@@ -6,9 +6,9 @@ Thank you for your interest in contributing to ADHDev! 🦦
 
 **Are you looking to add support for a new IDE, CLI, or ACP agent?**
 
-Providers live in this repository under `packages/daemon-core/providers/_builtin/<category>/<type>/`, and the daemon mirrors that same category-based structure in user and upstream directories.
+Providers live in the external [vilmire/adhdev-providers](https://github.com/vilmire/adhdev-providers) repository. The daemon automatically downloads these providers on startup and mirrors the category-based structure in your local `~/.adhdev/providers/` directory.
 
-👉 Start with [`packages/daemon-core/providers/_builtin/CONTRIBUTING.md`](packages/daemon-core/providers/_builtin/CONTRIBUTING.md)
+👉 Start with the [Provider Contribution Guide](https://github.com/vilmire/adhdev-providers/blob/main/CONTRIBUTING.md) in the providers repository.
 
 For a deeper walkthrough, see the provider guide on [docs.adhf.dev](https://docs.adhf.dev/features/providers).
 
