@@ -75,7 +75,7 @@ That's it! Open `http://localhost:3847` and your connected IDEs will appear auto
 We are actively building out providers. Here is the current capability tracking:
 
 - 🟢 **Antigravity** — Stable (CDP)
-- 🟢 **Cursor** — Stable (CDP)
+- 🟢 **Cursor** — Stable (CDP, including Composer)
 - 🟢 **Windsurf** — Stable (CDP)
 - 🟢 **Kiro** — Stable (webview CDP)
 - 🟡 **PearAI** — Beta (webview CDP)
@@ -86,7 +86,7 @@ We are actively building out providers. Here is the current capability tracking:
 - 🟢 **Cline** — Independent Stream
 - 🟢 **Roo Code (3.x, 4.x)** — Independent Stream
 - 🟢 **Codex Extension** — Independent Stream
-- 🟢 **Cursor Composer** — Native agent mode integration
+
 
 ### Standalone CLI Agents (via Daemon CLI Adapters)
 All CLI agents support interactive Terminal mode. Chat mode (UI abstraction) availability is listed below:
