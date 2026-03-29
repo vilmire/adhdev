@@ -1,8 +1,7 @@
 /**
  * AgentStreamPoller — Periodic agent stream polling + extension dynamic management
  *
- * Extracted from cloud daemon's startAgentStreamPolling() logic.
- * Used by both daemon-cloud and daemon-standalone.
+ * Handles periodic agent stream polling and extension dynamic management.
  *
  * Responsibilities:
  *   1. Refresh extension providers in CDP managers (config changes take effect immediately)

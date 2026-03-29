@@ -2,11 +2,10 @@
  * Status Builders — shared conversion functions for ProviderState → ManagedEntry
  *
  * Used by:
- *   - daemon-cloud (DaemonStatusReporter)
  *   - daemon-standalone (StandaloneServer.getStatus)
+ *   - DaemonStatusReporter
  *
- * Consolidates duplicated ProviderState→ManagedEntry mapping that was
- * previously copy-pasted between cloud and standalone codebases.
+ * Consolidates ProviderState→ManagedEntry mapping logic.
  */
 
 import type { DaemonCdpManager } from '../cdp/manager.js';

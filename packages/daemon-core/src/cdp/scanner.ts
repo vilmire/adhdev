@@ -1,7 +1,7 @@
 /**
  * DaemonCdpScanner — Periodic CDP port scanning & auto-connect
  *
- * Extracted from daemon-cloud initCdp() and daemon-standalone initCdp().
+ * Periodic CDP port scanning and auto-connect for IDE discovery.
  * Provides a unified approach to:
  * 1. Initial CDP port discovery
  * 2. Periodic scanning for newly launched IDEs
@@ -142,7 +142,7 @@ export class DaemonCdpScanner {
   }
 
   /**
-   * Multi-window connection (cloud mode).
+   * Multi-window connection.
    * Multiple CDP managers per IDE — one per workbench page.
    */
   private async connectMultiWindow(port: number, ide: string): Promise<void> {

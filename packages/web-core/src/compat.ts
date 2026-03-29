@@ -6,7 +6,7 @@ import { useBaseDaemons } from './context/BaseDaemonContext'
 
 let _useDaemonsHook: any = useBaseDaemons
 
-/** useDaemons() wrapper with dependency injection for web-cloud */
+/** useDaemons() wrapper with dependency injection */
 export function useDaemons() {
     return _useDaemonsHook()
 }
@@ -15,7 +15,7 @@ type EventCallback = (...args: any[]) => void
 
 /**
  * dashboardWS stub — no-op in standalone,
- * cloud injects the real WS instance.
+ * host app can inject the real WS instance.
  */
 class DashboardWSStub {
     private listeners = new Map<string, Set<EventCallback>>()
@@ -40,7 +40,7 @@ type PtyOutputCallback = (cliId: string, data: string) => void
 
 /**
  * ConnectionManager stub — abstract connection interface.
- * standalone: WS adapter injected, cloud: P2P implementation injected.
+ * Host app injects the real implementation.
  */
 class ConnectionManagerStub {
     private ptyCallbacks = new Set<PtyOutputCallback>()
@@ -77,7 +77,7 @@ export let connectionManager: any = new ConnectionManagerStub()
 /** @deprecated Use connectionManager instead */
 export let p2pManager: any = connectionManager
 
-/** Inject real implementations from the host app (e.g. web-cloud) */
+/** Inject real implementations from the host app */
 export function setupCompat(deps: { dashboardWS?: any; connectionManager?: any; p2pManager?: any; useDaemonsHook?: any }) {
     if (deps.dashboardWS) dashboardWS = deps.dashboardWS
     if (deps.connectionManager) {

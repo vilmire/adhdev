@@ -1,11 +1,8 @@
 /**
  * DaemonCdpSetup — Shared CDP initialization helpers
  *
- * Extracted from daemon-cloud/adhdev-daemon.ts setupCdpManager()
- * and daemon-standalone/index.ts inline CDP setup logic.
- *
- * Used by both daemon-cloud and daemon-standalone to ensure
- * consistent CDP → ProviderInstance registration.
+ * Common CDP setup logic for consistent
+ * CDP → ProviderInstance registration.
  */
 
 import { DaemonCdpManager } from './manager.js';
@@ -20,7 +17,7 @@ export interface CdpSetupContext {
   cdpManagers: Map<string, DaemonCdpManager>;
   /** UUID instanceId → CDP manager key mapping */
   instanceIdMap: Map<string, string>;
-  /** Server connection (optional, cloud-only) */
+  /** Server connection (optional) */
   serverConn?: any;
 }
 
