@@ -613,6 +613,21 @@ async function main(): Promise<void> {
       options.token = args[i + 1];
       i++;
     }
+    if (args[i] === '--help' || args[i] === '-h') {
+      console.log(`
+Usage: adhdev-standalone [options]
+
+Options:
+  --port, -p <port>   Port to run the standalone server on (default: 3847)
+  --host, -H          Allow external network connections (binds to 0.0.0.0)
+  --token <token>     Set an authentication token for the dashboard UI
+  --dev               Enable DevConsole to debug and test providers
+  --public <path>     Custom path to the web dashboard distribution
+  --no-open           Do not automatically open the browser on startup
+  --help, -h          Show this help message
+`);
+      process.exit(0);
+    }
   }
 
   // Try to find web-standalone build
