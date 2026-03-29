@@ -18,12 +18,13 @@ npx @adhdev/daemon-standalone
 
 ## Options
 
-```
---port, -p <port>     Port to listen on (default: 3847)
---host, -H            Listen on all interfaces (LAN access)
---no-open             Don't open browser automatically
---token <secret>      Enable token auth for API/WS
-```
+| Flag | Description |
+|------|-------------|
+| `--port, -p <port>` | Port to listen on (default: `3847`) |
+| `--host, -H` | Listen on all interfaces — enables LAN access (`0.0.0.0`) |
+| `--no-open` | Don't open browser automatically on start |
+| `--token <secret>` | Enable token authentication for API and WebSocket |
+| `--dev` | Enable DevServer on port `19280` (provider debugging, CDP tools) |
 
 ## Links
 
