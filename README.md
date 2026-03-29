@@ -80,7 +80,7 @@ We are actively building out providers. Here is the current capability tracking:
 - 🟢 **Kiro** — Stable (webview CDP)
 - 🟡 **PearAI** — Beta (webview CDP)
 - 🟡 **Trae** — Beta (webview CDP)
-- 🟡 **VS Code / Insiders / VSCodium** — Infrastructure ready (WIP)
+- 🟡 **VS Code / VSCodium** — Infrastructure ready (WIP)
 
 ### AI Extensions (via Agent Stream CDP scraping)
 - 🟢 **Cline** — Independent Stream
@@ -193,7 +193,7 @@ If you want to create a custom provider locally, use `~/.adhdev/providers/<categ
 
 ## 🗺️ Roadmap
 
-- [x] IDE detection (9 IDEs — Cursor, Antigravity, Kiro, PearAI, Trae, Windsurf, VS Code, VS Code Insiders, VSCodium)
+- [x] IDE detection (8 IDEs — Cursor, Antigravity, Kiro, PearAI, Trae, Windsurf, VS Code, VSCodium)
 - [x] CDP integration (Chrome DevTools Protocol)
 - [x] Agent Independent Chat Streams (Cline, Roo Code — real-time CDP scraping)
 - [x] CLI Agent Adapters (Gemini CLI, Claude Code, Codex CLI — PTY-based)
