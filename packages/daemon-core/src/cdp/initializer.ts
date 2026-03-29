@@ -1,7 +1,7 @@
 /**
  * DaemonCdpInitializer — Unified CDP initialization + periodic scanning
  *
- * Replaces initCdp() in both cloud and standalone daemons.
+ * Unified CDP initialization + periodic scanning.
  *
  * Features:
  *   1. Initial connection: connectAll() — multi-window aware

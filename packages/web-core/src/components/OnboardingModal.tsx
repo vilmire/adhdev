@@ -27,7 +27,7 @@ const STEPS = [
     icon: '🚀',
     title: 'Get started',
     desc: 'Install the daemon and link it to your dashboard. It connects automatically.',
-    code: 'npm install -g adhdev && adhdev setup',
+    code: 'npm install -g @adhdev/daemon-standalone && adhdev-standalone',
   },
 ]
 

@@ -159,7 +159,7 @@ components:
       properties:
         id:
           type: string
-          example: "standalone:ide:cursor_12345"
+          example: "ide:cursor_12345"
         instanceId:
           type: string
         type:
@@ -198,7 +198,7 @@ components:
       properties:
         id:
           type: string
-          example: "standalone:cli:gemini-cli"
+          example: "cli:gemini-cli"
         cliId:
           type: string
         type:
@@ -303,7 +303,7 @@ components:
           example: { "message": "Hello!" }
         target:
           type: string
-          example: "standalone:ide:cursor_12345"
+          example: "ide:cursor_12345"
 
     CommandResult:
       type: object

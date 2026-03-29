@@ -94,7 +94,7 @@ export default function InstallCommand() {
 
             {/* npm fallback */}
             <div className="text-text-muted text-[10px] font-sans mt-2">
-                Or via npm: <span className="text-text-secondary font-mono">npm i -g adhdev && adhdev setup</span>
+                Or via npm: <span className="text-text-secondary font-mono">npm i -g @adhdev/daemon-standalone &amp;&amp; adhdev-standalone</span>
             </div>
         </div>
     )

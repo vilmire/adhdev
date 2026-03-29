@@ -1,5 +1,5 @@
 /**
- * Daemon Lifecycle — Shared init + shutdown for cloud/standalone
+ * Daemon Lifecycle — Shared init + shutdown logic
  *
  * initDaemonComponents(): Creates all core daemon components in correct order.
  * shutdownDaemonComponents(): Graceful shutdown of all components.
@@ -77,7 +77,6 @@ export interface DaemonComponents {
 
 /**
  * Initialize all daemon core components.
- * Shared by both cloud and standalone daemons.
  *
  * Order:
  *   1. Global log interceptor
@@ -244,7 +243,6 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
 
 /**
  * Graceful shutdown of all daemon components.
- * Shared by both cloud and standalone daemons.
  *
  * Order:
  *   1. Stop timers (poller, cdpInitializer)

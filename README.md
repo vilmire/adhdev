@@ -15,8 +15,8 @@ Run it on your machine — no cloud account required.
 │  │ + AI Ext │CDP │ localhost:3847 │  │ HTTP │  Screenshots,    │
 │  └──────────┘    └────────────────┘  │  /WS │  Remote Control  │
 │                                      │      │                  │
-│  CLI Agents  ◄─PTY─►  Daemon        │      │                  │
-│  ACP Agents  ◄─stdio─► Daemon       │      └──────────────────┘
+│  CLI Agents  ◄─PTY─►  Daemon         │      │                  │
+│  ACP Agents  ◄─stdio─► Daemon        │      └──────────────────┘
 └──────────────────────────────────────┘
        Everything runs locally — no cloud required
 ```
@@ -26,7 +26,7 @@ Run it on your machine — no cloud account required.
 - **Remote desktop** — click, type, scroll in your IDE from the browser
 - **Manage CLI agents** — interactive terminal view with xterm.js
 - **Multi-IDE support** — manage 9 different IDEs simultaneously
-- **Provider system** — extensible via `provider.js` files (no TypeScript changes needed)
+- **Provider system** — extensible via `provider.json` & `scripts.js` files (no TypeScript changes needed)
 
 ## 🚀 Quick Start
 
@@ -35,14 +35,14 @@ Run it on your machine — no cloud account required.
 curl -fsSL https://adhf.dev/install | sh
 
 # Or install via npm directly
-npm install -g adhdev
+npm install -g @adhdev/daemon-standalone
 
 # One-liner — starts dashboard at http://localhost:3847
-adhdev standalone
+adhdev-standalone
 
 # With options
-adhdev standalone --port 8080 --host  # LAN access
-adhdev standalone --token mysecret     # Token auth
+adhdev-standalone --port 8080 --host  # LAN access
+adhdev-standalone --token mysecret     # Token auth
 ```
 
 That's it! Open `http://localhost:3847` and your connected IDEs will appear automatically.
@@ -144,17 +144,17 @@ curl http://localhost:3847/api/v1/status
 # Send a chat message to an IDE agent
 curl -X POST http://localhost:3847/api/v1/command \
   -H 'Content-Type: application/json' \
-  -d '{"type": "send_chat", "payload": {"message": "Fix the login bug"}, "target": "standalone:ide:cursor_12345"}'
+  -d '{"type": "send_chat", "payload": {"message": "Fix the login bug"}, "target": "ide:cursor_12345"}'
 
 # Read current chat
 curl -X POST http://localhost:3847/api/v1/command \
   -H 'Content-Type: application/json' \
-  -d '{"type": "read_chat", "target": "standalone:ide:cursor_12345"}'
+  -d '{"type": "read_chat", "target": "ide:cursor_12345"}'
 
 # Take a screenshot
 curl -X POST http://localhost:3847/api/v1/command \
   -H 'Content-Type: application/json' \
-  -d '{"type": "screenshot", "target": "standalone:ide:cursor_12345"}'
+  -d '{"type": "screenshot", "target": "ide:cursor_12345"}'
 
 # List connected IDEs
 curl http://localhost:3847/api/v1/ides
@@ -199,7 +199,7 @@ If you want to create a custom provider locally, use `~/.adhdev/providers/<categ
 - [x] CLI Agent Adapters (Gemini CLI, Claude Code, Codex CLI — PTY-based)
 - [x] ACP 35 agents (Agent Client Protocol — MCP stdio)
 - [x] Interactive Terminal View (xterm.js — full TUI rendering)
-- [x] Provider architecture (4-category provider.js system)
+- [x] Provider architecture (4-category provider.json & scripts.js system)
 - [x] Model/Mode selection (CDP-based switching for all IDEs)
 - [x] Mobile responsive UI
 - [x] Provider Settings System (per-provider configurable settings)

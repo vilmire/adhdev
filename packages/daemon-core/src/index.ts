@@ -2,7 +2,6 @@
  * @adhdev/daemon-core — Public API
  *
  * Core logic for daemon: CDP, Provider, IDE detection, CLI/ACP adapters and more.
- * Used by both daemon-standalone and daemon-cloud.
  */
 
 // ── Types ──
