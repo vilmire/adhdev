@@ -16,6 +16,8 @@ import {
     useBaseDaemons,
     useTransport,
     IconSettings,
+    IconVolume,
+    IconUser,
 } from '@adhdev/web-core'
 
 declare const __APP_VERSION__: string
@@ -57,7 +59,7 @@ export default function StandaloneSettings() {
 
     return (
         <div className="flex flex-col h-full">
-            <PageHeader icon="⚙️" title="Settings" subtitle="Local daemon configuration & preferences" />
+            <PageHeader icon={<IconSettings className="text-text-primary" />} title="Settings" subtitle="Local daemon configuration & preferences" />
             <div className="page-content">
 
                 {/* ═══ Daemon Info ═══ */}
@@ -126,7 +128,7 @@ export default function StandaloneSettings() {
                     <div className="flex flex-col gap-3">
                         <BrowserNotificationSettings />
                         <ToggleRow
-                            label="🔊 Sound Effects"
+                            label={<span className="flex items-center gap-1.5"><IconVolume size={15} /> Sound Effects</span>}
                             description="Play a sound when agent completes or needs approval"
                             checked={soundEnabled}
                             onChange={handleSoundToggle}
@@ -140,7 +142,7 @@ export default function StandaloneSettings() {
                         <div className="flex items-center justify-between px-3.5 py-4 bg-bg-glass rounded-xl border border-border-subtle hover:border-border-default transition-colors">
                             <div className="flex flex-col gap-1 pr-4 max-w-[500px]">
                                 <span className="text-sm font-semibold flex items-center gap-2">
-                                    👤 Display Name
+                                    <IconUser size={16} className="text-text-secondary" /> Display Name
                                 </span>
                                 <span className="text-[12px] text-text-muted leading-relaxed">
                                     Your name shown in chat threads and on the team dashboard.

@@ -4,7 +4,7 @@
  */
 
 export interface ToggleRowProps {
-    label: string
+    label: React.ReactNode
     description: string
     checked: boolean
     disabled?: boolean

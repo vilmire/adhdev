@@ -5,6 +5,7 @@
  */
 import { useNotificationPrefs } from '../../hooks/useNotificationPrefs'
 import { ToggleRow } from './ToggleRow'
+import { IconBell, IconMonitor, IconCheckCircle, IconZap, IconPlug } from '../Icons'
 
 export interface BrowserNotificationSettingsProps {
     /** Optional: called when a pref changes, for server sync (cloud only) */
@@ -23,7 +24,7 @@ export function BrowserNotificationSettings({ onPrefChange }: BrowserNotificatio
         <div className="flex flex-col gap-3">
             {/* Master toggle */}
             <ToggleRow
-                label="🔔 Notifications"
+                label={<span className="flex items-center gap-1.5"><IconBell size={15} /> Notifications</span>}
                 description="Master toggle for all alerts"
                 checked={prefs.globalEnabled}
                 onChange={v => handleUpdate('globalEnabled', v)}
@@ -34,7 +35,7 @@ export function BrowserNotificationSettings({ onPrefChange }: BrowserNotificatio
             {/* Browser Notifications */}
             {prefs.globalEnabled && (
                 <ToggleRow
-                    label="🖥️ Browser Notifications"
+                    label={<span className="flex items-center gap-1.5"><IconMonitor size={15} /> Browser Notifications</span>}
                     description="Desktop alerts when tab is inactive"
                     checked={prefs.browserNotifications}
                     onChange={v => handleUpdate('browserNotifications', v)}
@@ -45,19 +46,19 @@ export function BrowserNotificationSettings({ onPrefChange }: BrowserNotificatio
             {prefs.globalEnabled && prefs.browserNotifications && (
                 <div className="ml-5 pl-3 border-l-2 border-border-subtle flex flex-col gap-2">
                     <ToggleRow
-                        label="✅ Completion Alerts"
+                        label={<span className="flex items-center gap-1.5"><IconCheckCircle size={15} /> Completion Alerts</span>}
                         description="Notify when agent finishes a task"
                         checked={prefs.completionAlert}
                         onChange={v => handleUpdate('completionAlert', v)}
                     />
                     <ToggleRow
-                        label="⚡ Approval Alerts"
+                        label={<span className="flex items-center gap-1.5"><IconZap size={15} /> Approval Alerts</span>}
                         description="Notify when agent needs approval"
                         checked={prefs.approvalAlert}
                         onChange={v => handleUpdate('approvalAlert', v)}
                     />
                     <ToggleRow
-                        label="📡 Connection Alerts"
+                        label={<span className="flex items-center gap-1.5"><IconPlug size={15} /> Connection Alerts</span>}
                         description="Alert when a daemon disconnects"
                         checked={prefs.disconnectAlert}
                         onChange={v => handleUpdate('disconnectAlert', v)}

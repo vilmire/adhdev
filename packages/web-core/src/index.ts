@@ -110,6 +110,7 @@ export {
     IconBarChart, IconScroll, IconFolder, IconWarning, IconClock,
     IconTerminal, IconPlay, IconRocket, IconBot, IconThought,
     IconWrench, IconCandle, IconApple, IconLinux, IconWindows, IconBell, IconBuilding,
+    IconCheckCircle, IconZap, IconVolume
 } from './components/Icons'
 
 // ── Hooks ──

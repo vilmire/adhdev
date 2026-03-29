@@ -21,7 +21,7 @@ import HistoryModal from '../components/dashboard/HistoryModal'
 import ToastContainer from '../components/dashboard/ToastContainer'
 import PaneGroup from '../components/dashboard/PaneGroup'
 import OnboardingModal from '../components/OnboardingModal'
-
+import { IconRefresh } from '../components/Icons'
 export default function Dashboard() {
     const { sendCommand: sendDaemonCommand } = useTransport()
     const [searchParams, setSearchParams] = useSearchParams()
@@ -636,7 +636,7 @@ export default function Dashboard() {
             {/* Version mismatch banner — shows all outdated machines */}
             {versionMismatchDaemons.length > 0 && !versionBannerDismissed && (
                 <div className="flex items-center gap-2.5 px-4 py-2 bg-amber-500/[0.08] border-b border-amber-500/20 text-xs text-text-secondary shrink-0 flex-wrap">
-                    <span className="text-sm shrink-0">🔄</span>
+                    <span className="text-sm shrink-0 mt-0.5"><IconRefresh size={14} className="text-amber-500" /></span>
                     <span className="flex-1 flex items-center gap-2 flex-wrap min-w-0">
                         <span>
                             Update available: <strong>v{(versionMismatchDaemons[0] as any).version}</strong> → <strong>v{(versionMismatchDaemons[0] as any).serverVersion}</strong>

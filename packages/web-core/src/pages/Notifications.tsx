@@ -15,6 +15,7 @@ import { ToggleRow } from '../components/settings/ToggleRow'
 import { useNotificationPrefs } from '../hooks/useNotificationPrefs'
 import { useTransport } from '../context/TransportContext'
 import type { ProviderSettingsEntry, ProviderInfo } from './machine/types'
+import { IconBell, IconMonitor, IconCheckCircle, IconZap, IconPlug, IconVolume } from '../components/Icons'
 
 /* ─── helpers ──────────────────────────────────────────────── */
 
@@ -180,14 +181,14 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
 
     return (
         <div className="flex flex-col h-full">
-            <PageHeader icon="🔔" title="Notifications" subtitle="Alerts, auto-approve & provider settings" />
+            <PageHeader icon={<IconBell className="text-text-primary" />} title="Notifications" subtitle="Alerts, auto-approve & provider settings" />
             <div className="page-content">
 
                 {/* ═══ Section 1: Global / Browser ═══ */}
                 <Section title="Browser alerts" className="mb-4">
                     <div className="flex flex-col gap-3">
                         <ToggleRow
-                            label="🔔 Notifications"
+                            label={<span className="flex items-center gap-1.5"><IconBell size={15} /> Notifications</span>}
                             description="Master toggle for all alerts"
                             checked={prefs.globalEnabled}
                             onChange={v => setBrowserPref('globalEnabled', v)}
@@ -197,7 +198,7 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
 
                         {prefs.globalEnabled && (
                             <ToggleRow
-                                label="🖥️ Browser Notifications"
+                                label={<span className="flex items-center gap-1.5"><IconMonitor size={15} /> Browser Notifications</span>}
                                 description="Desktop alerts when tab is inactive"
                                 checked={prefs.browserNotifications}
                                 onChange={v => setBrowserPref('browserNotifications', v)}
@@ -207,19 +208,19 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                         {prefs.globalEnabled && prefs.browserNotifications && (
                             <div className="ml-5 pl-3 border-l-2 border-border-subtle flex flex-col gap-2">
                                 <ToggleRow
-                                    label="✅ Completion Alerts"
+                                    label={<span className="flex items-center gap-1.5"><IconCheckCircle size={15} /> Completion Alerts</span>}
                                     description="Notify when agent finishes a task"
                                     checked={prefs.completionAlert}
                                     onChange={v => setBrowserPref('completionAlert', v)}
                                 />
                                 <ToggleRow
-                                    label="⚡ Approval Alerts"
+                                    label={<span className="flex items-center gap-1.5"><IconZap size={15} /> Approval Alerts</span>}
                                     description="Notify when agent needs approval"
                                     checked={prefs.approvalAlert}
                                     onChange={v => setBrowserPref('approvalAlert', v)}
                                 />
                                 <ToggleRow
-                                    label="📡 Connection Alerts"
+                                    label={<span className="flex items-center gap-1.5"><IconPlug size={15} /> Connection Alerts</span>}
                                     description="Alert when a machine disconnects"
                                     checked={prefs.disconnectAlert}
                                     onChange={v => setBrowserPref('disconnectAlert', v)}
@@ -400,7 +401,7 @@ function SoundToggle() {
 
     return (
         <ToggleRow
-            label="🔊 Sound Effects"
+            label={<span className="flex items-center gap-1.5"><IconVolume size={15} /> Sound Effects</span>}
             description="Play a sound when agent completes or needs approval"
             checked={soundEnabled}
             onChange={handleToggle}
