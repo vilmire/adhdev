@@ -18,10 +18,6 @@ import ScreenshotViewer from '../ScreenshotViewer';
 import InstallCommand from '../InstallCommand';
 import { IconWarning, IconRocket } from '../Icons';
 
-// Module-level: tracks which tab is being dragged across ALL PaneGroups
-// (needed because onDragEnter can't read dataTransfer data due to browser security)
-let globalDraggingTabKey: string | null = null;
-
 export interface PaneGroupProps {
     /** Conversations assigned to this group */
     conversations: ActiveConversation[];
@@ -49,7 +45,7 @@ export interface PaneGroupProps {
     /** Split controls */
     isSplitMode: boolean;
     numGroups: number;
-    onMoveTab?: (tabKey: string, direction: 'left' | 'right' | 'new') => void;
+    onMoveTab?: (tabKey: string, direction: 'left' | 'right' | 'split-left' | 'split-right') => void;
     onClose?: () => void;
     /** Drag-to-split: called when a tab is dropped into this group */
     onReceiveTab?: (tabKey: string) => void;
@@ -90,6 +86,7 @@ export default function PaneGroup({
     const { sendCommand } = useTransport();
     const terminalRef = useRef<CliTerminalHandle>(null);
     const [dragOver, setDragOver] = useState(false);
+    const [splitDropSide, setSplitDropSide] = useState<'left' | 'right' | null>(null);
     const dragCounter = useRef(0);
     const longPressTimer = useRef<any>(null);
 
@@ -286,6 +283,7 @@ export default function PaneGroup({
         const handleDragEnd = () => {
             dragCounter.current = 0;
             setDragOver(false);
+            setSplitDropSide(null);
         };
         window.addEventListener('dragend', handleDragEnd);
         window.addEventListener('drop', handleDragEnd);
@@ -314,51 +312,6 @@ export default function PaneGroup({
         <div
             className="flex flex-col min-h-0 min-w-0 flex-1 overflow-hidden"
             onClick={onFocus}
-            onDragEnter={(e) => {
-                if (e.dataTransfer.types.includes('text/tab-key')) {
-                    dragCounter.current++;
-                    // Only show drop zone outline for cross-group drags
-                    // globalDraggingTabKey is set by whichever PaneGroup starts the drag
-                    const draggedKey = globalDraggingTabKey;
-                    const isOwnTab = draggedKey && conversations.some(c => c.tabKey === draggedKey);
-                    if (!isOwnTab) {
-                        setDragOver(true);
-                    }
-                }
-            }}
-            onDragOver={(e) => {
-                if (e.dataTransfer.types.includes('text/tab-key')) {
-                    e.preventDefault();
-                }
-            }}
-            onDragLeave={() => {
-                dragCounter.current--;
-                if (dragCounter.current <= 0) {
-                    dragCounter.current = 0;
-                    setDragOver(false);
-                }
-            }}
-            onDrop={(e) => {
-                dragCounter.current = 0;
-                setDragOver(false);
-                setPreviewOrder(null);
-                const tabKey = e.dataTransfer.getData('text/tab-key');
-                if (!tabKey) return;
-                e.preventDefault();
-                // Same group → reorder only (dropped on empty space = move to end)
-                const isOwnTab = conversations.some(c => c.tabKey === tabKey);
-                if (isOwnTab) {
-                    setTabOrder(prev => {
-                        const next = prev.filter(k => k !== tabKey);
-                        next.push(tabKey);
-                        onTabOrderChange?.(next);
-                        return next;
-                    });
-                } else if (onReceiveTab) {
-                    // Cross-group only → move tab to this group
-                    onReceiveTab(tabKey);
-                }
-            }}
             style={{
                 ...styleProp,
                 outline: dragOver ? '2px dashed var(--accent-primary)' : 'none',
@@ -386,13 +339,11 @@ export default function PaneGroup({
                                 className={`${tabClass} shrink-0 px-2.5 py-1.5 rounded-t-lg cursor-pointer flex items-center gap-2 relative`}
                                 draggable={true}
                                 onDragStart={(e) => {
-                                    globalDraggingTabKey = conv.tabKey;
                                     draggingTabRef.current = conv.tabKey;
                                     e.dataTransfer.setData('text/tab-key', conv.tabKey);
                                     e.dataTransfer.effectAllowed = 'move';
                                 }}
                                 onDragEnd={() => {
-                                    globalDraggingTabKey = null;
                                     draggingTabRef.current = null;
                                     // Commit preview order as actual tab order on drop
                                     const orderToCommit = previewOrderRef.current;
@@ -515,7 +466,83 @@ export default function PaneGroup({
             </div>
 
             {/* ── Content Area ────────────────────── */}
-            <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
+            <div
+                className="flex-1 min-h-0 flex flex-col overflow-hidden relative"
+                onDragEnter={(e) => {
+                    if (e.dataTransfer.types.includes('text/tab-key')) {
+                        dragCounter.current++;
+                        setDragOver(true);
+                    }
+                }}
+                onDragOver={(e) => {
+                    if (!e.dataTransfer.types.includes('text/tab-key')) return;
+                    e.preventDefault();
+                    if (numGroups < 4 && onMoveTab) {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const localX = e.clientX - rect.left;
+                        setSplitDropSide(localX < rect.width / 2 ? 'left' : 'right');
+                    }
+                }}
+                onDragLeave={() => {
+                    dragCounter.current--;
+                    if (dragCounter.current <= 0) {
+                        dragCounter.current = 0;
+                        setDragOver(false);
+                        setSplitDropSide(null);
+                    }
+                }}
+                onDrop={(e) => {
+                    dragCounter.current = 0;
+                    setDragOver(false);
+                    const tabKey = e.dataTransfer.getData('text/tab-key');
+                    const isOwnTab = tabKey ? conversations.some(c => c.tabKey === tabKey) : false;
+                    const dropSide = splitDropSide;
+                    setSplitDropSide(null);
+                    setPreviewOrder(null);
+                    if (!tabKey) return;
+                    e.preventDefault();
+                    if (dropSide && onMoveTab && numGroups < 4) {
+                        onMoveTab(tabKey, dropSide === 'left' ? 'split-left' : 'split-right');
+                        return;
+                    }
+                    if (isOwnTab) {
+                        setTabOrder(prev => {
+                            const next = prev.filter(k => k !== tabKey);
+                            next.push(tabKey);
+                            onTabOrderChange?.(next);
+                            return next;
+                        });
+                    } else if (onReceiveTab) {
+                        onReceiveTab(tabKey);
+                    }
+                }}
+            >
+                {dragOver && onMoveTab && numGroups < 4 && (
+                    <div className="absolute inset-0 z-10 pointer-events-none flex">
+                        <div
+                            className="flex-1 border-r border-white/10 transition-all duration-150 flex items-center justify-center"
+                            style={{
+                                background: splitDropSide === 'left' ? 'rgba(139, 92, 246, 0.18)' : 'rgba(139, 92, 246, 0.08)',
+                                boxShadow: splitDropSide === 'left' ? 'inset 0 0 0 2px var(--accent-primary)' : 'inset 0 0 0 1px rgba(255,255,255,0.05)',
+                            }}
+                        >
+                            <div className="px-3 py-1.5 rounded-full text-[11px] font-semibold text-white bg-black/45 backdrop-blur-sm">
+                                Split Left
+                            </div>
+                        </div>
+                        <div
+                            className="flex-1 transition-all duration-150 flex items-center justify-center"
+                            style={{
+                                background: splitDropSide === 'right' ? 'rgba(139, 92, 246, 0.18)' : 'rgba(139, 92, 246, 0.08)',
+                                boxShadow: splitDropSide === 'right' ? 'inset 0 0 0 2px var(--accent-primary)' : 'inset 0 0 0 1px rgba(255,255,255,0.05)',
+                            }}
+                        >
+                            <div className="px-3 py-1.5 rounded-full text-[11px] font-semibold text-white bg-black/45 backdrop-blur-sm">
+                                Split Right
+                            </div>
+                        </div>
+                    </div>
+                )}
                 {!activeConv ? (
                     <div className="flex-1 flex flex-col items-center justify-center">
                         {conversations.length === 0 && !isSplitMode && detectedIdes && handleLaunchIde ? (
@@ -702,9 +729,17 @@ export default function PaneGroup({
                     {onMoveTab && numGroups < 4 && (
                         <button
                             className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors "
-                            onClick={() => { onMoveTab(ctxMenu.tabKey, 'new'); setCtxMenu(null); }}
+                            onClick={() => { onMoveTab(ctxMenu.tabKey, 'split-left'); setCtxMenu(null); }}
                         >
-                            Split to New Group ◨
+                            ⇤ Split Left
+                        </button>
+                    )}
+                    {onMoveTab && numGroups < 4 && (
+                        <button
+                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors "
+                            onClick={() => { onMoveTab(ctxMenu.tabKey, 'split-right'); setCtxMenu(null); }}
+                        >
+                            Split Right ⇥
                         </button>
                     )}
                     <div className="border-t border-border-subtle my-1 " />

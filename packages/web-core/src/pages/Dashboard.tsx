@@ -43,7 +43,8 @@ export default function Dashboard() {
     const retryConnection = daemonCtx.retryConnection; void retryConnection
     const showReconnected = daemonCtx.showReconnected || false
     // ─── Split View state (N-group editor groups) ───────────
-    // groupAssignments: Map<tabKey, groupIndex>. Tabs not in map → group 0.
+    // groupAssignments: Map<tabKey, groupIndex>. Unassigned tabs still default to group 0,
+    // but we also allow explicit group 0 entries so a new leftmost split can be inserted.
     // Persisted to localStorage so split survives page reloads.
     const [groupAssignments, setGroupAssignments] = useState<Map<string, number>>(() => {
         try {
@@ -142,18 +143,16 @@ export default function Dashboard() {
         setFocusedGroup(targetGroup);
     }, []);
 
-    // Create a new group to the right of the rightmost group and move tab there
-    const splitTabToNewGroup = useCallback((tabKey: string) => {
-        setGroupAssignments(prev => {
-            const maxGroup = prev.size === 0 ? 0 : Math.max(0, ...prev.values());
-            const newGroup = maxGroup + 1;
-            if (newGroup >= 4) return prev; // Max 4 groups
-            const next = new Map(prev);
-            next.set(tabKey, newGroup);
-            return next;
-        });
-        setFocusedGroup(prev => prev + 1);
+    const shiftIndexedRecordRight = useCallback(<T,>(prev: Record<number, T>, insertIndex: number) => {
+        const next: Record<number, T> = {};
+        for (const [key, value] of Object.entries(prev)) {
+            const idx = Number(key);
+            next[idx >= insertIndex ? idx + 1 : idx] = value;
+        }
+        return next;
     }, []);
+
+    const buildDefaultSizes = useCallback((count: number) => Array(count).fill(100 / count), []);
 
     const closeGroup = useCallback((groupIdx: number) => {
         setGroupAssignments(prev => {
@@ -216,25 +215,6 @@ export default function Dashboard() {
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
     const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
 
-    const [rightDropZoneActive, setRightDropZoneActive] = useState(false);
-    const [isDraggingTab, setIsDraggingTab] = useState(false);
-
-    // Track tab drag globally — enables right drop zone only during drag
-    useEffect(() => {
-        const onDragStart = (e: DragEvent) => {
-            if (e.dataTransfer?.types.includes('text/tab-key')) setIsDraggingTab(true);
-        };
-        const onDragEnd = () => { setIsDraggingTab(false); setRightDropZoneActive(false); };
-        window.addEventListener('dragstart', onDragStart);
-        window.addEventListener('dragend', onDragEnd);
-        window.addEventListener('drop', onDragEnd);
-        return () => {
-            window.removeEventListener('dragstart', onDragStart);
-            window.removeEventListener('dragend', onDragEnd);
-            window.removeEventListener('drop', onDragEnd);
-        };
-    }, []);
-
     // Extract detectedIdes from machine-level entry (for standalone)
     const daemonEntry = ides.find(ide => ide.type === 'adhdev-daemon')
     const detectedIdes: { type: string; name: string; running: boolean; id?: string }[] = (daemonEntry as any)?.detectedIdes || []
@@ -288,6 +268,50 @@ export default function Dashboard() {
         () => conversations.filter(c => !hiddenTabs.has(c.tabKey)),
         [conversations, hiddenTabs],
     );
+
+    const splitTabRelative = useCallback((tabKey: string, targetGroup: number, side: 'left' | 'right') => {
+        const currentGroupCount = numGroups;
+        if (currentGroupCount >= 4) return;
+
+        const insertIndex = side === 'left' ? targetGroup : targetGroup + 1;
+
+        setGroupAssignments(prev => {
+            const next = new Map<string, number>();
+            for (const conv of visibleConversations) {
+                const currentGroup = prev.get(conv.tabKey) ?? 0;
+                const shiftedGroup = currentGroup >= insertIndex ? currentGroup + 1 : currentGroup;
+                next.set(conv.tabKey, shiftedGroup);
+            }
+            next.set(tabKey, insertIndex);
+            return next;
+        });
+
+        setGroupSizes(prev => {
+            const base = prev.length === currentGroupCount ? [...prev] : buildDefaultSizes(currentGroupCount);
+            const targetSize = base[targetGroup] ?? (100 / currentGroupCount);
+            const kept = Math.max(15, targetSize / 2);
+            const inserted = Math.max(15, targetSize / 2);
+            const next = [...base];
+            next[targetGroup] = kept;
+            next.splice(insertIndex, 0, inserted);
+            const total = next.reduce((sum, size) => sum + size, 0);
+            return next.map(size => (size / total) * 100);
+        });
+
+        setGroupActiveTabIds(prev => {
+            const next = shiftIndexedRecordRight(prev, insertIndex);
+            next[insertIndex] = tabKey;
+            return next;
+        });
+
+        setGroupTabOrders(prev => {
+            const next = shiftIndexedRecordRight(prev, insertIndex);
+            next[insertIndex] = [tabKey];
+            return next;
+        });
+
+        setFocusedGroup(insertIndex);
+    }, [numGroups, visibleConversations, buildDefaultSizes, shiftIndexedRecordRight]);
 
     // ─── Browser Notifications ───
     // Request permission on mount
@@ -469,7 +493,7 @@ export default function Dashboard() {
                     setFocusedGroup(0);
                 } else {
                     const second = conversations[1];
-                    if (second) splitTabToNewGroup(second.tabKey);
+                    if (second) splitTabRelative(second.tabKey, 0, 'right');
                 }
                 return;
             }
@@ -483,7 +507,7 @@ export default function Dashboard() {
         };
         window.addEventListener('keydown', handler);
         return () => window.removeEventListener('keydown', handler);
-    }, [isSplitMode, conversations, splitTabToNewGroup, numGroups]);
+    }, [isSplitMode, conversations, splitTabRelative, numGroups]);
 
     // ─── Centralized Event Manager wiring ──────────────────────────────
     // Provide current IDEs and resolve action fn to EventManager
@@ -712,7 +736,8 @@ export default function Dashboard() {
                                 onMoveTab={(tabKey, direction) => {
                                     if (direction === 'left' && gIdx > 0) moveTabToGroup(tabKey, gIdx - 1);
                                     else if (direction === 'right' && gIdx < numGroups - 1) moveTabToGroup(tabKey, gIdx + 1);
-                                    else if (direction === 'new' && numGroups < 4) splitTabToNewGroup(tabKey);
+                                    else if (direction === 'split-left' && numGroups < 4) splitTabRelative(tabKey, gIdx, 'left');
+                                    else if (direction === 'split-right' && numGroups < 4) splitTabRelative(tabKey, gIdx, 'right');
                                 }}
                                 onClose={isSplitMode ? () => closeGroup(gIdx) : undefined}
                                 onReceiveTab={(tabKey) => moveTabToGroup(tabKey, gIdx)}
@@ -728,39 +753,6 @@ export default function Dashboard() {
                     );
                 })}
 
-                {/* Drop zone: drag tab to right edge → create new group */}
-                {!isMobile && numGroups < 4 && (
-                    <div className="relative shrink-0 w-0 z-50">
-                        {/* Invisible hover target on the right edge */}
-                        <div
-                            className="fixed right-0 top-0 bottom-0 w-16"
-                            style={{ pointerEvents: isDraggingTab ? 'auto' : 'none' }}
-                            onDragOver={(e) => {
-                                if (e.dataTransfer.types.includes('text/tab-key')) {
-                                    e.preventDefault();
-                                    setRightDropZoneActive(true);
-                                }
-                            }}
-                            onDragLeave={() => setRightDropZoneActive(false)}
-                            onDrop={(e) => {
-                                e.preventDefault();
-                                setRightDropZoneActive(false);
-                                const tabKey = e.dataTransfer.getData('text/tab-key');
-                                if (tabKey) splitTabToNewGroup(tabKey);
-                            }}
-                        />
-                        {/* Visual indicator (animates in from right) */}
-                        <div
-                            className="fixed right-0 top-0 bottom-0 pointer-events-none transition-all duration-200"
-                            style={{
-                                width: rightDropZoneActive ? '120px' : '0px',
-                                background: 'var(--accent-primary)',
-                                opacity: rightDropZoneActive ? 0.15 : 0,
-                                borderLeft: rightDropZoneActive ? '2px dashed var(--accent-primary)' : 'none',
-                            }}
-                        />
-                    </div>
-                )}
             </div>
 
             {/* History Modal */}
