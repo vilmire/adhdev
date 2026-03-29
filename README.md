@@ -83,16 +83,22 @@ We are actively building out providers. Here is the current capability tracking:
 - 🟡 **VS Code / Insiders / VSCodium** — Infrastructure ready (WIP)
 
 ### AI Extensions (via Agent Stream CDP scraping)
-- ✅ Cline — **Independent Stream ✅**
-- ✅ Roo Code (3.x, 4.x) — **Independent Stream ✅**
-- ✅ Cursor Composer (native agent mode)
+- 🟢 **Cline** — Independent Stream
+- 🟢 **Roo Code (3.x, 4.x)** — Independent Stream
+- 🟢 **Codex Extension** — Independent Stream
+- 🟢 **Cursor Composer** — Native agent mode integration
 
 ### Standalone CLI Agents (via Daemon CLI Adapters)
 All CLI agents support interactive Terminal mode. Chat mode (UI abstraction) availability is listed below:
 
 - 🟢 **Claude Code** — Terminal + Chat Mode
 - 🟢 **Codex CLI** — Terminal + Chat Mode
+- 🟡 **Aider** — Terminal only (Chat Mode WIP)
+- 🟡 **Cursor CLI** — Terminal only (Chat Mode WIP)
 - 🟡 **Gemini CLI** — Terminal only (Chat Mode WIP)
+- 🟡 **GitHub Copilot CLI** — Terminal only (Chat Mode WIP)
+- 🟡 **Goose CLI** — Terminal only (Chat Mode WIP)
+- 🟡 **OpenCode CLI** — Terminal only (Chat Mode WIP)
 
 ### ACP Agents (Agent Client Protocol — 35 agents)
 - ✅ **35 ACP agents** supported (Gemini, Codex, Claude Agent, Cursor, Cline, GitHub Copilot, Goose, Kimi, Kiro, Mistral Vibe, OpenCode, Qwen Code, and 21 more)

@@ -6,7 +6,7 @@
  */
 import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { IconDashboard, IconServer, IconInfo, IconSettings } from '@adhdev/web-core'
+import { IconDashboard, IconServer, IconInfo, IconSettings, IconBook } from '@adhdev/web-core'
 
 interface LayoutProps {
     children: React.ReactNode
@@ -14,6 +14,7 @@ interface LayoutProps {
 
 const NAV_ITEMS = [
     { id: 'dashboard', path: '/dashboard', icon: <IconDashboard />, label: 'Dashboard' },
+    { id: 'capabilities', path: '/capabilities', icon: <IconBook />, label: 'Capabilities' },
     { id: 'machine', path: '/machines', icon: <IconServer />, label: 'Burrow' },
     { id: 'settings', path: '/settings', icon: <IconSettings />, label: 'Settings' },
 ]

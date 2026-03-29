@@ -129,6 +129,7 @@ export { default as IDEPage } from './pages/IDE'
 export { default as MachineDetail } from './pages/MachineDetail'
 export { default as MachinesPage } from './pages/Machines'
 export { default as NotificationsPage } from './pages/Notifications'
+export { default as CapabilitiesPage } from './pages/Capabilities'
 export { default as OnboardingModal } from './components/OnboardingModal'
 
 // ── CSS ──
