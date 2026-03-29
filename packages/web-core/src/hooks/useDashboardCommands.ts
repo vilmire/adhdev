@@ -53,25 +53,6 @@ export function useDashboardCommands({
         return {};
     }, [])
 
-    const buildTargetedPayload = useCallback((
-        conv: ActiveConversation | undefined,
-        data: Record<string, unknown> = {},
-    ) => {
-        const enriched: Record<string, unknown> = {
-            ...data,
-            ...getProviderArgs(conv),
-        };
-        const routeTarget = conv?.ideId || conv?.daemonId || '';
-        const parts = (conv?.ideId || '').split(':');
-        if (parts.length >= 3 && (parts[1] === 'ide' || parts[1] === 'cli' || parts[1] === 'acp')) {
-            const instanceId = parts.slice(2).join(':');
-            enriched._targetInstance = instanceId;
-            enriched._targetType = parts[1];
-            if (enriched.instanceId === undefined) enriched.instanceId = instanceId;
-        }
-        return { routeTarget, payload: enriched };
-    }, [getProviderArgs])
-
     const handleSendChat = useCallback(async () => {
         if (!activeConv) return
         const message = agentInput.trim()
@@ -92,12 +73,13 @@ export function useDashboardCommands({
         }));
 
         try {
-            const { routeTarget, payload } = buildTargetedPayload(activeConv, {
+            const routeTarget = targetIde || activeConv.daemonId || ''
+            if (!routeTarget) return
+            await sendDaemonCommand(routeTarget, 'send_chat', {
                 message,
                 text: message,
+                ...getProviderArgs(activeConv),
             })
-            if (!routeTarget) return
-            await sendDaemonCommand(routeTarget, 'send_chat', payload)
             // Cleanup stale local messages after 60s
             setTimeout(() => {
                 const cutoff = Date.now() - 60000;
@@ -117,7 +99,7 @@ export function useDashboardCommands({
                 [tabKey]: (prev[tabKey] || []).filter(m => m._localId !== localId),
             }));
         }
-    }, [activeConv, agentInput, sendDaemonCommand, setLocalUserMessages, pinTab, buildTargetedPayload])
+    }, [activeConv, agentInput, sendDaemonCommand, setLocalUserMessages, pinTab, getProviderArgs])
 
     const handleRelaunch = useCallback(async () => {
         if (!activeConv) return;
@@ -162,12 +144,13 @@ export function useDashboardCommands({
             const buttonIndex = buttons.indexOf(buttonText);
             const clean = buttonText.replace(/[⌥⏎⇧⌫⌘⌃]/g, '').trim().toLowerCase();
             const isApprove = /^(run|approve|accept|yes|allow|always|proceed|save)/.test(clean);
-            const { routeTarget, payload } = buildTargetedPayload(activeConv, {
+            const routeTarget = activeConv.ideId || activeConv.daemonId || '';
+            const res = await sendDaemonCommand(routeTarget, 'resolve_action', {
                 button: buttonText,
                 action: isApprove ? 'approve' : 'reject',
                 ...(buttonIndex >= 0 && { buttonIndex }),
+                ...getProviderArgs(activeConv),
             });
-            const res = await sendDaemonCommand(routeTarget, 'resolve_action', payload);
             if (!res.success) {
                 setActionLogs(prev => [...prev, {
                     ideId: activeConv.tabKey,
@@ -183,19 +166,16 @@ export function useDashboardCommands({
                 timestamp: Date.now(),
             }])
         }
-    }, [activeConv, sendDaemonCommand, setActionLogs, buildTargetedPayload])
+    }, [activeConv, sendDaemonCommand, setActionLogs, getProviderArgs])
 
     const handleSwitchSession = useCallback(async (ideId: string, sessionId: string) => {
         try {
-            const targetConv = activeConv && activeConv.ideId === ideId ? activeConv : {
-                ...activeConv,
-                ideId,
-            } as ActiveConversation;
-            const { routeTarget, payload } = buildTargetedPayload(targetConv, {
+            const routeTarget = ideId || activeConv?.daemonId || '';
+            const res: any = await sendDaemonCommand(routeTarget, 'switch_chat', {
                 id: sessionId,
                 sessionId,
+                ...getProviderArgs(activeConv),
             });
-            const res: any = await sendDaemonCommand(routeTarget, 'switch_chat', payload);
             const scriptResult = res?.result;
             const ok = res?.success === true || scriptResult === 'switched' || scriptResult === 'switched-by-title';
             if (!ok) {
@@ -211,14 +191,16 @@ export function useDashboardCommands({
             console.error('Switch failed', e);
             setToasts(prev => [...prev, { id: Date.now(), message: `❌ Switch failed: ${e.message || 'connection error'}`, type: 'warning', timestamp: Date.now() }]);
         }
-    }, [activeConv, sendDaemonCommand, setToasts, buildTargetedPayload])
+    }, [activeConv, sendDaemonCommand, setToasts, getProviderArgs])
 
     const handleNewChat = useCallback(async () => {
         if (!activeConv || isCreatingChat) return;
         setIsCreatingChat(true);
         try {
-            const { routeTarget, payload } = buildTargetedPayload(activeConv);
-            await sendDaemonCommand(routeTarget, 'new_chat', payload);
+            const routeTarget = activeConv.ideId || activeConv.daemonId || '';
+            await sendDaemonCommand(routeTarget, 'new_chat', {
+                ...getProviderArgs(activeConv),
+            });
             setClearedTabs(prev => ({ ...prev, [activeConv.tabKey]: Date.now() }));
             setLocalUserMessages(prev => ({ ...prev, [activeConv.tabKey]: [] }));
         } catch (e) {
@@ -226,7 +208,7 @@ export function useDashboardCommands({
         } finally {
             setIsCreatingChat(false);
         }
-    }, [activeConv, isCreatingChat, sendDaemonCommand, setClearedTabs, setLocalUserMessages, buildTargetedPayload])
+    }, [activeConv, isCreatingChat, sendDaemonCommand, setClearedTabs, setLocalUserMessages, getProviderArgs])
 
     const handleFocusAgent = useCallback(async () => {
         if (!activeConv || isFocusingAgent) return;
@@ -248,17 +230,18 @@ export function useDashboardCommands({
         if (!activeConv || isRefreshingHistory) return;
         setIsRefreshingHistory(true);
         try {
-            const { routeTarget, payload } = buildTargetedPayload(activeConv, {
+            const routeTarget = activeConv.ideId || activeConv.daemonId || '';
+            const res: any = await sendDaemonCommand(routeTarget, 'list_chats', {
                 forceExpand: true,
+                ...getProviderArgs(activeConv),
             });
-            const res: any = await sendDaemonCommand(routeTarget, 'list_chats', payload);
             const chats = res?.chats || res?.result?.chats;
             if (res?.success && Array.isArray(chats)) {
                 updateIdeChats(activeConv.ideId, chats);
             }
         } catch (e) { console.error('Refresh history failed', e); }
         finally { setIsRefreshingHistory(false); }
-    }, [activeConv, isRefreshingHistory, sendDaemonCommand, updateIdeChats, buildTargetedPayload])
+    }, [activeConv, isRefreshingHistory, sendDaemonCommand, updateIdeChats, getProviderArgs])
 
     return {
         agentInput,

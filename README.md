@@ -176,12 +176,28 @@ Full API spec: [docs/openapi.yml](docs/openapi.yml) (OpenAPI 3.0)
 | Mobile UI | Responsive design — works on phones and tablets |
 | Provider Settings | Per-provider configurable settings with runtime hot-reload |
 
-## 🔌 Adding New IDE/Agent Providers
+## 🔌 Provider Development & DevConsole
 
 Providers are dynamically loaded from the [vilmire/adhdev-providers](https://github.com/vilmire/adhdev-providers) repository.
 Your local daemon automatically downloads the latest providers on startup.
 
-If you want to create a custom provider locally, use `~/.adhdev/providers/<category>/<type>/`:
+### 🛠️ Using the DevConsole to Fix Providers
+
+If an IDE updates its UI and ADHDev's chat integration breaks, you can easily fix the provider scripts live using the built-in **DevConsole**:
+
+1. Stop your background daemon and run it in dev mode:
+   ```bash
+   adhdev-standalone --dev
+   ```
+2. Open **http://127.0.0.1:19280** in your browser to access the DevConsole UI.
+3. The DevConsole allows you to:
+   - **Inspect CDP Sessions:** View running IDEs and attach directly to their DOM.
+   - **Test Scripts Real-time:** Edit Javascript functions (like `sendMessage` or `readChat`) inside the browser and execute them instantly in the target IDE without reloading.
+   - **Inspect Errors:** Validate DOM selector changes seamlessly through the interactive tools.
+
+### Adding Custom Local Providers
+
+If you want to create a custom provider locally or test your fixes before submitting a PR to the providers repository, place your edited files in `~/.adhdev/providers/<category>/<type>/`. Local user providers will always overwrite upstream auto-updated ones.
 
 ```text
 ~/.adhdev/providers/ide/my-ide/
