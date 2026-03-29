@@ -22,7 +22,7 @@ export default function ToastContainer({ toasts, onDismiss, onClickToast }: Toas
             {toasts.map(toast => (
                 <div
                     key={toast.id}
-                    className="fade-in text-white px-5 py-3 rounded-xl text-[13px] font-semibold shadow-[0_8px_32px_rgba(0,0,0,0.3)] backdrop-blur-lg pointer-events-auto cursor-pointer animate-[toast-in_0.3s_ease-out] max-w-[360px]"
+                    className="fade-in text-white px-5 py-3 rounded-xl text-[13px] font-semibold shadow-[0_8px_32px_rgba(0,0,0,0.3)] backdrop-blur-lg pointer-events-auto cursor-pointer animate-[toast-in_0.3s_ease-out] max-w-[360px] relative group"
                     style={{ background: TYPE_BG[toast.type] || TYPE_BG.info }}
                     onClick={() => {
                         if (!toast.actions?.length) {
@@ -31,7 +31,13 @@ export default function ToastContainer({ toasts, onDismiss, onClickToast }: Toas
                         }
                     }}
                 >
-                    <div>{toast.message}</div>
+                    {/* Close button */}
+                    <button
+                        className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-white/50 hover:text-white hover:bg-white/20 transition-all text-[11px] leading-none opacity-0 group-hover:opacity-100 cursor-pointer"
+                        onClick={(e) => { e.stopPropagation(); onDismiss(toast.id); }}
+                        aria-label="Dismiss"
+                    >×</button>
+                    <div className="pr-4">{toast.message}</div>
                     {toast.actions && toast.actions.length > 0 && (
                         <div className="flex gap-2 mt-2">
                             {toast.actions.map((action, idx) => (
