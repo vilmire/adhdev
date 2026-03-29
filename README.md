@@ -80,7 +80,7 @@ We are actively building out providers. Here is the current capability tracking:
 - 🟢 **Kiro** — Stable (webview CDP)
 - 🟡 **PearAI** — Beta (webview CDP)
 - 🟡 **Trae** — Beta (webview CDP)
-- 🟡 **VS Code / VSCodium** — Infrastructure ready (WIP)
+- 🟢 **VS Code / VSCodium** — Stable (CDP)
 
 ### AI Extensions (via Agent Stream CDP scraping)
 - 🟢 **Cline** — Independent Stream
