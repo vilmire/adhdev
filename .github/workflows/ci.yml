@@ -1,6 +1,11 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -29,5 +34,44 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run OSS verification
-        run: npm run build -w packages/daemon-core && npm run build -w packages/web-core && npm run build -w packages/web-standalone && npm run build -w packages/web-devconsole && npm run build -w packages/daemon-standalone
+      - name: Build all packages
+        run: npm run build
+
+      - name: Verify shebang
+        run: head -1 packages/daemon-standalone/dist/index.js | grep '#!/usr/bin/env node'
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build all packages
+        run: npm run build
+
+      - name: Bundle web into daemon-standalone
+        run: npm run bundle:web -w packages/daemon-standalone
+
+      - name: Publish @adhdev/daemon-core
+        if: env.NODE_AUTH_TOKEN != ''
+        run: cd packages/daemon-core && npm publish --access public || echo '⚠️ daemon-core publish skipped (version may already exist)'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish @adhdev/daemon-standalone
+        if: env.NODE_AUTH_TOKEN != ''
+        run: cd packages/daemon-standalone && npm publish --access public || echo '⚠️ daemon-standalone publish skipped (version may already exist)'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

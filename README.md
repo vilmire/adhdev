@@ -1,5 +1,9 @@
 # 🦦 ADHDev — Agent Dashboard Hub for Dev
 
+[![npm](https://img.shields.io/npm/v/@adhdev/daemon-standalone?label=npm)](https://www.npmjs.com/package/@adhdev/daemon-standalone)
+[![CI](https://github.com/vilmire/adhdev/actions/workflows/ci.yml/badge.svg)](https://github.com/vilmire/adhdev/actions)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+
 > Your AI sidekick otter 🦦 — control your IDE's AI agents from anywhere.
 
 ADHDev is an **open-source** local dashboard for managing AI coding agents across multiple IDEs.
