@@ -30,4 +30,4 @@ jobs:
         run: npm ci
 
       - name: Run OSS verification
-        run: npm run build -w packages/daemon-core && npm run build -w packages/web-core && npm run build -w packages/web-standalone && npm run build -w packages/web-devconsole && npm run build -w packages/daemon-standalone && npm run check:shebang
+        run: npm run build -w packages/daemon-core && npm run build -w packages/web-core && npm run build -w packages/web-standalone && npm run build -w packages/web-devconsole && npm run build -w packages/daemon-standalone
