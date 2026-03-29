@@ -71,16 +71,16 @@ That's it! Open `http://localhost:3847` and your connected IDEs will appear auto
 
 ## 🔌 Supported IDEs & Agents
 
-### IDEs (9 supported)
-- ✅ **Cursor** — full support (CDP)
-- ✅ **Antigravity** — full support (CDP)
-- ✅ **Kiro** — full support (webview CDP)
-- ✅ **PearAI** — full support (webview CDP)
-- ✅ **Trae** — full support (webview CDP)
-- ✅ **Windsurf** — full support (CDP)
-- ✅ **VS Code** — infrastructure ready
-- ✅ **VS Code Insiders** — infrastructure ready
-- ✅ **VSCodium** — infrastructure ready
+### IDE Support Status
+We are actively building out providers. Here is the current capability tracking:
+
+- 🟢 **Antigravity** — Stable (CDP)
+- 🟢 **Cursor** — Stable (CDP)
+- 🟢 **Windsurf** — Stable (CDP)
+- 🟢 **Kiro** — Stable (webview CDP)
+- 🟡 **PearAI** — Beta (webview CDP)
+- 🟡 **Trae** — Beta (webview CDP)
+- 🟡 **VS Code / Insiders / VSCodium** — Infrastructure ready (WIP)
 
 ### AI Extensions (via Agent Stream CDP scraping)
 - ✅ Cline — **Independent Stream ✅**
@@ -88,9 +88,11 @@ That's it! Open `http://localhost:3847` and your connected IDEs will appear auto
 - ✅ Cursor Composer (native agent mode)
 
 ### Standalone CLI Agents (via Daemon CLI Adapters)
-- ✅ **Gemini CLI** — PTY-based interactive terminal
-- ✅ **Claude Code** — PTY-based interactive terminal
-- ✅ **Codex CLI** — PTY-based interactive terminal
+All CLI agents support interactive Terminal mode. Chat mode (UI abstraction) availability is listed below:
+
+- 🟢 **Claude Code** — Terminal + Chat Mode
+- 🟢 **Codex CLI** — Terminal + Chat Mode
+- 🟡 **Gemini CLI** — Terminal only (Chat Mode WIP)
 
 ### ACP Agents (Agent Client Protocol — 35 agents)
 - ✅ **35 ACP agents** supported (Gemini, Codex, Claude Agent, Cursor, Cline, GitHub Copilot, Goose, Kimi, Kiro, Mistral Vibe, OpenCode, Qwen Code, and 21 more)
