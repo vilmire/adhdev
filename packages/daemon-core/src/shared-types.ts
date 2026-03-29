@@ -1,10 +1,11 @@
 /**
  * ADHDev Shared Types — Cross-package type definitions
  *
- * Types used across daemon-core, web-core, and downstream consumers.
+ * Types used across daemon-core, web-core, web-cloud, server, etc.
  * Import via: import type { ... } from '@adhdev/daemon-core/types'
  *
  * IMPORTANT: This file must remain runtime-free (types only).
+ * Cloudflare Workers (server) can import type-only modules safely.
  */
 
 import type {
@@ -49,9 +50,9 @@ export type { WorkspaceEntry } from './config/workspaces.js';
 
 // ─── Managed Entry Types (reporter → server/web) ────────────────────
 // These define the shape of data sent by DaemonStatusReporter
-// and consumed by web-core and downstream consumers.
+// and consumed by web-core, web-cloud, and server.
 
-/** IDE entry as reported by daemon to dashboard */
+/** IDE entry as reported by daemon to server/dashboard */
 export interface ManagedIdeEntry {
     ideType: string;
     ideVersion: string;
@@ -68,7 +69,7 @@ export interface ManagedIdeEntry {
     currentAutoApprove?: string;
 }
 
-/** CLI entry as reported by daemon to dashboard */
+/** CLI entry as reported by daemon to server/dashboard */
 export interface ManagedCliEntry {
     id: string;
     instanceId: string;
@@ -80,7 +81,7 @@ export interface ManagedCliEntry {
     activeChat: _ActiveChatData | null;
 }
 
-/** ACP entry as reported by daemon to dashboard */
+/** ACP entry as reported by daemon to server/dashboard */
 export interface ManagedAcpEntry {
     id: string;
     acpType: string;

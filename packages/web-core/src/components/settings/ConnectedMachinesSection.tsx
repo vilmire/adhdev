@@ -28,7 +28,7 @@ export function ConnectedMachinesSection({ ides, emptyMessage, sendDaemonCommand
             <EmptyState
                 icon={<img src="/otter-logo.png" alt="ADHDev" className="w-12 h-12 object-contain mx-auto opacity-90" />}
                 title="No machines connected"
-                description={emptyMessage || "Run 'adhdev-standalone' to connect a local daemon instance."}
+                description={emptyMessage || "Run 'adhdev setup' once, then 'adhdev daemon' to connect this machine."}
             />
         )
     }
@@ -186,7 +186,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
         try {
             await onRevokeToken(ide.id)
             setActionState('done')
-            setActionMsg('Token revoked. Machine must restart "adhdev-standalone" to reconnect.')
+            setActionMsg('Token revoked. Machine must run "adhdev setup" to reconnect.')
         } catch (e: any) {
             setActionState('error')
             setActionMsg(e?.message || 'Failed to revoke token')
@@ -351,7 +351,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
             {confirmAction === 'revoke' && (
                 <ConfirmDialog
                     title="⚠️ Remove Machine"
-                    message={`Remove "${nickname}" from your dashboard?\n\nThis will:\n• Immediately disconnect the machine\n• Delete the machine registration\n• Require restarting "adhdev-standalone" on that machine\n\nUse this if you want to permanently remove a machine.`}
+                    message={`Remove "${nickname}" from your account?\n\nThis will:\n• Immediately disconnect the machine\n• Delete the machine registration\n• Require running "adhdev setup" again on that machine\n\nUse this if you want to permanently remove a machine.`}
                     confirmLabel="Remove Machine"
                     confirmColor="red"
                     onConfirm={handleRevoke}

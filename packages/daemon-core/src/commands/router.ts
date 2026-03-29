@@ -1,7 +1,8 @@
 /**
  * DaemonCommandRouter — Unified command routing for daemon-level commands
  *
- * Unified command routing for daemon-level commands.
+ * Extracted from cloud daemon's executeDaemonCommand() logic.
+ * Used by both daemon-cloud and daemon-standalone.
  *
  * Routing flow:
  *   1. Daemon-level commands (launch_ide, stop_ide, restart_ide, etc.) → handled here
@@ -38,13 +39,13 @@ export interface CommandRouterDeps {
     detectedIdes: { value: any[] };
     /** UUID instanceId → CDP manager key mapping */
     instanceIdMap: Map<string, string>;
-    /** Callback for CDP manager creation after launch_ide */
+    /** Callback for CDP manager creation after launch_ide (cloud: setupCdpManager, standalone: no-op) */
     onCdpManagerCreated?: (ideType: string, manager: DaemonCdpManager) => void;
     /** Callback after IDE connected (e.g., startAgentStreamPolling) */
     onIdeConnected?: () => void;
     /** Callback after status change (stop_ide, restart) */
     onStatusChange?: () => void;
-    /** Callback after chat-related commands */
+    /** Callback after chat-related commands (cloud: throttled report) */
     onPostChatCommand?: () => void;
     /** Get a connected CDP manager (for agent stream reset check) */
     getCdpLogFn?: (ideType: string) => (msg: string) => void;
@@ -233,7 +234,7 @@ export class DaemonCommandRouter {
                         LOG.info('CDP', `Connected: ${result.ideId} (port ${result.port})`);
                         LOG.info('CDP', `${this.deps.cdpManagers.size} IDE(s) connected`);
 
-                        // Notify consumer (e.g. setupIdeInstance)
+                        // Notify consumer (cloud: setupCdpManager, standalone: setupIdeInstance)
                         this.deps.onCdpManagerCreated?.(result.ideId, manager);
                     }
                 }
@@ -270,7 +271,7 @@ export class DaemonCommandRouter {
                 try {
                     const { execSync } = await import('child_process');
 
-                    // Detect package name for upgrade
+                    // Detect package: standalone uses @adhdev/daemon-standalone, cloud uses adhdev
                     const isStandalone = this.deps.packageName === '@adhdev/daemon-standalone'
                         || process.argv[1]?.includes('daemon-standalone');
                     const pkgName = isStandalone ? '@adhdev/daemon-standalone' : 'adhdev';

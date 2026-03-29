@@ -1,7 +1,7 @@
 /**
  * ADHDev Daemon Core — Shared Types
  *
- * Shared types referenced by daemon-core, daemon-standalone, and web-core.
+ * Shared types referenced by daemon-core, daemon-standalone, daemon-cloud, web-core.
  * When modifying this file, also update interface contracts in AGENT_PROTOCOL.md.
  */
 import type { StatusReportPayload } from './shared-types.js';

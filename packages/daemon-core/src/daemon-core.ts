@@ -1,7 +1,7 @@
 /**
  * DaemonCore — Core daemon orchestrator interface
  *
- * Provides the core daemon orchestrator interface consumed by daemon-standalone.
+ * Both daemon-standalone and daemon-cloud use this interface via daemon-core.
  * Actual implementation extracted from launcher and placed in this package.
  */
 

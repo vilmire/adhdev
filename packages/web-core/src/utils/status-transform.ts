@@ -6,14 +6,15 @@
  *
  * Used by:
  *   - web-standalone: StandaloneDaemonContext (localhost WS)
+ *   - web-cloud: DaemonContext (P2P status payload)
  */
 import type { StatusReportPayload, ManagedIdeEntry, ManagedCliEntry, ManagedAcpEntry } from '@adhdev/daemon-core'
 import type { DaemonData } from '../types'
 
 export interface StatusTransformOptions {
-    /** Override daemon ID */
+    /** Override daemon ID (cloud: doId from P2P, standalone: from status.id) */
     daemonId: string
-    /** Existing daemon entry to preserve */
+    /** Existing daemon entry to preserve (cloud P2P merge) */
     existingDaemon?: DaemonData
     /** Timestamp override */
     timestamp?: number

@@ -1,7 +1,7 @@
 /**
  * @adhdev/web-core — Shared components, hooks, type, API client
  *
- * Imported and used by web-standalone and downstream consumers.
+ * Imported and used by both web-standalone and web-cloud.
  */
 
 // ── Types ──
