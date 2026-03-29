@@ -2210,9 +2210,9 @@ export class DevServer {
             
         approvalBuffer = (approvalBuffer + cleanData).slice(-1500);
         
-        // Force exit on completion signal (ignore during first 15s — prompt echo contains the token)
+        // Force exit on completion signal (check cleanData directly to avoid stale buffer echo matches)
         const elapsed = Date.now() - spawnedAt;
-        if (elapsed > 15000 && approvalBuffer.includes('_PIPELINE_COMPLETE_SIGNAL_')) {
+        if (elapsed > 15000 && cleanData.includes('_PIPELINE_COMPLETE_SIGNAL_')) {
           this.log(`Agent finished task after ${Math.round(elapsed/1000)}s. Terminating interactive CLI session to unblock pipeline.`);
           this.sendAutoImplSSE({ event: 'output', data: { chunk: `\n[🤖 ADHDev Pipeline] Completion token detected. Proceeding...\n`, stream: 'stdout' } });
           approvalBuffer = '';
