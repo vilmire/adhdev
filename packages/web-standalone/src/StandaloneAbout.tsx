@@ -39,11 +39,8 @@ const COMPARISON = [
     { feature: 'SSO / RBAC / Audit logs', selfhost: false, cloud: true },
 ]
 
-const SUPPORTED = {
-    ides: ['VS Code', 'Cursor', 'Antigravity', 'Windsurf', 'Trae', 'PearAI', 'Kiro', 'VSCodium', 'VS Code Insiders'],
-    agents: ['GitHub Copilot', 'Cline', 'Roo Code'],
-    cli: ['Gemini CLI', 'Claude Code', 'Codex CLI'],
-}
+import { SUPPORTED_IDES, SUPPORTED_CLI_AGENTS, SUPPORTED_EXTENSIONS } from '@adhdev/web-core/src/constants/supported'
+
 
 export default function StandaloneAbout() {
     return (
@@ -81,9 +78,9 @@ export default function StandaloneAbout() {
                 <h2 className="text-lg font-bold mb-4">Compatible with</h2>
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-5">
                     {[
-                        { label: 'IDEs', items: SUPPORTED.ides },
-                        { label: 'Extension agents', items: SUPPORTED.agents },
-                        { label: 'CLI agents', items: SUPPORTED.cli },
+                        { label: 'IDEs', items: SUPPORTED_IDES.map(i => i.name) },
+                        { label: 'Extension agents', items: SUPPORTED_EXTENSIONS.map(i => i.name) },
+                        { label: 'CLI agents', items: SUPPORTED_CLI_AGENTS.map(i => i.name) },
                     ].map(group => (
                         <div key={group.label}>
                             <div className="text-[10px] font-bold tracking-wider text-text-muted mb-2 uppercase">{group.label}</div>

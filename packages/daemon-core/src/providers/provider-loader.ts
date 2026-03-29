@@ -131,11 +131,12 @@ export class ProviderLoader {
     return this.getProviderDir(this.upstreamDir, category, type);
   }
 
- /**
- * Canonical builtin directory for a provider.
- */
+  /**
+   * Canonical builtin directory for a provider.
+   */
   getBuiltinProviderDir(category: ProviderCategory, type: string): string {
-    return this.getProviderDir(this.getPrimaryBuiltinDir(), category, type);
+    const builtinRoot = this.getPrimaryBuiltinDir();
+    return builtinRoot ? this.getProviderDir(builtinRoot, category, type) : '';
   }
 
  /**

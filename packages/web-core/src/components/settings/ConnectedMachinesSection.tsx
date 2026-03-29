@@ -94,21 +94,25 @@ function ConfirmDialog({ title, message, confirmLabel, confirmColor, onConfirm, 
     )
 }
 
-// ── IDE type display names ──
-
-const IDE_LABELS: Record<string, { icon: string; name: string }> = {
-    'vscode': { icon: '💠', name: 'VS Code' },
-    'cursor': { icon: '⚡', name: 'Cursor' },
-    'windsurf': { icon: '🏄', name: 'Windsurf' },
-    'codex': { icon: '🤖', name: 'Codex' },
-    'claude-code': { icon: '🟠', name: 'Claude Code' },
-    'aider': { icon: '🔧', name: 'Aider' },
-}
+import { SUPPORTED_IDES, SUPPORTED_CLI_AGENTS, SUPPORTED_EXTENSIONS } from '../../constants/supported'
 
 function getIdeLabel(type: string): { icon: string; name: string } {
     // Type format: "vscode", "cursor", or full "adhdev-daemon" (skip)
     const key = type.replace(/^ide-/, '').replace(/-provider$/, '').toLowerCase()
-    return IDE_LABELS[key] || { icon: '📝', name: type }
+    
+    // Combine all supported lists to find matching icon/name
+    const allSupported = [...SUPPORTED_IDES, ...SUPPORTED_CLI_AGENTS, ...SUPPORTED_EXTENSIONS]
+    const match = allSupported.find(s => 
+        s.id === key || 
+        key.includes(s.id) || 
+        s.id.includes(key)
+    )
+    
+    if (match) {
+        return { icon: match.icon, name: match.name }
+    }
+    
+    return { icon: '📝', name: type }
 }
 
 // ── Machine Card ──
