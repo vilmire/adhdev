@@ -1,0 +1,316 @@
+openapi: 3.0.3
+info:
+  title: ADHDev Standalone API
+  description: REST API for the ADHDev standalone daemon — manage IDEs, CLIs, and AI agents.
+  version: 0.6.53
+  license:
+    name: AGPL-3.0
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: http://localhost:3847
+    description: Local standalone daemon
+
+security:
+  - BearerAuth: []
+
+paths:
+  /api/v1/status:
+    get:
+      summary: Get daemon status
+      description: Returns machine info, system stats, connected IDEs/CLIs, and detected providers.
+      operationId: getStatus
+      tags: [Status]
+      responses:
+        '200':
+          description: Current daemon status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+
+  /api/v1/ides:
+    get:
+      summary: List managed IDEs
+      description: Returns all IDE instances currently managed by the daemon.
+      operationId: getIdes
+      tags: [IDEs]
+      responses:
+        '200':
+          description: List of IDE entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ides:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/IdeEntry'
+
+  /api/v1/clis:
+    get:
+      summary: List managed CLIs
+      description: Returns all CLI instances currently managed by the daemon.
+      operationId: getClis
+      tags: [CLIs]
+      responses:
+        '200':
+          description: List of CLI entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  clis:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CliEntry'
+
+  /api/v1/agents:
+    get:
+      summary: List all agents
+      description: Returns a flattened list of all active agents across IDEs (native chat + extensions).
+      operationId: getAgents
+      tags: [Agents]
+      responses:
+        '200':
+          description: List of agent entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AgentEntry'
+
+  /api/v1/command:
+    post:
+      summary: Execute a command
+      description: Send a command to a specific IDE or CLI instance.
+      operationId: executeCommand
+      tags: [Commands]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandRequest'
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+        '400':
+          description: Missing required fields
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Optional token auth (set via --token flag)
+
+  schemas:
+    StatusResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "standalone_MacBook_Pro"
+        type:
+          type: string
+          example: "standalone"
+        platform:
+          type: string
+          example: "darwin"
+        hostname:
+          type: string
+          example: "MacBook-Pro"
+        timestamp:
+          type: number
+        ides:
+          type: array
+          items:
+            $ref: '#/components/schemas/IdeEntry'
+        clis:
+          type: array
+          items:
+            $ref: '#/components/schemas/CliEntry'
+        cdpConnected:
+          type: boolean
+        detectedIdes:
+          type: array
+          items:
+            $ref: '#/components/schemas/DetectedIde'
+        availableProviders:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderInfo'
+        system:
+          $ref: '#/components/schemas/SystemInfo'
+
+    IdeEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "standalone:ide:cursor_12345"
+        instanceId:
+          type: string
+        type:
+          type: string
+          example: "cursor"
+        name:
+          type: string
+          example: "Cursor"
+        cdpConnected:
+          type: boolean
+        cdpPort:
+          type: integer
+        agentStreams:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentStreamEntry'
+        workspaceFolders:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              path:
+                type: string
+        activeFile:
+          type: string
+          nullable: true
+        currentModel:
+          type: string
+        currentPlan:
+          type: string
+
+    CliEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "standalone:cli:gemini-cli"
+        cliId:
+          type: string
+        type:
+          type: string
+          example: "gemini-cli"
+        isRunning:
+          type: boolean
+
+    AgentEntry:
+      type: object
+      properties:
+        ideId:
+          type: string
+        type:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [idle, generating, streaming, waiting_approval]
+        source:
+          type: string
+          enum: [native, extension]
+
+    AgentStreamEntry:
+      type: object
+      properties:
+        agentType:
+          type: string
+        agentName:
+          type: string
+        extensionId:
+          type: string
+        status:
+          type: string
+        inputContent:
+          type: string
+        activeModal:
+          type: object
+          nullable: true
+          properties:
+            message:
+              type: string
+            buttons:
+              type: array
+              items:
+                type: string
+
+    DetectedIde:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        name:
+          type: string
+        installed:
+          type: boolean
+        running:
+          type: boolean
+
+    ProviderInfo:
+      type: object
+      properties:
+        type:
+          type: string
+        icon:
+          type: string
+        displayName:
+          type: string
+        category:
+          type: string
+
+    SystemInfo:
+      type: object
+      properties:
+        cpus:
+          type: integer
+        totalMem:
+          type: number
+        freeMem:
+          type: number
+        loadavg:
+          type: array
+          items:
+            type: number
+        uptime:
+          type: number
+        arch:
+          type: string
+
+    CommandRequest:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          example: "send_chat"
+        payload:
+          type: object
+          example: { "message": "Hello!" }
+        target:
+          type: string
+          example: "standalone:ide:cursor_12345"
+
+    CommandResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+        error:
+          type: string

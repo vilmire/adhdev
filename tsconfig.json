@@ -1,0 +1,14 @@
+{
+    "files": [],
+    "references": [
+        {
+            "path": "./packages/web"
+        },
+        {
+            "path": "./packages/server"
+        },
+        {
+            "path": "./packages/core"
+        }
+    ]
+}

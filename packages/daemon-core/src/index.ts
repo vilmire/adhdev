@@ -1,0 +1,126 @@
+/**
+ * @adhdev/daemon-core — Public API
+ *
+ * Core logic for daemon: CDP, Provider, IDE detection, CLI/ACP adapters and more.
+ * Used by both daemon-standalone and daemon-cloud.
+ */
+
+// ── Types ──
+export type {
+  ChatMessage,
+  ExtensionInfo,
+  CommandResult as CoreCommandResult,
+  ProviderConfig,
+  DaemonEvent,
+  StatusResponse,
+  SystemInfo,
+  DetectedIde,
+  ProviderInfo,
+  AgentEntry,
+} from './types.js';
+
+// ── Shared Types (cross-package) ──
+export type {
+  ManagedIdeEntry,
+  ManagedCliEntry,
+  ManagedAcpEntry,
+  ManagedAgentStream,
+  AvailableProviderInfo,
+  AcpConfigOption,
+  AcpMode,
+  StatusReportPayload,
+  MachineInfo,
+  DetectedIdeInfo,
+  WorkspaceEntry,
+  WorkspaceActivity,
+  ProviderStatus,
+  ProviderErrorReason,
+  ActiveChatData,
+  IdeProviderState,
+  CliProviderState,
+  AcpProviderState,
+  ExtensionProviderState,
+} from './shared-types.js';
+
+// ── Core Interface ──
+export type { IDaemonCore, DaemonCoreOptions } from './daemon-core.js';
+
+// ── Config ──
+export { loadConfig, saveConfig, resetConfig, isSetupComplete, addCliHistory, markSetupComplete, updateConfig } from './config/config.js';
+export { getWorkspaceState } from './config/workspaces.js';
+export { getWorkspaceActivity } from './config/workspace-activity.js';
+
+// ── Detection ──
+export { detectIDEs } from './detection/ide-detector.js';
+export type { IDEInfo } from './detection/ide-detector.js';
+export { detectCLIs } from './detection/cli-detector.js';
+export { getHostMemorySnapshot } from './system/host-memory.js';
+export type { HostMemorySnapshot } from './system/host-memory.js';
+
+// ── CDP ──
+export { DaemonCdpManager } from './cdp/manager.js';
+export { CdpDomHandlers } from './cdp/devtools.js';
+export { setupIdeInstance, registerExtensionProviders, connectCdpManager, probeCdpPort } from './cdp/setup.js';
+export type { CdpSetupContext, SetupIdeInstanceOptions } from './cdp/setup.js';
+export { DaemonCdpScanner } from './cdp/scanner.js';
+export type { CdpScannerOptions } from './cdp/scanner.js';
+export { DaemonCdpInitializer } from './cdp/initializer.js';
+export type { CdpInitializerConfig } from './cdp/initializer.js';
+
+// ── Commands ──
+export { DaemonCommandHandler } from './commands/handler.js';
+export type { CommandResult, CommandContext } from './commands/handler.js';
+export { DaemonCommandRouter } from './commands/router.js';
+export type { CommandRouterDeps, CommandRouterResult } from './commands/router.js';
+
+// ── Status ──
+export { DaemonStatusReporter } from './status/reporter.js';
+export { buildManagedIdes, buildManagedClis, buildManagedAcps, buildAllManagedEntries, findCdpManager, hasCdpManager, isCdpConnected } from './status/builders.js';
+
+// ── Logger ──
+export { LOG, installGlobalInterceptor, setLogLevel, getLogLevel, getRecentLogs } from './logging/logger.js';
+export type { ScopedLogger, LogLevel, LogEntry } from './logging/logger.js';
+export { logCommand, getRecentCommands } from './logging/command-log.js';
+
+// ── CLI Management ──
+export { DaemonCliManager } from './commands/cli-manager.js';
+
+// ── Launch ──
+export { launchWithCdp, getAvailableIdeIds, killIdeProcess, isIdeRunning } from './launch.js';
+
+// ── IPC ──
+export { DEFAULT_DAEMON_PORT, DAEMON_WS_PATH } from './ipc-protocol.js';
+
+// ── Chat History ──
+export { readChatHistory } from './config/chat-history.js';
+
+// ── Agent Stream ──
+export { DaemonAgentStreamManager } from './agent-stream/index.js';
+export { AgentStreamPoller } from './agent-stream/index.js';
+export type { AgentStreamPollerDeps } from './agent-stream/index.js';
+
+// ── Providers ──
+export { ProviderLoader } from './providers/provider-loader.js';
+export { ProviderInstanceManager } from './providers/provider-instance-manager.js';
+export { IdeProviderInstance } from './providers/ide-provider-instance.js';
+export { CliProviderInstance } from './providers/cli-provider-instance.js';
+export { AcpProviderInstance } from './providers/acp-provider-instance.js';
+export type { ProviderModule, CdpTargetFilter } from './providers/contracts.js';
+export { VersionArchive, detectAllVersions } from './providers/version-archive.js';
+export type { ProviderVersionInfo, VersionHistory } from './providers/version-archive.js';
+
+// ── Dev Server ──
+export { DevServer } from './daemon/dev-server.js';
+
+// ── CLI Adapters ──
+export { ProviderCliAdapter } from './cli-adapters/provider-cli-adapter.js';
+export type { CliAdapter } from './cli-adapter-types.js';
+
+// ── Installer ──
+export { getAIExtensions, installExtensions, launchIDE, isExtensionInstalled } from './installer.js';
+export type { ExtensionInfo as InstallerExtensionInfo } from './installer.js';
+
+// ── Boot / Lifecycle ──
+export { initDaemonComponents, shutdownDaemonComponents } from './boot/daemon-lifecycle.js';
+export type { DaemonInitConfig, DaemonComponents } from './boot/daemon-lifecycle.js';
+

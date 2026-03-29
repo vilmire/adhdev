@@ -1,0 +1,150 @@
+/**
+ * ProviderInstance — Provider runtime lifecycle
+ *
+ * provider.js = static config/scripts
+ * ProviderInstance = runtime status management + lifecycle
+ *
+ * Daemon only collects via ProviderInstance.getState(),
+ * Each Instance manages its own status.
+ */
+
+import type { ProviderModule, ProviderSettingDef } from './contracts.js';
+import type { AcpConfigOption, AcpMode } from '../shared-types.js';
+import type { ChatMessage } from '../types.js';
+
+// ─── ProviderState — Discriminated union by category ─────────────
+
+export type ProviderStatus = 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting';
+
+export interface ActiveChatData {
+    id: string;
+    title: string;
+    status: string;
+    messages: ChatMessage[];
+    activeModal: { message: string; buttons: string[] } | null;
+    terminalHistory?: string;
+    inputContent?: string;
+}
+
+/** Standardized error reasons across all provider categories */
+export type ProviderErrorReason =
+    | 'not_installed'   // CLI/ACP binary not found
+    | 'auth_failed'     // Authentication/API key error
+    | 'spawn_error'     // Process spawn failure
+    | 'init_failed'     // Initialization/handshake failure
+    | 'crash'           // Unexpected process crash
+    | 'timeout'         // Operation timeout
+    | 'cdp_error'       // CDP connection failure (IDE)
+    | 'disconnected';   // Connection lost
+
+/** Common fields shared by all provider categories */
+interface ProviderStateBase {
+ /** Provider type (e.g. 'gemini-cli', 'cursor', 'cline') */
+    type: string;
+ /** Provider Display name */
+    name: string;
+ /** current status */
+    status: ProviderStatus;
+ /** chat data */
+    activeChat: ActiveChatData | null;
+ /** Workspace — project path or name (all categories) */
+    workspace?: string | null;
+ /** Runtime info (real-time detection) */
+    currentModel?: string;
+    currentPlan?: string;
+ /** Error details (when status === 'error') */
+    errorMessage?: string;
+    errorReason?: ProviderErrorReason;
+ /** meta */
+    instanceId: string;
+    lastUpdated: number;
+    settings: Record<string, any>;
+ /** Event queue (cleared after daemon collects) */
+    pendingEvents: ProviderEvent[];
+}
+
+/** IDE provider state */
+export interface IdeProviderState extends ProviderStateBase {
+    category: 'ide';
+    cdpConnected: boolean;
+ /** IDE child Extension Instance status */
+    extensions: ProviderState[];
+    currentAutoApprove?: string;
+}
+
+/** CLI provider state */
+export interface CliProviderState extends ProviderStateBase {
+    category: 'cli';
+ /** terminal = PTY stream, chat = parsed conversation */
+    mode: 'terminal' | 'chat';
+}
+
+/** ACP provider state */
+export interface AcpProviderState extends ProviderStateBase {
+    category: 'acp';
+    mode: 'chat';
+ /** ACP config options (model/mode selection) */
+    acpConfigOptions?: AcpConfigOption[];
+ /** ACP available modes */
+    acpModes?: AcpMode[];
+}
+
+/** Extension provider state */
+export interface ExtensionProviderState extends ProviderStateBase {
+    category: 'extension';
+    agentStreams?: any[];
+}
+
+/** Discriminated union — switch on `.category` */
+export type ProviderState = IdeProviderState | CliProviderState | AcpProviderState | ExtensionProviderState;
+
+export interface ProviderEvent {
+    event: string;
+    timestamp: number;
+    [key: string]: any;
+}
+
+// ─── ProviderInstance interface ─────────────────
+
+export interface InstanceContext {
+ /** CDP connection (IDE/Extension) */
+    cdp?: {
+        isConnected: boolean;
+        evaluate(script: string, timeout?: number): Promise<unknown>;
+        evaluateInWebviewFrame?(expression: string, matchFn?: (bodyPreview: string) => boolean): Promise<string | null>;
+        discoverAgentWebviews?(): Promise<any[]>;
+    };
+ /** Server log transmit */
+    serverConn?: {
+        sendMessage(type: string, data: any): void;
+    };
+ /** P2P PTY output transmit */
+    onPtyData?: (data: string) => void;
+ /** Provider configvalue (resolved) */
+    settings: Record<string, any>;
+}
+
+export interface ProviderInstance {
+ /** Provider type */
+    readonly type: string;
+ /** Provider category */
+    readonly category: 'cli' | 'ide' | 'extension' | 'acp';
+
+ /** initialize */
+    init(context: InstanceContext): Promise<void>;
+
+ /** Tick — periodic status refresh (IDE: readChat, Extension: stream collection) */
+    onTick(): Promise<void>;
+
+ /** Return current status */
+    getState(): ProviderState;
+
+ /** Receive event (external → Instance) */
+    onEvent(event: string, data?: any): void;
+
+ /** Update settings at runtime (called when user changes settings from dashboard) */
+    updateSettings?(newSettings: Record<string, any>): void;
+
+ /** cleanup */
+    dispose(): void;
+}

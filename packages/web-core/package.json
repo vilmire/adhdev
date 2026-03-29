@@ -1,0 +1,39 @@
+{
+  "name": "@adhdev/web-core",
+  "version": "0.6.60",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "clsx": "^2.1.1",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-markdown": "^9.0.1",
+    "react-router-dom": "^6.26.0",
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.1",
+    "remark-github-blockquote-alert": "^2.0.1",
+    "tailwind-merge": "^3.5.0"
+  },
+  "devDependencies": {
+    "@adhdev/daemon-core": "*",
+    "@tailwindcss/vite": "^4.2.2",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^5.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vilmire/adhdev.git",
+    "directory": "packages/web-core"
+  },
+  "homepage": "https://github.com/vilmire/adhdev#readme",
+  "license": "AGPL-3.0-or-later"
+}

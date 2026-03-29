@@ -1,0 +1,883 @@
+/* ═══════════════════════════════════════════════════════
+   IDE Page — v2 styles
+   Clean 2-panel layout with premium dark theme
+   ═══════════════════════════════════════════════════════ */
+
+/* ─── Page Layout ────────────────────────────────────── */
+.ide-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    overflow: hidden;
+}
+
+.ide-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+/* ─── Header ─────────────────────────────────────────── */
+.ide-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-primary);
+    flex-shrink: 0;
+    z-index: 10;
+}
+
+.ide-header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ide-header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ide-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.ide-name {
+    font-weight: 800;
+    font-size: 15px;
+    letter-spacing: 0.02em;
+}
+
+.ide-name-mobile {
+    display: none;
+}
+
+.ide-workspace {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    opacity: 0.7;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ide-machine-label {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: var(--bg-secondary);
+    padding: 2px 8px;
+    border-radius: 10px;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+
+.ide-badge {
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: var(--accent-primary);
+    background: rgba(99, 102, 241, 0.1);
+    padding: 2px 8px;
+    border-radius: 6px;
+}
+
+.ide-status-pill {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    background: var(--bg-secondary);
+    border-radius: 20px;
+    border: 1px solid var(--border-subtle);
+}
+
+.ide-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    transition: background 0.3s;
+}
+
+.ide-dot.online {
+    background: var(--status-online);
+    box-shadow: 0 0 4px color-mix(in srgb, var(--status-online) 50%, transparent);
+}
+
+.ide-dot.connecting {
+    background: #fbbf24;
+    animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.ide-status-text {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+/* View toggle buttons */
+.ide-view-toggle {
+    display: flex;
+    background: var(--bg-secondary);
+    border-radius: 10px;
+    border: 1px solid var(--border-subtle);
+    overflow: hidden;
+}
+
+.ide-view-btn {
+    padding: 6px 12px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.ide-view-btn.active {
+    background: var(--surface-primary);
+    color: var(--accent-primary);
+    box-shadow: 0 0 0 1px var(--accent-primary);
+}
+
+.ide-view-btn:hover:not(.active) {
+    background: var(--bg-glass-hover);
+}
+
+.ide-back-btn {
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    background: var(--accent-primary);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.ide-back-btn:hover {
+    opacity: 0.85;
+}
+
+/* ─── Content Area ───────────────────────────────────── */
+.ide-content {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* ─── Chat Panel ─────────────────────────────────────── */
+.ide-chat-panel {
+    width: 420px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border-subtle);
+    background: var(--surface-secondary);
+    transition: flex 0.3s ease, width 0.3s ease, opacity 0.25s ease, min-width 0.3s ease;
+    opacity: 1;
+    overflow: hidden;
+}
+
+.ide-chat-panel.hidden {
+    flex: 0 !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    opacity: 0;
+    border-right: none;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+.ide-chat-panel.full {
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    border-right: none;
+}
+
+/* Chat tabs (IDE / Extensions) */
+.ide-chat-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+}
+
+.ide-chat-tab {
+    flex: 1;
+    padding: 10px 16px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+    transition: all 0.15s;
+}
+
+.ide-chat-tab.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--accent-primary);
+    background: var(--surface-primary);
+}
+
+.ide-chat-tab.ext.active {
+    border-bottom-color: #22d3ee;
+}
+
+.ide-ext-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: rgba(34, 211, 238, 0.15);
+    color: #22d3ee;
+    font-size: 10px;
+    font-weight: 700;
+    margin-left: 6px;
+}
+
+/* Chat header */
+.ide-chat-header {
+    padding: 14px 18px 10px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-primary);
+    flex-shrink: 0;
+}
+
+.ide-chat-header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.ide-chat-header-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.ide-chat-label {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.ide-chat-status {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--status-online);
+}
+
+.ide-chat-header-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.ide-btn-icon {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.ide-btn-icon:hover {
+    background: var(--bg-glass-hover);
+}
+
+.ide-btn-primary-sm {
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    background: var(--accent-primary);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+.ide-btn-primary-sm:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.ide-chat-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ─── History ────────────────────────────────────────── */
+.ide-history {
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+}
+
+.ide-history-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 18px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-muted);
+    cursor: pointer;
+    background: var(--surface-tertiary);
+    transition: background 0.15s;
+}
+
+.ide-history-header:hover {
+    background: var(--bg-glass-hover);
+}
+
+.ide-history-toggle {
+    font-size: 8px;
+    opacity: 0.6;
+}
+
+.ide-history-list {
+    max-height: 120px;
+    overflow: hidden;
+    transition: max-height 0.25s ease;
+}
+
+.ide-history-list.expanded {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.ide-history-item {
+    padding: 8px 18px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-subtle);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: background 0.1s;
+}
+
+.ide-history-item:hover {
+    background: var(--bg-glass-hover);
+}
+
+.ide-history-item.active {
+    color: var(--accent-primary-light);
+    border-left: 3px solid var(--accent-primary);
+    background: rgba(99, 102, 241, 0.06);
+}
+
+/* ─── Approval Bar ───────────────────────────────────── */
+.ide-approval {
+    padding: 14px 18px;
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(217, 119, 6, 0.08));
+    border-bottom: 1px solid rgba(245, 158, 11, 0.2);
+    flex-shrink: 0;
+    animation: slide-down 0.2s ease-out;
+}
+
+.ide-approval-label {
+    font-size: 11px;
+    font-weight: 800;
+    color: #f59e0b;
+    margin-bottom: 8px;
+    letter-spacing: 0.03em;
+}
+
+.ide-approval-msg {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-primary);
+    margin-bottom: 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 80px;
+    overflow: hidden;
+}
+
+.ide-approval-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.ide-approval-btn {
+    flex: 1;
+    min-width: 80px;
+    padding: 8px 14px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 12px;
+    cursor: pointer;
+    background: var(--surface-tertiary);
+    color: var(--text-primary);
+    transition: all 0.15s;
+}
+
+.ide-approval-btn:hover {
+    filter: brightness(1.1);
+}
+
+.ide-approval-btn.primary {
+    background: var(--status-online);
+    color: white;
+}
+
+/* ─── Chat Messages ──────────────────────────────────── */
+.ide-chat-messages {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.ide-chat-empty {
+    text-align: center;
+    margin-top: 80px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+.ide-chat-empty-icon {
+    font-size: 36px;
+    opacity: 0.12;
+}
+
+.ide-chat-empty-text {
+    opacity: 0.2;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.ide-chat-empty-bar {
+    width: 32px;
+    height: 3px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent-primary), transparent);
+    animation: shimmer 2s ease-in-out infinite;
+}
+
+/* ─── Chat Input ─────────────────────────────────────── */
+.ide-chat-input-wrap {
+    border-top: 1px solid var(--border-subtle);
+    background: var(--surface-primary);
+    flex-shrink: 0;
+}
+
+.ide-chat-input-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 18px 16px;
+}
+
+.ide-chat-input {
+    flex: 1;
+    height: 40px;
+    padding: 0 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 20px;
+    color: var(--text-primary);
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.ide-chat-input:focus {
+    border-color: var(--accent-primary);
+}
+
+.ide-btn-send {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    border: none;
+    cursor: default;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.3s ease;
+}
+
+.ide-btn-send:not(:disabled) {
+    background: var(--accent-primary);
+    color: white;
+    cursor: pointer;
+}
+
+.ide-btn-send:disabled {
+    opacity: 1;
+}
+
+.ide-btn-send:hover:not(:disabled) {
+    opacity: 0.9;
+}
+
+/* ─── Model/Mode Bar ─────────────────────────────────── */
+.ide-model-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 18px 0;
+    flex-wrap: wrap;
+}
+
+.ide-model-agent {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--accent-primary);
+    opacity: 0.7;
+    letter-spacing: 0.03em;
+}
+
+.ide-model-sep {
+    color: var(--border-subtle);
+    font-size: 10px;
+}
+
+.ide-chip-wrap {
+    position: relative;
+}
+
+.ide-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid transparent;
+    background: var(--surface-tertiary);
+    color: var(--text-secondary);
+    white-space: nowrap;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: all 0.15s;
+}
+
+.ide-chip.open {
+    border-color: rgba(99, 102, 241, 0.35);
+}
+
+.ide-chip:hover {
+    background: var(--bg-glass-hover);
+}
+
+.ide-chip-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 59;
+}
+
+.ide-chip-dropdown {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    z-index: 60;
+    background: var(--surface-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    margin-bottom: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+    min-width: 160px;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.35);
+    animation: slide-up 0.12s ease-out;
+}
+
+.ide-chip-dropdown-title {
+    padding: 6px 12px;
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.ide-chip-option {
+    padding: 7px 12px;
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-secondary);
+    border-left: 2px solid transparent;
+    transition: background 0.1s;
+}
+
+.ide-chip-option:hover {
+    background: rgba(99, 102, 241, 0.08);
+}
+
+.ide-chip-option.selected {
+    color: var(--accent-primary);
+    font-weight: 600;
+    background: rgba(99, 102, 241, 0.1);
+    border-left-color: var(--accent-primary);
+}
+
+/* ─── Remote Desktop Panel ───────────────────────────── */
+.ide-remote-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #000;
+    min-width: 0;
+    transition: flex 0.3s ease, opacity 0.25s ease;
+    opacity: 1;
+    overflow: hidden;
+}
+
+.ide-remote-panel.hidden {
+    flex: 0 !important;
+    opacity: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+.ide-remote-panel.full {
+    flex: 1;
+}
+
+/* ─── Toasts ─────────────────────────────────────────── */
+.ide-toasts {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+}
+
+.ide-toast {
+    padding: 10px 18px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 600;
+    backdrop-filter: blur(12px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    pointer-events: auto;
+    cursor: pointer;
+    animation: toast-in 0.25s ease-out;
+    max-width: 360px;
+}
+
+.ide-toast.success {
+    background: rgba(16, 185, 129, 0.92);
+    color: white;
+}
+
+.ide-toast.warning {
+    background: rgba(245, 158, 11, 0.92);
+    color: white;
+}
+
+.ide-toast.info {
+    background: rgba(99, 102, 241, 0.92);
+    color: white;
+}
+
+/* ─── Animations ─────────────────────────────────────── */
+@keyframes shimmer {
+    0%, 100% { opacity: 0.2; }
+    50% { opacity: 0.6; }
+}
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
+
+@keyframes toast-in {
+    from { opacity: 0; transform: translateX(40px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slide-up {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-down {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Responsive ─────────────────────────────────────── */
+@media (max-width: 768px) {
+    .ide-page {
+        height: 100%;
+        height: 100dvh;
+    }
+
+    /* Header: make room for hamburger menu (fixed left:14 w:36) */
+    .ide-header {
+        padding: 10px 10px 10px 60px;
+        min-height: 56px;
+        gap: 6px;
+        flex-wrap: nowrap;
+    }
+
+    .ide-header-left {
+        gap: 8px;
+        min-width: 0;
+        flex: 1 1 auto;
+    }
+
+    .ide-name {
+        display: none;
+    }
+
+    .ide-name-mobile {
+        display: inline;
+        font-weight: 700;
+        font-size: 14px;
+    }
+
+    .ide-workspace,
+    .ide-machine-label {
+        display: none;
+    }
+
+    .ide-badge {
+        display: none;
+    }
+
+    /* Match dashboard: hide status text, show just the dot inline */
+    .ide-status-pill {
+        padding: 0;
+        background: none;
+        border: none;
+    }
+
+    .ide-status-text {
+        display: none;
+    }
+
+    .ide-header-right {
+        gap: 4px;
+        flex-shrink: 0;
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: center;
+    }
+
+    .ide-view-btn {
+        padding: 5px 10px;
+        font-size: 13px;
+    }
+
+    .ide-back-btn {
+        padding: 5px 10px;
+        font-size: 11px;
+    }
+
+    /* Content: vertical stack, remote on top / chat on bottom */
+    .ide-content {
+        flex-direction: column;
+    }
+
+    /* Chat panel fills the space — below remote on mobile */
+    .ide-chat-panel {
+        width: 100%;
+        border-right: none;
+        flex: 1;
+        min-height: 0;
+        order: 2;
+    }
+
+    .ide-chat-panel.full {
+        max-width: 100%;
+    }
+
+    /* Remote panel fills the space — on top on mobile */
+    .ide-remote-panel {
+        flex: 1;
+        min-height: 0;
+        order: 1;
+    }
+
+    .ide-remote-panel.full {
+        flex: 1;
+    }
+
+    /* Chat input tighter on mobile */
+    .ide-chat-input-row {
+        padding: 8px 12px 12px;
+    }
+
+    .ide-chat-input {
+        height: 36px;
+        font-size: 13px;
+    }
+
+    /* Toasts: avoid hamburger overlap */
+    .ide-toasts {
+        top: auto;
+        bottom: 16px;
+        right: 12px;
+        left: 12px;
+    }
+
+    .ide-toast {
+        max-width: 100%;
+    }
+}
+
+@media (min-width: 769px) {
+    .ide-content {
+        flex-direction: row;
+    }
+}

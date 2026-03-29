@@ -1,0 +1,89 @@
+/**
+ * Compatibility layer — wraps functions used by existing page code
+ * with web-core abstractions. Supports gradual migration.
+ */
+import { useBaseDaemons } from './context/BaseDaemonContext'
+
+let _useDaemonsHook: any = useBaseDaemons
+
+/** useDaemons() wrapper with dependency injection for web-cloud */
+export function useDaemons() {
+    return _useDaemonsHook()
+}
+
+type EventCallback = (...args: any[]) => void
+
+/**
+ * dashboardWS stub — no-op in standalone,
+ * cloud injects the real WS instance.
+ */
+class DashboardWSStub {
+    private listeners = new Map<string, Set<EventCallback>>()
+
+    send(_data: any) { /* no-op in core */ }
+    isConnected() { return false }
+
+    on(event: string, callback: EventCallback): () => void {
+        if (!this.listeners.has(event)) this.listeners.set(event, new Set())
+        this.listeners.get(event)!.add(callback)
+        return () => { this.listeners.get(event)?.delete(callback) }
+    }
+
+    emit(event: string, ...args: any[]) {
+        this.listeners.get(event)?.forEach(cb => cb(...args))
+    }
+}
+
+export let dashboardWS: any = new DashboardWSStub()
+
+type PtyOutputCallback = (cliId: string, data: string) => void
+
+/**
+ * ConnectionManager stub — abstract connection interface.
+ * standalone: WS adapter injected, cloud: P2P implementation injected.
+ */
+class ConnectionManagerStub {
+    private ptyCallbacks = new Set<PtyOutputCallback>()
+
+    sendPtyInput(_daemonId: string, _cliId: string, _data: string) { return false }
+    sendPtyResize(_daemonId: string, _cliId: string, _cols: number, _rows: number) { return false }
+    async requestChatHistory(_daemonId: string, _agentType: string, _offset: number, _limit: number, _instanceId?: string) {
+        return { messages: [] as any[], hasMore: false }
+    }
+    retryConnection(_daemonId: string) {}
+    getState(_daemonId: string) { return 'disconnected' as string }
+    sendData(_daemonId: string, _data: any) { return false }
+
+    /** Get connection instance for a daemon (undefined when not connected) */
+    get(_daemonId: string): any { return undefined }
+
+    /** Screenshot callback */
+    onScreenshot(_key: string, _callback: (sourceDaemonId: string, blob: Blob) => void): () => void {
+        return () => {}
+    }
+
+    onPtyOutput(callback: PtyOutputCallback): () => void {
+        this.ptyCallbacks.add(callback)
+        return () => { this.ptyCallbacks.delete(callback) }
+    }
+
+    emitPtyOutput(cliId: string, data: string) {
+        this.ptyCallbacks.forEach(cb => cb(cliId, data))
+    }
+}
+
+export let connectionManager: any = new ConnectionManagerStub()
+
+/** @deprecated Use connectionManager instead */
+export let p2pManager: any = connectionManager
+
+/** Inject real implementations from the host app (e.g. web-cloud) */
+export function setupCompat(deps: { dashboardWS?: any; connectionManager?: any; p2pManager?: any; useDaemonsHook?: any }) {
+    if (deps.dashboardWS) dashboardWS = deps.dashboardWS
+    if (deps.connectionManager) {
+        connectionManager = deps.connectionManager
+        p2pManager = deps.connectionManager
+    }
+    if (deps.p2pManager) p2pManager = deps.p2pManager
+    if (deps.useDaemonsHook) _useDaemonsHook = deps.useDaemonsHook
+}

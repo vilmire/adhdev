@@ -1,0 +1,45 @@
+name: CLA Assistant
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  cla:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'pull_request_target' && github.event.action != 'synchronize') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null &&
+       contains(github.event.comment.body, 'I have read the CLA Document and I hereby sign the CLA'))
+    steps:
+      - name: CLA Assistant
+        uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.OSS_SYNC_TOKEN }}
+        with:
+          path-to-signatures: '.github/cla-signatures.json'
+          path-to-document: 'https://github.com/vilmire/adhdev/blob/main/CLA.md'
+          branch: 'main'
+          allowlist: bot*
+          sign-comment: >
+            I have read the CLA Document and I hereby sign the CLA
+          signed-comment: >
+            ✅ Thank you for signing the CLA! Your contribution can now be merged.
+          unsigned-comment: >
+            👋 Thanks for your Pull Request!
+
+            Before we can merge, please sign our [Contributor License Agreement](https://github.com/vilmire/adhdev/blob/main/CLA.md).
+
+            To sign, please reply with:
+
+            > I have read the CLA Document and I hereby sign the CLA
+
+            This allows ADHDev to distribute your contribution under both open-source and commercial licenses.

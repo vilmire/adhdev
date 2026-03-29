@@ -1,0 +1,26 @@
+{
+  "name": "adhdev",
+  "version": "0.6.60",
+  "private": true,
+  "description": "Agent Dashboard Hub — Control your IDE's AI agents from anywhere",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "start": "npm run dev",
+    "dev": "npm run dev:daemon & npm run dev:web",
+    "dev:daemon": "npm run dev -w packages/daemon-standalone",
+    "dev:web": "npm run dev -w packages/web-standalone",
+    "build": "npm run build -w packages/daemon-core && npm run build -w packages/web-core && npm run build -w packages/web-standalone && npm run build -w packages/daemon-standalone"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "author": "vilmire",
+  "license": "AGPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vilmire/adhdev.git"
+  },
+  "homepage": "https://docs.adhf.dev"
+}

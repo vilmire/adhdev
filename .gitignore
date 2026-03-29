@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+packages/daemon-standalone/public/
+.wrangler/
+
+# Environment
+.env
+.env.local
+.env.*
+.dev.vars
+wrangler.toml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+
+# VS Code Extension package
+*.vsix
+
+# Wrangler local state
+.wrangler/
+
+# npm pack artifacts
+*.tgz
+
+# OSS repo local clone
+adhdev-oss/
+
+# Turbo / Coverage
+.turbo/
+coverage/
+
+# Debug / temp files
+*.patch
+codex_*
+debug_*
+ide_dom.json
+.aider*

@@ -1,0 +1,50 @@
+{
+  "name": "@adhdev/daemon-standalone",
+  "version": "0.6.60",
+  "description": "ADHDev standalone daemon — embedded HTTP/WS server for local dashboard",
+  "main": "dist/index.js",
+  "bin": {
+    "adhdev-standalone": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "bundle:web": "node -e \"const{cpSync,mkdirSync}=require('fs');mkdirSync('public',{recursive:true});cpSync('../web-standalone/dist','public',{recursive:true});console.log('bundled web-standalone → public/')\"",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepublishOnly": "cd ../.. && npm run build -w packages/daemon-core && npm run build -w packages/web-standalone && cd packages/daemon-standalone && npm run bundle:web && npm run build"
+  },
+  "files": [
+    "dist",
+    "public",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "adhdev",
+    "standalone",
+    "local-dashboard"
+  ],
+  "author": "vilmire",
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "@adhdev/daemon-core": "*",
+    "open": "^10.1.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "tsup": "^8.2.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vilmire/adhdev.git",
+    "directory": "packages/daemon-standalone"
+  },
+  "homepage": "https://github.com/vilmire/adhdev#readme"
+}

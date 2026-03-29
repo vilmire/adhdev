@@ -1,0 +1,191 @@
+/**
+ * AgentStreamPanel — extension chat streams on IDE detail page
+ *
+ * Reuses the same ChatPane + ApprovalBanner components as the main Dashboard
+ * to maintain visual consistency. Each agent stream is converted to an
+ * ActiveConversation and rendered through ChatPane.
+ */
+
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import ChatPane from './dashboard/ChatPane';
+import ApprovalBanner from './dashboard/ApprovalBanner';
+import type { ActiveConversation } from './dashboard/types';
+import type { ManagedAgentStream } from '../types';
+
+interface Props {
+    ideId: string;
+    agentStreams: ManagedAgentStream[];
+    sendCommand: (commandType: string, data?: any) => Promise<void>;
+}
+
+export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: Props) {
+    const [activeAgent, setActiveAgent] = useState<string | null>(null);
+    const [agentInput, setAgentInput] = useState('');
+    const [isSending, setIsSending] = useState(false);
+
+    // Auto-select first agent stream
+    useEffect(() => {
+        if (!activeAgent && agentStreams.length > 0) {
+            setActiveAgent(agentStreams[0].agentType);
+        }
+    }, [agentStreams, activeAgent]);
+
+    const activeStream = agentStreams.find(s => s.agentType === activeAgent);
+
+    // Derive status matching Dashboard convention
+    const derivedStatus = useMemo(() => {
+        if (!activeStream) return 'idle';
+        if (activeStream.activeModal) return 'waiting_approval';
+        if (activeStream.status === 'streaming') return 'working';
+        return activeStream.status || 'idle';
+    }, [activeStream]);
+
+    // Build ActiveConversation for ChatPane (same format as Dashboard)
+    const activeConv: ActiveConversation | null = useMemo(() => {
+        if (!activeStream) return null;
+        return {
+            ideId,
+            agentName: activeStream.agentName,
+            agentType: activeStream.agentType,
+            status: derivedStatus,
+            title: '',
+            messages: activeStream.messages.map((m: any, i: number) => ({
+                role: m.role,
+                content: m.content,
+                kind: (m as any).kind,
+                id: `${activeStream.agentType}-${i}`,
+                receivedAt: m.timestamp,
+            })),
+            ideType: activeStream.agentType,
+            workspaceName: '',
+            displayPrimary: activeStream.agentName,
+            displaySecondary: '',
+            cdpConnected: true,
+            modalButtons: activeStream.activeModal?.buttons,
+            modalMessage: activeStream.activeModal?.message,
+            streamSource: 'agent-stream' as const,
+            tabKey: `agent-stream-${activeStream.agentType}`,
+        };
+    }, [activeStream, ideId, derivedStatus]);
+
+    const handleSendChat = useCallback(async () => {
+        if (!agentInput.trim() || !activeAgent || isSending) return;
+        setIsSending(true);
+        try {
+            await sendCommand('agent_stream_send', { agentType: activeAgent, text: agentInput.trim() });
+            setAgentInput('');
+        } catch (e) {
+            console.error('Failed to send agent message', e);
+        } finally {
+            setIsSending(false);
+        }
+    }, [agentInput, activeAgent, isSending, sendCommand]);
+
+    const handleResolve = useCallback(async (action: 'approve' | 'reject') => {
+        if (!activeAgent) return;
+        try {
+            await sendCommand('agent_stream_resolve', { agentType: activeAgent, action });
+        } catch (e) {
+            console.error('Failed to resolve agent action', e);
+        }
+    }, [activeAgent, sendCommand]);
+
+    const handleNewSession = useCallback(async () => {
+        if (!activeAgent) return;
+        try {
+            await sendCommand('agent_stream_new_session', { agentType: activeAgent });
+        } catch (e) {
+            console.error('Failed to start new session', e);
+        }
+    }, [activeAgent, sendCommand]);
+
+    if (agentStreams.length === 0) return null;
+
+    return (
+        <div className="flex flex-col h-full overflow-hidden">
+            {/* Agent Stream Tabs — consistent with dashboard tab style */}
+            <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border-subtle bg-[var(--surface-primary)] overflow-x-auto shrink-0">
+                {agentStreams.map(stream => {
+                    const isActive = stream.agentType === activeAgent;
+                    const isStreaming = stream.status === 'streaming';
+                    const needsApproval = stream.status === 'waiting_approval';
+
+                    return (
+                        <button
+                            key={stream.agentType}
+                            onClick={() => setActiveAgent(stream.agentType)}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 border-none rounded-lg text-[12px] whitespace-nowrap cursor-pointer transition-all duration-150 ${
+                                isActive
+                                    ? 'bg-accent/10 text-accent font-semibold'
+                                    : 'bg-transparent text-text-muted hover:bg-bg-secondary'
+                            }`}
+                        >
+                            <span
+                                className="w-1.5 h-1.5 rounded-full shrink-0"
+                                style={{
+                                    background: needsApproval ? '#f59e0b' : isStreaming ? 'var(--accent-primary)' : '#64748b',
+                                    boxShadow: isStreaming ? '0 0 6px var(--accent-primary)' : 'none',
+                                }}
+                            />
+                            {stream.agentName}
+                            {needsApproval && (
+                                <span className="text-[9px] px-1.5 py-px rounded-full bg-yellow-500/15 text-yellow-500 font-bold">
+                                    !
+                                </span>
+                            )}
+                        </button>
+                    );
+                })}
+                <div className="flex-1" />
+                <button
+                    onClick={handleNewSession}
+                    title="New Chat Session"
+                    className="px-2.5 py-1 border border-border-subtle bg-transparent text-text-muted rounded-md cursor-pointer text-[11px] hover:bg-bg-secondary transition-colors"
+                >
+                    + New
+                </button>
+            </div>
+
+            {/* Active Agent Content — reuses ChatPane + ApprovalBanner */}
+            {activeConv ? (
+                <>
+                    {/* Model/Status info bar */}
+                    {activeStream && (activeStream.model || activeStream.status) && (
+                        <div className="flex items-center gap-2 px-3.5 py-1.5 text-[11px] text-text-muted border-b border-border-subtle bg-[var(--surface-primary)] shrink-0">
+                            {activeStream.model && (
+                                <span className="text-text-secondary">
+                                    {activeStream.model}
+                                </span>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Approval Banner — same as Dashboard */}
+                    {activeStream?.activeModal && (
+                        <ApprovalBanner
+                            activeConv={activeConv}
+                            onModalButton={(btn) => handleResolve(btn.toLowerCase().includes('approv') || btn.toLowerCase().includes('accept') || btn.toLowerCase().includes('allow') || btn.toLowerCase().includes('run') || btn.toLowerCase().includes('yes') ? 'approve' : 'reject')}
+                        />
+                    )}
+
+                    {/* Chat — same ChatPane as Dashboard */}
+                    <ChatPane
+                        activeConv={activeConv}
+                        ides={[]}
+                        agentInput={agentInput}
+                        setAgentInput={setAgentInput}
+                        handleSendChat={handleSendChat}
+                        handleFocusAgent={() => {}}
+                        isFocusingAgent={false}
+                        messageReceivedAt={{}}
+                        actionLogs={[]}
+                    />
+                </>
+            ) : (
+                <div className="flex-1 flex items-center justify-center text-text-muted text-[13px] opacity-50">
+                    Select an agent tab to view its chat stream.
+                </div>
+            )}
+        </div>
+    );
+}
