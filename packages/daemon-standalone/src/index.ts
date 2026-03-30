@@ -123,6 +123,8 @@ class StandaloneServer {
       this.devServer = new DevServer({
         providerLoader: this.components.providerLoader,
         cdpManagers: this.components.cdpManagers,
+        instanceManager: this.components.instanceManager,
+        cliManager: this.components.cliManager,
         logFn: (msg: string) => console.log(msg),
       });
       await this.devServer.start();

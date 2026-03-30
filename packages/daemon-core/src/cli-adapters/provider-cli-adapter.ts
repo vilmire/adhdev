@@ -654,6 +654,8 @@ export class ProviderCliAdapter implements CliAdapter {
                 /Quick safety check/i,
                 /Is this a project/i,
                 /Enter to confirm/i,
+                /be able to read, edit, and execute/i,
+                /Security guide/i,
             ];
             if (dialogPatterns.some(p => p.test(this.startupBuffer))) {
                 setTimeout(() => this.ptyProcess?.write('\r'), this.timeouts.dialogAccept);
@@ -721,17 +723,46 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     private evaluateSettled(): void {
-        if (this.submitPendingUntil > Date.now()) return;
-        if (this.responseSettleIgnoreUntil > Date.now()) return;
+        const now = Date.now();
+        if (this.submitPendingUntil > now || this.responseSettleIgnoreUntil > now) {
+            const delayTime = Math.max(this.submitPendingUntil - now, this.responseSettleIgnoreUntil - now) + 50;
+            if (this.settleTimer) clearTimeout(this.settleTimer);
+            this.settleTimer = setTimeout(() => {
+                this.settleTimer = null;
+                this.settledBuffer = this.recentOutputBuffer;
+                this.evaluateSettled();
+            }, delayTime);
+            return;
+        }
         const tail = this.settledBuffer;
         const modal = this.runParseApproval(tail);
         const rawScriptStatus = this.runDetectStatus(tail);
-        const scriptStatus = rawScriptStatus === 'waiting_approval' || modal ? 'waiting_approval' : rawScriptStatus;
+        // detectStatus is the sole authority for status. parseApproval only enriches modal info.
+        const scriptStatus = rawScriptStatus;
         if (!scriptStatus) return;
 
         const prevStatus = this.currentStatus;
 
         if (scriptStatus === 'waiting_approval') {
+            // Auto-accept startup safety dialogs (e.g., "Claude Code'll be able to read, edit, and execute")
+            const modalMessage = modal?.message || '';
+            const screenText = this.terminalScreen.getText() || this.accumulatedBuffer;
+            const autoAcceptPatterns = [
+                /be able to read, edit, and execute/i,
+                /Security guide/i,
+                /Enter to confirm/i,
+                /Quick safety check/i,
+                /Do you trust the files/i,
+                /Is this a project/i,
+            ];
+            if (autoAcceptPatterns.some(p => p.test(modalMessage) || p.test(screenText))) {
+                LOG.info('CLI', `[${this.cliType}] Auto-accepting startup dialog: ${modalMessage.slice(0, 80)}`);
+                setTimeout(() => this.ptyProcess?.write('\r'), 200);
+                this.lastApprovalResolvedAt = Date.now();
+                this.activeModal = null;
+                return;
+            }
+
             const inCooldown = this.lastApprovalResolvedAt && (Date.now() - this.lastApprovalResolvedAt) < this.timeouts.approvalCooldown;
             if (!inCooldown) {
                 this.isWaitingForResponse = true;
