@@ -123,5 +123,5 @@ export { getAIExtensions, installExtensions, launchIDE, isExtensionInstalled } f
 export type { ExtensionInfo as InstallerExtensionInfo } from './installer.js';
 
 // ── Boot / Lifecycle ──
-export { initDaemonComponents, shutdownDaemonComponents } from './boot/daemon-lifecycle.js';
-export type { DaemonInitConfig, DaemonComponents } from './boot/daemon-lifecycle.js';
+export { initDaemonComponents, startDaemonDevSupport, shutdownDaemonComponents } from './boot/daemon-lifecycle.js';
+export type { DaemonInitConfig, DaemonComponents, DaemonDevSupportOptions } from './boot/daemon-lifecycle.js';

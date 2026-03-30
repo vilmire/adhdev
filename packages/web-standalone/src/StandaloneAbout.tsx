@@ -24,6 +24,7 @@ import {
     SUPPORTED_CLI_AGENTS,
     SUPPORTED_EXTENSIONS,
     SUPPORTED_IDES,
+    IconDiscord,
 } from '@adhdev/web-core'
 
 declare const __APP_VERSION__: string
@@ -174,7 +175,7 @@ export default function StandaloneAbout() {
                 action={(
                     <div className="flex flex-wrap justify-center gap-3">
                         <a href="https://adhf.dev" target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm no-underline">Compare Cloud ↗</a>
-                        <a href="https://discord.gg/WJD3tCfBzk" target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm no-underline">Discord ↗</a>
+                        <a href="https://discord.gg/WJD3tCfBzk" target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm no-underline"><IconDiscord size={14} className="mr-1" />Discord ↗</a>
                     </div>
                 )}
             />
