@@ -12,14 +12,16 @@
  * Shared hook: useMachineActions (launch/stop/restart/workspace handlers)
  * Shared types: ./machine/types.ts
  */
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
 import type { DaemonData } from '../types'
 import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel } from '../utils/daemon-utils'
-import { IconBarChart, IconMonitor, IconPlug, IconBot, IconSettings, IconClipboard } from '../components/Icons'
+import { IconBarChart, IconMonitor, IconPlug, IconBot, IconSettings, IconClipboard, IconRefresh } from '../components/Icons'
 import type { ReactNode } from 'react'
+import { eventManager, type ToastConfig } from '../managers/EventManager'
+import ToastContainer from '../components/dashboard/ToastContainer'
 
 // Machine sub-components
 import type { MachineData, ManagedIde, ManagedCli, ManagedAcp, TabId, ProviderInfo } from './machine/types'
@@ -54,6 +56,26 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         onNicknameSynced,
         logsEndRef,
     })
+
+    // ─── Setup Toast Listener ────────────────────────
+    useEffect(() => {
+        const unsubToast = eventManager.onToast((toast: ToastConfig) => {
+            daemonCtx.setToasts((prev: any[]) => {
+                // Dedup
+                const isDup = prev.some(t => t.message === toast.message && (toast.timestamp - t.timestamp) < 3000)
+                if (isDup) return prev
+                const newToast = {
+                    id: toast.id, message: toast.message, type: toast.type,
+                    timestamp: toast.timestamp, ideId: toast.ideId,
+                    actions: toast.actions as any,
+                }
+                return [...prev.slice(-4), newToast]
+            })
+            const dur = toast.duration || 5000
+            setTimeout(() => daemonCtx.setToasts((prev: any[]) => prev.filter(t => t.id !== toast.id)), dur)
+        })
+        return unsubToast
+    }, [daemonCtx])
 
     // ─── Derive machine data ─────────────────────────
     // Build provider info from daemon
@@ -316,6 +338,24 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                     actions={actions}
                 />
             )}
+
+            {/* Toast Notifications */}
+            <ToastContainer
+                toasts={daemonCtx.toasts || []}
+                onDismiss={(id) => daemonCtx.setToasts((prev: any[]) => prev.filter(t => t.id !== id))}
+                onClickToast={(toast) => {
+                    if (toast.ideId) {
+                        // Switch to the appropriate tab depending on the agent type if we had enough context,
+                        // but for now we just let the user see the notification.
+                    }
+                }}
+            />
+            <style>{`
+            @keyframes toast-in {
+                from { opacity: 0; transform: translateX(40px); }
+                to { opacity: 1; transform: translateX(0); }
+            }
+            `}</style>
         </div>
     )
 }

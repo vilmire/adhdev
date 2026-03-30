@@ -6,6 +6,7 @@
  */
 import { useState, useCallback, useRef } from 'react'
 import { formatIdeType } from '../../utils/daemon-utils'
+import { eventManager } from '../../managers/EventManager'
 import type { LogEntry, ManagedIde } from './types'
 
 export interface LaunchPickState {
@@ -41,9 +42,12 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         onDefaultWorkspaceChangedRef.current = fn
     }, [])
 
-    const addLog = useCallback((level: LogEntry['level'], message: string) => {
+    const addLog = useCallback((level: LogEntry['level'], message: string, showToast = false) => {
         setLogs(prev => [...prev.slice(-100), { timestamp: Date.now(), level, message }])
         setTimeout(() => logsEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
+        if (showToast) {
+            eventManager.showToast(message, level === 'error' ? 'warning' : level === 'warn' ? 'warning' : 'success')
+        }
     }, [logsEndRef])
 
     const handleLaunchIde = useCallback(async (ideType: string, opts?: { workspace?: string; useDefaultWorkspace?: boolean }) => {
@@ -55,8 +59,8 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
             if (opts?.workspace?.trim()) body.workspace = opts.workspace.trim()
             else if (opts?.useDefaultWorkspace) body.useDefaultWorkspace = true
             const res: any = await sendDaemonCommand(machineId, 'launch_ide', body)
-            addLog(res?.success ? 'info' : 'error', res?.success ? `${formatIdeType(ideType)} launched` : `Failed: ${res?.error}`)
-        } catch (e: any) { addLog('error', `Launch error: ${e.message}`) }
+            addLog(res?.success ? 'info' : 'error', res?.success ? `${formatIdeType(ideType)} launched` : `Failed: ${res?.error}`, true)
+        } catch (e: any) { addLog('error', `Launch error: ${e.message}`, true) }
         finally { setLaunchingIde(null) }
     }, [machineId, launchingIde, addLog, sendDaemonCommand])
 
@@ -66,7 +70,7 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
     }) => {
         if (!machineId) return
         const { cliType, dir, workspaceId, useDefaultWorkspace, useHome, argsStr, model } = opts
-        if (!cliType) { addLog('warn', 'Select a CLI or ACP provider first'); return }
+        if (!cliType) { addLog('warn', 'Select a CLI or ACP provider first', true); return }
         const cliArgs = argsStr ? argsStr.split(/\s+/).filter(Boolean) : undefined
         const dirHint = dir?.trim() || (workspaceId ? `(saved id)` : useDefaultWorkspace ? '(default workspace)' : useHome ? '(home)' : '')
         addLog('info', `Launching ${cliType}${dirHint ? ` in ${dirHint}` : ''}${model ? ` (model: ${model})` : ''}...`)
@@ -79,19 +83,19 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
             const res: any = await sendDaemonCommand(machineId, 'launch_cli', body)
             const payload = res?.result || res
             if (res?.success) {
-                addLog('info', `${cliType} launched`)
+                addLog('info', `${cliType} launched`, true)
                 if (payload?.launchSource === 'home') addLog('info', `📂 Running in home directory (explicit choice)`)
                 else if (payload?.launchSource === 'defaultWorkspace') addLog('info', `📂 Using default workspace (explicit choice)`)
             } else {
-                addLog('error', `Failed: ${res?.error || payload?.error}`)
+                addLog('error', `Failed: ${res?.error || payload?.error}`, true)
                 if (res?.code === 'WORKSPACE_LAUNCH_CONTEXT_REQUIRED') setLaunchPick({ cliType, argsStr, model })
             }
-        } catch (e: any) { addLog('error', `Launch error: ${e.message}`) }
+        } catch (e: any) { addLog('error', `Launch error: ${e.message}`, true) }
     }, [machineId, addLog, sendDaemonCommand])
 
     const handleLaunchCli = useCallback((cliType: string, dir: string, argsStr?: string, model?: string) => {
         if (!machineId) return
-        if (!cliType) { addLog('warn', 'Select a provider'); return }
+        if (!cliType) { addLog('warn', 'Select a provider', true); return }
         if (!dir.trim()) { setLaunchPick({ cliType, argsStr, model }); return }
         void runLaunchCliCore({ cliType, dir, argsStr, model })
     }, [machineId, addLog, runLaunchCliCore])
@@ -101,33 +105,33 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         if (!window.confirm(`Stop ${cliType}?\nThis will terminate the process.`)) return
         try {
             const res: any = await sendDaemonCommand(machineId, 'stop_cli', { cliType, dir, _targetInstance: entryId })
-            if (res?.success) addLog('info', `${cliType} stopped`)
-            else addLog('error', `Stop failed: ${res?.error || 'Unknown error'}`)
-        } catch (e: any) { addLog('error', `Stop failed: ${e.message}`) }
+            if (res?.success) addLog('info', `${cliType} stopped`, true)
+            else addLog('error', `Stop failed: ${res?.error || 'Unknown error'}`, true)
+        } catch (e: any) { addLog('error', `Stop failed: ${e.message}`, true) }
     }, [machineId, addLog, sendDaemonCommand])
 
     const handleRestartIde = useCallback(async (ide: ManagedIde) => {
         try {
             await sendDaemonCommand(ide.daemonId, 'restart_ide', { ideType: ide.type })
-            addLog('info', `${formatIdeType(ide.type)} restart initiated`)
-        } catch (e: any) { addLog('error', `Restart failed: ${e.message}`) }
+            addLog('info', `${formatIdeType(ide.type)} restart initiated`, true)
+        } catch (e: any) { addLog('error', `Restart failed: ${e.message}`, true) }
     }, [addLog, sendDaemonCommand])
 
     const handleStopIde = useCallback(async (ide: ManagedIde) => {
         if (!window.confirm(`Stop ${formatIdeType(ide.type)}?\nThis will disconnect CDP and optionally kill the process.`)) return
         try {
             const res: any = await sendDaemonCommand(ide.daemonId, 'stop_ide', { ideType: ide.type, killProcess: true })
-            if (res?.success) addLog('info', `${formatIdeType(ide.type)} stopped`)
-            else addLog('error', `Stop failed: ${res?.error || 'Unknown error'}`)
-        } catch (e: any) { addLog('error', `Stop failed: ${e.message}`) }
+            if (res?.success) addLog('info', `${formatIdeType(ide.type)} stopped`, true)
+            else addLog('error', `Stop failed: ${res?.error || 'Unknown error'}`, true)
+        } catch (e: any) { addLog('error', `Stop failed: ${e.message}`, true) }
     }, [addLog, sendDaemonCommand])
 
     const handleDetectIdes = useCallback(async () => {
         if (!machineId) return
         try {
             const res: any = await sendDaemonCommand(machineId, 'detect_ides', {})
-            addLog('info', `Found ${(res?.result || []).length} IDE(s)`)
-        } catch (e: any) { addLog('error', `Detection failed: ${e.message}`) }
+            addLog('info', `Found ${(res?.result || []).length} IDE(s)`, true)
+        } catch (e: any) { addLog('error', `Detection failed: ${e.message}`, true) }
     }, [machineId, addLog, sendDaemonCommand])
 
     const handleLoadRecentWorkspaces = useCallback(async () => {
@@ -157,9 +161,9 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         setWorkspaceBusy(true)
         try {
             const res: any = await sendDaemonCommand(machineId, 'workspace_remove', { id })
-            if (res?.success) addLog('info', 'Workspace removed')
-            else addLog('error', res?.error || 'workspace_remove failed')
-        } catch (e: any) { addLog('error', e.message) }
+            if (res?.success) addLog('info', 'Workspace removed', true)
+            else addLog('error', res?.error || 'workspace_remove failed', true)
+        } catch (e: any) { addLog('error', e.message, true) }
         finally { setWorkspaceBusy(false) }
     }, [machineId, addLog, sendDaemonCommand])
 
@@ -170,12 +174,12 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
             const res: any = await sendDaemonCommand(machineId, 'workspace_set_default',
                 id === null ? { clear: true } : { id })
             if (res?.success) {
-                addLog('info', id ? 'Default workspace updated' : 'Default workspace cleared')
+                addLog('info', id ? 'Default workspace updated' : 'Default workspace cleared', true)
                 const dp = typeof res.defaultWorkspacePath === 'string' ? res.defaultWorkspacePath : ''
                 if (dp) onDefaultWorkspaceChangedRef.current?.(dp)
             }
-            else addLog('error', res?.error || 'workspace_set_default failed')
-        } catch (e: any) { addLog('error', e.message) }
+            else addLog('error', res?.error || 'workspace_set_default failed', true)
+        } catch (e: any) { addLog('error', e.message, true) }
         finally { setWorkspaceBusy(false) }
     }, [machineId, addLog, sendDaemonCommand])
 

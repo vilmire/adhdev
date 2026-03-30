@@ -125,8 +125,17 @@ class EventManager {
 
     // ─── Dispatch helpers ─────────────────────────
 
-    private emitToast(toast: ToastConfig): void {
+    public emitToast(toast: ToastConfig): void {
         for (const cb of this.toastCallbacks) cb(toast)
+    }
+
+    public showToast(message: string, type: 'success' | 'info' | 'warning' = 'info', opts?: Partial<ToastConfig>): void {
+        const toastId = opts?.id || Date.now()
+        this.emitToast({
+            id: toastId, message, type, timestamp: toastId,
+            duration: 5000,
+            ...opts,
+        })
     }
 
     private emitSystemMessage(ideId: string, msg: SystemMessage): void {
