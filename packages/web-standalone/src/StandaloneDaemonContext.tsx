@@ -9,11 +9,11 @@ import {
     BaseDaemonProvider,
     useBaseDaemonActions,
     useBaseDaemons,
-    connectionManager,
     statusPayloadToEntries,
 } from '@adhdev/web-core'
 import type { ConnectionStatus } from '@adhdev/web-core'
 import type { StatusResponse } from '@adhdev/daemon-core'
+import { standaloneConnectionManager } from './connection-manager'
 
 // dev: vite proxy (ws://localhost:3000/ws → ws://localhost:3847/ws)
 // prod: same origin (daemon-standalone serves both HTTP + WS)
@@ -34,9 +34,7 @@ const MAX_RECONNECT_INTERVAL = 30000
 let _wsInstance: WebSocket | null = null
 let _reqCounter = 0
 const _pendingRequests = new Map<string, { resolve: (v: any) => void; reject: (e: any) => void }>()
-const _screenshotCallbacks = new Set<(daemonId: string, blob: Blob) => void>()
 let _screenshotTimer: any = null
-let _currentDaemonId: string | null = null
 let _wsStatusChangeCallback: ((status: ConnectionStatus, daemonId?: string) => void) | null = null
 
 /** Send a command via the shared WS connection. Falls back to HTTP if WS unavailable. */
@@ -119,8 +117,7 @@ class WsConnectionAdapter {
                 })
                 if (res?.success && res?.base64) {
                     const blob = await fetch(`data:image/jpeg;base64,${res.base64}`).then(r => r.blob())
-                    // Emit with actual daemonId — IDE.tsx uses doId = ideId.split(':')[0]
-                    _screenshotCallbacks.forEach(cb => cb(this.daemonId, blob))
+                    standaloneConnectionManager.emitScreenshot(this.daemonId, blob)
                 }
             } catch { /* silent */ }
         }
@@ -138,29 +135,11 @@ class WsConnectionAdapter {
 
 let _wsAdapter: WsConnectionAdapter | null = null
 
-/** Inject WS adapter into connectionManager so IDE.tsx sees it as a connection */
-function injectWsConnection(daemonId: string) {
+function getOrCreateWsAdapter(daemonId: string) {
     if (!_wsAdapter || (_wsAdapter as any).daemonId !== daemonId) {
         _wsAdapter = new WsConnectionAdapter(daemonId)
     }
-    // Patch connectionManager methods directly using the imported reference
-    const originalGet = connectionManager._originalGet || connectionManager.get.bind(connectionManager)
-    connectionManager._originalGet = originalGet
-    // Standalone has only one daemon — match any ID starting with 'standalone'
-    // IDE.tsx extracts doId as ideId.split(':')[0] → 'standalone', but daemon ID is 'standalone_hostname'
-    connectionManager.get = (id: string) => {
-        if (id === daemonId || id.startsWith('standalone')) return _wsAdapter
-        return originalGet(id)
-    }
-    connectionManager.getState = (id: string) => {
-        if (id === daemonId || id.startsWith('standalone')) return _wsAdapter?.connectionState || 'disconnected'
-        return 'disconnected'
-    }
-    // Fix: onScreenshot(key, callback) signature to match IDE.tsx usage
-    connectionManager.onScreenshot = (_key: string, callback: (sourceDaemonId: string, blob: Blob) => void) => {
-        _screenshotCallbacks.add(callback)
-        return () => { _screenshotCallbacks.delete(callback) }
-    }
+    return _wsAdapter
 }
 
 function StandaloneWSConnector({ children }: { children: ReactNode }) {
@@ -235,7 +214,7 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                     }
 
                     if (msg.type === 'pty_output') {
-                        connectionManager.emitPtyOutput(msg.cliId, msg.data)
+                        standaloneConnectionManager.emitPtyOutput(msg.cliId, msg.data)
                         return
                     }
 
@@ -246,11 +225,12 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                         const { injectEntries, markLoaded } = actionsRef.current
                         const daemonId = statusData.id || 'standalone'
 
-                        // Inject WS adapter into connectionManager for this daemon
-                        _currentDaemonId = daemonId
-                        injectWsConnection(daemonId)
+                        const adapter = getOrCreateWsAdapter(daemonId)
+                        standaloneConnectionManager.register(daemonId, adapter)
+                        standaloneConnectionManager.setState(daemonId, 'connected')
                         // Notify parent with daemonId so connectionStates can be updated
                         updateWsStatus('connected', daemonId)
+                        standaloneConnectionManager.emitStatus(daemonId, statusData)
 
                         // Convert StatusResponse → DaemonData[] using shared utility
                         const entries = statusPayloadToEntries(statusData, { daemonId })
@@ -270,6 +250,9 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
 
             ws.onclose = () => {
                 if (!mountedRef.current) return
+                if (_wsAdapter) {
+                    standaloneConnectionManager.setState((_wsAdapter as any).daemonId, 'disconnected')
+                }
                 updateWsStatus('disconnected')
                 wsRef.current = null
                 scheduleReconnect()
@@ -303,6 +286,9 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                 wsRef.current.close()
                 wsRef.current = null
                 _wsInstance = null
+            }
+            if (_wsAdapter) {
+                standaloneConnectionManager.unregister((_wsAdapter as any).daemonId)
             }
         }
     }, []) // Empty deps — connect once

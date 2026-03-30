@@ -75,6 +75,8 @@ export type { CommandRouterDeps, CommandRouterResult } from './commands/router.j
 // ── Status ──
 export { DaemonStatusReporter } from './status/reporter.js';
 export { buildManagedIdes, buildManagedClis, buildManagedAcps, buildAllManagedEntries, findCdpManager, hasCdpManager, isCdpConnected } from './status/builders.js';
+export { buildStatusSnapshot } from './status/snapshot.js';
+export type { StatusSnapshotOptions, StatusSnapshot } from './status/snapshot.js';
 
 // ── Logger ──
 export { LOG, installGlobalInterceptor, setLogLevel, getLogLevel, getRecentLogs } from './logging/logger.js';
@@ -97,6 +99,7 @@ export { readChatHistory } from './config/chat-history.js';
 export { DaemonAgentStreamManager } from './agent-stream/index.js';
 export { AgentStreamPoller } from './agent-stream/index.js';
 export type { AgentStreamPollerDeps } from './agent-stream/index.js';
+export { forwardAgentStreamsToIdeInstance } from './agent-stream/forward.js';
 
 // ── Providers ──
 export { ProviderLoader } from './providers/provider-loader.js';
@@ -122,4 +125,3 @@ export type { ExtensionInfo as InstallerExtensionInfo } from './installer.js';
 // ── Boot / Lifecycle ──
 export { initDaemonComponents, shutdownDaemonComponents } from './boot/daemon-lifecycle.js';
 export type { DaemonInitConfig, DaemonComponents } from './boot/daemon-lifecycle.js';
-

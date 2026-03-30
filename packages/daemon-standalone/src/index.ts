@@ -17,7 +17,6 @@ import { WebSocketServer, WebSocket } from 'ws';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import * as crypto from 'crypto';
 
 import {
   DevServer,
@@ -25,21 +24,35 @@ import {
   initDaemonComponents,
   shutdownDaemonComponents,
   loadConfig,
-  getWorkspaceState,
-  getHostMemorySnapshot,
-  getWorkspaceActivity,
-  buildManagedIdes,
-  hasCdpManager,
-  isCdpConnected,
+  buildStatusSnapshot,
+  forwardAgentStreamsToIdeInstance,
   type DaemonComponents,
   type StatusResponse,
   type AgentEntry,
 } from '@adhdev/daemon-core';
-import type { ManagedIdeEntry, ManagedCliEntry, ManagedAcpEntry } from '@adhdev/daemon-core';
 
 // ─── Constants ───
 const DEFAULT_PORT = 3847;
 const STATUS_INTERVAL = 2000;
+
+let pkgVersion = process.env.ADHDEV_PKG_VERSION || 'unknown';
+if (pkgVersion === 'unknown') {
+  try {
+    const possiblePaths = [
+      path.join(__dirname, '..', 'package.json'),
+      path.join(__dirname, 'package.json'),
+    ];
+    for (const candidate of possiblePaths) {
+      try {
+        const data = JSON.parse(fs.readFileSync(candidate, 'utf-8'));
+        if (data.version) {
+          pkgVersion = data.version;
+          break;
+        }
+      } catch { /* noop */ }
+    }
+  } catch { /* noop */ }
+}
 
 // ─── Types ───
 interface StandaloneOptions {
@@ -97,21 +110,8 @@ class StandaloneServer {
       },
       onStatusChange: () => this.broadcastStatus(),
       onStreamsUpdated: (ideType: string, streams: any[]) => {
-        // Forward agent stream data to the IDE's ExtensionProviderInstance
-        const ideInstance = this.components?.instanceManager?.getInstance(`ide:${ideType}`) as any;
-        if (ideInstance?.onEvent) {
-          for (const stream of streams) {
-            ideInstance.onEvent('stream_update', {
-              extensionType: stream.agentType,
-              streams: [stream],
-              messages: stream.messages || [],
-              status: stream.status || 'idle',
-              activeModal: stream.activeModal || null,
-              model: stream.model || undefined,
-              mode: stream.mode || undefined,
-            });
-          }
-        }
+        if (!this.components) return;
+        forwardAgentStreamsToIdeInstance(this.components.instanceManager, ideType, streams);
         this.broadcastStatus();
       },
       tickIntervalMs: 3000,
@@ -218,6 +218,11 @@ class StandaloneServer {
   ): void {
     const url = req.url || '/';
     const method = req.method || 'GET';
+    let sharedSnapshotCache: ReturnType<StandaloneServer['buildSharedSnapshot']> | null = null;
+    const getSharedSnapshot = () => {
+      if (!sharedSnapshotCache) sharedSnapshotCache = this.buildSharedSnapshot();
+      return sharedSnapshotCache;
+    };
 
     // CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -245,28 +250,28 @@ class StandaloneServer {
     const apiPath = url.startsWith('/api/v1/') ? url.slice(7) : null; // /api/v1/status → /status
 
     if (apiPath === '/status' && method === 'GET') {
-      const status = this.getStatus();
+      const status = this.getStatus(getSharedSnapshot());
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(status));
       return;
     }
 
     if (apiPath === '/ides' && method === 'GET') {
-      const ides = this.getIdes();
+      const ides = getSharedSnapshot().managedIdes;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ides }));
       return;
     }
 
     if (apiPath === '/clis' && method === 'GET') {
-      const clis = this.getClis();
+      const clis = getSharedSnapshot().managedClis;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ clis }));
       return;
     }
 
     if (apiPath === '/agents' && method === 'GET') {
-      const ides = this.getIdes();
+      const ides = getSharedSnapshot().managedIdes;
       const agents: AgentEntry[] = [];
       for (const ide of ides) {
         // IDE native chat
@@ -395,117 +400,43 @@ class StandaloneServer {
 
   // ─── Core Logic ───
 
-  private getStatus(): StatusResponse {
+  private buildSharedSnapshot() {
     const cfgSnap = loadConfig();
     const machineId = cfgSnap.machineId || os.hostname().replace(/[^a-zA-Z0-9]/g, '_');
-    const ides = this.getIdes();
-    const clis = this.getClis();
-    const acps = this.getAcps();
-    const cpus = os.cpus();
-    const memSnap = getHostMemorySnapshot();
-    const loadavg = os.loadavg();
-    const wsState = getWorkspaceState(cfgSnap);
-
-    return {
-      id: `standalone_${machineId}`,
-      instanceId: `standalone_${machineId}`,
-      version: '1.0.0', // Standalone static version
-      daemonMode: false,
-      type: 'standalone',
-      platform: os.platform(),
-      hostname: os.hostname(),
-      machine: {
-        hostname: os.hostname(),
-        platform: os.platform(),
-        arch: os.arch(),
-        cpus: cpus.length,
-        totalMem: memSnap.totalMem,
-        freeMem: memSnap.freeMem,
-        availableMem: memSnap.availableMem,
-        loadavg,
-        uptime: os.uptime(),
-        release: os.release(),
-      },
-      timestamp: Date.now(),
-      userName: cfgSnap.userName || undefined,
-      managedIdes: ides,
-      managedClis: clis,
-      managedAcps: acps,
-      workspaces: wsState.workspaces,
-      defaultWorkspaceId: wsState.defaultWorkspaceId,
-      defaultWorkspacePath: wsState.defaultWorkspacePath,
-      workspaceActivity: getWorkspaceActivity(cfgSnap, 15),
-      detectedIdes: this.components!.detectedIdes.value.filter((i: any) => i.installed).map((i: any) => ({
-        id: i.id, type: i.id, name: i.displayName || i.name, installed: true,
-        running: isCdpConnected(this.components!.cdpManagers, i.id),
-      })) as any,
-      availableProviders: this.components!.providerLoader.getAll().map((p: any) => ({
-        type: p.type, icon: p.icon || '💻', displayName: p.displayName || p.type,
-        category: p.category,
-      })) as any,
-      system: {
-        cpus: cpus.length,
-        totalMem: memSnap.totalMem,
-        freeMem: memSnap.freeMem,
-        availableMem: memSnap.availableMem,
-        loadavg,
-        uptime: os.uptime(),
-        arch: os.arch(),
-      },
-    };
-  }
-
-  private getIdes(): ManagedIdeEntry[] {
     const allStates = this.components!.instanceManager.collectAllStates();
-    const ideStates = allStates.filter((s) => s.category === 'ide') as import('@adhdev/daemon-core').IdeProviderState[];
-    return buildManagedIdes(ideStates, this.components!.cdpManagers, {
+
+    return buildStatusSnapshot({
+      allStates,
+      cdpManagers: this.components!.cdpManagers as Map<string, unknown>,
+      providerLoader: this.components!.providerLoader,
       detectedIdes: this.components!.detectedIdes.value,
+      instanceId: `standalone_${machineId}`,
+      version: pkgVersion,
+      daemonMode: false,
     });
   }
 
-  private getClis(): ManagedCliEntry[] {
-    const result: ManagedCliEntry[] = [];
-    for (const [key, adapter] of this.components!.cliManager.adapters.entries()) {
-      // Skip ACP adapters — they go to getAcps()
-      if ((adapter as any)._acpInstance) continue;
-      const state = this.components!.instanceManager.getInstance(key)?.getState();
-      result.push({
-        id: key,
-        instanceId: key,
-        cliType: (adapter as any).cliType || key,
-        cliName: (adapter as any).cliName || key,
-        status: state?.status || 'running',
-        mode: 'terminal',
-        workspace: (adapter as any).workingDir || '',
-        activeChat: state?.activeChat || null,
-      });
-    }
-    return result;
-  }
+  private getStatus(snapshot: ReturnType<StandaloneServer['buildSharedSnapshot']> = this.buildSharedSnapshot()): StatusResponse {
+    const cfgSnap = loadConfig();
 
-  private getAcps(): ManagedAcpEntry[] {
-    const result: ManagedAcpEntry[] = [];
-    for (const [key, adapter] of this.components!.cliManager.adapters.entries()) {
-      const acpInstance = (adapter as any)._acpInstance;
-      if (!acpInstance) continue;
-      const state = acpInstance.getState();
-      result.push({
-        id: key,
-        acpType: (adapter as any).cliType || state?.type || key,
-        acpName: state?.name || (adapter as any).cliType || key,
-        status: state?.status || 'running',
-        mode: 'chat',
-        workspace: (adapter as any).workingDir || '',
-        activeChat: state?.activeChat || null,
-        currentModel: state?.currentModel,
-        currentPlan: state?.currentPlan,
-        acpConfigOptions: state?.acpConfigOptions,
-        acpModes: state?.acpModes,
-        errorMessage: state?.errorMessage,
-        errorReason: state?.errorReason,
-      });
-    }
-    return result;
+    return {
+      ...snapshot,
+      id: snapshot.instanceId,
+      daemonMode: false,
+      type: 'standalone',
+      platform: snapshot.machine.platform,
+      hostname: snapshot.machine.hostname,
+      userName: cfgSnap.userName || undefined,
+      system: {
+        cpus: snapshot.machine.cpus,
+        totalMem: snapshot.machine.totalMem,
+        freeMem: snapshot.machine.freeMem,
+        availableMem: snapshot.machine.availableMem,
+        loadavg: snapshot.machine.loadavg,
+        uptime: snapshot.machine.uptime,
+        arch: snapshot.machine.arch,
+      },
+    };
   }
 
   private async executeCommand(type: string, args: any): Promise<any> {

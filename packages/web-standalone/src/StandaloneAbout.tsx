@@ -39,7 +39,7 @@ const COMPARISON = [
     { feature: 'SSO / RBAC / Audit logs', selfhost: false, cloud: true },
 ]
 
-import { SUPPORTED_IDES, SUPPORTED_CLI_AGENTS, SUPPORTED_EXTENSIONS } from '@adhdev/web-core/src/constants/supported'
+import { SUPPORTED_IDES, SUPPORTED_CLI_AGENTS, SUPPORTED_EXTENSIONS } from '@adhdev/web-core/constants/supported'
 
 
 export default function StandaloneAbout() {

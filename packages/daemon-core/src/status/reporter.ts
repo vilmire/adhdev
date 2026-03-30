@@ -5,14 +5,9 @@
  * Each Instance manages its own status/transition. This module only assembles + transmits.
  */
 
-import * as os from 'os';
-import * as path from 'path';
-import { loadConfig } from '../config/config.js';
-import { getWorkspaceState } from '../config/workspaces.js';
-import { getHostMemorySnapshot } from '../system/host-memory.js';
-import { getWorkspaceActivity } from '../config/workspace-activity.js';
 import { LOG } from '../logging/logger.js';
 import { buildAllManagedEntries } from './builders.js';
+import { buildStatusSnapshot } from './snapshot.js';
 import type {
     ProviderState,
     IdeProviderState,
@@ -27,9 +22,8 @@ export interface StatusReporterDeps {
     cdpManagers: Map<string, { isConnected: boolean }>;
     p2p: { isConnected: boolean; isAvailable: boolean; connectionState: string; connectedPeerCount: number; screenshotActive: boolean; sendStatus(data: any): void } | null;
     providerLoader: { resolve(type: string): any; getAll(): any[] };
-    adapters: Map<string, { cliType: string; cliName: string; workingDir: string; getStatus(): any; getPartialResponse(): string }>;
     detectedIdes: any[];
-    ideType: string;
+    instanceId: string;
     daemonVersion?: string;
     instanceManager: { collectAllStates(): ProviderState[]; collectStatesByCategory(cat: string): ProviderState[] };
     getScreenshotUsage?: () => { dailyUsedMinutes: number; dailyBudgetMinutes: number; budgetExhausted: boolean } | null;
@@ -163,50 +157,26 @@ export class DaemonStatusReporter {
             this.deps.cdpManagers as Map<string, any>,
         );
 
-
-
-
-
-        const cfg = loadConfig();
-        const wsState = getWorkspaceState(cfg);
-        const memSnap = getHostMemorySnapshot();
-
  // ═══ Assemble payload (P2P — required data only) ═══
         const payload: Record<string, any> = {
-            daemonMode: true,
-            version: this.deps.daemonVersion || 'unknown',
-            workspaces: wsState.workspaces,
-            defaultWorkspaceId: wsState.defaultWorkspaceId,
-            defaultWorkspacePath: wsState.defaultWorkspacePath,
-            workspaceActivity: getWorkspaceActivity(cfg, 15),
-            machine: {
-                hostname: os.hostname(),
-                platform: os.platform(),
-                arch: os.arch(),
-                cpus: os.cpus().length,
-                totalMem: memSnap.totalMem,
-                freeMem: memSnap.freeMem,
-                availableMem: memSnap.availableMem,
-                loadavg: os.loadavg(),
-                uptime: os.uptime(),
-            },
-            managedIdes,
-            managedClis,
-            managedAcps,
-            p2p: {
-                available: p2p?.isAvailable || false,
-                state: p2p?.connectionState || 'unavailable',
-                peers: p2p?.connectedPeerCount || 0,
-                screenshotActive: p2p?.screenshotActive || false,
-            },
+            ...buildStatusSnapshot({
+                allStates,
+                cdpManagers: this.deps.cdpManagers as Map<string, unknown>,
+                providerLoader: this.deps.providerLoader,
+                detectedIdes: this.deps.detectedIdes || [],
+                instanceId: this.deps.instanceId,
+                version: this.deps.daemonVersion || 'unknown',
+                daemonMode: true,
+                timestamp: now,
+                p2p: {
+                    available: p2p?.isAvailable || false,
+                    state: p2p?.connectionState || 'unavailable',
+                    peers: p2p?.connectedPeerCount || 0,
+                    screenshotActive: p2p?.screenshotActive || false,
+                },
+            }),
             screenshotUsage: this.deps.getScreenshotUsage?.() || null,
             connectedExtensions: [],
-            detectedIdes: this.deps.detectedIdes || [],
-            availableProviders: this.deps.providerLoader.getAll().map((p: any) => ({
-                type: p.type, icon: p.icon || '💻', displayName: p.displayName || p.type,
-                category: p.category,
-            })),
-            timestamp: now,
         };
 
  // ═══ P2P transmit ═══

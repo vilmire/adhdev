@@ -10,7 +10,7 @@ import { TransportProvider, MachineDetail, Dashboard, IDEPage, CapabilitiesPage,
 import StandaloneLayout from './StandaloneLayout'
 import StandaloneAbout from './StandaloneAbout'
 import StandaloneSettings from './StandaloneSettings'
-import '@adhdev/web-core/src/index.css'
+import '@adhdev/web-core/index.css'
 
 // Restore chat theme from localStorage on app load
 initChatTheme()

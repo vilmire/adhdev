@@ -73,6 +73,8 @@ export {
 export type { MachineIdeEntry, MachineCliEntry, MachineAcpEntry } from './utils/daemon-utils'
 export { statusPayloadToEntries } from './utils/status-transform'
 export type { StatusTransformOptions } from './utils/status-transform'
+export { SUPPORTED_IDES, SUPPORTED_CLI_AGENTS, SUPPORTED_EXTENSIONS, SUPPORTED_ACP_COUNT } from './constants/supported'
+export type { SupportedEntry } from './constants/supported'
 
 // ── Managers ──
 export { eventManager } from './managers/EventManager'
@@ -134,4 +136,4 @@ export { default as CapabilitiesPage } from './pages/Capabilities'
 export { default as OnboardingModal } from './components/OnboardingModal'
 
 // ── CSS ──
-// Import '@adhdev/web-core/src/index.css' in your app entry
+// Import '@adhdev/web-core/index.css' in your app entry
