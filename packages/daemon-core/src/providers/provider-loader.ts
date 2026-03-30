@@ -573,7 +573,7 @@ export class ProviderLoader {
         const watcher = fs.watch(dir, { recursive: true }, (event, filename) => {
           if (filename?.endsWith('.js') || filename?.endsWith('.json')) {
             this.log(`File changed: ${filename}, reloading...`);
-            this.loadAll();
+            this.reload();
           }
         });
         this.watchers.push(watcher);
