@@ -19,9 +19,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 
 import {
-  DevServer,
   LOG,
   initDaemonComponents,
+  startDaemonDevSupport,
   shutdownDaemonComponents,
   loadConfig,
   buildStatusSnapshot,
@@ -81,7 +81,7 @@ class StandaloneServer {
   private statusTimer: NodeJS.Timeout | null = null;
   private running = false;
   private components: DaemonComponents | null = null;
-  private devServer: DevServer | null = null;
+  private devServer: Awaited<ReturnType<typeof startDaemonDevSupport>> | null = null;
 
   async start(options: StandaloneOptions = {}): Promise<void> {
     const port = options.port || DEFAULT_PORT;
@@ -120,17 +120,10 @@ class StandaloneServer {
 
     // DevServer (optional)
     if (options.dev) {
-      this.devServer = new DevServer({
-        providerLoader: this.components.providerLoader,
-        cdpManagers: this.components.cdpManagers,
-        instanceManager: this.components.instanceManager,
-        cliManager: this.components.cliManager,
+      this.devServer = await startDaemonDevSupport({
+        components: this.components,
         logFn: (msg: string) => console.log(msg),
       });
-      await this.devServer.start();
-      
-      // Auto-reload providers on file changes in --dev mode
-      this.components.providerLoader.watch();
     }
 
     // 5. HTTP Server

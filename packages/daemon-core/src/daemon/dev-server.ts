@@ -1876,26 +1876,78 @@ export class DevServer {
     if (ref?.category === category) return desired;
 
     const all = this.providerLoader.getAll();
-    const fallback = all.find((p: any) => p.category === category && p.type !== targetType);
+    const fallback = all
+      .filter((p: any) => p.category === category && p.type !== targetType)
+      .sort((a: any, b: any) => String(a.type || '').localeCompare(String(b.type || ''), undefined, { numeric: true, sensitivity: 'base' }))[0];
     return fallback?.type || null;
   }
 
-  private loadAutoImplReferenceScripts(category: ProviderCategory, referenceType: string | null): Record<string, string> {
+  private getLatestScriptVersionDir(scriptsDir: string): string | null {
+    if (!fs.existsSync(scriptsDir)) return null;
+
+    const versions = fs.readdirSync(scriptsDir)
+      .filter((d: string) => {
+        try { return fs.statSync(path.join(scriptsDir, d)).isDirectory(); } catch { return false; }
+      })
+      .sort((a: string, b: string) => b.localeCompare(a, undefined, { numeric: true, sensitivity: 'base' }));
+
+    if (versions.length === 0) return null;
+    return path.join(scriptsDir, versions[0]);
+  }
+
+  private resolveAutoImplWritableProviderDir(category: ProviderCategory, type: string, requestedDir?: string): string | null {
+    const canonicalUserDir = path.resolve(this.providerLoader.getUserProviderDir(category, type));
+    const desiredDir = requestedDir ? path.resolve(requestedDir) : canonicalUserDir;
+
+    if (desiredDir !== canonicalUserDir) {
+      return null;
+    }
+
+    const userRoot = path.resolve(this.providerLoader.getUserDir());
+    if (desiredDir !== userRoot && !desiredDir.startsWith(`${userRoot}${path.sep}`)) {
+      return null;
+    }
+
+    const sourceDir = this.findProviderDir(type);
+    if (!sourceDir) {
+      return null;
+    }
+
+    if (!fs.existsSync(desiredDir)) {
+      fs.mkdirSync(path.dirname(desiredDir), { recursive: true });
+      fs.cpSync(sourceDir, desiredDir, { recursive: true });
+      this.log(`Auto-implement writable copy created: ${desiredDir}`);
+    }
+
+    const providerJson = path.join(desiredDir, 'provider.json');
+    if (!fs.existsSync(providerJson)) {
+      return null;
+    }
+
+    try {
+      const providerData = JSON.parse(fs.readFileSync(providerJson, 'utf-8'));
+      if (providerData.disableUpstream !== true) {
+        providerData.disableUpstream = true;
+        fs.writeFileSync(providerJson, JSON.stringify(providerData, null, 2));
+      }
+    } catch {
+      return null;
+    }
+
+    return desiredDir;
+  }
+
+  private loadAutoImplReferenceScripts(referenceType: string | null): Record<string, string> {
     if (!referenceType) return {};
 
-    const refDir = this.providerLoader.getUpstreamProviderDir(category, referenceType);
-    if (!fs.existsSync(refDir)) return {};
+    const refDir = this.findProviderDir(referenceType);
+    if (!refDir || !fs.existsSync(refDir)) return {};
 
     const referenceScripts: Record<string, string> = {};
     const scriptsDir = path.join(refDir, 'scripts');
-    if (!fs.existsSync(scriptsDir)) return referenceScripts;
+    const latestDir = this.getLatestScriptVersionDir(scriptsDir);
+    if (!latestDir) return referenceScripts;
 
-    const versions = fs.readdirSync(scriptsDir).filter((d: string) => {
-      try { return fs.statSync(path.join(scriptsDir, d)).isDirectory(); } catch { return false; }
-    }).sort().reverse();
-    if (versions.length === 0) return referenceScripts;
-
-    const latestDir = path.join(scriptsDir, versions[0]);
     for (const file of fs.readdirSync(latestDir)) {
       if (!file.endsWith('.js')) continue;
       try {
@@ -1909,7 +1961,7 @@ export class DevServer {
 
   private async handleAutoImplement(type: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await this.readBody(req);
-    const { agent = 'claude-cli', functions, reference = 'antigravity', model, comment } = body;
+    const { agent = 'claude-cli', functions, reference, model, comment, providerDir: requestedProviderDir } = body;
     if (!functions || !Array.isArray(functions) || functions.length === 0) {
       this.json(res, 400, { error: 'functions[] is required (e.g. ["readChat", "sendMessage"])' });
       return;
@@ -1923,8 +1975,13 @@ export class DevServer {
     const provider = this.providerLoader.resolve(type);
     if (!provider) { this.json(res, 404, { error: `Provider not found: ${type}` }); return; }
 
-    const providerDir = this.findProviderDir(type);
-    if (!providerDir) { this.json(res, 404, { error: `Provider directory not found: ${type}` }); return; }
+    const providerDir = this.resolveAutoImplWritableProviderDir(provider.category, type, requestedProviderDir);
+    if (!providerDir) {
+      this.json(res, 409, {
+        error: `Auto-implement only writes to the canonical user provider directory for '${type}'.`,
+      });
+      return;
+    }
 
     try {
       // 1. Collect DOM context
@@ -1952,7 +2009,7 @@ export class DevServer {
         }
       });
 
-      const referenceScripts = this.loadAutoImplReferenceScripts(provider.category, resolvedReference);
+      const referenceScripts = this.loadAutoImplReferenceScripts(resolvedReference);
 
       // 3. Build the prompt
       const prompt = this.buildAutoImplPrompt(type, provider, providerDir, functions, domContext, referenceScripts, comment, resolvedReference);
@@ -2339,25 +2396,20 @@ export class DevServer {
     lines.push('');
 
     const scriptsDir = path.join(providerDir, 'scripts');
-    if (fs.existsSync(scriptsDir)) {
-      const versions = fs.readdirSync(scriptsDir).filter((d: string) => {
-        try { return fs.statSync(path.join(scriptsDir, d)).isDirectory(); } catch { return false; }
-      }).sort().reverse();
-      if (versions.length > 0) {
-        const vDir = path.join(scriptsDir, versions[0]);
-        lines.push(`Scripts version directory: \`${vDir}\``);
-        lines.push('');
-        for (const file of fs.readdirSync(vDir)) {
-          if (file.endsWith('.js')) {
-            try {
-              const content = fs.readFileSync(path.join(vDir, file), 'utf-8');
-              lines.push(`### \`${file}\``);
-              lines.push('```javascript');
-              lines.push(content);
-              lines.push('```');
-              lines.push('');
-            } catch { /* skip */ }
-          }
+    const latestScriptsDir = this.getLatestScriptVersionDir(scriptsDir);
+    if (latestScriptsDir) {
+      lines.push(`Scripts version directory: \`${latestScriptsDir}\``);
+      lines.push('');
+      for (const file of fs.readdirSync(latestScriptsDir)) {
+        if (file.endsWith('.js')) {
+          try {
+            const content = fs.readFileSync(path.join(latestScriptsDir, file), 'utf-8');
+            lines.push(`### \`${file}\``);
+            lines.push('```javascript');
+            lines.push(content);
+            lines.push('```');
+            lines.push('');
+          } catch { /* skip */ }
         }
       }
     }
@@ -2442,7 +2494,7 @@ export class DevServer {
     lines.push('## Rules');
     lines.push('1. **Scripts WITHOUT params** → IIFE: `(() => { ... })()`');
     lines.push('2. **Scripts WITH params** → arrow: `(params) => { ... }` — router calls `(${script})(${JSON.stringify(params)})`');
-    lines.push('3. Use CSS selectors from the DOM analysis above');
+    lines.push('3. If live DOM analysis is included above, use it. Otherwise, discover selectors yourself via CDP before coding.');
     lines.push('4. Always wrap in try-catch, return `JSON.stringify(result)`');
     lines.push('5. Do NOT modify `scripts.js` router — only edit individual `*.js` files');
     lines.push('6. All scripts run in the browser (CDP evaluate) — use DOM APIs only');
@@ -2498,8 +2550,12 @@ export class DevServer {
     lines.push('');
 
     // ── DevConsole API for verification ──
-    lines.push('## YOU MUST EXPLORE THE DOM YOURSELF!');
-    lines.push('I have NOT provided you with the DOM snapshot. You MUST use your command-line tools to discover the IDE structure dynamically!');
+    lines.push('## DOM Exploration');
+    if (domContext) {
+      lines.push('A lightweight DOM snapshot is included above, but you MUST still verify selectors yourself before finalizing the scripts.');
+    } else {
+      lines.push('No DOM snapshot is included here. You MUST use your command-line tools to discover the IDE structure dynamically.');
+    }
     lines.push('');
     lines.push('### 1. Evaluate JS to explore IDE DOM');
     lines.push('Use cURL to run JavaScript inside the IDE:');
@@ -2604,26 +2660,21 @@ export class DevServer {
     lines.push('');
 
     const scriptsDir = path.join(providerDir, 'scripts');
-    if (fs.existsSync(scriptsDir)) {
-      const versions = fs.readdirSync(scriptsDir).filter((d: string) => {
-        try { return fs.statSync(path.join(scriptsDir, d)).isDirectory(); } catch { return false; }
-      }).sort().reverse();
-      if (versions.length > 0) {
-        const vDir = path.join(scriptsDir, versions[0]);
-        lines.push(`Scripts version directory: \`${vDir}\``);
-        lines.push('');
-        for (const file of fs.readdirSync(vDir)) {
-          if (!file.endsWith('.js')) continue;
-          try {
-            const content = fs.readFileSync(path.join(vDir, file), 'utf-8');
-            lines.push(`### \`${file}\``);
-            lines.push('```javascript');
-            lines.push(content);
-            lines.push('```');
-            lines.push('');
-          } catch {
-            // ignore
-          }
+    const latestScriptsDir = this.getLatestScriptVersionDir(scriptsDir);
+    if (latestScriptsDir) {
+      lines.push(`Scripts version directory: \`${latestScriptsDir}\``);
+      lines.push('');
+      for (const file of fs.readdirSync(latestScriptsDir)) {
+        if (!file.endsWith('.js')) continue;
+        try {
+          const content = fs.readFileSync(path.join(latestScriptsDir, file), 'utf-8');
+          lines.push(`### \`${file}\``);
+          lines.push('```javascript');
+          lines.push(content);
+          lines.push('```');
+          lines.push('');
+        } catch {
+          // ignore
         }
       }
     }

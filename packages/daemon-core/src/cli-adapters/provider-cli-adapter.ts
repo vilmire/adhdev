@@ -355,6 +355,8 @@ export class ProviderCliAdapter implements CliAdapter {
 
  // PTY I/O
     private onPtyDataCallback: ((data: string) => void) | null = null;
+    private pendingOutputParseBuffer = '';
+    private pendingOutputParseTimer: NodeJS.Timeout | null = null;
     private ptyOutputBuffer = '';
     private ptyOutputFlushTimer: NodeJS.Timeout | null = null;
 
@@ -516,6 +518,17 @@ export class ProviderCliAdapter implements CliAdapter {
         this.onPtyDataCallback = callback;
     }
 
+    private flushPendingOutputParse(): void {
+        if (this.pendingOutputParseTimer) {
+            clearTimeout(this.pendingOutputParseTimer);
+            this.pendingOutputParseTimer = null;
+        }
+        if (!this.pendingOutputParseBuffer) return;
+        const rawData = this.pendingOutputParseBuffer;
+        this.pendingOutputParseBuffer = '';
+        this.handleOutput(rawData);
+    }
+
     async spawn(): Promise<void> {
         if (this.ptyProcess) return;
         if (!pty) throw new Error('node-pty is not installed');
@@ -576,7 +589,21 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         this.ptyProcess.onData((data: string) => {
-            this.handleOutput(data);
+            if (Date.now() < this.resizeSuppressUntil) return;
+
+            if (data.includes('\x1b[6n') || data.includes('\x1b[?6n')) {
+                // Some TUIs probe cursor position during startup; reply quickly even when batching parsing.
+                this.ptyProcess?.write('\x1b[1;1R');
+            }
+
+            this.pendingOutputParseBuffer += data;
+            if (!this.pendingOutputParseTimer) {
+                this.pendingOutputParseTimer = setTimeout(() => {
+                    this.pendingOutputParseTimer = null;
+                    this.flushPendingOutputParse();
+                }, this.timeouts.ptyFlush);
+            }
+
             if (this.onPtyDataCallback) {
                 this.ptyOutputBuffer += data;
                 if (!this.ptyOutputFlushTimer) {
@@ -593,6 +620,7 @@ export class ProviderCliAdapter implements CliAdapter {
 
         this.ptyProcess.onExit(({ exitCode }: { exitCode: number }) => {
             LOG.info('CLI', `[${this.cliType}] Exit code ${exitCode}`);
+            this.flushPendingOutputParse();
             this.ptyProcess = null;
             this.setStatus('stopped', 'pty_exit');
             this.ready = false;
@@ -615,13 +643,6 @@ export class ProviderCliAdapter implements CliAdapter {
  // ─── Output Handling ────────────────────────────
 
     private handleOutput(rawData: string): void {
-        if (Date.now() < this.resizeSuppressUntil) return;
-
-        if (rawData.includes('\x1b[6n') || rawData.includes('\x1b[?6n')) {
-            // Some TUIs probe cursor position during startup; node-pty does not answer automatically.
-            this.ptyProcess?.write('\x1b[1;1R');
-        }
-
         this.terminalScreen.write(rawData);
         this.terminalHistory = mergeTerminalHistory(this.terminalHistory, this.terminalScreen.getText());
         const cleanData = stripAnsi(rawData);
@@ -1136,6 +1157,10 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.settleTimer) { clearTimeout(this.settleTimer); this.settleTimer = null; }
         if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
         if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
+        if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
+        this.pendingOutputParseBuffer = '';
+        if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
+        this.ptyOutputBuffer = '';
         if (this.ptyProcess) {
             this.ptyProcess.write('\x03');
             setTimeout(() => {
@@ -1159,6 +1184,10 @@ export class ProviderCliAdapter implements CliAdapter {
         this.currentTurnScope = null;
         this.submitRetryUsed = false;
         this.submitRetryPromptSnippet = '';
+        if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
+        this.pendingOutputParseBuffer = '';
+        if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
+        this.ptyOutputBuffer = '';
         this.terminalScreen.reset();
         this.onStatusChange?.();
     }
@@ -1236,6 +1265,8 @@ export class ProviderCliAdapter implements CliAdapter {
             scriptNames: Object.keys(this.cliScripts).filter(k => typeof (this.cliScripts as any)[k] === 'function'),
             statusHistory: this.statusHistory.slice(-30),
             timeouts: this.timeouts,
+            pendingOutputParseBufferLength: this.pendingOutputParseBuffer.length,
+            pendingOutputParseScheduled: !!this.pendingOutputParseTimer,
             ptyAlive: !!this.ptyProcess,
         };
     }

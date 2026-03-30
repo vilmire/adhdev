@@ -201,7 +201,8 @@ If an IDE updates its UI and ADHDev's chat integration breaks, you can easily fi
 
 ### Adding Custom Local Providers
 
-If you want to create a custom provider locally or test your fixes before submitting a PR to the providers repository, place your edited files in `~/.adhdev/providers/<category>/<type>/`. Local user providers will always overwrite upstream auto-updated ones.
+Providers are loaded dynamically. The legacy builtin directory has been deprecated in favor of a dynamic workspace model. 
+If you want to create a custom provider locally or test your fixes before submitting a PR to the providers repository, place your edited files in `~/.adhdev/providers/<category>/<type>/`. Local user providers will always overwrite upstream auto-updated ones, allowing for rapid reloading and local testing without rebuilding the daemon.
 
 ```text
 ~/.adhdev/providers/ide/my-ide/

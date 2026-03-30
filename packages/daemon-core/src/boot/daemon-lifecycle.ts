@@ -18,6 +18,7 @@ import { AgentStreamPoller } from '../agent-stream/poller.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
 import { VersionArchive, detectAllVersions } from '../providers/version-archive.js';
 import { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
+import { DevServer } from '../daemon/dev-server.js';
 import { detectIDEs } from '../detection/ide-detector.js';
 import { installGlobalInterceptor, LOG } from '../logging/logger.js';
 import { loadConfig } from '../config/config.js';
@@ -71,6 +72,11 @@ export interface DaemonComponents {
     cdpManagers: Map<string, DaemonCdpManager>;
     instanceIdMap: Map<string, string>;
     detectedIdes: { value: any[] };
+}
+
+export interface DaemonDevSupportOptions {
+    components: DaemonComponents;
+    logFn?: (msg: string) => void;
 }
 
 // ─── Init ───
@@ -238,6 +244,24 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         instanceIdMap,
         detectedIdes: detectedIdesRef,
     };
+}
+
+/**
+ * Start shared dev-only helpers:
+ * - DevServer on port 19280
+ * - Provider hot-reload watcher
+ */
+export async function startDaemonDevSupport(options: DaemonDevSupportOptions): Promise<DevServer> {
+    const devServer = new DevServer({
+        providerLoader: options.components.providerLoader,
+        cdpManagers: options.components.cdpManagers,
+        instanceManager: options.components.instanceManager,
+        cliManager: options.components.cliManager,
+        logFn: options.logFn,
+    });
+    await devServer.start();
+    options.components.providerLoader.watch();
+    return devServer;
 }
 
 // ─── Shutdown ───

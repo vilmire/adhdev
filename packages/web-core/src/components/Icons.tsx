@@ -477,3 +477,14 @@ export function IconVolume({ size = defaults.size, className }: IconProps) {
 }
 
 
+
+// Discord
+export function IconDiscord({ size = defaults.size, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M14.5 10c-.83 0-1.5-.89-1.5-2s.67-2 1.5-2 1.5.89 1.5 2-.67 2-1.5 2z"/>
+      <path d="M9.5 10c-.83 0-1.5-.89-1.5-2s.67-2 1.5-2 1.5.89 1.5 2-.67 2-1.5 2z"/>
+      <path d="M19.35 6.07A16.03 16.03 0 0 0 15 4a.84.84 0 0 0-.46.33 11 11 0 0 0-.74 1.5 15.68 15.68 0 0 0-3.6 0 11.23 11.23 0 0 0-.74-1.5A.84.84 0 0 0 9 4a16.03 16.03 0 0 0-4.35 2.07A16.8 16.8 0 0 0 2 15a16.22 16.22 0 0 0 4 3c.12.08.27.06.37-.04a11.14 11.14 0 0 0 1.2-1.92.35.35 0 0 0-.18-.46 10.4 10.4 0 0 1-1.63-.78.36.36 0 0 1 .03-.6 6.8 6.8 0 0 0 .32-.24.36.36 0 0 1 .37-.04c2.2.98 4.6.98 6.8 0a.36.36 0 0 1 .37.04c.1.08.21.16.32.24a.36.36 0 0 1 .03.6 10.4 10.4 0 0 1-1.63.78.35.35 0 0 0-.18.46c.39.67.8 1.3 1.2 1.92a.37.37 0 0 0 .37.04 16.22 16.22 0 0 0 4-3 16.8 16.8 0 0 0-2.65-8.93z" />
+    </svg>
+  );
+}
