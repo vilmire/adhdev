@@ -1895,22 +1895,25 @@ export class DevServer {
     return path.join(scriptsDir, versions[0]);
   }
 
-  private resolveAutoImplWritableProviderDir(category: ProviderCategory, type: string, requestedDir?: string): string | null {
+  private resolveAutoImplWritableProviderDir(
+    category: ProviderCategory,
+    type: string,
+    requestedDir?: string,
+  ): { dir: string | null; reason?: string } {
     const canonicalUserDir = path.resolve(this.providerLoader.getUserProviderDir(category, type));
     const desiredDir = requestedDir ? path.resolve(requestedDir) : canonicalUserDir;
-
-    if (desiredDir !== canonicalUserDir) {
-      return null;
+    const upstreamRoot = path.resolve(this.providerLoader.getUpstreamDir());
+    if (desiredDir === upstreamRoot || desiredDir.startsWith(`${upstreamRoot}${path.sep}`)) {
+      return { dir: null, reason: `Refusing to write into upstream provider directory: ${desiredDir}` };
     }
 
-    const userRoot = path.resolve(this.providerLoader.getUserDir());
-    if (desiredDir !== userRoot && !desiredDir.startsWith(`${userRoot}${path.sep}`)) {
-      return null;
+    if (path.basename(desiredDir) !== type) {
+      return { dir: null, reason: `Requested writable provider directory must end with '${type}': ${desiredDir}` };
     }
 
     const sourceDir = this.findProviderDir(type);
     if (!sourceDir) {
-      return null;
+      return { dir: null, reason: `Provider source directory not found for '${type}'` };
     }
 
     if (!fs.existsSync(desiredDir)) {
@@ -1921,7 +1924,7 @@ export class DevServer {
 
     const providerJson = path.join(desiredDir, 'provider.json');
     if (!fs.existsSync(providerJson)) {
-      return null;
+      return { dir: null, reason: `provider.json not found in writable provider directory: ${desiredDir}` };
     }
 
     try {
@@ -1930,11 +1933,14 @@ export class DevServer {
         providerData.disableUpstream = true;
         fs.writeFileSync(providerJson, JSON.stringify(providerData, null, 2));
       }
-    } catch {
-      return null;
+    } catch (error) {
+      return {
+        dir: null,
+        reason: `Failed to update provider.json in writable provider directory: ${(error as Error).message}`,
+      };
     }
 
-    return desiredDir;
+    return { dir: desiredDir };
   }
 
   private loadAutoImplReferenceScripts(referenceType: string | null): Record<string, string> {
@@ -1975,13 +1981,14 @@ export class DevServer {
     const provider = this.providerLoader.resolve(type);
     if (!provider) { this.json(res, 404, { error: `Provider not found: ${type}` }); return; }
 
-    const providerDir = this.resolveAutoImplWritableProviderDir(provider.category, type, requestedProviderDir);
-    if (!providerDir) {
+    const writableProvider = this.resolveAutoImplWritableProviderDir(provider.category, type, requestedProviderDir);
+    if (!writableProvider.dir) {
       this.json(res, 409, {
-        error: `Auto-implement only writes to the canonical user provider directory for '${type}'.`,
+        error: writableProvider.reason || `Auto-implement only writes to the canonical user provider directory for '${type}'.`,
       });
       return;
     }
+    const providerDir = writableProvider.dir;
 
     try {
       // 1. Collect DOM context
