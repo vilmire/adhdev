@@ -2,6 +2,22 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.6.68] - 2026-03-30
+
+### Added
+- `scripts/version-bump.sh` — OSS-first version bump workflow
+- Automated npm publish via CI on `v*` tags (daemon-core + daemon-standalone)
+
+### Fixed
+- Multi-window CDP detection: use `target.id` for stable manager keys
+- Periodic scan no longer skips IDEs with existing connections (finds new windows)
+- Extension settings now resolve correctly for multi-window manager keys
+
+### Changed
+- Provider loader: stable upstream directory independent of custom provider path
+- DevServer: auto-load PROVIDER_GUIDE.md and CDP_SELECTOR_GUIDE.md for auto-implement
+- Standalone daemon: enable provider hot-reload in `--dev` mode
+
 ## [0.6.67] - 2026-03-30
 
 ### Changed
