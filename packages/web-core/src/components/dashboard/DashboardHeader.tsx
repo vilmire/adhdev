@@ -7,16 +7,9 @@
 
 import { useNavigate } from 'react-router-dom';
 import type { ActiveConversation } from './types';
+import { isCliConv, isAcpConv } from './types';
 import { IconChat, IconScroll, IconMonitor, IconTerminal } from '../Icons';
 import { useDaemons } from '../../compat';
-
-/** Helper to check if a conversation is CLI type */
-const isCliConv = (conv: { ideId?: string; tabKey?: string; id?: string }) =>
-    (conv.ideId || conv.tabKey || conv.id || '').includes(':cli:');
-
-/** Helper to check if a conversation is ACP type */
-const isAcpConv = (conv: { ideId?: string; tabKey?: string; id?: string }) =>
-    (conv.ideId || conv.tabKey || conv.id || '').includes(':acp:');
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -25,13 +18,26 @@ export interface DashboardHeaderProps {
     /** Overall connection readiness (green=ready, yellow=partial, red=disconnected) */
     isConnected: boolean;
     onOpenHistory: () => void;
+    cliViewMode?: 'chat' | 'terminal' | null;
+    onSetCliViewMode?: (mode: 'chat' | 'terminal') => void;
+    onStopCli?: () => void;
 }
 
-export default function DashboardHeader({ activeConv, agentCount, wsStatus, isConnected, onOpenHistory }: DashboardHeaderProps) {
+export default function DashboardHeader({
+    activeConv,
+    agentCount,
+    wsStatus,
+    isConnected,
+    onOpenHistory,
+    cliViewMode,
+    onSetCliViewMode,
+    onStopCli,
+}: DashboardHeaderProps) {
     const navigate = useNavigate();
     const daemonCtx = useDaemons() as any;
     const p2pStates: Record<string, string> = daemonCtx.p2pStates || {};
     const ides = daemonCtx.ides || [];
+    const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
 
     const dotColor = isConnected ? '#22c55e' : wsStatus === 'connected' ? '#eab308' : '#ef4444';
     const dotGlow = isConnected ? '0 0 4px #22c55e80' : wsStatus === 'connected' ? '0 0 4px #eab30880' : '0 0 4px #ef444480';
@@ -86,7 +92,36 @@ export default function DashboardHeader({ activeConv, agentCount, wsStatus, isCo
                 </div>
             </div>
             <div className="flex gap-2 items-center">
-                {activeConv && !isCliConv(activeConv) && !isAcpConv(activeConv) && (
+                {isCliActive && cliViewMode && onSetCliViewMode && (
+                    <div className="flex items-center rounded-lg border border-border-subtle bg-bg-secondary p-0.5">
+                        <button
+                            onClick={() => onSetCliViewMode('chat')}
+                            className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${cliViewMode === 'chat' ? 'bg-bg-primary text-text-primary shadow-sm' : 'text-text-muted hover:text-text-primary'}`}
+                            title="Chat mode"
+                        >
+                            Chat
+                        </button>
+                        <button
+                            onClick={() => onSetCliViewMode('terminal')}
+                            className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${cliViewMode === 'terminal' ? 'bg-bg-primary text-text-primary shadow-sm' : 'text-text-muted hover:text-text-primary'}`}
+                            title="Terminal mode"
+                        >
+                            Terminal
+                        </button>
+                    </div>
+                )}
+
+                {isCliActive && onStopCli && (
+                    <button
+                        onClick={onStopCli}
+                        className="btn btn-secondary btn-sm text-red-400 border-red-500/25 hover:bg-red-500/10"
+                        title="Stop CLI process"
+                    >
+                        Stop
+                    </button>
+                )}
+
+                {activeConv && !isCliActive && !isAcpConv(activeConv) && (
                     <button
                         onClick={() => navigate(`/ide/${activeConv.ideId}`)}
                         className="btn btn-primary btn-sm"
@@ -96,7 +131,7 @@ export default function DashboardHeader({ activeConv, agentCount, wsStatus, isCo
                     </button>
                 )}
 
-                {activeConv && !isCliConv(activeConv) && !isAcpConv(activeConv) && (
+                {activeConv && !isCliActive && !isAcpConv(activeConv) && (
                     <button
                         onClick={onOpenHistory}
                         className="btn btn-secondary btn-sm"
@@ -105,7 +140,7 @@ export default function DashboardHeader({ activeConv, agentCount, wsStatus, isCo
                         <IconScroll size={16} />
                     </button>
                 )}
-                {activeConv && !isCliConv(activeConv) && !isAcpConv(activeConv) && (
+                {activeConv && !isCliActive && !isAcpConv(activeConv) && (
                     <button onClick={() => navigate(`/ide/${activeConv.ideId}?view=remote`)} className="btn btn-secondary btn-sm" title="Remote Control">
                         <IconMonitor size={16} />
                     </button>

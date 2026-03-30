@@ -64,6 +64,8 @@ export interface PaneGroupProps {
     onTabOrderChange?: (order: string[]) => void;
     /** Hide tab from dashboard */
     onHideTab?: (tabKey: string) => void;
+    /** Per-tab CLI pane mode */
+    cliViewModes: Record<string, 'chat' | 'terminal'>;
 }
 
 export default function PaneGroup({
@@ -82,11 +84,12 @@ export default function PaneGroup({
     initialTabOrder,
     onTabOrderChange,
     onHideTab,
+    cliViewModes,
 }: PaneGroupProps) {
     const { sendCommand } = useTransport();
     const terminalRef = useRef<CliTerminalHandle>(null);
     const [dragOver, setDragOver] = useState(false);
-    const [splitDropSide, setSplitDropSide] = useState<'left' | 'right' | null>(null);
+    const [dropAction, setDropAction] = useState<'split-left' | 'merge' | 'split-right' | null>(null);
     const dragCounter = useRef(0);
     const longPressTimer = useRef<any>(null);
 
@@ -271,9 +274,8 @@ export default function PaneGroup({
         return () => window.removeEventListener('keydown', handler);
     }, [tabShortcuts, sortedConversations, onFocus, onActiveTabChange, matchesShortcut]);
 
-    const [cliViewMode, setCliViewMode] = useState<Record<string, 'chat' | 'terminal'>>({});
     const isCli = activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
-    const activeViewMode = isCli ? (cliViewMode[activeConv.tabKey] ?? activeConv.mode ?? 'terminal') : 'chat';
+    const activeViewMode = isCli ? (cliViewModes[activeConv.tabKey] ?? activeConv.mode ?? 'terminal') : 'chat';
 
     // Force-clear dragOver on ANY drag end (global listener)
     // This prevents stuck outlines when drag ends outside this group
@@ -283,7 +285,7 @@ export default function PaneGroup({
         const handleDragEnd = () => {
             dragCounter.current = 0;
             setDragOver(false);
-            setSplitDropSide(null);
+            setDropAction(null);
         };
         window.addEventListener('dragend', handleDragEnd);
         window.addEventListener('drop', handleDragEnd);
@@ -477,18 +479,23 @@ export default function PaneGroup({
                 onDragOver={(e) => {
                     if (!e.dataTransfer.types.includes('text/tab-key')) return;
                     e.preventDefault();
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const localX = e.clientX - rect.left;
                     if (numGroups < 4 && onMoveTab) {
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        const localX = e.clientX - rect.left;
-                        setSplitDropSide(localX < rect.width / 2 ? 'left' : 'right');
+                        const third = rect.width / 3;
+                        if (localX < third) setDropAction('split-left');
+                        else if (localX > third * 2) setDropAction('split-right');
+                        else setDropAction('merge');
+                        return;
                     }
+                    setDropAction('merge');
                 }}
                 onDragLeave={() => {
                     dragCounter.current--;
                     if (dragCounter.current <= 0) {
                         dragCounter.current = 0;
                         setDragOver(false);
-                        setSplitDropSide(null);
+                        setDropAction(null);
                     }
                 }}
                 onDrop={(e) => {
@@ -496,13 +503,17 @@ export default function PaneGroup({
                     setDragOver(false);
                     const tabKey = e.dataTransfer.getData('text/tab-key');
                     const isOwnTab = tabKey ? conversations.some(c => c.tabKey === tabKey) : false;
-                    const dropSide = splitDropSide;
-                    setSplitDropSide(null);
+                    const nextDropAction = dropAction;
+                    setDropAction(null);
                     setPreviewOrder(null);
                     if (!tabKey) return;
                     e.preventDefault();
-                    if (dropSide && onMoveTab && numGroups < 4) {
-                        onMoveTab(tabKey, dropSide === 'left' ? 'split-left' : 'split-right');
+                    if (nextDropAction === 'split-left' && onMoveTab && numGroups < 4) {
+                        onMoveTab(tabKey, 'split-left');
+                        return;
+                    }
+                    if (nextDropAction === 'split-right' && onMoveTab && numGroups < 4) {
+                        onMoveTab(tabKey, 'split-right');
                         return;
                     }
                     if (isOwnTab) {
@@ -517,13 +528,14 @@ export default function PaneGroup({
                     }
                 }}
             >
-                {dragOver && onMoveTab && numGroups < 4 && (
+                {dragOver && (
                     <div className="absolute inset-0 z-10 pointer-events-none flex">
                         <div
                             className="flex-1 border-r border-white/10 transition-all duration-150 flex items-center justify-center"
                             style={{
-                                background: splitDropSide === 'left' ? 'rgba(139, 92, 246, 0.18)' : 'rgba(139, 92, 246, 0.08)',
-                                boxShadow: splitDropSide === 'left' ? 'inset 0 0 0 2px var(--accent-primary)' : 'inset 0 0 0 1px rgba(255,255,255,0.05)',
+                                background: dropAction === 'split-left' ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.04)',
+                                boxShadow: dropAction === 'split-left' ? 'inset 0 0 0 2px var(--accent-primary)' : 'inset 0 0 0 1px rgba(255,255,255,0.05)',
+                                opacity: numGroups < 4 && onMoveTab ? 1 : 0.45,
                             }}
                         >
                             <div className="px-3 py-1.5 rounded-full text-[11px] font-semibold text-white bg-black/45 backdrop-blur-sm">
@@ -531,10 +543,22 @@ export default function PaneGroup({
                             </div>
                         </div>
                         <div
+                            className="flex-1 border-r border-white/10 transition-all duration-150 flex items-center justify-center"
+                            style={{
+                                background: dropAction === 'merge' ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.04)',
+                                boxShadow: dropAction === 'merge' ? 'inset 0 0 0 2px var(--accent-primary)' : 'inset 0 0 0 1px rgba(255,255,255,0.05)',
+                            }}
+                        >
+                            <div className="px-3 py-1.5 rounded-full text-[11px] font-semibold text-white bg-black/45 backdrop-blur-sm">
+                                Move Here
+                            </div>
+                        </div>
+                        <div
                             className="flex-1 transition-all duration-150 flex items-center justify-center"
                             style={{
-                                background: splitDropSide === 'right' ? 'rgba(139, 92, 246, 0.18)' : 'rgba(139, 92, 246, 0.08)',
-                                boxShadow: splitDropSide === 'right' ? 'inset 0 0 0 2px var(--accent-primary)' : 'inset 0 0 0 1px rgba(255,255,255,0.05)',
+                                background: dropAction === 'split-right' ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.04)',
+                                boxShadow: dropAction === 'split-right' ? 'inset 0 0 0 2px var(--accent-primary)' : 'inset 0 0 0 1px rgba(255,255,255,0.05)',
+                                opacity: numGroups < 4 && onMoveTab ? 1 : 0.45,
                             }}
                         >
                             <div className="px-3 py-1.5 rounded-full text-[11px] font-semibold text-white bg-black/45 backdrop-blur-sm">
@@ -596,61 +620,6 @@ export default function PaneGroup({
                     </div>
                 ) : (
                     <>
-                        {isCli && (
-                            <div className="flex items-center justify-between px-3 py-1.5 bg-bg-primary border-b border-border-subtle shrink-0 gap-3">
-                                <div className="flex bg-bg-secondary rounded items-center p-0.5 border border-border-subtle text-[11px] shadow-sm">
-                                    <button
-                                        className={`px-2 py-[2px] rounded transition-all outline-none ${activeViewMode === 'chat' ? 'bg-[var(--surface-primary)] shadow-sm font-semibold text-text-primary' : 'bg-transparent text-text-muted hover:text-text-primary'}`}
-                                        onClick={() => {
-                                            if (activeViewMode !== 'chat') setCliViewMode(prev => ({ ...prev, [activeConv.tabKey]: 'chat' }));
-                                        }}
-                                    >
-                                        💬 Chat
-                                    </button>
-                                    <button
-                                        className={`px-2 py-[2px] rounded transition-all outline-none ${activeViewMode === 'terminal' ? 'bg-[var(--surface-primary)] shadow-sm font-semibold text-text-primary' : 'bg-transparent text-text-muted hover:text-text-primary'}`}
-                                        onClick={() => {
-                                            if (activeViewMode !== 'terminal') setCliViewMode(prev => ({ ...prev, [activeConv.tabKey]: 'terminal' }));
-                                        }}
-                                    >
-                                        🖥 Terminal
-                                    </button>
-                                </div>
-                                {activeViewMode === 'terminal' && (
-                                    <div className="flex items-center gap-2">
-                                        <button
-                                            onClick={() => {
-                                                if (!terminalRef.current) return;
-                                                const buf = ptyBuffers.current.get(activeConv.tabKey);
-                                                if (buf && buf.length > 0) {
-                                                    for (const chunk of buf) terminalRef.current.write(chunk);
-                                                }
-                                                requestAnimationFrame(() => {
-                                                    requestAnimationFrame(() => {
-                                                        terminalRef.current?.bumpResize();
-                                                    });
-                                                });
-                                            }}
-                                            title="Refresh terminal (replay buffer + TUI redraw)"
-                                            className="px-2 py-0.5 rounded-[5px] text-[11px] bg-bg-secondary text-text-secondary border border-border-subtle cursor-pointer leading-none"
-                                        >↺</button>
-                                        <button
-                                            onClick={async () => {
-                                                const cliType = activeConv.ideId?.includes(':cli:') ? activeConv.ideId.split(':cli:')[1] : (activeConv.ideType || activeConv.agentType || '');
-                                                if (!window.confirm(`Stop ${cliType}?\nThis will terminate the CLI process.`)) return;
-                                                const daemonId = activeConv.ideId || activeConv.daemonId || '';
-                                                try {
-                                                    await sendCommand(daemonId, 'stop_cli', { cliType });
-                                                } catch (e: any) { console.error('Stop CLI failed:', e); }
-                                            }}
-                                            title="Stop CLI process"
-                                            className="px-2 py-0.5 rounded-[5px] text-[11px] bg-red-500/[0.08] text-red-400 border border-red-500/30 cursor-pointer leading-none font-semibold"
-                                        >■ Stop</button>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
                         <ApprovalBanner activeConv={activeConv} onModalButton={cmds.handleModalButton} />
 
                         <div className="desktop-only px-3 pt-1 pb-2">

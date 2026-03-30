@@ -8,7 +8,7 @@ import { useDashboardCommands } from '../hooks/useDashboardCommands'
 import { useDaemons, dashboardWS, p2pManager } from '../compat'
 import { useTransport } from '../context/TransportContext'
 import type { DaemonData } from '../types'
-import { isCliConv } from '../components/dashboard/types'
+import { isCliConv, isAcpConv } from '../components/dashboard/types'
 import type { ActiveConversation } from '../components/dashboard/types'
 import { useHiddenTabs } from '../hooks/useHiddenTabs'
 
@@ -22,6 +22,95 @@ import ToastContainer from '../components/dashboard/ToastContainer'
 import PaneGroup from '../components/dashboard/PaneGroup'
 import OnboardingModal from '../components/OnboardingModal'
 import { IconRefresh } from '../components/Icons'
+
+function mapsEqual(a: Map<string, number>, b: Map<string, number>) {
+    if (a.size !== b.size) return false;
+    for (const [key, value] of a) {
+        if (b.get(key) !== value) return false;
+    }
+    return true;
+}
+
+function arraysEqual(a: number[], b: number[]) {
+    if (a.length !== b.length) return false;
+    return a.every((value, idx) => value === b[idx]);
+}
+
+function indexedRecordEqual<T>(a: Record<number, T>, b: Record<number, T>) {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    return aKeys.every(key => b[key as any] === a[key as any]);
+}
+
+function deriveNormalizedGroupLayout(assignments: Map<string, number>, visibleTabKeys: string[]) {
+    const validKeys = new Set(visibleTabKeys);
+    const usedGroups = visibleTabKeys.length > 0 ? [0] : [];
+
+    for (const [tabKey, groupIndex] of assignments) {
+        if (!validKeys.has(tabKey) || groupIndex <= 0 || usedGroups.includes(groupIndex)) continue;
+        usedGroups.push(groupIndex);
+    }
+
+    usedGroups.sort((a, b) => a - b);
+
+    const mapping: Record<number, number> = {};
+    usedGroups.forEach((groupIndex, nextIndex) => {
+        mapping[groupIndex] = nextIndex;
+    });
+
+    if (usedGroups.length === 0) {
+        mapping[0] = 0;
+    }
+
+    const normalizedAssignments = new Map<string, number>();
+    for (const [tabKey, groupIndex] of assignments) {
+        if (!validKeys.has(tabKey) || groupIndex <= 0) continue;
+        const nextIndex = mapping[groupIndex];
+        if (typeof nextIndex === 'number' && nextIndex > 0) {
+            normalizedAssignments.set(tabKey, nextIndex);
+        }
+    }
+
+    return {
+        assignments: normalizedAssignments,
+        groupCount: Math.max(1, usedGroups.length),
+        mapping,
+        usedGroups,
+    };
+}
+
+function remapIndexedRecord<T>(prev: Record<number, T>, mapping: Record<number, number>) {
+    const next: Record<number, T> = {};
+    for (const [key, value] of Object.entries(prev)) {
+        const mapped = mapping[Number(key)];
+        if (typeof mapped === 'number') next[mapped] = value;
+    }
+    return next;
+}
+
+function remapFocusedGroup(current: number, usedGroups: number[], mapping: Record<number, number>) {
+    if (usedGroups.length === 0) return 0;
+    if (typeof mapping[current] === 'number') return mapping[current];
+    const fallbackOldGroup = [...usedGroups].reverse().find(groupIndex => groupIndex < current)
+        ?? usedGroups[0];
+    return mapping[fallbackOldGroup] ?? 0;
+}
+
+function normalizeGroupSizes(prev: number[], usedGroups: number[], fallbackCount: number) {
+    if (usedGroups.length <= 1) return [];
+
+    const next = usedGroups.map(groupIndex => prev[groupIndex]).filter((size): size is number => Number.isFinite(size));
+    const base = next.length === usedGroups.length
+        ? next
+        : Array(fallbackCount).fill(100 / fallbackCount);
+
+    const total = base.reduce((sum, size) => sum + size, 0);
+    return total > 0
+        ? base.map(size => (size / total) * 100)
+        : Array(fallbackCount).fill(100 / fallbackCount);
+}
+
 export default function Dashboard() {
     const { sendCommand: sendDaemonCommand } = useTransport()
     const [searchParams, setSearchParams] = useSearchParams()
@@ -43,8 +132,7 @@ export default function Dashboard() {
     const retryConnection = daemonCtx.retryConnection; void retryConnection
     const showReconnected = daemonCtx.showReconnected || false
     // ─── Split View state (N-group editor groups) ───────────
-    // groupAssignments: Map<tabKey, groupIndex>. Unassigned tabs still default to group 0,
-    // but we also allow explicit group 0 entries so a new leftmost split can be inserted.
+    // groupAssignments: Map<tabKey, groupIndex>. Unassigned tabs default to group 0.
     // Persisted to localStorage so split survives page reloads.
     const [groupAssignments, setGroupAssignments] = useState<Map<string, number>>(() => {
         try {
@@ -125,95 +213,12 @@ export default function Dashboard() {
         return () => mq.removeEventListener('change', handler);
     }, []);
 
-    // Derive the number of groups (always at least 1, forced to 1 on mobile)
-    const numGroups = useMemo(() => {
-        if (isMobile) return 1; // never split on mobile
-        if (groupAssignments.size === 0) return 1;
-        return Math.max(1, ...groupAssignments.values()) + 1;
-    }, [groupAssignments, isMobile]);
-    const isSplitMode = numGroups > 1;
-
-    const moveTabToGroup = useCallback((tabKey: string, targetGroup: number) => {
-        setGroupAssignments(prev => {
-            const next = new Map(prev);
-            if (targetGroup === 0) { next.delete(tabKey); } // group 0 = default
-            else { next.set(tabKey, targetGroup); }
-            return next;
-        });
-        setFocusedGroup(targetGroup);
-    }, []);
-
-    const shiftIndexedRecordRight = useCallback(<T,>(prev: Record<number, T>, insertIndex: number) => {
-        const next: Record<number, T> = {};
-        for (const [key, value] of Object.entries(prev)) {
-            const idx = Number(key);
-            next[idx >= insertIndex ? idx + 1 : idx] = value;
-        }
-        return next;
-    }, []);
-
-    const buildDefaultSizes = useCallback((count: number) => Array(count).fill(100 / count), []);
-
-    const closeGroup = useCallback((groupIdx: number) => {
-        setGroupAssignments(prev => {
-            const next = new Map<string, number>();
-            for (const [key, g] of prev) {
-                if (g === groupIdx) continue;
-                if (g > groupIdx) next.set(key, g - 1);
-                else next.set(key, g);
-            }
-            return next;
-        });
-        setGroupSizes(prev => {
-            if (prev.length <= 1) return [];
-            const next = [...prev];
-            next.splice(groupIdx, 1);
-            // Re-normalize
-            const total = next.reduce((a, b) => a + b, 0);
-            return next.map(s => (s / total) * 100);
-        });
-        setFocusedGroup(0);
-    }, []);
-
-    // Resize handle drag
-    const containerRef = useRef<HTMLDivElement>(null);
-    const handleResizeStart = useCallback((dividerIdx: number, e: React.MouseEvent) => {
-        e.preventDefault();
-        const container = containerRef.current;
-        if (!container) return;
-        const startX = e.clientX;
-        const totalWidth = container.offsetWidth;
-        const startSizes = groupSizes.length === numGroups
-            ? [...groupSizes]
-            : Array(numGroups).fill(100 / numGroups);
-
-        const onMove = (ev: MouseEvent) => {
-            const dx = ev.clientX - startX;
-            const pctDelta = (dx / totalWidth) * 100;
-            const next = [...startSizes];
-            next[dividerIdx] = Math.max(15, startSizes[dividerIdx] + pctDelta);
-            next[dividerIdx + 1] = Math.max(15, startSizes[dividerIdx + 1] - pctDelta);
-            setGroupSizes(next);
-        };
-        const onUp = () => {
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-        };
-        document.body.style.cursor = 'col-resize';
-        document.body.style.userSelect = 'none';
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-    }, [groupSizes, numGroups]);
-
-
-
     const [messageReceivedAt, setMessageReceivedAt] = useState<Record<string, number>>({})
     const [historyModalOpen, setHistoryModalOpen] = useState(false)
     const [actionLogs, setActionLogs] = useState<{ ideId: string; text: string; timestamp: number }[]>([])
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
     const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
+    const [cliViewModes, setCliViewModes] = useState<Record<string, 'chat' | 'terminal'>>({})
 
     // Extract detectedIdes from machine-level entry (for standalone)
     const daemonEntry = ides.find(ide => ide.type === 'adhdev-daemon')
@@ -269,6 +274,97 @@ export default function Dashboard() {
         [conversations, hiddenTabs],
     );
 
+    const visibleTabKeys = useMemo(
+        () => visibleConversations.map(conv => conv.tabKey),
+        [visibleConversations],
+    );
+
+    const normalizedGroupLayout = useMemo(
+        () => deriveNormalizedGroupLayout(groupAssignments, visibleTabKeys),
+        [groupAssignments, visibleTabKeys],
+    );
+    const normalizedGroupAssignments = normalizedGroupLayout.assignments;
+
+    const numGroups = useMemo(() => {
+        if (isMobile) return 1;
+        return normalizedGroupLayout.groupCount;
+    }, [normalizedGroupLayout.groupCount, isMobile]);
+    const isSplitMode = numGroups > 1;
+
+    const shiftIndexedRecordRight = useCallback(<T,>(prev: Record<number, T>, insertIndex: number) => {
+        const next: Record<number, T> = {};
+        for (const [key, value] of Object.entries(prev)) {
+            const idx = Number(key);
+            next[idx >= insertIndex ? idx + 1 : idx] = value;
+        }
+        return next;
+    }, []);
+
+    const buildDefaultSizes = useCallback((count: number) => Array(count).fill(100 / count), []);
+
+    const moveTabToGroup = useCallback((tabKey: string, targetGroup: number) => {
+        setGroupAssignments(prev => {
+            const next = new Map(deriveNormalizedGroupLayout(prev, visibleTabKeys).assignments);
+            if (targetGroup === 0) next.delete(tabKey);
+            else next.set(tabKey, targetGroup);
+            return next;
+        });
+        setGroupActiveTabIds(prev => ({ ...prev, [targetGroup]: tabKey }));
+        setFocusedGroup(targetGroup);
+    }, [visibleTabKeys]);
+
+    const closeGroup = useCallback((groupIdx: number) => {
+        setGroupAssignments(prev => {
+            const current = deriveNormalizedGroupLayout(prev, visibleTabKeys).assignments;
+            const next = new Map<string, number>();
+            for (const [key, g] of current) {
+                if (g === groupIdx) continue;
+                if (g > groupIdx) next.set(key, g - 1);
+                else next.set(key, g);
+            }
+            return next;
+        });
+        setGroupSizes(prev => {
+            if (prev.length <= 1) return [];
+            const next = [...prev];
+            next.splice(groupIdx, 1);
+            const total = next.reduce((sum, size) => sum + size, 0);
+            return total > 0 ? next.map(size => (size / total) * 100) : [];
+        });
+        setFocusedGroup(0);
+    }, [visibleTabKeys]);
+
+    const containerRef = useRef<HTMLDivElement>(null);
+    const handleResizeStart = useCallback((dividerIdx: number, e: React.MouseEvent) => {
+        e.preventDefault();
+        const container = containerRef.current;
+        if (!container) return;
+        const startX = e.clientX;
+        const totalWidth = container.offsetWidth;
+        const startSizes = groupSizes.length === numGroups
+            ? [...groupSizes]
+            : Array(numGroups).fill(100 / numGroups);
+
+        const onMove = (ev: MouseEvent) => {
+            const dx = ev.clientX - startX;
+            const pctDelta = (dx / totalWidth) * 100;
+            const next = [...startSizes];
+            next[dividerIdx] = Math.max(15, startSizes[dividerIdx] + pctDelta);
+            next[dividerIdx + 1] = Math.max(15, startSizes[dividerIdx + 1] - pctDelta);
+            setGroupSizes(next);
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        };
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    }, [groupSizes, numGroups]);
+
     const splitTabRelative = useCallback((tabKey: string, targetGroup: number, side: 'left' | 'right') => {
         const currentGroupCount = numGroups;
         if (currentGroupCount >= 4) return;
@@ -276,13 +372,14 @@ export default function Dashboard() {
         const insertIndex = side === 'left' ? targetGroup : targetGroup + 1;
 
         setGroupAssignments(prev => {
+            const current = deriveNormalizedGroupLayout(prev, visibleTabKeys).assignments;
             const next = new Map<string, number>();
             for (const conv of visibleConversations) {
-                const currentGroup = prev.get(conv.tabKey) ?? 0;
+                const currentGroup = current.get(conv.tabKey) ?? 0;
                 const shiftedGroup = currentGroup >= insertIndex ? currentGroup + 1 : currentGroup;
-                next.set(conv.tabKey, shiftedGroup);
+                if (shiftedGroup > 0) next.set(conv.tabKey, shiftedGroup);
             }
-            next.set(tabKey, insertIndex);
+            if (insertIndex > 0) next.set(tabKey, insertIndex);
             return next;
         });
 
@@ -311,7 +408,7 @@ export default function Dashboard() {
         });
 
         setFocusedGroup(insertIndex);
-    }, [numGroups, visibleConversations, buildDefaultSizes, shiftIndexedRecordRight]);
+    }, [numGroups, visibleConversations, visibleTabKeys, buildDefaultSizes, shiftIndexedRecordRight]);
 
     // ─── Browser Notifications ───
     // Request permission on mount
@@ -328,39 +425,46 @@ export default function Dashboard() {
     )
     useBrowserNotifications(agentStates)
 
+    // Keep split-group state compact: no explicit group 0 entries and no empty gaps.
+    useEffect(() => {
+        if (mapsEqual(groupAssignments, normalizedGroupAssignments)) return;
+        setGroupAssignments(normalizedGroupAssignments);
+    }, [groupAssignments, normalizedGroupAssignments]);
+
+    useEffect(() => {
+        const { mapping, usedGroups } = normalizedGroupLayout;
+
+        setGroupActiveTabIds(prev => {
+            const next = remapIndexedRecord(prev, mapping);
+            return indexedRecordEqual(prev, next) ? prev : next;
+        });
+
+        setGroupTabOrders(prev => {
+            const next = remapIndexedRecord(prev, mapping);
+            return indexedRecordEqual(prev, next) ? prev : next;
+        });
+
+        setFocusedGroup(prev => {
+            const next = isMobile ? 0 : remapFocusedGroup(prev, usedGroups, mapping);
+            return prev === next ? prev : next;
+        });
+
+        setGroupSizes(prev => {
+            const next = isMobile ? [] : normalizeGroupSizes(prev, usedGroups, normalizedGroupLayout.groupCount);
+            return arraysEqual(prev, next) ? prev : next;
+        });
+    }, [normalizedGroupLayout, isMobile]);
+
     // Split conversations into N groups
     const groupedConvs = useMemo(() => {
         const groups: ActiveConversation[][] = Array.from({ length: numGroups }, () => []);
         for (const conv of visibleConversations) {
-            const g = groupAssignments.get(conv.tabKey) ?? 0;
+            const g = normalizedGroupAssignments.get(conv.tabKey) ?? 0;
             const idx = Math.min(g, numGroups - 1);
             groups[idx].push(conv);
         }
         return groups;
-    }, [visibleConversations, groupAssignments, numGroups]);
-
-    // Auto-cleanup: remove stale assignments + collapse empty groups
-    useEffect(() => {
-        const validKeys = new Set(visibleConversations.map(c => c.tabKey));
-        setGroupAssignments(prev => {
-            let changed = false;
-            const next = new Map<string, number>();
-            for (const [key, g] of prev) {
-                if (validKeys.has(key)) next.set(key, g);
-                else changed = true;
-            }
-            return changed ? next : prev;
-        });
-    }, [conversations]);
-
-    // Auto-collapse empty non-zero groups
-    useEffect(() => {
-        if (!isSplitMode) return;
-        for (let g = numGroups - 1; g >= 1; g--) {
-            const hasAny = [...groupAssignments.values()].some(v => v === g);
-            if (!hasAny) closeGroup(g);
-        }
-    }, [groupAssignments, numGroups, isSplitMode, closeGroup]);
+    }, [visibleConversations, normalizedGroupAssignments, numGroups]);
 
     // ─── URL ?activeTab= deep-link resolution ───
     // Matches the URL's activeTab (raw ideId like "cursor" or instance UUID) to a conversation tabKey.
@@ -372,7 +476,7 @@ export default function Dashboard() {
             || conversations.find(c => c.ideId === urlActiveTab)
             || conversations.find(c => c.ideType === urlActiveTab || c.agentType === urlActiveTab);
         if (match) {
-            const targetGroup = groupAssignments.get(match.tabKey) ?? 0;
+            const targetGroup = normalizedGroupAssignments.get(match.tabKey) ?? 0;
             setGroupActiveTabIds(prev => ({ ...prev, [targetGroup]: match.tabKey }));
             setFocusedGroup(targetGroup);
             urlTabAppliedRef.current = true;
@@ -383,7 +487,7 @@ export default function Dashboard() {
                 return next;
             }, { replace: true });
         }
-    }, [urlActiveTab, conversations, groupAssignments]);
+    }, [urlActiveTab, conversations, normalizedGroupAssignments]);
 
     // clearedTabs auto-cleanup (after 5s)
     useEffect(() => {
@@ -413,8 +517,23 @@ export default function Dashboard() {
         return groupedConvs[focusedGroup]?.[0] || groupedConvs[0]?.[0];
     }, [groupActiveTabIds, focusedGroup, conversations, groupedConvs]);
 
+    const activeCliViewMode = useMemo(() => {
+        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return null;
+        return cliViewModes[activeConv.tabKey] ?? activeConv.mode ?? 'terminal';
+    }, [activeConv, cliViewModes]);
+
     // Helper: pin (no-op in group-based model, PaneGroup handles its own activeTab)
     const pinTab = useCallback((_tabKey: string, _delays: number[]) => {}, []);
+
+    useEffect(() => {
+        const validKeys = new Set(conversations.map(conv => conv.tabKey));
+        setCliViewModes(prev => {
+            const next = Object.fromEntries(
+                Object.entries(prev).filter(([tabKey]) => validKeys.has(tabKey)),
+            ) as Record<string, 'chat' | 'terminal'>;
+            return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+        });
+    }, [conversations]);
 
 
 
@@ -607,6 +726,25 @@ export default function Dashboard() {
         isStandalone,
     });
 
+    const handleActiveCliViewModeChange = useCallback((mode: 'chat' | 'terminal') => {
+        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return;
+        setCliViewModes(prev => ({ ...prev, [activeConv.tabKey]: mode }));
+    }, [activeConv]);
+
+    const handleActiveCliStop = useCallback(async () => {
+        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return;
+        const cliType = activeConv.ideId?.includes(':cli:')
+            ? activeConv.ideId.split(':cli:')[1]
+            : (activeConv.ideType || activeConv.agentType || '');
+        if (!window.confirm(`Stop ${cliType}?\nThis will terminate the CLI process.`)) return;
+        const daemonId = activeConv.ideId || activeConv.daemonId || '';
+        try {
+            await sendDaemonCommand(daemonId, 'stop_cli', { cliType });
+        } catch (e: any) {
+            console.error('Stop CLI failed:', e);
+        }
+    }, [activeConv, sendDaemonCommand]);
+
     // Version mismatch detection — collect ALL outdated daemons
     const versionMismatchDaemons = useMemo(() =>
         ides.filter((d: any) => d.type === 'adhdev-daemon' && d.versionMismatch),
@@ -684,6 +822,9 @@ export default function Dashboard() {
                 wsStatus={wsStatus}
                 isConnected={isConnected}
                 onOpenHistory={() => setHistoryModalOpen(true)}
+                cliViewMode={activeCliViewMode}
+                onSetCliViewMode={handleActiveCliViewModeChange}
+                onStopCli={handleActiveCliStop}
             />
 
             {/* 2. Editor Groups (each with own tab bar + content) */}
@@ -748,6 +889,7 @@ export default function Dashboard() {
                                 initialTabOrder={groupTabOrders[gIdx]}
                                 onTabOrderChange={(order) => setGroupTabOrders(prev => ({ ...prev, [gIdx]: order }))}
                                 onHideTab={toggleHiddenTab}
+                                cliViewModes={cliViewModes}
                             />
                         </React.Fragment>
                     );
@@ -787,7 +929,7 @@ export default function Dashboard() {
                     if (toast.ideId) {
                         const matchedConv = conversations.find(c => c.ideId === toast.ideId || c.tabKey === toast.ideId);
                         if (matchedConv) {
-                            setFocusedGroup(groupAssignments.get(matchedConv.tabKey) ?? 0);
+                            setFocusedGroup(normalizedGroupAssignments.get(matchedConv.tabKey) ?? 0);
                         }
                     }
                 }}
