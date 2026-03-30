@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/web-standalone",
-  "version": "0.6.73",
+  "version": "0.6.74",
   "private": true,
   "type": "module",
   "scripts": {
