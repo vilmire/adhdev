@@ -5,7 +5,7 @@
  */
 import { useNotificationPrefs } from '../../hooks/useNotificationPrefs'
 import { ToggleRow } from './ToggleRow'
-import { IconBell, IconMonitor, IconCheckCircle, IconZap, IconPlug } from '../Icons'
+import { IconBell, IconMonitor, IconCheckCircle, IconZap, IconPlug, IconChat } from '../Icons'
 
 export interface BrowserNotificationSettingsProps {
     /** Optional: called when a pref changes, for server sync (cloud only) */
@@ -64,6 +64,17 @@ export function BrowserNotificationSettings({ onPrefChange }: BrowserNotificatio
                         onChange={v => handleUpdate('disconnectAlert', v)}
                     />
                 </div>
+            )}
+
+            {prefs.globalEnabled && <div className="border-t border-border-subtle my-2" />}
+
+            {prefs.globalEnabled && (
+                <ToggleRow
+                    label={<span className="flex items-center gap-1.5"><IconChat size={15} /> Task Completion Bubble</span>}
+                    description="Show a system message bubble in chat when an agent finishes a task"
+                    checked={prefs.chatTaskCompletionBubble}
+                    onChange={v => handleUpdate('chatTaskCompletionBubble', v)}
+                />
             )}
 
             {!prefs.globalEnabled && (

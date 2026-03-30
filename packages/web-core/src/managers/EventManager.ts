@@ -12,7 +12,7 @@
  */
 
 import { formatIdeType, getMachineDisplayName } from '../utils/daemon-utils'
-import { shouldNotify } from '../hooks/useNotificationPrefs'
+import { shouldNotify, getNotificationPrefs } from '../hooks/useNotificationPrefs'
 import { notify } from '../hooks/useBrowserNotifications'
 
 // ─── Types ────────────────────────────────────────
@@ -265,7 +265,7 @@ class EventManager {
             } catch {}
 
             // System message
-            if (payload.ideId) {
+            if (payload.ideId && getNotificationPrefs().chatTaskCompletionBubble) {
                 this.emitSystemMessage(payload.ideId, {
                     role: 'system',
                     timestamp: Date.now(),
