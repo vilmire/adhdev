@@ -29,7 +29,6 @@ import type {
 
 export class ProviderLoader {
   private providers = new Map<string, ProviderModule>();
-  private builtinDirs: string[];
   private userDir: string;
   private upstreamDir: string;
   private disableUpstream: boolean;
@@ -47,25 +46,27 @@ export class ProviderLoader {
   private static readonly META_FILE = '.meta.json';
 
   constructor(options?: {
-    builtinDir?: string | string[];
     userDir?: string;
     logFn?: (msg: string) => void;
     /** Disable upstream auto-download (for dev/testing/OSS) */
     disableUpstream?: boolean;
   }) {
- // Legacy builtin directories (no longer shipped; providers come from upstream auto-download)
-    if (options?.builtinDir) {
-        this.builtinDirs = Array.isArray(options.builtinDir) ? options.builtinDir : [options.builtinDir];
-    } else {
-        this.builtinDirs = [];
-    }
- // Default directory for auto-downloads
+    // Default directory for auto-downloads
     const defaultProvidersDir = path.join(os.homedir(), '.adhdev', 'providers');
 
- // User custom directory: ~/.adhdev/providers/ or custom via config
-    this.userDir = options?.userDir || defaultProvidersDir;
+    if (options?.userDir) {
+        this.userDir = options.userDir;
+    } else {
+        // Local dev overrides: Auto-detect local adhdev-providers repo for speed
+        const localRepoPath = path.resolve(__dirname, '../../../../../adhdev-providers');
+        if (fs.existsSync(localRepoPath)) {
+            this.userDir = localRepoPath;
+        } else {
+            this.userDir = defaultProvidersDir;
+        }
+    }
 
- // Upstream auto-download directory is always in the default location to avoid polluting custom dirs
+    // Upstream auto-download directory is always in the default location
     this.upstreamDir = path.join(defaultProvidersDir, '.upstream');
     this.disableUpstream = options?.disableUpstream ?? false;
     this.logFn = options?.logFn || LOG.forComponent('Provider').asLogFn();
@@ -77,23 +78,9 @@ export class ProviderLoader {
 
  // ─── Public API ────────────────────────────────
 
- /**
- * Ordered builtin roots used for local fallback/reference data.
- */
-  getBuiltinDirs(): string[] {
-    return [...this.builtinDirs];
-  }
-
- /**
- * Primary builtin root used for local scaffolding/reference flows.
- */
-  getPrimaryBuiltinDir(): string {
-    return this.builtinDirs[0];
-  }
-
- /**
- * User override root (~/.adhdev/providers by default).
- */
+  /**
+   * User override root (~/.adhdev/providers by default).
+   */
   getUserDir(): string {
     return this.userDir;
   }
@@ -105,12 +92,12 @@ export class ProviderLoader {
     return this.upstreamDir;
   }
 
- /**
- * Provider search order for on-disk lookups.
- * Highest-priority editable overrides come first.
- */
+  /**
+   * Provider search order for on-disk lookups.
+   * Highest-priority editable overrides come first.
+   */
   getProviderRoots(): string[] {
-    return [this.userDir, this.upstreamDir, ...this.builtinDirs];
+    return [this.userDir, this.upstreamDir];
   }
 
  /**
@@ -135,17 +122,9 @@ export class ProviderLoader {
   }
 
   /**
-   * Canonical builtin directory for a provider.
+   * Find the on-disk directory for a provider by type.
+   * Search order: user override → upstream.
    */
-  getBuiltinProviderDir(category: ProviderCategory, type: string): string {
-    const builtinRoot = this.getPrimaryBuiltinDir();
-    return builtinRoot ? this.getProviderDir(builtinRoot, category, type) : '';
-  }
-
- /**
- * Find the on-disk directory for a provider by type.
- * Search order: user override → upstream → builtin fallback.
- */
   findProviderDir(type: string): string | null {
     return this.findProviderDirInternal(type);
   }
@@ -598,7 +577,6 @@ export class ProviderLoader {
         this.log(`Watch failed for ${dir}: ${(e as Error).message}`);
       }
     };
-    this.builtinDirs.forEach(dir => watchDir(dir));
     watchDir(this.userDir);
   }
 
@@ -1096,8 +1074,8 @@ export class ProviderLoader {
             count++;
             // Identify source tier for debugging
             const source = d.startsWith(this.userDir) && !d.includes('.upstream')
-              ? 'user' : d.startsWith(this.upstreamDir) ? 'upstream' : 'builtin';
-            const overrideWarning = existed && source === 'user' ? ' ⚠ OVERRIDES builtin/upstream' : '';
+              ? 'user' : 'upstream';
+            const overrideWarning = existed && source === 'user' ? ' ⚠ OVERRIDES upstream' : '';
             this.log(`  ${existed ? '🔄' : '✅'} ${mod.type} (${mod.category}) — ${mod.name} [${source}]${overrideWarning}`);
           }
         } catch (e) {
