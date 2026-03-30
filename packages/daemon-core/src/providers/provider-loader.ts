@@ -51,25 +51,29 @@ export class ProviderLoader {
     /** Disable upstream auto-download (for dev/testing/OSS) */
     disableUpstream?: boolean;
   }) {
+    this.logFn = options?.logFn || LOG.forComponent('Provider').asLogFn();
+
     // Default directory for auto-downloads
     const defaultProvidersDir = path.join(os.homedir(), '.adhdev', 'providers');
 
     if (options?.userDir) {
         this.userDir = options.userDir;
+        this.log(`Config 'providerDir' applied: ${this.userDir}`);
     } else {
         // Local dev overrides: Auto-detect local adhdev-providers repo for speed
         const localRepoPath = path.resolve(__dirname, '../../../../../adhdev-providers');
         if (fs.existsSync(localRepoPath)) {
             this.userDir = localRepoPath;
+            this.log(`Auto-detected local public repository: ${this.userDir} (Dev workspace speedup)`);
         } else {
             this.userDir = defaultProvidersDir;
+            this.log(`Using default user providers directory: ${this.userDir}`);
         }
     }
 
     // Upstream auto-download directory is always in the default location
     this.upstreamDir = path.join(defaultProvidersDir, '.upstream');
     this.disableUpstream = options?.disableUpstream ?? false;
-    this.logFn = options?.logFn || LOG.forComponent('Provider').asLogFn();
   }
 
   private log(msg: string): void {
