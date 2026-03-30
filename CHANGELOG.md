@@ -2,6 +2,16 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.6.69] - 2026-03-30
+
+### Added
+- 
+
+### Fixed
+- 
+
+### Changed
+- 
 ## [0.6.68] - 2026-03-30
 
 ### Added
