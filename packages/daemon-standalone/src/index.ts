@@ -126,6 +126,9 @@ class StandaloneServer {
         logFn: (msg: string) => console.log(msg),
       });
       await this.devServer.start();
+      
+      // Auto-reload providers on file changes in --dev mode
+      this.components.providerLoader.watch();
     }
 
     // 5. HTTP Server

@@ -2405,6 +2405,34 @@ export class DevServer {
       }
     }
 
+    // ── Markdown Guides (Provider Fix) ──
+    const docsDir = path.join(providerDir, '../../docs');
+    const loadGuide = (name: string) => {
+      try {
+        const p = path.join(docsDir, name);
+        if (fs.existsSync(p)) return fs.readFileSync(p, 'utf-8');
+      } catch { /* ignore */ }
+      return null;
+    };
+
+    const providerGuide = loadGuide('PROVIDER_GUIDE.md');
+    if (providerGuide) {
+      lines.push('## Documentation: PROVIDER_GUIDE.md');
+      lines.push('```markdown');
+      lines.push(providerGuide);
+      lines.push('```');
+      lines.push('');
+    }
+
+    const cdpGuide = loadGuide('CDP_SELECTOR_GUIDE.md');
+    if (cdpGuide) {
+      lines.push('## Documentation: CDP_SELECTOR_GUIDE.md');
+      lines.push('```markdown');
+      lines.push(cdpGuide);
+      lines.push('```');
+      lines.push('');
+    }
+
     // ── Task ──
     lines.push('## Task');
     lines.push(`Edit files in \`${providerDir}\` to implement: **${functions.join(', ')}**`);
@@ -2627,6 +2655,25 @@ export class DevServer {
         lines.push('```');
         lines.push('');
       }
+    }
+
+    // ── Markdown Guides (Provider Fix) ──
+    const docsDir = path.join(providerDir, '../../docs');
+    const loadGuide = (name: string) => {
+      try {
+        const p = path.join(docsDir, name);
+        if (fs.existsSync(p)) return fs.readFileSync(p, 'utf-8');
+      } catch { /* ignore */ }
+      return null;
+    };
+
+    const providerGuide = loadGuide('PROVIDER_GUIDE.md');
+    if (providerGuide) {
+      lines.push('## Documentation: PROVIDER_GUIDE.md');
+      lines.push('```markdown');
+      lines.push(providerGuide);
+      lines.push('```');
+      lines.push('');
     }
 
     lines.push('## Runtime Contract');

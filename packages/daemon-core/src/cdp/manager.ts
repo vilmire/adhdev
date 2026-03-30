@@ -107,6 +107,9 @@ export class DaemonCdpManager {
  /** Connected page title (includes workspace name) */
     get pageTitle(): string { return this._pageTitle; }
 
+ /** Connected target ID */
+    get targetId(): string | null { return this._targetId; }
+
  /**
  * Query all workbench pages on port (static)
  * Returns multiple entries if multiple IDE windows are open on same port

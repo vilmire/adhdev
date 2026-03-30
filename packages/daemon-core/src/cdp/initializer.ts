@@ -90,6 +90,8 @@ export class DaemonCdpInitializer {
         const targets = await DaemonCdpManager.listAllTargets(port);
 
         if (targets.length === 0) {
+            // Prevent duplicate fallback connection
+            if (cdpManagers.has(ide)) return;
             // Fallback: direct single connection (probeCdpPort first)
             if (!await probeCdpPort(port)) return;
             const provider = providerLoader.getMeta(ide);
@@ -112,13 +114,23 @@ export class DaemonCdpInitializer {
         // 2. Multi-window: create separate CdpManager per page
         for (let i = 0; i < targets.length; i++) {
             const target = targets[i];
-            // Key: single page = ide type as-is, multi-page = ide_workspaceName
+            
+            // Check if ANY existing manager for this IDE is already tracking this target.id
+            let alreadyTracked = false;
+            for (const [key, m] of cdpManagers.entries()) {
+                if ((key === ide || key.startsWith(`${ide}_`)) && m.targetId === target.id) {
+                    alreadyTracked = true;
+                    break;
+                }
+            }
+            if (alreadyTracked) continue;
+
+            // Stable key using target.id instead of fluctuating window title
             let managerKey: string;
-            if (targets.length === 1) {
+            if (targets.length === 1 && !cdpManagers.has(ide)) {
                 managerKey = ide;
             } else {
-                const workspaceName = (target.title || '').split(' — ')[0].trim() || `window_${i}`;
-                managerKey = `${ide}_${workspaceName}`;
+                managerKey = `${ide}_${target.id}`;
             }
 
             if (cdpManagers.has(managerKey)) continue;
@@ -156,13 +168,7 @@ export class DaemonCdpInitializer {
 
             for (const [ide, ports] of Object.entries(portMap)) {
                 const primaryPort = ports[0];
-
-                // Skip if already connected
-                const alreadyConnected = [...cdpManagers.entries()].some(([key, m]) =>
-                    m.isConnected && (key === ide || key.startsWith(ide + '_'))
-                );
-                if (alreadyConnected) continue;
-
+                // Always try to connect to find new windows
                 await this.connectIdePort(primaryPort, ide);
             }
         }, intervalMs);

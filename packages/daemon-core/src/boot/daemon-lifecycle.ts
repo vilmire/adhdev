@@ -98,6 +98,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     const providerLoader = new ProviderLoader({
         logFn: config.providerLogFn,
         disableUpstream,
+        userDir: appConfig.providerDir,
     });
 
     // If no upstream providers exist, fetch them first (blocking — critical for new users)

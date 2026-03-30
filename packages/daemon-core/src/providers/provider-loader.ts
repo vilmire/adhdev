@@ -59,11 +59,14 @@ export class ProviderLoader {
     } else {
         this.builtinDirs = [];
     }
- // User custom directory: ~/.adhdev/providers/
-    this.userDir = options?.userDir ||
-      path.join(os.homedir(), '.adhdev', 'providers');
- // Upstream auto-download directory: ~/.adhdev/providers/.upstream/
-    this.upstreamDir = path.join(this.userDir, '.upstream');
+ // Default directory for auto-downloads
+    const defaultProvidersDir = path.join(os.homedir(), '.adhdev', 'providers');
+
+ // User custom directory: ~/.adhdev/providers/ or custom via config
+    this.userDir = options?.userDir || defaultProvidersDir;
+
+ // Upstream auto-download directory is always in the default location to avoid polluting custom dirs
+    this.upstreamDir = path.join(defaultProvidersDir, '.upstream');
     this.disableUpstream = options?.disableUpstream ?? false;
     this.logFn = options?.logFn || LOG.forComponent('Provider').asLogFn();
   }
@@ -301,7 +304,8 @@ export class ProviderLoader {
     try {
       const { loadConfig } = require('../config/config.js');
       const config = loadConfig();
-      const val = config.ideSettings?.[ideType]?.extensions?.[type]?.enabled;
+      const baseIdeType = ideType.split('_')[0];
+      const val = config.ideSettings?.[baseIdeType]?.extensions?.[type]?.enabled;
       return val === true; // undefined → false (default inactive)
     } catch {
       return false;
@@ -315,10 +319,11 @@ export class ProviderLoader {
     try {
       const { loadConfig, saveConfig } = require('../config/config.js');
       const config = loadConfig();
+      const baseIdeType = ideType.split('_')[0];
       if (!config.ideSettings) config.ideSettings = {};
-      if (!config.ideSettings[ideType]) config.ideSettings[ideType] = {};
-      if (!config.ideSettings[ideType].extensions) config.ideSettings[ideType].extensions = {};
-      config.ideSettings[ideType].extensions[extensionType] = { enabled };
+      if (!config.ideSettings[baseIdeType]) config.ideSettings[baseIdeType] = {};
+      if (!config.ideSettings[baseIdeType].extensions) config.ideSettings[baseIdeType].extensions = {};
+      config.ideSettings[baseIdeType].extensions[extensionType] = { enabled };
       saveConfig(config);
       this.log(`IDE extension setting: ${ideType}.${extensionType}.enabled = ${enabled}`);
       return true;

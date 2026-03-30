@@ -84,6 +84,9 @@ export interface ADHDevConfig {
  // Disable upstream provider auto-download (use builtin only)
  // Controllable from CLI (--no-upstream) and dashboard (machine page)
     disableUpstream?: boolean;
+
+ // Optional custom provider directory for local development
+    providerDir?: string;
 }
 
 export interface CliHistoryEntry {
