@@ -555,7 +555,6 @@ export class ProviderLoader {
 
     // Fallback: build from individual .js files
     const result = this.buildScriptWrappersFromDir(dir) as Record<string, any>;
-    this.log(`  [loadScriptsFromDir] ${type}: built wrappers from ${dir} (${Object.keys(result).length} scripts)`);
     this.scriptsCache.set(dir, result);
     return result;
   }
@@ -571,7 +570,7 @@ export class ProviderLoader {
       }
       try {
         const watcher = chokidar.watch(dir, {
-          ignored: /(^|[\/\\])\../, // ignore dotfiles
+          ignored: /(^|[\/\\])\.\./, // ignore dotfiles
           persistent: true,
           ignoreInitial: true,
           awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
@@ -585,7 +584,9 @@ export class ProviderLoader {
         };
 
         watcher.on('add', handleChange).on('change', handleChange).on('unlink', handleChange);
+        watcher.on('error', (err: unknown) => this.log(`Watch error: ${(err as Error).message}`));
         this.watchers.push(watcher);
+        this.log(`Hot-reload watcher active: ${dir}`);
       } catch (e) {
         this.log(`Watch failed for ${dir}: ${(e as Error).message}`);
       }

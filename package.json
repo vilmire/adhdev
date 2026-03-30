@@ -9,7 +9,7 @@
   "scripts": {
     "start": "npm run dev",
     "dev": "npm run dev:daemon & npm run dev:web",
-    "dev:daemon": "npm run dev -w packages/daemon-standalone",
+    "dev:daemon": "tsx packages/daemon-standalone/src/index.ts --dev --no-open",
     "dev:web": "npm run dev -w packages/web-standalone",
     "build": "npm run build -w packages/daemon-core && npm run build -w packages/web-core && npm run build -w packages/web-standalone && npm run build -w packages/daemon-standalone"
   },
