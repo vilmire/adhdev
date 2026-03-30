@@ -65,13 +65,27 @@ export interface ADHDevConfig {
  // Machine nickname (user-customizable label for this machine)
     machineNickname: string | null;
 
- // Stable local machine ID shared by standalone and cloud daemon modes
+    /**
+     * Stable local machine ID (prefix: `mach_`) — generated locally on first run.
+     * Used as daemon instance key (`daemon_<machineId>`) and in status reports.
+     * NOT the same as the server-side D1 `machines.id` — see `registeredMachineId`.
+     */
     machineId?: string;
 
  // Machine secret for server auth (replaces connectionToken)
     machineSecret?: string | null;
 
- // Account-scoped registered machine row ID (cloud-side)
+    /**
+     * Server-side D1 `machines.id` — the row ID assigned when daemon registers via
+     * `POST /cli/complete`. Corresponds to `machineId` in server DO context
+     * (`DaemonConnection.machineId`, `StatusContext.machineId`).
+     *
+     * Naming differs from server-side `machineId` to avoid confusion with the local
+     * `config.machineId` (mach_ prefix) which is a different value.
+     *
+     * @deprecated Legacy bridge field — will be removed after 2026-04-06.
+     * Modern auth flow uses `machineSecret` (adm_) to identify machines.
+     */
     registeredMachineId?: string;
 
  // CLI launch history
