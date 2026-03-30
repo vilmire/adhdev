@@ -11,7 +11,7 @@
  *   4. Web Push (server-side, via UserSession — not managed here)
  */
 
-import { formatIdeType } from '../utils/daemon-utils'
+import { formatIdeType, getMachineDisplayName } from '../utils/daemon-utils'
 import { shouldNotify } from '../hooks/useNotificationPrefs'
 import { notify } from '../hooks/useBrowserNotifications'
 
@@ -80,7 +80,7 @@ class EventManager {
     private viewRequestRespondFn: ViewRequestRespondFn | null = null
 
     // IDE lookup (set by Dashboard)
-    private ides: Array<{ id: string; type: string; daemonId?: string; machineNickname?: string | null; machine?: { hostname?: string } }> = []
+    private ides: Array<{ id: string; type: string; daemonId?: string; machineNickname?: string | null; hostname?: string; machine?: { hostname?: string } }> = []
 
     // ─── Registration ─────────────────────────────
 
@@ -114,7 +114,7 @@ class EventManager {
     }
 
     /** Update known IDEs (for routeId lookup) */
-    setIdes(ides: Array<{ id: string; type: string; daemonId?: string; machineNickname?: string | null; machine?: { hostname?: string } }>): void {
+    setIdes(ides: Array<{ id: string; type: string; daemonId?: string; machineNickname?: string | null; hostname?: string; machine?: { hostname?: string } }>): void {
         this.ides = ides
     }
 
@@ -234,7 +234,7 @@ class EventManager {
         let ideLabel = formatIdeType(payload.ideType || '')
         const owningDaemon = this.resolveOwningDaemon(payload)
         if (owningDaemon) {
-            const machineName = owningDaemon.machineNickname || owningDaemon.machine?.hostname
+            const machineName = getMachineDisplayName(owningDaemon, { fallbackId: owningDaemon.id })
             if (machineName) {
                 ideLabel = payload.ideType === 'adhdev-daemon'
                     ? machineName                         // daemon event → show machine name only

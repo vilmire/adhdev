@@ -17,7 +17,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
 import type { DaemonData } from '../types'
-import { isCliEntry, isAcpEntry, dedupeAgents } from '../utils/daemon-utils'
+import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel } from '../utils/daemon-utils'
 import { IconBarChart, IconMonitor, IconPlug, IconBot, IconSettings, IconClipboard } from '../components/Icons'
 import type { ReactNode } from 'react'
 
@@ -59,7 +59,7 @@ export default function MachineDetail() {
 
     const machine: MachineData | null = machineEntry ? {
         id: machineEntry.id,
-        hostname: (machineEntry as any).machine?.hostname || machineEntry.id,
+        hostname: getMachineHostnameLabel(machineEntry as any, { fallbackId: machineEntry.id }),
         platform: (machineEntry as any).machine?.platform || 'unknown',
         arch: (machineEntry as any).machine?.arch || '',
         cpus: (machineEntry as any).machine?.cpus || 0,
@@ -133,7 +133,7 @@ export default function MachineDetail() {
         )
     }
 
-    const displayName = machine.machineNickname || machine.hostname
+    const displayName = getMachineDisplayName(machineEntry as any, { fallbackId: machine.id })
 
     const TABS: { id: TabId; label: string | ReactNode; count?: number }[] = [
         { id: 'overview', label: <span className="flex items-center gap-1.5"><IconBarChart size={14} /> Overview</span> },

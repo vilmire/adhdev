@@ -12,7 +12,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useDaemons, connectionManager } from '../compat'
 import { useTransport } from '../context/TransportContext'
 import type { DaemonData } from '../types'
-import { getAgentDisplayName } from '../utils/daemon-utils'
+import { getAgentDisplayName, getMachineDisplayName } from '../utils/daemon-utils'
 type ConnectionState = string
 import './IDE.css'
 import { IconChat, IconMonitor } from '../components/Icons'
@@ -51,7 +51,7 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
     const transportType = daemonCtx.connectionTransports?.[doId] || 'unknown'
     // Machine + workspace info
     const daemonEntry = useMemo(() => globalIdes.find(i => i.id === doId || i.daemonId === doId), [globalIdes, doId])
-    const machineName = (daemonEntry as any)?.machineNickname || (daemonEntry as any)?.machine?.hostname || ''
+    const machineName = daemonEntry ? getMachineDisplayName(daemonEntry as any, { fallbackId: doId }) : ''
     const workspaceName = ideData?.workspace || ''
 
     // ─── Local UI state ────────────────────────────────

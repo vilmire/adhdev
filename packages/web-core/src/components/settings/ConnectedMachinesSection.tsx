@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom'
 import type { DaemonData } from '../../types'
 import { EmptyState } from '../ui/EmptyState'
 import { StatusBadge } from '../ui/StatusBadge'
+import { getMachineDisplayName } from '../../utils/daemon-utils'
 
 declare const __APP_VERSION__: string
 
@@ -132,9 +133,8 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
 
     const machine = ide as any
     const version = machine.version || machine.daemonVersion || null
-    const hostname = machine.machine?.hostname || machine.system?.hostname || ''
     const platform = machine.machine?.platform || machine.system?.platform || ''
-    const nickname = machine.machineNickname || hostname?.replace(/\.local$/, '') || 'Machine'
+    const nickname = getMachineDisplayName(machine, { fallbackId: ide.id })
 
     const platformIcon = platform === 'win32' ? '🪟' : platform === 'darwin' ? '🍎' : '🐧'
 

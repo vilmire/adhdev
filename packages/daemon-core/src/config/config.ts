@@ -7,6 +7,7 @@
 import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'fs';
+import { randomUUID } from 'crypto';
 import { migrateWorkspacesFromRecent } from './workspaces.js';
 import type { WorkspaceEntry } from './workspaces.js';
 import type { WorkspaceActivityEntry } from './workspace-activity.js';
@@ -64,11 +65,14 @@ export interface ADHDevConfig {
  // Machine nickname (user-customizable label for this machine)
     machineNickname: string | null;
 
- // Stable machine ID (prevents duplicate daemon entries when OS hostname changes dynamically)
+ // Stable local machine ID shared by standalone and cloud daemon modes
     machineId?: string;
 
  // Machine secret for server auth (replaces connectionToken)
     machineSecret?: string | null;
+
+ // Account-scoped registered machine row ID (cloud-side)
+    registeredMachineId?: string;
 
  // CLI launch history
     cliHistory: CliHistoryEntry[];
@@ -123,11 +127,43 @@ const DEFAULT_CONFIG: ADHDevConfig = {
     machineNickname: null,
     machineId: undefined,
     machineSecret: null,
+    registeredMachineId: undefined,
     cliHistory: [],
     providerSettings: {},
     ideSettings: {},
     disableUpstream: false,
 };
+
+const MACHINE_ID_PREFIX = 'mach_';
+
+export function generateMachineId(): string {
+    return `${MACHINE_ID_PREFIX}${randomUUID().replace(/-/g, '')}`;
+}
+
+export function isStableMachineId(machineId?: string | null): boolean {
+    return typeof machineId === 'string' && machineId.startsWith(MACHINE_ID_PREFIX);
+}
+
+function ensureMachineId(config: ADHDevConfig): { config: ADHDevConfig; changed: boolean } {
+    if (isStableMachineId(config.machineId)) {
+        return { config, changed: false };
+    }
+
+    // TODO(2026-04-06): Remove this legacy bridge after cloud clients have had
+    // time to persist registeredMachineId from the upgraded setup/login flow.
+    const legacyRegisteredMachineId = (!config.registeredMachineId && config.machineSecret && config.machineId)
+        ? config.machineId
+        : config.registeredMachineId;
+
+    return {
+        config: {
+            ...config,
+            machineId: generateMachineId(),
+            registeredMachineId: legacyRegisteredMachineId,
+        },
+        changed: true,
+    };
+}
 
 /**
  * Get the config directory path
@@ -154,7 +190,11 @@ export function loadConfig(): ADHDevConfig {
     const configPath = getConfigPath();
 
     if (!existsSync(configPath)) {
-        return { ...DEFAULT_CONFIG };
+        const initialized = ensureMachineId({ ...DEFAULT_CONFIG });
+        try {
+            saveConfig(initialized.config);
+        } catch { /* ignore */ }
+        return initialized.config;
     }
 
     try {
@@ -166,30 +206,25 @@ export function loadConfig(): ADHDevConfig {
         }
         delete (merged as any).activeWorkspaceId;
         const hadStoredWorkspaces = Array.isArray(parsed.workspaces) && parsed.workspaces.length > 0;
-        migrateWorkspacesFromRecent(merged);
+        const ensured = ensureMachineId(merged);
+        const normalized = ensured.config as ADHDevConfig & { activeWorkspaceId?: string | null };
+        migrateWorkspacesFromRecent(normalized);
         
-        let configChanged = false;
-        if (!merged.machineId) {
-            const os = require('os');
-            const crypto = require('crypto');
-            const safeHostname = os.hostname().replace(/[^a-zA-Z0-9]/g, '_');
-            const machineHash = crypto.createHash('md5').update(os.hostname() + os.homedir()).digest('hex').slice(0, 8);
-            merged.machineId = `${safeHostname}_${machineHash}`;
-            configChanged = true;
-        }
+        let configChanged = ensured.changed;
 
-        if (!hadStoredWorkspaces && (merged.workspaces?.length || 0) > 0) {
+        if (!hadStoredWorkspaces && (normalized.workspaces?.length || 0) > 0) {
             configChanged = true;
         }
 
         if (configChanged) {
             try {
-                saveConfig(merged);
+                saveConfig(normalized);
             } catch { /* ignore */ }
         }
-        return merged;
+        return normalized;
     } catch {
-        return { ...DEFAULT_CONFIG };
+        const initialized = ensureMachineId({ ...DEFAULT_CONFIG });
+        return initialized.config;
     }
 }
 

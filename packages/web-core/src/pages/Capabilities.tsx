@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
-import { PageHeader } from '../components/ui/PageHeader'
+import AppPage from '../components/ui/AppPage'
+import { Section } from '../components/ui/Section'
+import { EmptyState } from '../components/ui/EmptyState'
 import { IconMonitor, IconTerminal, IconPlug, IconClock, IconWarning, IconShield, IconBook } from '../components/Icons'
 
 export default function CapabilitiesPage() {
@@ -59,16 +61,16 @@ export default function CapabilitiesPage() {
     }
 
     const renderTable = (items: any[]) => (
-        <div className="bg-bg-panel border border-border-card rounded-md overflow-hidden">
+        <div className="bg-bg-card border border-border-subtle rounded-xl overflow-hidden">
             <table className="w-full text-left border-collapse">
                 <thead>
-                    <tr className="bg-bg-subtle border-b border-border-card text-xs uppercase text-text-muted font-medium tracking-wider">
+                    <tr className="bg-bg-secondary border-b border-border-subtle text-xs uppercase text-text-muted font-medium tracking-wider">
                         <th className="py-3 px-4 w-1/3">Target</th>
                         <th className="py-3 px-4 w-1/4">Status</th>
                         <th className="py-3 px-4">Details</th>
                     </tr>
                 </thead>
-                <tbody className="divide-y divide-border-card text-sm">
+                <tbody className="divide-y divide-border-subtle text-sm">
                     {items.map((item, i) => (
                         <tr key={i} className="hover:bg-bg-subtle/50 transition-colors">
                             <td className="py-3 px-4 font-medium text-text-main">{item.name}</td>
@@ -83,62 +85,65 @@ export default function CapabilitiesPage() {
 
     if (loading) {
         return (
-            <div className="p-8 max-w-4xl mx-auto flex flex-col items-center justify-center min-h-[50vh]">
-                <div className="w-8 h-8 border-4 border-accent border-t-transparent rounded-full animate-spin mb-4" />
-                <p className="text-text-muted">Loading providers registry...</p>
-            </div>
+            <AppPage
+                title="Capabilities"
+                subtitle="Provider registry coverage for IDEs, CLI agents, extensions, and ACPs"
+                icon={<IconBook />}
+                widthClassName="max-w-5xl"
+            >
+                <EmptyState
+                    icon={<div className="w-8 h-8 border-4 border-accent border-t-transparent rounded-full animate-spin mx-auto" />}
+                    title="Loading provider registry"
+                    description="Fetching the latest support matrix from the shared provider registry."
+                />
+            </AppPage>
         )
     }
 
     return (
-        <div className="p-8 max-w-4xl mx-auto animate-fade-in pb-20">
-            <PageHeader
-                title="Capabilities & Provider Status"
-                subtitle="Support matrix for IDEs, CLI Agents, and AI Extensions"
-                icon={<IconBook />}
-            />
+        <AppPage
+            title="Capabilities"
+            subtitle="Provider registry coverage for IDEs, CLI agents, extensions, and ACPs"
+            icon={<IconBook />}
+            widthClassName="max-w-5xl"
+            contentClassName="animate-fade-in"
+        >
+            <Section title="Registry overview" description="Support status is loaded from the shared provider registry used across OSS and cloud surfaces.">
+                <div className="grid gap-3 md:grid-cols-4">
+                    <div className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3">
+                        <div className="text-[11px] uppercase tracking-wider text-text-muted mb-1">IDEs</div>
+                        <div className="text-2xl font-semibold text-text-primary">{capabilities.ide.length}</div>
+                    </div>
+                    <div className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3">
+                        <div className="text-[11px] uppercase tracking-wider text-text-muted mb-1">CLI</div>
+                        <div className="text-2xl font-semibold text-text-primary">{capabilities.cli.length}</div>
+                    </div>
+                    <div className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3">
+                        <div className="text-[11px] uppercase tracking-wider text-text-muted mb-1">Extensions</div>
+                        <div className="text-2xl font-semibold text-text-primary">{capabilities.ext.length}</div>
+                    </div>
+                    <div className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-3">
+                        <div className="text-[11px] uppercase tracking-wider text-text-muted mb-1">ACP</div>
+                        <div className="text-2xl font-semibold text-text-primary">{capabilities.acp.length}</div>
+                    </div>
+                </div>
+            </Section>
 
-            <div className="space-y-12 mt-8">
-                <section>
-                    <div className="flex items-center gap-2 mb-4">
-                        <div className="p-2 rounded-md bg-blue-500/10 text-blue-400">
-                            <IconMonitor className="w-5 h-5" />
-                        </div>
-                        <h2 className="text-xl font-semibold text-text-main tracking-tight">IDE Support</h2>
-                    </div>
-                    {renderTable(capabilities.ide)}
-                </section>
+            <Section title="IDE support" icon={<IconMonitor className="w-4 h-4" />} description="Desktop editors and IDE surfaces with registry-backed providers.">
+                {renderTable(capabilities.ide)}
+            </Section>
 
-                <section>
-                    <div className="flex items-center gap-2 mb-4">
-                        <div className="p-2 rounded-md bg-purple-500/10 text-purple-400">
-                            <IconTerminal className="w-5 h-5" />
-                        </div>
-                        <h2 className="text-xl font-semibold text-text-main tracking-tight">Standalone CLI Agents</h2>
-                    </div>
-                    {renderTable(capabilities.cli)}
-                </section>
+            <Section title="Standalone CLI agents" icon={<IconTerminal className="w-4 h-4" />} description="CLI-first agents that can participate in the standalone dashboard.">
+                {renderTable(capabilities.cli)}
+            </Section>
 
-                <section>
-                    <div className="flex items-center gap-2 mb-4">
-                        <div className="p-2 rounded-md bg-green-500/10 text-green-400">
-                            <IconPlug className="w-5 h-5" />
-                        </div>
-                        <h2 className="text-xl font-semibold text-text-main tracking-tight">AI Extensions</h2>
-                    </div>
-                    {renderTable(capabilities.ext)}
-                </section>
-                
-                <section>
-                    <div className="flex items-center gap-2 mb-4">
-                        <div className="p-2 rounded-md bg-orange-500/10 text-orange-400">
-                            <IconPlug className="w-5 h-5" />
-                        </div>
-                        <h2 className="text-xl font-semibold text-text-main tracking-tight">ACP Agents ({capabilities.acp.length} loaded)</h2>
-                    </div>
-                    {renderTable(capabilities.acp)}
-                </section>
-            </div>
-        </div>
+            <Section title="AI extensions" icon={<IconPlug className="w-4 h-4" />} description="IDE extensions and companion integrations available in the registry.">
+                {renderTable(capabilities.ext)}
+            </Section>
+
+            <Section title={`ACP agents (${capabilities.acp.length} loaded)`} icon={<IconPlug className="w-4 h-4" />} description="ACP-backed providers discovered through the same shared registry.">
+                {renderTable(capabilities.acp)}
+            </Section>
+        </AppPage>
     )
 }

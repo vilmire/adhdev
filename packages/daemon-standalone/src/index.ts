@@ -404,7 +404,7 @@ class StandaloneServer {
 
   private buildSharedSnapshot() {
     const cfgSnap = loadConfig();
-    const machineId = cfgSnap.machineId || os.hostname().replace(/[^a-zA-Z0-9]/g, '_');
+    const machineId = cfgSnap.machineId || 'mach_unknown';
     const allStates = this.components!.instanceManager.collectAllStates();
 
     return buildStatusSnapshot({

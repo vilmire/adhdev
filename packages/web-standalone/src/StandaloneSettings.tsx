@@ -6,7 +6,9 @@
  */
 import { useState, useEffect } from 'react'
 import {
-    PageHeader, Section,
+    AppPage,
+    Section,
+    AlertBanner,
     BrowserNotificationSettings,
     ConnectedMachinesSection,
     GeneralThemeSection,
@@ -58,12 +60,18 @@ export default function StandaloneSettings() {
     }
 
     return (
-        <div className="flex flex-col h-full">
-            <PageHeader icon={<IconSettings className="text-text-primary" />} title="Settings" subtitle="Local daemon configuration & preferences" />
-            <div className="page-content">
+        <AppPage
+            icon={<IconSettings className="text-text-primary" />}
+            title="Settings"
+            subtitle="Local daemon configuration, appearance, and on-device preferences"
+            widthClassName="max-w-5xl"
+        >
+            <AlertBanner variant="info">
+                Standalone settings stay on this machine. The browser only talks to your local daemon over localhost.
+            </AlertBanner>
 
                 {/* ═══ Daemon Info ═══ */}
-                <Section title="Daemon" className="mb-4">
+                <Section title="Daemon" description="Connection health and local endpoints for the self-hosted runtime.">
                     <div className="grid grid-cols-[100px_1fr] gap-x-4 gap-y-2.5 text-sm">
                         <span className="text-text-muted">Version</span>
                         <span className="font-mono text-xs">v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?'}</span>
@@ -79,7 +87,7 @@ export default function StandaloneSettings() {
                 </Section>
 
                 {/* ═══ Detected IDEs ═══ */}
-                <Section title="Detected IDEs" className="mb-4">
+                <Section title="Detected IDEs" description="Editors discovered by the local daemon on this machine.">
                     {detectedIdes.length === 0 ? (
                         <p className="text-sm text-text-muted">No IDEs detected. Start an IDE to see it here.</p>
                     ) : (
@@ -98,7 +106,7 @@ export default function StandaloneSettings() {
                 </Section>
 
                 {/* ═══ Connected Machine ═══ */}
-                <Section title="Machine" className="mb-4">
+                <Section title="Machine" description="The local burrow exposed by your standalone daemon.">
                     <ConnectedMachinesSection
                         ides={ides}
                         emptyMessage="Daemon not connected. Run 'adhdev-standalone' to start."
@@ -106,25 +114,27 @@ export default function StandaloneSettings() {
                 </Section>
 
                 {/* ═══ Theme ═══ */}
-                <Section title="Theme" className="mb-4">
+                <Section title="Appearance" description="Match the rest of the dashboard with a single place for mode, theme, and accent.">
                     <div className="flex flex-col gap-4">
                         <div>
-                            <div className="text-xs text-text-muted mb-2 font-medium">Site theme</div>
+                            <div className="text-xs text-text-muted mb-2 font-medium">Mode</div>
                             <GeneralThemeSection />
                         </div>
                         <div className="border-t border-border-subtle pt-4">
-                            <div className="text-xs text-text-muted mb-2 font-medium">Chat theme</div>
+                            <div className="text-xs text-text-muted mb-1 font-medium">Theme</div>
+                            <p className="text-[11px] text-text-muted mb-3">Choose a preset or create a custom surface and chat palette for the standalone UI.</p>
                             <ChatThemeSection />
                         </div>
                         <div className="border-t border-border-subtle pt-4">
-                            <div className="text-xs text-text-muted mb-2 font-medium">Accent color</div>
+                            <div className="text-xs text-text-muted mb-1 font-medium">Accent color override</div>
+                            <p className="text-[11px] text-text-muted mb-3">Override preset accents without changing your full theme definition.</p>
                             <AccentColorSection />
                         </div>
                     </div>
                 </Section>
 
                 {/* ═══ Notifications ═══ */}
-                <Section title="Notifications" className="mb-4">
+                <Section title="Notifications" description="Browser prompts and local sound cues for agent activity.">
                     <div className="flex flex-col gap-3">
                         <BrowserNotificationSettings />
                         <ToggleRow
@@ -137,7 +147,7 @@ export default function StandaloneSettings() {
                 </Section>
 
                 {/* ═══ Preferences ═══ */}
-                <Section title="Preferences" className="mb-4">
+                <Section title="Profile" description="How your name appears in local chat threads and dashboard views.">
                     <div className="flex flex-col gap-3">
                         <div className="flex items-center justify-between px-3.5 py-4 bg-bg-glass rounded-xl border border-border-subtle hover:border-border-default transition-colors">
                             <div className="flex flex-col gap-1 pr-4 max-w-[500px]">
@@ -164,8 +174,6 @@ export default function StandaloneSettings() {
                         </div>
                     </div>
                 </Section>
-
-            </div>
-        </div>
+        </AppPage>
     )
 }

@@ -69,6 +69,7 @@ export {
     formatIdeType, formatUptime, formatBytes, getAgentDisplayName,
     isCliEntry, dedupeAgents, isAgentActive,
     buildProviderMaps, PLATFORM_ICONS, groupByMachine,
+    getMachineNickname, getMachineHostnameLabel, getMachineDisplayName,
 } from './utils/daemon-utils'
 export type { MachineIdeEntry, MachineCliEntry, MachineAcpEntry } from './utils/daemon-utils'
 export { statusPayloadToEntries } from './utils/status-transform'
@@ -85,6 +86,7 @@ export { cn } from './lib/utils'
 
 // ── UI Components ──
 export { PageHeader } from './components/ui/PageHeader'
+export { default as AppPage } from './components/ui/AppPage'
 export { Section } from './components/ui/Section'
 export { EmptyState } from './components/ui/EmptyState'
 export { AlertBanner } from './components/ui/AlertBanner'

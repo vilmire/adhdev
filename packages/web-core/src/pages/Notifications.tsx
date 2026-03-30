@@ -16,6 +16,7 @@ import { useNotificationPrefs } from '../hooks/useNotificationPrefs'
 import { useTransport } from '../context/TransportContext'
 import type { ProviderSettingsEntry, ProviderInfo } from './machine/types'
 import { IconBell, IconMonitor, IconCheckCircle, IconZap, IconPlug, IconVolume } from '../components/Icons'
+import { getMachineDisplayName } from '../utils/daemon-utils'
 
 /* ─── helpers ──────────────────────────────────────────────── */
 
@@ -121,7 +122,7 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
         const flat: (ProviderSettingsEntry & { machineId: string; machineLabel: string })[] = []
         for (const [mid, entries] of Object.entries(settings)) {
             const machine = onlineMachines.find(m => m.id === mid)
-            const label = machine?.nickname || machine?.hostname || mid.slice(0, 8)
+            const label = machine ? getMachineDisplayName(machine, { fallbackId: mid }) : mid.slice(0, 8)
             for (const e of entries) {
                 flat.push({ ...e, machineId: mid, machineLabel: label })
             }

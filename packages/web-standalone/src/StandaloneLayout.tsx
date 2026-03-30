@@ -102,6 +102,15 @@ export default function StandaloneLayout({ children }: LayoutProps) {
 
                 <div className="border-t border-border-subtle pt-4 mt-2">
                     <div
+                        className={`nav-item cursor-pointer ${collapsed ? 'justify-center py-2.5 px-0' : ''}`}
+                        id="nav-docs"
+                        onClick={() => window.open('https://docs.adhf.dev', '_blank')}
+                        title={collapsed ? 'Docs' : undefined}
+                    >
+                        <span className="nav-icon"><IconBook /></span>
+                        {!collapsed && <>Docs<span className="ml-auto text-[9px] text-text-muted">↗</span></>}
+                    </div>
+                    <div
                         className={`nav-item cursor-pointer${location.pathname === '/about' ? ' active' : ''} ${collapsed ? 'justify-center py-2.5 px-0' : ''}`}
                         id="nav-about"
                         onClick={() => navigate('/about')}

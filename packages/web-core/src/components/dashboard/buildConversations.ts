@@ -5,7 +5,7 @@
  * Reusable across Dashboard, mobile views, widgets, etc.
  */
 import type { DaemonData } from '../../types';
-import { formatIdeType, getAgentDisplayName } from '../../utils/daemon-utils';
+import { formatIdeType, getAgentDisplayName, getMachineDisplayName } from '../../utils/daemon-utils';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation } from './types';
 
@@ -42,11 +42,7 @@ export function buildConversations(
         for (const d of allIdes) {
             const sd = d as any;
             if (sd.type === 'adhdev-daemon' || sd.daemonMode) {
-                const mi = sd.machine || {};
-                const nick = sd.machineNickname;
-                const raw = mi.hostname || sd.system?.hostname || '';
-                const label = nick || (raw && raw !== 'Unknown' ? raw.replace(/\.local$/, '') : null) || `Machine ${(sd.id || '').substring(0, 6)}`;
-                machineNames[sd.id] = label;
+                machineNames[sd.id] = getMachineDisplayName(sd, { fallbackId: sd.id });
             }
         }
     }

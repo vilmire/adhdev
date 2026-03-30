@@ -44,6 +44,57 @@ export function formatMachineName(raw: string): string {
     return raw
 }
 
+export interface MachineNameSource {
+    id?: string
+    nickname?: string | null
+    machineNickname?: string | null
+    hostname?: string | null
+    machine?: { hostname?: string | null }
+    system?: { hostname?: string | null }
+}
+
+export interface MachineNameOptions {
+    fallbackId?: string
+    fallbackLabel?: string
+}
+
+function normalizeMachineHostname(raw: string): string {
+    return formatMachineName(raw.trim().replace(/\.local$/i, ''))
+}
+
+export function getMachineNickname(source: MachineNameSource): string | null {
+    const value = source.machineNickname ?? source.nickname
+    if (typeof value !== 'string') return null
+    const trimmed = value.trim()
+    return trimmed || null
+}
+
+export function getMachineHostnameLabel(
+    source: MachineNameSource,
+    options: MachineNameOptions = {},
+): string {
+    const rawHostname = [
+        source.hostname,
+        source.machine?.hostname,
+        source.system?.hostname,
+    ].find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+
+    if (rawHostname && rawHostname !== 'Unknown') {
+        return normalizeMachineHostname(rawHostname)
+    }
+
+    const fallbackId = options.fallbackId || source.id
+    if (fallbackId) return `Machine-${fallbackId.substring(0, 8)}`
+    return options.fallbackLabel || 'Machine'
+}
+
+export function getMachineDisplayName(
+    source: MachineNameSource,
+    options: MachineNameOptions = {},
+): string {
+    return getMachineNickname(source) || getMachineHostnameLabel(source, options)
+}
+
 // ─── ID / Type Helpers ───────────────────────────
 
 /** Determine if entry is CLI type (id pattern: `xxx:cli:yyy`) */
@@ -188,10 +239,9 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
     for (const daemon of daemons) {
         if (daemon.type === 'adhdev-daemon' || daemon.daemonMode) {
             const machineInfo = daemon.machine
-            const rawHostname = machineInfo?.hostname || daemon.system?.hostname || daemon.id?.split('_')[1] || ''
-            const hostname = rawHostname
-                ? (rawHostname === 'Unknown' ? `My Machine (${(daemon.id || '').substring(0, 8)})` : formatMachineName(rawHostname))
-                : `My Machine (${(daemon.id || '').substring(0, 8)})`
+            const hostname = getMachineHostnameLabel(daemon, {
+                fallbackId: daemon.id,
+            })
 
             const system = daemon.system || (machineInfo?.hostname ? {
                 arch: machineInfo.arch, cpus: machineInfo.cpus,
@@ -203,7 +253,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
             machines.push({
                 machineId: daemon.id,
                 hostname,
-                nickname: daemon.machineNickname || null,
+                nickname: getMachineNickname(daemon),
                 platform: machineInfo?.platform || daemon.platform || 'unknown',
                 system,
                 daemonIde: daemon,

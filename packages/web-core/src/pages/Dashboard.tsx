@@ -22,6 +22,7 @@ import ToastContainer from '../components/dashboard/ToastContainer'
 import PaneGroup from '../components/dashboard/PaneGroup'
 import OnboardingModal from '../components/OnboardingModal'
 import { IconRefresh } from '../components/Icons'
+import { getMachineDisplayName } from '../utils/daemon-utils'
 
 function mapsEqual(a: Map<string, number>, b: Map<string, number>) {
     if (a.size !== b.size) return false;
@@ -780,7 +781,7 @@ export default function Dashboard() {
                             Update available: <strong>v{(versionMismatchDaemons[0] as any).version}</strong> → <strong>v{(versionMismatchDaemons[0] as any).serverVersion}</strong>
                         </span>
                         {versionMismatchDaemons.map((d: any) => {
-                            const name = d.machineNickname || d.machine?.hostname || d.hostname || 'Machine'
+                            const name = getMachineDisplayName(d, { fallbackId: d.id })
                             const state = upgradingDaemons[d.id]
                             return (
                                 <span key={d.id} className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-amber-500/[0.08] border border-amber-500/15">
