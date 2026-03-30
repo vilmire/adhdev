@@ -100,6 +100,7 @@ export interface BaseDaemonData {
     managedIdeIds?: string[];
     managedCliIds?: string[];
     machineNickname?: string | null;
+    machineId?: string | null;
     workspaces?: WorkspaceEntry[];
     defaultWorkspaceId?: string | null;
     defaultWorkspacePath?: string | null;

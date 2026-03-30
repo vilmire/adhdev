@@ -31,24 +31,31 @@ import LogsTab from './machine/LogsTab'
 import LaunchPickModal from './machine/LaunchPickModal'
 
 // ─── Component ───────────────────────────────────────
-export default function MachineDetail() {
+interface MachineDetailProps {
+    onNicknameSynced?: (args: { machineRuntimeId: string; registeredMachineId?: string | null; nickname: string }) => Promise<void>
+}
+
+export default function MachineDetail({ onNicknameSynced }: MachineDetailProps = {}) {
     const { id: machineId } = useParams<{ id: string }>()
     const navigate = useNavigate()
     const { sendCommand: sendDaemonCommand } = useTransport()
     const daemonCtx = useDaemons() as any
     const allIdes: DaemonData[] = daemonCtx.ides || []
     const initialLoaded: boolean = daemonCtx.initialLoaded ?? true
+    const machineEntry = allIdes.find(i => i.id === machineId && (i as any).daemonMode)
     const [activeTab, setActiveTab] = useState<TabId>('overview')
     const logsEndRef = useRef<HTMLDivElement>(null)
 
     // ─── Actions hook ────────────────────────────────
     const actions = useMachineActions({
-        machineId, sendDaemonCommand, logsEndRef,
+        machineId,
+        registeredMachineId: (machineEntry as any)?.machineId || null,
+        sendDaemonCommand,
+        onNicknameSynced,
+        logsEndRef,
     })
 
     // ─── Derive machine data ─────────────────────────
-    const machineEntry = allIdes.find(i => i.id === machineId && (i as any).daemonMode)
-
     // Build provider info from daemon
     const providers: ProviderInfo[] = ((machineEntry as any)?.availableProviders || []).map((p: any) => ({
         type: p.type, displayName: p.displayName, icon: p.icon, category: p.category,

@@ -16,11 +16,13 @@ export interface LaunchPickState {
 
 interface UseMachineActionsOpts {
     machineId: string | undefined
+    registeredMachineId?: string | null
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
+    onNicknameSynced?: (args: { machineRuntimeId: string; registeredMachineId?: string | null; nickname: string }) => Promise<void>
     logsEndRef: React.RefObject<HTMLDivElement | null>
 }
 
-export function useMachineActions({ machineId, sendDaemonCommand, logsEndRef }: UseMachineActionsOpts) {
+export function useMachineActions({ machineId, registeredMachineId, sendDaemonCommand, onNicknameSynced, logsEndRef }: UseMachineActionsOpts) {
     const [logs, setLogs] = useState<LogEntry[]>([])
     const [launchingIde, setLaunchingIde] = useState<string | null>(null)
     const [loadingWorkspaces, setLoadingWorkspaces] = useState(false)
@@ -207,10 +209,21 @@ export function useMachineActions({ machineId, sendDaemonCommand, logsEndRef }: 
         if (!machineId) return
         try {
             await sendDaemonCommand(machineId, 'set_machine_nickname', { nickname: nicknameInput })
+            if (onNicknameSynced) {
+                try {
+                    await onNicknameSynced({
+                        machineRuntimeId: machineId,
+                        registeredMachineId,
+                        nickname: nicknameInput,
+                    })
+                } catch (e: any) {
+                    addLog('warn', `Live nickname updated, but account sync failed: ${e.message}`)
+                }
+            }
             addLog('info', `Nickname set to "${nicknameInput || '(cleared)'}"`)
             setEditingNickname(false)
         } catch (e: any) { addLog('error', `Failed: ${e.message}`) }
-    }, [machineId, nicknameInput, addLog, sendDaemonCommand])
+    }, [machineId, nicknameInput, registeredMachineId, addLog, onNicknameSynced, sendDaemonCommand])
 
     return {
         // State
