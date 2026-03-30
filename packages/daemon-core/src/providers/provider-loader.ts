@@ -16,6 +16,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as chokidar from 'chokidar';
 import { registerIDEDefinition } from '../detection/ide-detector.js';
 import { LOG } from '../logging/logger.js';
 import { VersionArchive } from './version-archive.js';
@@ -32,7 +33,7 @@ export class ProviderLoader {
   private userDir: string;
   private upstreamDir: string;
   private disableUpstream: boolean;
-  private watchers: fs.FSWatcher[] = [];
+  private watchers: any[] = [];
   private logFn: (msg: string) => void;
   private versionArchive: VersionArchive | null = null;
   private scriptsCache = new Map<string, Record<string, any>>();
@@ -559,23 +560,31 @@ export class ProviderLoader {
     return result;
   }
 
- /**
- * Hot-reload: start watching for file changes
- */
+  /**
+   * Hot-reload: start watching for file changes
+   */
   watch(): void {
     this.stopWatch();
     const watchDir = (dir: string) => {
       if (!fs.existsSync(dir)) {
- // Create directory if missing (so user can drop files)
         try { fs.mkdirSync(dir, { recursive: true }); } catch { return; }
       }
       try {
-        const watcher = fs.watch(dir, { recursive: true }, (event, filename) => {
-          if (filename?.endsWith('.js') || filename?.endsWith('.json')) {
-            this.log(`File changed: ${filename}, reloading...`);
+        const watcher = chokidar.watch(dir, {
+          ignored: /(^|[\/\\])\../, // ignore dotfiles
+          persistent: true,
+          ignoreInitial: true,
+          awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+        });
+
+        const handleChange = (filePath: string) => {
+          if (filePath.endsWith('.js') || filePath.endsWith('.json')) {
+            this.log(`File changed: ${path.basename(filePath)}, reloading...`);
             this.reload();
           }
-        });
+        };
+
+        watcher.on('add', handleChange).on('change', handleChange).on('unlink', handleChange);
         this.watchers.push(watcher);
       } catch (e) {
         this.log(`Watch failed for ${dir}: ${(e as Error).message}`);
