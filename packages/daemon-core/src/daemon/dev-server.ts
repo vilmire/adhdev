@@ -2756,6 +2756,9 @@ export class DevServer {
     lines.push('8. Keep exports compatible with the existing `scripts.js` router (`module.exports = function ...`).');
     lines.push('9. Do not rewrite unrelated provider config. Only touch the scripts needed for this task unless a tiny supporting change is required.');
     lines.push('10. When the verification API returns `instanceId`, keep using that exact instance for follow-up `send`, `resolve`, `raw`, and `stop` calls. Do not assume type-only routing is safe if multiple sessions exist.');
+    lines.push('11. Do NOT repeatedly dump the same target files. Read the target scripts once, reproduce the bug, then move directly to patching.');
+    lines.push('12. If the user instructions include concrete screen text, raw PTY snippets, or a specific repro, treat that as the primary acceptance criteria.');
+    lines.push('13. After the first successful live repro, stop broad diagnosis. Edit the scripts, reload, and verify. Do not burn tokens on repeated re-inspection without code changes.');
     lines.push('');
 
     lines.push('## Task');
@@ -2798,6 +2801,9 @@ export class DevServer {
     lines.push('```');
     lines.push('');
     lines.push('Use `resolve` when the parsed modal buttons are correct. Use `raw` when the CLI expects a literal keystroke like `1`, `y`, or Enter. Repeat until idle.');
+    lines.push('');
+    lines.push('### Patch Discipline');
+    lines.push('Once the repro is confirmed, immediately edit the target files. Avoid loops where you keep re-reading long files or re-running the same debug commands without changing code.');
     lines.push('');
     lines.push('### 5. Verify the side effects outside the CLI');
     lines.push('```bash');

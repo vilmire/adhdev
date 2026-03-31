@@ -85,25 +85,6 @@ export class CliProviderInstance implements ProviderInstance {
 
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
 
- // Preserve rich message objects, just truncate extremely long text strings
-        const recentMessages = adapterStatus.messages.slice(-50).map((m: any) => {
-            const content = typeof m.content === 'string' && m.content.length > 8000
-                ? m.content.slice(0, 8000) + '\n... (truncated)'
-                : m.content;
-            return { ...m, content };
-        });
-
- // generating during partial response add
- // Save history
-        if (recentMessages.length > 0) {
-            const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
-            this.historyWriter.appendNewMessages(
-                this.type,
-                recentMessages,
-                `${this.provider.name} · ${dirName}`,
-                this.instanceId,
-            );
-        }
         if (adapterStatus.terminalHistory?.trim()) {
             this.historyWriter.appendTerminalHistory(
                 this.type,
@@ -118,12 +99,12 @@ export class CliProviderInstance implements ProviderInstance {
             name: this.provider.name,
             category: 'cli',
             status: adapterStatus.status,
-            mode: (this.settings.mode as 'terminal' | 'chat') || 'terminal',
+            mode: 'terminal',
             activeChat: {
                 id: `${this.type}_${this.workingDir}`,
                 title: `${this.provider.name} · ${dirName}`,
                 status: adapterStatus.status,
-                messages: recentMessages,
+                messages: [],
                 activeModal: adapterStatus.activeModal,
                 terminalHistory: adapterStatus.terminalHistory,
                 inputContent: '',
@@ -138,11 +119,15 @@ export class CliProviderInstance implements ProviderInstance {
 
     onEvent(event: string, data?: any): void {
         if (event === 'send_message' && data?.text) {
-            this.adapter.sendMessage(data.text);
+            void this.adapter.sendMessage(data.text).catch((e: any) => {
+                LOG.warn('CLI', `[${this.type}] send_message failed: ${e?.message || e}`);
+            });
         } else if (event === 'server_connected' && data?.serverConn) {
             this.adapter.setServerConn(data.serverConn);
         } else if (event === 'resolve_action' && data) {
-            this.adapter.resolveAction(data);
+            void this.adapter.resolveAction(data).catch((e: any) => {
+                LOG.warn('CLI', `[${this.type}] resolve_action failed: ${e?.message || e}`);
+            });
         }
     }
 

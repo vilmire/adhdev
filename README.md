@@ -224,8 +224,6 @@ If you want to create a custom provider locally or test your fixes before submit
 - [x] Model/Mode selection (CDP-based switching for all IDEs)
 - [x] Mobile responsive UI
 - [x] Provider Settings System (per-provider configurable settings)
-- [ ] MCP server integration
-- [ ] JetBrains plugin
 
 ## 📚 Documentation
 

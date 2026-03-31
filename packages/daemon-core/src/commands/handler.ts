@@ -168,8 +168,24 @@ export class DaemonCommandHandler implements CommandHelpers {
     getCliAdapter(type?: string): any | null {
         const target = type || this._currentIdeType;
         if (!target || !this._ctx.adapters) return null;
+        // Normalize composite transport IDs:
+        //   standalone_xxx:cli:<uuid> -> <uuid>
+        //   daemon:acp:<uuid>         -> <uuid>
+        let normalizedTarget = target;
+        const colonIdx = normalizedTarget.lastIndexOf(':');
+        if (colonIdx >= 0) normalizedTarget = normalizedTarget.substring(colonIdx + 1);
+
+        const direct = this._ctx.adapters.get(normalizedTarget);
+        if (direct) return direct;
+
         for (const [key, adapter] of this._ctx.adapters.entries()) {
-            if ((adapter as any).cliType === target || key.startsWith(target)) {
+            if (
+                (adapter as any).cliType === target
+                || (adapter as any).cliType === normalizedTarget
+                || key === normalizedTarget
+                || key.startsWith(target)
+                || key.startsWith(normalizedTarget)
+            ) {
                 return adapter;
             }
         }

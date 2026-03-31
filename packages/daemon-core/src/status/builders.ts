@@ -156,7 +156,7 @@ export function buildManagedClis(
         cliType: s.type,
         cliName: s.name,
         status: s.status,
-        mode: s.mode as 'terminal' | 'chat',
+        mode: 'terminal' as const,
         workspace: s.workspace || '',
         activeChat: s.activeChat,
     }));

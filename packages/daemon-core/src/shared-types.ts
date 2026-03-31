@@ -75,7 +75,7 @@ export interface ManagedCliEntry {
     cliType: string;
     cliName: string;
     status: string;
-    mode: 'terminal' | 'chat';
+    mode: 'terminal';
     workspace: string;
     activeChat: _ActiveChatData | null;
 }

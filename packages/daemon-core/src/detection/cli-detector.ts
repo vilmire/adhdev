@@ -16,10 +16,16 @@ export interface CLIInfo {
     displayName: string;
     icon: string;
     command: string;
+    versionCommand?: string;
     installed: boolean;
     version?: string;
     path?: string;
     category?: string;
+}
+
+function parseVersion(raw: string): string {
+    const match = raw.match(/v?(\d+\.\d+(?:\.\d+)?(?:-[a-zA-Z0-9.]+)?)/);
+    return match ? match[1] : raw.split('\n')[0].slice(0, 100);
 }
 
 /** Run a shell command with timeout, returning stdout or null on failure */
@@ -62,11 +68,18 @@ export async function detectCLIs(providerLoader?: ProviderLoader): Promise<CLIIn
                 // Get version (parallel with other checks)
                 let version: string | undefined;
                 try {
-                    const versionResult = await execAsync(`${cli.command} --version 2>/dev/null`, 3000);
-                    if (versionResult) {
-                        // Extract version number (e.g. "gemini v1.2.3" → "1.2.3")
-                        const match = versionResult.match(/(\d+\.\d+[\.\d]*)/);
-                        version = match ? match[1] : versionResult.split('\n')[0].slice(0, 30);
+                    const versionCommands = [
+                        cli.versionCommand,
+                        `${cli.command} --version 2>/dev/null`,
+                        `${cli.command} -V 2>/dev/null`,
+                        `${cli.command} -v 2>/dev/null`,
+                    ].filter((v): v is string => !!v);
+                    for (const versionCommand of versionCommands) {
+                        const versionResult = await execAsync(versionCommand, 3000);
+                        if (versionResult) {
+                            version = parseVersion(versionResult);
+                            break;
+                        }
                     }
                 } catch { }
 

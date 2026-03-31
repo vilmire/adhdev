@@ -237,16 +237,23 @@ export class ProviderLoader {
  * Build CLI/ACP detection list (replaces cli-detector)
  * Dynamically generated from provider.js spawn.command.
  */
-  getCliDetectionList(): { id: string; displayName: string; icon: string; command: string; category: string }[] {
-    const result: { id: string; displayName: string; icon: string; command: string; category: string }[] = [];
+  getCliDetectionList(): { id: string; displayName: string; icon: string; command: string; category: string; versionCommand?: string }[] {
+    const result: { id: string; displayName: string; icon: string; command: string; category: string; versionCommand?: string }[] = [];
     for (const p of this.providers.values()) {
       if ((p.category === 'cli' || p.category === 'acp') && p.spawn?.command) {
+        const verCmdConfig = (p as any).versionCommand;
+        const versionCommand = typeof verCmdConfig === 'object' && verCmdConfig !== null
+          ? verCmdConfig[process.platform]
+          : verCmdConfig;
         result.push({
           id: p.type,
           displayName: p.displayName || p.name,
           icon: p.icon || '🔧',
           command: p.spawn.command,
           category: p.category,
+          ...(typeof versionCommand === 'string' && versionCommand.trim()
+            ? { versionCommand: versionCommand.trim() }
+            : {}),
         });
       }
     }

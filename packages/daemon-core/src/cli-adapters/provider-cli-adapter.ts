@@ -146,6 +146,25 @@ function stripAnsi(str: string): string {
         .replace(/  +/g, ' ');
 }
 
+function stripTerminalNoise(str: string): string {
+    return String(str || '')
+        // Remove remaining C0/C1 control chars except newlines/tabs.
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+        // Drop common terminal negotiation/report fragments that can remain after ANSI stripping.
+        .replace(/(^|[\s([])(?:\??\d{1,4}(?:;\d{1,4})*[A-Za-z])(?=$|[\s)\]])/g, '$1')
+        .replace(/(^|[\s([])(?:\[\??\d{1,4}(?:;\d{1,4})*[A-Za-z])(?=$|[\s)\]])/g, '$1')
+        .replace(/(^|[\s([])(?:\d{1,4};\?)(?=$|[\s)\]])/g, '$1')
+        .replace(/\r+/g, '\n')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/ {2,}/g, ' ');
+}
+
+function sanitizeTerminalText(str: string): string {
+    return stripTerminalNoise(stripAnsi(str));
+}
+
 function findBinary(name: string): string {
     const isWin = os.platform() === 'win32';
     try {
@@ -370,6 +389,9 @@ export class ProviderCliAdapter implements CliAdapter {
  // Approval state machine
     private approvalTransitionBuffer: string = '';
     private approvalExitTimeout: NodeJS.Timeout | null = null;
+    private pendingScriptStatus: 'generating' | 'waiting_approval' | null = null;
+    private pendingScriptStatusSince = 0;
+    private pendingScriptStatusTimer: NodeJS.Timeout | null = null;
 
  // Output settle debounce — fires after PTY output goes quiet
     private settleTimer: NodeJS.Timeout | null = null;
@@ -454,6 +476,7 @@ export class ProviderCliAdapter implements CliAdapter {
     private readonly sendDelayMs: number;
     private readonly sendKey: string;
     private readonly submitStrategy: 'wait_for_echo' | 'immediate';
+    private static readonly SCRIPT_STATUS_DEBOUNCE_MS = 1000;
 
     constructor(provider: CliProviderModule, workingDir: string, private extraArgs: string[] = []) {
         this.provider = provider;
@@ -645,7 +668,7 @@ export class ProviderCliAdapter implements CliAdapter {
     private handleOutput(rawData: string): void {
         this.terminalScreen.write(rawData);
         this.terminalHistory = mergeTerminalHistory(this.terminalHistory, this.terminalScreen.getText());
-        const cleanData = stripAnsi(rawData);
+        const cleanData = sanitizeTerminalText(rawData);
 
         if (this.isWaitingForResponse && cleanData) {
             this.responseBuffer = (this.responseBuffer + cleanData).slice(-8000);
@@ -764,26 +787,45 @@ export class ProviderCliAdapter implements CliAdapter {
 
         const prevStatus = this.currentStatus;
 
-        if (scriptStatus === 'waiting_approval') {
-            // Auto-accept startup safety dialogs (e.g., "Claude Code'll be able to read, edit, and execute")
-            const modalMessage = modal?.message || '';
-            const screenText = this.terminalScreen.getText() || this.accumulatedBuffer;
-            const autoAcceptPatterns = [
-                /be able to read, edit, and execute/i,
-                /Security guide/i,
-                /Enter to confirm/i,
-                /Quick safety check/i,
-                /Do you trust the files/i,
-                /Is this a project/i,
-            ];
-            if (autoAcceptPatterns.some(p => p.test(modalMessage) || p.test(screenText))) {
-                LOG.info('CLI', `[${this.cliType}] Auto-accepting startup dialog: ${modalMessage.slice(0, 80)}`);
-                setTimeout(() => this.ptyProcess?.write('\r'), 200);
-                this.lastApprovalResolvedAt = Date.now();
-                this.activeModal = null;
+        const clearPendingScriptStatus = () => {
+            this.pendingScriptStatus = null;
+            this.pendingScriptStatusSince = 0;
+            if (this.pendingScriptStatusTimer) {
+                clearTimeout(this.pendingScriptStatusTimer);
+                this.pendingScriptStatusTimer = null;
+            }
+        };
+        const armPendingScriptStatus = (delayMs: number) => {
+            if (this.pendingScriptStatusTimer) clearTimeout(this.pendingScriptStatusTimer);
+            this.pendingScriptStatusTimer = setTimeout(() => {
+                this.pendingScriptStatusTimer = null;
+                this.settledBuffer = this.recentOutputBuffer;
+                this.evaluateSettled();
+            }, delayMs);
+        };
+        const shouldDebouncePromotion = (status: string) =>
+            prevStatus === 'idle'
+            && !this.isWaitingForResponse
+            && !this.currentTurnScope
+            && (status === 'generating' || status === 'waiting_approval');
+
+        if (shouldDebouncePromotion(scriptStatus)) {
+            if (this.pendingScriptStatus !== scriptStatus) {
+                this.pendingScriptStatus = scriptStatus as 'generating' | 'waiting_approval';
+                this.pendingScriptStatusSince = now;
+                armPendingScriptStatus(ProviderCliAdapter.SCRIPT_STATUS_DEBOUNCE_MS);
                 return;
             }
+            const elapsed = now - this.pendingScriptStatusSince;
+            if (elapsed < ProviderCliAdapter.SCRIPT_STATUS_DEBOUNCE_MS) {
+                armPendingScriptStatus(ProviderCliAdapter.SCRIPT_STATUS_DEBOUNCE_MS - elapsed);
+                return;
+            }
+        } else {
+            clearPendingScriptStatus();
+        }
 
+        if (scriptStatus === 'waiting_approval') {
             const inCooldown = this.lastApprovalResolvedAt && (Date.now() - this.lastApprovalResolvedAt) < this.timeouts.approvalCooldown;
             if (!inCooldown) {
                 this.isWaitingForResponse = true;
@@ -800,6 +842,16 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         if (scriptStatus === 'generating') {
+            const screenText = this.terminalScreen.getText() || this.accumulatedBuffer;
+            const noActiveTurn = !this.currentTurnScope;
+            const looksIdleChrome = /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(screenText)
+                || (/accept edits on/i.test(screenText)
+                    && (/Update available!/i.test(screenText)
+                        || /\/effort/i.test(screenText)
+                        || /^.*➜\s+\S+/m.test(screenText)));
+            if (prevStatus === 'idle' && !this.isWaitingForResponse && noActiveTurn && !modal && looksIdleChrome) {
+                return;
+            }
             if (prevStatus === 'waiting_approval') {
                 // Transitioned out of approval → generating
                 if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
@@ -1242,7 +1294,7 @@ export class ProviderCliAdapter implements CliAdapter {
             committedMessages: this.committedMessages.slice(-20),
             structuredMessages: this.structuredMessages.slice(-20),
             messageCount: this.committedMessages.length,
-            screenText: this.terminalScreen.getText().slice(-4000),
+            screenText: sanitizeTerminalText(this.terminalScreen.getText()).slice(-4000),
             terminalHistory: this.terminalHistory.slice(-8000),
             currentTurnScope: this.currentTurnScope,
             startupBuffer: this.startupBuffer.slice(-4000),
@@ -1251,6 +1303,7 @@ export class ProviderCliAdapter implements CliAdapter {
             accumulatedBufferLength: this.accumulatedBuffer.length,
             accumulatedRawBufferLength: this.accumulatedRawBuffer.length,
             rawBufferPreview: this.accumulatedRawBuffer.slice(-1000),
+            sanitizedRawPreview: sanitizeTerminalText(this.accumulatedRawBuffer).slice(-1000),
             responseBuffer: this.responseBuffer.slice(-1000),
             isWaitingForResponse: this.isWaitingForResponse,
             activeModal: this.activeModal,

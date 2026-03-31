@@ -64,8 +64,6 @@ export interface PaneGroupProps {
     onTabOrderChange?: (order: string[]) => void;
     /** Hide tab from dashboard */
     onHideTab?: (tabKey: string) => void;
-    /** Per-tab CLI pane mode */
-    cliViewModes: Record<string, 'chat' | 'terminal'>;
 }
 
 export default function PaneGroup({
@@ -84,7 +82,6 @@ export default function PaneGroup({
     initialTabOrder,
     onTabOrderChange,
     onHideTab,
-    cliViewModes,
 }: PaneGroupProps) {
     const { sendCommand } = useTransport();
     const terminalRef = useRef<CliTerminalHandle>(null);
@@ -275,7 +272,7 @@ export default function PaneGroup({
     }, [tabShortcuts, sortedConversations, onFocus, onActiveTabChange, matchesShortcut]);
 
     const isCli = activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
-    const activeViewMode = isCli ? (cliViewModes[activeConv.tabKey] ?? activeConv.mode ?? 'terminal') : 'chat';
+    const activeViewMode = isCli ? 'terminal' : 'chat';
 
     // Force-clear dragOver on ANY drag end (global listener)
     // This prevents stuck outlines when drag ends outside this group

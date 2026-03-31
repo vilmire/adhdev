@@ -18,8 +18,6 @@ export interface DashboardHeaderProps {
     /** Overall connection readiness (green=ready, yellow=partial, red=disconnected) */
     isConnected: boolean;
     onOpenHistory: () => void;
-    cliViewMode?: 'chat' | 'terminal' | null;
-    onSetCliViewMode?: (mode: 'chat' | 'terminal') => void;
     onStopCli?: () => void;
 }
 
@@ -29,8 +27,6 @@ export default function DashboardHeader({
     wsStatus,
     isConnected,
     onOpenHistory,
-    cliViewMode,
-    onSetCliViewMode,
     onStopCli,
 }: DashboardHeaderProps) {
     const navigate = useNavigate();
@@ -92,25 +88,6 @@ export default function DashboardHeader({
                 </div>
             </div>
             <div className="flex gap-2 items-center">
-                {isCliActive && cliViewMode && onSetCliViewMode && (
-                    <div className="flex items-center rounded-lg border border-border-subtle bg-bg-secondary p-0.5">
-                        <button
-                            onClick={() => onSetCliViewMode('chat')}
-                            className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${cliViewMode === 'chat' ? 'bg-bg-primary text-text-primary shadow-sm' : 'text-text-muted hover:text-text-primary'}`}
-                            title="Chat mode"
-                        >
-                            Chat
-                        </button>
-                        <button
-                            onClick={() => onSetCliViewMode('terminal')}
-                            className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${cliViewMode === 'terminal' ? 'bg-bg-primary text-text-primary shadow-sm' : 'text-text-muted hover:text-text-primary'}`}
-                            title="Terminal mode"
-                        >
-                            Terminal
-                        </button>
-                    </div>
-                )}
-
                 {isCliActive && onStopCli && (
                     <button
                         onClick={onStopCli}

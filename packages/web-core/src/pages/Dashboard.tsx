@@ -219,7 +219,6 @@ export default function Dashboard() {
     const [actionLogs, setActionLogs] = useState<{ ideId: string; text: string; timestamp: number }[]>([])
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
     const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
-    const [cliViewModes, setCliViewModes] = useState<Record<string, 'chat' | 'terminal'>>({})
 
     // Extract detectedIdes from machine-level entry (for standalone)
     const daemonEntry = ides.find(ide => ide.type === 'adhdev-daemon')
@@ -518,23 +517,8 @@ export default function Dashboard() {
         return groupedConvs[focusedGroup]?.[0] || groupedConvs[0]?.[0];
     }, [groupActiveTabIds, focusedGroup, conversations, groupedConvs]);
 
-    const activeCliViewMode = useMemo(() => {
-        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return null;
-        return cliViewModes[activeConv.tabKey] ?? activeConv.mode ?? 'terminal';
-    }, [activeConv, cliViewModes]);
-
     // Helper: pin (no-op in group-based model, PaneGroup handles its own activeTab)
     const pinTab = useCallback((_tabKey: string, _delays: number[]) => {}, []);
-
-    useEffect(() => {
-        const validKeys = new Set(conversations.map(conv => conv.tabKey));
-        setCliViewModes(prev => {
-            const next = Object.fromEntries(
-                Object.entries(prev).filter(([tabKey]) => validKeys.has(tabKey)),
-            ) as Record<string, 'chat' | 'terminal'>;
-            return Object.keys(next).length === Object.keys(prev).length ? prev : next;
-        });
-    }, [conversations]);
 
 
 
@@ -727,11 +711,6 @@ export default function Dashboard() {
         isStandalone,
     });
 
-    const handleActiveCliViewModeChange = useCallback((mode: 'chat' | 'terminal') => {
-        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return;
-        setCliViewModes(prev => ({ ...prev, [activeConv.tabKey]: mode }));
-    }, [activeConv]);
-
     const handleActiveCliStop = useCallback(async () => {
         if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return;
         const cliType = activeConv.ideId?.includes(':cli:')
@@ -823,8 +802,6 @@ export default function Dashboard() {
                 wsStatus={wsStatus}
                 isConnected={isConnected}
                 onOpenHistory={() => setHistoryModalOpen(true)}
-                cliViewMode={activeCliViewMode}
-                onSetCliViewMode={handleActiveCliViewModeChange}
                 onStopCli={handleActiveCliStop}
             />
 
@@ -890,7 +867,6 @@ export default function Dashboard() {
                                 initialTabOrder={groupTabOrders[gIdx]}
                                 onTabOrderChange={(order) => setGroupTabOrders(prev => ({ ...prev, [gIdx]: order }))}
                                 onHideTab={toggleHiddenTab}
-                                cliViewModes={cliViewModes}
                             />
                         </React.Fragment>
                     );
