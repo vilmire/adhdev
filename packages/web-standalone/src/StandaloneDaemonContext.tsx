@@ -37,6 +37,10 @@ const _pendingRequests = new Map<string, { resolve: (v: any) => void; reject: (e
 let _screenshotTimer: any = null
 let _wsStatusChangeCallback: ((status: ConnectionStatus, daemonId?: string) => void) | null = null
 
+function mapStandaloneConnectionState(status: ConnectionStatus): ConnectionStatus {
+    return status === 'connected' ? 'connected' : status
+}
+
 function resolveCommandRoute(routeId: string, payload: Record<string, unknown> = {}) {
     const parts = routeId.split(':')
     if (parts.length >= 3 && (parts[1] === 'ide' || parts[1] === 'cli' || parts[1] === 'acp')) {
@@ -323,10 +327,11 @@ export function StandaloneDaemonProvider({ children }: { children: ReactNode }) 
     // Build connectionOverrides — map all known daemon IDs to current WS status
     const connectionOverrides = useMemo(() => {
         const isConn = wsConnStatus === 'connected'
+        const connectionState = mapStandaloneConnectionState(wsConnStatus)
         const states: Record<string, string> = {}
-        if (knownDaemonId) states[knownDaemonId] = isConn ? 'connected' : 'connecting'
+        if (knownDaemonId) states[knownDaemonId] = connectionState
         // Also map 'standalone' prefix so doId extraction works
-        states['standalone'] = isConn ? 'connected' : 'connecting'
+        states['standalone'] = connectionState
         return {
             wsStatus: wsConnStatus,
             isConnected: isConn,
