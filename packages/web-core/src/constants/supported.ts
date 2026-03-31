@@ -26,6 +26,11 @@ export const SUPPORTED_CLI_AGENTS: readonly SupportedEntry[] = [
     { id: 'claude-cli', name: 'Claude Code', icon: '🟠' },
     { id: 'gemini-cli', name: 'Gemini CLI', icon: '✨' },
     { id: 'codex-cli', name: 'Codex CLI', icon: '📦' },
+    { id: 'aider-cli', name: 'Aider', icon: '🛠️' },
+    { id: 'cursor-cli', name: 'Cursor CLI', icon: '⚡' },
+    { id: 'github-copilot-cli', name: 'GitHub Copilot CLI', icon: '🤖' },
+    { id: 'goose-cli', name: 'Goose CLI', icon: '🪿' },
+    { id: 'opencode-cli', name: 'OpenCode CLI', icon: '🧩' },
 ] as const
 
 export const SUPPORTED_EXTENSIONS: readonly SupportedEntry[] = [

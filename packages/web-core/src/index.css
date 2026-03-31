@@ -1281,7 +1281,7 @@ a:hover {
     position: absolute;
     width: 600px;
     height: 600px;
-    background: radial-gradient(circle, rgba(139, 92, 246, 0.15), transparent 60%);
+    background: radial-gradient(circle, rgba(217, 119, 6, 0.12), transparent 60%);
     top: -200px;
     right: -100px;
     pointer-events: none;
@@ -1292,7 +1292,7 @@ a:hover {
     position: absolute;
     width: 500px;
     height: 500px;
-    background: radial-gradient(circle, rgba(56, 189, 248, 0.08), transparent 60%);
+    background: radial-gradient(circle, rgba(20, 184, 166, 0.06), transparent 60%);
     bottom: -150px;
     left: -100px;
     pointer-events: none;
@@ -1306,7 +1306,7 @@ a:hover {
     width: 100%;
     max-width: 420px;
     backdrop-filter: blur(16px);
-    box-shadow: var(--shadow-lg);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
     position: relative;
     z-index: 1;
     flex-shrink: 0;
@@ -1319,15 +1319,22 @@ a:hover {
     }
 }
 
+.login-eyebrow {
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #fbbf24;
+    margin-bottom: 12px;
+}
+
 .login-card h1 {
     font-size: 28px;
     font-weight: 800;
     text-align: center;
     margin-bottom: 8px;
-    background: var(--accent-gradient);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: var(--text-primary);
 }
 
 .login-card p {
@@ -1335,6 +1342,7 @@ a:hover {
     color: var(--text-secondary);
     font-size: 15px;
     margin-bottom: 32px;
+    line-height: 1.65;
 }
 
 .login-btn {
@@ -1363,9 +1371,33 @@ a:hover {
     box-shadow: var(--shadow-md);
 }
 
+.login-btn:disabled {
+    opacity: 0.75;
+    cursor: default;
+}
+
 .login-btn svg {
     width: 20px;
     height: 20px;
+}
+
+.login-note {
+    text-align: center;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-muted);
+    margin-top: 8px;
+}
+
+.login-card a {
+    color: var(--text-primary);
+    text-decoration: underline;
+    text-decoration-color: rgba(255, 255, 255, 0.18);
+    text-underline-offset: 2px;
+}
+
+.login-card a:hover {
+    text-decoration-color: rgba(255, 255, 255, 0.4);
 }
 
 /* ── Animations ────────────────────────────────── */
