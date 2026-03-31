@@ -47,9 +47,6 @@ class ConnectionManagerStub {
 
     sendPtyInput(_daemonId: string, _cliId: string, _data: string) { return false }
     sendPtyResize(_daemonId: string, _cliId: string, _cols: number, _rows: number) { return false }
-    async requestChatHistory(_daemonId: string, _agentType: string, _offset: number, _limit: number, _instanceId?: string) {
-        return { messages: [] as any[], hasMore: false }
-    }
     retryConnection(_daemonId: string) {}
     getState(_daemonId: string) { return 'disconnected' as string }
     sendData(_daemonId: string, _data: any) { return false }

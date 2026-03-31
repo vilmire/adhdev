@@ -60,10 +60,6 @@ class StandaloneConnectionManager {
     sendPtyInput(_daemonId: string, _cliId: string, _data: string): boolean { return false }
     sendPtyResize(_daemonId: string, _cliId: string, _cols: number, _rows: number): boolean { return false }
 
-    async requestChatHistory(_daemonId: string, _agentType: string, _offset: number, _limit: number, _instanceId?: string) {
-        return { messages: [] as any[], hasMore: false }
-    }
-
     onScreenshot(key: string, callback: ScreenshotCallback): () => void {
         this.screenshotCallbacks.set(key, callback)
         return () => { this.screenshotCallbacks.delete(key) }
