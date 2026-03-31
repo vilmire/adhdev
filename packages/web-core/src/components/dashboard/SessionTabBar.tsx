@@ -210,7 +210,10 @@ export default function SessionTabBar({
                                 clearTabPinTimers();
                                 onSelectTab(conv.tabKey);
                                 if (conv.streamSource === 'agent-stream' && conv.agentType) {
-                                    sendCommand(conv.ideId, 'agent_stream_focus', { agentType: conv.agentType }).catch(() => { });
+                                    sendCommand(conv.ideId, 'focus_session', {
+                                        agentType: conv.agentType,
+                                        ...(conv.sessionId && { targetSessionId: conv.sessionId }),
+                                    }).catch(() => { });
                                     pinTab(conv.tabKey, [200, 1500]);
                                 }
                                 if (isCliConv(conv)) {

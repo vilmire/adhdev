@@ -20,10 +20,11 @@ export type {
 
 // ── Shared Types (cross-package) ──
 export type {
-  ManagedIdeEntry,
-  ManagedCliEntry,
-  ManagedAcpEntry,
-  ManagedAgentStream,
+  SessionEntry,
+  SessionTransport,
+  SessionKind,
+  SessionCapability,
+  AgentSessionStream,
   AvailableProviderInfo,
   AcpConfigOption,
   AcpMode,
@@ -74,7 +75,7 @@ export type { CommandRouterDeps, CommandRouterResult } from './commands/router.j
 
 // ── Status ──
 export { DaemonStatusReporter } from './status/reporter.js';
-export { buildManagedIdes, buildManagedClis, buildManagedAcps, buildAllManagedEntries, findCdpManager, hasCdpManager, isCdpConnected } from './status/builders.js';
+export { buildSessionEntries, findCdpManager, hasCdpManager, isCdpConnected } from './status/builders.js';
 export { buildStatusSnapshot } from './status/snapshot.js';
 export { normalizeManagedStatus, isManagedStatusWorking, isManagedStatusWaiting, normalizeActiveChatData } from './status/normalize.js';
 export type { ManagedStatus } from './status/normalize.js';

@@ -24,7 +24,7 @@ import { eventManager, type ToastConfig } from '../managers/EventManager'
 import ToastContainer from '../components/dashboard/ToastContainer'
 
 // Machine sub-components
-import type { MachineData, ManagedIde, ManagedCli, ManagedAcp, TabId, ProviderInfo } from './machine/types'
+import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, TabId, ProviderInfo } from './machine/types'
 import { useMachineActions } from './machine/useMachineActions'
 import OverviewTab from './machine/OverviewTab'
 import AgentTab from './machine/AgentTab'
@@ -66,7 +66,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                 if (isDup) return prev
                 const newToast = {
                     id: toast.id, message: toast.message, type: toast.type,
-                    timestamp: toast.timestamp, ideId: toast.ideId,
+                    timestamp: toast.timestamp, targetKey: toast.targetKey,
                     actions: toast.actions as any,
                 }
                 return [...prev.slice(-4), newToast]
@@ -102,15 +102,13 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         machineNickname: (machineEntry as any).machineNickname || null,
         p2p: (machineEntry as any).p2p || { available: false, state: 'unavailable', peers: 0, screenshotActive: false },
         detectedIdes: (machineEntry as any).detectedIdes || [],
-        managedIdeIds: (machineEntry as any).managedIdeIds || [],
-        managedCliIds: (machineEntry as any).managedCliIds || [],
         workspaces: (machineEntry as any).workspaces || [],
         defaultWorkspaceId: (machineEntry as any).defaultWorkspaceId ?? (machineEntry as any).activeWorkspaceId ?? null,
         defaultWorkspacePath: (machineEntry as any).defaultWorkspacePath ?? (machineEntry as any).activeWorkspacePath ?? null,
         workspaceActivity: (machineEntry as any).workspaceActivity || [],
     } : null
 
-    const managedIdes: ManagedIde[] = allIdes
+    const ideSessions: IdeSessionEntry[] = allIdes
         .filter(i => (i as any).daemonId === machineId && !(i as any).daemonMode)
         .filter(i => !isCliEntry(i) && !isAcpEntry(i))
         .map(i => ({
@@ -126,7 +124,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             daemonId: machineId!,
         }))
 
-    const managedClis: ManagedCli[] = allIdes
+    const cliSessions: CliSessionEntry[] = allIdes
         .filter(i => (i as any).daemonId === machineId && isCliEntry(i))
         .map(i => ({
             id: i.id, type: i.type, cliName: (i as any).cliName || i.type,
@@ -136,7 +134,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             daemonId: machineId!,
         }))
 
-    const managedAcps: ManagedAcp[] = allIdes
+    const acpSessions: AcpSessionEntry[] = allIdes
         .filter(i => (i as any).daemonId === machineId && isAcpEntry(i))
         .map(i => ({
             id: i.id, type: i.type, acpName: (i as any).cliName || i.type,
@@ -166,9 +164,9 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
 
     const TABS: { id: TabId; label: string | ReactNode; count?: number }[] = [
         { id: 'overview', label: <span className="flex items-center gap-1.5"><IconBarChart size={14} /> Overview</span> },
-        { id: 'ides', label: <span className="flex items-center gap-1.5"><IconMonitor size={14} /> IDEs</span>, count: managedIdes.length },
-        { id: 'clis', label: <span className="flex items-center gap-1.5"><IconPlug size={14} /> CLIs</span>, count: managedClis.length },
-        { id: 'acps', label: <span className="flex items-center gap-1.5"><IconBot size={14} /> ACP Agents</span>, count: managedAcps.length },
+        { id: 'ides', label: <span className="flex items-center gap-1.5"><IconMonitor size={14} /> IDEs</span>, count: ideSessions.length },
+        { id: 'clis', label: <span className="flex items-center gap-1.5"><IconPlug size={14} /> CLIs</span>, count: cliSessions.length },
+        { id: 'acps', label: <span className="flex items-center gap-1.5"><IconBot size={14} /> ACP Agents</span>, count: acpSessions.length },
         { id: 'providers', label: <span className="flex items-center gap-1.5"><IconSettings size={14} /> Providers</span> },
         { id: 'logs', label: <span className="flex items-center gap-1.5"><IconClipboard size={14} /> Logs</span> },
     ]
@@ -271,9 +269,9 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                 {activeTab === 'overview' && (
                     <OverviewTab
                         machine={machine}
-                        managedIdes={managedIdes}
-                        managedClis={managedClis}
-                        managedAcps={managedAcps}
+                        ideSessions={ideSessions}
+                        cliSessions={cliSessions}
+                        acpSessions={acpSessions}
                         actions={actions}
                     />
                 )}
@@ -284,7 +282,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                         machine={machine}
                         machineId={machineId!}
                         providers={providers}
-                        managedEntries={managedIdes}
+                        managedEntries={ideSessions}
                         getIcon={getIcon}
                         actions={actions}
                         sendDaemonCommand={sendDaemonCommand}
@@ -297,7 +295,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                         machine={machine}
                         machineId={machineId!}
                         providers={providers}
-                        managedEntries={managedClis}
+                        managedEntries={cliSessions}
                         getIcon={getIcon}
                         actions={actions}
                     />
@@ -309,7 +307,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                         machine={machine}
                         machineId={machineId!}
                         providers={providers}
-                        managedEntries={managedAcps}
+                        managedEntries={acpSessions}
                         getIcon={getIcon}
                         actions={actions}
                     />
@@ -344,7 +342,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                 toasts={daemonCtx.toasts || []}
                 onDismiss={(id) => daemonCtx.setToasts((prev: any[]) => prev.filter(t => t.id !== id))}
                 onClickToast={(toast) => {
-                    if (toast.ideId) {
+                    if (toast.targetKey) {
                         // Switch to the appropriate tab depending on the agent type if we had enough context,
                         // but for now we just let the user see the notification.
                     }

@@ -15,6 +15,7 @@ import type { DaemonAgentStreamManager } from './manager.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { registerExtensionProviders } from '../cdp/setup.js';
+import type { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 import type { AgentStreamState } from './types.js';
 
@@ -25,6 +26,7 @@ export interface AgentStreamPollerDeps {
     providerLoader: ProviderLoader;
     instanceManager: ProviderInstanceManager;
     cdpManagers: Map<string, DaemonCdpManager>;
+    sessionRegistry: SessionRegistry;
     /** Callback when agent streams are updated */
     onStreamsUpdated?: (ideType: string, streams: AgentStreamState[]) => void;
 }
@@ -43,8 +45,8 @@ export class AgentStreamPoller {
     }
 
     /** Reset active IDE tracking (e.g., when IDE is stopped) */
-    resetActiveIde(ideType: string): void {
-        this.deps.agentStreamManager.resetScope(ideType);
+    resetActiveIde(parentSessionId: string): void {
+        this.deps.agentStreamManager.resetParentSession(parentSessionId);
     }
 
     /** Start polling (idempotent — ignored if already started) */
@@ -71,6 +73,7 @@ export class AgentStreamPoller {
             providerLoader,
             instanceManager,
             cdpManagers,
+            sessionRegistry,
         } = this.deps;
 
         if (!agentStreamManager || cdpManagers.size === 0) return;
@@ -82,6 +85,7 @@ export class AgentStreamPoller {
 
             // 1b. Dynamically add/remove IDE instance extensions
             const ideInstance = instanceManager.getInstance(`ide:${ideType}`) as any;
+            const parentSessionId = ideInstance?.getInstanceId?.();
             if (ideInstance?.getExtensionTypes && ideInstance?.addExtension && ideInstance?.removeExtension) {
                 const currentExtTypes = new Set(ideInstance.getExtensionTypes() as string[]);
                 const enabledExtTypes = new Set(
@@ -91,6 +95,10 @@ export class AgentStreamPoller {
                 // Remove disabled extensions
                 for (const extType of currentExtTypes) {
                     if (!enabledExtTypes.has(extType)) {
+                        const extInstance = ideInstance.getExtension?.(extType);
+                        if (extInstance?.getInstanceId) {
+                            sessionRegistry.unregister(extInstance.getInstanceId());
+                        }
                         ideInstance.removeExtension(extType);
                         LOG.info('AgentStream', `Extension removed: ${extType} (disabled for ${ideType})`);
                     }
@@ -103,6 +111,18 @@ export class AgentStreamPoller {
                         if (extProvider) {
                             const extSettings = providerLoader.getSettings(extType);
                             ideInstance.addExtension(extProvider, extSettings);
+                            const extInstance = ideInstance.getExtension?.(extType);
+                            if (parentSessionId && extInstance?.getInstanceId) {
+                                sessionRegistry.register({
+                                    sessionId: extInstance.getInstanceId(),
+                                    parentSessionId,
+                                    providerType: extType,
+                                    providerCategory: 'extension',
+                                    transport: 'cdp-webview',
+                                    cdpManagerKey: ideType,
+                                    instanceKey: `ide:${ideType}`,
+                                });
+                            }
                             LOG.info('AgentStream', `Extension added: ${extType} (enabled for ${ideType})`);
                         }
                     }
@@ -110,47 +130,50 @@ export class AgentStreamPoller {
             }
 
             // 1c. If the active agent stream belongs to a now-disabled extension, detach it
-            const activeType = agentStreamManager.getActiveAgentType(ideType);
-            if (activeType) {
-                const enabledExtTypes = new Set(
-                    providerLoader.getEnabledExtensionProviders(ideType).map((p: any) => p.type)
-                );
-                if (!enabledExtTypes.has(activeType)) {
-                    LOG.info('AgentStream', `Active agent ${activeType} was disabled for ${ideType} — detaching`);
-                    await agentStreamManager.switchActiveAgent(cdp, ideType, null);
+            const activeSessionId = parentSessionId ? agentStreamManager.getActiveSessionId(parentSessionId) : null;
+            if (activeSessionId) {
+                const activeTarget = sessionRegistry.get(activeSessionId);
+                const enabledExtTypes = new Set(providerLoader.getEnabledExtensionProviders(ideType).map((p: any) => p.type));
+                if (!activeTarget || !enabledExtTypes.has(activeTarget.providerType)) {
+                    LOG.info('AgentStream', `Active agent ${activeTarget?.providerType || activeSessionId} was disabled for ${ideType} — detaching`);
+                    await agentStreamManager.setActiveSession(cdp, parentSessionId!, null);
                     // Report empty streams so dashboard removes the tab
                     this.deps.onStreamsUpdated?.(ideType, []);
                 }
             }
             if (!cdp.isConnected) {
-                if (activeType) {
-                    agentStreamManager.resetScope(ideType);
+                if (parentSessionId && activeSessionId) {
+                    agentStreamManager.resetParentSession(parentSessionId);
                     this.deps.onStreamsUpdated?.(ideType, []);
                 }
                 continue;
             }
 
             // ─── Phase 2: Agent session sync + collect ───
-            let resolvedActiveType = activeType;
+            let resolvedActiveSessionId = activeSessionId;
 
             // ─── Phase 3: Auto-discover agents ───
-            if (!resolvedActiveType) {
+            if (!resolvedActiveSessionId && parentSessionId) {
                 try {
                     const discovered = await cdp.discoverAgentWebviews();
-                    if (discovered.length > 0) {
-                        resolvedActiveType = discovered[0].agentType;
-                        await agentStreamManager.switchActiveAgent(cdp, ideType, resolvedActiveType);
-                        LOG.info('AgentStream', `Auto-activated: ${resolvedActiveType} (${ideType})`);
+                    for (const target of discovered) {
+                        const sessionId = agentStreamManager.resolveSessionForAgent(parentSessionId, target.agentType);
+                        if (sessionId) {
+                            resolvedActiveSessionId = sessionId;
+                            await agentStreamManager.setActiveSession(cdp, parentSessionId, sessionId);
+                            LOG.info('AgentStream', `Auto-activated: ${target.agentType} (${ideType})`);
+                            break;
+                        }
                     }
                 } catch { }
             }
 
-            if (!resolvedActiveType) continue;
+            if (!resolvedActiveSessionId || !parentSessionId) continue;
 
             try {
-                await agentStreamManager.syncAgentSessions(cdp, ideType);
-                const streams = await agentStreamManager.collectAgentStreams(cdp, ideType);
-                this.deps.onStreamsUpdated?.(ideType, streams);
+                await agentStreamManager.syncActiveSession(cdp, parentSessionId);
+                const stream = await agentStreamManager.collectActiveSession(cdp, parentSessionId);
+                this.deps.onStreamsUpdated?.(ideType, stream ? [stream] : []);
             } catch { }
         }
     }

@@ -19,6 +19,7 @@ import { AcpProviderInstance } from '../providers/acp-provider-instance.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
+import type { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 
 // ─── external dependency interface ──────────────────────────
@@ -33,6 +34,7 @@ export interface CliManagerDeps {
     removeAgentTracking(key: string): void;
  /** InstanceManager — register in CLI unified status */
     getInstanceManager(): ProviderInstanceManager | null;
+    getSessionRegistry?(): SessionRegistry | null;
 }
 
 type CommandResult = { success: boolean;[key: string]: unknown };
@@ -105,6 +107,7 @@ export class DaemonCliManager {
 
  // Create UUID-based key (allows separate instances even for same type+dir)
         const key = crypto.randomUUID();
+        const sessionRegistry = this.deps.getSessionRegistry?.() || null;
 
  // ─── ACP category handle ───
         if (provider && provider.category === 'acp') {
@@ -132,6 +135,16 @@ export class DaemonCliManager {
             const acpInstance = new AcpProviderInstance(provider, resolvedDir, cliArgs);
             await instanceManager.addInstance(key, acpInstance, {
                 settings: this.providerLoader.getSettings(normalizedType),
+            });
+            const sessionId = acpInstance.getInstanceId();
+            sessionRegistry?.register({
+                sessionId,
+                parentSessionId: null,
+                providerType: normalizedType,
+                providerCategory: 'acp',
+                transport: 'acp',
+                adapterKey: key,
+                instanceKey: key,
             });
 
  // Register ACP entry in adapter map (getStatus queries from acpInstance in real-time)
@@ -190,8 +203,17 @@ export class DaemonCliManager {
                     serverConn: this.deps.getServerConn(),
                     settings: {},
                     onPtyData: (data: string) => {
-                        this.deps.getP2p()?.broadcastPtyOutput(key, data);
+                        this.deps.getP2p()?.broadcastPtyOutput(cliInstance.instanceId, data);
                     },
+                });
+                sessionRegistry?.register({
+                    sessionId: cliInstance.instanceId,
+                    parentSessionId: null,
+                    providerType: normalizedType,
+                    providerCategory: 'cli',
+                    transport: 'pty',
+                    adapterKey: key,
+                    instanceKey: key,
                 });
             } catch (spawnErr: any) {
                 // Spawn failed — cleanup and propagate error
@@ -216,6 +238,7 @@ export class DaemonCliManager {
                             if (this.adapters.has(key)) {
                                 this.adapters.delete(key);
                                 this.deps.removeAgentTracking(key);
+                                sessionRegistry?.unregisterByInstanceKey(key);
                                 instanceManager.removeInstance(key);
                                 LOG.info('CLI', `🧹 Auto-cleaned ${status.status} CLI: ${cliType}`);
                                 this.deps.onStatusChange();
@@ -279,6 +302,7 @@ export class DaemonCliManager {
             // Always cleanup regardless of shutdown success
             this.adapters.delete(key);
             this.deps.removeAgentTracking(key);
+            this.deps.getSessionRegistry?.()?.unregisterByInstanceKey(key);
             this.deps.getInstanceManager()?.removeInstance(key);
             LOG.info('CLI', `🛑 Agent stopped: ${adapter.cliType} in ${adapter.workingDir}`);
             this.deps.onStatusChange();
@@ -286,6 +310,7 @@ export class DaemonCliManager {
             // Adapter not found — try InstanceManager direct removal
             const im = this.deps.getInstanceManager();
             if (im) {
+                this.deps.getSessionRegistry?.()?.unregisterByInstanceKey(key);
                 im.removeInstance(key);
                 this.deps.removeAgentTracking(key);
                 LOG.warn('CLI', `🧹 Force-removed orphan entry: ${key}`);
@@ -303,7 +328,7 @@ export class DaemonCliManager {
 
  /**
  * Search for CLI adapter. Priority order:
- * 0. instanceKey (UUID direct match) — extracted from _targetInstance / composite ID
+ * 0. sessionId (UUID direct match)
  * 1. agentType + dir (iteration match)
  * 2. agentType fuzzy match (⚠ returns first match when multiple sessions exist)
  */
@@ -382,8 +407,8 @@ export class DaemonCliManager {
                 const cliType = args?.cliType;
                 const dir = args?.dir || '';
                 if (!cliType) throw new Error('cliType required');
- // UUID (_targetInstance) based search priority
-                const found = this.findAdapter(cliType, { instanceKey: args?._targetInstance, dir });
+ // UUID session target based search priority
+                const found = this.findAdapter(cliType, { instanceKey: args?.targetSessionId, dir });
                 if (found) {
                     await this.stopSession(found.key);
                 } else {
@@ -415,7 +440,7 @@ export class DaemonCliManager {
                 }
                 const dir = rdir.path;
                 if (!cliType) throw new Error('cliType required');
-                const found = this.findAdapter(cliType, { instanceKey: args?._targetInstance, dir });
+                const found = this.findAdapter(cliType, { instanceKey: args?.targetSessionId, dir });
                 if (found) await this.stopSession(found.key);
                 await this.startSession(cliType, dir);
                 this.persistRecentDir(cliType, dir);
@@ -428,7 +453,7 @@ export class DaemonCliManager {
 
                 const found = this.findAdapter(agentType, {
                     dir: args?.dir,
-                    instanceKey: args?._targetInstance,
+                    instanceKey: args?.targetSessionId,
                 });
                 if (!found) throw new Error(`CLI agent not running: ${agentType}`);
                 const { adapter, key } = found;

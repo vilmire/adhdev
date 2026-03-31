@@ -14,6 +14,7 @@ const _modelModeCache = new Map<string, { models: string[]; modes: string[] }>()
 
 export interface ModelModeBarProps {
     ideId: string;
+    sessionId?: string;
     ideType: string;
     agentType: string;
     agentName: string;
@@ -27,7 +28,7 @@ export interface ModelModeBarProps {
     acpModes?: { id: string; name: string; description?: string }[];
 }
 
-export default function DashboardModelModeBar({ ideId, ideType, agentType, agentName, serverModel, serverMode, acpConfigOptions, acpModes }: ModelModeBarProps) {
+export default function DashboardModelModeBar({ ideId, sessionId, ideType, agentType, agentName, serverModel, serverMode, acpConfigOptions, acpModes }: ModelModeBarProps) {
     const { sendCommand } = useTransport();
     const isAcp = !!(acpConfigOptions || acpModes);
     const cacheKey = `${ideId}:${agentType}`;
@@ -109,14 +110,12 @@ export default function DashboardModelModeBar({ ideId, ideType, agentType, agent
     }, [serverMode]);
 
     const exec = useCallback(async (cmd: string, data: Record<string, unknown> = {}) => {
-        const enriched: Record<string, unknown> = { ...data };
-        const parts = ideId.split(':');
-        if (parts.length >= 3 && (parts[1] === 'ide' || parts[1] === 'cli' || parts[1] === 'acp')) {
-            enriched._targetInstance = parts.slice(2).join(':');
-            enriched._targetType = parts[1];
-        }
+        const enriched: Record<string, unknown> = {
+            ...data,
+            ...(sessionId && { targetSessionId: sessionId }),
+        };
         return await sendCommand(ideId, cmd, enriched);
-    }, [ideId]);
+    }, [ideId, sessionId, sendCommand]);
 
     const fetchModels = async () => {
         if (models.length > 0) { setModelOpen(!modelOpen); return; }

@@ -24,6 +24,13 @@ export interface CdpInitializerConfig {
     enabledIdes?: string[];
     /** Callback when a new CDP manager is connected */
     onConnected?: (ideType: string, manager: DaemonCdpManager, managerKey: string) => void | Promise<void>;
+    /** Callback when a stale/disconnected CDP manager is removed */
+    onDisconnected?: (
+        ideType: string,
+        manager: DaemonCdpManager,
+        managerKey: string,
+        reason: 'ide_closed' | 'target_closed' | 'target_rekeyed',
+    ) => void | Promise<void>;
 }
 
 export class DaemonCdpInitializer {
@@ -88,6 +95,7 @@ export class DaemonCdpInitializer {
 
         // 1. Try multi-window: list all workbench pages on this port
         const targets = await DaemonCdpManager.listAllTargets(port);
+        await this.pruneStaleManagers(port, ide, targets);
 
         if (targets.length === 0) {
             // Prevent duplicate fallback connection
@@ -150,6 +158,45 @@ export class DaemonCdpInitializer {
                 LOG.info('CDP', `Connected: ${managerKey} (port ${port}${targets.length > 1 ? `, page "${target.title}"` : ''})`);
                 await this.config.onConnected?.(ide, manager, managerKey);
             }
+        }
+    }
+
+    private async pruneStaleManagers(
+        port: number,
+        ide: string,
+        targets: Array<{ id: string }>,
+    ): Promise<void> {
+        const trackedTargetIds = new Set(targets.map((target) => target.id));
+        const removals: Array<{
+            key: string;
+            manager: DaemonCdpManager;
+            reason: 'ide_closed' | 'target_closed' | 'target_rekeyed';
+        }> = [];
+
+        for (const [key, manager] of this.config.cdpManagers.entries()) {
+            if (!(key === ide || key.startsWith(`${ide}_`))) continue;
+            if (manager.getPort() !== port) continue;
+
+            if (targets.length === 0) {
+                removals.push({ key, manager, reason: 'ide_closed' });
+                continue;
+            }
+
+            if (manager.targetId && !trackedTargetIds.has(manager.targetId)) {
+                removals.push({ key, manager, reason: 'target_closed' });
+                continue;
+            }
+
+            if (key === ide && !manager.targetId && targets.length > 1) {
+                removals.push({ key, manager, reason: 'target_rekeyed' });
+            }
+        }
+
+        for (const { key, manager, reason } of removals) {
+            try { manager.disconnect(); } catch { /* noop */ }
+            this.config.cdpManagers.delete(key);
+            LOG.info('CDP', `Removed stale manager: ${key} (${reason})`);
+            await this.config.onDisconnected?.(ide, manager, key, reason);
         }
     }
 

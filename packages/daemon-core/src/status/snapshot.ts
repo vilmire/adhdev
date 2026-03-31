@@ -11,7 +11,7 @@ import { loadConfig } from '../config/config.js';
 import { getWorkspaceState } from '../config/workspaces.js';
 import { getWorkspaceActivity } from '../config/workspace-activity.js';
 import { getHostMemorySnapshot } from '../system/host-memory.js';
-import { buildAllManagedEntries, isCdpConnected } from './builders.js';
+import { buildSessionEntries, isCdpConnected } from './builders.js';
 import type { ProviderState } from '../providers/provider-instance.js';
 import type {
     AvailableProviderInfo,
@@ -80,15 +80,9 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
     const cfg = loadConfig();
     const wsState = getWorkspaceState(cfg);
     const memSnap = getHostMemorySnapshot();
-    const { managedIdes, managedClis, managedAcps } = buildAllManagedEntries(
+    const sessions = buildSessionEntries(
         options.allStates,
         options.cdpManagers as Map<string, any>,
-        {
-            detectedIdes: options.detectedIdes.map((ide) => ({
-                id: ide.id,
-                installed: ide.installed !== false,
-            })),
-        },
     );
 
     return {
@@ -111,9 +105,7 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
         timestamp: options.timestamp ?? Date.now(),
         detectedIdes: buildDetectedIdeInfos(options.detectedIdes, options.cdpManagers),
         ...(options.p2p ? { p2p: options.p2p } : {}),
-        managedIdes,
-        managedClis,
-        managedAcps,
+        sessions,
         workspaces: wsState.workspaces,
         defaultWorkspaceId: wsState.defaultWorkspaceId,
         defaultWorkspacePath: wsState.defaultWorkspacePath,

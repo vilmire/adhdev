@@ -81,35 +81,36 @@ export default function MachinesPage() {
     // Cross-machine active agents
     const allActiveAgents: { name: string; machine: string; machineId: string; status: string; type: string; targetId: string; isCli: boolean; workspace: string }[] = []
     for (const m of machines) {
-        for (const ide of m.managedIdes) {
+        for (const ide of m.ideSessions) {
             if (isAgentActive(ide.agents, ide.agentStreams, ide.activeChat)) {
-                const agentName = ide.agentStreams.find(s => isManagedStatusWorking(s.status))?.agentName
+                const activeStream = ide.agentStreams.find(s => isManagedStatusWorking(s.status))
+                const agentName = activeStream?.agentName
                     || ide.agents.find(a => isManagedStatusWorking(a.status))?.name
                     || ide.name
                 allActiveAgents.push({
                     name: agentName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: ide.type,
-                    targetId: ide.id, isCli: false,
+                    targetId: activeStream?.sessionId || ide.sessionId || ide.id, isCli: false,
                     workspace: ide.workspace || '',
                 })
             }
         }
-        for (const cli of m.managedClis) {
+        for (const cli of m.cliSessions) {
             if (cli.agentStreams?.some(s => isManagedStatusWorking(s.status))) {
                 allActiveAgents.push({
                     name: cli.cliName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: cli.cliType,
-                    targetId: cli.id, isCli: true,
+                    targetId: cli.sessionId || cli.id, isCli: true,
                     workspace: cli.workspace?.split('/').pop() || '',
                 })
             }
         }
-        for (const acp of m.managedAcps) {
+        for (const acp of m.acpSessions) {
             if (acp.agentStreams?.some(s => isManagedStatusWorking(s.status))) {
                 allActiveAgents.push({
                     name: acp.acpName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: acp.acpType,
-                    targetId: acp.id, isCli: false,
+                    targetId: acp.sessionId || acp.id, isCli: false,
                     workspace: acp.workspace?.split('/').pop() || '',
                 })
             }
@@ -151,8 +152,7 @@ export default function MachinesPage() {
                                 <div
                                     key={idx}
                                     onClick={() => {
-                                        if (agent.isCli) navigate(`/dashboard?tab=terminal`)
-                                        else navigate(`/dashboard?activeTab=${encodeURIComponent(agent.targetId)}`)
+                                        navigate(`/dashboard?activeTab=${encodeURIComponent(agent.targetId)}`)
                                     }}
                                     className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-orange-500/[0.04] cursor-pointer transition-colors duration-150 hover:bg-orange-500/10"
                                 >
@@ -190,7 +190,7 @@ export default function MachinesPage() {
                         const connState = connectionStates[machine.machineId]
                         const transport = connectionTransports[machine.machineId]
                         const isConnecting = isOnline && (connState === 'new' || connState === 'connecting')
-                        const totalAgents = machine.managedIdes.length + machine.managedClis.length + machine.managedAcps.length
+                        const totalAgents = machine.ideSessions.length + machine.cliSessions.length + machine.acpSessions.length
 
                         return (
                             <div
@@ -279,11 +279,11 @@ export default function MachinesPage() {
                                     </div>
 
                                     {/* Compact Agent List — IDEs */}
-                                    {machine.managedIdes.length > 0 && (
+                                    {machine.ideSessions.length > 0 && (
                                         <div className="mb-1.5">
                                             <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">IDEs</div>
                                             <div className="flex flex-col gap-0.5">
-                                                {machine.managedIdes.map(ide => {
+                                                {machine.ideSessions.map(ide => {
                                                     const active = isAgentActive(ide.agents, ide.agentStreams, ide.activeChat)
                                                     const statusText = active ? 'generating'
                                                         : isManagedStatusWaiting(ide.activeChat?.status, { activeModal: (ide.activeChat as any)?.activeModal }) ? 'approval'
@@ -302,7 +302,7 @@ export default function MachinesPage() {
                                                                 isActive={active}
                                                                 isHidden={isHidden(ide.id)}
                                                                 onToggleVisibility={() => toggleTab(ide.id)}
-                                                                onClick={() => navigate(`/dashboard?activeTab=${encodeURIComponent(ide.id)}`)}
+                                                                onClick={() => navigate(`/dashboard?activeTab=${encodeURIComponent(ide.sessionId || ide.id)}`)}
                                                             />
                                                             {/* Extension sub-rows */}
                                                             {activeStreams.length > 0 && (
@@ -332,11 +332,11 @@ export default function MachinesPage() {
                                     )}
 
                                     {/* Compact Agent List — CLIs */}
-                                    {machine.managedClis.length > 0 && (
+                                    {machine.cliSessions.length > 0 && (
                                         <div className="mb-1.5">
                                             <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">CLIs</div>
                                             <div className="flex flex-col gap-0.5">
-                                                {machine.managedClis.map(cli => {
+                                                {machine.cliSessions.map(cli => {
                                                     const active = cli.agentStreams?.some(s => isManagedStatusWorking(s.status))
                                                     return (
                                                         <AgentRow
@@ -348,7 +348,7 @@ export default function MachinesPage() {
                                                             isActive={!!active}
                                                             isHidden={isHidden(cli.id)}
                                                             onToggleVisibility={() => toggleTab(cli.id)}
-                                                            onClick={() => navigate(`/dashboard?activeTab=${encodeURIComponent(cli.id)}`)}
+                                                            onClick={() => navigate(`/dashboard?activeTab=${encodeURIComponent(cli.sessionId || cli.id)}`)}
                                                         />
                                                     )
                                                 })}
@@ -357,11 +357,11 @@ export default function MachinesPage() {
                                     )}
 
                                     {/* Compact Agent List — ACP Agents */}
-                                    {machine.managedAcps.length > 0 && (
+                                    {machine.acpSessions.length > 0 && (
                                         <div className="mb-1.5">
                                             <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">ACP Agents</div>
                                             <div className="flex flex-col gap-0.5">
-                                                {machine.managedAcps.map(acp => {
+                                                {machine.acpSessions.map(acp => {
                                                     const active = acp.agentStreams?.some(s => isManagedStatusWorking(s.status))
                                                     return (
                                                         <AgentRow
@@ -373,7 +373,7 @@ export default function MachinesPage() {
                                                             isActive={!!active}
                                                             isHidden={isHidden(acp.id)}
                                                             onToggleVisibility={() => toggleTab(acp.id)}
-                                                            onClick={() => navigate(`/dashboard?activeTab=${encodeURIComponent(acp.id)}`)}
+                                                            onClick={() => navigate(`/dashboard?activeTab=${encodeURIComponent(acp.sessionId || acp.id)}`)}
                                                         />
                                                     )
                                                 })}

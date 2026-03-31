@@ -3,7 +3,7 @@
  */
 
 import type {
-    ManagedAgentStream,
+    AgentSessionStream,
     AcpConfigOption,
     AcpMode,
     MachineInfo,
@@ -16,10 +16,8 @@ import type {
 
 // Re-export shared types for convenience
 export type {
-    ManagedIdeEntry,
-    ManagedCliEntry,
-    ManagedAcpEntry,
-    ManagedAgentStream,
+    SessionEntry,
+    AgentSessionStream,
     AcpConfigOption,
     AcpMode,
     StatusReportPayload,
@@ -54,7 +52,11 @@ export interface WebAiAgentInfo {
 
 export interface BaseDaemonData {
     id: string;
+    sessionId?: string;
+    parentSessionId?: string | null;
     type: string;
+    sessionKind?: 'workspace' | 'agent';
+    transport?: 'cdp-page' | 'cdp-webview' | 'pty' | 'acp';
     mode?: 'terminal' | 'chat';
     version?: string;
     platform?: string;
@@ -85,7 +87,7 @@ export interface BaseDaemonData {
         dir: string;
         homeDir: string;
     };
-    agentStreams?: ManagedAgentStream[];
+    agentStreams?: AgentSessionStream[];
     availableProviders?: AvailableProviderInfo[];
     daemonMode?: boolean;
     machine?: MachineInfo;
@@ -97,10 +99,9 @@ export interface BaseDaemonData {
         screenshotActive?: boolean;
     };
     detectedIdes?: DetectedIdeInfo[];
-    managedIdeIds?: string[];
-    managedCliIds?: string[];
     machineNickname?: string | null;
     machineId?: string | null;
+    sessionCapabilities?: string[];
     workspaces?: WorkspaceEntry[];
     defaultWorkspaceId?: string | null;
     defaultWorkspacePath?: string | null;

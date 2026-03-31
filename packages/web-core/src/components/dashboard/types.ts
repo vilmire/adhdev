@@ -4,6 +4,8 @@
 
 export interface ActiveConversation {
     ideId: string;
+    sessionId?: string;
+    transport?: 'cdp-page' | 'cdp-webview' | 'pty' | 'acp';
     /** Daemon DO ID — actual server connection ID for command routing */
     daemonId?: string;
     mode?: 'terminal' | 'chat';
@@ -27,10 +29,10 @@ export interface ActiveConversation {
     connectionState?: string;
 }
 
-/** CLI detection: id includes ':cli:' */
-export const isCliConv = (conv: { ideType?: string; agentType?: string; ideId?: string; tabKey?: string; id?: string }) =>
-    (conv.ideId || conv.tabKey || conv.id || '').includes(':cli:');
+/** CLI detection: PTY transport */
+export const isCliConv = (conv: { transport?: string }) =>
+    conv.transport === 'pty';
 
-/** ACP detection: id includes ':acp:' */
-export const isAcpConv = (conv: { ideType?: string; agentType?: string; ideId?: string; tabKey?: string; id?: string }) =>
-    (conv.ideId || conv.tabKey || conv.id || '').includes(':acp:');
+/** ACP detection: ACP transport */
+export const isAcpConv = (conv: { transport?: string }) =>
+    conv.transport === 'acp';

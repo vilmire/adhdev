@@ -83,6 +83,7 @@ export class ProviderInstanceManager {
                             ...event,
                             providerType: instance.type,
                             instanceId: state.instanceId,
+                            targetSessionId: state.instanceId,
                             providerCategory: state.category,
                         });
                     }

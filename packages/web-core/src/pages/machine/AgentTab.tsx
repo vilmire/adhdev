@@ -16,13 +16,13 @@ import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { formatIdeType } from '../../utils/daemon-utils'
 import { IconChat, IconMonitor, IconSearch } from '../../components/Icons'
-import type { MachineData, ManagedIde, ManagedCli, ManagedAcp, ProviderInfo } from './types'
+import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, ProviderInfo } from './types'
 import type { useMachineActions } from './useMachineActions'
 
 type AgentCategory = 'ide' | 'cli' | 'acp'
 
 // Union type for running entries
-type AgentEntry = ManagedIde | ManagedCli | ManagedAcp
+type AgentEntry = IdeSessionEntry | CliSessionEntry | AcpSessionEntry
 
 interface AgentTabProps {
     category: AgentCategory
@@ -107,8 +107,8 @@ export default function AgentTab({
     // ─── Helpers ────────────────────────────────────
     const getName = (entry: AgentEntry) =>
         isIde ? formatIdeType(entry.type)
-            : category === 'cli' ? (entry as ManagedCli).cliName
-                : (entry as ManagedAcp).acpName
+            : category === 'cli' ? (entry as CliSessionEntry).cliName
+                : (entry as AcpSessionEntry).acpName
 
     const launchableIdes = isIde ? (machine.detectedIdes || []) : []
 
@@ -122,9 +122,9 @@ export default function AgentTab({
 
     const handleStop = (entry: AgentEntry) => {
         if (isIde) {
-            handleStopIde(entry as ManagedIde)
+            handleStopIde(entry as IdeSessionEntry)
         } else {
-            handleStopCli(entry.type, (entry as ManagedCli).workspace, entry.id)
+            handleStopCli(entry.type, (entry as CliSessionEntry).workspace, entry.id)
         }
     }
 
@@ -256,8 +256,8 @@ export default function AgentTab({
             ) : (
                 <div className="flex flex-col gap-2.5 mb-5">
                     {managedEntries.map(entry => {
-                        const ide = isIde ? (entry as ManagedIde) : null
-                        const acp = isAcp ? (entry as ManagedAcp) : null
+                        const ide = isIde ? (entry as IdeSessionEntry) : null
+                        const acp = isAcp ? (entry as AcpSessionEntry) : null
                         const normalizedStatus = normalizeManagedStatus(entry.status)
 
                         return (
@@ -287,7 +287,7 @@ export default function AgentTab({
                                         {isIde && (
                                             <>
                                                 <button onClick={() => navigate(`/ide/${entry.id}`)} className="machine-btn flex items-center gap-1"><IconMonitor size={13} /> Control</button>
-                                                <button onClick={() => handleRestartIde(entry as ManagedIde)} className="machine-btn text-amber-500 border-amber-500/30">↻</button>
+                                                <button onClick={() => handleRestartIde(entry as IdeSessionEntry)} className="machine-btn text-amber-500 border-amber-500/30">↻</button>
                                             </>
                                         )}
                                         {/* ACP: Chat */}

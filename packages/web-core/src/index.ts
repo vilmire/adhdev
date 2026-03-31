@@ -71,7 +71,7 @@ export {
     buildProviderMaps, PLATFORM_ICONS, groupByMachine,
     getMachineNickname, getMachineHostnameLabel, getMachineDisplayName,
 } from './utils/daemon-utils'
-export type { MachineIdeEntry, MachineCliEntry, MachineAcpEntry } from './utils/daemon-utils'
+export type { IdeSessionSummary, CliSessionSummary, AcpSessionSummary } from './utils/daemon-utils'
 export { statusPayloadToEntries } from './utils/status-transform'
 export type { StatusTransformOptions } from './utils/status-transform'
 export { SUPPORTED_IDES, SUPPORTED_CLI_AGENTS, SUPPORTED_EXTENSIONS, SUPPORTED_ACP_COUNT } from './constants/supported'
@@ -81,7 +81,7 @@ export type { SupportedEntry } from './constants/supported'
 export { eventManager } from './managers/EventManager'
 export type { StatusEventPayload, ToastConfig, SystemMessage, ToastAction, ViewRequestRespondFn } from './managers/EventManager'
 // Re-export daemon-core shared types for downstream consumers
-export type { ManagedIdeEntry, ManagedCliEntry, ManagedAcpEntry, AcpConfigOption, AcpMode, StatusReportPayload } from './types'
+export type { AcpConfigOption, AcpMode, StatusReportPayload } from './types'
 export { cn } from './lib/utils'
 
 // ── UI Components ──

@@ -9,14 +9,13 @@ import { DaemonCdpManager } from './manager.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
 import { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { IdeProviderInstance } from '../providers/ide-provider-instance.js';
-import type { ProviderModule } from '../providers/contracts.js';
+import { SessionRegistry } from '../sessions/registry.js';
 
 export interface CdpSetupContext {
   providerLoader: ProviderLoader;
   instanceManager: ProviderInstanceManager;
   cdpManagers: Map<string, DaemonCdpManager>;
-  /** UUID instanceId → CDP manager key mapping */
-  instanceIdMap: Map<string, string>;
+  sessionRegistry: SessionRegistry;
   /** Server connection (optional) */
   serverConn?: any;
 }
@@ -58,7 +57,7 @@ export function registerExtensionProviders(
  * 2. Create IdeProviderInstance
  * 3. Register in InstanceManager
  * 4. Register enabled extensions
- * 5. Update instanceIdMap (IDE + extension UUIDs)
+ * 5. Register runtime sessions (workspace + extension children)
  *
  * @returns The created IdeProviderInstance, or null if provider not found
  */
@@ -66,7 +65,7 @@ export async function setupIdeInstance(
   ctx: CdpSetupContext,
   opts: SetupIdeInstanceOptions,
 ): Promise<IdeProviderInstance | null> {
-  const { providerLoader, instanceManager, instanceIdMap } = ctx;
+  const { providerLoader, instanceManager, sessionRegistry } = ctx;
   const { ideType, manager, settings } = opts;
   const managerKey = opts.managerKey || ideType;
 
@@ -91,18 +90,34 @@ export async function setupIdeInstance(
     settings: resolvedSettings,
   });
 
-  // 5. Map IDE instance UUID → manager key
-  instanceIdMap.set(ideInstance.getInstanceId(), managerKey);
+  // 5. Register workspace session
+  sessionRegistry.register({
+    sessionId: ideInstance.getInstanceId(),
+    parentSessionId: null,
+    providerType: ideType,
+    providerCategory: 'ide',
+    transport: 'cdp-page',
+    cdpManagerKey: managerKey,
+    instanceKey: `ide:${managerKey}`,
+  });
 
   // 6. Register enabled extensions
   const extensionProviders = providerLoader.getEnabledByCategory('extension', ideType);
   for (const extProvider of extensionProviders) {
     const extSettings = providerLoader.getSettings(extProvider.type);
     await ideInstance.addExtension(extProvider, extSettings);
-    // Map extension UUIDs too (CDP uses parent IDE)
-    for (const ext of ideInstance.getExtensionInstances()) {
-      instanceIdMap.set(ext.getInstanceId(), managerKey);
-    }
+  }
+
+  for (const ext of ideInstance.getExtensionInstances()) {
+    sessionRegistry.register({
+      sessionId: ext.getInstanceId(),
+      parentSessionId: ideInstance.getInstanceId(),
+      providerType: ext.type,
+      providerCategory: 'extension',
+      transport: 'cdp-webview',
+      cdpManagerKey: managerKey,
+      instanceKey: `ide:${managerKey}`,
+    });
   }
 
   return ideInstance;

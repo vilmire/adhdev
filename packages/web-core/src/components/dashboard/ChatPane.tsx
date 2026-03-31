@@ -78,14 +78,12 @@ export default function ChatPane({
             }
 
             const agentType = activeConv.ideType || activeConv.agentType || '';
-            const ideParts = (activeConv.ideId || '').split(':');
-            const instanceId = ideParts.length >= 3 ? ideParts.slice(2).join(':') : undefined;
 
             const raw = await sendCommand(daemonId, 'chat_history', {
                 agentType,
                 offset: currentState.offset,
                 limit: 30,
-                instanceId,
+                targetSessionId: activeConv.sessionId,
             });
 
             const result = (raw as any)?.result ?? raw;
@@ -203,6 +201,7 @@ export default function ChatPane({
                 return (
                     <DashboardModelModeBar
                         ideId={activeConv.ideId}
+                        sessionId={activeConv.sessionId}
                         ideType={activeConv.ideType}
                         agentType={activeConv.streamSource === 'agent-stream' ? activeConv.agentType : ((ideEntry as any)?.agents?.[0]?.type || activeConv.ideType)}
                         agentName={activeConv.streamSource === 'agent-stream' ? activeConv.agentName : ((ideEntry as any)?.agents?.[0]?.name || activeConv.agentName)}

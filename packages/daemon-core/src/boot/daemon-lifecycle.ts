@@ -20,6 +20,7 @@ import { VersionArchive, detectAllVersions } from '../providers/version-archive.
 import { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { DevServer } from '../daemon/dev-server.js';
 import { detectIDEs } from '../detection/ide-detector.js';
+import { SessionRegistry } from '../sessions/registry.js';
 import { installGlobalInterceptor, LOG } from '../logging/logger.js';
 import { loadConfig } from '../config/config.js';
 
@@ -70,7 +71,7 @@ export interface DaemonComponents {
     poller: AgentStreamPoller;
     cdpInitializer: DaemonCdpInitializer;
     cdpManagers: Map<string, DaemonCdpManager>;
-    instanceIdMap: Map<string, string>;
+    sessionRegistry: SessionRegistry;
     detectedIdes: { value: any[] };
 }
 
@@ -141,13 +142,16 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // 3. Shared state
     const instanceManager = new ProviderInstanceManager();
     const cdpManagers = new Map<string, DaemonCdpManager>();
-    const instanceIdMap = new Map<string, string>();
+    const sessionRegistry = new SessionRegistry();
     const detectedIdesRef = { value: [] as any[] };
+    let agentStreamManager: DaemonAgentStreamManager | null = null;
+    let poller: AgentStreamPoller | null = null;
 
     // 4. CLI Manager
     const cliManager = new DaemonCliManager({
         ...config.cliManagerDeps,
         getInstanceManager: () => instanceManager,
+        getSessionRegistry: () => sessionRegistry,
     }, providerLoader);
 
     // 5. Detect IDEs
@@ -161,7 +165,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         providerLoader,
         instanceManager,
         cdpManagers,
-        instanceIdMap,
+        sessionRegistry,
     };
 
     const cdpInitializer = new DaemonCdpInitializer({
@@ -173,6 +177,21 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
             await setupIdeInstance(cdpSetupContext, { ideType, manager, managerKey });
             // Transport-specific extras
             await config.onCdpManagerSetup?.(ideType, manager, managerKey);
+        },
+        onDisconnected: async (_ideType, _manager, managerKey) => {
+            sessionRegistry.unregisterByManagerKey(managerKey);
+            const instanceKey = `ide:${managerKey}`;
+            const ideInstance = instanceManager.getInstance(instanceKey) as any;
+
+            if (ideInstance) {
+                instanceManager.removeInstance(instanceKey);
+                LOG.info('CDP', `Instance removed after disconnect: ${instanceKey}`);
+            }
+
+            if (ideInstance?.getInstanceId) {
+                agentStreamManager?.resetParentSession(ideInstance.getInstanceId());
+            }
+            config.onStatusChange?.();
         },
     });
     await cdpInitializer.connectAll(detectedIdesRef.value);
@@ -186,20 +205,19 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         adapters: cliManager.adapters,
         providerLoader,
         instanceManager,
-        instanceIdMap,
+        sessionRegistry,
     });
 
     // 8. AgentStreamManager
-    const agentStreamManager = new DaemonAgentStreamManager(
+    agentStreamManager = new DaemonAgentStreamManager(
         LOG.forComponent('AgentStream').asLogFn(),
         providerLoader,
+        sessionRegistry,
     );
     commandHandler.setAgentStreamManager(agentStreamManager);
 
     // 9. Router + Poller (with internal cross-wiring)
     // Note: poller is declared first so router's onIdeConnected closure captures it
-    let poller: AgentStreamPoller;
-
     const router = new DaemonCommandRouter({
         commandHandler,
         cliManager,
@@ -207,7 +225,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         providerLoader,
         instanceManager,
         detectedIdes: detectedIdesRef,
-        instanceIdMap,
+        sessionRegistry,
         onCdpManagerCreated: async (ideType: string, manager: DaemonCdpManager) => {
             // For launch_ide: register instance + extension providers
             await setupIdeInstance(cdpSetupContext, { ideType, manager });
@@ -224,6 +242,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         providerLoader,
         instanceManager,
         cdpManagers,
+        sessionRegistry,
         onStreamsUpdated: config.onStreamsUpdated,
     });
     poller.start();
@@ -241,7 +260,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         poller,
         cdpInitializer,
         cdpManagers,
-        instanceIdMap,
+        sessionRegistry,
         detectedIdes: detectedIdesRef,
     };
 }

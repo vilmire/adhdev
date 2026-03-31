@@ -7,7 +7,7 @@
  * Used by:
  *   - web-standalone: StandaloneDaemonContext (localhost WS)
  */
-import type { StatusReportPayload, ManagedIdeEntry, ManagedCliEntry, ManagedAcpEntry } from '@adhdev/daemon-core'
+import type { StatusReportPayload, SessionEntry } from '@adhdev/daemon-core'
 import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import type { DaemonData } from '../types'
 
@@ -18,6 +18,23 @@ export interface StatusTransformOptions {
     existingDaemon?: DaemonData
     /** Timestamp override */
     timestamp?: number
+}
+
+function groupChildSessions(sessions: SessionEntry[]) {
+    const topLevel: SessionEntry[] = []
+    const childrenByParent = new Map<string, SessionEntry[]>()
+
+    for (const session of sessions) {
+        if (session.parentId) {
+            const existing = childrenByParent.get(session.parentId) || []
+            existing.push(session)
+            childrenByParent.set(session.parentId, existing)
+        } else {
+            topLevel.push(session)
+        }
+    }
+
+    return { topLevel, childrenByParent }
 }
 
 /**
@@ -31,6 +48,18 @@ export function statusPayloadToEntries(
     const entries: DaemonData[] = []
     const { daemonId, existingDaemon, timestamp: tsOverride } = options
     const ts = tsOverride || payload.timestamp || Date.now()
+    const sessions = payload.sessions || []
+    const { topLevel, childrenByParent } = groupChildSessions(sessions)
+
+    const ideSessions = topLevel.filter((session) =>
+        session.kind === 'workspace' && session.transport === 'cdp-page',
+    )
+    const cliSessions = topLevel.filter((session) =>
+        session.kind === 'agent' && session.transport === 'pty',
+    )
+    const acpSessions = topLevel.filter((session) =>
+        session.kind === 'agent' && session.transport === 'acp',
+    )
 
     // ─── 1. Machine-level daemon entry ─────────────────
     entries.push({
@@ -45,73 +74,91 @@ export function statusPayloadToEntries(
         ...(payload.instanceId && { instanceId: payload.instanceId }),
         ...(payload.machineNickname !== undefined && { machineNickname: payload.machineNickname }),
         ...(payload.p2p && { p2p: payload.p2p }),
-        // System info
-        ...(('system' in payload) && { system: (payload as any).system }),
-        ...(('hostname' in payload) && { hostname: (payload as any).hostname }),
-        // Workspaces
         ...(payload.workspaces && { workspaces: payload.workspaces }),
         ...(payload.defaultWorkspaceId !== undefined && { defaultWorkspaceId: payload.defaultWorkspaceId }),
         ...(payload.defaultWorkspacePath !== undefined && { defaultWorkspacePath: payload.defaultWorkspacePath }),
         ...(payload.workspaceActivity && { workspaceActivity: payload.workspaceActivity }),
-        // IDE detection
         ...(payload.detectedIdes && { detectedIdes: payload.detectedIdes }),
-        // Provider info
         ...(('availableProviders' in payload) && { availableProviders: (payload as any).availableProviders }),
-        // CDP status (derived from managed IDEs)
-        cdpConnected: payload.managedIdes.some((i: ManagedIdeEntry) => i.cdpConnected),
-        // Managed IDs for cross-reference
-        managedIdeIds: payload.managedIdes.map((i: ManagedIdeEntry) => `${daemonId}:ide:${i.instanceId}`),
-        managedCliIds: payload.managedClis.map((c: ManagedCliEntry) => c.id ? `${daemonId}:cli:${c.id}` : `${daemonId}:cli:${c.cliType}`),
-        managedAcpIds: payload.managedAcps.map((a: ManagedAcpEntry) => a.id ? `${daemonId}:acp:${a.id}` : `${daemonId}:acp:${a.acpType}`),
+        cdpConnected: ideSessions.some((session) => !!session.cdpConnected),
     } as any)
 
     // ─── 2. IDE entries ────────────────────────────────
-    for (const ide of payload.managedIdes) {
+    for (const session of ideSessions) {
+        const childSessions = childrenByParent.get(session.id) || []
         entries.push({
-            id: `${daemonId}:ide:${ide.instanceId}`,
-            type: ide.ideType,
-            ideType: ide.ideType,
-            version: ide.ideVersion,
-            status: ide.cdpConnected ? 'online' : 'detected',
+            id: `${daemonId}:ide:${session.id}`,
+            sessionId: session.id,
+            parentSessionId: session.parentId,
+            sessionKind: session.kind,
+            transport: session.transport,
+            sessionCapabilities: session.capabilities,
+            type: session.providerType,
+            ideType: session.providerType,
+            status: session.cdpConnected ? 'online' : 'detected',
             daemonId,
-            instanceId: ide.instanceId,
-            workspace: ide.workspace,
-            terminals: ide.terminals,
-            agents: ide.aiAgents,
-            activeChat: ide.activeChat,
-            chats: ide.chats,
-            agentStreams: ide.agentStreams,
-            cdpConnected: ide.cdpConnected,
-            currentModel: ide.currentModel,
-            currentPlan: ide.currentPlan,
-            currentAutoApprove: ide.currentAutoApprove,
+            instanceId: session.id,
+            workspace: session.workspace,
+            terminals: 0,
+            agents: childSessions.map((child) => ({
+                id: child.id,
+                name: child.providerName,
+                type: child.providerType,
+                status: child.status,
+            })),
+            activeChat: session.activeChat,
+            chats: [],
+            agentStreams: childSessions.map((child) => ({
+                sessionId: child.id,
+                parentSessionId: child.parentId,
+                agentType: child.providerType,
+                agentName: child.providerName,
+                extensionId: child.providerType,
+                transport: child.transport,
+                status: normalizeManagedStatus(child.status, { activeModal: child.activeChat?.activeModal }),
+                messages: child.activeChat?.messages || [],
+                inputContent: child.activeChat?.inputContent || '',
+                activeModal: child.activeChat?.activeModal || null,
+                model: child.currentModel,
+            })),
+            cdpConnected: session.cdpConnected,
+            currentModel: session.currentModel,
+            currentPlan: session.currentPlan,
+            currentAutoApprove: session.currentAutoApprove,
             timestamp: ts,
         } as any)
     }
 
     // ─── 3. CLI entries ────────────────────────────────
-    for (const cli of payload.managedClis) {
-        const cliId = cli.id ? `${daemonId}:cli:${cli.id}` : `${daemonId}:cli:${cli.cliType}`
+    for (const session of cliSessions) {
         entries.push({
-            id: cliId,
-            type: cli.cliType,
-            ideType: cli.cliType,
-            agentType: cli.cliType,
-            status: cli.status || 'running',
+            id: `${daemonId}:cli:${session.id}`,
+            sessionId: session.id,
+            parentSessionId: session.parentId,
+            sessionKind: session.kind,
+            transport: session.transport,
+            sessionCapabilities: session.capabilities,
+            type: session.providerType,
+            ideType: session.providerType,
+            agentType: session.providerType,
+            status: session.status || 'running',
             daemonId,
-            instanceId: cli.id,
-            cliName: cli.cliName,
-            mode: cli.mode || 'terminal',
-            workspace: cli.workspace,
-            activeChat: cli.activeChat,
+            instanceId: session.id,
+            cliName: session.providerName,
+            mode: 'terminal',
+            workspace: session.workspace || '',
+            activeChat: session.activeChat,
             agentStreams: [{
-                agentType: cli.cliType,
-                agentName: cli.cliName,
+                sessionId: session.id,
+                parentSessionId: session.parentId,
+                agentType: session.providerType,
+                agentName: session.providerName,
                 extensionId: 'cli-agent',
-                status: normalizeManagedStatus(cli.status, { activeModal: cli.activeChat?.activeModal }),
-                messages: cli.activeChat?.messages || [],
-                inputContent: '',
-                activeModal: cli.activeChat?.activeModal,
+                transport: session.transport,
+                status: normalizeManagedStatus(session.status, { activeModal: session.activeChat?.activeModal }),
+                messages: session.activeChat?.messages || [],
+                inputContent: session.activeChat?.inputContent || '',
+                activeModal: session.activeChat?.activeModal,
             }],
             timestamp: ts,
             _isCli: true,
@@ -119,32 +166,39 @@ export function statusPayloadToEntries(
     }
 
     // ─── 4. ACP entries ────────────────────────────────
-    for (const acp of payload.managedAcps) {
-        const acpId = acp.id ? `${daemonId}:acp:${acp.id}` : `${daemonId}:acp:${acp.acpType}`
+    for (const session of acpSessions) {
         entries.push({
-            id: acpId,
-            type: acp.acpType,
-            ideType: acp.acpType,
-            agentType: acp.acpType,
-            status: acp.status || 'running',
+            id: `${daemonId}:acp:${session.id}`,
+            sessionId: session.id,
+            parentSessionId: session.parentId,
+            sessionKind: session.kind,
+            transport: session.transport,
+            sessionCapabilities: session.capabilities,
+            type: session.providerType,
+            ideType: session.providerType,
+            agentType: session.providerType,
+            status: session.status || 'running',
             daemonId,
-            instanceId: acp.id,
-            cliName: acp.acpName,
+            instanceId: session.id,
+            cliName: session.providerName,
             mode: 'chat',
-            workspace: acp.workspace,
-            activeChat: acp.activeChat,
-            currentModel: acp.currentModel,
-            currentPlan: acp.currentPlan,
-            acpConfigOptions: acp.acpConfigOptions,
-            acpModes: acp.acpModes,
+            workspace: session.workspace || '',
+            activeChat: session.activeChat,
+            currentModel: session.currentModel,
+            currentPlan: session.currentPlan,
+            acpConfigOptions: session.acpConfigOptions,
+            acpModes: session.acpModes,
             agentStreams: [{
-                agentType: acp.acpType,
-                agentName: acp.acpName,
+                sessionId: session.id,
+                parentSessionId: session.parentId,
+                agentType: session.providerType,
+                agentName: session.providerName,
                 extensionId: 'acp-agent',
-                status: normalizeManagedStatus(acp.status, { activeModal: acp.activeChat?.activeModal }),
-                messages: acp.activeChat?.messages || [],
-                inputContent: '',
-                activeModal: acp.activeChat?.activeModal,
+                transport: session.transport,
+                status: normalizeManagedStatus(session.status, { activeModal: session.activeChat?.activeModal }),
+                messages: session.activeChat?.messages || [],
+                inputContent: session.activeChat?.inputContent || '',
+                activeModal: session.activeChat?.activeModal,
             }],
             timestamp: ts,
             _isAcp: true,

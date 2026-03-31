@@ -6,19 +6,19 @@ import { formatUptime, formatBytes } from '../../utils/daemon-utils'
 import ProgressBar from '../../components/ProgressBar'
 import StatCard from '../../components/StatCard'
 import { IconClock, IconMonitor, IconFolder, IconTerminal, IconBot } from '../../components/Icons'
-import type { MachineData, ManagedIde, ManagedCli, ManagedAcp } from './types'
+import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
 import type { useMachineActions } from './useMachineActions'
 
 interface OverviewTabProps {
     machine: MachineData
-    managedIdes: ManagedIde[]
-    managedClis: ManagedCli[]
-    managedAcps: ManagedAcp[]
+    ideSessions: IdeSessionEntry[]
+    cliSessions: CliSessionEntry[]
+    acpSessions: AcpSessionEntry[]
     actions: ReturnType<typeof useMachineActions>
 }
 
 export default function OverviewTab({
-    machine, managedIdes, managedClis, managedAcps,
+    machine, ideSessions, cliSessions, acpSessions,
     actions,
 }: OverviewTabProps) {
     const {
@@ -39,9 +39,9 @@ export default function OverviewTab({
             {/* System Stats */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-5">
                 <StatCard icon={<IconClock size={16} />} label="Uptime" value={formatUptime(machine.uptime)} />
-                <StatCard icon={<IconMonitor size={16} />} label="IDEs" value={`${managedIdes.length}`} />
-                <StatCard icon={<IconTerminal size={16} />} label="CLIs" value={`${managedClis.length}`} />
-                <StatCard icon={<IconBot size={16} />} label="ACPs" value={`${managedAcps.length}`} />
+                <StatCard icon={<IconMonitor size={16} />} label="IDEs" value={`${ideSessions.length}`} />
+                <StatCard icon={<IconTerminal size={16} />} label="CLIs" value={`${cliSessions.length}`} />
+                <StatCard icon={<IconBot size={16} />} label="ACPs" value={`${acpSessions.length}`} />
             </div>
 
             {/* Resource Usage */}

@@ -9,11 +9,12 @@
  */
 
 import type { DaemonCdpManager } from '../cdp/manager.js';
-import type { ManagedIdeEntry, ManagedCliEntry, ManagedAcpEntry } from '../shared-types.js';
+import type { SessionEntry, SessionCapability } from '../shared-types.js';
 import type {
     IdeProviderState,
     CliProviderState,
     AcpProviderState,
+    ExtensionProviderState,
     ProviderState,
 } from '../providers/provider-instance.js';
 import { normalizeActiveChatData, normalizeManagedStatus } from './normalize.js';
@@ -74,137 +75,172 @@ export function isCdpConnected(
     return m?.isConnected ?? false;
 }
 
-// ─── ProviderState → ManagedEntry builders ───────────
+const IDE_SESSION_CAPABILITIES: SessionCapability[] = [
+    'read_chat',
+    'send_message',
+    'new_session',
+    'list_sessions',
+    'switch_session',
+    'resolve_action',
+    'change_model',
+    'set_mode',
+    'set_thought_level',
+];
 
-/**
- * Convert IdeProviderState[] → ManagedIdeEntry[]
- *
- * @param ideStates - from instanceManager.collectAllStates() filtered to ide
- * @param cdpManagers - for cdpConnected lookup
- * @param opts.detectedIdes - include CDPs that have no instance yet
- */
-export function buildManagedIdes(
-    ideStates: IdeProviderState[],
+const EXTENSION_SESSION_CAPABILITIES: SessionCapability[] = [
+    'read_chat',
+    'send_message',
+    'new_session',
+    'list_sessions',
+    'switch_session',
+    'resolve_action',
+    'change_model',
+    'set_mode',
+];
+
+const PTY_SESSION_CAPABILITIES: SessionCapability[] = [
+    'read_chat',
+    'send_message',
+    'resolve_action',
+    'terminal_io',
+    'resize_terminal',
+];
+
+const ACP_SESSION_CAPABILITIES: SessionCapability[] = [
+    'read_chat',
+    'send_message',
+    'new_session',
+    'resolve_action',
+    'change_model',
+    'set_mode',
+    'set_thought_level',
+];
+
+function buildIdeWorkspaceSession(
+    state: IdeProviderState,
     cdpManagers: Map<string, DaemonCdpManager>,
-    opts?: { detectedIdes?: { id: string; installed: boolean }[] },
-): ManagedIdeEntry[] {
-    const result: ManagedIdeEntry[] = [];
-
-    for (const state of ideStates) {
-        // Use cdpConnected from IdeProviderState if available (it checks internally),
-        // otherwise fall back to CDP manager lookup
-        const cdpConnected = state.cdpConnected ?? isCdpConnected(cdpManagers, state.type);
-        result.push({
-            ideType: state.type,
-            ideVersion: '',
-            instanceId: state.instanceId || state.type,
-            workspace: state.workspace || null,
-            terminals: 0,
-            aiAgents: [],
-            activeChat: normalizeActiveChatData(state.activeChat),
-            chats: [],
-            agentStreams: state.extensions.map((ext) => ({
-                agentType: ext.type,
-                agentName: ext.name,
-                extensionId: ext.type,
-                status: normalizeManagedStatus(ext.status, { activeModal: ext.activeChat?.activeModal || null }),
-                messages: ext.activeChat?.messages || [],
-                inputContent: ext.activeChat?.inputContent || '',
-                activeModal: ext.activeChat?.activeModal || null,
-            })),
-            cdpConnected,
-            currentModel: state.currentModel,
-            currentPlan: state.currentPlan,
-            currentAutoApprove: state.currentAutoApprove,
-        });
-    }
-
-    // Include CDPs with no ProviderInstance yet (newly detected IDEs)
-    if (opts?.detectedIdes) {
-        const coveredTypes = new Set(ideStates.map((s) => s.type));
-        for (const ide of opts.detectedIdes) {
-            if (!ide.installed || coveredTypes.has(ide.id)) continue;
-            if (!isCdpConnected(cdpManagers, ide.id)) continue;
-            result.push({
-                ideType: ide.id,
-                ideVersion: '',
-                instanceId: ide.id,
-                workspace: null,
-                terminals: 0,
-                aiAgents: [],
-                activeChat: null,
-                chats: [],
-                agentStreams: [],
-                cdpConnected: true,
-                currentModel: undefined,
-                currentPlan: undefined,
-            });
-        }
-    }
-
-    return result;
+): SessionEntry {
+    const activeChat = normalizeActiveChatData(state.activeChat);
+    const title = activeChat?.title || state.name;
+    return {
+        id: state.instanceId || state.type,
+        parentId: null,
+        providerType: state.type,
+        providerName: state.name,
+        kind: 'workspace',
+        transport: 'cdp-page',
+        status: normalizeManagedStatus(activeChat?.status || state.status, {
+            activeModal: activeChat?.activeModal || null,
+        }),
+        title,
+        workspace: state.workspace || null,
+        activeChat,
+        capabilities: IDE_SESSION_CAPABILITIES,
+        cdpConnected: state.cdpConnected ?? isCdpConnected(cdpManagers, state.type),
+        currentModel: state.currentModel,
+        currentPlan: state.currentPlan,
+        currentAutoApprove: state.currentAutoApprove,
+        errorMessage: state.errorMessage,
+        errorReason: state.errorReason,
+    };
 }
 
-/**
- * Convert CliProviderState[] → ManagedCliEntry[]
- */
-export function buildManagedClis(
-    cliStates: CliProviderState[],
-): ManagedCliEntry[] {
-    return cliStates.map((s) => ({
-        id: s.instanceId,
-        instanceId: s.instanceId,
-        cliType: s.type,
-        cliName: s.name,
-        status: normalizeManagedStatus(s.status, { activeModal: s.activeChat?.activeModal || null }),
-        mode: 'terminal' as const,
-        workspace: s.workspace || '',
-        activeChat: normalizeActiveChatData(s.activeChat),
-    }));
+function buildExtensionAgentSession(
+    parent: IdeProviderState,
+    ext: ExtensionProviderState,
+): SessionEntry {
+    const activeChat = normalizeActiveChatData(ext.activeChat);
+    return {
+        id: ext.instanceId || `${parent.instanceId}:${ext.type}`,
+        parentId: parent.instanceId || parent.type,
+        providerType: ext.type,
+        providerName: ext.name,
+        kind: 'agent',
+        transport: 'cdp-webview',
+        status: normalizeManagedStatus(activeChat?.status || ext.status, {
+            activeModal: activeChat?.activeModal || null,
+        }),
+        title: activeChat?.title || ext.name,
+        workspace: parent.workspace || null,
+        activeChat,
+        capabilities: EXTENSION_SESSION_CAPABILITIES,
+        currentModel: ext.currentModel,
+        currentPlan: ext.currentPlan,
+        errorMessage: ext.errorMessage,
+        errorReason: ext.errorReason,
+    };
 }
 
-/**
- * Convert AcpProviderState[] → ManagedAcpEntry[]
- */
-export function buildManagedAcps(
-    acpStates: AcpProviderState[],
-): ManagedAcpEntry[] {
-    return acpStates.map((s) => ({
-        id: s.instanceId,
-        acpType: s.type,
-        acpName: s.name,
-        status: normalizeManagedStatus(s.status, { activeModal: s.activeChat?.activeModal || null }),
-        mode: 'chat' as const,
-        workspace: s.workspace || '',
-        activeChat: normalizeActiveChatData(s.activeChat),
-        currentModel: s.currentModel,
-        currentPlan: s.currentPlan,
-        acpConfigOptions: s.acpConfigOptions,
-        acpModes: s.acpModes,
-        errorMessage: s.errorMessage,
-        errorReason: s.errorReason,
-    }));
+function buildCliSession(state: CliProviderState): SessionEntry {
+    const activeChat = normalizeActiveChatData(state.activeChat);
+    return {
+        id: state.instanceId,
+        parentId: null,
+        providerType: state.type,
+        providerName: state.name,
+        kind: 'agent',
+        transport: 'pty',
+        status: normalizeManagedStatus(activeChat?.status || state.status, {
+            activeModal: activeChat?.activeModal || null,
+        }),
+        title: activeChat?.title || state.name,
+        workspace: state.workspace || null,
+        activeChat,
+        capabilities: PTY_SESSION_CAPABILITIES,
+        errorMessage: state.errorMessage,
+        errorReason: state.errorReason,
+    };
 }
 
-/**
- * Convenience: collect & build all managed entries from instanceManager
- */
-export function buildAllManagedEntries(
+function buildAcpSession(state: AcpProviderState): SessionEntry {
+    const activeChat = normalizeActiveChatData(state.activeChat);
+    return {
+        id: state.instanceId,
+        parentId: null,
+        providerType: state.type,
+        providerName: state.name,
+        kind: 'agent',
+        transport: 'acp',
+        status: normalizeManagedStatus(activeChat?.status || state.status, {
+            activeModal: activeChat?.activeModal || null,
+        }),
+        title: activeChat?.title || state.name,
+        workspace: state.workspace || null,
+        activeChat,
+        capabilities: ACP_SESSION_CAPABILITIES,
+        currentModel: state.currentModel,
+        currentPlan: state.currentPlan,
+        acpConfigOptions: state.acpConfigOptions,
+        acpModes: state.acpModes,
+        errorMessage: state.errorMessage,
+        errorReason: state.errorReason,
+    };
+}
+
+export function buildSessionEntries(
     allStates: ProviderState[],
     cdpManagers: Map<string, DaemonCdpManager>,
-    opts?: { detectedIdes?: { id: string; installed: boolean }[] },
-): {
-    managedIdes: ManagedIdeEntry[];
-    managedClis: ManagedCliEntry[];
-    managedAcps: ManagedAcpEntry[];
-} {
+): SessionEntry[] {
+    const sessions: SessionEntry[] = [];
+
     const ideStates = allStates.filter((s): s is IdeProviderState => s.category === 'ide');
     const cliStates = allStates.filter((s): s is CliProviderState => s.category === 'cli');
     const acpStates = allStates.filter((s): s is AcpProviderState => s.category === 'acp');
 
-    return {
-        managedIdes: buildManagedIdes(ideStates, cdpManagers, opts),
-        managedClis: buildManagedClis(cliStates),
-        managedAcps: buildManagedAcps(acpStates),
-    };
+    for (const state of ideStates) {
+        sessions.push(buildIdeWorkspaceSession(state, cdpManagers));
+        for (const ext of state.extensions as ExtensionProviderState[]) {
+            sessions.push(buildExtensionAgentSession(state, ext));
+        }
+    }
+
+    for (const state of cliStates) {
+        sessions.push(buildCliSession(state));
+    }
+
+    for (const state of acpStates) {
+        sessions.push(buildAcpSession(state));
+    }
+
+    return sessions;
 }

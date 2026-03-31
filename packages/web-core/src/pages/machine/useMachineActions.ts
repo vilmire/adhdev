@@ -7,7 +7,7 @@
 import { useState, useCallback, useRef } from 'react'
 import { formatIdeType } from '../../utils/daemon-utils'
 import { eventManager } from '../../managers/EventManager'
-import type { LogEntry, ManagedIde } from './types'
+import type { LogEntry, IdeSessionEntry } from './types'
 
 export interface LaunchPickState {
     cliType: string
@@ -104,20 +104,20 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         if (!machineId) return
         if (!window.confirm(`Stop ${cliType}?\nThis will terminate the process.`)) return
         try {
-            const res: any = await sendDaemonCommand(machineId, 'stop_cli', { cliType, dir, _targetInstance: entryId })
+            const res: any = await sendDaemonCommand(machineId, 'stop_cli', { cliType, dir, targetSessionId: entryId })
             if (res?.success) addLog('info', `${cliType} stopped`, true)
             else addLog('error', `Stop failed: ${res?.error || 'Unknown error'}`, true)
         } catch (e: any) { addLog('error', `Stop failed: ${e.message}`, true) }
     }, [machineId, addLog, sendDaemonCommand])
 
-    const handleRestartIde = useCallback(async (ide: ManagedIde) => {
+    const handleRestartIde = useCallback(async (ide: IdeSessionEntry) => {
         try {
             await sendDaemonCommand(ide.daemonId, 'restart_ide', { ideType: ide.type })
             addLog('info', `${formatIdeType(ide.type)} restart initiated`, true)
         } catch (e: any) { addLog('error', `Restart failed: ${e.message}`, true) }
     }, [addLog, sendDaemonCommand])
 
-    const handleStopIde = useCallback(async (ide: ManagedIde) => {
+    const handleStopIde = useCallback(async (ide: IdeSessionEntry) => {
         if (!window.confirm(`Stop ${formatIdeType(ide.type)}?\nThis will disconnect CDP and optionally kill the process.`)) return
         try {
             const res: any = await sendDaemonCommand(ide.daemonId, 'stop_ide', { ideType: ide.type, killProcess: true })

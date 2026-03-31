@@ -6,7 +6,7 @@
  */
 
 import { LOG } from '../logging/logger.js';
-import { buildAllManagedEntries } from './builders.js';
+import { buildSessionEntries } from './builders.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import type {
     ProviderState,
@@ -152,7 +152,7 @@ export class DaemonStatusReporter {
         }
 
  // IDE/CLI/ACP states → managed entries (shared builder)
-        const { managedIdes, managedClis, managedAcps } = buildAllManagedEntries(
+        const sessions = buildSessionEntries(
             allStates,
             this.deps.cdpManagers as Map<string, any>,
         );
@@ -189,19 +189,20 @@ export class DaemonStatusReporter {
         if (opts?.p2pOnly) return;
         const wsPayload = {
             daemonMode: true,
- // managedIdes: server only saves id, type, cdpConnected
-            managedIdes: managedIdes.map(ide => ({
-                ideType: ide.ideType,
-                instanceId: ide.instanceId,
-                cdpConnected: ide.cdpConnected,
-            })),
- // managedClis: server only saves id, type, name
-            managedClis: managedClis.map(c => ({
-                id: c.id, cliType: c.cliType, cliName: c.cliName,
-            })),
- // managedAcps: server only saves id, type, name
-            managedAcps: managedAcps?.map((a: any) => ({
-                id: a.id, acpType: a.acpType, acpName: a.acpName,
+            sessions: sessions.map((session) => ({
+                id: session.id,
+                parentId: session.parentId,
+                providerType: session.providerType,
+                providerName: session.providerName,
+                kind: session.kind,
+                transport: session.transport,
+                status: session.status,
+                workspace: session.workspace,
+                title: session.title,
+                cdpConnected: session.cdpConnected,
+                currentModel: session.currentModel,
+                currentPlan: session.currentPlan,
+                currentAutoApprove: session.currentAutoApprove,
             })),
             p2p: payload.p2p,
             timestamp: now,

@@ -98,14 +98,14 @@ export function getMachineDisplayName(
 
 // ─── ID / Type Helpers ───────────────────────────
 
-/** Determine if entry is CLI type (id pattern: `xxx:cli:yyy`) */
-export function isCliEntry(entry: { id?: string }): boolean {
-    return (entry.id || '').includes(':cli:')
+/** Determine if entry is a PTY-backed CLI session */
+export function isCliEntry(entry: { transport?: string }): boolean {
+    return entry.transport === 'pty'
 }
 
-/** Determine if entry is ACP type (id pattern: `xxx:acp:yyy`) */
-export function isAcpEntry(entry: { id?: string }): boolean {
-    return (entry.id || '').includes(':acp:')
+/** Determine if entry is an ACP session */
+export function isAcpEntry(entry: { transport?: string }): boolean {
+    return entry.transport === 'acp'
 }
 
 /** Per-platform icon — now rendered as SVG at component level, kept for compat */
@@ -231,44 +231,47 @@ export interface MachineGroup {
     platform: string
     system?: Partial<MachineInfo>
     daemonIde: DaemonData
-    managedIdes: MachineIdeEntry[]
-    managedClis: MachineCliEntry[]
-    managedAcps: MachineAcpEntry[]
+    ideSessions: IdeSessionSummary[]
+    cliSessions: CliSessionSummary[]
+    acpSessions: AcpSessionSummary[]
     detectedIdes: DetectedIdeInfo[]
     p2p?: { available: boolean; state: string; peers: number }
 }
 
-/** IDE entry for machine detail/overview display */
-export interface MachineIdeEntry {
+/** IDE session summary for machine detail/overview display */
+export interface IdeSessionSummary {
     id: string
+    sessionId?: string
     type: string
     name: string
     status: string
     workspace: string
     agents: { id: string; name: string; status: string }[]
-    agentStreams: { agentName: string; status: string }[]
+    agentStreams: { sessionId?: string; agentName: string; status: string }[]
     activeChat?: { status?: string }
 }
 
-/** CLI entry for machine detail/overview display (from daemon-core ManagedCliEntry) */
-export interface MachineCliEntry {
+/** CLI session summary for machine detail/overview display */
+export interface CliSessionSummary {
     id: string
+    sessionId?: string
     cliType: string
     cliName: string
     status: string
     workspace: string
-    agentStreams: { agentName: string; status: string }[]
+    agentStreams: { sessionId?: string; agentName: string; status: string }[]
 }
 
-/** ACP entry for machine detail/overview display (from daemon-core ManagedAcpEntry) */
-export interface MachineAcpEntry {
+/** ACP session summary for machine detail/overview display */
+export interface AcpSessionSummary {
     id: string
+    sessionId?: string
     acpType: string
     acpName: string
     status: string
     workspace: string
     model?: string
-    agentStreams: { agentName: string; status: string }[]
+    agentStreams: { sessionId?: string; agentName: string; status: string }[]
 }
 
 /** Group daemon array by machine */
@@ -297,9 +300,9 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                 platform: machineInfo?.platform || daemon.platform || 'unknown',
                 system,
                 daemonIde: daemon,
-                managedIdes: [],
-                managedClis: [],
-                managedAcps: [],
+                ideSessions: [],
+                cliSessions: [],
+                acpSessions: [],
                 detectedIdes: daemon.detectedIdes || [],
                 p2p: daemon.p2p,
             })
@@ -313,9 +316,10 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
         if (!parent) continue
 
         if (isAcpEntry(daemon)) {
-            if (!parent.managedAcps.some(a => a.id === daemon.id)) {
-                parent.managedAcps.push({
+            if (!parent.acpSessions.some(a => a.id === daemon.id)) {
+                parent.acpSessions.push({
                     id: daemon.id,
+                    sessionId: daemon.sessionId,
                     acpType: daemon.type,
                     acpName: daemon.cliName || daemon.type,
                     status: daemon.status || 'online',
@@ -325,9 +329,10 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                 })
             }
         } else if (isCliEntry(daemon)) {
-            if (!parent.managedClis.some(c => c.id === daemon.id)) {
-                parent.managedClis.push({
+            if (!parent.cliSessions.some(c => c.id === daemon.id)) {
+                parent.cliSessions.push({
                     id: daemon.id,
+                    sessionId: daemon.sessionId,
                     cliType: daemon.type,
                     cliName: daemon.cliName || daemon.type,
                     status: daemon.status || 'online',
@@ -336,9 +341,10 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                 })
             }
         } else {
-            if (!parent.managedIdes.some(i => i.id === daemon.id)) {
-                parent.managedIdes.push({
+            if (!parent.ideSessions.some(i => i.id === daemon.id)) {
+                parent.ideSessions.push({
                     id: daemon.id,
+                    sessionId: daemon.sessionId,
                     type: daemon.type,
                     name: providerLabels[daemon.type?.toLowerCase()] || formatIdeType(daemon.type || ''),
                     status: daemon.status || 'online',

@@ -139,9 +139,9 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
     const platformIcon = platform === 'win32' ? '🪟' : platform === 'darwin' ? '🍎' : '🐧'
 
     // Collect connected IDE/CLI instances for this daemon
-    const connectedIdes = allIdes.filter(i => (i as any).daemonId === ide.id && i.id.includes(':ide:'))
-    const connectedClis = allIdes.filter(i => (i as any).daemonId === ide.id && i.id.includes(':cli:'))
-    const connectedAcps = allIdes.filter(i => (i as any).daemonId === ide.id && i.id.includes(':acp:'))
+    const connectedIdes = allIdes.filter(i => (i as any).daemonId === ide.id && i.transport === 'cdp-page')
+    const connectedClis = allIdes.filter(i => (i as any).daemonId === ide.id && i.transport === 'pty')
+    const connectedAcps = allIdes.filter(i => (i as any).daemonId === ide.id && i.transport === 'acp')
 
     // P2P connection status
     const p2p = machine.p2p as { available?: boolean; state?: string; peers?: number } | undefined

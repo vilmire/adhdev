@@ -389,7 +389,10 @@ export default function PaneGroup({
                                     setActiveTabId(conv.tabKey);
                                     onActiveTabChange?.(conv.tabKey);
                                     if (conv.streamSource === 'agent-stream' && conv.agentType) {
-                                        sendCommand(conv.ideId, 'agent_stream_focus', { agentType: conv.agentType }).catch(() => {});
+                                        sendCommand(conv.ideId, 'focus_session', {
+                                            agentType: conv.agentType,
+                                            ...(conv.sessionId && { targetSessionId: conv.sessionId }),
+                                        }).catch(() => {});
                                     }
                                     if (isCliConv(conv)) {
                                         setTimeout(() => terminalRef.current?.bumpResize?.(), 100);

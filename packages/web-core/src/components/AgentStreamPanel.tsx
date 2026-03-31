@@ -10,12 +10,17 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import ChatPane from './dashboard/ChatPane';
 import ApprovalBanner from './dashboard/ApprovalBanner';
 import type { ActiveConversation } from './dashboard/types';
-import type { ManagedAgentStream } from '../types';
+import type { AgentSessionStream } from '../types';
 import { deriveStreamConversationStatus } from '../utils/daemon-utils';
+
+type StreamTab = AgentSessionStream & {
+    sessionId?: string;
+    parentSessionId?: string | null;
+};
 
 interface Props {
     ideId: string;
-    agentStreams: ManagedAgentStream[];
+    agentStreams: StreamTab[];
     sendCommand: (commandType: string, data?: any) => Promise<void>;
 }
 
@@ -70,33 +75,48 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
     const handleSendChat = useCallback(async () => {
         if (!agentInput.trim() || !activeAgent || isSending) return;
         setIsSending(true);
+        const targetSessionId = activeStream?.sessionId;
         try {
-            await sendCommand('agent_stream_send', { agentType: activeAgent, text: agentInput.trim() });
+            await sendCommand('send_chat', {
+                agentType: activeAgent,
+                text: agentInput.trim(),
+                message: agentInput.trim(),
+                ...(targetSessionId && { targetSessionId }),
+            });
             setAgentInput('');
         } catch (e) {
             console.error('Failed to send agent message', e);
         } finally {
             setIsSending(false);
         }
-    }, [agentInput, activeAgent, isSending, sendCommand]);
+    }, [agentInput, activeAgent, activeStream, isSending, sendCommand]);
 
     const handleResolve = useCallback(async (action: 'approve' | 'reject') => {
         if (!activeAgent) return;
+        const targetSessionId = activeStream?.sessionId;
         try {
-            await sendCommand('agent_stream_resolve', { agentType: activeAgent, action });
+            await sendCommand('resolve_action', {
+                agentType: activeAgent,
+                action,
+                ...(targetSessionId && { targetSessionId }),
+            });
         } catch (e) {
             console.error('Failed to resolve agent action', e);
         }
-    }, [activeAgent, sendCommand]);
+    }, [activeAgent, activeStream, sendCommand]);
 
     const handleNewSession = useCallback(async () => {
         if (!activeAgent) return;
+        const targetSessionId = activeStream?.sessionId;
         try {
-            await sendCommand('agent_stream_new_session', { agentType: activeAgent });
+            await sendCommand('new_chat', {
+                agentType: activeAgent,
+                ...(targetSessionId && { targetSessionId }),
+            });
         } catch (e) {
             console.error('Failed to start new session', e);
         }
-    }, [activeAgent, sendCommand]);
+    }, [activeAgent, activeStream, sendCommand]);
 
     if (agentStreams.length === 0) return null;
 

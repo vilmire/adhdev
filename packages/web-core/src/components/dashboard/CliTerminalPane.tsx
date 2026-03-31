@@ -30,9 +30,8 @@ export default function CliTerminalPane({
 
     // ─── Real-time PTY output: subscribe to P2P pty_output and write to xterm ───
     // Also replay existing buffer on mount so the terminal starts with past output.
-    const convAdapterKey = activeConv.ideId?.includes(':cli:') ? activeConv.ideId.split(':cli:')[1] : '';
     const tabKey = activeConv.tabKey;
-    const cliType = activeConv.ideType || activeConv.agentType || '';
+    const sessionId = activeConv.sessionId || '';
 
     useEffect(() => {
         // Replay existing buffer on mount
@@ -55,13 +54,13 @@ export default function CliTerminalPane({
         // Subscribe to real-time PTY output via ptyBus (emitted by Dashboard)
         const unsub = ptyBus.on((cliId: string, data: string) => {
             if (!data) return;
-            const match = cliId === convAdapterKey || cliId === cliType || cliId === activeConv.ideId || cliId === activeConv.tabKey;
+            const match = cliId === sessionId || cliId === activeConv.ideId || cliId === activeConv.tabKey;
             if (match) {
                 terminalRef.current?.write(data);
             }
         });
         return () => { unsub(); };
-    }, [convAdapterKey, cliType]);
+    }, [sessionId, activeConv.ideId, activeConv.tabKey]);
 
     return (
         <>
@@ -72,16 +71,14 @@ export default function CliTerminalPane({
                     ref={terminalRef as any}
                     onInput={(data) => {
                         const daemonId = activeConv.ideId || activeConv.daemonId || ''
-                        const cliId = activeConv.ideId?.includes(':cli:') ? activeConv.ideId.split(':cli:')[1] : (activeConv.ideType || activeConv.agentType || '')
-                        if (!sendData?.(daemonId, { type: 'pty_input', cliType: cliId, data })) {
-                            sendCommand(daemonId, 'pty_input', { cliType: cliId, data }).catch(console.error)
+                        if (!sendData?.(daemonId, { type: 'pty_input', targetSessionId: sessionId, data })) {
+                            sendCommand(daemonId, 'pty_input', { targetSessionId: sessionId, data }).catch(console.error)
                         }
                     }}
                     onResize={(cols, rows) => {
                         const daemonId = activeConv.ideId || activeConv.daemonId || ''
-                        const cliId = activeConv.ideId?.includes(':cli:') ? activeConv.ideId.split(':cli:')[1] : (activeConv.ideType || activeConv.agentType || '')
-                        if (!sendData?.(daemonId, { type: 'pty_resize', cliType: cliId, cols, rows })) {
-                            sendCommand(daemonId, 'pty_resize', { cliType: cliId, cols, rows, force: true }).catch(() => { })
+                        if (!sendData?.(daemonId, { type: 'pty_resize', targetSessionId: sessionId, cols, rows })) {
+                            sendCommand(daemonId, 'pty_resize', { targetSessionId: sessionId, cols, rows, force: true }).catch(() => { })
                         }
                     }}
                 />

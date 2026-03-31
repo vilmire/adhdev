@@ -21,6 +21,7 @@ import { resolveIdeLaunchWorkspace } from '../config/workspaces.js';
 import { appendWorkspaceActivity } from '../config/workspace-activity.js';
 import { addCliHistory } from '../config/config.js';
 import { detectIDEs } from '../detection/ide-detector.js';
+import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 import { logCommand } from '../logging/command-log.js';
 import { getRecentLogs, LOG_PATH } from '../logging/logger.js';
@@ -36,8 +37,7 @@ export interface CommandRouterDeps {
     instanceManager: ProviderInstanceManager;
     /** Reference to detected IDEs array (mutable — router updates it) */
     detectedIdes: { value: any[] };
-    /** UUID instanceId → CDP manager key mapping */
-    instanceIdMap: Map<string, string>;
+    sessionRegistry: SessionRegistry;
     /** Callback for CDP manager creation after launch_ide */
     onCdpManagerCreated?: (ideType: string, manager: DaemonCdpManager) => void;
     /** Callback after IDE connected (e.g., startAgentStreamPolling) */
@@ -60,7 +60,7 @@ export interface CommandRouterResult {
 // Commands that trigger post-chat status updates
 const CHAT_COMMANDS = [
     'send_chat', 'new_chat', 'switch_chat', 'set_mode',
-    'change_model', 'agent_stream_send',
+    'change_model',
 ];
 
 export class DaemonCommandRouter {
@@ -344,6 +344,7 @@ export class DaemonCommandRouter {
             if (cdp) {
                 try { cdp.disconnect(); } catch { /* noop */ }
                 this.deps.cdpManagers.delete(key);
+                this.deps.sessionRegistry.unregisterByManagerKey(key);
                 LOG.info('StopIDE', `CDP disconnected: ${key}`);
             }
         }
@@ -358,15 +359,6 @@ export class DaemonCommandRouter {
         for (const instanceKey of keysToRemove) {
             const ideInstance = this.deps.instanceManager.getInstance(instanceKey) as any;
             if (ideInstance) {
-                // Remove IDE and child Extension UUIDs from instanceIdMap
-                if (ideInstance.getInstanceId) {
-                    this.deps.instanceIdMap.delete(ideInstance.getInstanceId());
-                }
-                if (ideInstance.getExtensionInstances) {
-                    for (const ext of ideInstance.getExtensionInstances()) {
-                        if (ext.getInstanceId) this.deps.instanceIdMap.delete(ext.getInstanceId());
-                    }
-                }
                 this.deps.instanceManager.removeInstance(instanceKey);
                 LOG.info('StopIDE', `Instance removed: ${instanceKey}`);
             }
@@ -376,14 +368,6 @@ export class DaemonCommandRouter {
             const instanceKey = `ide:${ideType}`;
             const ideInstance = this.deps.instanceManager.getInstance(instanceKey) as any;
             if (ideInstance) {
-                if (ideInstance.getInstanceId) {
-                    this.deps.instanceIdMap.delete(ideInstance.getInstanceId());
-                }
-                if (ideInstance.getExtensionInstances) {
-                    for (const ext of ideInstance.getExtensionInstances()) {
-                        if (ext.getInstanceId) this.deps.instanceIdMap.delete(ext.getInstanceId());
-                    }
-                }
                 this.deps.instanceManager.removeInstance(instanceKey);
                 LOG.info('StopIDE', `Instance removed: ${instanceKey}`);
             }

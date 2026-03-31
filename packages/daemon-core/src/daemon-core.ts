@@ -6,7 +6,7 @@
  */
 
 import type { StatusResponse, CommandResult, DaemonEvent } from './types.js';
-import type { ManagedIdeEntry, ManagedCliEntry, ManagedAcpEntry } from './shared-types.js';
+import type { SessionEntry } from './shared-types.js';
 
 export interface DaemonCoreOptions {
  /** Data directory for config, logs */
@@ -40,12 +40,6 @@ export interface IDaemonCore {
  /** Execute a command (send_chat, new_session, etc.) */
   executeCommand(type: string, payload: any, target?: string): Promise<CommandResult>;
 
- /** Get currently detected/managed IDEs */
-  getManagedIdes(): ManagedIdeEntry[];
-
- /** Get currently detected/managed CLIs */
-  getManagedClis(): ManagedCliEntry[];
-
- /** Get currently detected/managed ACP agents */
-  getManagedAcps(): ManagedAcpEntry[];
+  /** Get current canonical runtime sessions */
+  getSessions(): SessionEntry[];
 }

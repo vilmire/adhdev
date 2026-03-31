@@ -37,10 +37,25 @@ const _pendingRequests = new Map<string, { resolve: (v: any) => void; reject: (e
 let _screenshotTimer: any = null
 let _wsStatusChangeCallback: ((status: ConnectionStatus, daemonId?: string) => void) | null = null
 
+function resolveCommandRoute(routeId: string, payload: Record<string, unknown> = {}) {
+    const parts = routeId.split(':')
+    if (parts.length >= 3 && (parts[1] === 'ide' || parts[1] === 'cli' || parts[1] === 'acp')) {
+        return {
+            daemonId: parts[0],
+            payload: {
+                ...payload,
+                targetSessionId: payload.targetSessionId || parts.slice(2).join(':'),
+            },
+        }
+    }
+    return { daemonId: routeId, payload }
+}
+
 /** Send a command via the shared WS connection. Falls back to HTTP if WS unavailable. */
 export async function sendCommandViaWs(
     daemonId: string, command: string, data?: Record<string, unknown>
 ): Promise<any> {
+    const route = resolveCommandRoute(daemonId, data || {})
     const ws = _wsInstance
     if (ws && ws.readyState === WebSocket.OPEN) {
         const requestId = `req_${++_reqCounter}_${Date.now()}`
@@ -56,7 +71,7 @@ export async function sendCommandViaWs(
             ws.send(JSON.stringify({
                 type: 'command',
                 requestId,
-                data: { type: command, payload: data || {}, target: daemonId },
+                data: { type: command, payload: route.payload },
             }))
         })
     }
@@ -64,7 +79,7 @@ export async function sendCommandViaWs(
     const res = await fetch('/api/v1/command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: command, payload: data || {}, target: daemonId }),
+        body: JSON.stringify({ type: command, payload: route.payload }),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return res.json()
@@ -90,11 +105,11 @@ class WsConnectionAdapter {
     }
 
     async sendInput(action: string, params: any): Promise<any> {
-        // Use screenshotIdeType (set by startScreenshots) to target correct IDE
-        const target = this.screenshotIdeType
-            ? `${this.daemonId}:ide:${this.screenshotIdeType}`
-            : this.daemonId
-        return sendCommandViaWs(target, 'cdp_remote_action', { action, params })
+        return sendCommandViaWs(this.daemonId, 'cdp_remote_action', {
+            action,
+            params,
+            ...(this.screenshotIdeType && { targetSessionId: this.screenshotIdeType }),
+        })
     }
 
     startScreenshots(ideType?: string) {
@@ -107,13 +122,9 @@ class WsConnectionAdapter {
         const poll = async () => {
             if (!this.hasCommandChannel) return
             try {
-                // Use ideType-based target so server's extractIdeType resolves the correct CDP
-                // Server extracts ideType from _targetInstance via /:ide:(.+)$/ pattern
-                const target = this.screenshotIdeType
-                    ? `${this.daemonId}:ide:${this.screenshotIdeType}`
-                    : this.daemonId
-                const res = await sendCommandViaWs(target, 'screenshot', {
+                const res = await sendCommandViaWs(this.daemonId, 'screenshot', {
                     width: 1280,
+                    ...(this.screenshotIdeType && { targetSessionId: this.screenshotIdeType }),
                 })
                 if (res?.success && res?.base64) {
                     const blob = await fetch(`data:image/jpeg;base64,${res.base64}`).then(r => r.blob())

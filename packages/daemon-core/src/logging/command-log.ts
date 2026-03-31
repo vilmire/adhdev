@@ -50,7 +50,7 @@ function maskArgs(args: any): Record<string, unknown> | undefined {
                 ? `[${value.length} chars]`
                 : '[masked]';
         } else if (key.startsWith('_')) {
- // internal fields: keep as-is (e.g. _targetType, _targetInstance)
+ // internal fields: keep as-is (e.g. targetSessionId)
             masked[key] = value;
         } else if (typeof value === 'object' && value !== null) {
  // Don't recurse deeply — just note the type

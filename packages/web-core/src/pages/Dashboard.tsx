@@ -117,7 +117,7 @@ export default function Dashboard() {
     const [searchParams, setSearchParams] = useSearchParams()
     const urlActiveTab = searchParams.get('activeTab')
 
-    type Toast = { id: number; message: string; type: 'success' | 'info' | 'warning'; timestamp: number; ideId?: string }
+    type Toast = { id: number; message: string; type: 'success' | 'info' | 'warning'; timestamp: number; targetKey?: string }
     const daemonCtx = useDaemons() as any
     const { updateIdeChats, screenshotMap, setScreenshotMap } = daemonCtx
     const ides: DaemonData[] = daemonCtx.ides || []
@@ -266,6 +266,17 @@ export default function Dashboard() {
         },
         [chatIdes, localUserMessages, clearedTabs, ides]
     );
+
+    const resolveConversationByTarget = useCallback((target: string | null | undefined) => {
+        if (!target) return undefined;
+        return conversations.find(c =>
+            c.sessionId === target
+            || c.ideId === target
+            || c.tabKey === target
+            || c.ideType === target
+            || c.agentType === target
+        );
+    }, [conversations]);
 
     // ─── Hidden Tabs ───
     const { hiddenTabs, toggleTab: toggleHiddenTab } = useHiddenTabs();
@@ -471,10 +482,7 @@ export default function Dashboard() {
     // Applied once when conversations become available, then clears the URL param.
     useEffect(() => {
         if (!urlActiveTab || urlTabAppliedRef.current || conversations.length === 0) return;
-        // Find matching conversation: try tabKey exact match, then ideId match, then ideType/agentType match
-        const match = conversations.find(c => c.tabKey === urlActiveTab)
-            || conversations.find(c => c.ideId === urlActiveTab)
-            || conversations.find(c => c.ideType === urlActiveTab || c.agentType === urlActiveTab);
+        const match = resolveConversationByTarget(urlActiveTab);
         if (match) {
             const targetGroup = normalizedGroupAssignments.get(match.tabKey) ?? 0;
             setGroupActiveTabIds(prev => ({ ...prev, [targetGroup]: match.tabKey }));
@@ -487,7 +495,7 @@ export default function Dashboard() {
                 return next;
             }, { replace: true });
         }
-    }, [urlActiveTab, conversations, normalizedGroupAssignments]);
+    }, [urlActiveTab, conversations, normalizedGroupAssignments, resolveConversationByTarget]);
 
     // clearedTabs auto-cleanup (after 5s)
     useEffect(() => {
@@ -572,8 +580,7 @@ export default function Dashboard() {
             ptyBus.emit(cliId, data)
             for (const conv of conversations) {
                 if (!isCliConv(conv)) continue;
-                const convAdapterKey = conv.ideId?.includes(':cli:') ? conv.ideId.split(':cli:')[1] : '';
-                const convCliMatch = cliId === convAdapterKey || cliId === conv.agentType || cliId === conv.ideType || cliId === conv.ideId || cliId === conv.tabKey;
+                const convCliMatch = cliId === conv.sessionId || cliId === conv.ideId || cliId === conv.tabKey;
                 if (convCliMatch) {
                     const buf = ptyBuffers.current.get(conv.tabKey) || [];
                     buf.push(data);
@@ -634,7 +641,7 @@ export default function Dashboard() {
                 if (isDup) return prev
                 return [...prev.slice(-4), {
                     id: toast.id, message: toast.message, type: toast.type,
-                    timestamp: toast.timestamp, ideId: toast.ideId,
+                    timestamp: toast.timestamp, targetKey: toast.targetKey,
                     actions: toast.actions as any,
                 }]
             })
@@ -674,16 +681,22 @@ export default function Dashboard() {
     useEffect(() => {
         const handler = (event: MessageEvent) => {
             const data = event.data
-            if (data?.type === 'notification_action' && data.action === 'approve' && data.ideId) {
-                sendDaemonCommand(data.ideId, 'resolve_action', {
+            if (data?.type === 'notification_action' && data.action === 'approve' && (data.ideId || data.targetSessionId || data.targetKey)) {
+                const targetKey = data.targetSessionId || data.targetKey || data.ideId
+                const matchedConv = resolveConversationByTarget(targetKey)
+                const routeId = matchedConv?.ideId || data.ideId
+                if (!routeId) return
+                sendDaemonCommand(routeId, 'resolve_action', {
                     action: 'approve',
                     button: 'Approve',
+                    ...(matchedConv?.sessionId && { targetSessionId: matchedConv.sessionId }),
+                    ...(data.targetSessionId && { targetSessionId: data.targetSessionId }),
                 }).catch(e => console.error('[SW Action] approve failed:', e))
             }
         }
         navigator.serviceWorker?.addEventListener('message', handler)
         return () => navigator.serviceWorker?.removeEventListener('message', handler)
-    }, [])
+    }, [resolveConversationByTarget, sendDaemonCommand])
 
     // ─── Command Handlers (header/history use activeConv) ──────
     const {
@@ -707,13 +720,11 @@ export default function Dashboard() {
 
     const handleActiveCliStop = useCallback(async () => {
         if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return;
-        const cliType = activeConv.ideId?.includes(':cli:')
-            ? activeConv.ideId.split(':cli:')[1]
-            : (activeConv.ideType || activeConv.agentType || '');
+        const cliType = activeConv.ideType || activeConv.agentType || '';
         if (!window.confirm(`Stop ${cliType}?\nThis will terminate the CLI process.`)) return;
         const daemonId = activeConv.ideId || activeConv.daemonId || '';
         try {
-            await sendDaemonCommand(daemonId, 'stop_cli', { cliType });
+            await sendDaemonCommand(daemonId, 'stop_cli', { cliType, targetSessionId: activeConv.sessionId });
         } catch (e: any) {
             console.error('Stop CLI failed:', e);
         }
@@ -897,8 +908,8 @@ export default function Dashboard() {
                 toasts={toasts}
                 onDismiss={(id) => setToasts(prev => prev.filter(t => t.id !== id))}
                 onClickToast={(toast) => {
-                    if (toast.ideId) {
-                        const matchedConv = conversations.find(c => c.ideId === toast.ideId || c.tabKey === toast.ideId);
+                    if (toast.targetKey) {
+                        const matchedConv = resolveConversationByTarget(toast.targetKey);
                         if (matchedConv) {
                             setFocusedGroup(normalizedGroupAssignments.get(matchedConv.tabKey) ?? 0);
                         }

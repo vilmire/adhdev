@@ -14,9 +14,9 @@ import type { ActiveConversation } from './types';
 
 /** Conversation-first IDE: CLI or IDE category → native tab */
 export const isConversationFirstIde = (ide: DaemonData) => {
-    if ((ide.id || '').includes(':cli:')) return true;
-    if ((ide.id || '').includes(':acp:')) return true;
-    if ((ide.id || '').includes(':ide:')) return true;
+    if (ide.transport === 'pty') return true;
+    if (ide.transport === 'acp') return true;
+    if (ide.transport === 'cdp-page') return true;
     if (ide.daemonId === ide.id) return false;
     return true;
 };
@@ -26,6 +26,26 @@ export function getWorkspaceName(ide: DaemonData): string {
     if (!ws) return '';
     const parts = ws.split(/[/\\]/).filter(Boolean);
     return parts.length > 0 ? parts[parts.length - 1] : ws;
+}
+
+function getLocalMessages(
+    localUserMessages: Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>,
+    keys: Array<string | undefined>,
+) {
+    const seen = new Set<string>();
+    const merged: { role: string; content: string; timestamp: number; _localId: string }[] = [];
+
+    for (const key of keys) {
+        if (!key) continue;
+        for (const msg of localUserMessages[key] || []) {
+            const dedupKey = msg._localId || `${msg.role}:${msg.timestamp}:${msg.content}`;
+            if (seen.has(dedupKey)) continue;
+            seen.add(dedupKey);
+            merged.push(msg);
+        }
+    }
+
+    return merged.sort((a, b) => a.timestamp - b.timestamp);
 }
 
 // ─── Main conversion function ────────────────────────────────
@@ -64,6 +84,7 @@ export function buildConversations(
 
         // 1) IDE native chat tab
         if (useConversationFirst) {
+            const nativeSessionId = (ide as any).sessionId || ide.instanceId;
             const agentName = getAgentDisplayName(ide.type);
             const detectedAgent = ide.agents?.[0];
             const modal = ide.activeChat?.activeModal;
@@ -80,7 +101,7 @@ export function buildConversations(
                 if (matched?.title && String(matched.title).trim()) title = String(matched.title).trim();
             }
             const nativeServerMsgs = chat.messages || [];
-            const nativeLocalMsgs = localUserMessages[ide.id] || [];
+            const nativeLocalMsgs = getLocalMessages(localUserMessages, [ide.id, nativeSessionId]);
             const serverContentCounts = new Map<string, number>();
             nativeServerMsgs.filter((m: any) => m.role === 'user').forEach((m: any) => {
                 serverContentCounts.set(m.content, (serverContentCounts.get(m.content) || 0) + 1);
@@ -92,6 +113,8 @@ export function buildConversations(
             });
             results.push({
                 ideId: ide.id,
+                sessionId: nativeSessionId,
+                transport: ide.transport,
                 daemonId: ide.daemonId || undefined,
                 mode: isCliConv(ide as any) ? (((ide as any).mode as 'terminal' | 'chat' | undefined) || 'terminal') : 'chat',
                 agentName,
@@ -122,7 +145,7 @@ export function buildConversations(
             const streamStatus = deriveStreamConversationStatus(stream);
             const streamTabKey = `${ide.id}:${stream.agentType}`;
             const serverMsgs = stream.messages || [];
-            const localMsgs = localUserMessages[streamTabKey] || [];
+            const localMsgs = getLocalMessages(localUserMessages, [streamTabKey, (stream as any).sessionId]);
             const serverContentCounts = new Map<string, number>();
             serverMsgs.filter((m: any) => m.role === 'user').forEach((m: any) => {
                 serverContentCounts.set(m.content, (serverContentCounts.get(m.content) || 0) + 1);
@@ -134,6 +157,8 @@ export function buildConversations(
             });
             results.push({
                 ideId: ide.id,
+                sessionId: (stream as any).sessionId || (stream as any).instanceId,
+                transport: (stream as any).transport || 'cdp-webview',
                 daemonId: ide.daemonId || undefined,
                 mode: 'chat',
                 agentName: stream.agentName,
@@ -159,6 +184,8 @@ export function buildConversations(
         if (results.length === 0) {
             results.push({
                 ideId: ide.id,
+                sessionId: (ide as any).sessionId || ide.instanceId,
+                transport: ide.transport,
                 daemonId: ide.daemonId || undefined,
                 mode: 'chat',
                 agentName: getAgentDisplayName(ide.type),

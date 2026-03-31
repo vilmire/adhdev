@@ -3,7 +3,7 @@
  */
 
 // ─── Types ───────────────────────────────────────────
-export interface ManagedIde {
+export interface IdeSessionEntry {
     id: string; type: string; version: string; instanceId: string; status: string
     workspace: string | null; terminals: number
     aiAgents: { id: string; name: string; status: string; version?: string }[]
@@ -11,12 +11,12 @@ export interface ManagedIde {
     cdpConnected: boolean; daemonId: string
 }
 
-export interface ManagedCli {
+export interface CliSessionEntry {
     id: string; type: string; cliName: string; status: string
     workspace: string; activeChat: any; daemonId: string
 }
 
-export interface ManagedAcp {
+export interface AcpSessionEntry {
     id: string; type: string; acpName: string; status: string
     workspace: string; activeChat: any; daemonId: string
     currentModel?: string; currentPlan?: string
@@ -32,7 +32,6 @@ export interface MachineData {
     uptime: number; release: string; cdpConnected: boolean; machineNickname: string | null
     p2p: { available: boolean; state: string; peers: number; screenshotActive: boolean }
     detectedIdes: { type: string; id?: string; name: string; running: boolean; path?: string }[]
-    managedIdeIds: string[]; managedCliIds: string[]
     workspaces: WorkspaceRow[]
     defaultWorkspaceId: string | null
     defaultWorkspacePath: string | null
@@ -66,9 +65,9 @@ export function formatRelativeAgo(ts: number): string {
 export interface MachineTabContext {
     machineId: string
     machine: MachineData
-    managedIdes: ManagedIde[]
-    managedClis: ManagedCli[]
-    managedAcps: ManagedAcp[]
+    ideSessions: IdeSessionEntry[]
+    cliSessions: CliSessionEntry[]
+    acpSessions: AcpSessionEntry[]
     providers: ProviderInfo[]
     getIcon: (type: string) => string
     addLog: (level: LogEntry['level'], message: string) => void

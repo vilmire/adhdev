@@ -8,7 +8,7 @@ import { createContext, useContext, type ReactNode } from 'react'
 
 export interface TransportContextValue {
     /** Send command to daemon */
-    sendCommand: (daemonId: string, type: string, payload?: any, target?: string) => Promise<any>
+    sendCommand: (daemonId: string, type: string, payload?: any) => Promise<any>
 
     /** Send data directly via connection (returns false if unsupported) */
     sendData?: (daemonId: string, data: any) => boolean

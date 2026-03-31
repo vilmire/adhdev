@@ -259,6 +259,10 @@ export class AcpProviderInstance implements ProviderInstance {
         }
     }
 
+    getInstanceId(): string {
+        return this.instanceId;
+    }
+
  // ─── ACP Config Options & Modes ─────────────────────
 
     private parseConfigOptions(raw: any): void {

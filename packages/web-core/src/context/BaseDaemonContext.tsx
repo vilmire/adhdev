@@ -19,7 +19,7 @@ export interface Toast {
     message: string
     type: 'success' | 'info' | 'warning'
     timestamp: number
-    ideId?: string
+    targetKey?: string
     /** Optional inline action buttons (e.g., approve/reject for approval toasts) */
     actions?: { label: string; onClick: () => void; variant?: 'primary' | 'danger' | 'default' }[]
 }
@@ -191,11 +191,11 @@ export function reconcileIdes(incoming: DaemonData[], prev: DaemonData[]): Daemo
 
         const age = now - (ide._lastUpdate || ide.timestamp || 0)
 
-        if (key.includes(':cli:') && !incomingIds.has(key) && age > 10_000) {
+        if (ide.transport === 'pty' && !incomingIds.has(key) && age > 10_000) {
             resultMap.delete(key)
-        } else if (key.includes(':acp:') && !incomingIds.has(key) && age > 10_000) {
+        } else if (ide.transport === 'acp' && !incomingIds.has(key) && age > 10_000) {
             resultMap.delete(key)
-        } else if (key.includes(':ide:') && !incomingIds.has(key) && age > 30_000) {
+        } else if (ide.transport === 'cdp-page' && !incomingIds.has(key) && age > 30_000) {
             resultMap.delete(key)
         }
     }
@@ -225,9 +225,21 @@ export interface CompactDaemon {
     cdpConnected?: boolean
     ts?: number
     timestamp?: number
-    ides?: { iid?: string; instanceId?: string; id?: string; type: string; cdp?: boolean; cdpConnected?: boolean }[]
-    clis?: { cid?: string; cliId?: string; id?: string; type: string; name?: string }[]
-    acps?: { aid?: string; acpId?: string; id?: string; type: string; name?: string }[]
+    sessions?: {
+        id: string
+        parentId?: string | null
+        providerType: string
+        providerName?: string
+        kind: 'workspace' | 'agent'
+        transport: 'cdp-page' | 'cdp-webview' | 'pty' | 'acp'
+        status?: string
+        workspace?: string | null
+        title?: string
+        cdpConnected?: boolean
+        currentModel?: string
+        currentPlan?: string
+        currentAutoApprove?: string
+    }[]
 }
 
 export function expandCompactDaemons(
@@ -244,9 +256,10 @@ export function expandCompactDaemons(
 
         const ts = d.timestamp || d.ts || Date.now()
         const cdp = d.cdpConnected ?? d.cdp
-
-        const ideIds = (d.ides || []).map(i => i.id || `${d.id}:ide:${i.instanceId || i.iid}`)
-        const cliIds = (d.clis || []).map(c => c.id || `${d.id}:cli:${c.cliId || c.cid}`)
+        const sessions = d.sessions || []
+        const topLevelIdeSessions = sessions.filter(s => !s.parentId && s.kind === 'workspace' && s.transport === 'cdp-page')
+        const topLevelCliSessions = sessions.filter(s => !s.parentId && s.kind === 'agent' && s.transport === 'pty')
+        const topLevelAcpSessions = sessions.filter(s => !s.parentId && s.kind === 'agent' && s.transport === 'acp')
 
         entries.push({
             id: d.id,
@@ -258,8 +271,6 @@ export function expandCompactDaemons(
             p2p: d.p2p,
             cdpConnected: cdp,
             timestamp: ts,
-            managedIdeIds: ideIds,
-            managedCliIds: cliIds,
             // Version mismatch (server-driven flag)
             ...((d as any).versionMismatch && {
                 versionMismatch: true,
@@ -268,41 +279,62 @@ export function expandCompactDaemons(
             }),
         } as any)
 
-        for (const ide of (d.ides || [])) {
-            const ideInstanceId = ide.instanceId || ide.iid
-            const ideFullId = ide.id || `${d.id}:ide:${ideInstanceId}`
+        for (const ide of topLevelIdeSessions) {
+            const childSessions = sessions.filter(s => s.parentId === ide.id)
+            const ideFullId = `${d.id}:ide:${ide.id}`
             entries.push({
                 id: ideFullId,
-                type: ide.type,
-                status: 'online',
+                sessionId: ide.id,
+                type: ide.providerType,
+                status: ide.status || 'online',
                 daemonId: d.id,
-                cdpConnected: ide.cdpConnected ?? ide.cdp,
+                cdpConnected: ide.cdpConnected,
+                currentModel: ide.currentModel,
+                currentPlan: ide.currentPlan,
+                currentAutoApprove: ide.currentAutoApprove,
+                workspace: ide.workspace || null,
+                agentStreams: childSessions.map(child => ({
+                    sessionId: child.id,
+                    parentSessionId: child.parentId,
+                    agentType: child.providerType,
+                    agentName: child.providerName || child.providerType,
+                    extensionId: child.providerType,
+                    transport: child.transport,
+                    status: child.status || 'idle',
+                    messages: [],
+                    inputContent: '',
+                    activeModal: null,
+                })),
                 timestamp: ts,
             } as any)
         }
 
-        for (const cli of (d.clis || [])) {
-            const cliCid = cli.cliId || cli.cid
-            const cliFullId = cli.id || `${d.id}:cli:${cliCid}`
+        for (const cli of topLevelCliSessions) {
+            const cliFullId = `${d.id}:cli:${cli.id}`
             entries.push({
                 id: cliFullId,
-                type: cli.type,
-                status: 'online',
+                sessionId: cli.id,
+                type: cli.providerType,
+                status: cli.status || 'online',
                 daemonId: d.id,
-                cliName: cli.name,
+                cliName: cli.providerName,
+                workspace: cli.workspace || '',
                 timestamp: ts,
             } as any)
         }
 
-        for (const acp of (d.acps || [])) {
-            const acpAid = acp.acpId || acp.aid
-            const acpFullId = acp.id || `${d.id}:acp:${acpAid}`
+        for (const acp of topLevelAcpSessions) {
+            const acpFullId = `${d.id}:acp:${acp.id}`
             entries.push({
                 id: acpFullId,
-                type: acp.type,
-                status: 'online',
+                sessionId: acp.id,
+                type: acp.providerType,
+                status: acp.status || 'online',
                 daemonId: d.id,
-                cliName: acp.name,
+                cliName: acp.providerName,
+                workspace: acp.workspace || '',
+                currentModel: acp.currentModel,
+                currentPlan: acp.currentPlan,
                 timestamp: ts,
             } as any)
         }

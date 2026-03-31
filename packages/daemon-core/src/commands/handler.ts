@@ -5,7 +5,7 @@
  * the correct CDP manager or CLI adapter.
  *
  * Key concepts:
- *   - extractIdeType(): determines target IDE from _targetInstance
+ *   - extractIdeType(): determines target IDE from targetSessionId or ideType
  *   - getCdp(): returns the DaemonCdpManager for current command
  *   - getProvider(): returns the ProviderModule for current command
  *   - handle(): main entry point, sets context then dispatches
@@ -20,6 +20,7 @@ import type { ProviderModule } from '../providers/contracts.js';
 import type { DaemonAgentStreamManager } from '../agent-stream/index.js';
 import { loadConfig } from '../config/config.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
+import type { SessionRegistry, SessionRuntimeTarget } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 
 // Sub-module imports
@@ -42,8 +43,7 @@ export interface CommandContext {
     providerLoader?: ProviderLoader;
     /** ProviderInstanceManager — for runtime settings propagation */
     instanceManager?: ProviderInstanceManager;
-    /** UUID instanceId → CDP manager key (ideType) mapping */
-    instanceIdMap?: Map<string, string>;
+    sessionRegistry?: SessionRegistry;
 }
 
 /**
@@ -56,8 +56,10 @@ export interface CommandHelpers {
     getProviderScript(scriptName: string, params?: Record<string, string>, ideType?: string): string | null;
     evaluateProviderScript(scriptName: string, params?: Record<string, string>, timeout?: number): Promise<{ result: any; category: string } | null>;
     getCliAdapter(type?: string): any | null;
+    readonly currentManagerKey: string | undefined;
     readonly currentIdeType: string | undefined;
     readonly currentProviderType: string | undefined;
+    readonly currentSession: SessionRuntimeTarget | undefined;
     readonly agentStream: DaemonAgentStreamManager | null;
     readonly ctx: CommandContext;
     readonly historyWriter: ChatHistoryWriter;
@@ -69,10 +71,12 @@ export class DaemonCommandHandler implements CommandHelpers {
     private domHandlers: CdpDomHandlers;
     private _historyWriter: ChatHistoryWriter;
 
-    /** Current IDE type extracted from command args (per-request) */
-    private _currentIdeType: string | undefined;
-    /** Current provider type — agentType priority, ideType use */
-    private _currentProviderType: string | undefined;
+    /** Current request route context */
+    private _currentRoute: {
+        session?: SessionRuntimeTarget;
+        managerKey?: string;
+        providerType?: string;
+    } = {};
 
     constructor(ctx: CommandContext) {
         this._ctx = ctx;
@@ -85,19 +89,18 @@ export class DaemonCommandHandler implements CommandHelpers {
     get ctx(): CommandContext { return this._ctx; }
     get agentStream(): DaemonAgentStreamManager | null { return this._agentStream; }
     get historyWriter(): ChatHistoryWriter { return this._historyWriter; }
-    get currentIdeType(): string | undefined { return this._currentIdeType; }
-    get currentProviderType(): string | undefined { return this._currentProviderType; }
+    get currentManagerKey(): string | undefined { return this._currentRoute.managerKey; }
+    get currentIdeType(): string | undefined { return this._currentRoute.managerKey; }
+    get currentProviderType(): string | undefined { return this._currentRoute.providerType; }
+    get currentSession(): SessionRuntimeTarget | undefined { return this._currentRoute.session; }
 
-    /** Get CDP manager for a specific ideType or managerKey.
-     * Supports exact match, multi-window prefix match, and instanceIdMap UUID lookup.
-     * Returns null if no match — never falls back to another IDE. */
+    /** Get CDP manager for a specific session or manager key. */
     getCdp(ideType?: string): DaemonCdpManager | null {
-        const key = ideType || this._currentIdeType;
-        if (!key) return null;
-        // 1. Try instanceIdMap (UUID → managerKey)
-        const resolved = this._ctx.instanceIdMap?.get(key) || key;
-        // 2. Use findCdpManager (exact + prefix match)
-        const m = findCdpManager(this._ctx.cdpManagers, resolved);
+        const requested = ideType || this._currentRoute.session?.sessionId || this._currentRoute.managerKey;
+        if (!requested) return null;
+        const session = this._ctx.sessionRegistry?.get(requested);
+        const managerKey = session?.cdpManagerKey || requested;
+        const m = findCdpManager(this._ctx.cdpManagers, managerKey);
         if (m?.isConnected) return m;
         return null;
     }
@@ -106,7 +109,7 @@ export class DaemonCommandHandler implements CommandHelpers {
      * Get provider module — _currentProviderType (agentType priority) use.
      */
     getProvider(overrideType?: string): ProviderModule | undefined {
-        const key = overrideType || this._currentProviderType || this._currentIdeType;
+        const key = overrideType || this._currentRoute.providerType || this._currentRoute.session?.providerType || this._currentRoute.managerKey;
         if (!key || !this._ctx.providerLoader) return undefined;
         const result = this._ctx.providerLoader.resolve(key);
         if (result) return result;
@@ -148,14 +151,22 @@ export class DaemonCommandHandler implements CommandHelpers {
 
         // Extension: evaluateInSession
         if (provider?.category === 'extension') {
-            let sessionId = this.getExtensionSessionId(provider, this._currentIdeType);
-            if (!sessionId && this._agentStream && this._currentIdeType) {
-                await this._agentStream.switchActiveAgent(cdp, this._currentIdeType, provider.type);
-                await this._agentStream.syncAgentSessions(cdp, this._currentIdeType);
-                sessionId = this.getExtensionSessionId(provider, this._currentIdeType);
+            let sessionId: string | null = this._currentRoute.session?.sessionId || null;
+            if (!sessionId && this._currentRoute.session?.parentSessionId) {
+                sessionId = this._agentStream?.resolveSessionForAgent(this._currentRoute.session.parentSessionId, provider.type) || null;
+            }
+            if (sessionId && this._agentStream) {
+                const target = this._ctx.sessionRegistry?.get(sessionId);
+                if (target?.parentSessionId) {
+                    await this._agentStream.setActiveSession(cdp, target.parentSessionId, sessionId);
+                    await this._agentStream.syncActiveSession(cdp, target.parentSessionId);
+                }
             }
             if (!sessionId) return null;
-            const result = await cdp.evaluateInSessionFrame(sessionId, script, timeout);
+            const managed = this._agentStream?.getManagedSession(sessionId);
+            const cdpSessionId = managed?.cdpSessionId;
+            if (!cdpSessionId) return null;
+            const result = await cdp.evaluateInSessionFrame(cdpSessionId, script, timeout);
             return { result, category: 'extension' };
         }
 
@@ -166,79 +177,47 @@ export class DaemonCommandHandler implements CommandHelpers {
 
     /** CLI adapter search */
     getCliAdapter(type?: string): any | null {
-        const target = type || this._currentIdeType;
+        const target = type || this._currentRoute.session?.sessionId || this._currentRoute.providerType || this._currentRoute.managerKey;
         if (!target || !this._ctx.adapters) return null;
-        // Normalize composite transport IDs:
-        //   standalone_xxx:cli:<uuid> -> <uuid>
-        //   daemon:acp:<uuid>         -> <uuid>
-        let normalizedTarget = target;
-        const colonIdx = normalizedTarget.lastIndexOf(':');
-        if (colonIdx >= 0) normalizedTarget = normalizedTarget.substring(colonIdx + 1);
-
-        const direct = this._ctx.adapters.get(normalizedTarget);
-        if (direct) return direct;
-
-        for (const [key, adapter] of this._ctx.adapters.entries()) {
-            if (
-                (adapter as any).cliType === target
-                || (adapter as any).cliType === normalizedTarget
-                || key === normalizedTarget
-                || key.startsWith(target)
-                || key.startsWith(normalizedTarget)
-            ) {
-                return adapter;
-            }
+        const session = this._ctx.sessionRegistry?.get(target);
+        if (session?.adapterKey) {
+            return this._ctx.adapters.get(session.adapterKey) || null;
         }
-        return null;
+        return this._ctx.adapters.get(target) || null;
     }
 
     // ─── Private helpers ──────────────────────────────
 
-    private getExtensionSessionId(provider: ProviderModule, scopeKey?: string): string | null {
-        if (provider.category !== 'extension' || !this._agentStream || !scopeKey) return null;
-        const managed = this._agentStream.getManagedAgent(provider.type, scopeKey);
-        return managed?.sessionId || null;
+    private inferProviderType(key: string | undefined): string | undefined {
+        if (!key) return undefined;
+        const session = this._ctx.sessionRegistry?.get(key);
+        if (session?.providerType) return session.providerType;
+        return key.split('_')[0];
     }
 
-    private resolveManagerKeyFromInstanceId(instanceId: string): string | undefined {
-        const mapped = this._ctx.instanceIdMap?.get(instanceId);
-        if (mapped) return mapped;
+    private resolveRoute(args: any): { session?: SessionRuntimeTarget; managerKey?: string; providerType?: string } {
+        const session = this._ctx.sessionRegistry?.get(args?.targetSessionId);
+        const managerKey = this.extractIdeType(args);
+        const providerType =
+            args?.agentType
+            || args?.providerType
+            || session?.providerType
+            || this.inferProviderType(managerKey);
+        return { session, managerKey, providerType };
+    }
 
-        const entries = (this._ctx.instanceManager as any)?.instances?.entries?.();
-        if (!entries) return undefined;
-
-        for (const [instanceKey, instance] of entries as Iterable<[string, any]>) {
-            if (typeof instanceKey !== 'string' || !instanceKey.startsWith('ide:')) continue;
-
-            if (typeof instance?.getInstanceId === 'function' && instance.getInstanceId() === instanceId) {
-                const managerKey = instanceKey.slice(4);
-                this._ctx.instanceIdMap?.set(instanceId, managerKey);
-                return managerKey;
-            }
-
-            if (typeof instance?.getExtensionInstances === 'function') {
-                for (const ext of instance.getExtensionInstances() || []) {
-                    if (typeof ext?.getInstanceId === 'function' && ext.getInstanceId() === instanceId) {
-                        const managerKey = instanceKey.slice(4);
-                        this._ctx.instanceIdMap?.set(instanceId, managerKey);
-                        return managerKey;
-                    }
-                }
-            }
+    /** Extract CDP scope key from target session or explicit ideType */
+    private extractIdeType(args: any): string | undefined {
+        if (args?.targetSessionId) {
+            const target = this._ctx.sessionRegistry?.get(args.targetSessionId);
+            if (target?.cdpManagerKey) return target.cdpManagerKey;
+            if (this._ctx.cdpManagers.has(args.targetSessionId)) return args.targetSessionId;
         }
 
-        return undefined;
-    }
-
-    /** Extract ideType from _targetInstance or explicit ideType */
-    private extractIdeType(args: any): string | undefined {
         // Also accept explicit ideType from args (P2P input, agentType for extensions)
         if (args?.ideType) {
-            // UUID → managerKey via instanceIdMap (P2P sends UUID instance IDs)
-            const mappedKey = this.resolveManagerKeyFromInstanceId(args.ideType);
-            if (mappedKey) {
-                return mappedKey;
-            }
+            const target = this._ctx.sessionRegistry?.get(args.ideType);
+            if (target?.cdpManagerKey) return target.cdpManagerKey;
             // Exact match first
             if (this._ctx.cdpManagers.has(args.ideType)) {
                 return args.ideType;
@@ -253,46 +232,6 @@ export class DaemonCommandHandler implements CommandHelpers {
             }
         }
 
-        if (args?._targetInstance) {
-            let raw = args._targetInstance as string;
-            const ideMatch = raw.match(/:ide:(.+)$/);
-            const cliMatch = raw.match(/:cli:(.+)$/);
-            const acpMatch = raw.match(/:acp:(.+)$/);
-            if (ideMatch) raw = ideMatch[1];
-            else if (cliMatch) raw = cliMatch[1];
-            else if (acpMatch) raw = acpMatch[1];
-
-            const mappedKey = this.resolveManagerKeyFromInstanceId(raw);
-            if (mappedKey) {
-                return mappedKey;
-            }
-
-            // Direct CDP manager key match (e.g. "cursor", "cursor_remote_vs")
-            if (this._ctx.cdpManagers.has(raw)) {
-                return raw;
-            }
-
-            // Prefix match for multi-window keys
-            const found = findCdpManager(this._ctx.cdpManagers, raw);
-            if (found) {
-                for (const [k, m] of this._ctx.cdpManagers.entries()) {
-                    if (m === found) return k;
-                }
-            }
-
-            // Fallback removed: returning first-connected CDP was the root cause of
-            // input routing to wrong IDE (e.g. screenshot shows Cursor but input goes
-            // to Antigravity). If no match is found, return undefined so the caller
-            // gets an explicit error rather than silently routing to the wrong IDE.
-
-            // Legacy: strip trailing _N suffix (e.g. "cursor_1" → "cursor")
-            const lastUnderscore = raw.lastIndexOf('_');
-            if (lastUnderscore > 0) {
-                const stripped = raw.substring(0, lastUnderscore);
-                if (this._ctx.cdpManagers.has(stripped)) return stripped;
-            }
-            return raw;
-        }
         return undefined;
     }
 
@@ -303,15 +242,14 @@ export class DaemonCommandHandler implements CommandHelpers {
     // ─── Command Dispatcher ──────────────────────────
 
     async handle(cmd: string, args: any): Promise<CommandResult> {
-        // Per-request: extract target IDE/provider type from args
-        this._currentIdeType = this.extractIdeType(args);
-        this._currentProviderType = args?.agentType || args?.providerType || this._currentIdeType;
+        // Per-request: extract target session / CDP scope / provider type from args
+        this._currentRoute = this.resolveRoute(args);
 
         // Commands without ideType CDP silently fail (prevent P2P retry spam)
-        if (!this._currentIdeType && !this._currentProviderType) {
+        if (!this._currentRoute.session && !this._currentRoute.managerKey && !this._currentRoute.providerType) {
             const cdpCommands = ['send_chat', 'read_chat', 'list_chats', 'new_chat', 'switch_chat', 'set_mode', 'change_model', 'set_thought_level', 'resolve_action'];
             if (cdpCommands.includes(cmd)) {
-                return { success: false, error: 'No ideType specified — cannot route command' };
+                return { success: false, error: 'No targetSessionId specified — cannot route command' };
             }
         }
 
@@ -382,14 +320,7 @@ export class DaemonCommandHandler implements CommandHelpers {
             case 'refresh_scripts': return this.handleRefreshScripts(args);
 
             // ─── Stream commands (stream-commands.ts) ───────────
-            case 'agent_stream_switch': return Stream.handleAgentStreamSwitch(this, args);
-            case 'agent_stream_read': return Stream.handleAgentStreamRead(this, args);
-            case 'agent_stream_send': return Stream.handleAgentStreamSend(this, args);
-            case 'agent_stream_resolve': return Stream.handleAgentStreamResolve(this, args);
-            case 'agent_stream_new': return Stream.handleAgentStreamNew(this, args);
-            case 'agent_stream_list_chats': return Stream.handleAgentStreamListChats(this, args);
-            case 'agent_stream_switch_session': return Stream.handleAgentStreamSwitchSession(this, args);
-            case 'agent_stream_focus': return Stream.handleAgentStreamFocus(this, args);
+            case 'focus_session': return Stream.handleFocusSession(this, args);
 
             // ─── PTY Raw I/O (stream-commands.ts) ─────────
             case 'pty_input': return Stream.handlePtyInput(this, args);

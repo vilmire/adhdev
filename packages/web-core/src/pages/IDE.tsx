@@ -80,6 +80,7 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
     // Build ActiveConversation for native IDE ChatPane
     const nativeConv: ActiveConversation = useMemo(() => ({
         ideId: ideId || '',
+        sessionId: (ideData as any)?.sessionId || ideData?.instanceId,
         daemonId: doId,
         agentName: getAgentDisplayName(ideType || ''),
         agentType: ideType || '',
@@ -103,6 +104,7 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
             const streamStatus = deriveStreamConversationStatus(stream);
             return {
                 ideId: ideId || '',
+                sessionId: (stream as any).sessionId || (stream as any).instanceId,
                 daemonId: doId,
                 agentName: stream.agentName,
                 agentType: stream.agentType,
@@ -133,8 +135,8 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
 
     const getProviderArgs = useCallback(() => (
         activeConv.streamSource === 'agent-stream'
-            ? { agentType: activeConv.agentType }
-            : {}
+            ? { targetSessionId: activeConv.sessionId, agentType: activeConv.agentType }
+            : (activeConv.sessionId ? { targetSessionId: activeConv.sessionId } : {})
     ), [activeConv])
 
     // ─── Connection screenshot listener ─────────────
@@ -218,6 +220,7 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
                 message,
                 text: message,
                 waitForResponse: true,
+                ...(activeConv.sessionId && { targetSessionId: activeConv.sessionId }),
                 ...(activeChatTab !== 'native' && { agentType: activeChatTab }),
             })
         } catch (e) {

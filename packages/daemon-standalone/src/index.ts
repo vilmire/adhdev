@@ -3,7 +3,7 @@
  *
  * Standalone-only server:
  * 1. DaemonCore init (IDE detection, CDP connection, Provider loading)
- * 2. HTTP REST API — /api/v1/status, /api/v1/command, /api/v1/ides, /api/v1/clis, /api/v1/agents
+ * 2. HTTP REST API — /api/v1/status, /api/v1/command
  * 3. WebSocket — ws://localhost:3847/ws (real-time status broadcast + command execution)
  * 4. Static file serving — web-standalone build output
  *
@@ -251,58 +251,13 @@ class StandaloneServer {
       return;
     }
 
-    if (apiPath === '/ides' && method === 'GET') {
-      const ides = getSharedSnapshot().managedIdes;
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ides }));
-      return;
-    }
-
-    if (apiPath === '/clis' && method === 'GET') {
-      const clis = getSharedSnapshot().managedClis;
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ clis }));
-      return;
-    }
-
-    if (apiPath === '/agents' && method === 'GET') {
-      const ides = getSharedSnapshot().managedIdes;
-      const agents: AgentEntry[] = [];
-      for (const ide of ides) {
-        // IDE native chat
-        if (ide.activeChat) {
-          agents.push({
-            ideId: ide.instanceId,
-            type: ide.ideType,
-            name: ide.ideType,
-            status: ide.activeChat.status || 'idle',
-            source: 'native',
-          });
-        }
-        // Extension agent streams
-        for (const stream of (ide.agentStreams || [])) {
-          agents.push({
-            ideId: ide.instanceId,
-            type: stream.agentType,
-            name: stream.agentName,
-            status: stream.status || 'idle',
-            source: 'extension',
-          });
-        }
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ agents }));
-      return;
-    }
-
     if (apiPath === '/command' && method === 'POST') {
       let body = '';
       req.on('data', (chunk) => { body += chunk; });
       req.on('end', async () => {
         try {
-          const { type, payload, target } = JSON.parse(body);
-          const args = { ...payload, _targetInstance: target };
-          const result = await this.executeCommand(type, args);
+          const { type, payload } = JSON.parse(body);
+          const result = await this.executeCommand(type, payload || {});
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(result));
         } catch (e: any) {
@@ -371,10 +326,9 @@ class StandaloneServer {
       try {
         const msg: WsMessage = JSON.parse(raw.toString());
         if (msg.type === 'command' && msg.data) {
-          const { type, payload, target } = msg.data;
+          const { type, payload } = msg.data;
           const requestId = msg.requestId;
-          const args = { ...payload, _targetInstance: target };
-          const result = await this.executeCommand(type, args);
+          const result = await this.executeCommand(type, payload || {});
           ws.send(JSON.stringify({ type: 'command_result', requestId, data: result }));
         }
       } catch (e: any) {

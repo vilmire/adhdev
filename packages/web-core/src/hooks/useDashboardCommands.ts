@@ -10,7 +10,7 @@ import type { ActiveConversation } from '../components/dashboard/types'
 import { isCliConv, isAcpConv } from '../components/dashboard/types'
 
 
-type Toast = { id: number; message: string; type: 'success' | 'info' | 'warning'; timestamp: number; ideId?: string }
+type Toast = { id: number; message: string; type: 'success' | 'info' | 'warning'; timestamp: number; targetKey?: string }
 
 interface UseDashboardCommandsOptions {
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
@@ -46,13 +46,14 @@ export function useDashboardCommands({
 
     const getProviderArgs = useCallback((conv: ActiveConversation | undefined) => {
         if (!conv) return {};
+        const targetSessionId = conv.sessionId ? { targetSessionId: conv.sessionId } : {};
         if (isCliConv(conv) || isAcpConv(conv)) {
-            return { agentType: conv.agentType || conv.ideType };
+            return { ...targetSessionId, agentType: conv.agentType || conv.ideType };
         }
         if (conv.streamSource === 'agent-stream') {
-            return { agentType: conv.agentType };
+            return { ...targetSessionId, agentType: conv.agentType };
         }
-        return {};
+        return targetSessionId;
     }, [])
 
     const handleSendChat = useCallback(async () => {
@@ -222,8 +223,9 @@ export function useDashboardCommands({
         setIsFocusingAgent(true);
         const savedTabKey = activeConv.tabKey;
         try {
-            await sendDaemonCommand(activeConv.ideId, 'agent_stream_focus', {
+            await sendDaemonCommand(activeConv.ideId, 'focus_session', {
                 agentType: activeConv.agentType,
+                ...(activeConv.sessionId && { targetSessionId: activeConv.sessionId }),
             });
             pinTab(savedTabKey, [200, 1500, 3000]);
         } catch (e) {

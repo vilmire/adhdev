@@ -10,17 +10,25 @@ import { LOG } from '../logging/logger.js';
 const RECENT_SEND_WINDOW_MS = 1200;
 const recentSendByTarget = new Map<string, number>();
 
+function getCurrentProviderType(h: CommandHelpers, fallback = ''): string {
+    return h.currentSession?.providerType || h.currentProviderType || fallback;
+}
+
+function getCurrentManagerKey(h: CommandHelpers): string {
+    return h.currentSession?.cdpManagerKey || h.currentManagerKey || '';
+}
+
 function getTargetedCliAdapter(h: CommandHelpers, args: any, providerType?: string) {
-    return h.getCliAdapter(args?._targetInstance || h.currentIdeType || providerType);
+    return h.getCliAdapter(args?.targetSessionId || providerType || h.currentSession?.providerType || h.currentManagerKey);
 }
 
 function buildRecentSendKey(h: CommandHelpers, args: any, provider: any, text: string): string {
     const target =
-        args?._targetInstance
-        || args?.instanceId
+        args?.targetSessionId
         || args?.agentType
+        || h.currentSession?.providerType
         || h.currentProviderType
-        || h.currentIdeType
+        || h.currentManagerKey
         || 'unknown';
     return `${provider?.category || 'unknown'}:${target}:${text.trim()}`;
 }
@@ -37,10 +45,11 @@ function isRecentDuplicateSend(key: string): boolean {
 }
 
 export async function handleChatHistory(h: CommandHelpers, args: any): Promise<CommandResult> {
-    const { agentType, offset, limit, instanceId } = args;
+    const { agentType, offset, limit } = args;
+    const instanceId = args?.targetSessionId;
     try {
         const provider = h.getProvider(agentType);
-        const agentStr = provider?.type || agentType || h.currentIdeType || '';
+        const agentStr = provider?.type || agentType || getCurrentProviderType(h);
         const result = readChatHistory(agentStr, offset || 0, limit || 30, instanceId);
         return { success: true, ...result, agent: agentStr };
     } catch (e: any) {
@@ -85,7 +94,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         provider.type || 'unknown_extension',
                         parsed.messages || [],
                         parsed.title,
-                        args?.instanceId
+                        args?.targetSessionId
                     );
                     return { success: true, ...parsed };
                 }
@@ -96,15 +105,18 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
         // Alternative: AgentStreamManager (script fail when)
         if (h.agentStream) {
             const cdp = h.getCdp();
-            if (cdp && h.currentIdeType) {
-                const streams = await h.agentStream.collectAgentStreams(cdp, h.currentIdeType);
-                const stream = streams.find((s: any) => s.agentType === provider.type);
+            const parentSessionId = h.currentSession?.parentSessionId;
+            if (cdp && parentSessionId) {
+                const stream = await h.agentStream.collectActiveSession(cdp, parentSessionId);
+                if (stream?.agentType !== provider.type) {
+                    return { success: true, messages: [], status: 'idle' };
+                }
                 if (stream) {
                     h.historyWriter.appendNewMessages(
                         stream.agentType,
                         stream.messages || [],
                         undefined,
-                        args?.instanceId
+                        args?.targetSessionId
                     );
                     return { success: true, messages: stream.messages || [], status: stream.status, agentType: stream.agentType };
                 }
@@ -132,11 +144,11 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 if (parsed && typeof parsed === 'object') {
                     _log(`Webview OK: ${parsed.messages?.length || 0} msgs`);
                     h.historyWriter.appendNewMessages(
-                        provider?.type || h.currentIdeType || 'unknown_webview',
-                        parsed.messages || [],
-                        parsed.title,
-                        args?.instanceId
-                    );
+                    provider?.type || getCurrentProviderType(h, 'unknown_webview'),
+                    parsed.messages || [],
+                    parsed.title,
+                    args?.targetSessionId
+                );
                     return { success: true, ...parsed };
                 }
             }
@@ -156,10 +168,10 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             if (parsed && typeof parsed === 'object' && parsed.messages?.length > 0) {
                 _log(`OK: ${parsed.messages?.length} msgs`);
                 h.historyWriter.appendNewMessages(
-                    provider?.type || h.currentIdeType || 'unknown_ide',
+                    provider?.type || getCurrentProviderType(h, 'unknown_ide'),
                     parsed.messages || [],
                     parsed.title,
-                    args?.instanceId
+                    args?.targetSessionId
                 );
                 return { success: true, ...parsed };
             }
@@ -180,10 +192,10 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
 
     const _logSendSuccess = (method: string, targetAgent?: string) => {
         h.historyWriter.appendNewMessages(
-            targetAgent || provider?.type || h.currentIdeType || 'unknown_agent',
+            targetAgent || provider?.type || getCurrentProviderType(h, 'unknown_agent'),
             [{ role: 'user', content: text, receivedAt: Date.now() }],
             undefined, // title
-            args?.instanceId
+            args?.targetSessionId
         );
         return { success: true, sent: true, method, targetAgent };
     };
@@ -228,8 +240,9 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
             _log(`Extension script error: ${e.message}`);
         }
         // Method 2: AgentStreamManager
-        if (h.agentStream && h.getCdp() && h.currentIdeType) {
-            const ok = await h.agentStream.sendToAgent(h.getCdp()!, h.currentIdeType, provider.type, text, h.currentIdeType);
+        const extensionSessionId = h.currentSession?.sessionId;
+        if (h.agentStream && h.getCdp() && extensionSessionId) {
+            const ok = await h.agentStream.sendToSession(h.getCdp()!, extensionSessionId, text);
             if (ok) {
                 _log(`AgentStreamManager sent OK`);
                 return _logSendSuccess('agent-stream');
@@ -241,11 +254,12 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
     // IDE category (default): provider sendMessage script is authoritative when present.
     const targetCdp = h.getCdp();
     if (!targetCdp?.isConnected) {
-        _log(`No CDP for ${h.currentIdeType}`);
-        return { success: false, error: `CDP for ${h.currentIdeType || 'unknown'} not connected` };
+        const managerKey = getCurrentManagerKey(h);
+        _log(`No CDP for ${managerKey}`);
+        return { success: false, error: `CDP for ${managerKey || 'unknown'} not connected` };
     }
 
-    _log(`Targeting IDE: ${h.currentIdeType}`);
+    _log(`Targeting IDE: ${getCurrentManagerKey(h)}`);
     const sendScript = h.getProviderScript('sendMessage', { MESSAGE: text });
     if (sendScript) {
         try {
@@ -354,9 +368,9 @@ export async function handleListChats(h: CommandHelpers, args: any): Promise<Com
     const provider = h.getProvider(args?.agentType);
 
     // Extension: via AgentStreamManager
-    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentIdeType) {
+    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
         try {
-            const chats = await h.agentStream.listAgentChats(h.getCdp()!, h.currentIdeType, provider.type);
+            const chats = await h.agentStream.listSessionChats(h.getCdp()!, h.currentSession.sessionId);
             LOG.info('Command', `[list_chats] Extension: ${chats.length} chats`);
             return { success: true, chats };
         } catch (e: any) {
@@ -413,8 +427,8 @@ export async function handleNewChat(h: CommandHelpers, args: any): Promise<Comma
         return { success: false, error: 'new_chat not supported by this CLI provider' };
     }
 
-    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentIdeType) {
-        const ok = await h.agentStream.newAgentSession(h.getCdp()!, h.currentIdeType, provider.type, h.currentIdeType);
+    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
+        const ok = await h.agentStream.newSession(h.getCdp()!, h.currentSession.sessionId);
         return { success: ok };
     }
 
@@ -443,17 +457,17 @@ export async function handleNewChat(h: CommandHelpers, args: any): Promise<Comma
 
 export async function handleSwitchChat(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
-    const ideType = h.currentIdeType;
+    const managerKey = getCurrentManagerKey(h);
     const sessionId = args?.sessionId || args?.id || args?.chatId;
     if (!sessionId) return { success: false, error: 'sessionId required' };
-    LOG.info('Command', `[switch_chat] sessionId=${sessionId}, ideType=${ideType}`);
+    LOG.info('Command', `[switch_chat] sessionId=${sessionId}, manager=${managerKey}`);
 
-    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentIdeType) {
-        const ok = await h.agentStream.switchAgentSession(h.getCdp()!, h.currentIdeType, provider.type, sessionId);
+    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
+        const ok = await h.agentStream.switchConversation(h.getCdp()!, h.currentSession.sessionId, sessionId);
         return { success: ok, result: ok ? 'switched' : 'failed' };
     }
 
-    const cdp = h.getCdp(ideType);
+    const cdp = h.getCdp(managerKey);
     if (!cdp?.isConnected) return { success: false, error: 'CDP not connected' };
 
     // webview IDE
@@ -585,7 +599,7 @@ export async function handleChangeModel(h: CommandHelpers, args: any): Promise<C
     const provider = h.getProvider(args?.agentType);
     const model = args?.model;
 
-    LOG.info('Command', `[change_model] model=${model} provider=${provider?.type} category=${provider?.category} ideType=${h.currentIdeType} providerType=${h.currentProviderType}`);
+    LOG.info('Command', `[change_model] model=${model} provider=${provider?.type} category=${provider?.category} manager=${getCurrentManagerKey(h)} providerType=${getCurrentProviderType(h)}`);
 
     // ACP provider
     if (provider?.category === 'acp') {
@@ -717,10 +731,8 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
     }
 
     // 1. Extension: via AgentStreamManager
-    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentIdeType) {
-        const ok = await h.agentStream.resolveAgentAction(
-            h.getCdp()!, h.currentIdeType, provider.type, action, h.currentIdeType
-        );
+    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
+        const ok = await h.agentStream.resolveSessionAction(h.getCdp()!, h.currentSession.sessionId, action);
         return { success: ok };
     }
 

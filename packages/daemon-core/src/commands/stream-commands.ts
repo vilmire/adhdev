@@ -8,172 +8,41 @@ import type { ProviderLoader } from '../providers/provider-loader.js';
 import { loadConfig } from '../config/config.js';
 import { LOG } from '../logging/logger.js';
 
-// ─── Agent Stream commands ───────────────────────
-
-export async function handleAgentStreamSwitch(h: CommandHelpers, args: any): Promise<CommandResult> {
-    if (!h.agentStream || !h.getCdp() || !h.currentIdeType) return { success: false, error: 'AgentStream or CDP not available' };
-    const agentType = args?.agentType || args?.agent || null;
-    await h.agentStream.switchActiveAgent(h.getCdp()!, h.currentIdeType, agentType);
-    return { success: true, activeAgent: agentType };
-}
-
-export async function handleAgentStreamRead(h: CommandHelpers, args: any): Promise<CommandResult> {
-    if (!h.agentStream || !h.getCdp() || !h.currentIdeType) return { success: false, error: 'AgentStream or CDP not available' };
-    const streams = await h.agentStream.collectAgentStreams(h.getCdp()!, h.currentIdeType);
-    return { success: true, streams };
-}
-
-export async function handleAgentStreamSend(h: CommandHelpers, args: any): Promise<CommandResult> {
-    const agentType = args?.agentType || args?.agent;
-    const text = args?.text || args?.message;
-    if (!text) return { success: false, error: 'text required' };
-
-    // CLI adapter routing
-    if (agentType && h.ctx.adapters) {
-        for (const [key, adapter] of h.ctx.adapters.entries()) {
-            if (adapter.cliType === agentType || key.includes(agentType)) {
-                LOG.info('Command', `[agent_stream_send] Routing to CLI adapter: ${adapter.cliType}`);
-                try {
-                    await adapter.sendMessage(text);
-                    return { success: true, sent: true, targetAgent: adapter.cliType };
-                } catch (e: any) {
-                    LOG.info('Command', `[agent_stream_send] CLI adapter failed: ${e.message}`);
-                    return { success: false, error: `CLI send failed: ${e.message}` };
-                }
-            }
-        }
-    }
-
-    // CDP-based IDE agent routing
+export async function handleFocusSession(h: CommandHelpers, args: any): Promise<CommandResult> {
     if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
-    const resolvedAgent = agentType || (h.currentIdeType ? h.agentStream.getActiveAgentType(h.currentIdeType) : null);
-    if (!resolvedAgent) return { success: false, error: 'agentType required' };
-    if (!h.currentIdeType) return { success: false, error: 'ideType required' };
-    const ok = await h.agentStream.sendToAgent(h.getCdp()!, h.currentIdeType, resolvedAgent, text, h.currentIdeType);
-    return { success: ok };
-}
-
-export async function handleAgentStreamResolve(h: CommandHelpers, args: any): Promise<CommandResult> {
-    if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
-    const agentType = args?.agentType || args?.agent || (h.currentIdeType ? h.agentStream.getActiveAgentType(h.currentIdeType) : null);
-    const action = args?.action as 'approve' | 'reject' || 'approve';
-    if (!agentType) return { success: false, error: 'agentType required' };
-    if (!h.currentIdeType) return { success: false, error: 'ideType required' };
-    const ok = await h.agentStream.resolveAgentAction(h.getCdp()!, h.currentIdeType, agentType, action, h.currentIdeType);
-    return { success: ok };
-}
-
-export async function handleAgentStreamNew(h: CommandHelpers, args: any): Promise<CommandResult> {
-    if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
-    const agentType = args?.agentType || args?.agent || (h.currentIdeType ? h.agentStream.getActiveAgentType(h.currentIdeType) : null);
-    if (!agentType) return { success: false, error: 'agentType required' };
-    if (!h.currentIdeType) return { success: false, error: 'ideType required' };
-    const ok = await h.agentStream.newAgentSession(h.getCdp()!, h.currentIdeType, agentType, h.currentIdeType);
-    return { success: ok };
-}
-
-export async function handleAgentStreamListChats(h: CommandHelpers, args: any): Promise<CommandResult> {
-    if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
-    const agentType = args?.agentType || args?.agent || (h.currentIdeType ? h.agentStream.getActiveAgentType(h.currentIdeType) : null);
-    if (!agentType) return { success: false, error: 'agentType required' };
-    if (!h.currentIdeType) return { success: false, error: 'ideType required' };
-    const chats = await h.agentStream.listAgentChats(h.getCdp()!, h.currentIdeType, agentType);
-    return { success: true, chats };
-}
-
-export async function handleAgentStreamSwitchSession(h: CommandHelpers, args: any): Promise<CommandResult> {
-    if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
-    const agentType = args?.agentType || args?.agent || (h.currentIdeType ? h.agentStream.getActiveAgentType(h.currentIdeType) : null);
-    const sessionId = args?.sessionId || args?.id;
-    if (!agentType || !sessionId) return { success: false, error: 'agentType and sessionId required' };
-    if (!h.currentIdeType) return { success: false, error: 'ideType required' };
-    const ok = await h.agentStream.switchAgentSession(h.getCdp()!, h.currentIdeType, agentType, sessionId);
-    return { success: ok };
-}
-
-export async function handleAgentStreamFocus(h: CommandHelpers, args: any): Promise<CommandResult> {
-    if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
-    const agentType = args?.agentType || args?.agent || (h.currentIdeType ? h.agentStream.getActiveAgentType(h.currentIdeType) : null);
-    if (!agentType) return { success: false, error: 'agentType required' };
-    await h.agentStream.ensureAgentPanelOpen(agentType, h.currentIdeType);
-    if (!h.currentIdeType) return { success: false, error: 'ideType required' };
-    const ok = await h.agentStream.focusAgentEditor(h.getCdp()!, h.currentIdeType, agentType);
+    const sessionId = args?.targetSessionId || h.currentSession?.sessionId;
+    if (!sessionId) return { success: false, error: 'targetSessionId required' };
+    const ok = await h.agentStream.focusSession(h.getCdp()!, sessionId);
     return { success: ok };
 }
 
 // ─── PTY Raw I/O ──────────────────────────────────
 
 export function handlePtyInput(h: CommandHelpers, args: any): CommandResult {
-    const { cliType, data } = args || {};
+    const { cliType, data, targetSessionId } = args || {};
     if (!data) return { success: false, error: 'data required' };
-
-    if (h.ctx.adapters) {
-        const targetCli = cliType || '';
-        if (!targetCli && h.ctx.adapters.size > 0) {
-            const first = h.ctx.adapters.values().next().value;
-            if (first && typeof first.writeRaw === 'function') {
-                first.writeRaw(data);
-                return { success: true };
-            }
-        }
-        const directAdapter = h.ctx.adapters.get(targetCli);
-        if (directAdapter && typeof directAdapter.writeRaw === 'function') {
-            directAdapter.writeRaw(data);
-            return { success: true };
-        }
-        for (const [, adapter] of h.ctx.adapters) {
-            if (adapter.cliType === targetCli && typeof adapter.writeRaw === 'function') {
-                adapter.writeRaw(data);
-                return { success: true };
-            }
-        }
-        for (const [key, adapter] of h.ctx.adapters) {
-            if ((key.startsWith(targetCli) || targetCli.startsWith(adapter.cliType)) && typeof adapter.writeRaw === 'function') {
-                adapter.writeRaw(data);
-                return { success: true };
-            }
-        }
+    const adapter = h.getCliAdapter(targetSessionId || cliType);
+    if (!adapter || typeof adapter.writeRaw !== 'function') {
+        return { success: false, error: `CLI adapter not found: ${targetSessionId || cliType || 'unknown'}` };
     }
-    return { success: false, error: `CLI adapter not found: ${cliType}` };
+    adapter.writeRaw(data);
+    return { success: true };
 }
 
 export function handlePtyResize(h: CommandHelpers, args: any): CommandResult {
-    const { cliType, cols, rows, force } = args || {};
+    const { cliType, cols, rows, force, targetSessionId } = args || {};
     if (!cols || !rows) return { success: false, error: 'cols and rows required' };
-
-    if (h.ctx.adapters) {
-        const targetCli = cliType || '';
-        if (!targetCli && h.ctx.adapters.size > 0) {
-            const first = h.ctx.adapters.values().next().value;
-            if (first && typeof first.resize === 'function') {
-                if (force) { first.resize(cols - 1, rows); setTimeout(() => first.resize(cols, rows), 50); }
-                else { first.resize(cols, rows); }
-                return { success: true };
-            }
-        }
-        const directAdapter = h.ctx.adapters.get(targetCli);
-        if (directAdapter && typeof directAdapter.resize === 'function') {
-            if (force) {
-                directAdapter.resize(cols - 1, rows);
-                setTimeout(() => directAdapter.resize(cols, rows), 50);
-            } else {
-                directAdapter.resize(cols, rows);
-            }
-            return { success: true };
-        }
-        for (const [key, adapter] of h.ctx.adapters) {
-            if ((adapter.cliType === targetCli || key.startsWith(targetCli) || targetCli.startsWith(adapter.cliType)) && typeof adapter.resize === 'function') {
-                if (force) {
-                    adapter.resize(cols - 1, rows);
-                    setTimeout(() => adapter.resize(cols, rows), 50);
-                } else {
-                    adapter.resize(cols, rows);
-                }
-                return { success: true };
-            }
-        }
+    const adapter = h.getCliAdapter(targetSessionId || cliType);
+    if (!adapter || typeof adapter.resize !== 'function') {
+        return { success: false, error: `CLI adapter not found: ${targetSessionId || cliType || 'unknown'}` };
     }
-    return { success: false, error: `CLI adapter not found: ${cliType}` };
+    if (force) {
+        adapter.resize(cols - 1, rows);
+        setTimeout(() => adapter.resize(cols, rows), 50);
+    } else {
+        adapter.resize(cols, rows);
+    }
+    return { success: true };
 }
 
 // ─── Provider Settings ────────────────────────
@@ -216,7 +85,7 @@ export function handleSetProviderSetting(h: CommandHelpers, args: any): CommandR
 
 export async function handleExtensionScript(h: CommandHelpers, args: any, scriptName: string): Promise<CommandResult> {
     const { agentType, ideType } = args || {};
-    LOG.info('Command', `[ExtScript] ${scriptName} agentType=${agentType} ideType=${ideType} _currentIdeType=${h.currentIdeType}`);
+    LOG.info('Command', `[ExtScript] ${scriptName} agentType=${agentType} ideType=${ideType} session=${h.currentSession?.sessionId || ''}`);
     if (!agentType) return { success: false, error: 'agentType is required' };
 
     const loader = h.ctx.providerLoader;
@@ -246,7 +115,9 @@ export async function handleExtensionScript(h: CommandHelpers, args: any, script
     const scriptCode = scriptFn(normalizedArgs);
     if (!scriptCode) return { success: false, error: `Script '${actualScriptName}' returned null` };
 
-    const cdpKey = provider.category === 'ide' ? (h.currentIdeType || agentType) : (h.currentIdeType || ideType);
+    const cdpKey = provider.category === 'ide'
+        ? (h.currentSession?.cdpManagerKey || h.currentManagerKey || agentType)
+        : (h.currentSession?.cdpManagerKey || h.currentManagerKey || ideType);
     LOG.info('Command', `[ExtScript] provider=${provider.type} category=${provider.category} cdpKey=${cdpKey}`);
     const cdp = h.getCdp(cdpKey);
     if (!cdp?.isConnected) return { success: false, error: `No CDP connection for ${cdpKey || 'any'}` };
@@ -255,14 +126,15 @@ export async function handleExtensionScript(h: CommandHelpers, args: any, script
         let result: unknown;
 
         if (provider.category === 'extension') {
-            const sessions = cdp.getAgentSessions();
-            let targetSessionId: string | null = null;
-            for (const [sessionId, target] of sessions) {
-                if (target.agentType === agentType) {
-                    targetSessionId = sessionId;
-                    break;
-                }
+            const runtimeSessionId = h.currentSession?.sessionId || args?.targetSessionId;
+            if (!runtimeSessionId) return { success: false, error: `No target session found for ${agentType}` };
+            const parentSessionId = h.currentSession?.parentSessionId;
+            if (parentSessionId) {
+                await h.agentStream?.setActiveSession(cdp, parentSessionId, runtimeSessionId);
+                await h.agentStream?.syncActiveSession(cdp, parentSessionId);
             }
+            const managed = runtimeSessionId ? h.agentStream?.getManagedSession(runtimeSessionId) : null;
+            const targetSessionId = managed?.cdpSessionId || null;
 
             // IDE-level scripts (model/mode) — try session frame first, fallback to main page
             const IDE_LEVEL_SCRIPTS = ['listModes', 'setMode', 'listModels', 'setModel'];

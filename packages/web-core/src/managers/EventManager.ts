@@ -22,6 +22,7 @@ export interface StatusEventPayload {
     ideType?: string
     ideName?: string
     agentType?: string
+    targetSessionId?: string
     instanceId?: string
     providerType?: string
     providerCategory?: string
@@ -44,7 +45,7 @@ export interface ToastConfig {
     message: string
     type: 'success' | 'info' | 'warning'
     timestamp: number
-    ideId?: string
+    targetKey?: string
     actions?: ToastAction[]
     duration?: number // ms before auto-dismiss (default 5000)
 }
@@ -138,12 +139,12 @@ class EventManager {
         })
     }
 
-    private emitSystemMessage(ideId: string, msg: SystemMessage): void {
-        for (const cb of this.systemMessageCallbacks) cb(ideId, msg)
+    private emitSystemMessage(targetKey: string, msg: SystemMessage): void {
+        for (const cb of this.systemMessageCallbacks) cb(targetKey, msg)
     }
 
-    private emitClearSystemMessage(ideId: string, prefix: string): void {
-        for (const cb of this.clearSystemMessageCallbacks) cb(ideId, prefix)
+    private emitClearSystemMessage(targetKey: string, prefix: string): void {
+        for (const cb of this.clearSystemMessageCallbacks) cb(targetKey, prefix)
     }
 
     // ─── Deduplication ────────────────────────────
@@ -181,8 +182,11 @@ class EventManager {
 
         // Find the IDE entry this event belongs to
         let matchedIde: typeof this.ides[number] | undefined
+        if (payload.targetSessionId) {
+            matchedIde = this.findOwningSession(payload.targetSessionId) || undefined
+        }
         if (payload.ideId) {
-            matchedIde = this.ides.find(i => i.id === payload.ideId)
+            matchedIde = matchedIde || this.ides.find(i => i.id === payload.ideId)
         }
         if (!matchedIde && payload.instanceId) {
             matchedIde = this.ides.find(i =>
@@ -218,28 +222,40 @@ class EventManager {
         return rawIdeId
     }
 
-    private resolveConversationKey(payload: StatusEventPayload): string | null {
-        if (!payload.ideId) return null
-
-        // Agent-stream tabs are keyed as "{ideId}:{agentType}" while native/CLI/ACP
-        // conversations use the resolved IDE/instance id directly.
-        if (payload.providerCategory === 'extension') {
-            const streamType = payload.agentType || payload.providerType
-            if (streamType) return `${payload.ideId}:${streamType}`
+    private findOwningSession(targetSessionId: string): typeof this.ides[number] | null {
+        for (const ide of this.ides) {
+            if (ide.id === targetSessionId || (ide as any).sessionId === targetSessionId) {
+                return ide
+            }
+            const streams = Array.isArray((ide as any).agentStreams) ? (ide as any).agentStreams : []
+            if (streams.some((stream: any) => stream?.sessionId === targetSessionId)) {
+                return ide
+            }
         }
+        return null
+    }
 
+    private resolveActionRouteTarget(payload: StatusEventPayload): string | null {
+        if (payload.ideId) {
+            const agentType = payload.agentType || payload.ideType || ''
+            return this.resolveRouteId(payload.ideId, agentType)
+        }
+        if (payload.targetSessionId) {
+            const owner = this.findOwningSession(payload.targetSessionId)
+            return owner?.id || owner?.daemonId || null
+        }
+        return null
+    }
+
+    private resolveConversationKey(payload: StatusEventPayload): string | null {
+        if (payload.targetSessionId) return payload.targetSessionId
+        if (!payload.ideId) return null
         return payload.ideId
     }
 
     // ─── Main entry point ─────────────────────────
 
     handleRawEvent(payload: StatusEventPayload, _source: 'ws' | 'p2p'): void {
-        // Dedup key: ideType + event + chatTitle (NOT ideId/instanceId)
-        // WS relay assigns ideId = DO UUID, P2P sends instanceId = provider key.
-        // Using those in the key causes dedup failure between WS and P2P.
-        const dedupKey = `${payload.ideType || payload.providerType || ''}:${payload.event}:${payload.chatTitle || ''}`
-        if (this.isDuplicate(dedupKey)) return
-
         // Resolve ideId from instanceId if not present
         // instanceId from daemon is like 'antigravity' or 'cursor_remote_vs'
         // Frontend ideId is like '{doId}:ide:{instanceId}'
@@ -253,6 +269,9 @@ class EventManager {
         }
 
         const conversationKey = this.resolveConversationKey(payload)
+        const dedupTarget = conversationKey || payload.instanceId || payload.ideType || payload.providerType || ''
+        const dedupKey = `${dedupTarget}:${payload.event}:${payload.chatTitle || ''}`
+        if (this.isDuplicate(dedupKey)) return
 
         // Resolve ideLabel: find the owning daemon for this event's IDE
         let ideLabel = formatIdeType(payload.ideType || '')
@@ -316,8 +335,9 @@ class EventManager {
             }
 
             // Inline action toast with modal buttons
-            if (payload.ideId && payload.modalButtons?.length && this.resolveActionFn) {
-                const rawIdeId = payload.ideId
+            if (payload.modalButtons?.length && this.resolveActionFn) {
+                const routeId = this.resolveActionRouteTarget(payload)
+                if (!routeId) return
                 const agentType = payload.agentType || payload.ideType || ''
                 const ideType = payload.ideType || ''
                 const modalBtns = payload.modalButtons
@@ -336,7 +356,6 @@ class EventManager {
                         label: cleanBtnText(btnText),
                         variant: (isPrimary ? 'primary' : isDanger ? 'danger' : 'default') as 'primary' | 'danger' | 'default',
                         onClick: () => {
-                            const routeId = this.resolveRouteId(rawIdeId, agentType)
                             const isApprove = /^(run|approve|accept|yes|allow|always|proceed|save)/.test(clean)
                             resolveAction(routeId, 'resolve_action', {
                                 action: isApprove ? 'approve' : 'reject',
@@ -344,6 +363,7 @@ class EventManager {
                                 buttonIndex: idx,
                                 agentType,
                                 ideType,
+                                ...(payload.targetSessionId && { targetSessionId: payload.targetSessionId }),
                             })
                         },
                     }
@@ -356,7 +376,7 @@ class EventManager {
                 const toastId = Date.now()
                 this.emitToast({
                     id: toastId, message: contextMsg, type, timestamp: toastId,
-                    ideId: conversationKey || rawIdeId, actions, duration: 15000,
+                    targetKey: conversationKey || routeId, actions, duration: 15000,
                 })
                 msg = '' // skip default toast
             }
@@ -442,7 +462,7 @@ class EventManager {
             const toastId = Date.now()
             this.emitToast({
                 id: toastId, message: msg, type, timestamp: toastId,
-                ideId: conversationKey || payload.ideId, duration: 5000,
+                targetKey: conversationKey || payload.ideId, duration: 5000,
             })
         }
     }

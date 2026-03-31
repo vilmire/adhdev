@@ -41,7 +41,7 @@ export type {
 export type { ProviderErrorReason } from './providers/provider-instance.js';
 
 // Local import for use in Managed*Entry types below
-import type { ActiveChatData as _ActiveChatData } from './providers/provider-instance.js';
+import type { ActiveChatData as _ActiveChatData, ProviderErrorReason as _ProviderErrorReason } from './providers/provider-instance.js';
 import type { WorkspaceEntry } from './config/workspaces.js';
 
 // Re-export WorkspaceEntry for downstream consumers
@@ -51,63 +51,58 @@ export type { WorkspaceEntry } from './config/workspaces.js';
 // These define the shape of data sent by DaemonStatusReporter
 // and consumed by web-core and downstream consumers.
 
-/** IDE entry as reported by daemon to dashboard */
-export interface ManagedIdeEntry {
-    ideType: string;
-    ideVersion: string;
-    instanceId: string;
-    workspace: string | null;
-    terminals: number;
-    aiAgents: unknown[];
-    activeChat: _ActiveChatData | null;
-    chats: unknown[];
-    agentStreams: ManagedAgentStream[];
-    cdpConnected: boolean;
-    currentModel?: string;
-    currentPlan?: string;
-    currentAutoApprove?: string;
-}
-
-/** CLI entry as reported by daemon to dashboard */
-export interface ManagedCliEntry {
-    id: string;
-    instanceId: string;
-    cliType: string;
-    cliName: string;
-    status: string;
-    mode: 'terminal';
-    workspace: string;
-    activeChat: _ActiveChatData | null;
-}
-
-/** ACP entry as reported by daemon to dashboard */
-export interface ManagedAcpEntry {
-    id: string;
-    acpType: string;
-    acpName: string;
-    status: string;
-    mode: 'chat';
-    workspace: string;
-    activeChat: _ActiveChatData | null;
-    currentModel?: string;
-    currentPlan?: string;
-    acpConfigOptions?: AcpConfigOption[];
-    acpModes?: AcpMode[];
-    /** Error details */
-    errorMessage?: string;
-    errorReason?: 'not_installed' | 'auth_failed' | 'spawn_error' | 'init_failed' | 'crash' | 'timeout' | 'cdp_error' | 'disconnected';
-}
-
-/** Agent stream within an IDE (extension status) */
-export interface ManagedAgentStream {
+/** Agent stream snapshot carried by flattened UI entries. */
+export interface AgentSessionStream {
+    sessionId?: string;
+    parentSessionId?: string | null;
     agentType: string;
     agentName: string;
     extensionId: string;
+    transport?: SessionTransport;
     status: string;
     messages: ChatMessage[];
     inputContent: string;
     model?: string;
     activeModal: { message: string; buttons: string[] } | null;
+}
+
+export type SessionTransport = 'cdp-page' | 'cdp-webview' | 'pty' | 'acp';
+
+export type SessionKind = 'workspace' | 'agent';
+
+export type SessionCapability =
+    | 'read_chat'
+    | 'send_message'
+    | 'new_session'
+    | 'list_sessions'
+    | 'switch_session'
+    | 'resolve_action'
+    | 'terminal_io'
+    | 'resize_terminal'
+    | 'change_model'
+    | 'set_mode'
+    | 'set_thought_level';
+
+export interface SessionEntry {
+    id: string;
+    parentId: string | null;
+    providerType: string;
+    providerName: string;
+    kind: SessionKind;
+    transport: SessionTransport;
+    status: 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
+    title: string;
+    workspace: string | null;
+    activeChat: _ActiveChatData | null;
+    capabilities: SessionCapability[];
+    cdpConnected?: boolean;
+    currentModel?: string;
+    currentPlan?: string;
+    currentAutoApprove?: string;
+    acpConfigOptions?: AcpConfigOption[];
+    acpModes?: AcpMode[];
+    errorMessage?: string;
+    errorReason?: _ProviderErrorReason;
 }
 
 /** Available provider information */
@@ -188,12 +183,8 @@ export interface StatusReportPayload {
     detectedIdes: DetectedIdeInfo[];
     /** P2P state */
     p2p?: { available: boolean; state: string; peers: number; screenshotActive?: boolean };
-    /** Managed IDE instances */
-    managedIdes: ManagedIdeEntry[];
-    /** Managed CLI instances */
-    managedClis: ManagedCliEntry[];
-    /** Managed ACP instances */
-    managedAcps: ManagedAcpEntry[];
+    /** Canonical daemon runtime sessions */
+    sessions: SessionEntry[];
     /** Saved workspaces */
     workspaces?: WorkspaceEntry[];
     defaultWorkspaceId?: string | null;
