@@ -828,7 +828,10 @@ export class DaemonCdpManager {
     async attachToAgent(target: AgentWebviewTarget): Promise<string | null> {
         if (!this.isConnected) return null;
         for (const [sid, t] of this.agentSessions) {
-            if (t.agentType === target.agentType) return sid;
+            if (t.targetId === target.targetId) return sid;
+            if (t.agentType === target.agentType && t.targetId !== target.targetId) {
+                await this.detachAgent(sid).catch(() => { });
+            }
         }
         try {
  // Attach via Browser WS (iframes can only be attached from browser-level)
@@ -971,6 +974,21 @@ export class DaemonCdpManager {
 
     private async getCurrentPageWebviewUrls(): Promise<Set<string>> {
         if (!this.isConnected) return new Set();
+
+        try {
+            const urls = new Set<string>();
+            const { frameTree } = await this.sendInternal('Page.getFrameTree', {}, 5000);
+            const visit = (node: any) => {
+                const url = node?.frame?.url;
+                if (typeof url === 'string' && url.includes('vscode-webview')) {
+                    urls.add(url);
+                }
+                for (const child of node?.childFrames || []) visit(child);
+            };
+            if (frameTree) visit(frameTree);
+            if (urls.size > 0) return urls;
+        } catch { /* fall through to DOM scan */ }
+
         try {
             const raw = await this.evaluate(
                 `JSON.stringify(Array.from(document.querySelectorAll('iframe,webview'))
