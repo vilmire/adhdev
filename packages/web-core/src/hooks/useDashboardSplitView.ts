@@ -40,7 +40,6 @@ function buildDefaultSizes(count: number) {
 export function useDashboardSplitView({
     groupAssignments,
     setGroupAssignments,
-    focusedGroup,
     setFocusedGroup,
     setGroupActiveTabIds,
     setGroupTabOrders,

@@ -31,7 +31,7 @@ export interface ModelModeBarProps {
 export default function DashboardModelModeBar({ ideId, sessionId, ideType, agentType, agentName, serverModel, serverMode, acpConfigOptions, acpModes }: ModelModeBarProps) {
     const { sendCommand } = useTransport();
     const isAcp = !!(acpConfigOptions || acpModes);
-    const cacheKey = `${ideId}:${agentType}`;
+    const cacheKey = `${ideId}:${sessionId || agentType}`;
     const cached = _modelModeCache.get(cacheKey);
 
     const [modelOpen, setModelOpen] = useState(false);
@@ -99,7 +99,7 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, agent
         } else {
             setModels([]); setModes([]);
         }
-    }, [ideId, agentType]);
+    }, [ideId, agentType, sessionId]);
 
     // Reflect real-time server value updates (ignore for 5s after local changes)
     useEffect(() => {

@@ -6,7 +6,6 @@ import { standaloneConnectionManager } from './connection-manager'
 
 setupCompat({
     connectionManager: standaloneConnectionManager,
-    p2pManager: standaloneConnectionManager,
 })
 
 createRoot(document.getElementById('root')!).render(

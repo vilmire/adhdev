@@ -19,7 +19,7 @@ interface PaneGroupContentProps {
     handleModalButton: (button: string) => void
     handleRelaunch: () => void
     agentInput: string
-    setAgentInput: (value: string) => void
+    setAgentInput: (value: string | ((prev: string) => string)) => void
     handleSendChat: () => void
     isSendingChat: boolean
     handleFocusAgent: () => void

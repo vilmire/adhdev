@@ -15,6 +15,7 @@ import { deriveStreamConversationStatus } from '../utils/daemon-utils';
 
 type StreamTab = AgentSessionStream & {
     sessionId?: string;
+    title?: string;
     parentSessionId?: string | null;
 };
 
@@ -22,6 +23,10 @@ interface Props {
     ideId: string;
     agentStreams: StreamTab[];
     sendCommand: (commandType: string, data?: any) => Promise<void>;
+}
+
+function getStreamKey(stream: StreamTab): string {
+    return stream.sessionId || (stream as any).instanceId || stream.agentType;
 }
 
 export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: Props) {
@@ -32,11 +37,11 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
     // Auto-select first agent stream
     useEffect(() => {
         if (!activeAgent && agentStreams.length > 0) {
-            setActiveAgent(agentStreams[0].agentType);
+            setActiveAgent(getStreamKey(agentStreams[0]));
         }
     }, [agentStreams, activeAgent]);
 
-    const activeStream = agentStreams.find(s => s.agentType === activeAgent);
+    const activeStream = agentStreams.find(s => getStreamKey(s) === activeAgent);
 
     // Derive status matching Dashboard convention
     const derivedStatus = useMemo(() => {
@@ -57,18 +62,18 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
                 role: m.role,
                 content: m.content,
                 kind: (m as any).kind,
-                id: `${activeStream.agentType}-${i}`,
+                id: `${getStreamKey(activeStream)}-${i}`,
                 receivedAt: m.timestamp,
             })),
             ideType: activeStream.agentType,
             workspaceName: '',
-            displayPrimary: activeStream.agentName,
+            displayPrimary: activeStream.title || activeStream.agentName,
             displaySecondary: '',
             cdpConnected: true,
             modalButtons: activeStream.activeModal?.buttons,
             modalMessage: activeStream.activeModal?.message,
             streamSource: 'agent-stream' as const,
-            tabKey: `agent-stream-${activeStream.agentType}`,
+            tabKey: `agent-stream-${getStreamKey(activeStream)}`,
         };
     }, [activeStream, ideId, derivedStatus]);
 
@@ -125,15 +130,16 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
             {/* Agent Stream Tabs — consistent with dashboard tab style */}
             <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border-subtle bg-[var(--surface-primary)] overflow-x-auto shrink-0">
                 {agentStreams.map(stream => {
-                    const isActive = stream.agentType === activeAgent;
+                    const streamKey = getStreamKey(stream);
+                    const isActive = streamKey === activeAgent;
                     const normalizedStatus = deriveStreamConversationStatus(stream);
                     const isGenerating = normalizedStatus === 'generating';
                     const needsApproval = normalizedStatus === 'waiting_approval';
 
                     return (
                         <button
-                            key={stream.agentType}
-                            onClick={() => setActiveAgent(stream.agentType)}
+                            key={streamKey}
+                            onClick={() => setActiveAgent(streamKey)}
                             className={`flex items-center gap-1.5 px-3 py-1.5 border-none rounded-lg text-[12px] whitespace-nowrap cursor-pointer transition-all duration-150 ${
                                 isActive
                                     ? 'bg-accent/10 text-accent font-semibold'
@@ -147,7 +153,7 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
                                     boxShadow: isGenerating ? '0 0 6px var(--accent-primary)' : 'none',
                                 }}
                             />
-                            {stream.agentName}
+                            {stream.title || stream.agentName}
                             {needsApproval && (
                                 <span className="text-[9px] px-1.5 py-px rounded-full bg-yellow-500/15 text-yellow-500 font-bold">
                                     !

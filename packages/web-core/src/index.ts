@@ -58,7 +58,6 @@ export { default as ConnectionBanner } from './components/dashboard/ConnectionBa
 export { default as DashboardHeader } from './components/dashboard/DashboardHeader'
 export { default as HistoryModal } from './components/dashboard/HistoryModal'
 export { default as DashboardModelModeBar } from './components/dashboard/ModelModeBar'
-export { default as SessionTabBar } from './components/dashboard/SessionTabBar'
 export { default as ToastContainer } from './components/dashboard/ToastContainer'
 export { buildConversations } from './components/dashboard/buildConversations'
 export type { ActiveConversation } from './components/dashboard/types'
@@ -74,6 +73,7 @@ export {
 export type { IdeSessionSummary, CliSessionSummary, AcpSessionSummary } from './utils/daemon-utils'
 export { statusPayloadToEntries } from './utils/status-transform'
 export type { StatusTransformOptions } from './utils/status-transform'
+export { parseDaemonRouteId, applyRouteTarget, extractDaemonId, collectDaemonIds } from './utils/route-id'
 export { SUPPORTED_IDES, SUPPORTED_CLI_AGENTS, SUPPORTED_EXTENSIONS, SUPPORTED_ACP_COUNT } from './constants/supported'
 export type { SupportedEntry } from './constants/supported'
 
@@ -126,7 +126,7 @@ export { useBrowserNotifications, requestNotificationPermission } from './hooks/
 export { useHiddenTabs } from './hooks/useHiddenTabs'
 
 // ── Compat layer (gradual migration) ──
-export { useDaemons, dashboardWS, connectionManager, p2pManager, setupCompat } from './compat'
+export { useDaemons, dashboardWS, connectionManager, setupCompat } from './compat'
 
 // ── Pages ──
 export { default as Dashboard } from './pages/Dashboard'

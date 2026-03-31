@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, type Dispatch, type SetStateAction } from '
 import type { ActiveConversation } from '../components/dashboard/types'
 import { isCliConv } from '../components/dashboard/types'
 import { ptyBus } from '../components/dashboard/ptyBus'
-import { p2pManager } from '../compat'
+import { connectionManager } from '../compat'
 import { requestNotificationPermission, useBrowserNotifications } from './useBrowserNotifications'
 
 interface UseDashboardConversationMetaOptions {
@@ -107,7 +107,7 @@ export function useDashboardConversationMeta({
             }
         }
 
-        const unsubP2P = p2pManager.onPtyOutput(writePty)
+        const unsubP2P = connectionManager.onPtyOutput(writePty)
         return () => { unsubP2P() }
     }, [conversations])
 

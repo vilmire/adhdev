@@ -274,7 +274,11 @@ export interface CompactDaemon {
 
 export function expandCompactDaemons(
     compactDaemons: CompactDaemon[],
-    options?: { skipDaemonId?: (id: string) => boolean }
+    options?: {
+        skipDaemonId?: (id: string) => boolean
+        /** Keep daemon-level metadata but strip all session expansion for matching daemons. */
+        daemonOnlyId?: (id: string) => boolean
+    }
 ): { entries: DaemonData[]; allDaemonIds: Set<string> } {
     const entries: DaemonData[] = []
     const allDaemonIds = new Set<string>()
@@ -286,7 +290,8 @@ export function expandCompactDaemons(
 
         const ts = d.timestamp || d.ts || Date.now()
         const cdp = d.cdpConnected ?? d.cdp
-        const sessions = d.sessions || []
+        const daemonOnly = options?.daemonOnlyId?.(d.id) === true
+        const sessions = daemonOnly ? [] : (d.sessions || [])
         const topLevelIdeSessions = sessions.filter(s => !s.parentId && s.kind === 'workspace' && s.transport === 'cdp-page')
         const topLevelCliSessions = sessions.filter(s => !s.parentId && s.kind === 'agent' && s.transport === 'pty')
         const topLevelAcpSessions = sessions.filter(s => !s.parentId && s.kind === 'agent' && s.transport === 'acp')
@@ -325,12 +330,14 @@ export function expandCompactDaemons(
                 workspace: ide.workspace || null,
                 agentStreams: childSessions.map(child => ({
                     sessionId: child.id,
+                    instanceId: child.id,
                     parentSessionId: child.parentId,
                     agentType: child.providerType,
                     agentName: child.providerName || child.providerType,
                     extensionId: child.providerType,
                     transport: child.transport,
                     status: child.status || 'idle',
+                    title: child.title,
                     messages: [],
                     inputContent: '',
                     activeModal: null,

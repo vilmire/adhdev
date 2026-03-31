@@ -28,6 +28,10 @@ export function getWorkspaceName(ide: DaemonData): string {
     return parts.length > 0 ? parts[parts.length - 1] : ws;
 }
 
+function getStreamKey(stream: { sessionId?: string; instanceId?: string; agentType: string }): string {
+    return stream.sessionId || stream.instanceId || stream.agentType;
+}
+
 function getLocalMessages(
     localUserMessages: Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>,
     keys: Array<string | undefined>,
@@ -75,7 +79,7 @@ export function buildConversations(
         const workspaceName = getWorkspaceName(ide);
         const ideLabel = formatIdeType(ide.type);
         const rawStreams = ide.agentStreams;
-        const streams: { agentType: string; agentName: string; status: string; messages: any[]; activeModal?: { message: string; buttons: string[] } }[] = Array.isArray(rawStreams) ? rawStreams.map(s => ({ ...s, activeModal: s.activeModal ?? undefined })) : [];
+        const streams: { sessionId?: string; instanceId?: string; agentType: string; agentName: string; status: string; title?: string; messages: any[]; activeModal?: { message: string; buttons: string[] } }[] = Array.isArray(rawStreams) ? rawStreams.map(s => ({ ...s, activeModal: s.activeModal ?? undefined })) : [];
         const useConversationFirst = isConversationFirstIde(ide);
 
         // Parent IDE chat title — shared with extension tabs
@@ -143,9 +147,10 @@ export function buildConversations(
         for (const stream of streams) {
             const hasModal = stream.activeModal && Array.isArray(stream.activeModal.buttons) && stream.activeModal.buttons.length > 0;
             const streamStatus = deriveStreamConversationStatus(stream);
-            const streamTabKey = `${ide.id}:${stream.agentType}`;
+            const streamKey = getStreamKey(stream);
+            const streamTabKey = `${ide.id}:${streamKey}`;
             const serverMsgs = stream.messages || [];
-            const localMsgs = getLocalMessages(localUserMessages, [streamTabKey, (stream as any).sessionId]);
+            const localMsgs = getLocalMessages(localUserMessages, [streamTabKey, stream.sessionId, stream.instanceId]);
             const serverContentCounts = new Map<string, number>();
             serverMsgs.filter((m: any) => m.role === 'user').forEach((m: any) => {
                 serverContentCounts.set(m.content, (serverContentCounts.get(m.content) || 0) + 1);
@@ -164,11 +169,11 @@ export function buildConversations(
                 agentName: stream.agentName,
                 agentType: stream.agentType,
                 status: streamStatus,
-                title: '',
+                title: stream.title || '',
                 messages: [...serverMsgs, ...pendingLocal],
                 ideType: stream.agentType,
                 workspaceName,
-                displayPrimary: parentTitle || workspaceName || stream.agentName,
+                displayPrimary: (stream.title && String(stream.title).trim()) || parentTitle || workspaceName || stream.agentName,
                 displaySecondary: `${ideLabel}·${stream.agentName}`,
                 cdpConnected: ide.cdpConnected,
                 modalButtons: hasModal ? stream.activeModal!.buttons : undefined,

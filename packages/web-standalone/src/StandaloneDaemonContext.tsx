@@ -9,6 +9,7 @@ import {
     BaseDaemonProvider,
     useBaseDaemonActions,
     useBaseDaemons,
+    applyRouteTarget,
     statusPayloadToEntries,
 } from '@adhdev/web-core'
 import type { ConnectionStatus } from '@adhdev/web-core'
@@ -41,25 +42,11 @@ function mapStandaloneConnectionState(status: ConnectionStatus): ConnectionStatu
     return status === 'connected' ? 'connected' : status
 }
 
-function resolveCommandRoute(routeId: string, payload: Record<string, unknown> = {}) {
-    const parts = routeId.split(':')
-    if (parts.length >= 3 && (parts[1] === 'ide' || parts[1] === 'cli' || parts[1] === 'acp')) {
-        return {
-            daemonId: parts[0],
-            payload: {
-                ...payload,
-                targetSessionId: payload.targetSessionId || parts.slice(2).join(':'),
-            },
-        }
-    }
-    return { daemonId: routeId, payload }
-}
-
 /** Send a command via the shared WS connection. Falls back to HTTP if WS unavailable. */
 export async function sendCommandViaWs(
     daemonId: string, command: string, data?: Record<string, unknown>
 ): Promise<any> {
-    const route = resolveCommandRoute(daemonId, data || {})
+    const route = applyRouteTarget(daemonId, data || {})
     const ws = _wsInstance
     if (ws && ws.readyState === WebSocket.OPEN) {
         const requestId = `req_${++_reqCounter}_${Date.now()}`

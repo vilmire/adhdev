@@ -74,16 +74,9 @@ class ConnectionManagerStub {
 
 export let connectionManager: any = new ConnectionManagerStub()
 
-/** @deprecated Use connectionManager instead */
-export let p2pManager: any = connectionManager
-
 /** Inject real implementations from the host app */
-export function setupCompat(deps: { dashboardWS?: any; connectionManager?: any; p2pManager?: any; useDaemonsHook?: any }) {
+export function setupCompat(deps: { dashboardWS?: any; connectionManager?: any; useDaemonsHook?: any }) {
     if (deps.dashboardWS) dashboardWS = deps.dashboardWS
-    if (deps.connectionManager) {
-        connectionManager = deps.connectionManager
-        p2pManager = deps.connectionManager
-    }
-    if (deps.p2pManager) p2pManager = deps.p2pManager
+    if (deps.connectionManager) connectionManager = deps.connectionManager
     if (deps.useDaemonsHook) _useDaemonsHook = deps.useDaemonsHook
 }

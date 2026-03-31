@@ -52,7 +52,6 @@ export default function DashboardPaneWorkspace({
     setActionLogs,
     isStandalone,
     userName,
-    focusedGroup,
     setFocusedGroup,
     moveTabToGroup,
     splitTabRelative,

@@ -24,6 +24,10 @@ interface IDEPageProps {
     renderHeaderActions?: (context: { daemonId: string; ideInstanceId: string }) => React.ReactNode
 }
 
+function getStreamKey(stream: { sessionId?: string; instanceId?: string; agentType: string }): string {
+    return stream.sessionId || stream.instanceId || stream.agentType
+}
+
 
 // ─── Helper: extract doId from composite ideId ─
 function extractDoId(ideId: string): string {
@@ -102,6 +106,7 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
     const streamConvs: ActiveConversation[] = useMemo(() =>
         agentStreams.map(stream => {
             const streamStatus = deriveStreamConversationStatus(stream);
+            const streamKey = getStreamKey(stream as any);
             return {
                 ideId: ideId || '',
                 sessionId: (stream as any).sessionId || (stream as any).instanceId,
@@ -109,20 +114,20 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
                 agentName: stream.agentName,
                 agentType: stream.agentType,
                 status: streamStatus,
-                title: '',
+                title: (stream as any).title || '',
                 messages: stream.messages.map((m: any, i: number) => ({
                     role: m.role, content: m.content, kind: (m as any).kind,
-                    id: `${stream.agentType}-${i}`, receivedAt: m.timestamp,
+                    id: `${streamKey}-${i}`, receivedAt: m.timestamp,
                 })),
                 ideType: stream.agentType,
                 workspaceName: '',
-                displayPrimary: stream.agentName,
+                displayPrimary: (stream as any).title || stream.agentName,
                 displaySecondary: '',
                 cdpConnected: true,
                 modalButtons: stream.activeModal?.buttons,
                 modalMessage: stream.activeModal?.message,
                 streamSource: 'agent-stream' as const,
-                tabKey: `agent-stream-${stream.agentType}`,
+                tabKey: `agent-stream-${streamKey}`,
             };
         }),
     [agentStreams, ideId, doId])
@@ -130,7 +135,7 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
     // Currently active conversation (native or extension)
     const activeConv = useMemo(() => {
         if (activeChatTab === 'native') return nativeConv;
-        return streamConvs.find(c => c.agentType === activeChatTab) || nativeConv;
+        return streamConvs.find(c => c.tabKey === activeChatTab) || nativeConv;
     }, [activeChatTab, nativeConv, streamConvs])
 
     const getProviderArgs = useCallback(() => (
@@ -221,7 +226,7 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
                 text: message,
                 waitForResponse: true,
                 ...(activeConv.sessionId && { targetSessionId: activeConv.sessionId }),
-                ...(activeChatTab !== 'native' && { agentType: activeChatTab }),
+                ...(activeChatTab !== 'native' && { agentType: activeConv.agentType }),
             })
         } catch (e) {
             console.error('[IDE] Send failed:', e)
@@ -310,6 +315,13 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
         }
     }, [historyModalOpen, ideData?.chats, isRefreshingHistory, handleRefreshHistory])
 
+    useEffect(() => {
+        if (activeChatTab === 'native') return
+        if (!streamConvs.some(conv => conv.tabKey === activeChatTab)) {
+            setActiveChatTab(streamConvs[0]?.tabKey || 'native')
+        }
+    }, [activeChatTab, streamConvs])
+
 
 
     // ─── Derived values ─────────────────────────────
@@ -382,15 +394,17 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
                                     {ideName}
                                 </button>
                                 {agentStreams.map(stream => {
-                                    const isActive = activeChatTab === stream.agentType;
+                                    const streamKey = getStreamKey(stream as any);
+                                    const tabKey = `agent-stream-${streamKey}`;
+                                    const isActive = activeChatTab === tabKey;
                                     const normalizedStatus = deriveStreamConversationStatus(stream);
                                     const needsApproval = normalizedStatus === 'waiting_approval';
                                     const isGenerating = normalizedStatus === 'generating';
                                     return (
                                         <button
-                                            key={stream.agentType}
+                                            key={tabKey}
                                             className={`ide-chat-tab ${isActive ? 'active' : ''}`}
-                                            onClick={() => setActiveChatTab(stream.agentType)}
+                                            onClick={() => setActiveChatTab(tabKey)}
                                         >
                                             <span
                                                 style={{
@@ -399,7 +413,7 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
                                                     boxShadow: isGenerating ? '0 0 6px var(--accent-primary)' : 'none',
                                                 }}
                                             />
-                                            {stream.agentName}
+                                            {(stream as any).title || stream.agentName}
                                             {needsApproval && <span className="ide-ext-badge" style={{background:'#f59e0b22',color:'#f59e0b',marginLeft:4}}>!</span>}
                                         </button>
                                     );

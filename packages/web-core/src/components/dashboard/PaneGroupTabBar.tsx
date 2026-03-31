@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { useTabShortcuts } from '../../hooks/useTabShortcuts'
-import { isCliConv } from './types'
 import type { ActiveConversation } from './types'
 
 interface PaneGroupTabBarProps {

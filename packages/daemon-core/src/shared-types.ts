@@ -54,12 +54,14 @@ export type { WorkspaceEntry } from './config/workspaces.js';
 /** Agent stream snapshot carried by flattened UI entries. */
 export interface AgentSessionStream {
     sessionId?: string;
+    instanceId?: string;
     parentSessionId?: string | null;
     agentType: string;
     agentName: string;
     extensionId: string;
     transport?: SessionTransport;
     status: string;
+    title?: string;
     messages: ChatMessage[];
     inputContent: string;
     model?: string;
