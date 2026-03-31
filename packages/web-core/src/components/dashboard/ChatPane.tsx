@@ -130,6 +130,7 @@ export default function ChatPane({
         );
         return [...uniqueHistory, ...live];
     })();
+    const panelLabel = activeConv.displayPrimary || activeConv.agentName || 'Agent'
 
     return (
         <>
@@ -172,7 +173,7 @@ export default function ChatPane({
                                 <div className="text-3xl opacity-60"><IconPlug size={28} /></div>
                                 <div className="text-[13px] opacity-50">Agent not monitored</div>
                                 <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
-                                    {isFocusingAgent ? '⌛ Switching...' : <span className="flex items-center gap-1.5"><IconFolder size={14} /> Open {activeConv.displayPrimary} Panel</span>}
+                                    {isFocusingAgent ? '⌛ Switching...' : <span className="flex items-center gap-1.5"><IconFolder size={14} /> Open {panelLabel} Panel</span>}
                                 </button>
                                 <div className="text-[11px] opacity-35 max-w-[280px]">Click to switch monitoring to this agent</div>
                             </div>
@@ -181,7 +182,7 @@ export default function ChatPane({
                                 <div className="text-3xl opacity-60"><IconEye size={28} /></div>
                                 <div className="text-[13px] opacity-50">Agent panel is not visible yet</div>
                                 <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
-                                    {isFocusingAgent ? '⌛ Opening...' : <span className="flex items-center gap-1.5"><IconFolder size={14} /> Open {activeConv.displayPrimary} Panel</span>}
+                                    {isFocusingAgent ? '⌛ Opening...' : <span className="flex items-center gap-1.5"><IconFolder size={14} /> Open {panelLabel} Panel</span>}
                                 </button>
                                 <div className="text-[11px] opacity-35 max-w-[280px]">Open the agent panel or chat view in the app you are using to start viewing messages</div>
                             </div>
@@ -198,13 +199,20 @@ export default function ChatPane({
             {/* Model/Mode Bar */}
             {!isCliConv(activeConv) && (() => {
                 const ideEntry = ides.find(i => i.id === activeConv.ideId);
+                const isNativeConversation = activeConv.streamSource !== 'agent-stream'
+                const modelBarAgentType = isNativeConversation
+                    ? activeConv.ideType
+                    : activeConv.agentType
+                const modelBarAgentName = isNativeConversation
+                    ? activeConv.agentName
+                    : activeConv.agentName
                 return (
                     <DashboardModelModeBar
                         ideId={activeConv.ideId}
                         sessionId={activeConv.sessionId}
                         ideType={activeConv.ideType}
-                        agentType={activeConv.streamSource === 'agent-stream' ? activeConv.agentType : ((ideEntry as any)?.agents?.[0]?.type || activeConv.ideType)}
-                        agentName={activeConv.streamSource === 'agent-stream' ? activeConv.agentName : ((ideEntry as any)?.agents?.[0]?.name || activeConv.agentName)}
+                        agentType={modelBarAgentType}
+                        agentName={modelBarAgentName}
                         serverModel={(ideEntry as any)?.currentModel || undefined}
                         serverMode={(ideEntry as any)?.currentPlan || undefined}
                         acpConfigOptions={isAcpConv(activeConv) ? (ideEntry as any)?.acpConfigOptions : undefined}
@@ -220,7 +228,7 @@ export default function ChatPane({
                         <input
                             ref={chatInputRef}
                             type="text"
-                            placeholder={`Send message to ${activeConv.displayPrimary}...`}
+                            placeholder={`Send message to ${panelLabel}...`}
                             value={agentInput}
                             onChange={e => setAgentInput(e.target.value)}
                             onPaste={e => {

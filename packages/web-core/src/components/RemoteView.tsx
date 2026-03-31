@@ -1,4 +1,8 @@
 import { useRef, useEffect, useState, KeyboardEvent, MouseEvent } from 'react';
+import RemoteCursorOverlay from './remote/RemoteCursorOverlay';
+import RemoteViewToolbar from './remote/RemoteViewToolbar';
+import RemoteWaitingState from './remote/RemoteWaitingState';
+import { useRemoteTouchControls } from '../hooks/useRemoteTouchControls';
 
 /** Connection state */
 type ConnectionState = 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed';
@@ -47,28 +51,13 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
     const [panY, setPanY] = useState(0);
 
     const lastWheelTime = useRef(0);
-    const onActionRef = useRef(onAction);
-
-    // Touch control refs
-    const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
-    const touchLastRef = useRef<{ x: number; y: number } | null>(null);
-    const isPanningRef = useRef(false);
-    const longPressTimerRef = useRef<any>(null);
-    const lastTapTimeRef = useRef<number>(0);
-    const pinchStartDistRef = useRef<number | null>(null);
-    const pinchStartZoomRef = useRef<number>(1);
-    const pinchMidRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-    const wasPinchingRef = useRef(false);  // Tracks if we were in a pinch gesture (suppresses accidental clicks)
     const zoomRef = useRef(zoom);
     const panXRef = useRef(panX);
     const panYRef = useRef(panY);
-    const inputModeRef = useRef(inputMode);
 
     useEffect(() => { zoomRef.current = zoom; }, [zoom]);
     useEffect(() => { panXRef.current = panX; }, [panX]);
     useEffect(() => { panYRef.current = panY; }, [panY]);
-    useEffect(() => { onActionRef.current = onAction; }, [onAction]);
-    useEffect(() => { inputModeRef.current = inputMode; }, [inputMode]);
 
     // Auto-focus on mount
     useEffect(() => { containerRef.current?.focus(); }, []);
@@ -265,343 +254,32 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
         return () => container.removeEventListener('wheel', handleNativeWheel);
     }, [onAction]);
 
-    // ─── Touch Controls (mobile) ───────────────────────────────────────────────
-    // Mouse cursor state (Google Remote Desktop style)
-    const [cursorPos, setCursorPos] = useState<{ nx: number; ny: number } | null>(null);
-    const cursorPosRef = useRef<{ nx: number; ny: number } | null>(null);
-
-    // Initialize cursor to center when entering mouse mode
-    useEffect(() => {
-        if (inputMode === 'mouse' && !cursorPosRef.current) {
-            const initial = { nx: 0.5, ny: 0.5 };
-            cursorPosRef.current = initial;
-            setCursorPos(initial);
-        }
-    }, [inputMode]);
-
-    useEffect(() => {
-        const container = containerRef.current;
-        if (!container) return;
-
-        const getTouchImgPos = (touch: Touch) => {
-            if (!imgRef.current) return null;
-            const rect = imgRef.current.getBoundingClientRect();
-            if (!rect.width || !rect.height) return null;
-            return {
-                nx: Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width)),
-                ny: Math.max(0, Math.min(1, (touch.clientY - rect.top) / rect.height)),
-            };
-        };
-
-        // Google Remote Desktop: convert finger delta (px) to cursor delta (normalized)
-        const fingerDeltaToCursorDelta = (dx: number, dy: number) => {
-            if (!imgRef.current) return { dnx: 0, dny: 0 };
-            const img = imgRef.current;
-            const rect = img.getBoundingClientRect();
-            // Account for object-fit:contain — actual image may be smaller than element
-            const natW = img.naturalWidth || rect.width;
-            const natH = img.naturalHeight || rect.height;
-            const imgAspect = natW / natH;
-            const elemAspect = rect.width / rect.height;
-            let renderedW: number, renderedH: number;
-            if (imgAspect > elemAspect) {
-                // Image is wider → width fills, height has bars
-                renderedW = rect.width;
-                renderedH = rect.width / imgAspect;
-            } else {
-                // Image is taller → height fills, width has bars
-                renderedH = rect.height;
-                renderedW = rect.height * imgAspect;
-            }
-            return {
-                dnx: dx / renderedW,
-                dny: dy / renderedH,
-            };
-        };
-
-        // Auto-pan: center viewport on cursor when zoomed
-        const autoPanTowardsCursor = (nx: number, ny: number, currentZoom: number) => {
-            if (currentZoom <= 1.05) return;
-            // Center viewport on cursor. translate% is relative to scaled size,
-            // so we just need -(nx - 0.5) * 100 (no zoom multiply needed)
-            const targetPanX = -(nx - 0.5) * 100;
-            const targetPanY = -(ny - 0.5) * 100;
-            const clamped = clampPan(targetPanX, targetPanY, currentZoom);
-            if (Math.abs(clamped.x - panXRef.current) > 0.1 || Math.abs(clamped.y - panYRef.current) > 0.1) {
-                setPanX(clamped.x);
-                setPanY(clamped.y);
-                panXRef.current = clamped.x;
-                panYRef.current = clamped.y;
-            }
-        };
-
-        const handleTouchStart = (e: TouchEvent) => {
-            // Only block browser defaults for touches inside the viewport (image area).
-            // Toolbar/popover buttons must receive native touch→click conversion.
-            const vp = viewportRef.current;
-            if (vp && e.target instanceof Node && vp.contains(e.target as Node)) {
-                e.preventDefault();
-            } else {
-                return; // Let toolbar handle its own events
-            }
-
-            if (e.touches.length === 1) {
-                const touch = e.touches[0];
-                touchStartRef.current = { x: touch.clientX, y: touch.clientY, time: Date.now() };
-                touchLastRef.current = { x: touch.clientX, y: touch.clientY };
-                // Only reset panning if this is a fresh touch (not leftover from pinch)
-                if (!wasPinchingRef.current) {
-                    isPanningRef.current = false;
-                }
-
-                // Long press (500ms) → right click
-                longPressTimerRef.current = setTimeout(() => {
-                    if (!isPanningRef.current && !wasPinchingRef.current) {
-                        isPanningRef.current = true; // Prevent click on release
-                        if (inputModeRef.current === 'mouse') {
-                            const pos = cursorPosRef.current || { nx: 0.5, ny: 0.5 };
-                            setLastActionStatus(`Right Click`);
-                            spawnRippleFromNormalized(pos.nx, pos.ny, 'right');
-                            onActionRef.current('input_click', { ...pos, button: 'right' }).catch(() => {});
-                        } else {
-                            const pos = getTouchImgPos(touch);
-                            if (pos) {
-                                setLastActionStatus(`Right Click`);
-                                spawnRippleFromNormalized(pos.nx, pos.ny, 'right');
-                                onActionRef.current('input_click', { ...pos, button: 'right' }).catch(() => {});
-                            }
-                        }
-                    }
-                }, 500);
-            } else if (e.touches.length === 2) {
-                clearTimeout(longPressTimerRef.current);
-                isPanningRef.current = true;
-                wasPinchingRef.current = true; // Mark that we entered pinch mode
-                const dx = e.touches[1].clientX - e.touches[0].clientX;
-                const dy = e.touches[1].clientY - e.touches[0].clientY;
-                pinchStartDistRef.current = Math.sqrt(dx * dx + dy * dy);
-                pinchStartZoomRef.current = zoomRef.current;
-                pinchMidRef.current = {
-                    x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
-                    y: (e.touches[0].clientY + e.touches[1].clientY) / 2,
-                };
-            }
-        };
-
-        const handleTouchMove = (e: TouchEvent) => {
-            // Only prevent default scrolling inside viewport
-            const vp = viewportRef.current;
-            if (vp && e.target instanceof Node && vp.contains(e.target as Node)) {
-                e.preventDefault();
-            }
-
-            if (e.touches.length === 1 && touchLastRef.current) {
-                const touch = e.touches[0];
-                const dx = touch.clientX - touchLastRef.current.x;
-                const dy = touch.clientY - touchLastRef.current.y;
-
-                // Drag threshold: use cumulative distance from START (not per-frame)
-                // This prevents slow gradual drags from being misread as taps
-                if (!isPanningRef.current && touchStartRef.current) {
-                    const totalDx = touch.clientX - touchStartRef.current.x;
-                    const totalDy = touch.clientY - touchStartRef.current.y;
-                    const totalDist = Math.sqrt(totalDx * totalDx + totalDy * totalDy);
-                    if (totalDist > 8) {
-                        isPanningRef.current = true;
-                        clearTimeout(longPressTimerRef.current);
-                    }
-                }
-
-                if (isPanningRef.current) {
-                    if (inputModeRef.current === 'mouse') {
-                        // Mouse mode: drag → move cursor
-                        const delta = fingerDeltaToCursorDelta(dx, dy);
-                        const prev = cursorPosRef.current || { nx: 0.5, ny: 0.5 };
-                        const newNx = Math.max(0, Math.min(1, prev.nx + delta.dnx));
-                        const newNy = Math.max(0, Math.min(1, prev.ny + delta.dny));
-                        cursorPosRef.current = { nx: newNx, ny: newNy };
-                        setCursorPos({ nx: newNx, ny: newNy });
-                        setLastActionStatus(`Cursor: ${Math.round(newNx * 100)}%, ${Math.round(newNy * 100)}%`);
-
-                        autoPanTowardsCursor(newNx, newNy, zoomRef.current);
-
-                        const now = Date.now();
-                        if (now - lastWheelTime.current >= 30) {
-                            lastWheelTime.current = now;
-                            onActionRef.current('input_mouseMoved', { nx: newNx, ny: newNy }).catch(() => {});
-                        }
-                    } else if (zoomRef.current > 1.0) {
-                        // Touch mode + zoomed: pan viewport
-                        const viewport = viewportRef.current;
-                        if (viewport) {
-                            const vw = viewport.clientWidth;
-                            const vh = viewport.clientHeight;
-                            const newPanX = panXRef.current + (dx / vw) * 100;
-                            const newPanY = panYRef.current + (dy / vh) * 100;
-                            const clamped = clampPan(newPanX, newPanY, zoomRef.current);
-                            setPanX(clamped.x);
-                            setPanY(clamped.y);
-                            panXRef.current = clamped.x;
-                            panYRef.current = clamped.y;
-                        }
-                    } else {
-                        // Touch mode + 1x: remote scroll
-                        const pos = getTouchImgPos(touch);
-                        if (pos) {
-                            const now = Date.now();
-                            if (now - lastWheelTime.current >= 40) {
-                                lastWheelTime.current = now;
-                                setLastActionStatus('Scroll');
-                                onActionRef.current('input_wheel', {
-                                    nx: pos.nx, ny: pos.ny,
-                                    deltaX: Math.round(-dx * 2.5),
-                                    deltaY: Math.round(-dy * 2.5),
-                                }).catch(() => {});
-                            }
-                        }
-                    }
-                }
-                touchLastRef.current = { x: touch.clientX, y: touch.clientY };
-            } else if (e.touches.length === 2 && pinchStartDistRef.current !== null) {
-                const dx = e.touches[1].clientX - e.touches[0].clientX;
-                const dy = e.touches[1].clientY - e.touches[0].clientY;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                const scale = dist / pinchStartDistRef.current;
-
-                const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-                const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-                const dMidX = midX - pinchMidRef.current.x;
-                const dMidY = midY - pinchMidRef.current.y;
-
-                const isPinching = Math.abs(scale - 1) > 0.03;
-
-                if (inputModeRef.current === 'mouse') {
-                    if (isPinching) {
-                        // Pinch → zoom only
-                        const newZoom = Math.max(minZoom, Math.min(5, pinchStartZoomRef.current * scale));
-                        setZoom(newZoom);
-                        zoomRef.current = newZoom;
-                    } else if (Math.abs(dMidX) > 2 || Math.abs(dMidY) > 2) {
-                        // Parallel drag → scroll only
-                        const pos = cursorPosRef.current || { nx: 0.5, ny: 0.5 };
-                        const now = Date.now();
-                        if (now - lastWheelTime.current >= 30) {
-                            lastWheelTime.current = now;
-                            setLastActionStatus('Scroll');
-                            onActionRef.current('input_wheel', {
-                                nx: pos.nx, ny: pos.ny,
-                                deltaX: Math.round(-dMidX * 3),
-                                deltaY: Math.round(-dMidY * 3),
-                            }).catch(() => {});
-                        }
-                    }
-                } else {
-                    // Touch mode: always pinch zoom + pan
-                    const newZoom = Math.max(minZoom, Math.min(5, pinchStartZoomRef.current * scale));
-                    setZoom(newZoom);
-                    zoomRef.current = newZoom;
-
-                    const viewport = viewportRef.current;
-                    if (viewport && newZoom > 1) {
-                        const vw = viewport.clientWidth;
-                        const vh = viewport.clientHeight;
-                        const newPanX = panXRef.current + (dMidX / vw) * 100;
-                        const newPanY = panYRef.current + (dMidY / vh) * 100;
-                        const clamped = clampPan(newPanX, newPanY, newZoom);
-                        setPanX(clamped.x);
-                        setPanY(clamped.y);
-                        panXRef.current = clamped.x;
-                        panYRef.current = clamped.y;
-                    }
-                }
-                pinchMidRef.current = { x: midX, y: midY };
-            }
-        };
-
-        const handleTouchEnd = (e: TouchEvent) => {
-            clearTimeout(longPressTimerRef.current);
-            pinchStartDistRef.current = null;
-
-            // If going from 2 fingers to 1 (pinch ending), suppress the remaining finger
-            if (e.touches.length === 1 && wasPinchingRef.current) {
-                // One finger still down after pinch — update refs but do NOT reset isPanning
-                const remaining = e.touches[0];
-                touchStartRef.current = { x: remaining.clientX, y: remaining.clientY, time: Date.now() };
-                touchLastRef.current = { x: remaining.clientX, y: remaining.clientY };
-                isPanningRef.current = true; // Force-suppress any click on this finger's release
-                return;
-            }
-
-            // All fingers lifted
-            if (e.touches.length === 0) {
-                // If we were pinching, suppress click and reset flag
-                if (wasPinchingRef.current) {
-                    wasPinchingRef.current = false;
-                    isPanningRef.current = false;
-                    return;
-                }
-
-                if (e.changedTouches.length === 1 && !isPanningRef.current) {
-                    const touch = e.changedTouches[0];
-                    const now = Date.now();
-                    const elapsed = now - (touchStartRef.current?.time || 0);
-
-                    // Tap guard: too fast (<60ms) or too slow (>400ms) → ignore
-                    if (elapsed < 60 || elapsed > 400) {
-                        isPanningRef.current = false;
-                        return;
-                    }
-
-                    // Final distance check: finger must not have moved far from start
-                    if (touchStartRef.current) {
-                        const totalDx = touch.clientX - touchStartRef.current.x;
-                        const totalDy = touch.clientY - touchStartRef.current.y;
-                        if (Math.sqrt(totalDx * totalDx + totalDy * totalDy) > 12) {
-                            isPanningRef.current = false;
-                            return;
-                        }
-                    }
-
-                    if (inputModeRef.current === 'mouse') {
-                        // Mouse mode: tap → click at CURSOR position (not finger position)
-                        const pos = cursorPosRef.current || getTouchImgPos(touch);
-                        if (pos) {
-                            setLastActionStatus(`Click: ${Math.round(pos.nx * 100)}%, ${Math.round(pos.ny * 100)}%`);
-                            spawnRippleFromNormalized(pos.nx, pos.ny, 'left');
-                            onActionRef.current('input_click', { ...pos }).catch(() => {});
-                        }
-                    } else {
-                        // Touch mode: tap directly
-                        const pos = getTouchImgPos(touch);
-                        if (!pos) return;
-                        if (now - lastTapTimeRef.current < 300) {
-                            setLastActionStatus('Double tap');
-                            spawnRippleFromNormalized(pos.nx, pos.ny, 'double');
-                            onActionRef.current('input_click', { ...pos, clickCount: 2 }).catch(() => {});
-                            lastTapTimeRef.current = 0;
-                        } else {
-                            setLastActionStatus(`Tap: ${Math.round(pos.nx * 100)}%, ${Math.round(pos.ny * 100)}%`);
-                            spawnRippleFromNormalized(pos.nx, pos.ny, 'left');
-                            onActionRef.current('input_click', { ...pos }).catch(() => {});
-                            lastTapTimeRef.current = now;
-                        }
-                    }
-                }
-                // Always reset panning state at end of touch
-                isPanningRef.current = false;
-            }
-        };
-
-        container.addEventListener('touchstart', handleTouchStart, { passive: false });
-        container.addEventListener('touchmove', handleTouchMove, { passive: false });
-        container.addEventListener('touchend', handleTouchEnd, { passive: false });
-        return () => {
-            container.removeEventListener('touchstart', handleTouchStart);
-            container.removeEventListener('touchmove', handleTouchMove);
-            container.removeEventListener('touchend', handleTouchEnd);
-            clearTimeout(longPressTimerRef.current);
-        };
-    }, []);
+    const {
+        cursorPos,
+        cursorPosRef,
+        handleToggleInputMode,
+        handleZoomReset,
+    } = useRemoteTouchControls({
+        containerRef,
+        viewportRef,
+        imgRef,
+        inputMode,
+        setInputMode,
+        minZoom,
+        zoomRef,
+        panXRef,
+        panYRef,
+        setPanX,
+        setPanY,
+        setZoom,
+        lastWheelTimeRef: lastWheelTime,
+        onAction,
+        setLastActionStatus,
+        spawnRippleFromNormalized,
+        clampPan,
+        isMobile,
+        mobileFillZoom,
+    })
 
     return (
         <div
@@ -637,66 +315,16 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
                         onDragStart={e => e.preventDefault()}
                     />
                 ) : (
-                    <div className="text-center flex flex-col items-center gap-3 px-6">
-                        <div
-                            className="w-14 h-14 rounded-2xl flex items-center justify-center border border-white/10 bg-white/[0.04] shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
-                            style={{ animation: 'remote-float 2.8s ease-in-out infinite' }}
-                        >
-                            <img src="/otter-logo.png" alt="" className="w-8 h-8 opacity-90" />
-                        </div>
-                        <div className="text-white/85 text-[13px] font-semibold tracking-wide">{waitingLabel}</div>
-                        <div className="text-[11px] text-white/40">{waitingHint}</div>
-                        {transportType === 'relay' && (
-                            <div className="text-[10px] text-amber-300/80">TURN relay active</div>
-                        )}
-                    </div>
+                    <RemoteWaitingState
+                        waitingLabel={waitingLabel}
+                        waitingHint={waitingHint}
+                        transportType={transportType}
+                    />
                 )}
 
-                {/* Virtual cursor indicator (mouse mode) */}
-                {inputMode === 'mouse' && cursorPos && displayScreenshot && imgRef.current && (() => {
-                    const img = imgRef.current!;
-                    const rect = img.getBoundingClientRect();
-                    const viewRect = viewportRef.current?.getBoundingClientRect();
-                    if (!viewRect) return null;
-                    // Account for object-fit:contain letterboxing
-                    const natW = img.naturalWidth || rect.width;
-                    const natH = img.naturalHeight || rect.height;
-                    const imgAspect = natW / natH;
-                    const elemAspect = rect.width / rect.height;
-                    let renderedW: number, renderedH: number, offsetX: number, offsetY: number;
-                    if (imgAspect > elemAspect) {
-                        renderedW = rect.width;
-                        renderedH = rect.width / imgAspect;
-                        offsetX = 0;
-                        offsetY = (rect.height - renderedH) / 2;
-                    } else {
-                        renderedH = rect.height;
-                        renderedW = rect.height * imgAspect;
-                        offsetX = (rect.width - renderedW) / 2;
-                        offsetY = 0;
-                    }
-                    const cx = rect.left - viewRect.left + offsetX + renderedW * cursorPos.nx;
-                    const cy = rect.top - viewRect.top + offsetY + renderedH * cursorPos.ny;
-                    // Clamp to viewport so cursor never leaves mobile screen
-                    const clampedCx = Math.max(8, Math.min(viewRect.width - 8, cx));
-                    const clampedCy = Math.max(8, Math.min(viewRect.height - 8, cy));
-                    return (
-                        <div style={{
-                            position: 'absolute', left: clampedCx - 8, top: clampedCy - 8,
-                            width: 16, height: 16, pointerEvents: 'none', zIndex: 100,
-                        }}>
-                            {/* Crosshair */}
-                            <div style={{ position: 'absolute', left: 7, top: 0, width: 2, height: 16, background: 'rgba(59,130,246,0.8)' }} />
-                            <div style={{ position: 'absolute', left: 0, top: 7, width: 16, height: 2, background: 'rgba(59,130,246,0.8)' }} />
-                            {/* Center dot */}
-                            <div style={{
-                                position: 'absolute', left: 5, top: 5, width: 6, height: 6,
-                                borderRadius: '50%', background: '#3b82f6',
-                                boxShadow: '0 0 8px rgba(59,130,246,0.6)',
-                            }} />
-                        </div>
-                    );
-                })()}
+                {inputMode === 'mouse' && displayScreenshot && (
+                    <RemoteCursorOverlay cursorPos={cursorPos} viewportRef={viewportRef} imgRef={imgRef} />
+                )}
 
                 {/* Click ripple feedback */}
                 {ripples.map(r => {
@@ -730,152 +358,27 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
                 })}
             </div>
 
-            {/* Bottom Toolbar (horizontal, always visible) */}
-            <div
-                onTouchStart={e => e.stopPropagation()}
-                className="absolute bottom-0 left-0 right-0 z-20 flex items-center justify-center gap-1.5 px-3 py-2 bg-black/75 backdrop-blur-xl border-t border-white/[0.08] touch-none"
-            >
-                {/* Input Mode Toggle */}
-                <div
-                    onClick={() => {
-                        setInputMode(m => {
-                            const next = m === 'touch' ? 'mouse' : 'touch';
-                            if (next === 'mouse' && !cursorPosRef.current) {
-                                const init = { nx: 0.5, ny: 0.5 };
-                                cursorPosRef.current = init;
-                                setCursorPos(init);
-                            }
-                            return next;
-                        });
-                    }}
-                    className={`h-8 px-2.5 rounded-lg flex items-center gap-[5px] cursor-pointer ${
-                        inputMode === 'mouse' ? 'bg-blue-500/25 border border-blue-500/40' : 'bg-white/[0.08] border border-white/10'
-                    }`}
-                >
-                    <span className="text-sm">{inputMode === 'mouse' ? '🖱️' : '👆'}</span>
-                    <span className={`text-[10px] font-bold ${inputMode === 'mouse' ? 'text-blue-400' : 'text-slate-400'}`}>
-                        {inputMode === 'mouse' ? 'Mouse' : 'Touch'}
-                    </span>
-                </div>
-
-                {/* IME */}
-                <div className="relative">
-                    <div
-                        onClick={() => { setIsImeOpen(!isImeOpen); setIsMenuOpen(false); }}
-                        className={`w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer ${
-                            isImeOpen ? 'bg-emerald-500/25 border border-emerald-500/40' : 'bg-white/[0.08] border border-white/10'
-                        }`}
-                    >
-                        <span className="text-sm">⌨️</span>
-                    </div>
-                    {isImeOpen && (
-                        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-[220px] bg-neutral-950/[0.98] backdrop-blur-[30px] rounded-xl border border-white/20 p-[10px_12px] shadow-[0_10px_30px_rgba(0,0,0,0.8)] flex flex-col gap-2 z-20" style={{ animation: 'slideUp 0.15s ease-out' }}>
-                            <input
-                                type="text" placeholder="Type & Enter..." value={imeText} autoFocus
-                                onTouchStart={e => e.stopPropagation()}
-                                onChange={e => setImeText(e.target.value)} onKeyDown={handleImeSubmit}
-                                className="w-full bg-black/60 border border-white/15 rounded-lg px-2.5 py-2 text-white text-[13px] outline-none"
-                            />
-                        </div>
-                    )}
-                </div>
-
-                {/* Settings */}
-                <div className="relative">
-                    <div
-                        onClick={() => { setIsMenuOpen(!isMenuOpen); setIsImeOpen(false); }}
-                        className={`w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer ${
-                            isMenuOpen ? 'bg-blue-500/25 border border-blue-500/40' : 'bg-white/[0.08] border border-white/10'
-                        }`}
-                    >
-                        <span className="text-sm">⚙️</span>
-                    </div>
-                </div>
-
-                {/* Separator */}
-                <div className="w-px h-[18px] bg-white/10" />
-
-                {/* Status indicators */}
-                <div className="flex items-center gap-1.5">
-                    <div
-                        className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-md"
-                        style={{ background: isConnActive ? 'rgba(34,197,94,0.12)' : 'rgba(234,179,8,0.12)' }}
-                    >
-                        <div className="w-1 h-1 rounded-full" style={{ background: isConnActive ? '#22c55e' : '#eab308', boxShadow: isConnActive ? '0 0 4px #22c55e80' : '0 0 4px #eab30880' }} />
-                        <span className="text-[8px] font-extrabold" style={{ color: isConnActive ? '#22c55e' : '#eab308' }}>
-                            {isConnActive ? 'Connected' : 'WS'}
-                        </span>
-                    </div>
-                    {zoom > 1.0 && (
-                        <span className="text-[8px] font-bold text-indigo-400">{Math.round(zoom * 100)}%</span>
-                    )}
-                    {transportType === 'direct' && (
-                        <span
-                            className="text-[8px] font-bold px-1 py-0.5 rounded"
-                            style={{ color: '#22c55e', background: 'rgba(34,197,94,0.12)' }}
-                            title="Direct P2P connection"
-                        >
-                            Direct
-                        </span>
-                    )}
-                    {transportType === 'relay' && (
-                        <span
-                            className="text-[8px] font-bold px-1 py-0.5 rounded"
-                            style={{ color: '#f59e0b', background: 'rgba(245,158,11,0.12)' }}
-                            title="TURN relay in use"
-                        >
-                            Relay
-                        </span>
-                    )}
-                    {screenshotUsage && screenshotUsage.dailyBudgetMinutes > 0 && (
-                        <span
-                            className="text-[8px] font-bold px-1 py-0.5 rounded"
-                            style={{
-                                color: screenshotUsage.budgetExhausted ? '#ef4444' : '#c4b5fd',
-                                background: screenshotUsage.budgetExhausted ? 'rgba(239,68,68,0.1)' : 'rgba(139,92,246,0.14)',
-                            }}
-                            title="Daily TURN relay usage"
-                        >
-                            {screenshotUsage.budgetExhausted
-                                ? 'TURN blocked'
-                                : `TURN ${screenshotUsage.dailyUsedMinutes}/${screenshotUsage.dailyBudgetMinutes}m`}
-                        </span>
-                    )}
-                    {lastActionStatus && (
-                        <span className="text-[8px] text-neutral-500 font-semibold max-w-[100px] overflow-hidden text-ellipsis whitespace-nowrap">{lastActionStatus}</span>
-                    )}
-                </div>
-            </div>
-
-            {/* Settings Popover (displayed from toolbar gear icon) */}
-            {isMenuOpen && (
-                <div
-                    onTouchStart={e => e.stopPropagation()}
-                    style={{
-                        position: 'absolute', bottom: 56, left: '50%', transform: 'translateX(-50%)', width: 220,
-                        background: 'rgba(23, 23, 23, 0.95)', backdropFilter: 'blur(25px)',
-                        borderRadius: 14, border: '1px solid rgba(255,255,255,0.1)',
-                        padding: 14, boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
-                        display: 'flex', flexDirection: 'column', gap: 12,
-                        zIndex: 20, touchAction: 'none',
-                        animation: 'slideUpSidebar 0.15s ease-out'
-                    }}
-                >
-                    <div style={{ fontSize: 9, fontWeight: 900, color: '#3b82f6', letterSpacing: 1.5 }}>SETTINGS</div>
-
-                    {/* Zoom Controls */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        <div style={{ fontSize: 10, color: '#888', fontWeight: 700 }}>ZOOM: {zoom <= (isMobile ? mobileFillZoom : 1.0) + 0.01 ? (isMobile ? 'FILL' : 'FIT') : `${Math.round(zoom * 100)}%`}</div>
-                        <div style={{ display: 'flex', gap: 4 }}>
-                            <button onClick={(e) => { e.stopPropagation(); setZoom(prev => Math.max(0.5, prev - 0.25)); }} style={{ flex: 1, background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', padding: '6px', borderRadius: 6, fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>−</button>
-                            <button onClick={(e) => { e.stopPropagation(); const resetZ = isMobile ? mobileFillZoom : 1.0; setZoom(resetZ); zoomRef.current = resetZ; setPanX(0); setPanY(0); }} style={{ flex: 1, background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', padding: '6px', borderRadius: 6, fontSize: 9, fontWeight: 800, cursor: 'pointer' }}>{isMobile ? 'FILL' : 'FIT'}</button>
-                            <button onClick={(e) => { e.stopPropagation(); setZoom(prev => Math.min(5, prev + 0.25)); }} style={{ flex: 1, background: 'rgba(255,255,255,0.1)', color: '#fff', border: 'none', padding: '6px', borderRadius: 6, fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>+</button>
-                        </div>
-                    </div>
-
-
-                </div>
-            )}
+            <RemoteViewToolbar
+                inputMode={inputMode}
+                onToggleInputMode={handleToggleInputMode}
+                isImeOpen={isImeOpen}
+                setIsImeOpen={setIsImeOpen}
+                isMenuOpen={isMenuOpen}
+                setIsMenuOpen={setIsMenuOpen}
+                imeText={imeText}
+                setImeText={setImeText}
+                handleImeSubmit={handleImeSubmit}
+                isConnActive={isConnActive}
+                zoom={zoom}
+                isMobile={isMobile}
+                mobileFillZoom={mobileFillZoom}
+                onZoomOut={() => setZoom(prev => Math.max(0.5, prev - 0.25))}
+                onZoomReset={handleZoomReset}
+                onZoomIn={() => setZoom(prev => Math.min(5, prev + 0.25))}
+                transportType={transportType}
+                screenshotUsage={screenshotUsage}
+                lastActionStatus={lastActionStatus}
+            />
 
             <style>{`
                 @keyframes slideUp {

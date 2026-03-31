@@ -90,11 +90,10 @@ export function buildConversations(
         if (useConversationFirst) {
             const nativeSessionId = (ide as any).sessionId || ide.instanceId;
             const agentName = getAgentDisplayName(ide.type);
-            const detectedAgent = ide.agents?.[0];
             const modal = ide.activeChat?.activeModal;
             const hasRealModal = modal && Array.isArray(modal.buttons) && modal.buttons.length > 0;
             const agentStatus = normalizeManagedStatus(ide.activeChat?.status, { activeModal: ide.activeChat?.activeModal })
-                || normalizeManagedStatus(detectedAgent?.status)
+                || normalizeManagedStatus(ide.agents?.[0]?.status)
                 || 'idle';
             const chat = ide.activeChat || { title: '', messages: [] };
             let title = (chat.title && String(chat.title).trim()) ? String(chat.title).trim() : '';
@@ -122,7 +121,9 @@ export function buildConversations(
                 daemonId: ide.daemonId || undefined,
                 mode: isCliConv(ide as any) ? (((ide as any).mode as 'terminal' | 'chat' | undefined) || 'terminal') : 'chat',
                 agentName,
-                agentType: (isCliConv(ide as any) || isAcpConv(ide as any)) ? ((ide as any).cliType || (ide as any).acpType || ide.type) : (detectedAgent?.type || 'ide-native'),
+                agentType: (isCliConv(ide as any) || isAcpConv(ide as any))
+                    ? ((ide as any).cliType || (ide as any).acpType || ide.type)
+                    : ide.type,
                 status: agentStatus,
                 title,
                 messages: [...nativeServerMsgs, ...nativePendingLocal],
