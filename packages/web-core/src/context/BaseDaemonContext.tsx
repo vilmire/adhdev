@@ -107,6 +107,30 @@ function payloadRichness(ide: DaemonData): number {
     return score;
 }
 
+function mergeDaemonVersionFlags(existing: DaemonData, incoming: DaemonData, merged: DaemonData): DaemonData {
+    if (merged.type !== 'adhdev-daemon') return merged
+
+    const next = { ...merged } as any
+    const daemonVersion = (incoming as any).version ?? (merged as any).version ?? (existing as any).version
+    const serverVersion = (incoming as any).serverVersion ?? (existing as any).serverVersion ?? (merged as any).serverVersion
+    const hasMismatchFlag = (incoming as any).versionMismatch === true || (existing as any).versionMismatch === true
+
+    if (daemonVersion) next.version = daemonVersion
+    if (serverVersion) next.serverVersion = serverVersion
+
+    if (daemonVersion && serverVersion && daemonVersion === serverVersion) {
+        delete next.versionMismatch
+        delete next.serverVersion
+        return next
+    }
+
+    if ((incoming as any).versionMismatch === true || (hasMismatchFlag && daemonVersion && serverVersion && daemonVersion !== serverVersion)) {
+        next.versionMismatch = true
+    }
+
+    return next
+}
+
 /**
  * reconcileIdes — merge IDE status with richness-aware priority.
  *
@@ -144,7 +168,8 @@ export function reconcileIdes(incoming: DaemonData[], prev: DaemonData[]): Daemo
         if (incomingRichness > existingRichness) {
             // Incoming is richer → always overwrite, preserve chats if incoming lacks them
             const chats = (ide.chats?.length) ? ide.chats : existing.chats;
-            resultMap.set(ide.id, { ...existing, ...ide, chats, _lastUpdate: now } as any);
+            const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, _lastUpdate: now } as any)
+            resultMap.set(ide.id, merged as any);
         } else if (incomingRichness < existingRichness) {
             // Incoming is weaker → NEVER overwrite core data.
             // Only merge non-destructive routing metadata (status, cdpConnected, timestamp).
@@ -157,9 +182,13 @@ export function reconcileIdes(incoming: DaemonData[], prev: DaemonData[]): Daemo
             if (ide.machineNickname !== undefined && ide.machineNickname !== existing.machineNickname) {
                 safeUpdate.machineNickname = ide.machineNickname;
             }
+            if ((ide as any).version !== undefined) (safeUpdate as any).version = (ide as any).version
+            if ((ide as any).serverVersion !== undefined) (safeUpdate as any).serverVersion = (ide as any).serverVersion
+            if ((ide as any).versionMismatch === true) (safeUpdate as any).versionMismatch = true
 
             if (Object.keys(safeUpdate).length > 0) {
-                resultMap.set(ide.id, { ...existing, ...safeUpdate, _lastUpdate: existing._lastUpdate } as any);
+                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...safeUpdate, _lastUpdate: existing._lastUpdate } as any)
+                resultMap.set(ide.id, merged as any);
             }
             // Do NOT update _lastUpdate — preserve rich data's timestamp authority
         } else {
@@ -168,7 +197,8 @@ export function reconcileIdes(incoming: DaemonData[], prev: DaemonData[]): Daemo
             const existingTs = existing._lastUpdate || existing.timestamp || 0;
             if (incomingTs >= existingTs) {
                 const chats = (ide.chats?.length) ? ide.chats : existing.chats;
-                resultMap.set(ide.id, { ...existing, ...ide, chats, _lastUpdate: now } as any);
+                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, _lastUpdate: now } as any)
+                resultMap.set(ide.id, merged as any);
             } else {
                 if (ide.chats?.length && !existing.chats?.length) {
                     resultMap.set(ide.id, { ...existing, chats: ide.chats });
