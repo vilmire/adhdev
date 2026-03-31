@@ -2536,14 +2536,16 @@ export class DevServer {
     lines.push('| Status | When to use | How to detect |');
     lines.push('|---|---|---|');
     lines.push('| `idle` | AI is NOT generating, no approval needed | Default state. No stop button, no spinners, no approval pills/buttons |');
-    lines.push('| `generating` | AI is actively streaming/thinking | ANY of: (1) Stop/Cancel button visible, (2) CSS animation (animate-spin/pulse/bounce), (3) floating state text like Thinking/Generating/Sailing, (4) streaming indicator class |');
+    lines.push('| `generating` | AI is actively streaming/thinking | ANY of: (1) Submit button icon SVG changes (e.g. arrow→stop square, fill="none"→fill="currentColor"), (2) Stop/Cancel button visible, (3) CSS animation, (4) Structural markers (aria-labels that only appear during generation) |');
     lines.push('| `waiting_approval` | AI stopped and needs user action | Actionable buttons like Run/Skip/Accept/Reject are visible AND clickable |');
     lines.push('');
     lines.push('### ⚠️ Status Detection Gotchas (MUST READ!)');
-    lines.push('1. **FALSE POSITIVES from old messages**: Chat history may contain text like "Command Awaiting Approval" from PAST turns. If you search the entire chat panel for this text, you will get false matches from parent divs whose innerText includes ALL child text. ONLY match small leaf elements (under 80 chars) or use explicit button/pill selectors.');
-    lines.push('2. **Awaiting Approval pill without actions**: Some IDEs show a floating pill/banner saying "Awaiting Approval" that is just a scroll-to indicator (not an actual approval dialog). If this pill exists but NO actionable buttons (Run/Skip/Accept/Reject) exist anywhere in the panel, the status should be `idle`, NOT `waiting_approval`.');
-    lines.push('3. **generating detection must be multi-signal**: Do NOT rely on just one indicator. Check ALL of: stop buttons, CSS animations, floating state labels, streaming classes. IDEs differ widely.');
-    lines.push('4. **activeModal must include actions**: When `status` is `waiting_approval`, the `activeModal` object MUST include a non-empty `actions` array listing the button labels. If you cannot find any action buttons, the status is NOT `waiting_approval`.');
+    lines.push('1. **DO NOT rely on button text/labels in the user\'s language.** OS locale may be Korean, Japanese, etc. Button text like "Cancel" or "Stop" will be localized. Instead, detect STRUCTURAL indicators: SVG icon changes, CSS classes, aria-labels from the extension\'s own React/Radix UI (which stay in English regardless of OS locale).');
+    lines.push('2. **Use sendMessage to CREATE a generating state, then CAPTURE the DOM.** Send a LONG prompt (e.g. "Write an extremely detailed 5000-word essay...") so the AI takes 10+ seconds. Then periodically capture the DOM during generation to find which elements appear/change. Compare idle vs generating DOM snapshots to find reliable structural markers.');
+    lines.push('3. **Look for SVG icon changes in the submit button.** Many IDEs change the submit button icon from an arrow (send) to a square (stop) during generation. Check the SVG `fill` attribute or path data.');
+    lines.push('4. **FALSE POSITIVES from old messages**: Chat history may contain text like "Command Awaiting Approval" from PAST turns. ONLY match small leaf elements (under 80 chars) or use explicit button/pill selectors.');
+    lines.push('5. **Awaiting Approval pill without actions**: Some IDEs show a floating pill/banner that is just a scroll-to indicator. If NO actionable buttons exist, the status should be `idle`, NOT `waiting_approval`.');
+    lines.push('6. **activeModal must include actions**: When `status` is `waiting_approval`, the `activeModal` object MUST include a non-empty `actions` array.');
     lines.push('');
 
     lines.push('## Action');
@@ -2606,10 +2608,10 @@ export class DevServer {
     lines.push(`echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',d); r=json.loads(r) if isinstance(r,str) else r; assert r.get('status')=='idle', f'Expected idle, got {r.get(chr(34)+chr(115)+chr(116)+chr(97)+chr(116)+chr(117)+chr(115)+chr(34))}'; print('Step 1 PASS: status=idle')"`);
     lines.push('```');
     lines.push('');
-    lines.push('### Step 2: Send a message that triggers generation');
+    lines.push('### Step 2: Send a LONG message that triggers extended generation (10+ seconds)');
     lines.push('```bash');
-    lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "sendMessage", "type": "${type}", "ideType": "${type}", "args": {"message": "Say hello in one word"}}'`);
-    lines.push('sleep 2');
+    lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "sendMessage", "type": "${type}", "ideType": "${type}", "args": {"message": "Write an extremely detailed 5000-word essay about the history of artificial intelligence from Alan Turing to 2025. Be very thorough and verbose."}}'`);
+    lines.push('sleep 3');
     lines.push('```');
     lines.push('');
     lines.push('### Step 3: Check generating OR completed');
