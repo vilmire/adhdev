@@ -98,7 +98,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         loadavg: (machineEntry as any).machine?.loadavg || [],
         uptime: (machineEntry as any).machine?.uptime || 0,
         release: (machineEntry as any).machine?.release || '',
-        cdpConnected: !!((machineEntry as any).ides || []).some((i: any) => i.cdpConnected),
+        cdpConnected: !!(machineEntry as any).cdpConnected,
         machineNickname: (machineEntry as any).machineNickname || null,
         p2p: (machineEntry as any).p2p || { available: false, state: 'unavailable', peers: 0, screenshotActive: false },
         detectedIdes: (machineEntry as any).detectedIdes || [],
