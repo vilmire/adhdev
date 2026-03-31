@@ -478,7 +478,7 @@ export default function PaneGroup({
                     e.preventDefault();
                     const rect = e.currentTarget.getBoundingClientRect();
                     const localX = e.clientX - rect.left;
-                    if (numGroups < 4 && onMoveTab) {
+                    if (numGroups < 4 && onMoveTab && window.innerWidth >= 768) {
                         const third = rect.width / 3;
                         if (localX < third) setDropAction('split-left');
                         else if (localX > third * 2) setDropAction('split-right');
@@ -505,11 +505,11 @@ export default function PaneGroup({
                     setPreviewOrder(null);
                     if (!tabKey) return;
                     e.preventDefault();
-                    if (nextDropAction === 'split-left' && onMoveTab && numGroups < 4) {
+                    if (nextDropAction === 'split-left' && onMoveTab && numGroups < 4 && window.innerWidth >= 768) {
                         onMoveTab(tabKey, 'split-left');
                         return;
                     }
-                    if (nextDropAction === 'split-right' && onMoveTab && numGroups < 4) {
+                    if (nextDropAction === 'split-right' && onMoveTab && numGroups < 4 && window.innerWidth >= 768) {
                         onMoveTab(tabKey, 'split-right');
                         return;
                     }
@@ -526,7 +526,7 @@ export default function PaneGroup({
                 }}
             >
                 {dragOver && (
-                    <div className="absolute inset-0 z-10 pointer-events-none flex">
+                    <div className="absolute inset-0 z-10 pointer-events-none hidden md:flex">
                         <div
                             className="flex-1 border-r border-white/10 transition-all duration-150 flex items-center justify-center"
                             style={{

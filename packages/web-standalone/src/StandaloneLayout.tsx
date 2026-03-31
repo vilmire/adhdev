@@ -14,7 +14,6 @@ interface LayoutProps {
 
 const NAV_ITEMS = [
     { id: 'dashboard', path: '/dashboard', icon: <IconDashboard />, label: 'Dashboard' },
-    { id: 'capabilities', path: '/capabilities', icon: <IconBook />, label: 'Capabilities' },
     { id: 'machine', path: '/machines', icon: <IconServer />, label: 'Burrow' },
     { id: 'settings', path: '/settings', icon: <IconSettings />, label: 'Settings' },
 ]
