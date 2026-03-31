@@ -1,8 +1,8 @@
 /**
  * TransportContext — abstract transport layer for command execution
  *
- * standalone: commands via WS (sendCommand via WebSocket)
- * cloud: connection-first → fallback HTTP
+ * standalone: commands via localhost WS/HTTP
+ * cloud: commands via P2P data channel
  */
 import { createContext, useContext, type ReactNode } from 'react'
 
