@@ -30,14 +30,12 @@ export interface ManagedAgent {
 
 export class DaemonAgentStreamManager {
     private allAdapters: IAgentStreamAdapter[] = [];
-    private managed = new Map<string, ManagedAgent>();
+    private managedByScope = new Map<string, Map<string, ManagedAgent>>();
     private enabled = true;
     private logFn: (msg: string) => void;
-    private lastDiscoveryTime = 0;
-    private discoveryIntervalMs = 10_000;
-
-
-    private _activeAgentType: string | null = null;
+    private lastDiscoveryTimeByScope = new Map<string, number>();
+    private discoveryIntervalMsByScope = new Map<string, number>();
+    private activeAgentTypeByScope = new Map<string, string | null>();
 
     constructor(logFn?: (msg: string) => void, providerLoader?: ProviderLoader) {
         this.logFn = logFn || LOG.forComponent('AgentStream').asLogFn();
@@ -58,7 +56,25 @@ export class DaemonAgentStreamManager {
 
     setEnabled(enabled: boolean) { this.enabled = enabled; }
     get isEnabled() { return this.enabled; }
-    get activeAgentType(): string | null { return this._activeAgentType; }
+    getActiveAgentType(scopeKey: string): string | null {
+        return this.activeAgentTypeByScope.get(scopeKey) || null;
+    }
+
+    private getManagedScope(scopeKey: string): Map<string, ManagedAgent> {
+        let managed = this.managedByScope.get(scopeKey);
+        if (!managed) {
+            managed = new Map<string, ManagedAgent>();
+            this.managedByScope.set(scopeKey, managed);
+        }
+        return managed;
+    }
+
+    resetScope(scopeKey: string): void {
+        this.managedByScope.delete(scopeKey);
+        this.activeAgentTypeByScope.delete(scopeKey);
+        this.lastDiscoveryTimeByScope.delete(scopeKey);
+        this.discoveryIntervalMsByScope.delete(scopeKey);
+    }
 
  /** Panel focus based on provider.js focusPanel or extensionId (currently no-op) */
     async ensureAgentPanelOpen(agentType: string, targetIdeType?: string): Promise<void> {
@@ -66,43 +82,52 @@ export class DaemonAgentStreamManager {
  // Can be replaced with CDP-based focus (future implementation)
     }
 
-    async switchActiveAgent(cdp: DaemonCdpManager, agentType: string | null): Promise<void> {
-        if (this._activeAgentType === agentType) return;
+    async switchActiveAgent(cdp: DaemonCdpManager, scopeKey: string, agentType: string | null): Promise<void> {
+        const managed = this.getManagedScope(scopeKey);
+        const previousAgentType = this.getActiveAgentType(scopeKey);
+        if (previousAgentType === agentType) return;
 
-        if (this._activeAgentType) {
-            const prev = this.managed.get(this._activeAgentType);
+        if (previousAgentType) {
+            const prev = managed.get(previousAgentType);
             if (prev) {
                 try { await cdp.detachAgent(prev.sessionId); } catch { }
-                this.managed.delete(this._activeAgentType);
-                this.logFn(`[AgentStream] Deactivated: ${prev.adapter.agentName}`);
+                managed.delete(previousAgentType);
+                this.logFn(`[AgentStream] Deactivated: ${prev.adapter.agentName} (${scopeKey})`);
             }
         }
 
-        this._activeAgentType = agentType;
-        this.lastDiscoveryTime = 0;
-        this.logFn(`[AgentStream] Active agent: ${agentType || 'none'}`);
+        this.activeAgentTypeByScope.set(scopeKey, agentType);
+        this.lastDiscoveryTimeByScope.set(scopeKey, 0);
+        if (!agentType && managed.size === 0) {
+            this.managedByScope.delete(scopeKey);
+        }
+        this.logFn(`[AgentStream] Active agent (${scopeKey}): ${agentType || 'none'}`);
     }
 
  /** Agent webview discovery + session connection */
-    async syncAgentSessions(cdp: DaemonCdpManager): Promise<void> {
-        if (!this.enabled || !this._activeAgentType) return;
+    async syncAgentSessions(cdp: DaemonCdpManager, scopeKey: string): Promise<void> {
+        const activeAgentType = this.getActiveAgentType(scopeKey);
+        if (!this.enabled || !activeAgentType) return;
 
         const now = Date.now();
-        if (this.managed.has(this._activeAgentType) && (now - this.lastDiscoveryTime) < this.discoveryIntervalMs) {
+        const managed = this.getManagedScope(scopeKey);
+        const lastDiscoveryTime = this.lastDiscoveryTimeByScope.get(scopeKey) || 0;
+        const discoveryIntervalMs = this.discoveryIntervalMsByScope.get(scopeKey) || 10_000;
+        if (managed.has(activeAgentType) && (now - lastDiscoveryTime) < discoveryIntervalMs) {
             return;
         }
-        this.lastDiscoveryTime = now;
+        this.lastDiscoveryTimeByScope.set(scopeKey, now);
 
         try {
             const targets = await cdp.discoverAgentWebviews();
-            const activeTarget = targets.find(t => t.agentType === this._activeAgentType);
+            const activeTarget = targets.find(t => t.agentType === activeAgentType);
 
-            if (activeTarget && !this.managed.has(this._activeAgentType)) {
-                const adapter = this.allAdapters.find(a => a.agentType === this._activeAgentType);
+            if (activeTarget && !managed.has(activeAgentType)) {
+                const adapter = this.allAdapters.find(a => a.agentType === activeAgentType);
                 if (adapter) {
                     const sessionId = await cdp.attachToAgent(activeTarget);
                     if (sessionId) {
-                        this.managed.set(this._activeAgentType, {
+                        managed.set(activeAgentType, {
                             adapter,
                             sessionId,
                             target: activeTarget,
@@ -110,34 +135,36 @@ export class DaemonAgentStreamManager {
                             lastError: null,
                             lastHiddenCheckTime: 0,
                         });
-                        this.logFn(`[AgentStream] Connected: ${adapter.agentName}`);
+                        this.logFn(`[AgentStream] Connected: ${adapter.agentName} (${scopeKey})`);
                     }
                 }
             }
 
  // Cleanup inactive agents
-            for (const [type, agent] of this.managed) {
-                if (type !== this._activeAgentType) {
+            for (const [type, agent] of managed) {
+                if (type !== activeAgentType) {
                     await cdp.detachAgent(agent.sessionId);
-                    this.managed.delete(type);
+                    managed.delete(type);
                 }
             }
 
-            this.discoveryIntervalMs = this.managed.has(this._activeAgentType) ? 30_000 : 10_000;
+            this.discoveryIntervalMsByScope.set(scopeKey, managed.has(activeAgentType) ? 30_000 : 10_000);
         } catch (e) {
-            this.logFn(`[AgentStream] sync error: ${(e as Error).message}`);
+            this.logFn(`[AgentStream] sync error (${scopeKey}): ${(e as Error).message}`);
         }
     }
 
  /** Collect active agent status */
-    async collectAgentStreams(cdp: DaemonCdpManager): Promise<AgentStreamState[]> {
+    async collectAgentStreams(cdp: DaemonCdpManager, scopeKey: string): Promise<AgentStreamState[]> {
         if (!this.enabled) return [];
 
         const results: AgentStreamState[] = [];
+        const activeAgentType = this.getActiveAgentType(scopeKey);
+        const managed = this.managedByScope.get(scopeKey);
 
-        if (this._activeAgentType && this.managed.has(this._activeAgentType)) {
-            const agent = this.managed.get(this._activeAgentType)!;
-            const type = this._activeAgentType;
+        if (activeAgentType && managed?.has(activeAgentType)) {
+            const agent = managed.get(activeAgentType)!;
+            const type = activeAgentType;
 
             const isHidden = agent.lastState?.status === 'panel_hidden';
             const hiddenCacheFresh = isHidden && (Date.now() - agent.lastHiddenCheckTime < 30000);
@@ -170,8 +197,8 @@ export class DaemonAgentStreamManager {
                     });
                     if (errorMsg.includes('timeout') || errorMsg.includes('not connected') || errorMsg.includes('Session')) {
                         try { await cdp.detachAgent(agent.sessionId); } catch { }
-                        this.managed.delete(type);
-                        this.lastDiscoveryTime = 0;
+                        managed.delete(type);
+                        this.lastDiscoveryTimeByScope.set(scopeKey, 0);
                     }
                 }
             }
@@ -180,9 +207,9 @@ export class DaemonAgentStreamManager {
         return results;
     }
 
-    async sendToAgent(cdp: DaemonCdpManager, agentType: string, text: string, targetIdeType?: string): Promise<boolean> {
+    async sendToAgent(cdp: DaemonCdpManager, scopeKey: string, agentType: string, text: string, targetIdeType?: string): Promise<boolean> {
         await this.ensureAgentPanelOpen(agentType, targetIdeType);
-        const agent = this.managed.get(agentType);
+        const agent = this.getManagedAgent(agentType, scopeKey);
         if (!agent) return false;
         try {
             const evaluate: AgentEvaluateFn = (expr, timeout) =>
@@ -195,9 +222,9 @@ export class DaemonAgentStreamManager {
         }
     }
 
-    async resolveAgentAction(cdp: DaemonCdpManager, agentType: string, action: 'approve' | 'reject', targetIdeType?: string): Promise<boolean> {
+    async resolveAgentAction(cdp: DaemonCdpManager, scopeKey: string, agentType: string, action: 'approve' | 'reject', targetIdeType?: string): Promise<boolean> {
         await this.ensureAgentPanelOpen(agentType, targetIdeType);
-        const agent = this.managed.get(agentType);
+        const agent = this.getManagedAgent(agentType, scopeKey);
         if (!agent) return false;
         try {
             const evaluate: AgentEvaluateFn = (expr, timeout) =>
@@ -209,9 +236,9 @@ export class DaemonAgentStreamManager {
         }
     }
 
-    async newAgentSession(cdp: DaemonCdpManager, agentType: string, targetIdeType?: string): Promise<boolean> {
+    async newAgentSession(cdp: DaemonCdpManager, scopeKey: string, agentType: string, targetIdeType?: string): Promise<boolean> {
         await this.ensureAgentPanelOpen(agentType, targetIdeType);
-        const agent = this.managed.get(agentType);
+        const agent = this.getManagedAgent(agentType, scopeKey);
         if (!agent) return false;
         try {
             const evaluate: AgentEvaluateFn = (expr, timeout) =>
@@ -224,14 +251,14 @@ export class DaemonAgentStreamManager {
         }
     }
 
-    async listAgentChats(cdp: DaemonCdpManager, agentType: string): Promise<AgentChatListItem[]> {
-        let agent = this.managed.get(agentType);
+    async listAgentChats(cdp: DaemonCdpManager, scopeKey: string, agentType: string): Promise<AgentChatListItem[]> {
+        let agent = this.getManagedAgent(agentType, scopeKey);
  // on-demand: try activate+sync if not in managed list
         if (!agent) {
-            this.logFn(`[AgentStream] listChats: ${agentType} not managed, trying on-demand activation`);
-            await this.switchActiveAgent(cdp, agentType);
-            await this.syncAgentSessions(cdp);
-            agent = this.managed.get(agentType);
+            this.logFn(`[AgentStream] listChats: ${agentType} not managed in ${scopeKey}, trying on-demand activation`);
+            await this.switchActiveAgent(cdp, scopeKey, agentType);
+            await this.syncAgentSessions(cdp, scopeKey);
+            agent = this.getManagedAgent(agentType, scopeKey);
         }
         if (!agent || typeof agent.adapter.listChats !== 'function') return [];
         try {
@@ -244,13 +271,13 @@ export class DaemonAgentStreamManager {
         }
     }
 
-    async switchAgentSession(cdp: DaemonCdpManager, agentType: string, sessionId: string): Promise<boolean> {
-        let agent = this.managed.get(agentType);
+    async switchAgentSession(cdp: DaemonCdpManager, scopeKey: string, agentType: string, sessionId: string): Promise<boolean> {
+        let agent = this.getManagedAgent(agentType, scopeKey);
         if (!agent) {
-            this.logFn(`[AgentStream] switchSession: ${agentType} not managed, trying on-demand activation`);
-            await this.switchActiveAgent(cdp, agentType);
-            await this.syncAgentSessions(cdp);
-            agent = this.managed.get(agentType);
+            this.logFn(`[AgentStream] switchSession: ${agentType} not managed in ${scopeKey}, trying on-demand activation`);
+            await this.switchActiveAgent(cdp, scopeKey, agentType);
+            await this.syncAgentSessions(cdp, scopeKey);
+            agent = this.getManagedAgent(agentType, scopeKey);
         }
         if (!agent || typeof agent.adapter.switchSession !== 'function') return false;
         try {
@@ -263,8 +290,8 @@ export class DaemonAgentStreamManager {
         }
     }
 
-    async focusAgentEditor(cdp: DaemonCdpManager, agentType: string): Promise<boolean> {
-        const agent = this.managed.get(agentType);
+    async focusAgentEditor(cdp: DaemonCdpManager, scopeKey: string, agentType: string): Promise<boolean> {
+        const agent = this.getManagedAgent(agentType, scopeKey);
         if (!agent || typeof agent.adapter.focusEditor !== 'function') return false;
         try {
             const evaluate: AgentEvaluateFn = (expr, timeout) =>
@@ -277,13 +304,26 @@ export class DaemonAgentStreamManager {
         }
     }
 
-    getConnectedAgents(): string[] { return Array.from(this.managed.keys()); }
-    getManagedAgent(agentType: string): ManagedAgent | undefined { return this.managed.get(agentType); }
+    getConnectedAgents(scopeKey?: string): string[] {
+        if (scopeKey) return Array.from((this.managedByScope.get(scopeKey) || new Map()).keys());
+        return Array.from(this.managedByScope.values()).flatMap(scope => Array.from(scope.keys()));
+    }
 
-    async dispose(cdp: DaemonCdpManager): Promise<void> {
-        for (const [, agent] of this.managed) {
-            try { await cdp.detachAgent(agent.sessionId); } catch { }
+    getManagedAgent(agentType: string, scopeKey: string): ManagedAgent | undefined {
+        return this.managedByScope.get(scopeKey)?.get(agentType);
+    }
+
+    async dispose(cdpManagers: Map<string, DaemonCdpManager>): Promise<void> {
+        for (const [scopeKey, managed] of this.managedByScope) {
+            const cdp = cdpManagers.get(scopeKey);
+            if (!cdp) continue;
+            for (const [, agent] of managed) {
+                try { await cdp.detachAgent(agent.sessionId); } catch { }
+            }
         }
-        this.managed.clear();
+        this.managedByScope.clear();
+        this.activeAgentTypeByScope.clear();
+        this.lastDiscoveryTimeByScope.clear();
+        this.discoveryIntervalMsByScope.clear();
     }
 }

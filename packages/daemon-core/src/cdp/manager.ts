@@ -660,9 +660,12 @@ export class DaemonCdpManager {
         try {
  // 1. Find webview iframe targets
             const { targetInfos } = await sendWs('Target.getTargets');
-            const webviewIframes = (targetInfos || []).filter(
-                (t: any) => t.type === 'iframe' && (t.url || '').includes('vscode-webview')
-            );
+            const pageWebviewUrls = await this.getCurrentPageWebviewUrls();
+            const webviewIframes = (targetInfos || []).filter((t: any) => {
+                if (t.type !== 'iframe' || !(t.url || '').includes('vscode-webview')) return false;
+                if (pageWebviewUrls.size === 0) return true;
+                return pageWebviewUrls.has(t.url || '');
+            });
 
             if (webviewIframes.length === 0) {
                 this.log('[CDP] evaluateInWebviewFrame: no webview iframes found');
@@ -766,6 +769,8 @@ export class DaemonCdpManager {
                 allTargets = result?.targetInfos || [];
             }
 
+            const pageWebviewUrls = await this.getCurrentPageWebviewUrls();
+
             const iframes = allTargets.filter((t: any) => t.type === 'iframe');
             const typeMap = new Map<string, number>();
             for (const t of allTargets) {
@@ -794,6 +799,7 @@ export class DaemonCdpManager {
                 const url = target.url || '';
                 const hasWebview = url.includes('vscode-webview');
                 if (!hasWebview) continue;
+                if (pageWebviewUrls.size > 0 && !pageWebviewUrls.has(url)) continue;
 
                 for (const known of this.extensionProviders) {
                     if (known.extensionIdPattern.test(url)) {
@@ -961,6 +967,23 @@ export class DaemonCdpManager {
 
     getAgentSessions(): Map<string, AgentWebviewTarget> {
         return this.agentSessions;
+    }
+
+    private async getCurrentPageWebviewUrls(): Promise<Set<string>> {
+        if (!this.isConnected) return new Set();
+        try {
+            const raw = await this.evaluate(
+                `JSON.stringify(Array.from(document.querySelectorAll('iframe,webview'))
+                    .map((el) => el.src || el.getAttribute('src') || '')
+                    .filter((src) => typeof src === 'string' && src.includes('vscode-webview')))`,
+                5000,
+            );
+            const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            if (!Array.isArray(parsed)) return new Set();
+            return new Set(parsed.filter((src: unknown): src is string => typeof src === 'string' && src.length > 0));
+        } catch {
+            return new Set();
+        }
     }
 
  // ─── Screenshot ──────────────────────────────────────────

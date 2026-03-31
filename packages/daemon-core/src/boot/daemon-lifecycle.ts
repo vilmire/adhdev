@@ -288,9 +288,8 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
 
     // 2. Dispose agent stream
     try {
-        const anyCdp = [...cdpManagers.values()].find(m => m.isConnected);
-        if (agentStreamManager && anyCdp) {
-            await agentStreamManager.dispose(anyCdp);
+        if (agentStreamManager) {
+            await agentStreamManager.dispose(cdpManagers);
         }
     } catch (e: any) { LOG.warn('Shutdown', `AgentStream dispose: ${e?.message}`); }
 

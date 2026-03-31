@@ -31,7 +31,6 @@ export interface AgentStreamPollerDeps {
 
 export class AgentStreamPoller {
     private deps: AgentStreamPollerDeps;
-    private _activeIdeType: string | null = null;
     private timer: NodeJS.Timeout | null = null;
 
     constructor(deps: AgentStreamPollerDeps) {
@@ -40,14 +39,12 @@ export class AgentStreamPoller {
 
     /** Currently active IDE type for agent streaming */
     get activeIde(): string | null {
-        return this._activeIdeType;
+        return null;
     }
 
     /** Reset active IDE tracking (e.g., when IDE is stopped) */
     resetActiveIde(ideType: string): void {
-        if (this._activeIdeType === ideType) {
-            this._activeIdeType = null;
-        }
+        this.deps.agentStreamManager.resetScope(ideType);
     }
 
     /** Start polling (idempotent — ignored if already started) */
@@ -113,56 +110,48 @@ export class AgentStreamPoller {
             }
 
             // 1c. If the active agent stream belongs to a now-disabled extension, detach it
-            if (this._activeIdeType === ideType && agentStreamManager.activeAgentType) {
-                const activeType = agentStreamManager.activeAgentType;
+            const activeType = agentStreamManager.getActiveAgentType(ideType);
+            if (activeType) {
                 const enabledExtTypes = new Set(
                     providerLoader.getEnabledExtensionProviders(ideType).map((p: any) => p.type)
                 );
                 if (!enabledExtTypes.has(activeType)) {
                     LOG.info('AgentStream', `Active agent ${activeType} was disabled for ${ideType} — detaching`);
-                    await agentStreamManager.switchActiveAgent(cdp, null);
-                    this._activeIdeType = null;
+                    await agentStreamManager.switchActiveAgent(cdp, ideType, null);
                     // Report empty streams so dashboard removes the tab
                     this.deps.onStreamsUpdated?.(ideType, []);
                 }
             }
-        }
-
-        // ─── Phase 2: Agent session sync + collect ───
-
-        // If agent already connected to a specific IDE, only operate on that CDP
-        if (this._activeIdeType) {
-            const cdp = cdpManagers.get(this._activeIdeType);
-            if (cdp?.isConnected) {
-                try {
-                    await agentStreamManager.syncAgentSessions(cdp);
-                    const streams = await agentStreamManager.collectAgentStreams(cdp);
-                    this.deps.onStreamsUpdated?.(this._activeIdeType, streams);
-                } catch { }
-                return;
+            if (!cdp.isConnected) {
+                if (activeType) {
+                    agentStreamManager.resetScope(ideType);
+                    this.deps.onStreamsUpdated?.(ideType, []);
+                }
+                continue;
             }
-            // CDP lost — reset
-            this._activeIdeType = null;
-        }
 
-        // ─── Phase 3: Auto-discover agents ───
-        if (!agentStreamManager.activeAgentType) {
-            for (const [ideType, cdp] of cdpManagers) {
-                if (!cdp.isConnected) continue;
+            // ─── Phase 2: Agent session sync + collect ───
+            let resolvedActiveType = activeType;
+
+            // ─── Phase 3: Auto-discover agents ───
+            if (!resolvedActiveType) {
                 try {
                     const discovered = await cdp.discoverAgentWebviews();
                     if (discovered.length > 0) {
-                        this._activeIdeType = ideType;
-                        await agentStreamManager.switchActiveAgent(cdp, discovered[0].agentType);
-                        LOG.info('AgentStream', `Auto-activated: ${discovered[0].agentType} (${ideType})`);
-                        // sync+collect immediately
-                        await agentStreamManager.syncAgentSessions(cdp);
-                        const streams = await agentStreamManager.collectAgentStreams(cdp);
-                        this.deps.onStreamsUpdated?.(ideType, streams);
-                        return;
+                        resolvedActiveType = discovered[0].agentType;
+                        await agentStreamManager.switchActiveAgent(cdp, ideType, resolvedActiveType);
+                        LOG.info('AgentStream', `Auto-activated: ${resolvedActiveType} (${ideType})`);
                     }
                 } catch { }
             }
+
+            if (!resolvedActiveType) continue;
+
+            try {
+                await agentStreamManager.syncAgentSessions(cdp, ideType);
+                const streams = await agentStreamManager.collectAgentStreams(cdp, ideType);
+                this.deps.onStreamsUpdated?.(ideType, streams);
+            } catch { }
         }
     }
 }

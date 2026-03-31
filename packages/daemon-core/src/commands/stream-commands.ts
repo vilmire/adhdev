@@ -11,15 +11,15 @@ import { LOG } from '../logging/logger.js';
 // ─── Agent Stream commands ───────────────────────
 
 export async function handleAgentStreamSwitch(h: CommandHelpers, args: any): Promise<CommandResult> {
-    if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
+    if (!h.agentStream || !h.getCdp() || !h.currentIdeType) return { success: false, error: 'AgentStream or CDP not available' };
     const agentType = args?.agentType || args?.agent || null;
-    await h.agentStream.switchActiveAgent(h.getCdp()!, agentType);
+    await h.agentStream.switchActiveAgent(h.getCdp()!, h.currentIdeType, agentType);
     return { success: true, activeAgent: agentType };
 }
 
 export async function handleAgentStreamRead(h: CommandHelpers, args: any): Promise<CommandResult> {
-    if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
-    const streams = await h.agentStream.collectAgentStreams(h.getCdp()!);
+    if (!h.agentStream || !h.getCdp() || !h.currentIdeType) return { success: false, error: 'AgentStream or CDP not available' };
+    const streams = await h.agentStream.collectAgentStreams(h.getCdp()!, h.currentIdeType);
     return { success: true, streams };
 }
 
@@ -46,52 +46,58 @@ export async function handleAgentStreamSend(h: CommandHelpers, args: any): Promi
 
     // CDP-based IDE agent routing
     if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
-    const resolvedAgent = agentType || h.agentStream.activeAgentType;
+    const resolvedAgent = agentType || (h.currentIdeType ? h.agentStream.getActiveAgentType(h.currentIdeType) : null);
     if (!resolvedAgent) return { success: false, error: 'agentType required' };
-    const ok = await h.agentStream.sendToAgent(h.getCdp()!, resolvedAgent, text, h.currentIdeType);
+    if (!h.currentIdeType) return { success: false, error: 'ideType required' };
+    const ok = await h.agentStream.sendToAgent(h.getCdp()!, h.currentIdeType, resolvedAgent, text, h.currentIdeType);
     return { success: ok };
 }
 
 export async function handleAgentStreamResolve(h: CommandHelpers, args: any): Promise<CommandResult> {
     if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
-    const agentType = args?.agentType || args?.agent || h.agentStream.activeAgentType;
+    const agentType = args?.agentType || args?.agent || (h.currentIdeType ? h.agentStream.getActiveAgentType(h.currentIdeType) : null);
     const action = args?.action as 'approve' | 'reject' || 'approve';
     if (!agentType) return { success: false, error: 'agentType required' };
-    const ok = await h.agentStream.resolveAgentAction(h.getCdp()!, agentType, action, h.currentIdeType);
+    if (!h.currentIdeType) return { success: false, error: 'ideType required' };
+    const ok = await h.agentStream.resolveAgentAction(h.getCdp()!, h.currentIdeType, agentType, action, h.currentIdeType);
     return { success: ok };
 }
 
 export async function handleAgentStreamNew(h: CommandHelpers, args: any): Promise<CommandResult> {
     if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
-    const agentType = args?.agentType || args?.agent || h.agentStream.activeAgentType;
+    const agentType = args?.agentType || args?.agent || (h.currentIdeType ? h.agentStream.getActiveAgentType(h.currentIdeType) : null);
     if (!agentType) return { success: false, error: 'agentType required' };
-    const ok = await h.agentStream.newAgentSession(h.getCdp()!, agentType, h.currentIdeType);
+    if (!h.currentIdeType) return { success: false, error: 'ideType required' };
+    const ok = await h.agentStream.newAgentSession(h.getCdp()!, h.currentIdeType, agentType, h.currentIdeType);
     return { success: ok };
 }
 
 export async function handleAgentStreamListChats(h: CommandHelpers, args: any): Promise<CommandResult> {
     if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
-    const agentType = args?.agentType || args?.agent || h.agentStream.activeAgentType;
+    const agentType = args?.agentType || args?.agent || (h.currentIdeType ? h.agentStream.getActiveAgentType(h.currentIdeType) : null);
     if (!agentType) return { success: false, error: 'agentType required' };
-    const chats = await h.agentStream.listAgentChats(h.getCdp()!, agentType);
+    if (!h.currentIdeType) return { success: false, error: 'ideType required' };
+    const chats = await h.agentStream.listAgentChats(h.getCdp()!, h.currentIdeType, agentType);
     return { success: true, chats };
 }
 
 export async function handleAgentStreamSwitchSession(h: CommandHelpers, args: any): Promise<CommandResult> {
     if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
-    const agentType = args?.agentType || args?.agent || h.agentStream.activeAgentType;
+    const agentType = args?.agentType || args?.agent || (h.currentIdeType ? h.agentStream.getActiveAgentType(h.currentIdeType) : null);
     const sessionId = args?.sessionId || args?.id;
     if (!agentType || !sessionId) return { success: false, error: 'agentType and sessionId required' };
-    const ok = await h.agentStream.switchAgentSession(h.getCdp()!, agentType, sessionId);
+    if (!h.currentIdeType) return { success: false, error: 'ideType required' };
+    const ok = await h.agentStream.switchAgentSession(h.getCdp()!, h.currentIdeType, agentType, sessionId);
     return { success: ok };
 }
 
 export async function handleAgentStreamFocus(h: CommandHelpers, args: any): Promise<CommandResult> {
     if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
-    const agentType = args?.agentType || args?.agent || h.agentStream.activeAgentType;
+    const agentType = args?.agentType || args?.agent || (h.currentIdeType ? h.agentStream.getActiveAgentType(h.currentIdeType) : null);
     if (!agentType) return { success: false, error: 'agentType required' };
     await h.agentStream.ensureAgentPanelOpen(agentType, h.currentIdeType);
-    const ok = await h.agentStream.focusAgentEditor(h.getCdp()!, agentType);
+    if (!h.currentIdeType) return { success: false, error: 'ideType required' };
+    const ok = await h.agentStream.focusAgentEditor(h.getCdp()!, h.currentIdeType, agentType);
     return { success: ok };
 }
 

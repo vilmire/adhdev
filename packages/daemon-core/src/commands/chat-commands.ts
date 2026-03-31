@@ -71,8 +71,8 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
         // Alternative: AgentStreamManager (script fail when)
         if (h.agentStream) {
             const cdp = h.getCdp();
-            if (cdp) {
-                const streams = await h.agentStream.collectAgentStreams(cdp);
+            if (cdp && h.currentIdeType) {
+                const streams = await h.agentStream.collectAgentStreams(cdp, h.currentIdeType);
                 const stream = streams.find((s: any) => s.agentType === provider.type);
                 if (stream) {
                     h.historyWriter.appendNewMessages(
@@ -197,8 +197,8 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
             _log(`Extension script error: ${e.message}`);
         }
         // Method 2: AgentStreamManager
-        if (h.agentStream && h.getCdp()) {
-            const ok = await h.agentStream.sendToAgent(h.getCdp()!, provider.type, text, h.currentIdeType);
+        if (h.agentStream && h.getCdp() && h.currentIdeType) {
+            const ok = await h.agentStream.sendToAgent(h.getCdp()!, h.currentIdeType, provider.type, text, h.currentIdeType);
             if (ok) {
                 _log(`AgentStreamManager sent OK`);
                 return _logSendSuccess('agent-stream');
@@ -318,9 +318,9 @@ export async function handleListChats(h: CommandHelpers, args: any): Promise<Com
     const provider = h.getProvider(args?.agentType);
 
     // Extension: via AgentStreamManager
-    if (provider?.category === 'extension' && h.agentStream && h.getCdp()) {
+    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentIdeType) {
         try {
-            const chats = await h.agentStream.listAgentChats(h.getCdp()!, provider.type);
+            const chats = await h.agentStream.listAgentChats(h.getCdp()!, h.currentIdeType, provider.type);
             LOG.info('Command', `[list_chats] Extension: ${chats.length} chats`);
             return { success: true, chats };
         } catch (e: any) {
@@ -377,8 +377,8 @@ export async function handleNewChat(h: CommandHelpers, args: any): Promise<Comma
         return { success: false, error: 'new_chat not supported by this CLI provider' };
     }
 
-    if (provider?.category === 'extension' && h.agentStream && h.getCdp()) {
-        const ok = await h.agentStream.newAgentSession(h.getCdp()!, provider.type, h.currentIdeType);
+    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentIdeType) {
+        const ok = await h.agentStream.newAgentSession(h.getCdp()!, h.currentIdeType, provider.type, h.currentIdeType);
         return { success: ok };
     }
 
@@ -412,8 +412,8 @@ export async function handleSwitchChat(h: CommandHelpers, args: any): Promise<Co
     if (!sessionId) return { success: false, error: 'sessionId required' };
     LOG.info('Command', `[switch_chat] sessionId=${sessionId}, ideType=${ideType}`);
 
-    if (provider?.category === 'extension' && h.agentStream && h.getCdp()) {
-        const ok = await h.agentStream.switchAgentSession(h.getCdp()!, provider.type, sessionId);
+    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentIdeType) {
+        const ok = await h.agentStream.switchAgentSession(h.getCdp()!, h.currentIdeType, provider.type, sessionId);
         return { success: ok, result: ok ? 'switched' : 'failed' };
     }
 
@@ -681,9 +681,9 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
     }
 
     // 1. Extension: via AgentStreamManager
-    if (provider?.category === 'extension' && h.agentStream && h.getCdp()) {
+    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentIdeType) {
         const ok = await h.agentStream.resolveAgentAction(
-            h.getCdp()!, provider.type, action, h.currentIdeType
+            h.getCdp()!, h.currentIdeType, provider.type, action, h.currentIdeType
         );
         return { success: ok };
     }

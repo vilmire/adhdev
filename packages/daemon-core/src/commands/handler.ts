@@ -97,7 +97,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         // 1. Try instanceIdMap (UUID → managerKey)
         const resolved = this._ctx.instanceIdMap?.get(key) || key;
         // 2. Use findCdpManager (exact + prefix match)
-        const m = findCdpManager(this._ctx.cdpManagers, resolved.toLowerCase());
+        const m = findCdpManager(this._ctx.cdpManagers, resolved);
         if (m?.isConnected) return m;
         return null;
     }
@@ -148,11 +148,11 @@ export class DaemonCommandHandler implements CommandHelpers {
 
         // Extension: evaluateInSession
         if (provider?.category === 'extension') {
-            let sessionId = this.getExtensionSessionId(provider);
-            if (!sessionId && this._agentStream) {
-                await this._agentStream.switchActiveAgent(cdp, provider.type);
-                await this._agentStream.syncAgentSessions(cdp);
-                sessionId = this.getExtensionSessionId(provider);
+            let sessionId = this.getExtensionSessionId(provider, this._currentIdeType);
+            if (!sessionId && this._agentStream && this._currentIdeType) {
+                await this._agentStream.switchActiveAgent(cdp, this._currentIdeType, provider.type);
+                await this._agentStream.syncAgentSessions(cdp, this._currentIdeType);
+                sessionId = this.getExtensionSessionId(provider, this._currentIdeType);
             }
             if (!sessionId) return null;
             const result = await cdp.evaluateInSessionFrame(sessionId, script, timeout);
@@ -194,10 +194,40 @@ export class DaemonCommandHandler implements CommandHelpers {
 
     // ─── Private helpers ──────────────────────────────
 
-    private getExtensionSessionId(provider: ProviderModule): string | null {
-        if (provider.category !== 'extension' || !this._agentStream) return null;
-        const managed = this._agentStream.getManagedAgent(provider.type);
+    private getExtensionSessionId(provider: ProviderModule, scopeKey?: string): string | null {
+        if (provider.category !== 'extension' || !this._agentStream || !scopeKey) return null;
+        const managed = this._agentStream.getManagedAgent(provider.type, scopeKey);
         return managed?.sessionId || null;
+    }
+
+    private resolveManagerKeyFromInstanceId(instanceId: string): string | undefined {
+        const mapped = this._ctx.instanceIdMap?.get(instanceId);
+        if (mapped) return mapped;
+
+        const entries = (this._ctx.instanceManager as any)?.instances?.entries?.();
+        if (!entries) return undefined;
+
+        for (const [instanceKey, instance] of entries as Iterable<[string, any]>) {
+            if (typeof instanceKey !== 'string' || !instanceKey.startsWith('ide:')) continue;
+
+            if (typeof instance?.getInstanceId === 'function' && instance.getInstanceId() === instanceId) {
+                const managerKey = instanceKey.slice(4);
+                this._ctx.instanceIdMap?.set(instanceId, managerKey);
+                return managerKey;
+            }
+
+            if (typeof instance?.getExtensionInstances === 'function') {
+                for (const ext of instance.getExtensionInstances() || []) {
+                    if (typeof ext?.getInstanceId === 'function' && ext.getInstanceId() === instanceId) {
+                        const managerKey = instanceKey.slice(4);
+                        this._ctx.instanceIdMap?.set(instanceId, managerKey);
+                        return managerKey;
+                    }
+                }
+            }
+        }
+
+        return undefined;
     }
 
     /** Extract ideType from _targetInstance or explicit ideType */
@@ -205,7 +235,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         // Also accept explicit ideType from args (P2P input, agentType for extensions)
         if (args?.ideType) {
             // UUID → managerKey via instanceIdMap (P2P sends UUID instance IDs)
-            const mappedKey = this._ctx.instanceIdMap?.get(args.ideType);
+            const mappedKey = this.resolveManagerKeyFromInstanceId(args.ideType);
             if (mappedKey) {
                 return mappedKey;
             }
@@ -232,8 +262,9 @@ export class DaemonCommandHandler implements CommandHelpers {
             else if (cliMatch) raw = cliMatch[1];
             else if (acpMatch) raw = acpMatch[1];
 
-            if (this._ctx.instanceIdMap?.has(raw)) {
-                return this._ctx.instanceIdMap.get(raw)!;
+            const mappedKey = this.resolveManagerKeyFromInstanceId(raw);
+            if (mappedKey) {
+                return mappedKey;
             }
 
             // Direct CDP manager key match (e.g. "cursor", "cursor_remote_vs")
