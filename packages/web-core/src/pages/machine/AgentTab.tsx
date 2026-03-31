@@ -98,7 +98,7 @@ export default function AgentTab({
             try {
                 const res: any = await sendDaemonCommand(machineId, 'get_ide_extensions', {})
                 const payload = res?.result || res
-                if (payload?.success && payload?.ides) setIdeExtensions(payload.ides)
+                if (payload?.success && payload?.ideExtensions) setIdeExtensions(payload.ideExtensions)
             } catch { /* silent */ }
         }
         fetchExtensions()

@@ -216,7 +216,7 @@ export function handleGetIdeExtensions(h: CommandHelpers, args: any): CommandRes
             enabled: config.ideSettings?.[ide]?.extensions?.[p.type]?.enabled === true,
         }));
     }
-    return { success: true, ides: result };
+    return { success: true, ideExtensions: result };
 }
 
 export function handleSetIdeExtension(h: CommandHelpers, args: any): CommandResult {

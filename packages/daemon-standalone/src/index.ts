@@ -402,7 +402,7 @@ class StandaloneServer {
     const status = this.getStatus();
     const msg = JSON.stringify({ type: 'status', data: status });
     const cdpCount = [...this.components!.cdpManagers.values()].filter(m => m.isConnected).length;
-    LOG.debug('Broadcast', `status → ${this.clients.size} client(s), ${(status as any).ides?.length || 0} IDE(s), ${cdpCount} CDP`);
+    LOG.debug('Broadcast', `status → ${this.clients.size} client(s), ${(status as any).sessions?.length || 0} session(s), ${cdpCount} CDP`);
     for (const client of this.clients) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(msg);
