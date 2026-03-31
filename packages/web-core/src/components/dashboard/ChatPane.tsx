@@ -203,16 +203,14 @@ export default function ChatPane({
                 const modelBarAgentType = isNativeConversation
                     ? activeConv.ideType
                     : activeConv.agentType
-                const modelBarAgentName = isNativeConversation
-                    ? activeConv.agentName
-                    : activeConv.agentName
+                const modelBarLabel = activeConv.displayPrimary || activeConv.agentName || 'Agent'
                 return (
                     <DashboardModelModeBar
                         ideId={activeConv.ideId}
                         sessionId={activeConv.sessionId}
                         ideType={activeConv.ideType}
-                        agentType={modelBarAgentType}
-                        agentName={modelBarAgentName}
+                        providerType={modelBarAgentType}
+                        displayLabel={modelBarLabel}
                         serverModel={(ideEntry as any)?.currentModel || undefined}
                         serverMode={(ideEntry as any)?.currentPlan || undefined}
                         acpConfigOptions={isAcpConv(activeConv) ? (ideEntry as any)?.acpConfigOptions : undefined}

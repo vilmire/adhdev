@@ -16,8 +16,8 @@ export interface ModelModeBarProps {
     ideId: string;
     sessionId?: string;
     ideType: string;
-    agentType: string;
-    agentName: string;
+    providerType: string;
+    displayLabel: string;
     /** Current model from daemon status report */
     serverModel?: string;
     /** Current mode from daemon status report */
@@ -28,10 +28,10 @@ export interface ModelModeBarProps {
     acpModes?: { id: string; name: string; description?: string }[];
 }
 
-export default function DashboardModelModeBar({ ideId, sessionId, ideType, agentType, agentName, serverModel, serverMode, acpConfigOptions, acpModes }: ModelModeBarProps) {
+export default function DashboardModelModeBar({ ideId, sessionId, ideType, providerType, displayLabel, serverModel, serverMode, acpConfigOptions, acpModes }: ModelModeBarProps) {
     const { sendCommand } = useTransport();
     const isAcp = !!(acpConfigOptions || acpModes);
-    const cacheKey = `${ideId}:${sessionId || agentType}`;
+    const cacheKey = `${ideId}:${sessionId || providerType}`;
     const cached = _modelModeCache.get(cacheKey);
 
     const [modelOpen, setModelOpen] = useState(false);
@@ -99,7 +99,7 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, agent
         } else {
             setModels([]); setModes([]);
         }
-    }, [ideId, agentType, sessionId]);
+    }, [ideId, providerType, sessionId]);
 
     // Reflect real-time server value updates (ignore for 5s after local changes)
     useEffect(() => {
@@ -122,7 +122,7 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, agent
         if (isAcp) { setModelOpen(true); return; } // ACP: already configured
         setLoadingModels(true);
         try {
-            const res: any = await exec('list_extension_models', { agentType, ideType });
+            const res: any = await exec('list_extension_models', { agentType: providerType, ideType });
             const rawList = res?.models || res?.result?.models || [];
             const list = normalizeList(rawList);
             setModels(list);
@@ -141,7 +141,7 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, agent
         if (isAcp) { setModeOpen(true); return; } // ACP: already configured
         setLoadingModes(true);
         try {
-            const res: any = await exec('list_extension_modes', { agentType, ideType });
+            const res: any = await exec('list_extension_modes', { agentType: providerType, ideType });
             const rawList = res?.modes || res?.result?.modes || [];
             const list = normalizeList(rawList);
             setModes(list);
@@ -161,9 +161,9 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, agent
         localOverrideUntil.current = Date.now() + 5000; // 5s ignore server values
         try {
             if (isAcp) {
-                await exec('change_model', { agentType, ideType, model });
+                await exec('change_model', { agentType: providerType, ideType, model });
             } else {
-                await exec('set_extension_model', { agentType, ideType, model });
+                await exec('set_extension_model', { agentType: providerType, ideType, model });
             }
         } catch { /* silent */ }
     };
@@ -179,11 +179,11 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, agent
         try {
             if (isAcp && isThoughtLevel && thoughtConfigId) {
                 // thought_level → change via set_config_option
-                await exec('set_thought_level', { agentType, ideType, configId: thoughtConfigId, value: mode });
+                await exec('set_thought_level', { agentType: providerType, ideType, configId: thoughtConfigId, value: mode });
             } else if (isAcp) {
-                await exec('set_mode', { agentType, ideType, mode });
+                await exec('set_mode', { agentType: providerType, ideType, mode });
             } else {
-                await exec('set_extension_mode', { agentType, ideType, mode });
+                await exec('set_extension_mode', { agentType: providerType, ideType, mode });
             }
         } catch { /* silent */ }
     };
@@ -192,7 +192,7 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, agent
         'cline': '#22d3ee', 'roo-code': '#a78bfa', 'cursor': '#60a5fa',
         'antigravity': '#f97316', 'windsurf': '#34d399',
     };
-    const accent = AGENT_COLORS[agentType] || '#94a3b8';
+    const accent = AGENT_COLORS[providerType] || '#94a3b8';
 
     return (
         <div className="flex items-center gap-1.5 px-3 py-1 flex-wrap text-[10px] border-t border-border-subtle bg-[var(--surface-primary)]">
@@ -200,7 +200,7 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, agent
                 className="text-[9px] font-bold tracking-wide uppercase opacity-70"
                 style={{ color: accent }}
             >
-                {agentName}
+                {displayLabel}
             </span>
             <span className="text-border-subtle text-[10px]">│</span>
 
