@@ -24,6 +24,7 @@ export interface DashboardPaneProps {
     agentInput: string;
     setAgentInput: (v: string | ((prev: string) => string)) => void;
     handleSendChat: () => void;
+    isSendingChat?: boolean;
     handleFocusAgent: () => void;
     handleRelaunch: () => void;
     handleModalButton: (btnText: string) => void;
@@ -52,6 +53,7 @@ export interface DashboardPaneProps {
 export default function DashboardPane({
     activeConv, ides,
     agentInput, setAgentInput, handleSendChat,
+    isSendingChat = false,
     handleFocusAgent, handleRelaunch, handleModalButton,
     isFocusingAgent, messageReceivedAt, actionLogs,
     ptyBuffers, terminalRef,
@@ -130,6 +132,7 @@ export default function DashboardPane({
                     agentInput={agentInput}
                     setAgentInput={setAgentInput}
                     handleSendChat={handleSendChat}
+                    isSendingChat={isSendingChat}
                 />
             ) : (
                 <ChatPane
@@ -138,6 +141,7 @@ export default function DashboardPane({
                     agentInput={agentInput}
                     setAgentInput={setAgentInput}
                     handleSendChat={handleSendChat}
+                    isSendingChat={isSendingChat}
                     handleFocusAgent={handleFocusAgent}
                     isFocusingAgent={isFocusingAgent}
                     messageReceivedAt={messageReceivedAt}

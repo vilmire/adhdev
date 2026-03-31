@@ -7,8 +7,33 @@ import type { CommandResult, CommandHelpers } from './handler.js';
 import { readChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 
+const RECENT_SEND_WINDOW_MS = 1200;
+const recentSendByTarget = new Map<string, number>();
+
 function getTargetedCliAdapter(h: CommandHelpers, args: any, providerType?: string) {
     return h.getCliAdapter(args?._targetInstance || h.currentIdeType || providerType);
+}
+
+function buildRecentSendKey(h: CommandHelpers, args: any, provider: any, text: string): string {
+    const target =
+        args?._targetInstance
+        || args?.instanceId
+        || args?.agentType
+        || h.currentProviderType
+        || h.currentIdeType
+        || 'unknown';
+    return `${provider?.category || 'unknown'}:${target}:${text.trim()}`;
+}
+
+function isRecentDuplicateSend(key: string): boolean {
+    const now = Date.now();
+    for (const [candidate, ts] of recentSendByTarget.entries()) {
+        if (now - ts > RECENT_SEND_WINDOW_MS) recentSendByTarget.delete(candidate);
+    }
+    const previous = recentSendByTarget.get(key);
+    if (previous && (now - previous) <= RECENT_SEND_WINDOW_MS) return true;
+    recentSendByTarget.set(key, now);
+    return false;
 }
 
 export async function handleChatHistory(h: CommandHelpers, args: any): Promise<CommandResult> {
@@ -151,6 +176,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
     if (!text) return { success: false, error: 'text required' };
     const _log = (msg: string) => LOG.debug('Command', `[send_chat] ${msg}`);
     const provider = h.getProvider(args?.agentType);
+    const dedupeKey = buildRecentSendKey(h, args, provider, text);
 
     const _logSendSuccess = (method: string, targetAgent?: string) => {
         h.historyWriter.appendNewMessages(
@@ -161,6 +187,11 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
         );
         return { success: true, sent: true, method, targetAgent };
     };
+
+    if (isRecentDuplicateSend(dedupeKey)) {
+        _log(`Suppressed duplicate send for ${dedupeKey}`);
+        return { success: true, sent: false, deduplicated: true };
+    }
 
     // CLI / ACP category: transmit via adapter
     if (provider?.category === 'cli' || provider?.category === 'acp') {
@@ -207,7 +238,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
         return { success: false, error: `Extension '${provider.type}' send failed` };
     }
 
-    // IDE category (default): Provider → typeAndSend → script
+    // IDE category (default): provider sendMessage script is authoritative when present.
     const targetCdp = h.getCdp();
     if (!targetCdp?.isConnected) {
         _log(`No CDP for ${h.currentIdeType}`);
@@ -215,42 +246,6 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
     }
 
     _log(`Targeting IDE: ${h.currentIdeType}`);
-
-    // Method 0: webview-based IDE (try webviewSendMessage first)
-    if (provider?.webviewMatchText && provider?.scripts?.webviewSendMessage) {
-        try {
-            const webviewScript = (provider.scripts as any).webviewSendMessage(text);
-            if (webviewScript && targetCdp.evaluateInWebviewFrame) {
-                const matchText = provider.webviewMatchText;
-                const matchFn = matchText ? (body: string) => body.includes(matchText) : undefined;
-                const wvResult = await targetCdp.evaluateInWebviewFrame(webviewScript, matchFn);
-                let wvParsed: any = wvResult;
-                if (typeof wvResult === 'string') { try { wvParsed = JSON.parse(wvResult); } catch { } }
-                if (wvParsed?.sent) {
-                    _log(`webviewSendMessage (priority) OK`);
-                    return _logSendSuccess('webview-script-priority');
-                }
-                _log(`webviewSendMessage (priority) did not confirm sent, falling through`);
-            }
-        } catch (e: any) {
-            _log(`webviewSendMessage (priority) failed: ${e.message}, falling through`);
-        }
-    }
-
-    // Method 1: use provider.inputMethod if available (main frame input)
-    if (provider?.inputMethod === 'cdp-type-and-send' && provider.inputSelector) {
-        try {
-            const sent = await targetCdp.typeAndSend(provider.inputSelector, text);
-            if (sent) {
-                _log(`typeAndSend(provider.inputSelector=${provider.inputSelector}) success`);
-                return _logSendSuccess('typeAndSend-provider');
-            }
-        } catch (e: any) {
-            _log(`typeAndSend(provider) failed: ${e.message}`);
-        }
-    }
-
-    // Method 2: provider sendMessage script
     const sendScript = h.getProviderScript('sendMessage', { MESSAGE: text });
     if (sendScript) {
         try {
@@ -261,7 +256,6 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                 _log(`sendMessage script OK`);
                 return _logSendSuccess('script');
             }
-            // needsTypeAndSend response: typeAndSend using script-specified selector
             if (parsed?.needsTypeAndSend && parsed?.selector) {
                 try {
                     const sent = await targetCdp.typeAndSend(parsed.selector, text);
@@ -273,8 +267,30 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                     _log(`typeAndSend(script.selector) failed: ${e.message}`);
                 }
             }
-            // webviewSendMessage: attempt direct transmission from inside webview iframe
-            if (parsed?.needsTypeAndSend && provider?.scripts?.webviewSendMessage) {
+            if (parsed?.needsTypeAndSend && parsed?.clickCoords) {
+                try {
+                    const { x, y } = parsed.clickCoords;
+                    const sent = await targetCdp.typeAndSendAt(x, y, text);
+                    if (sent) {
+                        _log(`typeAndSendAt(${x},${y}) success`);
+                        return _logSendSuccess('typeAndSendAt-script');
+                    }
+                } catch (e: any) {
+                    _log(`typeAndSendAt failed: ${e.message}`);
+                }
+            }
+            if (parsed?.needsTypeAndSend && provider?.inputMethod === 'cdp-type-and-send' && provider.inputSelector) {
+                try {
+                    const sent = await targetCdp.typeAndSend(provider.inputSelector, text);
+                    if (sent) {
+                        _log(`typeAndSend(provider.inputSelector=${provider.inputSelector}) success`);
+                        return _logSendSuccess('typeAndSend-provider');
+                    }
+                } catch (e: any) {
+                    _log(`typeAndSend(provider) failed: ${e.message}`);
+                }
+            }
+            if (parsed?.needsTypeAndSend && provider?.webviewMatchText && provider?.scripts?.webviewSendMessage) {
                 try {
                     const webviewScript = (provider.scripts as any).webviewSendMessage(text);
                     if (webviewScript && targetCdp.evaluateInWebviewFrame) {
@@ -292,21 +308,41 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                     _log(`webviewSendMessage failed: ${e.message}`);
                 }
             }
-            // Coordinate-based fallback: input field inside webview iframe
-            if (parsed?.needsTypeAndSend && parsed?.clickCoords) {
-                try {
-                    const { x, y } = parsed.clickCoords;
-                    const sent = await targetCdp.typeAndSendAt(x, y, text);
-                    if (sent) {
-                        _log(`typeAndSendAt(${x},${y}) success`);
-                        return _logSendSuccess('typeAndSendAt-script');
-                    }
-                } catch (e: any) {
-                    _log(`typeAndSendAt failed: ${e.message}`);
+            return { success: false, error: parsed?.error || 'Provider sendMessage did not confirm send' };
+        } catch (e: any) {
+            _log(`sendMessage script failed: ${e.message}`);
+            return { success: false, error: `Provider sendMessage failed: ${e.message}` };
+        }
+    }
+
+    if (provider?.webviewMatchText && provider?.scripts?.webviewSendMessage) {
+        try {
+            const webviewScript = (provider.scripts as any).webviewSendMessage(text);
+            if (webviewScript && targetCdp.evaluateInWebviewFrame) {
+                const matchText = provider.webviewMatchText;
+                const matchFn = matchText ? (body: string) => body.includes(matchText) : undefined;
+                const wvResult = await targetCdp.evaluateInWebviewFrame(webviewScript, matchFn);
+                let wvParsed: any = wvResult;
+                if (typeof wvResult === 'string') { try { wvParsed = JSON.parse(wvResult); } catch { } }
+                if (wvParsed?.sent) {
+                    _log(`webviewSendMessage OK`);
+                    return _logSendSuccess('webview-script');
                 }
             }
         } catch (e: any) {
-            _log(`sendMessage script failed: ${e.message}`);
+            _log(`webviewSendMessage failed: ${e.message}`);
+        }
+    }
+
+    if (provider?.inputMethod === 'cdp-type-and-send' && provider.inputSelector) {
+        try {
+            const sent = await targetCdp.typeAndSend(provider.inputSelector, text);
+            if (sent) {
+                _log(`typeAndSend(provider.inputSelector=${provider.inputSelector}) success`);
+                return _logSendSuccess('typeAndSend-provider');
+            }
+        } catch (e: any) {
+            _log(`typeAndSend(provider) failed: ${e.message}`);
         }
     }
 

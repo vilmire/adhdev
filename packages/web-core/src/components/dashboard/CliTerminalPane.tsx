@@ -17,11 +17,13 @@ export interface CliTerminalPaneProps {
     agentInput: string;
     setAgentInput: (v: string | ((prev: string) => string)) => void;
     handleSendChat: () => void;
+    isSendingChat?: boolean;
 }
 
 export default function CliTerminalPane({
     activeConv, ptyBuffers, terminalRef,
     agentInput, setAgentInput, handleSendChat,
+    isSendingChat = false,
 }: CliTerminalPaneProps) {
     const chatInputRef = useRef<HTMLInputElement>(null);
     const { sendCommand, sendData } = useTransport();
@@ -115,11 +117,11 @@ export default function CliTerminalPane({
                     </div>
                     <button
                         onClick={handleSendChat}
-                        disabled={!agentInput.trim()}
+                        disabled={!agentInput.trim() || isSendingChat}
                         className={`w-9 h-9 rounded-full flex items-center justify-center border-none shrink-0 transition-all duration-300 ${
-                            agentInput.trim() ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
+                            agentInput.trim() && !isSendingChat ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
                         }`}
-                        style={agentInput.trim() ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
+                        style={agentInput.trim() && !isSendingChat ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
                     >
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={agentInput.trim() ? 'text-white' : 'text-text-muted'}>
                             <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />

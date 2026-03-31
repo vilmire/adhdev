@@ -650,6 +650,7 @@ export default function PaneGroup({
                                 agentInput={cmds.agentInput}
                                 setAgentInput={cmds.setAgentInput}
                                 handleSendChat={cmds.handleSendChat}
+                                isSendingChat={cmds.isSendingChat}
                             />
                         ) : (
                             <ChatPane
@@ -658,6 +659,7 @@ export default function PaneGroup({
                                 agentInput={cmds.agentInput}
                                 setAgentInput={cmds.setAgentInput}
                                 handleSendChat={cmds.handleSendChat}
+                                isSendingChat={cmds.isSendingChat}
                                 handleFocusAgent={cmds.handleFocusAgent}
                                 isFocusingAgent={cmds.isFocusingAgent}
                                 messageReceivedAt={messageReceivedAt}

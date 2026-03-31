@@ -4,7 +4,7 @@
  * Extracted from Dashboard.tsx to reduce component complexity.
  * All daemon command handlers: sendChat, newChat, switchSession, etc.
  */
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import type { DaemonData } from '../types'
 import type { ActiveConversation } from '../components/dashboard/types'
 import { isCliConv, isAcpConv } from '../components/dashboard/types'
@@ -41,6 +41,8 @@ export function useDashboardCommands({
     const [isCreatingChat, setIsCreatingChat] = useState(false)
     const [isRefreshingHistory, setIsRefreshingHistory] = useState(false)
     const [isFocusingAgent, setIsFocusingAgent] = useState(false)
+    const [isSendingChat, setIsSendingChat] = useState(false)
+    const sendInFlightRef = useRef(false)
 
     const getProviderArgs = useCallback((conv: ActiveConversation | undefined) => {
         if (!conv) return {};
@@ -56,9 +58,11 @@ export function useDashboardCommands({
     const handleSendChat = useCallback(async () => {
         if (!activeConv) return
         const message = agentInput.trim()
-        if (!message) return
+        if (!message || sendInFlightRef.current) return
         const targetIde = activeConv.ideId
         const tabKey = activeConv.tabKey
+        sendInFlightRef.current = true
+        setIsSendingChat(true)
         setAgentInput('')
 
         // Prevent tab reset from WS/P2P updates during message send
@@ -98,6 +102,9 @@ export function useDashboardCommands({
                 ...prev,
                 [tabKey]: (prev[tabKey] || []).filter(m => m._localId !== localId),
             }));
+        } finally {
+            sendInFlightRef.current = false
+            setIsSendingChat(false)
         }
     }, [activeConv, agentInput, sendDaemonCommand, setLocalUserMessages, pinTab, getProviderArgs])
 
@@ -246,6 +253,7 @@ export function useDashboardCommands({
     return {
         agentInput,
         setAgentInput,
+        isSendingChat,
         isCreatingChat,
         isRefreshingHistory,
         isFocusingAgent,

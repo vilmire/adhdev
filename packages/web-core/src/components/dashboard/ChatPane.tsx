@@ -17,6 +17,7 @@ export interface ChatPaneProps {
     agentInput: string;
     setAgentInput: (v: string | ((prev: string) => string)) => void;
     handleSendChat: () => void;
+    isSendingChat?: boolean;
     handleFocusAgent: () => void;
     isFocusingAgent: boolean;
     messageReceivedAt: Record<string, number>;
@@ -27,6 +28,7 @@ export interface ChatPaneProps {
 
 export default function ChatPane({
     activeConv, ides, agentInput, setAgentInput, handleSendChat,
+    isSendingChat = false,
     handleFocusAgent, isFocusingAgent, messageReceivedAt, actionLogs, userName,
 }: ChatPaneProps) {
     const chatInputRef = useRef<HTMLInputElement>(null);
@@ -251,11 +253,11 @@ export default function ChatPane({
                     </div>
                     <button
                         onClick={handleSendChat}
-                        disabled={!agentInput.trim()}
+                        disabled={!agentInput.trim() || isSendingChat}
                         className={`w-10 h-10 rounded-full flex items-center justify-center border-none shrink-0 transition-all duration-300 ${
-                            agentInput.trim() ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
+                            agentInput.trim() && !isSendingChat ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
                         }`}
-                        style={agentInput.trim() ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
+                        style={agentInput.trim() && !isSendingChat ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
                     >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={agentInput.trim() ? 'text-white' : 'text-text-muted'}>
                             <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
