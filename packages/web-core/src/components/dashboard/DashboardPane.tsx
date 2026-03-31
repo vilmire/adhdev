@@ -78,7 +78,7 @@ export default function DashboardPane({
                 <div className="flex items-center justify-between px-3 py-1 bg-bg-secondary border-b border-border-subtle shrink-0">
                     <div className="flex items-center gap-2 min-w-0">
                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                            activeConv.status === 'working' ? 'bg-green-400 animate-pulse' :
+                            activeConv.status === 'generating' ? 'bg-green-400 animate-pulse' :
                             activeConv.status === 'waiting_approval' ? 'bg-yellow-400' : 'bg-text-muted'
                         }`} />
                         <span className="text-xs font-semibold truncate">{activeConv.displayPrimary}</span>

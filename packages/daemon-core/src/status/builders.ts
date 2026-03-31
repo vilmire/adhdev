@@ -16,6 +16,7 @@ import type {
     AcpProviderState,
     ProviderState,
 } from '../providers/provider-instance.js';
+import { normalizeActiveChatData, normalizeManagedStatus } from './normalize.js';
 
 // ─── CDP Manager lookup helpers ──────────────────────
 
@@ -100,13 +101,13 @@ export function buildManagedIdes(
             workspace: state.workspace || null,
             terminals: 0,
             aiAgents: [],
-            activeChat: state.activeChat,
+            activeChat: normalizeActiveChatData(state.activeChat),
             chats: [],
             agentStreams: state.extensions.map((ext) => ({
                 agentType: ext.type,
                 agentName: ext.name,
                 extensionId: ext.type,
-                status: ext.status || 'idle',
+                status: normalizeManagedStatus(ext.status, { activeModal: ext.activeChat?.activeModal || null }),
                 messages: ext.activeChat?.messages || [],
                 inputContent: ext.activeChat?.inputContent || '',
                 activeModal: ext.activeChat?.activeModal || null,
@@ -155,10 +156,10 @@ export function buildManagedClis(
         instanceId: s.instanceId,
         cliType: s.type,
         cliName: s.name,
-        status: s.status,
+        status: normalizeManagedStatus(s.status, { activeModal: s.activeChat?.activeModal || null }),
         mode: 'terminal' as const,
         workspace: s.workspace || '',
-        activeChat: s.activeChat,
+        activeChat: normalizeActiveChatData(s.activeChat),
     }));
 }
 
@@ -172,10 +173,10 @@ export function buildManagedAcps(
         id: s.instanceId,
         acpType: s.type,
         acpName: s.name,
-        status: s.status,
+        status: normalizeManagedStatus(s.status, { activeModal: s.activeChat?.activeModal || null }),
         mode: 'chat' as const,
         workspace: s.workspace || '',
-        activeChat: s.activeChat,
+        activeChat: normalizeActiveChatData(s.activeChat),
         currentModel: s.currentModel,
         currentPlan: s.currentPlan,
         acpConfigOptions: s.acpConfigOptions,

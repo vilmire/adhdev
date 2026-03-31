@@ -5,6 +5,7 @@
  */
 import type { DaemonData } from '../types'
 import type { MachineInfo, DetectedIdeInfo } from '@adhdev/daemon-core'
+import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 
 // ─── Formatters ──────────────────────────────────
 
@@ -152,30 +153,69 @@ export function buildProviderMaps(daemons: DaemonData[]): {
 
 // ─── Agent Status ────────────────────────────────
 
-/** Determine if agent stream has active (generating/streaming) status */
+/** Determine if any agent/stream/chat is currently generating */
 export function isAgentActive(
     agents: { status: string }[],
     streams: { status: string }[],
     activeChat?: { status?: string },
 ): boolean {
-    return agents.some(a => a.status === 'generating' || a.status === 'streaming')
-        || streams.some(s => s.status === 'streaming' || s.status === 'generating')
-        || (activeChat?.status === 'generating' || activeChat?.status === 'streaming')
+    return agents.some(a => isManagedStatusWorking(a.status))
+        || streams.some(s => isManagedStatusWorking(s.status))
+        || isManagedStatusWorking(activeChat?.status)
 }
 
-/** Remove aiAgents duplicates: when multiple streams share the same name, prioritize active/generating status */
+type StatusLike = { status?: string | null; activeModal?: { buttons?: unknown[] | null } | null }
+
+/**
+ * Native IDE chat status can lag behind extension streams.
+ * Prefer explicit native chat state, then active stream state, then agent fallback state.
+ */
+export function deriveNativeConversationStatus(
+    activeChat?: StatusLike | null,
+    streams: StatusLike[] = [],
+    agents: StatusLike[] = [],
+): string {
+    const chatStatus = normalizeManagedStatus(activeChat?.status, { activeModal: activeChat?.activeModal })
+    if (chatStatus === 'waiting_approval') return 'waiting_approval'
+    if (chatStatus === 'generating') return 'generating'
+
+    const activeStream = streams.find(stream =>
+        isManagedStatusWaiting(stream.status, { activeModal: stream.activeModal }) || isManagedStatusWorking(stream.status)
+    )
+    if (activeStream) {
+        return normalizeManagedStatus(activeStream.status, { activeModal: activeStream.activeModal })
+    }
+
+    const activeAgent = agents.find(agent =>
+        isManagedStatusWaiting(agent.status, { activeModal: agent.activeModal }) || isManagedStatusWorking(agent.status)
+    )
+    if (activeAgent) {
+        return normalizeManagedStatus(activeAgent.status, { activeModal: activeAgent.activeModal })
+    }
+
+    return chatStatus || normalizeManagedStatus(agents[0]?.status) || 'idle'
+}
+
+export function deriveStreamConversationStatus(
+    stream?: StatusLike | null,
+): string {
+    return normalizeManagedStatus(stream?.status, { activeModal: stream?.activeModal })
+}
+
+/** Remove aiAgents duplicates, prioritizing generating/waiting entries over idle ones */
 export function dedupeAgents(agents: { id: string; name: string; status: string; version?: string }[]): typeof agents {
     if (!Array.isArray(agents) || agents.length <= 1) return agents
     const map = new Map<string, typeof agents[number]>()
-    const priority = ['generating', 'streaming', 'active', 'connected', 'idle', 'panel_hidden']
+    const priority = ['generating', 'waiting_approval', 'connected', 'idle', 'panel_hidden']
     for (const a of agents) {
         const key = (a.name || a.id || '').toLowerCase().replace(/\s+/g, '-')
         const existing = map.get(key)
-        if (!existing) { map.set(key, a); continue }
+        const normalized = normalizeManagedStatus(a.status)
+        if (!existing) { map.set(key, { ...a, status: normalized }); continue }
         const existingIdx = priority.indexOf(existing.status || 'idle')
-        const newIdx = priority.indexOf(a.status || 'idle')
+        const newIdx = priority.indexOf(normalized || 'idle')
         if (newIdx >= 0 && (existingIdx < 0 || newIdx < existingIdx)) {
-            map.set(key, a)
+            map.set(key, { ...a, status: normalized })
         }
     }
     return Array.from(map.values())

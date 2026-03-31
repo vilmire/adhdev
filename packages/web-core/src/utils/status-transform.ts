@@ -8,6 +8,7 @@
  *   - web-standalone: StandaloneDaemonContext (localhost WS)
  */
 import type { StatusReportPayload, ManagedIdeEntry, ManagedCliEntry, ManagedAcpEntry } from '@adhdev/daemon-core'
+import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import type { DaemonData } from '../types'
 
 export interface StatusTransformOptions {
@@ -107,9 +108,7 @@ export function statusPayloadToEntries(
                 agentType: cli.cliType,
                 agentName: cli.cliName,
                 extensionId: 'cli-agent',
-                status: cli.status === 'generating' ? 'streaming'
-                    : cli.status === 'waiting_approval' ? 'waiting_approval'
-                    : 'idle',
+                status: normalizeManagedStatus(cli.status, { activeModal: cli.activeChat?.activeModal }),
                 messages: cli.activeChat?.messages || [],
                 inputContent: '',
                 activeModal: cli.activeChat?.activeModal,
@@ -142,9 +141,7 @@ export function statusPayloadToEntries(
                 agentType: acp.acpType,
                 agentName: acp.acpName,
                 extensionId: 'acp-agent',
-                status: acp.status === 'generating' ? 'streaming'
-                    : acp.status === 'waiting_approval' ? 'waiting_approval'
-                    : 'idle',
+                status: normalizeManagedStatus(acp.status, { activeModal: acp.activeChat?.activeModal }),
                 messages: acp.activeChat?.messages || [],
                 inputContent: '',
                 activeModal: acp.activeChat?.activeModal,

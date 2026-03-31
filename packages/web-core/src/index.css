@@ -246,8 +246,8 @@ button {
     background: rgba(0, 0, 0, 0.02);
 }
 
-/* Agent working/waiting tab indicators — toned down in light mode */
-:root[data-theme="light"] .agent-tab-working {
+/* Agent generating/waiting tab indicators — toned down in light mode */
+:root[data-theme="light"] .agent-tab-generating {
     box-shadow: none;
     border-color: rgba(139, 92, 246, 0.15);
 }
@@ -1674,12 +1674,12 @@ a:hover {
     color: var(--text-muted);
 }
 
-.status-pill.working {
+.status-pill.generating {
     background: rgba(16, 185, 129, 0.15);
     color: #10b981;
 }
 
-/* Green spinner for generating/working state in tab */
+/* Green spinner for generating state in tab */
 .tab-spinner {
     width: 12px;
     height: 12px;

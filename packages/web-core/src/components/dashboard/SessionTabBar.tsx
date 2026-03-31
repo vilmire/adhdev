@@ -175,7 +175,7 @@ export default function SessionTabBar({
                     const isActive = activeTabId === conv.tabKey;
                     const isInSplit = isSplitMode && (splitPanes?.[0] === conv.tabKey || splitPanes?.[1] === conv.tabKey);
                     const splitPaneIdx = splitPanes?.[0] === conv.tabKey ? 0 : splitPanes?.[1] === conv.tabKey ? 1 : -1;
-                    const tabClass = conv.status === 'working' ? 'agent-tab-working' : conv.status === 'waiting_approval' ? 'agent-tab-waiting' : '';
+                    const tabClass = conv.status === 'generating' ? 'agent-tab-generating' : conv.status === 'waiting_approval' ? 'agent-tab-waiting' : '';
                     const tabShortcut = convIdx < 9 ? String(convIdx + 1) : null;
                     const isReconnecting = conv.connectionState === 'failed' || conv.connectionState === 'closed';
                     return (
@@ -240,7 +240,7 @@ export default function SessionTabBar({
                             }}
                         >
                             {/* Left dot: connection indicator */}
-                            {conv.status === 'working' ? (
+                            {conv.status === 'generating' ? (
                                 <div className="tab-spinner" />
                             ) : conv.status === 'waiting_approval' ? (
                                 <span className="text-[8px] px-[5px] py-px text-yellow-400">▲</span>

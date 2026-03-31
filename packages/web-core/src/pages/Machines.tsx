@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom'
+import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { useDaemons } from '../compat'
 import {
     buildProviderMaps, PLATFORM_ICONS,
@@ -82,8 +83,8 @@ export default function MachinesPage() {
     for (const m of machines) {
         for (const ide of m.managedIdes) {
             if (isAgentActive(ide.agents, ide.agentStreams, ide.activeChat)) {
-                const agentName = ide.agentStreams.find(s => s.status === 'streaming' || s.status === 'generating')?.agentName
-                    || ide.agents.find(a => a.status === 'generating' || a.status === 'streaming')?.name
+                const agentName = ide.agentStreams.find(s => isManagedStatusWorking(s.status))?.agentName
+                    || ide.agents.find(a => isManagedStatusWorking(a.status))?.name
                     || ide.name
                 allActiveAgents.push({
                     name: agentName, machine: m.nickname || m.hostname,
@@ -94,7 +95,7 @@ export default function MachinesPage() {
             }
         }
         for (const cli of m.managedClis) {
-            if (cli.agentStreams?.some(s => s.status === 'streaming' || s.status === 'generating')) {
+            if (cli.agentStreams?.some(s => isManagedStatusWorking(s.status))) {
                 allActiveAgents.push({
                     name: cli.cliName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: cli.cliType,
@@ -104,7 +105,7 @@ export default function MachinesPage() {
             }
         }
         for (const acp of m.managedAcps) {
-            if (acp.agentStreams?.some(s => s.status === 'streaming' || s.status === 'generating')) {
+            if (acp.agentStreams?.some(s => isManagedStatusWorking(s.status))) {
                 allActiveAgents.push({
                     name: acp.acpName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: acp.acpType,
@@ -285,11 +286,11 @@ export default function MachinesPage() {
                                                 {machine.managedIdes.map(ide => {
                                                     const active = isAgentActive(ide.agents, ide.agentStreams, ide.activeChat)
                                                     const statusText = active ? 'generating'
-                                                        : ide.activeChat?.status === 'waiting_approval' ? 'approval'
+                                                        : isManagedStatusWaiting(ide.activeChat?.status, { activeModal: (ide.activeChat as any)?.activeModal }) ? 'approval'
                                                         : 'idle'
                                                     // Extensions / agent streams running inside this IDE
                                                     const activeStreams = (ide.agentStreams || []).filter(
-                                                        s => s.status === 'generating' || s.status === 'streaming' || s.status === 'active'
+                                                        s => isManagedStatusWorking(s.status)
                                                     )
                                                     return (
                                                         <div key={ide.id}>
@@ -314,10 +315,10 @@ export default function MachinesPage() {
                                                                             <span className="text-[8px]">{getIcon(stream.agentName) || '🧩'}</span>
                                                                             <span className="font-medium">{stream.agentName}</span>
                                                                             <span className={`ml-auto text-[9px] ${
-                                                                                stream.status === 'generating' || stream.status === 'streaming'
+                                                                                isManagedStatusWorking(stream.status)
                                                                                     ? 'text-orange-400' : 'text-text-muted'
                                                                             }`}>
-                                                                                {stream.status === 'generating' || stream.status === 'streaming' ? '⚡ generating' : stream.status}
+                                                                                {isManagedStatusWorking(stream.status) ? '⚡ generating' : normalizeManagedStatus(stream.status)}
                                                                             </span>
                                                                         </div>
                                                                     ))}
@@ -336,13 +337,13 @@ export default function MachinesPage() {
                                             <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">CLIs</div>
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.managedClis.map(cli => {
-                                                    const active = cli.agentStreams?.some(s => s.status === 'streaming' || s.status === 'generating')
+                                                    const active = cli.agentStreams?.some(s => isManagedStatusWorking(s.status))
                                                     return (
                                                         <AgentRow
                                                             key={cli.id}
                                                             icon={getIcon(cli.cliType)}
                                                             name={cli.cliName}
-                                                            status={active ? 'generating' : cli.status === 'stopped' ? 'stopped' : 'idle'}
+                                                            status={active ? 'generating' : normalizeManagedStatus(cli.status)}
                                                             workspace={cli.workspace?.split('/').pop()}
                                                             isActive={!!active}
                                                             isHidden={isHidden(cli.id)}
@@ -361,13 +362,13 @@ export default function MachinesPage() {
                                             <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">ACP Agents</div>
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.managedAcps.map(acp => {
-                                                    const active = acp.agentStreams?.some(s => s.status === 'streaming' || s.status === 'generating')
+                                                    const active = acp.agentStreams?.some(s => isManagedStatusWorking(s.status))
                                                     return (
                                                         <AgentRow
                                                             key={acp.id}
                                                             icon={getIcon(acp.acpType)}
                                                             name={acp.acpName}
-                                                            status={active ? 'generating' : acp.status === 'stopped' ? 'stopped' : 'idle'}
+                                                            status={active ? 'generating' : normalizeManagedStatus(acp.status)}
                                                             workspace={acp.workspace?.split('/').pop()}
                                                             isActive={!!active}
                                                             isHidden={isHidden(acp.id)}

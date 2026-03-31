@@ -642,28 +642,22 @@ export default function Dashboard() {
             setTimeout(() => setToasts(prev => prev.filter(t => t.id !== toast.id)), dur)
         })
 
-        const unsubSysMsg = eventManager.onSystemMessage((ideId: string, msg: SystemMessage) => {
-            setLocalUserMessages(prev => {
-                for (const key of Object.keys(prev)) {
-                    if (key.includes(ideId)) {
-                        return { ...prev, [key]: [...(prev[key] || []), msg] }
-                    }
-                }
-                return prev
-            })
+        const unsubSysMsg = eventManager.onSystemMessage((targetKey: string, msg: SystemMessage) => {
+            setLocalUserMessages(prev => ({
+                ...prev,
+                [targetKey]: [...(prev[targetKey] || []), msg],
+            }))
         })
 
-        const unsubClearSysMsg = eventManager.onClearSystemMessage((ideId: string, prefix: string) => {
+        const unsubClearSysMsg = eventManager.onClearSystemMessage((targetKey: string, prefix: string) => {
             setLocalUserMessages(prev => {
-                const updated = { ...prev }
-                for (const key of Object.keys(updated)) {
-                    if (key.includes(ideId)) {
-                        updated[key] = (updated[key] || []).filter(
-                            (m: any) => !(m.role === 'system' && m._localId?.startsWith(prefix))
-                        )
-                    }
+                if (!prev[targetKey]?.length) return prev
+                return {
+                    ...prev,
+                    [targetKey]: prev[targetKey].filter(
+                        (m: any) => !(m.role === 'system' && m._localId?.startsWith(prefix))
+                    ),
                 }
-                return updated
             })
         })
 

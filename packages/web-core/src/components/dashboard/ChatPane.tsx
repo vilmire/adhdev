@@ -142,7 +142,7 @@ export default function ChatPane({
                 agentName={activeConv.agentName || activeConv.displayPrimary || 'Agent'}
                 userName={userName}
                 isCliMode={isCliConv(activeConv) || isAcpConv(activeConv)}
-                isWorking={activeConv.status === 'working'}
+                isWorking={activeConv.status === 'generating'}
                 contextKey={activeConv.tabKey}
                 onLoadMore={handleLoadMore}
                 isLoadingMore={isLoadingMore}

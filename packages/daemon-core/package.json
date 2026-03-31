@@ -7,8 +7,15 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
       "require": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./status/normalize": {
+      "types": "./dist/status/normalize.d.ts",
+      "import": "./dist/status/normalize.mjs",
+      "require": "./dist/status/normalize.js",
+      "default": "./dist/status/normalize.js"
     }
   },
   "scripts": {

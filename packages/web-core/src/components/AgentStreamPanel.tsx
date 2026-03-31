@@ -11,6 +11,7 @@ import ChatPane from './dashboard/ChatPane';
 import ApprovalBanner from './dashboard/ApprovalBanner';
 import type { ActiveConversation } from './dashboard/types';
 import type { ManagedAgentStream } from '../types';
+import { deriveStreamConversationStatus } from '../utils/daemon-utils';
 
 interface Props {
     ideId: string;
@@ -35,9 +36,7 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
     // Derive status matching Dashboard convention
     const derivedStatus = useMemo(() => {
         if (!activeStream) return 'idle';
-        if (activeStream.activeModal) return 'waiting_approval';
-        if (activeStream.status === 'streaming') return 'working';
-        return activeStream.status || 'idle';
+        return deriveStreamConversationStatus(activeStream);
     }, [activeStream]);
 
     // Build ActiveConversation for ChatPane (same format as Dashboard)
@@ -107,8 +106,9 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
             <div className="flex items-center gap-1 px-3 py-1.5 border-b border-border-subtle bg-[var(--surface-primary)] overflow-x-auto shrink-0">
                 {agentStreams.map(stream => {
                     const isActive = stream.agentType === activeAgent;
-                    const isStreaming = stream.status === 'streaming';
-                    const needsApproval = stream.status === 'waiting_approval';
+                    const normalizedStatus = deriveStreamConversationStatus(stream);
+                    const isGenerating = normalizedStatus === 'generating';
+                    const needsApproval = normalizedStatus === 'waiting_approval';
 
                     return (
                         <button
@@ -123,8 +123,8 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
                             <span
                                 className="w-1.5 h-1.5 rounded-full shrink-0"
                                 style={{
-                                    background: needsApproval ? '#f59e0b' : isStreaming ? 'var(--accent-primary)' : '#64748b',
-                                    boxShadow: isStreaming ? '0 0 6px var(--accent-primary)' : 'none',
+                                    background: needsApproval ? '#f59e0b' : isGenerating ? 'var(--accent-primary)' : '#64748b',
+                                    boxShadow: isGenerating ? '0 0 6px var(--accent-primary)' : 'none',
                                 }}
                             />
                             {stream.agentName}

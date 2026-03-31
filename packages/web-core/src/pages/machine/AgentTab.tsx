@@ -13,6 +13,7 @@
  */
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { formatIdeType } from '../../utils/daemon-utils'
 import { IconChat, IconMonitor, IconSearch } from '../../components/Icons'
 import type { MachineData, ManagedIde, ManagedCli, ManagedAcp, ProviderInfo } from './types'
@@ -257,6 +258,7 @@ export default function AgentTab({
                     {managedEntries.map(entry => {
                         const ide = isIde ? (entry as ManagedIde) : null
                         const acp = isAcp ? (entry as ManagedAcp) : null
+                        const normalizedStatus = normalizeManagedStatus(entry.status)
 
                         return (
                             <div key={entry.id} className="px-4.5 py-3.5 rounded-xl bg-bg-secondary border border-border-subtle">
@@ -277,10 +279,10 @@ export default function AgentTab({
                                     </div>
                                     <div className="flex items-center gap-1.5">
                                         <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${
-                                            entry.status === 'stopped' ? 'bg-red-500/[0.08] text-red-500'
-                                                : entry.status === 'generating' ? 'bg-orange-500/[0.08] text-orange-400'
+                                            normalizedStatus === 'stopped' ? 'bg-red-500/[0.08] text-red-500'
+                                                : normalizedStatus === 'generating' ? 'bg-orange-500/[0.08] text-orange-400'
                                                     : 'bg-green-500/[0.08] text-green-500'
-                                        }`}>{entry.status}</span>
+                                        }`}>{normalizedStatus}</span>
                                         {/* IDE: Control + Restart */}
                                         {isIde && (
                                             <>
@@ -293,7 +295,7 @@ export default function AgentTab({
                                             <button onClick={() => navigate(`/ide/${entry.id}`)} className="machine-btn" title="View chat"><IconChat size={14} /></button>
                                         )}
                                         {/* All: Stop / Restart */}
-                                        {entry.status === 'stopped' ? (
+                                        {normalizedStatus === 'stopped' ? (
                                             <button onClick={() => isIde ? handleLaunchIde(entry.type, (entry as any).workspace ? { workspace: (entry as any).workspace } : undefined) : handleLaunchCli(entry.type, (entry as any).workspace)} className="machine-btn text-green-500 border-green-500/30">▶</button>
                                         ) : (
                                             <button onClick={() => handleStop(entry)} className="machine-btn text-red-500 border-red-500/30">■</button>
@@ -306,8 +308,8 @@ export default function AgentTab({
                                     <div className="flex gap-1 mb-2 flex-wrap">
                                         {ide.aiAgents.map(a => (
                                             <span key={a.id} className={`px-2 py-0.5 rounded-md text-[10px] ${
-                                                (a.status === 'generating' || a.status === 'streaming') ? 'bg-orange-500/[0.08] text-orange-400' : 'bg-indigo-500/[0.06] text-indigo-400'
-                                            }`}>{a.name} · {a.status}</span>
+                                                isManagedStatusWorking(a.status) ? 'bg-orange-500/[0.08] text-orange-400' : 'bg-indigo-500/[0.06] text-indigo-400'
+                                            }`}>{a.name} · {normalizeManagedStatus(a.status)}</span>
                                         ))}
                                     </div>
                                 )}

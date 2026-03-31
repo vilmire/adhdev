@@ -327,7 +327,7 @@ export default function PaneGroup({
                 >
                     {sortedConversations.map((conv, _idx) => {
                         const isActive = activeTabId === conv.tabKey;
-                        const tabClass = conv.status === 'working' ? 'agent-tab-working'
+                        const tabClass = conv.status === 'generating' ? 'agent-tab-generating'
                             : conv.status === 'waiting_approval' ? 'agent-tab-waiting' : '';
                         const isReconnecting = conv.connectionState === 'failed' || conv.connectionState === 'closed';
                         const isDraggedTab = draggingTabRef.current === conv.tabKey;
@@ -419,7 +419,7 @@ export default function PaneGroup({
                                 }}
                             >
                                 {/* Status dot */}
-                                {conv.status === 'working' ? (
+                                {conv.status === 'generating' ? (
                                     <div className="tab-spinner" />
                                 ) : conv.status === 'waiting_approval' ? (
                                     <span className="text-[8px] px-[5px] py-px text-yellow-400">▲</span>

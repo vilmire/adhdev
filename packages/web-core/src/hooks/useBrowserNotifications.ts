@@ -9,6 +9,7 @@
  * Works on localhost and HTTPS. Browser tab must be open (background OK).
  */
 import { useEffect, useRef, useCallback } from 'react'
+import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { shouldNotify } from './useNotificationPrefs'
 
 interface NotificationOptions {
@@ -132,14 +133,14 @@ export function useBrowserNotifications(
         if (document.hasFocus()) {
             // Still track state changes
             for (const agent of agents) {
-                prevStates.current.set(agent.id, agent.status || 'idle')
+                prevStates.current.set(agent.id, normalizeManagedStatus(agent.status, { activeModal: agent.activeModal }))
             }
             return
         }
 
         for (const agent of agents) {
             const prev = prevStates.current.get(agent.id)
-            const curr = agent.status || 'idle'
+            const curr = normalizeManagedStatus(agent.status, { activeModal: agent.activeModal })
             const name = agent.name || agent.id
 
             // Approval request
@@ -153,10 +154,10 @@ export function useBrowserNotifications(
             }
 
             // Task complete (generating → idle)
-            if (opts.onComplete && shouldNotify('completion') && prev === 'generating' && curr === 'idle') {
+            if (opts.onComplete && shouldNotify('completion') && isManagedStatusWorking(prev) && curr === 'idle') {
                 throttledNotify(
                     `✅ ${name} — Task complete`,
-                    'Agent has finished working',
+                    'Agent has finished generating',
                     `complete-${agent.id}`,
                 )
             }

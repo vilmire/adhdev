@@ -76,6 +76,8 @@ export type { CommandRouterDeps, CommandRouterResult } from './commands/router.j
 export { DaemonStatusReporter } from './status/reporter.js';
 export { buildManagedIdes, buildManagedClis, buildManagedAcps, buildAllManagedEntries, findCdpManager, hasCdpManager, isCdpConnected } from './status/builders.js';
 export { buildStatusSnapshot } from './status/snapshot.js';
+export { normalizeManagedStatus, isManagedStatusWorking, isManagedStatusWaiting, normalizeActiveChatData } from './status/normalize.js';
+export type { ManagedStatus } from './status/normalize.js';
 export type { StatusSnapshotOptions, StatusSnapshot } from './status/snapshot.js';
 
 // ── Logger ──

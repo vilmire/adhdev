@@ -451,7 +451,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                         <div className="dot" />
                         <div className="dot" />
                         <div className="dot" />
-                        <span className="text-[11px] text-text-muted ml-1">Agent working...</span>
+                        <span className="text-[11px] text-text-muted ml-1">Agent generating...</span>
                     </div>
                 </div>
             )}

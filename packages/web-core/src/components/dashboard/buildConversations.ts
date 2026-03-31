@@ -5,7 +5,8 @@
  * Reusable across Dashboard, mobile views, widgets, etc.
  */
 import type { DaemonData } from '../../types';
-import { formatIdeType, getAgentDisplayName, getMachineDisplayName } from '../../utils/daemon-utils';
+import { deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, getMachineDisplayName } from '../../utils/daemon-utils';
+import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation } from './types';
 
@@ -67,10 +68,9 @@ export function buildConversations(
             const detectedAgent = ide.agents?.[0];
             const modal = ide.activeChat?.activeModal;
             const hasRealModal = modal && Array.isArray(modal.buttons) && modal.buttons.length > 0;
-            const chatStatus = ide.activeChat?.status;
-            const isWorking = chatStatus === 'generating' || chatStatus === 'loading' || (chatStatus && chatStatus.toLowerCase() === 'thinking');
-            const isChatWaiting = chatStatus === 'waiting_approval';
-            const agentStatus = (hasRealModal || isChatWaiting) ? 'waiting_approval' : (isWorking ? 'working' : (detectedAgent?.status || 'idle'));
+            const agentStatus = normalizeManagedStatus(ide.activeChat?.status, { activeModal: ide.activeChat?.activeModal })
+                || normalizeManagedStatus(detectedAgent?.status)
+                || 'idle';
             const chat = ide.activeChat || { title: '', messages: [] };
             let title = (chat.title && String(chat.title).trim()) ? String(chat.title).trim() : '';
             const activeId = ide.activeChat?.id;
@@ -119,7 +119,7 @@ export function buildConversations(
         }
         for (const stream of streams) {
             const hasModal = stream.activeModal && Array.isArray(stream.activeModal.buttons) && stream.activeModal.buttons.length > 0;
-            const streamStatus = hasModal ? 'waiting_approval' : (stream.status === 'streaming' ? 'working' : stream.status);
+            const streamStatus = deriveStreamConversationStatus(stream);
             const streamTabKey = `${ide.id}:${stream.agentType}`;
             const serverMsgs = stream.messages || [];
             const localMsgs = localUserMessages[streamTabKey] || [];

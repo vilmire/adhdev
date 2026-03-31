@@ -4,18 +4,20 @@
  * 2-panel layout: Chat (left) + Remote Desktop (right)
  * All connection state from DaemonContext — no local duplication.
  */
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import RemoteView from '../components/RemoteView'
 import ChatPane from '../components/dashboard/ChatPane'
+import HistoryModal from '../components/dashboard/HistoryModal'
 import type { ActiveConversation } from '../components/dashboard/types'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
+import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { useDaemons, connectionManager } from '../compat'
 import { useTransport } from '../context/TransportContext'
 import type { DaemonData } from '../types'
-import { getAgentDisplayName, getMachineDisplayName } from '../utils/daemon-utils'
+import { deriveStreamConversationStatus, getAgentDisplayName, getMachineDisplayName } from '../utils/daemon-utils'
 type ConnectionState = string
 import './IDE.css'
-import { IconChat, IconMonitor } from '../components/Icons'
+import { IconChat, IconMonitor, IconScroll } from '../components/Icons'
 
 interface IDEPageProps {
     /** Optional render prop for extra header buttons (e.g. Share) */
@@ -36,6 +38,7 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
     const navigate = useNavigate()
     const daemonCtx = useDaemons() as any
     const globalIdes: DaemonData[] = daemonCtx.ides || []
+    const updateIdeChats = daemonCtx.updateIdeChats || (() => {})
     const connectionStates = daemonCtx.connectionStates || {}
     const { sendCommand: sendDaemonCommand } = useTransport()
 
@@ -61,18 +64,18 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
     const [viewMode, setViewMode] = useState<'split' | 'remote' | 'chat'>(initialView)
     // Unified tab: 'native' for IDE chat, or agentType string for extensions
     const [activeChatTab, setActiveChatTab] = useState<string>('native')
+    const [historyModalOpen, setHistoryModalOpen] = useState(false)
+    const [isCreatingChat, setIsCreatingChat] = useState(false)
+    const [isRefreshingHistory, setIsRefreshingHistory] = useState(false)
     const [agentInput, setAgentInput] = useState('')
     const [isSendingChat, setIsSendingChat] = useState(false)
     const [connScreenshot, setConnScreenshot] = useState<string | null>(null)
     const [screenshotUsage, setScreenshotUsage] = useState<{ dailyUsedMinutes: number; dailyBudgetMinutes: number; budgetExhausted: boolean } | null>(null)
     const [toasts, setToasts] = useState<{ id: number; message: string; type: 'success' | 'info' | 'warning' }[]>([])
+    const historyRefreshedRef = useRef(false)
 
-    // Derive status like Dashboard's buildConversations — 'generating' → 'working'
-    const chatStatus = activeChat?.status;
-    const hasModal = (activeChat?.activeModal?.buttons?.length ?? 0) > 0;
-    const isWorking = chatStatus === 'generating' || chatStatus === 'loading' || (chatStatus && chatStatus.toLowerCase() === 'thinking');
-    const isChatWaiting = chatStatus === 'waiting_approval';
-    const derivedStatus = (hasModal || isChatWaiting) ? 'waiting_approval' : (isWorking ? 'working' : (chatStatus || 'idle'));
+    // Native IDE tab should reflect native chat state only.
+    const derivedStatus = normalizeManagedStatus(activeChat?.status, { activeModal: activeChat?.activeModal });
 
     // Build ActiveConversation for native IDE ChatPane
     const nativeConv: ActiveConversation = useMemo(() => ({
@@ -97,9 +100,7 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
     // Build ActiveConversation for each agent stream (extension)
     const streamConvs: ActiveConversation[] = useMemo(() =>
         agentStreams.map(stream => {
-            const streamStatus = stream.activeModal ? 'waiting_approval'
-                : stream.status === 'streaming' ? 'working'
-                : stream.status || 'idle';
+            const streamStatus = deriveStreamConversationStatus(stream);
             return {
                 ideId: ideId || '',
                 daemonId: doId,
@@ -129,6 +130,12 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
         if (activeChatTab === 'native') return nativeConv;
         return streamConvs.find(c => c.agentType === activeChatTab) || nativeConv;
     }, [activeChatTab, nativeConv, streamConvs])
+
+    const getProviderArgs = useCallback(() => (
+        activeConv.streamSource === 'agent-stream'
+            ? { agentType: activeConv.agentType }
+            : {}
+    ), [activeConv])
 
     // ─── Connection screenshot listener ─────────────
     useEffect(() => {
@@ -220,6 +227,86 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
         }
     }
 
+    const pushToast = useCallback((message: string, type: 'success' | 'info' | 'warning' = 'warning') => {
+        const id = Date.now() + Math.floor(Math.random() * 1000)
+        setToasts(prev => [...prev, { id, message, type }])
+        window.setTimeout(() => {
+            setToasts(prev => prev.filter(toast => toast.id !== id))
+        }, 5000)
+    }, [])
+
+    const handleRefreshHistory = useCallback(async () => {
+        if (!ideId || isRefreshingHistory) return
+        setIsRefreshingHistory(true)
+        try {
+            const res: any = await sendDaemonCommand(ideId, 'list_chats', {
+                forceExpand: true,
+                ...getProviderArgs(),
+            })
+            const chats = res?.chats || res?.result?.chats
+            if (res?.success && Array.isArray(chats)) {
+                updateIdeChats(ideId, chats)
+            }
+        } catch (e) {
+            console.error('[IDE] Refresh history failed:', e)
+            pushToast('히스토리 새로고침에 실패했습니다.', 'warning')
+        } finally {
+            setIsRefreshingHistory(false)
+        }
+    }, [ideId, isRefreshingHistory, sendDaemonCommand, getProviderArgs, updateIdeChats, pushToast])
+
+    const handleSwitchSession = useCallback(async (_targetIdeId: string, sessionId: string) => {
+        if (!ideId) return
+        try {
+            const res: any = await sendDaemonCommand(ideId, 'switch_chat', {
+                id: sessionId,
+                sessionId,
+                ...getProviderArgs(),
+            })
+            const scriptResult = res?.result
+            const ok = res?.success === true || scriptResult === 'switched' || scriptResult === 'switched-by-title'
+            if (!ok) {
+                if (scriptResult === false || scriptResult === 'not_found') {
+                    pushToast('세션 탭을 찾지 못했습니다. 히스토리를 새로고침해 보세요.', 'warning')
+                } else if (typeof scriptResult === 'string' && scriptResult.startsWith('error:')) {
+                    pushToast(`세션 전환 오류: ${scriptResult}`, 'warning')
+                } else {
+                    pushToast('세션 전환에 실패했습니다.', 'warning')
+                }
+            }
+        } catch (e: any) {
+            console.error('[IDE] Switch session failed:', e)
+            pushToast(`세션 전환 실패: ${e?.message || 'connection error'}`, 'warning')
+        }
+    }, [ideId, sendDaemonCommand, getProviderArgs, pushToast])
+
+    const handleNewChat = useCallback(async () => {
+        if (!ideId || isCreatingChat) return
+        setIsCreatingChat(true)
+        try {
+            await sendDaemonCommand(ideId, 'new_chat', {
+                ...getProviderArgs(),
+            })
+        } catch (e) {
+            console.error('[IDE] New chat failed:', e)
+            pushToast('새 채팅 생성에 실패했습니다.', 'warning')
+        } finally {
+            setIsCreatingChat(false)
+        }
+    }, [ideId, isCreatingChat, sendDaemonCommand, getProviderArgs, pushToast])
+
+    useEffect(() => {
+        if (!historyModalOpen) {
+            historyRefreshedRef.current = false
+            return
+        }
+        if (historyRefreshedRef.current || isRefreshingHistory) return
+        if (!ideData?.chats || ideData.chats.length === 0) {
+            historyRefreshedRef.current = true
+            handleRefreshHistory()
+        }
+    }, [historyModalOpen, ideData?.chats, isRefreshingHistory, handleRefreshHistory])
+
 
 
     // ─── Derived values ─────────────────────────────
@@ -261,6 +348,13 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
                             {mode === 'chat' ? <IconChat size={14} /> : mode === 'split' ? '⊞' : <IconMonitor size={14} />}
                         </button>
                     ))}
+                    <button
+                        className="btn btn-secondary btn-sm flex items-center justify-center shrink-0"
+                        onClick={() => setHistoryModalOpen(true)}
+                        title="Chat History"
+                    >
+                        <IconScroll size={14} />
+                    </button>
                     {renderHeaderActions && renderHeaderActions({ daemonId: doId, ideInstanceId: ideId || '' })}
                     <button
                         className="btn btn-primary btn-sm flex items-center justify-center shrink-0"
@@ -286,8 +380,9 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
                                 </button>
                                 {agentStreams.map(stream => {
                                     const isActive = activeChatTab === stream.agentType;
-                                    const needsApproval = stream.status === 'waiting_approval' || !!stream.activeModal;
-                                    const isStreaming = stream.status === 'streaming';
+                                    const normalizedStatus = deriveStreamConversationStatus(stream);
+                                    const needsApproval = normalizedStatus === 'waiting_approval';
+                                    const isGenerating = normalizedStatus === 'generating';
                                     return (
                                         <button
                                             key={stream.agentType}
@@ -297,8 +392,8 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
                                             <span
                                                 style={{
                                                     display: 'inline-block', width: 6, height: 6, borderRadius: '50%', marginRight: 5,
-                                                    background: needsApproval ? '#f59e0b' : isStreaming ? 'var(--accent-primary)' : '#64748b',
-                                                    boxShadow: isStreaming ? '0 0 6px var(--accent-primary)' : 'none',
+                                                    background: needsApproval ? '#f59e0b' : isGenerating ? 'var(--accent-primary)' : '#64748b',
+                                                    boxShadow: isGenerating ? '0 0 6px var(--accent-primary)' : 'none',
                                                 }}
                                             />
                                             {stream.agentName}
@@ -355,6 +450,18 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
                         </div>
                     ))}
                 </div>
+            )}
+            {historyModalOpen && (
+                <HistoryModal
+                    activeConv={activeConv}
+                    ides={globalIdes}
+                    isCreatingChat={isCreatingChat}
+                    isRefreshingHistory={isRefreshingHistory}
+                    onClose={() => setHistoryModalOpen(false)}
+                    onNewChat={handleNewChat}
+                    onSwitchSession={handleSwitchSession}
+                    onRefreshHistory={handleRefreshHistory}
+                />
             )}
         </div>
     )

@@ -231,7 +231,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                 <div className="px-5 py-3.5 border-t border-border-subtle flex justify-between items-center">
                     <div className="text-[10px] text-text-muted">
                         {phase === 'config' && selectedScripts.length > 0 && `${selectedScripts.length} script(s) selected`}
-                        {phase === 'running' && 'Agent is working...'}
+                        {phase === 'running' && 'Agent is generating...'}
                         {phase === 'done' && 'Run `adhdev provider verify` to validate'}
                     </div>
                     <div className="flex gap-2">

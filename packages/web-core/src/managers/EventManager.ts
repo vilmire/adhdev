@@ -57,8 +57,8 @@ export interface SystemMessage {
 }
 
 export type ToastCallback = (toast: ToastConfig) => void
-export type SystemMessageCallback = (ideId: string, msg: SystemMessage) => void
-export type ClearSystemMessageCallback = (ideId: string, localIdPrefix: string) => void
+export type SystemMessageCallback = (targetKey: string, msg: SystemMessage) => void
+export type ClearSystemMessageCallback = (targetKey: string, localIdPrefix: string) => void
 export type DesktopNotificationCallback = (title: string, body: string, tag: string) => void
 export type ResolveActionFn = (routeId: string, action: string, payload: Record<string, any>) => void
 export type ViewRequestRespondFn = (orgId: string, requestId: string, action: 'approve' | 'reject') => Promise<any>
@@ -218,6 +218,19 @@ class EventManager {
         return rawIdeId
     }
 
+    private resolveConversationKey(payload: StatusEventPayload): string | null {
+        if (!payload.ideId) return null
+
+        // Agent-stream tabs are keyed as "{ideId}:{agentType}" while native/CLI/ACP
+        // conversations use the resolved IDE/instance id directly.
+        if (payload.providerCategory === 'extension') {
+            const streamType = payload.agentType || payload.providerType
+            if (streamType) return `${payload.ideId}:${streamType}`
+        }
+
+        return payload.ideId
+    }
+
     // ─── Main entry point ─────────────────────────
 
     handleRawEvent(payload: StatusEventPayload, _source: 'ws' | 'p2p'): void {
@@ -238,6 +251,8 @@ class EventManager {
                 }
             }
         }
+
+        const conversationKey = this.resolveConversationKey(payload)
 
         // Resolve ideLabel: find the owning daemon for this event's IDE
         let ideLabel = formatIdeType(payload.ideType || '')
@@ -265,8 +280,8 @@ class EventManager {
             } catch {}
 
             // System message
-            if (payload.ideId && getNotificationPrefs().chatTaskCompletionBubble) {
-                this.emitSystemMessage(payload.ideId, {
+            if (conversationKey && getNotificationPrefs().chatTaskCompletionBubble) {
+                this.emitSystemMessage(conversationKey, {
                     role: 'system',
                     timestamp: Date.now(),
                     content: `✅ Task completed${dur}`,
@@ -277,8 +292,8 @@ class EventManager {
         // ── agent:generating_started ──
         } else if (payload.event === 'agent:generating_started') {
             // Clear previous completion messages
-            if (payload.ideId) {
-                this.emitClearSystemMessage(payload.ideId, 'sys_complete_')
+            if (conversationKey) {
+                this.emitClearSystemMessage(conversationKey, 'sys_complete_')
             }
 
         // ── agent:waiting_approval ──
@@ -287,12 +302,12 @@ class EventManager {
             type = 'warning'
 
             // Approval system message
-            if (payload.ideId) {
+            if (conversationKey) {
                 const modalText = payload.modalMessage || 'Approval requested'
                 const buttons = payload.modalButtons?.length
                     ? payload.modalButtons.map(b => `[${b}]`).join(' ')
                     : '[Approve] [Reject]'
-                this.emitSystemMessage(payload.ideId, {
+                this.emitSystemMessage(conversationKey, {
                     role: 'system',
                     timestamp: Date.now(),
                     content: `⚡ Approval requested: ${modalText}\n${buttons}`,
@@ -341,7 +356,7 @@ class EventManager {
                 const toastId = Date.now()
                 this.emitToast({
                     id: toastId, message: contextMsg, type, timestamp: toastId,
-                    ideId: rawIdeId, actions, duration: 15000,
+                    ideId: conversationKey || rawIdeId, actions, duration: 15000,
                 })
                 msg = '' // skip default toast
             }
@@ -427,7 +442,7 @@ class EventManager {
             const toastId = Date.now()
             this.emitToast({
                 id: toastId, message: msg, type, timestamp: toastId,
-                ideId: payload.ideId, duration: 5000,
+                ideId: conversationKey || payload.ideId, duration: 5000,
             })
         }
     }
