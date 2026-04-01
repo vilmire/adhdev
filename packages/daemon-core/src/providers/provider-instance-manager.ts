@@ -75,16 +75,13 @@ export class ProviderInstanceManager {
             try {
                 const state = instance.getState();
                 states.push(state);
-
- // pending events propagation
-                for (const event of state.pendingEvents) {
-                    for (const listener of this.eventListeners) {
-                        listener({
-                            ...event,
-                            providerType: instance.type,
-                            instanceId: state.instanceId,
-                            targetSessionId: state.instanceId,
-                            providerCategory: state.category,
+                this.emitPendingEvents(instance.type, state);
+                if (state.category === 'ide') {
+                    for (const childState of state.extensions) {
+                        this.emitPendingEvents(childState.type, childState, {
+                            targetSessionId: childState.instanceId,
+                            workspaceName: state.workspace || undefined,
+                            parentSessionId: state.instanceId,
                         });
                     }
                 }
@@ -139,6 +136,26 @@ export class ProviderInstanceManager {
  */
     onEvent(listener: (event: ProviderEvent & { providerType: string }) => void): void {
         this.eventListeners.push(listener);
+    }
+
+    private emitPendingEvents(
+        providerType: string,
+        state: ProviderState,
+        extra: Record<string, unknown> = {},
+    ): void {
+        for (const event of state.pendingEvents) {
+            for (const listener of this.eventListeners) {
+                listener({
+                    ...event,
+                    providerType,
+                    instanceId: state.instanceId,
+                    targetSessionId: state.instanceId,
+                    providerCategory: state.category,
+                    workspaceName: state.workspace || undefined,
+                    ...extra,
+                });
+            }
+        }
     }
 
  /**

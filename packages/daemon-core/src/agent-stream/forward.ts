@@ -24,6 +24,12 @@ export function forwardAgentStreamsToIdeInstance(
             activeModal: stream.activeModal || null,
             model: stream.model || undefined,
             mode: stream.mode || undefined,
+            sessionId: stream.sessionId || stream.instanceId || undefined,
+            title: stream.title || stream.agentName || undefined,
+            agentType: stream.agentType || undefined,
+            agentName: stream.agentName || undefined,
+            extensionId: stream.extensionId || undefined,
+            inputContent: stream.inputContent || '',
         });
     }
 }

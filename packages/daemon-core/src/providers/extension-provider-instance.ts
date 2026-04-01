@@ -32,6 +32,10 @@ export class ExtensionProviderInstance implements ProviderInstance {
  // meta
     private instanceId: string;
     private ideType: string = '';
+    private chatId: string | null = null;
+    private chatTitle: string | null = null;
+    private agentName: string = '';
+    private extensionId: string = '';
 
     constructor(provider: ProviderModule) {
         this.type = provider.type;
@@ -69,8 +73,8 @@ export class ExtensionProviderInstance implements ProviderInstance {
             category: 'extension',
             status: this.currentStatus as ProviderState['status'],
             activeChat: this.messages.length > 0 ? {
-                id: `${this.type}_session`,
-                title: this.provider.name,
+                id: this.chatId || this.instanceId,
+                title: this.chatTitle || this.agentName || this.provider.name,
                 status: this.currentStatus,
                 messages: this.messages,
                 activeModal: this.activeModal,
@@ -94,6 +98,10 @@ export class ExtensionProviderInstance implements ProviderInstance {
             if (data?.activeModal !== undefined) this.activeModal = data.activeModal;
             if (data?.model) this.currentModel = data.model;
             if (data?.mode) this.currentMode = data.mode;
+            if (typeof data?.sessionId === 'string' && data.sessionId.trim()) this.chatId = data.sessionId;
+            if (typeof data?.title === 'string' && data.title.trim()) this.chatTitle = data.title;
+            if (typeof data?.agentName === 'string' && data.agentName.trim()) this.agentName = data.agentName;
+            if (typeof data?.extensionId === 'string' && data.extensionId.trim()) this.extensionId = data.extensionId;
             if (data?.status) {
                 const newStatus = data.status;
                 this.detectTransition(newStatus, data);
@@ -117,12 +125,6 @@ export class ExtensionProviderInstance implements ProviderInstance {
     }
 
  // ─── status transition detect ──────────────────────────────
-    // NOTE: Extension transitions are TRACKED but NOT emitted as events.
-    // The parent IdeProviderInstance already emits identical events
-    // (generating_started, generating_completed, waiting_approval)
-    // via its own detectAgentTransitions(). Emitting here would cause
-    // duplicate toasts with slightly different content.
-
     private detectTransition(newStatus: string, data: any): void {
         const now = Date.now();
         const agentStatus = (newStatus === 'streaming' || newStatus === 'generating') ? 'generating'
@@ -136,13 +138,44 @@ export class ExtensionProviderInstance implements ProviderInstance {
             : undefined;
 
         if (agentStatus !== this.lastAgentStatus) {
-            // Track generating start time (for monitor elapsed calculation)
             if (this.lastAgentStatus === 'idle' && agentStatus === 'generating') {
                 this.generatingStartedAt = now;
+                this.pushEvent({
+                    event: 'agent:generating_started',
+                    chatTitle: this.resolveChatTitle(data),
+                    timestamp: now,
+                    ideType: this.ideType || this.type,
+                    agentType: this.type,
+                    agentName: this.agentName || this.provider.name,
+                    extensionId: this.extensionId || this.type,
+                });
+            } else if (agentStatus === 'waiting_approval') {
+                if (!this.generatingStartedAt) this.generatingStartedAt = now;
+                this.pushEvent({
+                    event: 'agent:waiting_approval',
+                    chatTitle: this.resolveChatTitle(data),
+                    timestamp: now,
+                    ideType: this.ideType || this.type,
+                    agentType: this.type,
+                    agentName: this.agentName || this.provider.name,
+                    extensionId: this.extensionId || this.type,
+                    modalMessage: data?.activeModal?.message,
+                    modalButtons: data?.activeModal?.buttons,
+                });
             } else if (agentStatus === 'idle' && (this.lastAgentStatus === 'generating' || this.lastAgentStatus === 'waiting_approval')) {
+                const duration = this.generatingStartedAt ? Math.round((now - this.generatingStartedAt) / 1000) : 0;
+                this.pushEvent({
+                    event: 'agent:generating_completed',
+                    chatTitle: this.resolveChatTitle(data),
+                    duration,
+                    timestamp: now,
+                    ideType: this.ideType || this.type,
+                    agentType: this.type,
+                    agentName: this.agentName || this.provider.name,
+                    extensionId: this.extensionId || this.type,
+                });
                 this.generatingStartedAt = 0;
             }
-            // Do NOT pushEvent for transitions — parent IDE instance handles these
             this.lastAgentStatus = agentStatus;
         }
 
@@ -163,5 +196,12 @@ export class ExtensionProviderInstance implements ProviderInstance {
         const events = [...this.events];
         this.events = [];
         return events;
+    }
+
+    private resolveChatTitle(data: any): string {
+        const title = typeof data?.title === 'string' && data.title.trim()
+            ? data.title.trim()
+            : this.chatTitle;
+        return title || this.agentName || this.provider.name;
     }
 }
