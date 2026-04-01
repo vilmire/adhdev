@@ -78,9 +78,9 @@ export class DaemonCdpInitializer {
 
         // Summary
         if (cdpManagers.size > 0) {
-            LOG.info('CDP', `${cdpManagers.size} IDE(s) connected: ${[...cdpManagers.entries()].map(([k, m]) => `${k}:${m.getPort()}`).join(', ')}`);
+            LOG.info('IDE', `${cdpManagers.size} IDE window(s) attached: ${[...cdpManagers.entries()].map(([k, m]) => `${k}:${m.getPort()}`).join(', ')}`);
         } else {
-            LOG.warn('CDP', `No IDEs connected — tried: ${filtered.map(p => `${p.ide}:${p.port}`).join(', ')}`);
+            LOG.warn('IDE', `No IDE windows attached — tried: ${filtered.map(p => `${p.ide}:${p.port}`).join(', ')}`);
         }
     }
 
@@ -113,7 +113,7 @@ export class DaemonCdpInitializer {
             if (connected) {
                 registerExtensionProviders(providerLoader, manager, ide);
                 cdpManagers.set(ide, manager);
-                LOG.info('CDP', `Connected: ${ide} (port ${port})`);
+                LOG.info('IDE', `Attached: ${ide} (port ${port})`);
                 await this.config.onConnected?.(ide, manager, ide);
             }
             return;
@@ -155,7 +155,7 @@ export class DaemonCdpInitializer {
             if (connected) {
                 registerExtensionProviders(providerLoader, manager, ide);
                 cdpManagers.set(managerKey, manager);
-                LOG.info('CDP', `Connected: ${managerKey} (port ${port}${targets.length > 1 ? `, page "${target.title}"` : ''})`);
+                LOG.info('IDE', `Attached window: ${managerKey} (port ${port}${targets.length > 1 ? `, page "${target.title}"` : ''})`);
                 await this.config.onConnected?.(ide, manager, managerKey);
             }
         }
@@ -195,7 +195,7 @@ export class DaemonCdpInitializer {
         for (const { key, manager, reason } of removals) {
             try { manager.disconnect(); } catch { /* noop */ }
             this.config.cdpManagers.delete(key);
-            LOG.info('CDP', `Removed stale manager: ${key} (${reason})`);
+            LOG.info('IDE', `Detached window: ${key} (${reason})`);
             await this.config.onDisconnected?.(ide, manager, key, reason);
         }
     }

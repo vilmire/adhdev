@@ -65,6 +65,96 @@ export interface CommandHelpers {
     readonly historyWriter: ChatHistoryWriter;
 }
 
+const COMMAND_DEBUG_LEVELS = new Set([
+    'pty_input',
+    'pty_resize',
+    'cdp_eval',
+    'cdp_batch',
+    'cdp_dom_query',
+    'cdp_dom_dump',
+    'cdp_dom_debug',
+]);
+
+function logAtLevel(level: 'debug' | 'info' | 'warn' | 'error', category: string, message: string): void {
+    switch (level) {
+        case 'debug':
+            LOG.debug(category, message);
+            return;
+        case 'warn':
+            LOG.warn(category, message);
+            return;
+        case 'error':
+            LOG.error(category, message);
+            return;
+        default:
+            LOG.info(category, message);
+    }
+}
+
+function getCommandLogLevel(cmd: string): 'debug' | 'info' {
+    return COMMAND_DEBUG_LEVELS.has(cmd) ? 'debug' : 'info';
+}
+
+function summarizeLogValue(value: unknown): string {
+    if (value === null) return 'null';
+    if (value === undefined) return 'undefined';
+    if (typeof value === 'string') {
+        const normalized = value.replace(/\s+/g, ' ').trim();
+        if (!normalized) return '""';
+        if (normalized.length <= 80) return JSON.stringify(normalized);
+        return `${JSON.stringify(normalized.slice(0, 80))}…(${normalized.length} chars)`;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) return `[${value.length} items]`;
+    if (typeof value === 'object') return '{...}';
+    return String(value);
+}
+
+function summarizeCommandArgs(args: any): string {
+    if (!args || typeof args !== 'object') return '-';
+
+    const preferredKeys = [
+        'targetSessionId',
+        'providerType',
+        'agentType',
+        'ideType',
+        'model',
+        'mode',
+        'action',
+        'button',
+        'key',
+        'force',
+        'offset',
+        'limit',
+        'cols',
+        'rows',
+        'path',
+        'command',
+        'commandId',
+        'workspace',
+        'dir',
+        'url',
+        'text',
+        'message',
+        'data',
+        'value',
+    ];
+
+    const entries: string[] = [];
+    for (const key of preferredKeys) {
+        if (!(key in args) || args[key] === undefined) continue;
+        const value =
+            key === 'text' || key === 'message'
+                ? `${String(args[key] || '').length} chars`
+                : key === 'data'
+                    ? `${String(args[key] || '').length} chars`
+                    : summarizeLogValue(args[key]);
+        entries.push(`${key}=${value}`);
+    }
+
+    return entries.length ? entries.join(' ') : '{...}';
+}
+
 export class DaemonCommandHandler implements CommandHelpers {
     private _ctx: CommandContext;
     private _agentStream: DaemonAgentStreamManager | null = null;
@@ -235,6 +325,30 @@ export class DaemonCommandHandler implements CommandHelpers {
         return undefined;
     }
 
+    private logCommandStart(cmd: string, args: any): void {
+        const routeBits = [
+            this._currentRoute.session?.sessionId ? `session=${this._currentRoute.session.sessionId}` : '',
+            this._currentRoute.managerKey ? `manager=${this._currentRoute.managerKey}` : '',
+            this._currentRoute.providerType ? `provider=${this._currentRoute.providerType}` : '',
+        ].filter(Boolean).join(' ');
+        const summary = summarizeCommandArgs(args);
+        logAtLevel(
+            getCommandLogLevel(cmd),
+            'Command',
+            `[${cmd}] start${routeBits ? ` ${routeBits}` : ''} args=${summary}`,
+        );
+    }
+
+    private logCommandEnd(cmd: string, result: CommandResult, startedAt: number): void {
+        const durationMs = Date.now() - startedAt;
+        const parts = [`[${cmd}] end`, `success=${result.success}`, `duration=${durationMs}ms`];
+        if (typeof result.error === 'string' && result.error) {
+            parts.push(`error=${JSON.stringify(result.error)}`);
+        }
+        const level = result.success ? getCommandLogLevel(cmd) : 'warn';
+        logAtLevel(level, 'Command', parts.join(' '));
+    }
+
     setAgentStreamManager(manager: DaemonAgentStreamManager): void {
         this._agentStream = manager;
     }
@@ -244,20 +358,29 @@ export class DaemonCommandHandler implements CommandHelpers {
     async handle(cmd: string, args: any): Promise<CommandResult> {
         // Per-request: extract target session / CDP scope / provider type from args
         this._currentRoute = this.resolveRoute(args);
+        const startedAt = Date.now();
+        this.logCommandStart(cmd, args);
 
         // Commands without ideType CDP silently fail (prevent P2P retry spam)
+        let result: CommandResult;
         if (!this._currentRoute.session && !this._currentRoute.managerKey && !this._currentRoute.providerType) {
             const cdpCommands = ['send_chat', 'read_chat', 'list_chats', 'new_chat', 'switch_chat', 'set_mode', 'change_model', 'set_thought_level', 'resolve_action'];
             if (cdpCommands.includes(cmd)) {
-                return { success: false, error: 'No targetSessionId specified — cannot route command' };
+                result = { success: false, error: 'No targetSessionId specified — cannot route command' };
+                this.logCommandEnd(cmd, result, startedAt);
+                return result;
             }
         }
 
         try {
-            return await this.dispatch(cmd, args);
+            result = await this.dispatch(cmd, args);
+            this.logCommandEnd(cmd, result, startedAt);
+            return result;
         } catch (e: any) {
             LOG.error('Command', `[${cmd}] Unhandled error: ${e?.message || e}`);
-            return { success: false, error: `Internal error: ${e?.message || 'unknown'}` };
+            result = { success: false, error: `Internal error: ${e?.message || 'unknown'}` };
+            this.logCommandEnd(cmd, result, startedAt);
+            return result;
         }
     }
 

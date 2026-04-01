@@ -185,7 +185,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
 
             if (ideInstance) {
                 instanceManager.removeInstance(instanceKey);
-                LOG.info('CDP', `Instance removed after disconnect: ${instanceKey}`);
+                LOG.info('IDE', `Instance removed after detach: ${instanceKey}`);
             }
 
             if (ideInstance?.getInstanceId) {

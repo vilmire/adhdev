@@ -13,11 +13,19 @@ import { IconServer, IconMonitor } from '../components/Icons'
 import { useHiddenTabs } from '../hooks/useHiddenTabs'
 
 // ─── Compact Agent Row (replaces full IdeCard/CliCard) ──────────
-function AgentRow({ icon, name, status, workspace, isActive, onClick, isHidden, onToggleVisibility }: {
-    icon: string; name: string; status: string; workspace?: string
+function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive, onClick, isHidden, onToggleVisibility }: {
+    icon: string; name: string; status: string; statusTone?: 'active' | 'waiting' | 'idle' | 'offline'; workspace?: string
     isActive: boolean; onClick: () => void
     isHidden?: boolean; onToggleVisibility?: () => void
 }) {
+    const statusDotColor = statusTone === 'active'
+        ? '#f97316'
+        : statusTone === 'waiting'
+            ? '#f59e0b'
+            : statusTone === 'offline'
+                ? '#ef4444'
+                : '#64748b'
+
     return (
         <div
             className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg transition-all ${
@@ -55,8 +63,8 @@ function AgentRow({ icon, name, status, workspace, isActive, onClick, isHidden, 
                 <span
                     className="w-[5px] h-[5px] rounded-full shrink-0"
                     style={{
-                        background: isActive ? '#f97316' : status === 'stopped' ? '#ef4444' : '#22c55e',
-                        animation: isActive ? 'pulse-dot 1.5s infinite' : 'none',
+                        background: statusDotColor,
+                        animation: statusTone === 'active' ? 'pulse-dot 1.5s infinite' : 'none',
                     }}
                 />
                 <span className="text-[9px] text-text-muted">→</span>
@@ -190,6 +198,11 @@ export default function MachinesPage() {
                         const connState = connectionStates[machine.machineId]
                         const transport = connectionTransports[machine.machineId]
                         const isConnecting = isOnline && (connState === 'new' || connState === 'connecting')
+                        const machineDotColor = connState === 'connected'
+                            ? '#22c55e'
+                            : isConnecting
+                                ? '#a78bfa'
+                                : '#64748b'
                         const totalAgents = machine.ideSessions.length + machine.cliSessions.length + machine.acpSessions.length
 
                         return (
@@ -264,9 +277,9 @@ export default function MachinesPage() {
                                             <div
                                                 className="w-2 h-2 rounded-full"
                                                 style={{
-                                                    background: isOnline ? '#22c55e' : '#64748b',
-                                                    boxShadow: isOnline ? '0 0 8px rgba(34,197,94,0.4)' : 'none',
-                                                    animation: isOnline ? 'pulse-dot 2s infinite' : 'none',
+                                                    background: machineDotColor,
+                                                    boxShadow: connState === 'connected' ? '0 0 8px rgba(34,197,94,0.4)' : 'none',
+                                                    animation: connState === 'connected' ? 'pulse-dot 2s infinite' : 'none',
                                                 }}
                                             />
                                         </div>
@@ -288,6 +301,13 @@ export default function MachinesPage() {
                                                     const statusText = active ? 'generating'
                                                         : isManagedStatusWaiting(ide.activeChat?.status, { activeModal: (ide.activeChat as any)?.activeModal }) ? 'approval'
                                                         : 'idle'
+                                                    const statusTone = active
+                                                        ? 'active'
+                                                        : statusText === 'approval'
+                                                            ? 'waiting'
+                                                            : ide.status === 'stopped'
+                                                                ? 'offline'
+                                                                : 'idle'
                                                     // Extensions / agent streams running inside this IDE
                                                     const activeStreams = (ide.agentStreams || []).filter(
                                                         s => isManagedStatusWorking(s.status)
@@ -298,6 +318,7 @@ export default function MachinesPage() {
                                                                 icon={getIcon(ide.type)}
                                                                 name={ide.name}
                                                                 status={statusText}
+                                                                statusTone={statusTone}
                                                                 workspace={ide.workspace}
                                                                 isActive={active}
                                                                 isHidden={isHidden(ide.id)}
@@ -338,12 +359,18 @@ export default function MachinesPage() {
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.cliSessions.map(cli => {
                                                     const active = cli.agentStreams?.some(s => isManagedStatusWorking(s.status))
+                                                    const statusTone = active
+                                                        ? 'active'
+                                                        : normalizeManagedStatus(cli.status) === 'stopped'
+                                                            ? 'offline'
+                                                            : 'idle'
                                                     return (
                                                         <AgentRow
                                                             key={cli.id}
                                                             icon={getIcon(cli.cliType)}
                                                             name={cli.cliName}
                                                             status={active ? 'generating' : normalizeManagedStatus(cli.status)}
+                                                            statusTone={statusTone}
                                                             workspace={cli.workspace?.split('/').pop()}
                                                             isActive={!!active}
                                                             isHidden={isHidden(cli.id)}
@@ -363,12 +390,18 @@ export default function MachinesPage() {
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.acpSessions.map(acp => {
                                                     const active = acp.agentStreams?.some(s => isManagedStatusWorking(s.status))
+                                                    const statusTone = active
+                                                        ? 'active'
+                                                        : normalizeManagedStatus(acp.status) === 'stopped'
+                                                            ? 'offline'
+                                                            : 'idle'
                                                     return (
                                                         <AgentRow
                                                             key={acp.id}
                                                             icon={getIcon(acp.acpType)}
                                                             name={acp.acpName}
                                                             status={active ? 'generating' : normalizeManagedStatus(acp.status)}
+                                                            statusTone={statusTone}
                                                             workspace={acp.workspace?.split('/').pop()}
                                                             isActive={!!active}
                                                             isHidden={isHidden(acp.id)}

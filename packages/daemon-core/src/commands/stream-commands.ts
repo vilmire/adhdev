@@ -85,7 +85,6 @@ export function handleSetProviderSetting(h: CommandHelpers, args: any): CommandR
 
 export async function handleExtensionScript(h: CommandHelpers, args: any, scriptName: string): Promise<CommandResult> {
     const { agentType, ideType } = args || {};
-    LOG.info('Command', `[ExtScript] ${scriptName} agentType=${agentType} ideType=${ideType} session=${h.currentSession?.sessionId || ''}`);
     if (!agentType) return { success: false, error: 'agentType is required' };
 
     const loader = h.ctx.providerLoader;

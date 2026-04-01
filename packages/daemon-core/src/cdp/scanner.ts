@@ -134,7 +134,7 @@ export class DaemonCdpScanner {
 
     registerExtensionProviders(this.ctx.providerLoader, manager, ide);
     this.ctx.cdpManagers.set(ide, manager);
-    LOG.info('CDP', `Connected: ${ide} (port ${port})`);
+    LOG.info('IDE', `Attached: ${ide} (port ${port})`);
 
     // Setup IDE instance
     await setupIdeInstance(this.ctx, { ideType: ide, manager });
@@ -172,7 +172,7 @@ export class DaemonCdpScanner {
       if (!manager) continue;
 
       this.ctx.cdpManagers.set(managerKey, manager);
-      LOG.info('CDP', `Connected: ${managerKey} (port ${port}, page "${target.title}")`);
+      LOG.info('IDE', `Attached window: ${managerKey} (port ${port}, page "${target.title}")`);
 
       await setupIdeInstance(this.ctx, {
         ideType: ide,
