@@ -74,6 +74,7 @@ jobs:
         with:
           name: publish-artifacts
           path: |
+            packages/session-host-core/dist
             packages/session-host-daemon/dist
             packages/daemon-core/dist
             packages/daemon-standalone/dist
@@ -111,6 +112,12 @@ jobs:
 
       - name: Bundle vendored runtime deps into daemon-standalone
         run: npm run bundle:vendor -w packages/daemon-standalone
+
+      - name: Publish @adhdev/session-host-core
+        if: env.NODE_AUTH_TOKEN != ''
+        run: cd packages/session-host-core && npm publish --access public --ignore-scripts || echo '⚠️ session-host-core publish skipped (version may already exist)'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @adhdev/daemon-core
         if: env.NODE_AUTH_TOKEN != ''
