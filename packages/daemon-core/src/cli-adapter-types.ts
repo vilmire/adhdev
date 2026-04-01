@@ -12,7 +12,9 @@ export interface CliAdapter {
     sendMessage(text: string): Promise<void>;
     getStatus(): any;
     getPartialResponse(): string;
+    saveAndStop?(): Promise<void>;
     shutdown(): void;
+    detach?(): void;
     cancel(): void;
     isProcessing(): boolean;
     isReady(): boolean;

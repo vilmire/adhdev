@@ -11,6 +11,7 @@ import type { ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
+import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
@@ -37,10 +38,11 @@ export class CliProviderInstance implements ProviderInstance {
         private workingDir: string,
         private cliArgs: string[] = [],
         instanceId?: string,
+        transportFactory?: PtyTransportFactory,
     ) {
         this.type = provider.type;
         this.instanceId = instanceId || crypto.randomUUID();
-        this.adapter = new ProviderCliAdapter(provider as any as CliProviderModule, workingDir, cliArgs);
+        this.adapter = new ProviderCliAdapter(provider as any as CliProviderModule, workingDir, cliArgs, transportFactory);
         this.monitor = new StatusMonitor();
         this.historyWriter = new ChatHistoryWriter();
     }
@@ -82,6 +84,7 @@ export class CliProviderInstance implements ProviderInstance {
 
     getState(): ProviderState {
         const adapterStatus = this.adapter.getStatus();
+        const runtime = this.adapter.getRuntimeMetadata();
 
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
 
@@ -114,6 +117,15 @@ export class CliProviderInstance implements ProviderInstance {
             lastUpdated: Date.now(),
             settings: this.settings,
             pendingEvents: this.flushEvents(),
+            runtime: runtime ? {
+                runtimeId: runtime.runtimeId,
+                runtimeKey: runtime.runtimeKey,
+                displayName: runtime.displayName,
+                workspaceLabel: runtime.workspaceLabel,
+                writeOwner: runtime.writeOwner || null,
+                attachedClients: runtime.attachedClients || [],
+            } : undefined,
+            resume: this.provider.resume,
         };
     }
 

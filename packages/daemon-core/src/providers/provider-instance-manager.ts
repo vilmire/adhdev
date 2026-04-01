@@ -42,6 +42,27 @@ export class ProviderInstanceManager {
         }
     }
 
+    removeByCategory(
+        category: 'cli' | 'ide' | 'extension' | 'acp',
+        options: { dispose?: boolean } = {},
+    ): number {
+        const dispose = options.dispose !== false;
+        let removed = 0;
+        for (const [id, instance] of this.instances) {
+            if (instance.category !== category) continue;
+            if (dispose) {
+                try {
+                    instance.dispose();
+                } catch {
+                    // noop
+                }
+            }
+            this.instances.delete(id);
+            removed += 1;
+        }
+        return removed;
+    }
+
  /**
  * Import by Instance ID
  */

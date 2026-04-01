@@ -11,9 +11,14 @@
     "dev": "npm run dev:daemon & npm run dev:web",
     "dev:daemon": "tsx packages/daemon-standalone/src/index.ts --dev --no-open",
     "dev:web": "npm run dev -w packages/web-standalone",
-    "build": "npm run build -w packages/daemon-core && npm run build -w packages/web-core && npm run build -w packages/web-standalone && npm run build -w packages/daemon-standalone"
+    "build": "npm run build -w packages/session-host-core && npm run build -w packages/session-host-daemon && npm run build -w packages/ghostty-vt-node && npm run build -w packages/terminal-mux-core && npm run build -w packages/terminal-mux-control && npm run build -w packages/terminal-render-web && npm run build -w packages/terminal-mux-cli && npm run build -w packages/daemon-core && npm run build -w packages/web-core && npm run build -w packages/web-standalone && npm run build -w packages/daemon-standalone"
   },
   "devDependencies": {
+    "@types/cacheable-request": "^6.0.3",
+    "@types/http-cache-semantics": "^4.2.0",
+    "@types/keyv": "^3.1.4",
+    "@types/responselike": "^1.0.3",
+    "@types/yauzl": "^2.10.3",
     "concurrently": "^9.1.2"
   },
   "author": "vilmire",

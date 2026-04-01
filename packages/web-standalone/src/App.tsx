@@ -6,7 +6,7 @@
  */
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { StandaloneDaemonProvider, sendCommandViaWs } from './StandaloneDaemonContext'
-import { TransportProvider, MachineDetail, Dashboard, IDEPage, CapabilitiesPage, useBaseDaemons, initTheme, initChatTheme } from '@adhdev/web-core'
+import { TransportProvider, MachineDetail, Dashboard, IDEPage, CapabilitiesPage, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient } from '@adhdev/web-core'
 import StandaloneLayout from './StandaloneLayout'
 import StandaloneAbout from './StandaloneAbout'
 import StandaloneSettings from './StandaloneSettings'
@@ -15,6 +15,10 @@ import '@adhdev/web-core/index.css'
 // Restore persisted appearance before first render so CSS vars resolve correctly.
 initTheme()
 initChatTheme()
+
+const standaloneApiClient = createApiClient({
+    baseUrl: '',
+})
 
 /**
  * SingleMachineRedirect — standalone only has 1 machine.
@@ -43,26 +47,28 @@ export default function App() {
                 v7_relativeSplatPath: true,
             }}
         >
-            <StandaloneDaemonProvider>
-                <TransportProvider value={{
-                    sendCommand: sendCommandViaWs,
-                    sendData: () => false,
-                }}>
-                    <StandaloneLayout>
-                        <Routes>
-                            <Route path="/dashboard" element={<Dashboard />} />
-                            <Route path="/ide/:id" element={<IDEPage />} />
-                            <Route path="/machine" element={<SingleMachineRedirect />} />
-                            <Route path="/machines/:id" element={<MachineDetail />} />
-                            <Route path="/machines" element={<SingleMachineRedirect />} />
-                            <Route path="/capabilities" element={<CapabilitiesPage />} />
-                            <Route path="/about" element={<StandaloneAbout />} />
-                            <Route path="/settings" element={<StandaloneSettings />} />
-                            <Route path="*" element={<Navigate to="/dashboard" replace />} />
-                        </Routes>
-                    </StandaloneLayout>
-                </TransportProvider>
-            </StandaloneDaemonProvider>
+            <ApiProvider client={standaloneApiClient}>
+                <StandaloneDaemonProvider>
+                    <TransportProvider value={{
+                        sendCommand: sendCommandViaWs,
+                        sendData: () => false,
+                    }}>
+                        <StandaloneLayout>
+                            <Routes>
+                                <Route path="/dashboard" element={<Dashboard />} />
+                                <Route path="/ide/:id" element={<IDEPage />} />
+                                <Route path="/machine" element={<SingleMachineRedirect />} />
+                                <Route path="/machines/:id" element={<MachineDetail />} />
+                                <Route path="/machines" element={<SingleMachineRedirect />} />
+                                <Route path="/capabilities" element={<CapabilitiesPage />} />
+                                <Route path="/about" element={<StandaloneAbout />} />
+                                <Route path="/settings" element={<StandaloneSettings />} />
+                                <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                            </Routes>
+                        </StandaloneLayout>
+                    </TransportProvider>
+                </StandaloneDaemonProvider>
+            </ApiProvider>
         </BrowserRouter>
     )
 }

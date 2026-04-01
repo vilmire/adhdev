@@ -312,13 +312,16 @@ export async function shutdownDaemonComponents(components: DaemonComponents): Pr
         }
     } catch (e: any) { LOG.warn('Shutdown', `AgentStream dispose: ${e?.message}`); }
 
-    // 3. Shutdown CLIs
-    try { await cliManager.shutdownAll(); } catch { /* noop */ }
+    // 3. Detach CLIs (persistent runtimes survive daemon restarts)
+    try { cliManager.detachAll(); } catch { /* noop */ }
 
-    // 4. Dispose instances
+    // 4. Remove CLI instances without disposing their runtimes again
+    try { instanceManager.removeByCategory('cli', { dispose: false }); } catch { /* noop */ }
+
+    // 5. Dispose remaining instances
     try { instanceManager.disposeAll(); } catch { /* noop */ }
 
-    // 5. Disconnect CDPs
+    // 6. Disconnect CDPs
     for (const m of cdpManagers.values()) {
         try { m.disconnect(); } catch { /* noop */ }
     }

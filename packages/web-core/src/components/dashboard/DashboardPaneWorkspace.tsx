@@ -9,6 +9,7 @@ interface DashboardPaneWorkspaceProps {
     numGroups: number
     groupSizes: number[]
     groupedConvs: ActiveConversation[][]
+    clearedTabs: Record<string, number>
     ides: DaemonData[]
     actionLogs: { ideId: string; text: string; timestamp: number }[]
     ptyBuffers: React.MutableRefObject<Map<string, string[]>>
@@ -40,6 +41,7 @@ export default function DashboardPaneWorkspace({
     numGroups,
     groupSizes,
     groupedConvs,
+    clearedTabs,
     ides,
     actionLogs,
     ptyBuffers,
@@ -91,6 +93,7 @@ export default function DashboardPaneWorkspace({
                                 flexShrink: flexBasis ? 0 : 1,
                             } : undefined}
                             conversations={convs}
+                            clearedTabs={clearedTabs}
                             ides={ides}
                             actionLogs={actionLogs}
                             ptyBuffers={ptyBuffers}

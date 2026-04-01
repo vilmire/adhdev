@@ -33,6 +33,19 @@ export function formatBytes(bytes: number): string {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }
 
+/** Human-friendly workspace label from optional custom label or path basename */
+export function getWorkspaceDisplayLabel(path?: string | null, label?: string | null): string {
+    const customLabel = typeof label === 'string' ? label.trim() : ''
+    if (customLabel) return customLabel
+
+    const rawPath = typeof path === 'string' ? path.trim() : ''
+    if (!rawPath) return ''
+
+    const normalized = rawPath.replace(/[\\/]+$/, '')
+    const parts = normalized.split(/[\\/]/).filter(Boolean)
+    return parts[parts.length - 1] || normalized
+}
+
 /** Shorten long hostname to human-readable form */
 export function formatMachineName(raw: string): string {
     if (raw.length > 16 && /^[a-f0-9]+$/i.test(raw)) return `Machine-${raw.substring(0, 8)}`
@@ -276,6 +289,10 @@ export interface CliSessionSummary {
     cliName: string
     status: string
     workspace: string
+    runtimeKey?: string
+    runtimeDisplayName?: string
+    runtimeWorkspaceLabel?: string
+    runtimeWriteOwner?: { clientId: string; ownerType: 'agent' | 'user' } | null
     agentStreams: { sessionId?: string; agentName: string; status: string }[]
 }
 
@@ -354,6 +371,10 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                     cliName: daemon.cliName || daemon.type,
                     status: daemon.status || 'online',
                     workspace: daemon.workspace || '',
+                    runtimeKey: daemon.runtimeKey,
+                    runtimeDisplayName: daemon.runtimeDisplayName,
+                    runtimeWorkspaceLabel: daemon.runtimeWorkspaceLabel,
+                    runtimeWriteOwner: daemon.runtimeWriteOwner || null,
                     agentStreams: daemon.agentStreams || [],
                 })
             }

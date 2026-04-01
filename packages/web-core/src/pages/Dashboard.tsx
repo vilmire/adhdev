@@ -21,6 +21,7 @@ import DashboardHeader from '../components/dashboard/DashboardHeader'
 import DashboardPaneWorkspace from '../components/dashboard/DashboardPaneWorkspace'
 import DashboardVersionBanner from '../components/dashboard/DashboardVersionBanner'
 import HistoryModal from '../components/dashboard/HistoryModal'
+import CliStopDialog from '../components/dashboard/CliStopDialog'
 import ToastContainer from '../components/dashboard/ToastContainer'
 import OnboardingModal from '../components/OnboardingModal'
 
@@ -55,9 +56,12 @@ export default function Dashboard() {
         groupSizes,
         setGroupSizes,
         isMobile,
+        hasHydratedStoredLayout,
+        hydrateStoredLayout,
     } = useDashboardGroupState()
 
     const [historyModalOpen, setHistoryModalOpen] = useState(false)
+    const [cliStopDialogOpen, setCliStopDialogOpen] = useState(false)
     const [actionLogs, setActionLogs] = useState<{ ideId: string; text: string; timestamp: number }[]>([])
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
     const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
@@ -162,6 +166,8 @@ export default function Dashboard() {
         conversations,
         resolveConversationByTarget,
         normalizedGroupAssignments,
+        hasHydratedStoredLayout,
+        hydrateStoredLayout,
         setGroupActiveTabIds,
         setFocusedGroup,
         setSearchParams,
@@ -176,17 +182,38 @@ export default function Dashboard() {
         clearAllSplits,
     })
 
-    const handleActiveCliStop = useCallback(async () => {
+    const performActiveCliStop = useCallback(async (mode: 'hard' | 'save') => {
         if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return
         const cliType = activeConv.ideType || activeConv.agentType || ''
-        if (!window.confirm(`Stop ${cliType}?\nThis will terminate the CLI process.`)) return
         const daemonId = activeConv.ideId || activeConv.daemonId || ''
         try {
-            await sendDaemonCommand(daemonId, 'stop_cli', { cliType, targetSessionId: activeConv.sessionId })
+            await sendDaemonCommand(daemonId, 'stop_cli', {
+                cliType,
+                targetSessionId: activeConv.sessionId,
+                mode,
+            })
         } catch (e: any) {
             console.error('Stop CLI failed:', e)
         }
     }, [activeConv, sendDaemonCommand])
+
+    const handleActiveCliStop = useCallback(async () => {
+        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return
+        if (activeConv.resume?.supported) {
+            setCliStopDialogOpen(true)
+            return
+        }
+        const cliType = activeConv.ideType || activeConv.agentType || 'CLI'
+        if (!window.confirm(`Stop ${cliType}?\nThis will terminate the CLI process.`)) return
+        await performActiveCliStop('hard')
+    }, [activeConv, performActiveCliStop])
+
+    const handleActiveCliFit = useCallback(() => {
+        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv) || !activeConv.sessionId) return
+        window.dispatchEvent(new CustomEvent('adhdev:fit-cli-terminal', {
+            detail: { sessionId: activeConv.sessionId },
+        }))
+    }, [activeConv])
 
     const {
         versionMismatchDaemons,
@@ -222,6 +249,7 @@ export default function Dashboard() {
                 wsStatus={wsStatus}
                 isConnected={isConnected}
                 onOpenHistory={() => setHistoryModalOpen(true)}
+                onFitCli={handleActiveCliFit}
                 onStopCli={handleActiveCliStop}
             />
 
@@ -231,6 +259,7 @@ export default function Dashboard() {
                 numGroups={numGroups}
                 groupSizes={groupSizes}
                 groupedConvs={groupedConvs}
+                clearedTabs={clearedTabs}
                 ides={ides}
                 actionLogs={actionLogs}
                 ptyBuffers={ptyBuffers}
@@ -267,6 +296,21 @@ export default function Dashboard() {
                     onNewChat={handleNewChat}
                     onSwitchSession={handleSwitchSession}
                     onRefreshHistory={handleRefreshHistory}
+                />
+            )}
+
+            {cliStopDialogOpen && activeConv && isCliConv(activeConv) && !isAcpConv(activeConv) && (
+                <CliStopDialog
+                    activeConv={activeConv}
+                    onCancel={() => setCliStopDialogOpen(false)}
+                    onStopNow={async () => {
+                        setCliStopDialogOpen(false)
+                        await performActiveCliStop('hard')
+                    }}
+                    onSaveAndStop={async () => {
+                        setCliStopDialogOpen(false)
+                        await performActiveCliStop('save')
+                    }}
                 />
             )}
 

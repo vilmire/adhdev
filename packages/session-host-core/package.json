@@ -1,0 +1,43 @@
+{
+  "name": "@adhdev/session-host-core",
+  "version": "0.7.6",
+  "description": "ADHDev local session host core — session registry, protocol, buffers",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "keywords": [
+    "adhdev",
+    "session-host",
+    "pty",
+    "runtime"
+  ],
+  "author": "vilmire",
+  "license": "AGPL-3.0-or-later",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.2.0",
+    "typescript": "^5.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vilmire/adhdev.git",
+    "directory": "packages/session-host-core"
+  },
+  "homepage": "https://github.com/vilmire/adhdev#readme"
+}

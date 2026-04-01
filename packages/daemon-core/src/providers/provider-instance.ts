@@ -8,13 +8,33 @@
  * Each Instance manages its own status.
  */
 
-import type { ProviderModule, ProviderSettingDef } from './contracts.js';
+import type { ProviderModule, ProviderSettingDef, ProviderResumeCapability } from './contracts.js';
 import type { AcpConfigOption, AcpMode } from '../shared-types.js';
 import type { ChatMessage } from '../types.js';
 
 // ─── ProviderState — Discriminated union by category ─────────────
 
 export type ProviderStatus = 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting';
+
+export interface ProviderRuntimeWriteOwner {
+    clientId: string;
+    ownerType: 'agent' | 'user';
+}
+
+export interface ProviderRuntimeClient {
+    clientId: string;
+    type: 'daemon' | 'web' | 'local-terminal';
+    readOnly: boolean;
+}
+
+export interface ProviderRuntimeInfo {
+    runtimeId: string;
+    runtimeKey?: string;
+    displayName?: string;
+    workspaceLabel?: string;
+    writeOwner?: ProviderRuntimeWriteOwner | null;
+    attachedClients?: ProviderRuntimeClient[];
+}
 
 export interface ActiveChatData {
     id: string;
@@ -61,6 +81,8 @@ interface ProviderStateBase {
     settings: Record<string, any>;
  /** Event queue (cleared after daemon collects) */
     pendingEvents: ProviderEvent[];
+    runtime?: ProviderRuntimeInfo;
+    resume?: ProviderResumeCapability;
 }
 
 /** IDE provider state */

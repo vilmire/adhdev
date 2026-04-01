@@ -1,77 +1,53 @@
-import { useEffect, useState } from 'react'
-
-const STORAGE_KEYS = {
-    splitGroups: 'adhdev_splitGroups',
-    focusedGroup: 'adhdev_focusedGroup',
-    groupActiveTabs: 'adhdev_groupActiveTabs',
-    groupTabOrders: 'adhdev_groupTabOrders',
-    splitSizes: 'adhdev_splitSizes',
-} as const
-
-function readJsonStorage<T>(key: string, fallback: T): T {
-    try {
-        const raw = localStorage.getItem(key)
-        return raw ? JSON.parse(raw) as T : fallback
-    } catch {
-        return fallback
-    }
-}
-
-function writeStorage(key: string, value: string | null) {
-    try {
-        if (value == null) localStorage.removeItem(key)
-        else localStorage.setItem(key, value)
-    } catch { /* noop */ }
-}
+import { useCallback, useEffect, useState } from 'react'
+import {
+    getDashboardLayoutProfile,
+    getEmptyDashboardStoredLayout,
+    readDashboardStoredLayout,
+    writeDashboardStoredLayout,
+} from '../utils/dashboardLayoutStorage'
 
 export function useDashboardGroupState() {
-    const [groupAssignments, setGroupAssignments] = useState<Map<string, number>>(() => {
-        const entries = readJsonStorage<[string, number][]>(STORAGE_KEYS.splitGroups, [])
-        return new Map(entries)
-    })
-    const [focusedGroup, setFocusedGroup] = useState(() => {
-        try {
-            const saved = localStorage.getItem(STORAGE_KEYS.focusedGroup)
-            if (saved) return parseInt(saved, 10) || 0
-        } catch { /* noop */ }
-        return 0
-    })
-    const [groupActiveTabIds, setGroupActiveTabIds] = useState<Record<number, string | null>>(() =>
-        readJsonStorage<Record<number, string | null>>(STORAGE_KEYS.groupActiveTabs, {})
+    const [layoutProfile] = useState(() =>
+        getDashboardLayoutProfile(typeof window !== 'undefined' ? window.innerWidth : 1280)
     )
-    const [groupTabOrders, setGroupTabOrders] = useState<Record<number, string[]>>(() =>
-        readJsonStorage<Record<number, string[]>>(STORAGE_KEYS.groupTabOrders, {})
-    )
-    const [groupSizes, setGroupSizes] = useState<number[]>(() =>
-        readJsonStorage<number[]>(STORAGE_KEYS.splitSizes, [])
-    )
+    const [groupAssignments, setGroupAssignments] = useState<Map<string, number>>(() => new Map())
+    const [focusedGroup, setFocusedGroup] = useState(0)
+    const [groupActiveTabIds, setGroupActiveTabIds] = useState<Record<number, string | null>>({})
+    const [groupTabOrders, setGroupTabOrders] = useState<Record<number, string[]>>({})
+    const [groupSizes, setGroupSizes] = useState<number[]>([])
     const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
+    const [hasHydratedStoredLayout, setHasHydratedStoredLayout] = useState(false)
+
+    const hydrateStoredLayout = useCallback(() => {
+        if (hasHydratedStoredLayout) return
+
+        const stored = readDashboardStoredLayout(layoutProfile) ?? getEmptyDashboardStoredLayout()
+        setGroupAssignments(new Map(stored.groupAssignments))
+        setFocusedGroup(stored.focusedGroup)
+        setGroupActiveTabIds(stored.groupActiveTabIds)
+        setGroupTabOrders(stored.groupTabOrders)
+        setGroupSizes(stored.groupSizes)
+        setHasHydratedStoredLayout(true)
+    }, [hasHydratedStoredLayout, layoutProfile])
 
     useEffect(() => {
-        writeStorage(
-            STORAGE_KEYS.splitGroups,
-            groupAssignments.size === 0 ? null : JSON.stringify([...groupAssignments.entries()]),
-        )
-    }, [groupAssignments])
-
-    useEffect(() => {
-        writeStorage(
-            STORAGE_KEYS.splitSizes,
-            groupSizes.length > 0 ? JSON.stringify(groupSizes) : null,
-        )
-    }, [groupSizes])
-
-    useEffect(() => {
-        writeStorage(STORAGE_KEYS.focusedGroup, String(focusedGroup))
-    }, [focusedGroup])
-
-    useEffect(() => {
-        writeStorage(STORAGE_KEYS.groupActiveTabs, JSON.stringify(groupActiveTabIds))
-    }, [groupActiveTabIds])
-
-    useEffect(() => {
-        writeStorage(STORAGE_KEYS.groupTabOrders, JSON.stringify(groupTabOrders))
-    }, [groupTabOrders])
+        if (!hasHydratedStoredLayout) return
+        writeDashboardStoredLayout(layoutProfile, {
+            groupAssignments: [...groupAssignments.entries()],
+            focusedGroup,
+            groupActiveTabIds,
+            groupTabOrders,
+            groupSizes,
+        })
+    }, [
+        hasHydratedStoredLayout,
+        layoutProfile,
+        groupAssignments,
+        focusedGroup,
+        groupActiveTabIds,
+        groupTabOrders,
+        groupSizes,
+    ])
 
     useEffect(() => {
         const mq = window.matchMedia('(max-width: 767px)')
@@ -92,5 +68,7 @@ export function useDashboardGroupState() {
         groupSizes,
         setGroupSizes,
         isMobile,
+        hasHydratedStoredLayout,
+        hydrateStoredLayout,
     }
 }

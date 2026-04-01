@@ -324,6 +324,7 @@ export interface ProviderModule {
     ready?: RegExp[];
   };
   cleanOutput?: (raw: string, lastUserInput?: string) => string;
+  resume?: ProviderResumeCapability;
 
  // ─── CDP scripts (ide/extension category) ───
   scripts?: ProviderScripts;
@@ -386,6 +387,14 @@ export interface ProviderModule {
  // ─── ACP Authentication (auth method definitions) ───
  /** ACP agent auth methods (multiple supported — in priority order) */
   auth?: AcpAuthMethod[];
+}
+
+export interface ProviderResumeCapability {
+  supported: boolean;
+  stopStrategy?: 'command' | 'ctrl_c';
+  stopCommand?: string;
+  shutdownGraceMs?: number;
+  resumeArgs?: string[];
 }
 
 // ─── ACP Auth Types ─────────────────────────────────

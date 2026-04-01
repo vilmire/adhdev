@@ -4,7 +4,8 @@
   "description": "ADHDev standalone daemon — embedded HTTP/WS server for local dashboard",
   "main": "dist/index.js",
   "bin": {
-    "adhdev-standalone": "./dist/index.js"
+    "adhdev-standalone": "./dist/index.js",
+    "adhdev": "./dist/index.js"
   },
   "scripts": {
     "build": "tsup",
@@ -31,6 +32,10 @@
   "license": "AGPL-3.0-or-later",
   "dependencies": {
     "@adhdev/daemon-core": "*",
+    "@adhdev/session-host-core": "*",
+    "@adhdev/session-host-daemon": "*",
+    "@adhdev/terminal-mux-cli": "*",
+    "@adhdev/terminal-mux-control": "*",
     "open": "^10.1.0",
     "ws": "^8.19.0"
   },

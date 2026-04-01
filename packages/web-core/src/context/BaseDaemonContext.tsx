@@ -272,6 +272,11 @@ export interface CompactDaemon {
         transport: 'cdp-page' | 'cdp-webview' | 'pty' | 'acp'
         status?: string
         workspace?: string | null
+        runtimeKey?: string
+        runtimeDisplayName?: string
+        runtimeWorkspaceLabel?: string
+        runtimeWriteOwner?: { clientId: string; ownerType: 'agent' | 'user' } | null
+        runtimeAttachedClients?: { clientId: string; type: 'daemon' | 'web' | 'local-terminal'; readOnly: boolean }[]
         title?: string
         cdpConnected?: boolean
         currentModel?: string
@@ -364,6 +369,12 @@ export function expandCompactDaemons(
                 daemonId: d.id,
                 cliName: cli.providerName,
                 workspace: cli.workspace || '',
+                activeChat: (cli as any).activeChat || null,
+                runtimeKey: cli.runtimeKey,
+                runtimeDisplayName: cli.runtimeDisplayName,
+                runtimeWorkspaceLabel: cli.runtimeWorkspaceLabel,
+                runtimeWriteOwner: cli.runtimeWriteOwner || null,
+                runtimeAttachedClients: cli.runtimeAttachedClients || [],
                 timestamp: ts,
             } as any)
         }

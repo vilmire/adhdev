@@ -22,6 +22,7 @@ import PaneGroupTabBar from './PaneGroupTabBar'
 export interface PaneGroupProps {
     /** Conversations assigned to this group */
     conversations: ActiveConversation[];
+    clearedTabs: Record<string, number>;
     ides: DaemonData[];
     /** Shared state refs */
     actionLogs: { ideId: string; text: string; timestamp: number }[];
@@ -62,6 +63,7 @@ export interface PaneGroupProps {
 
 export default function PaneGroup({
     conversations, ides,
+    clearedTabs,
     actionLogs, ptyBuffers,
     screenshotMap, setScreenshotMap,
     sendDaemonCommand, setLocalUserMessages, setActionLogs,
@@ -154,9 +156,6 @@ export default function PaneGroup({
                 ...(conv.sessionId && { targetSessionId: conv.sessionId }),
             }).catch(() => {})
         }
-        if (isCliConv(conv)) {
-            setTimeout(() => terminalRef.current?.bumpResize?.(), 100)
-        }
     }, [sendCommand])
 
     return (
@@ -212,6 +211,7 @@ export default function PaneGroup({
                 ) : (
                     <PaneGroupContent
                         activeConv={activeConv}
+                        clearToken={clearedTabs[activeConv.tabKey] || 0}
                         isCli={!!isCli}
                         ideEntry={activeIdeEntry}
                         screenshotUrl={activeScreenshotUrl}

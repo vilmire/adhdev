@@ -1,0 +1,26 @@
+{
+  "name": "@adhdev/ghostty-vt-node",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native Node binding for libghostty-vt",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "CMakeLists.txt",
+    "src"
+  ],
+  "scripts": {
+    "build": "cmake-js compile",
+    "rebuild": "cmake-js rebuild",
+    "clean": "cmake-js clean"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.7.0"
+  },
+  "devDependencies": {
+    "cmake-js": "^8.0.0"
+  },
+  "license": "AGPL-3.0-or-later"
+}

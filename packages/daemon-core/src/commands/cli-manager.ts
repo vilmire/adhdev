@@ -19,6 +19,7 @@ import { AcpProviderInstance } from '../providers/acp-provider-instance.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
+import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 
@@ -35,9 +36,31 @@ export interface CliManagerDeps {
  /** InstanceManager — register in CLI unified status */
     getInstanceManager(): ProviderInstanceManager | null;
     getSessionRegistry?(): SessionRegistry | null;
+    createPtyTransportFactory?: (params: CliTransportFactoryParams) => PtyTransportFactory | null;
+    listHostedCliRuntimes?: () => Promise<HostedCliRuntimeDescriptor[]>;
 }
 
 type CommandResult = { success: boolean;[key: string]: unknown };
+
+export interface CliTransportFactoryParams {
+    runtimeId: string;
+    providerType: string;
+    workspace: string;
+    cliArgs?: string[];
+    attachExisting?: boolean;
+}
+
+export interface HostedCliRuntimeDescriptor {
+    runtimeId: string;
+    runtimeKey?: string;
+    displayName?: string;
+    workspaceLabel?: string;
+    lifecycle?: 'starting' | 'running' | 'stopping' | 'stopped' | 'failed' | 'interrupted';
+    recoveryState?: string | null;
+    cliType: string;
+    workspace: string;
+    cliArgs?: string[];
+}
 
 // ─── DaemonCliManager ────────────────────────────
 
@@ -77,7 +100,29 @@ export class DaemonCliManager {
         }
     }
 
-    private createAdapter(cliType: string, workingDir: string, cliArgs?: string[]): CliAdapter {
+    private getTransportFactory(
+        runtimeId: string,
+        providerType: string,
+        workspace: string,
+        cliArgs?: string[],
+        attachExisting = false,
+    ): PtyTransportFactory | undefined {
+        return this.deps.createPtyTransportFactory?.({
+            runtimeId,
+            providerType,
+            workspace,
+            cliArgs,
+            attachExisting,
+        }) || undefined;
+    }
+
+    private createAdapter(
+        cliType: string,
+        workingDir: string,
+        cliArgs: string[] | undefined,
+        runtimeId: string,
+        attachExisting = false,
+    ): CliAdapter {
  // cliType normalize (Resolve alias)
         const normalizedType = this.providerLoader.resolveAlias(cliType);
 
@@ -86,10 +131,78 @@ export class DaemonCliManager {
         if (provider && provider.category === 'cli' && provider.patterns && provider.spawn) {
             console.log(chalk.cyan(`  📦 Using provider: ${provider.name} (${provider.type})`));
             const resolvedProvider = this.providerLoader.resolve(normalizedType) || provider;
-            return new ProviderCliAdapter(resolvedProvider as any, workingDir, cliArgs);
+            const transportFactory = this.getTransportFactory(runtimeId, normalizedType, workingDir, cliArgs, attachExisting);
+            return new ProviderCliAdapter(resolvedProvider as any, workingDir, cliArgs, transportFactory);
         }
 
         throw new Error(`No CLI provider found for '${cliType}'. Create a provider.js in providers/cli/${cliType}/`);
+    }
+
+    private startCliExitMonitor(key: string, cliType: string): void {
+        const sessionRegistry = this.deps.getSessionRegistry?.() || null;
+        const instanceManager = this.deps.getInstanceManager();
+        const checkStopped = setInterval(() => {
+            try {
+                const adapter = this.adapters.get(key);
+                if (!adapter) { clearInterval(checkStopped); return; }
+                const status = adapter.getStatus?.();
+                if (status?.status === 'stopped' || status?.status === 'error') {
+                    clearInterval(checkStopped);
+                    setTimeout(() => {
+                        if (this.adapters.has(key)) {
+                            this.adapters.delete(key);
+                            this.deps.removeAgentTracking(key);
+                            sessionRegistry?.unregisterByInstanceKey(key);
+                            instanceManager?.removeInstance(key);
+                            LOG.info('CLI', `🧹 Auto-cleaned ${status.status} CLI: ${cliType}`);
+                            this.deps.onStatusChange();
+                        }
+                    }, 5000);
+                }
+            } catch { /* ignore */ }
+        }, 3000);
+    }
+
+    private async registerCliInstance(
+        key: string,
+        normalizedType: string,
+        cliType: string,
+        resolvedDir: string,
+        cliArgs: string[] | undefined,
+        provider: any,
+        settings: Record<string, any>,
+        attachExisting = false,
+    ): Promise<void> {
+        const instanceManager = this.deps.getInstanceManager();
+        const sessionRegistry = this.deps.getSessionRegistry?.() || null;
+        if (!instanceManager) throw new Error('InstanceManager not available');
+        const transportFactory = this.getTransportFactory(key, normalizedType, resolvedDir, cliArgs, attachExisting);
+        const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key, transportFactory);
+        try {
+            await instanceManager.addInstance(key, cliInstance, {
+                serverConn: this.deps.getServerConn(),
+                settings,
+                onPtyData: (data: string) => {
+                    this.deps.getP2p()?.broadcastPtyOutput(cliInstance.instanceId, data);
+                },
+            });
+            sessionRegistry?.register({
+                sessionId: cliInstance.instanceId,
+                parentSessionId: null,
+                providerType: normalizedType,
+                providerCategory: 'cli',
+                transport: 'pty',
+                adapterKey: key,
+                instanceKey: key,
+            });
+        } catch (spawnErr: any) {
+            LOG.error('CLI', `[${cliType}] Spawn failed: ${spawnErr?.message}`);
+            instanceManager.removeInstance(key);
+            throw new Error(`Failed to start ${provider.displayName || provider.name || cliType}: ${spawnErr?.message}`);
+        }
+
+        this.adapters.set(key, cliInstance.getAdapter() as any);
+        this.startCliExitMonitor(key, cliType);
     }
 
  // ─── Session start/management ──────────────────────────────
@@ -197,59 +310,20 @@ export class DaemonCliManager {
         const instanceManager = this.deps.getInstanceManager();
         if (provider && instanceManager) {
             const resolvedProvider = this.providerLoader.resolve(cliType, { version: cliInfo.version }) || provider;
-            const cliInstance = new CliProviderInstance(resolvedProvider, resolvedDir, cliArgs, key);
-            try {
-                await instanceManager.addInstance(key, cliInstance, {
-                    serverConn: this.deps.getServerConn(),
-                    settings: {},
-                    onPtyData: (data: string) => {
-                        this.deps.getP2p()?.broadcastPtyOutput(cliInstance.instanceId, data);
-                    },
-                });
-                sessionRegistry?.register({
-                    sessionId: cliInstance.instanceId,
-                    parentSessionId: null,
-                    providerType: normalizedType,
-                    providerCategory: 'cli',
-                    transport: 'pty',
-                    adapterKey: key,
-                    instanceKey: key,
-                });
-            } catch (spawnErr: any) {
-                // Spawn failed — cleanup and propagate error
-                LOG.error('CLI', `[${cliType}] Spawn failed: ${spawnErr?.message}`);
-                instanceManager.removeInstance(key);
-                throw new Error(`Failed to start ${cliInfo.displayName}: ${spawnErr?.message}`);
-            }
-
- // Keep adapter ref too (backward compat — write, resize etc)
-            this.adapters.set(key, cliInstance.getAdapter() as any);
+            await this.registerCliInstance(
+                key,
+                normalizedType,
+                cliType,
+                resolvedDir,
+                cliArgs,
+                resolvedProvider,
+                {},
+                false,
+            );
             console.log(chalk.green(`  ✓ CLI started: ${cliInfo.displayName} v${cliInfo.version || 'unknown'} in ${resolvedDir}`));
-
-            // Monitor for stopped/error → auto-cleanup
-            const checkStopped = setInterval(() => {
-                try {
-                    const adapter = this.adapters.get(key);
-                    if (!adapter) { clearInterval(checkStopped); return; }
-                    const status = adapter.getStatus?.();
-                    if (status?.status === 'stopped' || status?.status === 'error') {
-                        clearInterval(checkStopped);
-                        setTimeout(() => {
-                            if (this.adapters.has(key)) {
-                                this.adapters.delete(key);
-                                this.deps.removeAgentTracking(key);
-                                sessionRegistry?.unregisterByInstanceKey(key);
-                                instanceManager.removeInstance(key);
-                                LOG.info('CLI', `🧹 Auto-cleaned ${status.status} CLI: ${cliType}`);
-                                this.deps.onStatusChange();
-                            }
-                        }, 5000);
-                    }
-                } catch { /* ignore */ }
-            }, 3000);
         } else {
  // Fallback: InstanceManager without directly adapter manage
-            const adapter = this.createAdapter(cliType, resolvedDir, cliArgs);
+            const adapter = this.createAdapter(cliType, resolvedDir, cliArgs, key, false);
             try {
                 await adapter.spawn();
             } catch (spawnErr: any) {
@@ -292,10 +366,18 @@ export class DaemonCliManager {
     }
 
     async stopSession(key: string): Promise<void> {
+        return this.stopSessionWithMode(key, 'hard');
+    }
+
+    async stopSessionWithMode(key: string, mode: 'hard' | 'save'): Promise<void> {
         const adapter = this.adapters.get(key);
         if (adapter) {
             try {
-                adapter.shutdown();
+                if (mode === 'save' && typeof adapter.saveAndStop === 'function') {
+                    await adapter.saveAndStop();
+                } else {
+                    adapter.shutdown();
+                }
             } catch (e: any) {
                 LOG.warn('CLI', `Shutdown error for ${adapter.cliType}: ${e?.message} (force-cleaning)`);
             }
@@ -322,6 +404,52 @@ export class DaemonCliManager {
     shutdownAll(): void {
         for (const adapter of this.adapters.values()) adapter.shutdown();
         this.adapters.clear();
+    }
+
+    detachAll(): void {
+        for (const adapter of this.adapters.values()) {
+            if (typeof adapter.detach === 'function') adapter.detach();
+            else adapter.shutdown();
+        }
+        this.adapters.clear();
+    }
+
+    async restoreHostedSessions(records?: HostedCliRuntimeDescriptor[]): Promise<number> {
+        const instanceManager = this.deps.getInstanceManager();
+        if (!instanceManager) return 0;
+        const sessions = records || await this.deps.listHostedCliRuntimes?.() || [];
+        let restored = 0;
+
+        for (const record of sessions) {
+            if (!record?.runtimeId || !record?.cliType || !record?.workspace) continue;
+            if (this.adapters.has(record.runtimeId) || instanceManager.getInstance(record.runtimeId)) continue;
+            const normalizedType = this.providerLoader.resolveAlias(record.cliType);
+            const providerMeta = this.providerLoader.getMeta(normalizedType);
+            if (!providerMeta || providerMeta.category !== 'cli') continue;
+
+            const resolvedProvider = this.providerLoader.resolve(normalizedType) || providerMeta;
+            try {
+                await this.registerCliInstance(
+                    record.runtimeId,
+                    normalizedType,
+                    record.cliType,
+                    record.workspace,
+                    record.cliArgs,
+                    resolvedProvider,
+                    {},
+                    true,
+                );
+                restored += 1;
+                LOG.info('CLI', `♻ Restored hosted runtime: ${record.runtimeKey || record.runtimeId} (${record.displayName || record.workspace})`);
+            } catch (error: any) {
+                LOG.warn('CLI', `Failed to restore hosted runtime ${record.runtimeId}: ${error?.message || error}`);
+            }
+        }
+
+        if (restored > 0) {
+            this.deps.onStatusChange();
+        }
+        return restored;
     }
 
  // ─── Adapter search ─────────────────────────────
@@ -406,15 +534,16 @@ export class DaemonCliManager {
             case 'stop_cli': {
                 const cliType = args?.cliType;
                 const dir = args?.dir || '';
+                const mode = args?.mode === 'save' ? 'save' : 'hard';
                 if (!cliType) throw new Error('cliType required');
  // UUID session target based search priority
                 const found = this.findAdapter(cliType, { instanceKey: args?.targetSessionId, dir });
                 if (found) {
-                    await this.stopSession(found.key);
+                    await this.stopSessionWithMode(found.key, mode);
                 } else {
                     console.log(chalk.yellow(`  ⚠ No adapter found for ${cliType}`));
                 }
-                return { success: true, cliType, dir, stopped: true };
+                return { success: true, cliType, dir, stopped: true, mode };
             }
             case 'restart_session': {
                 const cliType = args?.cliType || args?.agentType || args?.ideType;

@@ -11,6 +11,7 @@ import { IconWarning } from '../Icons'
 
 interface PaneGroupContentProps {
     activeConv: ActiveConversation
+    clearToken: number
     isCli: boolean
     ideEntry?: DaemonData
     screenshotUrl?: string
@@ -29,6 +30,7 @@ interface PaneGroupContentProps {
 
 const PaneGroupContent = memo(function PaneGroupContent({
     activeConv,
+    clearToken,
     isCli,
     ideEntry,
     screenshotUrl,
@@ -74,6 +76,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
             {isCli ? (
                 <CliTerminalPane
                     activeConv={activeConv}
+                    clearToken={clearToken}
                     ptyBuffers={ptyBuffers}
                     terminalRef={terminalRef}
                     handleSendChat={handleSendChat}

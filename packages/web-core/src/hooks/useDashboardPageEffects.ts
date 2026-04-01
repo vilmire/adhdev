@@ -8,6 +8,8 @@ interface UseDashboardPageEffectsOptions {
     conversations: ActiveConversation[]
     resolveConversationByTarget: (target: string | null | undefined) => ActiveConversation | undefined
     normalizedGroupAssignments: Map<string, number>
+    hasHydratedStoredLayout: boolean
+    hydrateStoredLayout: () => void
     setGroupActiveTabIds: Dispatch<SetStateAction<Record<number, string | null>>>
     setFocusedGroup: Dispatch<SetStateAction<number>>
     setSearchParams: SetURLSearchParams
@@ -27,6 +29,8 @@ export function useDashboardPageEffects({
     conversations,
     resolveConversationByTarget,
     normalizedGroupAssignments,
+    hasHydratedStoredLayout,
+    hydrateStoredLayout,
     setGroupActiveTabIds,
     setFocusedGroup,
     setSearchParams,
@@ -41,10 +45,17 @@ export function useDashboardPageEffects({
     clearAllSplits,
 }: UseDashboardPageEffectsOptions) {
     const urlTabAppliedRef = useRef(false)
+    const initialLayoutAppliedRef = useRef(false)
+    const urlFallbackTimerRef = useRef<number | null>(null)
     const historyRefreshedRef = useRef(false)
 
     useEffect(() => {
         if (!urlActiveTab || urlTabAppliedRef.current || conversations.length === 0) return
+
+        if (!hasHydratedStoredLayout) {
+            hydrateStoredLayout()
+            return
+        }
 
         const match = resolveConversationByTarget(urlActiveTab)
         if (!match) return
@@ -53,6 +64,12 @@ export function useDashboardPageEffects({
         setGroupActiveTabIds(prev => ({ ...prev, [targetGroup]: match.tabKey }))
         setFocusedGroup(targetGroup)
         urlTabAppliedRef.current = true
+        initialLayoutAppliedRef.current = true
+
+        if (urlFallbackTimerRef.current != null) {
+            window.clearTimeout(urlFallbackTimerRef.current)
+            urlFallbackTimerRef.current = null
+        }
 
         setSearchParams(prev => {
             const next = new URLSearchParams(prev)
@@ -64,9 +81,47 @@ export function useDashboardPageEffects({
         conversations,
         resolveConversationByTarget,
         normalizedGroupAssignments,
+        hasHydratedStoredLayout,
+        hydrateStoredLayout,
         setGroupActiveTabIds,
         setFocusedGroup,
         setSearchParams,
+    ])
+
+    useEffect(() => {
+        if (initialLayoutAppliedRef.current || hasHydratedStoredLayout) return
+        if (conversations.length === 0) return
+
+        if (!urlActiveTab) {
+            hydrateStoredLayout()
+            initialLayoutAppliedRef.current = true
+            return
+        }
+
+        if (urlTabAppliedRef.current) {
+            initialLayoutAppliedRef.current = true
+            return
+        }
+
+        if (urlFallbackTimerRef.current != null) return
+        urlFallbackTimerRef.current = window.setTimeout(() => {
+            urlFallbackTimerRef.current = null
+            if (initialLayoutAppliedRef.current || hasHydratedStoredLayout) return
+            hydrateStoredLayout()
+            initialLayoutAppliedRef.current = true
+        }, 1500)
+
+        return () => {
+            if (urlFallbackTimerRef.current != null) {
+                window.clearTimeout(urlFallbackTimerRef.current)
+                urlFallbackTimerRef.current = null
+            }
+        }
+    }, [
+        urlActiveTab,
+        conversations.length,
+        hasHydratedStoredLayout,
+        hydrateStoredLayout,
     ])
 
     useEffect(() => {

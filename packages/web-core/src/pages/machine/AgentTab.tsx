@@ -11,13 +11,14 @@
  *   - ACP: Model field in launch form, model/plan badges, chat button
  *   - CLI: Simplest — just the base
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
-import { formatIdeType } from '../../utils/daemon-utils'
+import { formatIdeType, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import { IconChat, IconMonitor, IconSearch } from '../../components/Icons'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, ProviderInfo } from './types'
 import type { useMachineActions } from './useMachineActions'
+import { describeMuxOwner } from '../../utils/mux-ui'
 
 type AgentCategory = 'ide' | 'cli' | 'acp'
 
@@ -32,6 +33,8 @@ interface AgentTabProps {
     managedEntries: AgentEntry[]
     getIcon: (type: string) => string
     actions: ReturnType<typeof useMachineActions>
+    isDashboardHidden?: (tabKey: string) => boolean
+    onToggleDashboardVisibility?: (tabKey: string) => void
     /** Required for IDE extension toggles */
     sendDaemonCommand?: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
 }
@@ -45,18 +48,26 @@ const CATEGORY_CONFIG = {
 
 export default function AgentTab({
     category, machine, machineId, providers, managedEntries, getIcon, actions, sendDaemonCommand,
+    isDashboardHidden,
+    onToggleDashboardVisibility,
 }: AgentTabProps) {
     const navigate = useNavigate()
     const {
         handleLaunchIde, handleLaunchCli, handleStopCli, handleRestartIde, handleStopIde,
         handleDetectIdes,
-        cliHistory, loadingHistory, loadCliHistory, launchingIde,
+        cliHistory, loadingHistory, loadCliHistory, launchingIde, launchingAgentType,
     } = actions
+    const [copiedRuntimeKey, setCopiedRuntimeKey] = useState<string | null>(null)
+    const openSessionInDashboard = useCallback((sessionId: string) => {
+        if (!sessionId) return
+        navigate({ pathname: '/', search: `?activeTab=${encodeURIComponent(sessionId)}` })
+    }, [navigate])
 
     const config = CATEGORY_CONFIG[category]
     const isIde = category === 'ide'
     const isAcp = category === 'acp'
     const categoryProviders = providers.filter(p => p.category === category)
+    const providerLabelMap = new Map(categoryProviders.map(provider => [provider.type, provider.displayName || provider.type]))
 
     // ─── Launch Form State ──────────────────────────
     const [selectedType, setSelectedType] = useState('')
@@ -65,6 +76,10 @@ export default function AgentTab({
     // Workspace selection: workspace-id | '__custom__' | '' (home)
     const [selectedWorkspace, setSelectedWorkspace] = useState(machine.defaultWorkspaceId || '')
     const [customPath, setCustomPath] = useState('')
+    const [pendingLaunchTypes, setPendingLaunchTypes] = useState<string[]>([])
+    const visiblePendingLaunches = pendingLaunchTypes
+        .filter(type => !managedEntries.some(entry => entry.type === type && normalizeManagedStatus(entry.status) !== 'stopped'))
+    const pendingTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
     // Default provider selection
     useEffect(() => {
@@ -87,6 +102,39 @@ export default function AgentTab({
         const ws = (machine.workspaces || []).find(w => w.id === selectedWorkspace)
         return ws?.path || ''
     })()
+
+    const clearPendingLaunch = useCallback((type: string) => {
+        const timeout = pendingTimeoutsRef.current[type]
+        if (timeout) {
+            clearTimeout(timeout)
+            delete pendingTimeoutsRef.current[type]
+        }
+        setPendingLaunchTypes(prev => prev.filter(item => item !== type))
+    }, [])
+
+    const markPendingLaunch = useCallback((type: string) => {
+        if (!type) return
+        setPendingLaunchTypes(prev => (prev.includes(type) ? prev : [...prev, type]))
+        const existing = pendingTimeoutsRef.current[type]
+        if (existing) clearTimeout(existing)
+        pendingTimeoutsRef.current[type] = setTimeout(() => {
+            setPendingLaunchTypes(prev => prev.filter(item => item !== type))
+            delete pendingTimeoutsRef.current[type]
+        }, 20000)
+    }, [])
+
+    useEffect(() => {
+        for (const entry of managedEntries) {
+            if (normalizeManagedStatus(entry.status) !== 'stopped') {
+                clearPendingLaunch(entry.type)
+            }
+        }
+    }, [managedEntries, clearPendingLaunch])
+
+    useEffect(() => () => {
+        Object.values(pendingTimeoutsRef.current).forEach(clearTimeout)
+        pendingTimeoutsRef.current = {}
+    }, [])
 
     // ─── IDE Extension State ────────────────────────
     const [ideExtensions, setIdeExtensions] = useState<Record<string, { type: string; name: string; enabled: boolean }[]>>({})
@@ -113,11 +161,26 @@ export default function AgentTab({
     const launchableIdes = isIde ? (machine.detectedIdes || []) : []
 
     const handleLaunch = () => {
-        if (isIde) {
-            handleLaunchIde(selectedType, resolvedWorkspacePath ? { workspace: resolvedWorkspacePath } : undefined)
-        } else {
-            handleLaunchCli(selectedType, resolvedWorkspacePath, launchArgs || undefined, isAcp ? launchModel || undefined : undefined)
-        }
+        void (async () => {
+            if (isIde) {
+                const launched = await handleLaunchIde(
+                    selectedType,
+                    resolvedWorkspacePath ? { workspace: resolvedWorkspacePath } : undefined,
+                )
+                if (launched) markPendingLaunch(selectedType)
+                return
+            }
+            const launched = await handleLaunchCli(
+                selectedType,
+                resolvedWorkspacePath,
+                launchArgs || undefined,
+                isAcp ? launchModel || undefined : undefined,
+            )
+            if (launched.success) {
+                markPendingLaunch(selectedType)
+                if (launched.sessionId) openSessionInDashboard(launched.sessionId)
+            }
+        })()
     }
 
     const handleStop = (entry: AgentEntry) => {
@@ -130,7 +193,8 @@ export default function AgentTab({
 
     // ─── Workspace Selector (shared across all categories) ───
     const workspaceSelector = (
-        <div className="flex gap-2 items-center flex-wrap mb-3">
+        <div className="mb-3">
+            <div className="flex gap-2 items-center flex-wrap">
             <select
                 value={selectedWorkspace}
                 onChange={e => { setSelectedWorkspace(e.target.value); if (e.target.value !== '__custom__') setCustomPath('') }}
@@ -142,9 +206,7 @@ export default function AgentTab({
                         {(machine.workspaces || []).map(w => (
                             <option key={w.id} value={w.id}>
                                 {w.id === machine.defaultWorkspaceId ? '⭐ ' : ''}
-                                {w.label || w.path.split('/').filter(Boolean).pop() || w.path}
-                                {' — '}
-                                {w.path}
+                                {getWorkspaceDisplayLabel(w.path, w.label)}
                             </option>
                         ))}
                         <option value="__custom__">✏️ Custom path…</option>
@@ -166,6 +228,23 @@ export default function AgentTab({
                     autoFocus
                 />
             )}
+            </div>
+            <div className="mt-1.5 text-[10px] text-text-muted">
+                {selectedWorkspace === '__custom__'
+                    ? (resolvedWorkspacePath
+                        ? <span className="font-mono truncate block" title={resolvedWorkspacePath}>{resolvedWorkspacePath}</span>
+                        : 'Enter an absolute path to launch there.')
+                    : resolvedWorkspacePath
+                        ? (
+                            <>
+                                <span className="font-medium text-text-secondary">
+                                    {selectedWorkspace === machine.defaultWorkspaceId ? 'Default workspace' : 'Selected workspace'}
+                                </span>
+                                <span className="font-mono truncate block" title={resolvedWorkspacePath}>{resolvedWorkspacePath}</span>
+                            </>
+                        )
+                        : 'No workspace selected. This launches in the home directory.'}
+            </div>
         </div>
     )
 
@@ -185,19 +264,38 @@ export default function AgentTab({
                     <>
                         <div className="flex flex-wrap gap-2">
                             {launchableIdes.map(d => {
-                                const isRunning = d.running || managedEntries.some(m => (m.type || '').toLowerCase() === (d.type || '').toLowerCase())
+                                const matchingEntry = managedEntries.find(m => (m.type || '').toLowerCase() === (d.type || '').toLowerCase() && normalizeManagedStatus(m.status) !== 'stopped')
+                                const isRunning = d.running || !!matchingEntry
+                                const isReady = !!matchingEntry && (matchingEntry as IdeSessionEntry).cdpConnected
+                                const isPending = pendingLaunchTypes.includes(d.type || d.id || '')
                                 return (
                                     <button
                                         key={d.type}
-                                        onClick={() => handleLaunchIde(d.type || d.id || '', resolvedWorkspacePath ? { workspace: resolvedWorkspacePath } : undefined)}
-                                        disabled={!!launchingIde}
+                                        onClick={() => {
+                                            if (isReady && matchingEntry) {
+                                                navigate(`/ide/${matchingEntry.id}`)
+                                                return
+                                            }
+                                            if (isPending) return
+                                            void (async () => {
+                                                const launched = await handleLaunchIde(d.type || d.id || '', resolvedWorkspacePath ? { workspace: resolvedWorkspacePath } : undefined)
+                                                if (launched) markPendingLaunch(d.type || d.id || '')
+                                            })()
+                                        }}
+                                        disabled={!!launchingIde || isPending}
                                         className={`machine-btn-primary flex items-center gap-1.5 ${isRunning ? '!border-green-500/30' : ''}`}
-                                        style={{ opacity: launchingIde && launchingIde !== d.type ? 0.4 : 1 }}
+                                        style={{ opacity: (launchingIde && launchingIde !== d.type) ? 0.4 : 1 }}
                                     >
                                         <span>{getIcon(d.type)}</span>
                                         {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_4px_rgba(34,197,94,0.4)]" />}
-                                        {launchingIde === d.type ? '⏳ Launching...' : `▶ ${d.name || formatIdeType(d.type)}`}
-                                        {isRunning && <span className="text-[9px] text-green-400 font-normal">+ window</span>}
+                                        {isPending
+                                            ? `⏳ Waiting for ${d.name || formatIdeType(d.type)}...`
+                                            : isReady
+                                                ? `Open ${d.name || formatIdeType(d.type)}`
+                                                : launchingIde === d.type
+                                                    ? '⏳ Launching...'
+                                                    : `▶ ${d.name || formatIdeType(d.type)}`}
+                                        {isRunning && isReady && <span className="text-[9px] text-green-400 font-normal">running</span>}
                                     </button>
                                 )
                             })}
@@ -239,26 +337,56 @@ export default function AgentTab({
                             onChange={e => setLaunchArgs(e.target.value)}
                             className="machine-input min-w-[120px]"
                         />
-                        <button onClick={handleLaunch} className="machine-btn-primary">▶ Launch</button>
+                        <button
+                            onClick={handleLaunch}
+                            disabled={!!launchingAgentType}
+                            className="machine-btn-primary"
+                        >
+                            {launchingAgentType === selectedType ? '⏳ Launching...' : '▶ Launch'}
+                        </button>
                     </div>
                 )}
             </div>
 
             {/* ═══ Running Agents ═══ */}
             <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-2.5">
-                Running ({managedEntries.length})
+                Running ({managedEntries.length + pendingLaunchTypes.filter(type => !managedEntries.some(entry => entry.type === type && normalizeManagedStatus(entry.status) !== 'stopped')).length})
             </div>
 
-            {managedEntries.length === 0 ? (
+            {managedEntries.length === 0 && visiblePendingLaunches.length === 0 ? (
                 <div className="py-7.5 px-5 text-center rounded-xl bg-bg-secondary border border-dashed border-border-subtle text-text-muted text-[13px] mb-5">
                     No {config.plural} running
                 </div>
             ) : (
                 <div className="flex flex-col gap-2.5 mb-5">
+                    {visiblePendingLaunches.map(type => (
+                            <div key={`pending:${type}`} className="px-4.5 py-3.5 rounded-xl bg-bg-secondary border border-amber-500/20">
+                                <div className="flex justify-between items-center">
+                                    <div className="flex items-center gap-2.5">
+                                        <span className="text-lg">{getIcon(type)}</span>
+                                        <div>
+                                            <div className="font-semibold text-[13px] text-text-primary">
+                                                {isIde ? formatIdeType(type) : (providerLabelMap.get(type) || type)}
+                                            </div>
+                                            <div className="text-[11px] text-text-muted">
+                                                {launchingAgentType === type
+                                                    ? 'Launching process...'
+                                                    : 'Waiting for process and session to register...'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/[0.08] text-amber-400">
+                                        starting
+                                    </span>
+                                </div>
+                            </div>
+                        ))}
                     {managedEntries.map(entry => {
                         const ide = isIde ? (entry as IdeSessionEntry) : null
                         const acp = isAcp ? (entry as AcpSessionEntry) : null
+                        const cli = !isIde && !isAcp ? (entry as CliSessionEntry) : null
                         const normalizedStatus = normalizeManagedStatus(entry.status)
+                        const isHidden = isDashboardHidden?.(entry.id) ?? false
 
                         return (
                             <div key={entry.id} className="px-4.5 py-3.5 rounded-xl bg-bg-secondary border border-border-subtle">
@@ -275,9 +403,50 @@ export default function AgentTab({
                                                 {acp?.currentModel && <span className="text-cyan-500">🤖 {acp.currentModel}</span>}
                                                 {acp?.currentPlan && <span className="text-amber-500">📋 {acp.currentPlan}</span>}
                                             </div>
+                                            {cli && (cli.runtimeKey || cli.runtimeWriteOwner) && (
+                                                <div className="text-[10px] text-text-muted flex gap-2 mt-0.5 flex-wrap">
+                                                    {cli.runtimeKey && (
+                                                        <>
+                                                            <span className="text-text-secondary">Local terminal:</span>
+                                                            <span className="font-mono text-text-secondary">adhdev attach {cli.runtimeKey}</span>
+                                                            <button
+                                                                type="button"
+                                                                className="machine-btn text-[9px] px-1.5 py-px"
+                                                                onClick={() => {
+                                                                    void navigator.clipboard?.writeText(`adhdev attach ${cli.runtimeKey}`)
+                                                                    setCopiedRuntimeKey(cli.runtimeKey || null)
+                                                                    window.setTimeout(() => {
+                                                                        setCopiedRuntimeKey((current) => (current === cli.runtimeKey ? null : current))
+                                                                    }, 1200)
+                                                                }}
+                                                            >
+                                                                {copiedRuntimeKey === cli.runtimeKey ? 'Copied' : 'Copy'}
+                                                            </button>
+                                                        </>
+                                                    )}
+                                                    {cli.runtimeWriteOwner && (
+                                                        <span className={cli.runtimeWriteOwner.ownerType === 'user' ? 'text-amber-500' : 'text-violet-400'}>
+                                                            {describeMuxOwner(cli.runtimeWriteOwner)}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-1.5">
+                                        {onToggleDashboardVisibility && (
+                                            <button
+                                                onClick={() => onToggleDashboardVisibility(entry.id)}
+                                                className={`machine-btn ${
+                                                    isHidden
+                                                        ? 'text-zinc-300 border-zinc-500/30'
+                                                        : 'text-violet-400 border-violet-500/30'
+                                                }`}
+                                                title={isHidden ? 'Show on Dashboard' : 'Hide from Dashboard'}
+                                            >
+                                                {isHidden ? 'Show' : 'Hide'}
+                                            </button>
+                                        )}
                                         <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${
                                             normalizedStatus === 'stopped' ? 'bg-red-500/[0.08] text-red-500'
                                                 : normalizedStatus === 'generating' ? 'bg-orange-500/[0.08] text-orange-400'
@@ -294,9 +463,40 @@ export default function AgentTab({
                                         {isAcp && (
                                             <button onClick={() => navigate(`/ide/${entry.id}`)} className="machine-btn" title="View chat"><IconChat size={14} /></button>
                                         )}
+                                        {cli && normalizedStatus !== 'stopped' && (
+                                            <button
+                                                onClick={() => openSessionInDashboard(entry.id)}
+                                                className="machine-btn flex items-center gap-1"
+                                                title="Open terminal in dashboard"
+                                            >
+                                                <IconMonitor size={13} /> Open
+                                            </button>
+                                        )}
                                         {/* All: Stop / Restart */}
                                         {normalizedStatus === 'stopped' ? (
-                                            <button onClick={() => isIde ? handleLaunchIde(entry.type, (entry as any).workspace ? { workspace: (entry as any).workspace } : undefined) : handleLaunchCli(entry.type, (entry as any).workspace)} className="machine-btn text-green-500 border-green-500/30">▶</button>
+                                            <button
+                                                onClick={() => {
+                                                    void (async () => {
+                                                        if (isIde) {
+                                                            const launched = await handleLaunchIde(
+                                                                entry.type,
+                                                                (entry as any).workspace ? { workspace: (entry as any).workspace } : undefined,
+                                                            )
+                                                            if (launched) markPendingLaunch(entry.type)
+                                                            return
+                                                        }
+                                                        const launched = await handleLaunchCli(entry.type, (entry as any).workspace)
+                                                        if (launched.success) {
+                                                            markPendingLaunch(entry.type)
+                                                            if (launched.sessionId) openSessionInDashboard(launched.sessionId)
+                                                        }
+                                                    })()
+                                                }}
+                                                disabled={pendingLaunchTypes.includes(entry.type)}
+                                                className="machine-btn text-green-500 border-green-500/30"
+                                            >
+                                                {pendingLaunchTypes.includes(entry.type) ? '⏳' : '▶'}
+                                            </button>
                                         ) : (
                                             <button onClick={() => handleStop(entry)} className="machine-btn text-red-500 border-red-500/30">■</button>
                                         )}
@@ -396,7 +596,10 @@ export default function AgentTab({
                                             setLaunchArgs((item.cliArgs || []).join(' '))
                                             setLaunchModel(item.model || '')
                                             if (isIde) {
-                                                handleLaunchIde(item.cliType, item.workspace ? { workspace: item.workspace } : undefined)
+                                                void (async () => {
+                                                    const launched = await handleLaunchIde(item.cliType, item.workspace ? { workspace: item.workspace } : undefined)
+                                                    if (launched) markPendingLaunch(item.cliType)
+                                                })()
                                             }
                                         }}
                                         className="flex justify-between items-center px-2.5 py-1.5 rounded-md cursor-pointer bg-bg-glass border border-border-subtle text-xs transition-colors duration-150 hover:bg-bg-glass-hover"

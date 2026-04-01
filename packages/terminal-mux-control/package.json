@@ -1,0 +1,60 @@
+{
+  "name": "@adhdev/terminal-mux-control",
+  "version": "0.7.6",
+  "description": "Shared control, storage, and socket helpers for ADHDev terminal mux clients",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.mjs",
+      "require": "./dist/api.js",
+      "default": "./dist/api.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "import": "./dist/storage.mjs",
+      "require": "./dist/storage.js",
+      "default": "./dist/storage.js"
+    },
+    "./control-socket": {
+      "types": "./dist/control-socket.d.ts",
+      "import": "./dist/control-socket.mjs",
+      "require": "./dist/control-socket.js",
+      "default": "./dist/control-socket.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts src/api.ts src/storage.ts src/control-socket.ts --format esm,cjs --dts",
+    "dev": "tsup src/index.ts src/api.ts src/storage.ts src/control-socket.ts --format esm,cjs --dts --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "keywords": [
+    "adhdev",
+    "terminal",
+    "mux",
+    "control",
+    "storage"
+  ],
+  "author": "vilmire",
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "@adhdev/session-host-core": "*",
+    "@adhdev/terminal-mux-core": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.2.0",
+    "typescript": "^5.5.0"
+  }
+}

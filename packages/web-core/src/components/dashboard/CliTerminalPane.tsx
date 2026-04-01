@@ -5,11 +5,13 @@ import { useRef, useEffect, useState } from 'react';
 import { CliTerminal } from '../CliTerminal';
 import type { CliTerminalHandle } from '../CliTerminal';
 import { useTransport } from '../../context/TransportContext';
-import { ptyBus } from './ptyBus';
+import { useApi } from '../../context/ApiContext';
 import type { ActiveConversation } from './types';
+import type { RuntimeSnapshot } from '../../base-api';
 
 export interface CliTerminalPaneProps {
     activeConv: ActiveConversation;
+    clearToken?: number;
     /** PTY buffer map (ref from Dashboard) */
     ptyBuffers: React.MutableRefObject<Map<string, string[]>>;
     /** Outer terminal ref for bumpResize etc. */
@@ -19,51 +21,126 @@ export interface CliTerminalPaneProps {
 }
 
 export default function CliTerminalPane({
-    activeConv, ptyBuffers, terminalRef,
+    activeConv, clearToken = 0, ptyBuffers, terminalRef,
     handleSendChat,
     isSendingChat = false,
 }: CliTerminalPaneProps) {
     const chatInputRef = useRef<HTMLInputElement>(null);
     const { sendCommand, sendData } = useTransport();
+    const api = useApi();
     const [draftInput, setDraftInput] = useState('');
+    const [runtimeReady, setRuntimeReady] = useState(false);
+    const seededSnapshotSeqRef = useRef(0);
+    const liveOutputStartedRef = useRef(false);
 
-    // ─── Real-time PTY output: subscribe to P2P pty_output and write to xterm ───
-    // Also replay existing buffer on mount so the terminal starts with past output.
     const tabKey = activeConv.tabKey;
     const sessionId = activeConv.sessionId || '';
 
-    useEffect(() => {
-        // Replay existing buffer on mount
-        const buf = ptyBuffers.current.get(tabKey);
-        if (buf && buf.length > 0) {
-            // Small delay to let xterm initialize
-            const timer = setTimeout(() => {
-                for (const chunk of buf) {
-                    terminalRef.current?.write(chunk);
-                }
-                requestAnimationFrame(() => {
-                    terminalRef.current?.bumpResize();
-                });
-            }, 100);
-            return () => clearTimeout(timer);
-        }
-    }, [tabKey]); // Only on mount / tab switch
+    const resetRuntimeView = () => {
+        seededSnapshotSeqRef.current = 0;
+        liveOutputStartedRef.current = false;
+        setRuntimeReady(false);
+        terminalRef.current?.clear();
+    };
+
+    const clearRuntimeView = () => {
+        seededSnapshotSeqRef.current = 0;
+        liveOutputStartedRef.current = false;
+        setRuntimeReady(true);
+        terminalRef.current?.clear();
+    };
+
+    const seedTerminal = (text: string, seq = 0) => {
+        if (liveOutputStartedRef.current) return;
+        if (seededSnapshotSeqRef.current >= seq && seededSnapshotSeqRef.current !== 0) return;
+        seededSnapshotSeqRef.current = seq;
+        setRuntimeReady(true);
+        terminalRef.current?.clear();
+        if (text) terminalRef.current?.write(text);
+    };
 
     useEffect(() => {
-        // Subscribe to real-time PTY output via ptyBus (emitted by Dashboard)
-        const unsub = ptyBus.on((cliId: string, data: string) => {
-            if (!data) return;
-            const match = cliId === sessionId || cliId === activeConv.ideId || cliId === activeConv.tabKey;
-            if (match) {
-                terminalRef.current?.write(data);
+        resetRuntimeView();
+    }, [sessionId]);
+
+    useEffect(() => {
+        if (!sessionId) return;
+        const es = new EventSource(api.getRuntimeEventsUrl(sessionId));
+
+        const handleSnapshot = (raw: MessageEvent<string>) => {
+            try {
+                const snapshot = JSON.parse(raw.data) as RuntimeSnapshot;
+                if (snapshot.sessionId !== sessionId) return;
+                seedTerminal(snapshot.text || '', snapshot.seq || 0);
+            } catch {
+                // noop
             }
-        });
-        return () => { unsub(); };
-    }, [sessionId, activeConv.ideId, activeConv.tabKey]);
+        };
+
+        const handleOutput = (raw: MessageEvent<string>) => {
+            try {
+                const event = JSON.parse(raw.data) as { sessionId: string; data?: string; seq?: number };
+                if (event.sessionId !== sessionId) return;
+                liveOutputStartedRef.current = true;
+                if (typeof event.seq === 'number') {
+                    seededSnapshotSeqRef.current = Math.max(seededSnapshotSeqRef.current, event.seq);
+                }
+                setRuntimeReady(true);
+                if (typeof event.data === 'string') terminalRef.current?.write(event.data);
+            } catch {
+                // noop
+            }
+        };
+
+        const handleCleared = (raw: MessageEvent<string>) => {
+            try {
+                const event = JSON.parse(raw.data) as { sessionId: string };
+                if (event.sessionId !== sessionId) return;
+                clearRuntimeView();
+            } catch {
+                // noop
+            }
+        };
+
+        es.addEventListener('runtime_snapshot', handleSnapshot as EventListener);
+        es.addEventListener('session_output', handleOutput as EventListener);
+        es.addEventListener('session_cleared', handleCleared as EventListener);
+
+        es.onerror = () => {
+            // EventSource reconnects automatically. Do not clear the terminal on transient stream errors.
+        };
+
+        return () => {
+            es.removeEventListener('runtime_snapshot', handleSnapshot as EventListener);
+            es.removeEventListener('session_output', handleOutput as EventListener);
+            es.removeEventListener('session_cleared', handleCleared as EventListener);
+            es.close();
+        };
+    }, [api, sessionId]);
+
+    useEffect(() => {
+        if (!clearToken) return;
+
+        ptyBuffers.current.delete(tabKey);
+        resetRuntimeView();
+    }, [clearToken, tabKey, ptyBuffers, terminalRef]);
 
     useEffect(() => {
         setDraftInput('');
     }, [activeConv.tabKey]);
+
+    useEffect(() => {
+        const handleFit = (event: Event) => {
+            const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
+            if (detail?.sessionId && detail.sessionId !== sessionId) return;
+            if (!runtimeReady) return;
+            terminalRef.current?.fit();
+        };
+        window.addEventListener('adhdev:fit-cli-terminal', handleFit as EventListener);
+        return () => {
+            window.removeEventListener('adhdev:fit-cli-terminal', handleFit as EventListener);
+        };
+    }, [runtimeReady, sessionId, terminalRef]);
 
     return (
         <>
@@ -72,19 +149,27 @@ export default function CliTerminalPane({
                 <CliTerminal
                     key={activeConv.tabKey}
                     ref={terminalRef as any}
+                    readOnly={!runtimeReady}
                     onInput={(data) => {
+                        if (!runtimeReady) return;
                         const daemonId = activeConv.ideId || activeConv.daemonId || ''
                         if (!sendData?.(daemonId, { type: 'pty_input', targetSessionId: sessionId, data })) {
                             sendCommand(daemonId, 'pty_input', { targetSessionId: sessionId, data }).catch(console.error)
                         }
                     }}
                     onResize={(cols, rows) => {
+                        if (!runtimeReady) return;
                         const daemonId = activeConv.ideId || activeConv.daemonId || ''
                         if (!sendData?.(daemonId, { type: 'pty_resize', targetSessionId: sessionId, cols, rows })) {
                             sendCommand(daemonId, 'pty_resize', { targetSessionId: sessionId, cols, rows, force: true }).catch(() => { })
                         }
                     }}
                 />
+                {!runtimeReady && (
+                    <div className="absolute inset-x-2 top-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-300 pointer-events-none">
+                        Runtime terminal unavailable
+                    </div>
+                )}
             </div>
 
             {/* Input bar for CLI terminal */}
@@ -110,7 +195,7 @@ export default function CliTerminalPane({
                                 }
                                 e.preventDefault();
                                 const message = draftInput.trim();
-                                if (!message || isSendingChat) return;
+                                if (!runtimeReady || !message || isSendingChat) return;
                                 setDraftInput('');
                                 handleSendChat(message);
                             }}
@@ -121,11 +206,11 @@ export default function CliTerminalPane({
                     <button
                         onClick={() => {
                             const message = draftInput.trim();
-                            if (!message || isSendingChat) return;
+                            if (!runtimeReady || !message || isSendingChat) return;
                             setDraftInput('');
                             handleSendChat(message);
                         }}
-                        disabled={!draftInput.trim() || isSendingChat}
+                        disabled={!runtimeReady || !draftInput.trim() || isSendingChat}
                         className={`w-9 h-9 rounded-full flex items-center justify-center border-none shrink-0 transition-all duration-300 ${
                             draftInput.trim() && !isSendingChat ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
                         }`}

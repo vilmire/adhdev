@@ -43,6 +43,7 @@ export type { ProviderErrorReason } from './providers/provider-instance.js';
 // Local import for use in Managed*Entry types below
 import type { ActiveChatData as _ActiveChatData, ProviderErrorReason as _ProviderErrorReason } from './providers/provider-instance.js';
 import type { WorkspaceEntry } from './config/workspaces.js';
+import type { ProviderResumeCapability } from './providers/contracts.js';
 
 // Re-export WorkspaceEntry for downstream consumers
 export type { WorkspaceEntry } from './config/workspaces.js';
@@ -95,6 +96,19 @@ export interface SessionEntry {
     status: 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
     title: string;
     workspace: string | null;
+    runtimeKey?: string;
+    runtimeDisplayName?: string;
+    runtimeWorkspaceLabel?: string;
+    runtimeWriteOwner?: {
+        clientId: string;
+        ownerType: 'agent' | 'user';
+    } | null;
+    runtimeAttachedClients?: {
+        clientId: string;
+        type: 'daemon' | 'web' | 'local-terminal';
+        readOnly: boolean;
+    }[];
+    resume?: ProviderResumeCapability;
     activeChat: _ActiveChatData | null;
     capabilities: SessionCapability[];
     cdpConnected?: boolean;

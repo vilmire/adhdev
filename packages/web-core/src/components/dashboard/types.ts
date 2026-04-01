@@ -14,6 +14,8 @@ export interface ActiveConversation {
     status: string;
     title: string;
     messages: any[];
+    terminalHistory?: string;
+    resume?: import('../../types').ProviderResumeCapability;
     ideType: string;
     workspaceName: string;
     displayPrimary: string;

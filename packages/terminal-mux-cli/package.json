@@ -1,0 +1,46 @@
+{
+  "name": "@adhdev/terminal-mux-cli",
+  "version": "0.7.6",
+  "description": "User-facing terminal mux client for ADHDev runtimes",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "adhmux": "dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts",
+    "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "keywords": [
+    "adhdev",
+    "terminal",
+    "mux",
+    "client",
+    "ghostty"
+  ],
+  "author": "vilmire",
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "@adhdev/session-host-core": "*",
+    "@adhdev/terminal-mux-control": "*",
+    "@adhdev/terminal-mux-core": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.2.0",
+    "typescript": "^5.5.0"
+  }
+}

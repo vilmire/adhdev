@@ -19,6 +19,7 @@ export interface DashboardHeaderProps {
     isConnected: boolean;
     onOpenHistory: () => void;
     onStopCli?: () => void;
+    onFitCli?: () => void;
 }
 
 export default function DashboardHeader({
@@ -28,6 +29,7 @@ export default function DashboardHeader({
     isConnected,
     onOpenHistory,
     onStopCli,
+    onFitCli,
 }: DashboardHeaderProps) {
     const navigate = useNavigate();
     const daemonCtx = useDaemons() as any;
@@ -89,13 +91,22 @@ export default function DashboardHeader({
             </div>
             <div className="flex gap-2 items-center">
                 {isCliActive && onStopCli && (
-                    <button
-                        onClick={onStopCli}
-                        className="btn btn-secondary btn-sm text-red-400 border-red-500/25 hover:bg-red-500/10"
-                        title="Stop CLI process"
-                    >
-                        Stop
-                    </button>
+                    <>
+                        <button
+                            onClick={onFitCli}
+                            className="btn btn-secondary btn-sm"
+                            title="Fit terminal to current view"
+                        >
+                            Fit
+                        </button>
+                        <button
+                            onClick={onStopCli}
+                            className="btn btn-secondary btn-sm text-red-400 border-red-500/25 hover:bg-red-500/10"
+                            title="Stop CLI process"
+                        >
+                            Stop
+                        </button>
+                    </>
                 )}
 
                 {activeConv && !isCliActive && !isAcpConv(activeConv) && (

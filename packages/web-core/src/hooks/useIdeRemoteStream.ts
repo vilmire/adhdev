@@ -72,6 +72,9 @@ export function useIdeRemoteStream({
         } else {
             conn.stopScreenshots(screenshotTarget)
         }
+        return () => {
+            conn.stopScreenshots(screenshotTarget)
+        }
     }, [viewMode, connState, screenshotTarget, doId])
 
     const handleRemoteAction = useCallback(async (action: string, params: any) => {

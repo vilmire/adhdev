@@ -254,6 +254,7 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
 
             ws.onclose = () => {
                 if (!mountedRef.current) return
+                _wsAdapter?.stopScreenshots()
                 if (_wsAdapter) {
                     standaloneConnectionManager.setState((_wsAdapter as any).daemonId, 'disconnected')
                 }
@@ -295,6 +296,7 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                 _wsInstance = null
             }
             if (_wsAdapter) {
+                _wsAdapter.stopScreenshots()
                 standaloneConnectionManager.unregister((_wsAdapter as any).daemonId)
             }
         }

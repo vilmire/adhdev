@@ -110,7 +110,7 @@ export { ProviderInstanceManager } from './providers/provider-instance-manager.j
 export { IdeProviderInstance } from './providers/ide-provider-instance.js';
 export { CliProviderInstance } from './providers/cli-provider-instance.js';
 export { AcpProviderInstance } from './providers/acp-provider-instance.js';
-export type { ProviderModule, CdpTargetFilter } from './providers/contracts.js';
+export type { ProviderModule, CdpTargetFilter, ProviderResumeCapability } from './providers/contracts.js';
 export { VersionArchive, detectAllVersions } from './providers/version-archive.js';
 export type { ProviderVersionInfo, VersionHistory } from './providers/version-archive.js';
 
@@ -120,6 +120,10 @@ export { DevServer } from './daemon/dev-server.js';
 // ── CLI Adapters ──
 export { ProviderCliAdapter } from './cli-adapters/provider-cli-adapter.js';
 export type { CliAdapter } from './cli-adapter-types.js';
+export { NodePtyTransportFactory } from './cli-adapters/pty-transport.js';
+export type { PtyRuntimeTransport, PtyTransportFactory, PtySpawnOptions } from './cli-adapters/pty-transport.js';
+export { SessionHostPtyTransportFactory } from './cli-adapters/session-host-transport.js';
+export type { HostedCliRuntimeDescriptor, CliTransportFactoryParams } from './commands/cli-manager.js';
 
 // ── Installer ──
 export { getAIExtensions, installExtensions, launchIDE, isExtensionInstalled } from './installer.js';

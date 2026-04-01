@@ -32,7 +32,20 @@ export type { TransportContextValue } from './context/TransportContext'
 
 // ── API Client Factory ──
 export { createApiClient } from './base-api'
-export type { ApiClient, ApiClientConfig } from './base-api'
+export type {
+    ApiClient,
+    ApiClientConfig,
+    MuxAttachedClient,
+    MuxControlRequest,
+    MuxLayoutNode,
+    MuxPaneSummary,
+    MuxRuntimePaneState,
+    MuxSocketInfo,
+    MuxViewportState,
+    MuxWorkspaceSnapshot,
+    MuxWorkspaceState,
+    MuxWriteOwner,
+} from './base-api'
 
 // ── Components ──
 export { default as ChatMessageList } from './components/ChatMessageList'

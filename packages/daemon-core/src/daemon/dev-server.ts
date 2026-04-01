@@ -1,3 +1,4 @@
+import type { DevServerContext } from './dev-server-types.js';
 /**
  * Dev Server — HTTP API for Provider debugging + script development
  * 
@@ -27,15 +28,18 @@ import type { DaemonCliManager } from '../commands/cli-manager.js';
 import { generateTemplate as genScaffoldTemplate, generateFiles as genScaffoldFiles } from './scaffold-template.js';
 import { VersionArchive, detectAllVersions } from '../providers/version-archive.js';
 import { LOG } from '../logging/logger.js';
+import { handleCdpEvaluate, handleCdpClick, handleCdpDomQuery, handleScreenshot, handleScriptsRun, handleTypeAndSend, handleTypeAndSendAt, handleScriptHints, handleCdpTargets, handleDomInspect, handleDomChildren, handleDomAnalyze, handleFindCommon, handleFindByText, handleDomContext } from './dev-cdp-handlers.js';
+import { handleCliStatus, handleCliLaunch, handleCliSend, handleCliStop, handleCliDebug, handleCliResolve, handleCliRaw, handleCliSSE } from './dev-cli-debug.js';
+import { handleAutoImplement, handleAutoImplCancel, handleAutoImplSSE } from './dev-auto-implement.js';
 
 export const DEV_SERVER_PORT = 19280;
 
-export class DevServer {
+export class DevServer implements DevServerContext {
   private server: http.Server | null = null;
-  private providerLoader: ProviderLoader;
-  private cdpManagers: Map<string, DaemonCdpManager>;
-  private instanceManager: ProviderInstanceManager | null;
-  private cliManager: DaemonCliManager | null;
+  public providerLoader: ProviderLoader;
+  public cdpManagers: Map<string, DaemonCdpManager>;
+  public instanceManager: ProviderInstanceManager | null;
+  public cliManager: DaemonCliManager | null;
   private logFn: (msg: string) => void;
   private sseClients: http.ServerResponse[] = [];
   private watchScriptPath: string | null = null;
@@ -43,9 +47,9 @@ export class DevServer {
   private watchTimer: NodeJS.Timeout | null = null;
 
   // Auto-implement state
-  private autoImplProcess: ChildProcess | null = null;
-  private autoImplSSEClients: http.ServerResponse[] = [];
-  private autoImplStatus: { running: boolean; type: string | null; progress: any[] } = { running: false, type: null, progress: [] };
+  public autoImplProcess: ChildProcess | null = null;
+  public autoImplSSEClients: http.ServerResponse[] = [];
+  public autoImplStatus: { running: boolean; type: string | null; progress: any[] } = { running: false, type: null, progress: [] };
 
   // CLI debug SSE
   private cliSSEClients: http.ServerResponse[] = [];
@@ -64,7 +68,7 @@ export class DevServer {
     this.logFn = options.logFn || LOG.forComponent('DevServer').asLogFn();
   }
 
-  private log(msg: string): void {
+  public log(msg: string): void {
     this.logFn(`[DevServer] ${msg}`);
   }
 
@@ -392,147 +396,23 @@ export class DevServer {
   }
 
   private async handleCdpEvaluate(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { expression, timeout, ideType } = body;
-    if (!expression) {
-      this.json(res, 400, { error: 'expression required' });
-      return;
-    }
-
-    const cdp = this.getCdp(ideType);
-    if (!cdp && !ideType) {
-      LOG.warn('DevServer', 'CDP evaluate without ideType — picked first connected manager');
-    }
-    if (!cdp?.isConnected) {
-      this.json(res, 503, { error: 'No CDP connection available' });
-      return;
-    }
-
-    try {
-      const raw = await cdp.evaluate(expression, timeout || 30000);
-      let result = raw;
-      if (typeof raw === 'string') {
-        try { result = JSON.parse(raw); } catch { /* keep */ }
-      }
-      this.json(res, 200, { result });
-    } catch (e: any) {
-      this.json(res, 500, { error: e.message });
-    }
+    return handleCdpEvaluate(this, req, res);
   }
 
   private async handleCdpClick(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { ideType, x, y } = body;
-    if (x == null || y == null) {
-      this.json(res, 400, { error: 'x and y coordinates required' });
-      return;
-    }
-
-    const cdp = this.getCdp(ideType);
-    if (!cdp?.isConnected) {
-      this.json(res, 503, { error: 'No CDP connection available' });
-      return;
-    }
-
-    try {
-      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
-      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
-      this.json(res, 200, { success: true, clicked: true, x, y });
-    } catch (e: any) {
-      this.json(res, 500, { error: e.message });
-    }
+    return handleCdpClick(this, req, res);
   }
 
   private async handleCdpDomQuery(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { selector, limit = 10, ideType } = body;
-    if (!selector) {
-      this.json(res, 400, { error: 'selector required' });
-      return;
-    }
-
-    const cdp = this.getCdp(ideType as string);
-    if (!cdp) {
-      this.json(res, 503, { error: 'No CDP connection available' });
-      return;
-    }
-
-    const expr = `(() => {
-      try {
-        const els = document.querySelectorAll('${selector.replace(/'/g, "\\'")}');
-        const results = [];
-        for (let i = 0; i < Math.min(els.length, ${limit}); i++) {
-          const el = els[i];
-          results.push({
-            index: i,
-            tag: el.tagName?.toLowerCase(),
-            id: el.id || null,
-            class: el.className && typeof el.className === 'string' ? el.className.trim().slice(0, 200) : null,
-            role: el.getAttribute?.('role') || null,
-            text: (el.textContent || '').trim().slice(0, 100),
-            visible: el.offsetParent !== null || el.offsetWidth > 0,
-            rect: (() => { try { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; } catch { return null; } })()
-          });
-        }
-        return JSON.stringify({ total: els.length, results });
-      } catch (e) { return JSON.stringify({ error: e.message }); }
-    })()`;
-
-    try {
-      const raw = await cdp.evaluate(expr, 10000);
-      const result = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      this.json(res, 200, result);
-    } catch (e: any) {
-      this.json(res, 500, { error: e.message });
-    }
+    return handleCdpDomQuery(this, req, res);
   }
 
   private async handleScreenshot(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const url = new URL(req.url || '/', 'http://localhost');
-    const ideType = url.searchParams.get('ideType') || undefined;
-    const cdp = this.getCdp(ideType);
-    if (!cdp) {
-      this.json(res, 503, { error: 'No CDP connection available' });
-      return;
-    }
-
-    try {
-      // Get viewport metrics before capturing
-      let vpW = 0, vpH = 0;
-      try {
-        const metrics = await cdp.send('Page.getLayoutMetrics', {}, 3000);
-        const vp = metrics?.cssVisualViewport || metrics?.visualViewport;
-        if (vp) {
-          vpW = Math.round(vp.clientWidth || vp.width || 0);
-          vpH = Math.round(vp.clientHeight || vp.height || 0);
-        }
-      } catch { /* ignore */ }
-
-      const buf = await cdp.captureScreenshot();
-      if (buf) {
-        res.writeHead(200, {
-          'Content-Type': 'image/webp',
-          'X-Viewport-Width': String(vpW),
-          'X-Viewport-Height': String(vpH),
-        });
-        res.end(buf);
-      } else {
-        this.json(res, 500, { error: 'Screenshot failed' });
-      }
-    } catch (e: any) {
-      this.json(res, 500, { error: e.message });
-    }
+    return handleScreenshot(this, req, res);
   }
 
   private async handleScriptsRun(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { type, script: scriptName, params } = body;
-    if (!type || !scriptName) {
-      this.json(res, 400, { error: 'type and script required' });
-      return;
-    }
-    // Delegate to handleRunScript
-    await this.handleRunScript(type, req, res, body);
+    return handleScriptsRun(this, req, res);
   }
 
   private async handleStatus(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -730,7 +610,7 @@ export class DevServer {
   // ─── Provider File Explorer ───
 
   /** Find the provider directory on disk */
-  private findProviderDir(type: string): string | null {
+  public findProviderDir(type: string): string | null {
     return this.providerLoader.findProviderDir(type);
   }
 
@@ -844,143 +724,15 @@ export class DevServer {
   }
 
   private async handleTypeAndSend(type: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { selector, text } = body;
-    if (!selector || typeof selector !== 'string' || !text || typeof text !== 'string') {
-      this.json(res, 400, { error: 'selector and text strings required' }); return;
-    }
-    const cdp = this.getCdp(type);
-    if (!cdp) {
-      this.json(res, 503, { error: `CDP not connected for '${type}'` }); return;
-    }
-    try {
-      const sent = await cdp.typeAndSend(selector, text);
-      this.json(res, 200, { sent });
-    } catch (e: any) {
-      this.json(res, 500, { error: e.message });
-    }
+    return handleTypeAndSend(this, type, req, res);
   }
 
   private async handleTypeAndSendAt(type: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { x, y, text } = body;
-    if (typeof x !== 'number' || typeof y !== 'number' || !text || typeof text !== 'string') {
-      this.json(res, 400, { error: 'x, y numbers and text string required' }); return;
-    }
-    const cdp = this.getCdp(type);
-    if (!cdp) {
-      this.json(res, 503, { error: `CDP not connected for '${type}'` }); return;
-    }
-    try {
-      const sent = await cdp.typeAndSendAt(x, y, text);
-      this.json(res, 200, { sent });
-    } catch (e: any) {
-      this.json(res, 500, { error: e.message });
-    }
+    return handleTypeAndSendAt(this, type, req, res);
   }
 
   private async handleScriptHints(type: string, _req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const dir = this.findProviderDir(type);
-    if (!dir) { this.json(res, 404, { error: `Provider not found: ${type}` }); return; }
-
-    // Find scripts.js in the provider dir (may be versioned)
-    let scriptsPath = '';
-    const directScripts = path.join(dir, 'scripts.js');
-    if (fs.existsSync(directScripts)) {
-      scriptsPath = directScripts;
-    } else {
-      // Check versioned scripts dirs
-      const scriptsDir = path.join(dir, 'scripts');
-      if (fs.existsSync(scriptsDir)) {
-        const versions = fs.readdirSync(scriptsDir).filter(d => {
-          return fs.statSync(path.join(scriptsDir, d)).isDirectory();
-        }).sort().reverse();
-        for (const ver of versions) {
-          const p = path.join(scriptsDir, ver, 'scripts.js');
-          if (fs.existsSync(p)) { scriptsPath = p; break; }
-        }
-      }
-    }
-
-    if (!scriptsPath) {
-      this.json(res, 200, { hints: {} });
-      return;
-    }
-
-    try {
-      const source = fs.readFileSync(scriptsPath, 'utf-8');
-      const hints: Record<string, { template: Record<string, any>; description: string }> = {};
-
-      // Parse exported functions and extract param usage
-      const funcRegex = /module\.exports\.(\w+)\s*=\s*function\s+\w+\s*\(params\)/g;
-      let match;
-      while ((match = funcRegex.exec(source)) !== null) {
-        const name = match[1];
-        // Find the function body (rough: from match to next module.exports or end)
-        const startIdx = match.index;
-        const nextFunc = source.indexOf('module.exports.', startIdx + 1);
-        const funcBody = source.substring(startIdx, nextFunc > 0 ? nextFunc : source.length);
-
-        const paramFields: Record<string, any> = {};
-
-        // Pattern 1: params?.xxx or params.xxx
-        const dotRegex = /params\?\.([a-zA-Z_]+)|params\.([a-zA-Z_]+)/g;
-        let dm;
-        while ((dm = dotRegex.exec(funcBody)) !== null) {
-          const field = dm[1] || dm[2];
-          if (field === 'length') continue;
-          if (!(field in paramFields)) {
-            // Infer type from context
-            if (/index|count|port|timeout/i.test(field)) paramFields[field] = 0;
-            else if (/action|text|title|message|model|mode|button|name|filter/i.test(field)) paramFields[field] = '';
-            else paramFields[field] = '';
-          }
-        }
-
-        // Pattern 2: typeof params === 'string' ? params : params?.xxx
-        const typeofRegex = /typeof params === 'string' \? params : params\?\.([a-zA-Z_]+)/g;
-        let tm;
-        while ((tm = typeofRegex.exec(funcBody)) !== null) {
-          const field = tm[1];
-          if (!(field in paramFields)) paramFields[field] = '';
-        }
-
-        // Pattern 3: typeof params === 'number' ? params : params?.xxx
-        const numRegex = /typeof params === 'number' \? params : params\?\.([a-zA-Z_]+)/g;
-        let nm;
-        while ((nm = numRegex.exec(funcBody)) !== null) {
-          const field = nm[1];
-          if (!(field in paramFields)) paramFields[field] = 0;
-        }
-
-        // Determine description from function name
-        const descriptions: Record<string, string> = {
-          readChat: 'No params required',
-          sendMessage: 'Text to send to the chat',
-          listSessions: 'No params required',
-          switchSession: 'Switch by index or title',
-          newSession: 'No params required',
-          focusEditor: 'No params required',
-          openPanel: 'No params required',
-          resolveAction: 'Approve/reject action buttons',
-          listNotifications: 'Optional message filter',
-          dismissNotification: 'Dismiss by index, message, or button',
-          listModels: 'No params required',
-          setModel: 'Model name to select',
-          listModes: 'No params required',
-          setMode: 'Mode name to select',
-        };
-
-        hints[name] = {
-          template: Object.keys(paramFields).length > 0 ? paramFields : {},
-          description: descriptions[name] || (Object.keys(paramFields).length > 0 ? 'Params: ' + Object.keys(paramFields).join(', ') : 'No params'),
-        };
-      }
-
-      this.json(res, 200, { hints });
-    } catch (e: any) {
-      this.json(res, 500, { error: e.message });
-    }
+    return handleScriptHints(this, type, _req, res);
   }
 
   // ─── Validate provider.json ───
@@ -1089,11 +841,7 @@ export class DevServer {
 
 
   private async handleCdpTargets(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const targets: { ide: string; connected: boolean; port: number }[] = [];
-    for (const [ide, cdp] of this.cdpManagers.entries()) {
-      targets.push({ ide, connected: cdp.isConnected, port: cdp.getPort() });
-    }
-    this.json(res, 200, { targets });
+    return handleCdpTargets(this, _req, res);
   }
 
   // ─── Scaffold ───
@@ -1161,728 +909,36 @@ export class DevServer {
   // ─── DOM Inspector ───
 
   private async handleDomInspect(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { x, y, selector, ideType } = body;
-    const cdp = this.getCdp(ideType);
-    if (!cdp) { this.json(res, 503, { error: 'No CDP connection' }); return; }
-
-    const selectorArg = selector ? JSON.stringify(selector) : 'null';
-    const inspectScript = `(() => {
-      function gs(el) {
-        if (!el || el === document.body) return 'body';
-        if (el.id) return '#' + CSS.escape(el.id);
-        let s = el.tagName.toLowerCase();
-        if (el.className && typeof el.className === 'string') {
-          const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
-          if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
-        }
-        const p = el.parentElement;
-        if (p) {
-          const sibs = [...p.children].filter(c => c.tagName === el.tagName);
-          if (sibs.length > 1) s += ':nth-child(' + ([...p.children].indexOf(el) + 1) + ')';
-        }
-        return s;
-      }
-      function gp(el) {
-        const parts = [];
-        let c = el;
-        while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
-        return parts;
-      }
-      function ni(el) {
-        if (!el) return null;
-        const tag = el.tagName?.toLowerCase() || '#text';
-        const attrs = {};
-        if (el.attributes) for (const a of el.attributes) if (a.name !== 'class' && a.name !== 'style') attrs[a.name] = a.value?.substring(0, 200);
-        const cls = (el.className && typeof el.className === 'string') ? el.className.trim().split(/\\s+/).filter(Boolean).slice(0, 10) : [];
-        const text = el.textContent?.trim().substring(0, 150) || '';
-        const dt = [...(el.childNodes||[])].filter(n=>n.nodeType===3).map(n=>n.textContent.trim()).filter(Boolean).join(' ').substring(0,100);
-        const cc = el.children?.length || 0;
-        const r = el.getBoundingClientRect?.();
-        return { tag, cls, attrs, text, directText: dt, childCount: cc, selector: gs(el), fullSelector: gp(el).join(' > '), rect: r ? {x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)} : null };
-      }
-      const sel = ${selectorArg};
-      let el = sel ? document.querySelector(sel) : document.elementFromPoint(${x || 0}, ${y || 0});
-      if (!el) return JSON.stringify({ error: 'No element found' });
-      const info = ni(el);
-      const ancestors = [];
-      let pp = el.parentElement;
-      while (pp && pp !== document.documentElement) {
-        ancestors.push({ tag: pp.tagName.toLowerCase(), selector: gs(pp), cls: (pp.className && typeof pp.className === 'string') ? pp.className.trim().split(/\\s+/).slice(0,3) : [] });
-        pp = pp.parentElement;
-      }
-      const children = [...(el.children||[])].slice(0,50).map(c => ni(c));
-      return JSON.stringify({ element: info, ancestors: ancestors.reverse(), children });
-    })()`;
-
-    try {
-      const raw = await cdp.evaluate(inspectScript, 10000);
-      let result = raw;
-      if (typeof raw === 'string') { try { result = JSON.parse(raw as string); } catch { } }
-      this.json(res, 200, result as Record<string, unknown>);
-    } catch (e: any) {
-      this.json(res, 500, { error: e.message });
-    }
+    return handleDomInspect(this, req, res);
   }
 
   private async handleDomChildren(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { selector, ideType } = body;
-    const cdp = this.getCdp(ideType);
-    if (!cdp) { this.json(res, 503, { error: 'No CDP connection' }); return; }
-    if (!selector) { this.json(res, 400, { error: 'selector required' }); return; }
-
-    const script = `(() => {
-      function gs(el) {
-        if (!el || el === document.body) return 'body';
-        if (el.id) return '#' + CSS.escape(el.id);
-        let s = el.tagName.toLowerCase();
-        if (el.className && typeof el.className === 'string') {
-          const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
-          if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
-        }
-        const p = el.parentElement;
-        if (p) {
-          const sibs = [...p.children].filter(c => c.tagName === el.tagName);
-          if (sibs.length > 1) s += ':nth-child(' + ([...p.children].indexOf(el) + 1) + ')';
-        }
-        return s;
-      }
-      const el = document.querySelector(${JSON.stringify(selector)});
-      if (!el) return JSON.stringify({ error: 'Element not found' });
-      const children = [...(el.children||[])].slice(0,100).map(c => {
-        const tag = c.tagName?.toLowerCase();
-        const cls = (c.className && typeof c.className === 'string') ? c.className.trim().split(/\\s+/).filter(Boolean).slice(0,10) : [];
-        const attrs = {};
-        for (const a of c.attributes) if (a.name!=='class'&&a.name!=='style') attrs[a.name] = a.value?.substring(0,200);
-        const text = c.textContent?.trim().substring(0,150)||'';
-        const dt = [...c.childNodes].filter(n=>n.nodeType===3).map(n=>n.textContent.trim()).filter(Boolean).join(' ').substring(0,100);
-        return { tag, cls, attrs, text, directText: dt, childCount: c.children?.length||0, selector: gs(c) };
-      });
-      return JSON.stringify({ selector: ${JSON.stringify(selector)}, childCount: el.children?.length||0, children });
-    })()`;
-
-    try {
-      const raw = await cdp.evaluate(script, 10000);
-      let result = raw;
-      if (typeof raw === 'string') { try { result = JSON.parse(raw as string); } catch { } }
-      this.json(res, 200, result as Record<string, unknown>);
-    } catch (e: any) {
-      this.json(res, 500, { error: e.message });
-    }
+    return handleDomChildren(this, req, res);
   }
 
   private async handleDomAnalyze(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { ideType, selector, x, y } = body;
-    const cdp = this.getCdp(ideType);
-    if (!cdp) { this.json(res, 503, { error: 'No CDP connection' }); return; }
-
-    const selectorArg = selector ? JSON.stringify(selector) : 'null';
-    const analyzeScript = `(() => {
-      function gs(el) {
-        if (!el || el === document.body) return 'body';
-        if (el.id) return '#' + CSS.escape(el.id);
-        let s = el.tagName.toLowerCase();
-        if (el.className && typeof el.className === 'string') {
-          const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
-          if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
-        }
-        return s;
-      }
-      function fp(el) {
-        const parts = [];
-        let c = el;
-        while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
-        return parts.join(' > ');
-      }
-      function sigOf(el) {
-        return el.tagName + '|' + ((el.className && typeof el.className === 'string') ? el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).sort().join('.') : '');
-      }
-
-      // Find target element
-      const sel = ${selectorArg};
-      let target = sel ? document.querySelector(sel) : document.elementFromPoint(${x || 0}, ${y || 0});
-      if (!target) return JSON.stringify({ error: 'Element not found' });
-
-      const result = {
-        target: { tag: target.tagName.toLowerCase(), selector: fp(target), text: (target.textContent||'').trim().substring(0, 200) },
-        siblingPattern: null,
-        ancestorAnalysis: [],
-        subtreeTexts: [],
-      };
-
-      // 1. Walk UP parents — at each level, find sibling patterns
-      let el = target;
-      let depth = 0;
-      while (el && el !== document.body && depth < 15) {
-        const parent = el.parentElement;
-        if (!parent) break;
-
-        const mySig = sigOf(el);
-        const siblings = [...parent.children].filter(c => sigOf(c) === mySig);
-        const totalChildren = parent.children.length;
-        const childSel = gs(el).replace(/:nth-child\\(\\d+\\)/, '');
-        const parentSel = fp(parent);
-
-        result.ancestorAnalysis.push({
-          depth,
-          parentTag: parent.tagName.toLowerCase(),
-          parentSelector: parentSel,
-          totalChildren,
-          matchingSiblings: siblings.length,
-          childSelector: childSel,
-          fullSelector: parentSel + ' > ' + childSel,
-        });
-
-        // Best sibling pattern: 3+ matching siblings with text
-        if (!result.siblingPattern && siblings.length >= 3) {
-          const siblingData = siblings.map((s, i) => {
-            const directText = [...s.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent.trim()).filter(Boolean).join(' ').substring(0, 120);
-            const allText = (s.textContent || '').trim().substring(0, 200);
-            const childCount = s.children?.length || 0;
-            const cls = (s.className && typeof s.className === 'string') ? s.className.trim().split(/\\s+/).filter(Boolean) : [];
-            const attrs = {};
-            if (s.attributes) for (const a of s.attributes) {
-              if (a.name !== 'class' && a.name !== 'style' && a.value) attrs[a.name] = a.value.substring(0, 100);
-            }
-            return { index: i, directText, allText, childCount, cls, attrs, tag: s.tagName.toLowerCase() };
-          });
-
-          // Find common attributes across siblings
-          const allAttrs = siblingData.map(s => Object.keys(s.attrs));
-          const commonAttrs = allAttrs[0]?.filter(attr => allAttrs.every(a => a.includes(attr))) || [];
-          // Find varying attributes (data-*, role, etc)
-          const varyingAttrs = {};
-          for (const attr of commonAttrs) {
-            const values = siblingData.map(s => s.attrs[attr]);
-            const unique = [...new Set(values)];
-            if (unique.length > 1) varyingAttrs[attr] = unique.slice(0, 5);
-          }
-
-          result.siblingPattern = {
-            count: siblings.length,
-            selector: parentSel + ' > ' + childSel,
-            parentSelector: parentSel,
-            depthFromTarget: depth,
-            siblings: siblingData.slice(0, 30),
-            commonAttrs,
-            varyingAttrs,
-          };
-        }
-
-        el = parent;
-        depth++;
-      }
-
-      // 2. Collect subtree text nodes from target
-      const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT, null);
-      let node;
-      while ((node = walker.nextNode()) && result.subtreeTexts.length < 30) {
-        const text = node.textContent.trim();
-        if (text.length > 2) {
-          const parentTag = node.parentElement?.tagName?.toLowerCase() || '';
-          const parentCls = (node.parentElement?.className && typeof node.parentElement.className === 'string')
-            ? node.parentElement.className.trim().split(/\\s+/).filter(Boolean).slice(0,3).join('.') : '';
-          result.subtreeTexts.push({
-            text: text.substring(0, 150),
-            parentTag,
-            parentCls,
-            parentSelector: gs(node.parentElement),
-          });
-        }
-      }
-
-      return JSON.stringify(result);
-    })()`;
-
-    try {
-      const raw = await cdp.evaluate(analyzeScript, 15000);
-      let result = raw;
-      if (typeof raw === 'string') { try { result = JSON.parse(raw as string); } catch { } }
-      this.json(res, 200, result as Record<string, unknown>);
-    } catch (e: any) {
-      this.json(res, 500, { error: e.message });
-    }
+    return handleDomAnalyze(this, req, res);
   }
 
   private async handleFindCommon(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { include, exclude, ideType } = body;
-    if (!Array.isArray(include) || include.length === 0) { this.json(res, 400, { error: 'include[] is required' }); return; }
-    const cdp = this.getCdp(ideType);
-    if (!cdp) { this.json(res, 503, { error: 'No CDP connection' }); return; }
-
-    const script = `(() => {
-      const includes = ${JSON.stringify(include)};
-      const excludes = ${JSON.stringify(exclude || [])};
-
-      function gs(el) {
-        if (!el || el === document.body) return 'body';
-        if (el.id) return '#' + CSS.escape(el.id);
-        let s = el.tagName.toLowerCase();
-        if (el.className && typeof el.className === 'string') {
-          const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
-          if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
-        }
-        return s;
-      }
-      function fp(el) {
-        const parts = [];
-        let c = el;
-        while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
-        return parts.join(' > ');
-      }
-      function sig(el) {
-        return el.tagName + '|' + ((el.className && typeof el.className === 'string') ? el.className.trim() : '');
-      }
-
-      // Step 1: For each include, find all matching leaf elements
-      const includeMatches = includes.map(text => {
-        const lower = text.toLowerCase();
-        const found = [];
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-          acceptNode: n => n.textContent.toLowerCase().includes(lower) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
-        });
-        let node;
-        while ((node = walker.nextNode()) && found.length < 5) {
-          if (node.parentElement) found.push(node.parentElement);
-        }
-        return found;
-      });
-
-      if (includeMatches.some(m => m.length === 0)) {
-        const missing = includes.filter((_, i) => includeMatches[i].length === 0);
-        return JSON.stringify({ results: [], message: 'Text not found: ' + missing.join(', ') });
-      }
-
-      // Step 2: Find LCA for each combination of include elements
-      // For each pair of include[0] element and include[1] element, find their LCA
-      // Then within the LCA, find the direct-child subtree branch for each
-      const containers = [];
-      const seen = new Set();
-
-      function findLCA(el1, el2) {
-        const ancestors1 = new Set();
-        let c = el1;
-        while (c) { ancestors1.add(c); c = c.parentElement; }
-        c = el2;
-        while (c) { if (ancestors1.has(c)) return c; c = c.parentElement; }
-        return document.body;
-      }
-
-      function findDirectChildContaining(parent, descendant) {
-        let c = descendant;
-        while (c && c.parentElement !== parent) c = c.parentElement;
-        return c;
-      }
-
-      // Try all combinations (first 3 matches per include)
-      for (const el1 of includeMatches[0].slice(0, 3)) {
-        for (let ii = 1; ii < includeMatches.length; ii++) {
-          for (const el2 of includeMatches[ii].slice(0, 3)) {
-            if (el1 === el2) continue;
-            const lca = findLCA(el1, el2);
-            if (!lca || lca === document.body || lca === document.documentElement) continue;
-
-            // Find which direct child of LCA contains each include element
-            const child1 = findDirectChildContaining(lca, el1);
-            const child2 = findDirectChildContaining(lca, el2);
-            if (!child1 || !child2 || child1 === child2) continue;
-
-            const lcaSel = fp(lca);
-            if (seen.has(lcaSel)) continue;
-            seen.add(lcaSel);
-
-            // Check exclude
-            if (excludes.length > 0) {
-              const lcaText = (lca.textContent || '').toLowerCase();
-              if (excludes.some(ex => lcaText.includes(ex.toLowerCase()))) continue;
-            }
-
-            // Are child1 and child2 same tag? (relaxed — ignore classes)
-            const tag1 = child1.tagName;
-            const tag2 = child2.tagName;
-
-            // Bubble up: walk up from LCA, find the best list container
-            // (the one with most repeating same-tag children)
-            let container = lca;
-            let bestContainer = lca;
-            let bestListCount = 0;
-            for (let up = 0; up < 10; up++) {
-              const p = container.parentElement;
-              if (!p || p === document.body || p === document.documentElement) break;
-              // Check how many same-tag siblings 'container' has in parent
-              const myTag = container.tagName;
-              const sibCount = [...p.children].filter(c => c.tagName === myTag).length;
-              if (sibCount > bestListCount) {
-                bestListCount = sibCount;
-                bestContainer = p;
-              }
-              container = p;
-            }
-            container = bestListCount >= 3 ? bestContainer : lca;
-
-            const allChildren = [...container.children];
-            const childTag = tag1 === tag2 ? tag1 : (allChildren.length > 0 ? allChildren[0].tagName : '');
-            const sameTagCount = allChildren.filter(c => c.tagName === childTag).length;
-            const isList = sameTagCount >= 3 && sameTagCount >= allChildren.length * 0.4;
-
-            // Gather all same-tag children as list items
-            const listItems = isList 
-              ? allChildren.filter(c => c.tagName === childTag)
-              : allChildren;
-
-            // Filter rendered items (skip virtual scroll placeholders)
-            const rendered = listItems.filter(c => (c.innerText || '').trim().length > 0);
-            const placeholderCount = listItems.length - rendered.length;
-
-            const containerSel = fp(container);
-            if (seen.has(containerSel)) continue;
-            seen.add(containerSel);
-
-            const r = container.getBoundingClientRect();
-            containers.push({
-              selector: containerSel,
-              tag: container.tagName.toLowerCase(),
-              childCount: allChildren.length,
-              listItemCount: listItems.length,
-              renderedCount: rendered.length,
-              placeholderCount,
-              isList,
-              rect: { w: Math.round(r.width), h: Math.round(r.height) },
-              depth: containerSel.split(' > ').length,
-              items: rendered.slice(0, 30).map((el, i) => {
-                const fullText = (el.innerText || el.textContent || '').trim();
-                // Find snippet around first matched include text
-                let text = fullText.substring(0, 200);
-                const matched = [];
-                for (const inc of includes) {
-                  const idx = fullText.toLowerCase().indexOf(inc.toLowerCase());
-                  if (idx >= 0) {
-                    matched.push(inc);
-                    if (matched.length === 1) {
-                      // Show snippet around first match
-                      const start = Math.max(0, idx - 30);
-                      const end = Math.min(fullText.length, idx + inc.length + 80);
-                      text = (start > 0 ? '...' : '') + fullText.substring(start, end) + (end < fullText.length ? '...' : '');
-                    }
-                  }
-                }
-                return {
-                  index: i,
-                  tag: el.tagName.toLowerCase(),
-                  cls: (el.className && typeof el.className === 'string') ? el.className.trim().split(/\\s+/).slice(0, 2).join(' ') : '',
-                  text,
-                  matchedIncludes: matched,
-                  childCount: el.children.length,
-                  h: Math.round(el.getBoundingClientRect().height),
-                };
-              }),
-            });
-          }
-        }
-      }
-
-      // Sort: list containers first (more items = better), then by depth
-      containers.sort((a, b) => {
-        if (a.isList !== b.isList) return a.isList ? -1 : 1;
-        return b.listItemCount - a.listItemCount || b.depth - a.depth;
-      });
-
-      return JSON.stringify({
-        results: containers.slice(0, 10),
-        includeCount: includes.length,
-        excludeCount: excludes.length,
-      });
-    })()`;
-
-    try {
-      const raw = await cdp.evaluate(script, 10000);
-      let result = raw;
-      if (typeof raw === 'string') { try { result = JSON.parse(raw as string); } catch { } }
-      this.json(res, 200, result as Record<string, unknown>);
-    } catch (e: any) {
-      this.json(res, 500, { error: e.message });
-    }
+    return handleFindCommon(this, req, res);
   }
 
   private async handleFindByText(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { text, ideType, containerSelector } = body;
-    if (!text || typeof text !== 'string') { this.json(res, 400, { error: 'text is required' }); return; }
-    const cdp = this.getCdp(ideType);
-    if (!cdp) { this.json(res, 503, { error: 'No CDP connection' }); return; }
-
-    const containerArg = containerSelector ? JSON.stringify(containerSelector) : 'null';
-    const script = `(() => {
-      function gs(el) {
-        if (!el || el === document.body) return 'body';
-        if (el.id) return '#' + CSS.escape(el.id);
-        let s = el.tagName.toLowerCase();
-        if (el.className && typeof el.className === 'string') {
-          const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
-          if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
-        }
-        return s;
-      }
-      function fp(el) {
-        const parts = [];
-        let c = el;
-        while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
-        return parts.join(' > ');
-      }
-      function parentSig(el) {
-        // Signature: tag+class chain up 3 levels
-        const parts = [];
-        let c = el;
-        for (let i = 0; i < 3 && c; i++) { parts.push(gs(c)); c = c.parentElement; }
-        return parts.join(' < ');
-      }
-
-      const searchText = ${JSON.stringify(text)}.toLowerCase();
-      const container = ${containerArg} ? document.querySelector(${containerArg}) : document.body;
-      if (!container) return JSON.stringify({ error: 'Container not found' });
-
-      const matches = [];
-      const seen = new Set();
-
-      // Find all text nodes containing the search text
-      const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
-        acceptNode: n => n.textContent.toLowerCase().includes(searchText) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
-      });
-      let node;
-      while ((node = walker.nextNode()) && matches.length < 50) {
-        // Walk up to find the most specific visible element
-        let el = node.parentElement;
-        if (!el) continue;
-
-        // Skip hidden elements
-        const r = el.getBoundingClientRect();
-        if (r.width === 0 && r.height === 0) continue;
-
-        const selector = fp(el);
-        if (seen.has(selector)) continue;
-        seen.add(selector);
-
-        // Walk up parent chain — record each level's selector + sibling count
-        const ancestors = [];
-        let cur = el;
-        let pLvl = cur.parentElement;
-        for (let lvl = 0; lvl < 10 && pLvl && pLvl !== document.body; lvl++) {
-          const mySig = cur.tagName + '|' + ((cur.className && typeof cur.className === 'string') ? cur.className.trim().split(/\\s+/).sort().join('.') : '');
-          const sibs = [...pLvl.children].filter(c => {
-            const sig = c.tagName + '|' + ((c.className && typeof c.className === 'string') ? c.className.trim().split(/\\s+/).sort().join('.') : '');
-            return sig === mySig;
-          });
-          const childSel = gs(cur).replace(/:nth-child\\(\\d+\\)/, '');
-          ancestors.push({
-            parentSelector: fp(pLvl),
-            childSelector: childSel,
-            fullSelector: fp(pLvl) + ' > ' + childSel,
-            siblingCount: sibs.length,
-            parentTag: pLvl.tagName.toLowerCase(),
-          });
-          cur = pLvl;
-          pLvl = pLvl.parentElement;
-        }
-
-        const directText = (node.textContent || '').trim().substring(0, 200);
-        const allText = (node.parentElement.textContent || '').trim().substring(0, 300);
-        const tag = node.parentElement.tagName.toLowerCase();
-        const cls = (node.parentElement.className && typeof node.parentElement.className === 'string')
-          ? node.parentElement.className.trim().split(/\\s+/).filter(Boolean) : [];
-
-        matches.push({
-          selector,
-          tag,
-          cls,
-          directText,
-          allText,
-          ancestors,
-          rect: { w: Math.round(r.width), h: Math.round(r.height) },
-          depth: selector.split(' > ').length,
-        });
-      }
-
-      // Sort: prefer elements with more siblings in ancestry, then fewer depth
-      matches.sort((a, b) => {
-        const aMax = Math.max(1, ...a.ancestors.map(x => x.siblingCount));
-        const bMax = Math.max(1, ...b.ancestors.map(x => x.siblingCount));
-        return (bMax - aMax) || (a.depth - b.depth);
-      });
-
-      return JSON.stringify({ query: ${JSON.stringify(text)}, matches, total: matches.length });
-    })()`;
-
-    try {
-      const raw = await cdp.evaluate(script, 10000);
-      let result = raw;
-      if (typeof raw === 'string') { try { result = JSON.parse(raw as string); } catch { } }
-      this.json(res, 200, result as Record<string, unknown>);
-    } catch (e: any) {
-      this.json(res, 500, { error: e.message });
-    }
+    return handleFindByText(this, req, res);
   }
 
   // ─── Phase 1: DOM Context API ───
 
   private async handleDomContext(type: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { ideType } = body;
-    const provider = this.providerLoader.resolve(type);
-    if (!provider) { this.json(res, 404, { error: `Provider not found: ${type}` }); return; }
-
-    const cdp = this.getCdp(ideType || type);
-    if (!cdp) { this.json(res, 503, { error: 'No CDP connection available. Target IDE must be running with CDP enabled.' }); return; }
-
-    try {
-      // 1. Capture screenshot
-      let screenshot: string | null = null;
-      try {
-        const buf = await cdp.captureScreenshot();
-        if (buf) screenshot = buf.toString('base64');
-      } catch { /* screenshot optional */ }
-
-      // 2. Collect DOM snapshot
-      const domScript = `(() => {
-        function gs(el) {
-          if (!el || el === document.body) return 'body';
-          if (el.id) return '#' + CSS.escape(el.id);
-          let s = el.tagName.toLowerCase();
-          if (el.className && typeof el.className === 'string') {
-            const cls = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('_')).slice(0, 3);
-            if (cls.length) s += '.' + cls.map(c => CSS.escape(c)).join('.');
-          }
-          return s;
-        }
-        function fp(el) {
-          const parts = [];
-          let c = el;
-          while (c && c !== document.documentElement) { parts.unshift(gs(c)); c = c.parentElement; }
-          return parts.join(' > ');
-        }
-        function rect(el) {
-          try { const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; }
-          catch { return null; }
-        }
-
-        const result = { contentEditables: [], chatContainers: [], buttons: [], sidebars: [], dropdowns: [], inputs: [] };
-
-        // Content editables + textareas + inputs
-        document.querySelectorAll('[contenteditable], textarea, input[type="text"], input:not([type])').forEach(el => {
-          if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
-          result.contentEditables.push({
-            selector: fp(el),
-            tag: el.tagName.toLowerCase(),
-            contenteditable: el.getAttribute('contenteditable'),
-            role: el.getAttribute('role'),
-            ariaLabel: el.getAttribute('aria-label'),
-            placeholder: el.getAttribute('placeholder'),
-            rect: rect(el),
-            visible: el.offsetParent !== null || el.offsetWidth > 0,
-          });
-        });
-
-        // Chat containers — large divs with scroll
-        document.querySelectorAll('div, section, main').forEach(el => {
-          const style = getComputedStyle(el);
-          const isScrollable = style.overflowY === 'auto' || style.overflowY === 'scroll';
-          const r = el.getBoundingClientRect();
-          if (!isScrollable || r.height < 200 || r.width < 200) return;
-          const childCount = el.children.length;
-          if (childCount < 2) return;
-          result.chatContainers.push({
-            selector: fp(el),
-            childCount,
-            rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
-            hasScrollable: true,
-            scrollTop: Math.round(el.scrollTop),
-            scrollHeight: Math.round(el.scrollHeight),
-          });
-        });
-
-        // Buttons
-        document.querySelectorAll('button, [role="button"]').forEach(el => {
-          if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
-          const text = (el.textContent || '').trim().substring(0, 80);
-          if (!text && !el.getAttribute('aria-label')) return;
-          result.buttons.push({
-            text,
-            ariaLabel: el.getAttribute('aria-label'),
-            selector: fp(el),
-            rect: rect(el),
-            disabled: el.disabled || el.getAttribute('aria-disabled') === 'true',
-          });
-        });
-
-        // Sidebars — panels on left/right edges
-        document.querySelectorAll('[class*="sidebar"], [class*="side-bar"], [class*="panel"], [role="complementary"], [role="navigation"], aside').forEach(el => {
-          if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
-          const r = el.getBoundingClientRect();
-          if (r.width < 50 || r.height < 200) return;
-          result.sidebars.push({
-            selector: fp(el),
-            position: r.x < window.innerWidth / 3 ? 'left' : r.x > window.innerWidth * 2 / 3 ? 'right' : 'center',
-            rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
-            childCount: el.children.length,
-          });
-        });
-
-        // Dropdowns — select, popover, menu patterns
-        document.querySelectorAll('select, [role="listbox"], [role="menu"], [role="combobox"], [class*="dropdown"], [class*="popover"]').forEach(el => {
-          result.dropdowns.push({
-            selector: fp(el),
-            tag: el.tagName.toLowerCase(),
-            role: el.getAttribute('role'),
-            visible: el.offsetParent !== null || el.offsetWidth > 0,
-            rect: rect(el),
-          });
-        });
-
-        return JSON.stringify(result);
-      })()`;
-
-      const raw = await cdp.evaluate(domScript, 15000);
-      let domSnapshot: any = {};
-      if (typeof raw === 'string') { try { domSnapshot = JSON.parse(raw); } catch { domSnapshot = { raw }; } }
-      else domSnapshot = raw;
-
-      this.json(res, 200, {
-        screenshot: screenshot ? `base64:${screenshot}` : null,
-        domSnapshot,
-        pageTitle: await cdp.evaluate('document.title', 3000).catch(() => ''),
-        pageUrl: await cdp.evaluate('window.location.href', 3000).catch(() => ''),
-        providerType: type,
-        timestamp: new Date().toISOString(),
-      });
-    } catch (e: any) {
-      this.json(res, 500, { error: `DOM context collection failed: ${e.message}` });
-    }
+    return handleDomContext(this, type, req, res);
   }
 
   // ─── Phase 2: Auto-Implement Backend ───
 
-  private getDefaultAutoImplReference(category: string, type: string): string {
-    if (category === 'cli') {
-      return type === 'codex-cli' ? 'claude-cli' : 'codex-cli';
-    }
-    return 'antigravity';
-  }
 
-  private resolveAutoImplReference(category: string, requestedReference: string | undefined, targetType: string): string | null {
-    const desired = requestedReference || this.getDefaultAutoImplReference(category, targetType);
-    const ref = this.providerLoader.resolve(desired) || this.providerLoader.getMeta(desired);
-    if (ref?.category === category) return desired;
 
-    const all = this.providerLoader.getAll();
-    const fallback = all
-      .filter((p: any) => p.category === category && p.type !== targetType)
-      .sort((a: any, b: any) => String(a.type || '').localeCompare(String(b.type || ''), undefined, { numeric: true, sensitivity: 'base' }))[0];
-    return fallback?.type || null;
-  }
-
-  private getLatestScriptVersionDir(scriptsDir: string): string | null {
+  public getLatestScriptVersionDir(scriptsDir: string): string | null {
     if (!fs.existsSync(scriptsDir)) return null;
 
     const versions = fs.readdirSync(scriptsDir)
@@ -1943,432 +999,9 @@ export class DevServer {
     return { dir: desiredDir };
   }
 
-  private loadAutoImplReferenceScripts(referenceType: string | null): Record<string, string> {
-    if (!referenceType) return {};
-
-    const refDir = this.findProviderDir(referenceType);
-    if (!refDir || !fs.existsSync(refDir)) return {};
-
-    const referenceScripts: Record<string, string> = {};
-    const scriptsDir = path.join(refDir, 'scripts');
-    const latestDir = this.getLatestScriptVersionDir(scriptsDir);
-    if (!latestDir) return referenceScripts;
-
-    for (const file of fs.readdirSync(latestDir)) {
-      if (!file.endsWith('.js')) continue;
-      try {
-        referenceScripts[file] = fs.readFileSync(path.join(latestDir, file), 'utf-8');
-      } catch {
-        // ignore broken reference files
-      }
-    }
-    return referenceScripts;
-  }
 
   private async handleAutoImplement(type: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { agent = 'claude-cli', functions, reference, model, comment, providerDir: requestedProviderDir } = body;
-    if (!functions || !Array.isArray(functions) || functions.length === 0) {
-      this.json(res, 400, { error: 'functions[] is required (e.g. ["readChat", "sendMessage"])' });
-      return;
-    }
-
-    if (this.autoImplStatus.running) {
-      this.json(res, 409, { error: 'Auto-implement already in progress', type: this.autoImplStatus.type });
-      return;
-    }
-
-    const provider = this.providerLoader.resolve(type);
-    if (!provider) { this.json(res, 404, { error: `Provider not found: ${type}` }); return; }
-
-    const writableProvider = this.resolveAutoImplWritableProviderDir(provider.category, type, requestedProviderDir);
-    if (!writableProvider.dir) {
-      this.json(res, 409, {
-        error: writableProvider.reason || `Auto-implement only writes to the canonical user provider directory for '${type}'.`,
-      });
-      return;
-    }
-    const providerDir = writableProvider.dir;
-
-    try {
-      // 1. Collect DOM context
-      // 1. Skip heavy DOM pre-parsing (Agent will use cURL to explore via CDP!)
-      const resolvedReference = this.resolveAutoImplReference(provider.category, reference, type);
-      this.sendAutoImplSSE({
-        event: 'progress',
-        data: {
-          function: '_init',
-          status: 'analyzing',
-          message: provider.category === 'cli'
-            ? 'Initializing agent (granting CLI PTY debug access)...'
-            : 'Initializing agent (granting DOM access)...'
-        }
-      });
-      const domContext = null;
-
-      // 2. Load reference scripts
-      this.sendAutoImplSSE({
-        event: 'progress',
-        data: {
-          function: '_init',
-          status: 'loading_reference',
-          message: `Loading reference script (${resolvedReference || 'none'})...`
-        }
-      });
-
-      const referenceScripts = this.loadAutoImplReferenceScripts(resolvedReference);
-
-      // 3. Build the prompt
-      const prompt = this.buildAutoImplPrompt(type, provider, providerDir, functions, domContext, referenceScripts, comment, resolvedReference);
-
-      // 4. Write prompt to temp file (avoids shell escaping issues with special chars)
-      const tmpDir = path.join(os.tmpdir(), 'adhdev-autoimpl');
-      if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-      const promptFile = path.join(tmpDir, `prompt-${type}-${Date.now()}.md`);
-      fs.writeFileSync(promptFile, prompt, 'utf-8');
-      this.log(`Auto-implement prompt written to ${promptFile} (${prompt.length} chars)`);
-
-      // 5. Determine agent command from provider spawn config
-      const agentProvider = this.providerLoader.resolve(agent) || this.providerLoader.getMeta(agent);
-      const spawn = (agentProvider as any)?.spawn;
-      if (!spawn?.command) {
-        try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
-        this.json(res, 400, { error: `Agent '${agent}' has no spawn config. Select a CLI provider with a spawn configuration.` });
-        return;
-      }
-
-      const agentCategory = (agentProvider as any)?.category;
-
-      // ─── ACP Agent: use ACP SDK (JSON-RPC protocol) ───
-      if (agentCategory === 'acp') {
-        this.sendAutoImplSSE({ event: 'progress', data: { function: '_init', status: 'spawning', message: `Spawning ACP agent: ${spawn.command} ${(spawn.args || []).join(' ')}` } });
-        this.autoImplStatus = { running: true, type, progress: [] };
-
-        // Dynamic import ACP SDK
-        const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } = await import('@agentclientprotocol/sdk');
-        const { Readable, Writable } = await import('stream');
-        const { spawn: spawnFn } = await import('child_process');
-
-        // Add model override to spawn args if specified
-        const acpArgs = [...(spawn.args || [])];
-        if (model) {
-          acpArgs.push('--model', model);
-          this.log(`Auto-implement ACP using model: ${model}`);
-        }
-
-        const child = spawnFn(spawn.command, acpArgs, {
-          cwd: providerDir,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          shell: spawn.shell ?? false,
-          env: { ...process.env, ...(spawn.env || {}) },
-        });
-        this.autoImplProcess = child;
-
-        // stderr → stream to SSE
-        child.stderr?.on('data', (d: Buffer) => {
-          const chunk = d.toString();
-          this.sendAutoImplSSE({ event: 'output', data: { chunk, stream: 'stderr' } });
-        });
-
-        // Setup ACP connection via SDK
-        const webStdin = Writable.toWeb(child.stdin!) as WritableStream<Uint8Array>;
-        const webStdout = Readable.toWeb(child.stdout!) as ReadableStream<Uint8Array>;
-        const stream = ndJsonStream(webStdin, webStdout);
-
-        const connection = new ClientSideConnection((_agent: any) => ({
-          // Auto-approve all tool calls for auto-implement
-          requestPermission: async (params: any) => {
-            const allowOpt = params.options?.find((o: any) => o.kind === 'allow_once') || params.options?.[0];
-            this.sendAutoImplSSE({ event: 'output', data: { chunk: `[ACP] Auto-approved: ${params.toolCall?.title || 'tool call'}\n`, stream: 'stdout' } });
-            return { outcome: { outcome: 'selected', optionId: allowOpt?.optionId || '' } };
-          },
-          sessionUpdate: async (params: any) => {
-            const update = params?.update;
-            if (!update) return;
-            // Stream meaningful output only (skip thought chunks — they're too verbose)
-            switch (update.sessionUpdate) {
-              case 'agent_message_chunk':
-                if (update.content?.text) {
-                  this.sendAutoImplSSE({ event: 'output', data: { chunk: update.content.text, stream: 'stdout' } });
-                }
-                break;
-              case 'tool_call':
-                this.sendAutoImplSSE({ event: 'output', data: { chunk: `\n🔧 [Tool] ${update.title || 'unknown'}\n`, stream: 'stdout' } });
-                break;
-              case 'tool_call_update':
-                if (update.status === 'completed' || update.status === 'failed') {
-                  const label = update.status === 'completed' ? '✅' : '❌';
-                  const out = update.rawOutput ? (typeof update.rawOutput === 'string' ? update.rawOutput : JSON.stringify(update.rawOutput)) : '';
-                  this.sendAutoImplSSE({ event: 'output', data: { chunk: `${label} Result: ${out.slice(0, 1000)}\n`, stream: 'stdout' } });
-                }
-                break;
-              case 'agent_thought_chunk':
-                // Skip — too verbose for auto-implement UI
-                break;
-              default:
-                break;
-            }
-          },
-          // Not used for auto-implement
-          readTextFile: async () => { throw new Error('not supported'); },
-          writeTextFile: async () => { throw new Error('not supported'); },
-          createTerminal: async () => { throw new Error('not supported'); },
-          terminalOutput: async () => { throw new Error('not supported'); },
-          releaseTerminal: async () => { throw new Error('not supported'); },
-          waitForTerminalExit: async () => { throw new Error('not supported'); },
-          killTerminal: async () => { throw new Error('not supported'); },
-        }), stream);
-
-        child.on('exit', (code) => {
-          this.autoImplProcess = null;
-          this.autoImplStatus.running = false;
-          const success = code === 0;
-          this.sendAutoImplSSE({ event: 'complete', data: { success, exitCode: code, functions, message: success ? '✅ ACP Auto-implement complete' : `❌ ACP agent exited (code: ${code})` } });
-          try { this.providerLoader.reload(); } catch { /* ignore */ }
-          try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
-          this.log(`Auto-implement (ACP) ${success ? 'completed' : 'failed'}: ${type} (exit: ${code})`);
-        });
-
-        // ACP handshake flow (async, runs in background)
-        (async () => {
-          try {
-            this.sendAutoImplSSE({ event: 'progress', data: { function: '_init', status: 'initializing', message: 'ACP initialize...' } });
-            await connection.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
-
-            this.sendAutoImplSSE({ event: 'progress', data: { function: '_init', status: 'session', message: 'Creating ACP session...' } });
-            const session = await connection.newSession({ cwd: providerDir, mcpServers: [] });
-            const sessionId = session?.sessionId;
-            if (!sessionId) throw new Error('No sessionId returned from session/new');
-
-            this.sendAutoImplSSE({ event: 'progress', data: { function: '_init', status: 'prompting', message: `Sending prompt (${prompt.length} chars)...` } });
-            await connection.prompt({
-              sessionId,
-              prompt: [{ type: 'text', text: prompt }],
-            });
-
-            this.sendAutoImplSSE({ event: 'progress', data: { function: '_done', status: 'complete', message: '✅ ACP prompt processing complete' } });
-          } catch (e: any) {
-            this.sendAutoImplSSE({ event: 'output', data: { chunk: `[ACP Error] ${e.message}\n`, stream: 'stderr' } });
-            this.log(`Auto-implement ACP error: ${e.message}`);
-            // Process exit will trigger the 'complete' SSE event
-            if (child.exitCode === null) { child.kill('SIGTERM'); }
-          }
-        })();
-
-        this.json(res, 202, {
-          started: true, type, agent: spawn.command, functions, providerDir,
-          message: 'ACP Auto-implement started. Connect to SSE for progress.',
-          sseUrl: `/api/providers/${type}/auto-implement/status`,
-        });
-        return;
-      }
-
-      // ─── CLI Agent: stdin pipe approach ───
-      const command: string = spawn.command;
-      // Strip interactive-only flags for auto-implement (non-interactive mode)
-      const interactiveFlags = ['--yolo', '--interactive', '-i'];
-      const baseArgs: string[] = [...(spawn.args || [])].filter((a: string) => !interactiveFlags.includes(a));
-
-      // 6. Construct the complete shell command per-agent
-      let shellCmd: string;
-
-      if (command === 'claude') {
-        // Claude Code: autonomous agent mode (no --print), skip permissions, prompt via meta-prompt
-        const args = [...baseArgs, '--dangerously-skip-permissions'];
-        if (model) args.push('--model', model);
-        const escapedArgs = args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
-        const metaPrompt = `Read the file at ${promptFile} and follow ALL the instructions. Implement the specific function requested, then test it via CDP curl targeting 127.0.0.1:19280, wait for confirmation of success, and then close. DO NOT start working on other features not listed in the prompt constraint.`;
-        shellCmd = `${command} ${escapedArgs} -p "${metaPrompt}"`;
-      } else if (command === 'gemini') {
-        // Gemini CLI: non-interactive prompt mode
-        // We can't use @file syntax (causes Parts object parsing bug) or $(cat) (arg too long).
-        // Solution: meta-prompt that tells Gemini to read the instructions file itself.
-        const args = [...baseArgs, '-y', '-s', 'false'];
-        if (model) args.push('-m', model);
-        const escapedArgs = args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
-        shellCmd = `${command} ${escapedArgs} -p "Read the file at ${promptFile} and follow ALL the instructions in it exactly. Do not ask questions, just execute."`;
-
-      } else if (command === 'codex') {
-        const args = ['exec', ...baseArgs];
-        if (!args.includes('--dangerously-bypass-approvals-and-sandbox')) {
-          args.push('--dangerously-bypass-approvals-and-sandbox');
-        }
-        if (!args.includes('--skip-git-repo-check')) {
-          args.push('--skip-git-repo-check');
-        }
-        if (model) args.push('--model', model);
-        const escapedArgs = args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
-        const metaPrompt = `Read the file at ${promptFile} and follow ALL instructions strictly. DO NOT spend time exploring the filesystem or other providers. You have full authority to implement ALL required script files and independently test them against 127.0.0.1:19280 via CDP CURL. Upon complete validation of ALL assigned files, print exactly "_PIPELINE_COMPLETE_SIGNAL_" to gracefully close the pipeline. DO NOT WAIT FOR APPROVAL, execute completely autonomously.`;
-        shellCmd = `${command} ${escapedArgs} "${metaPrompt}"`;
-      } else {
-        // Generic fallback: pipe prompt via stdin
-        const escapedArgs = baseArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
-        shellCmd = `cat '${promptFile}' | ${command} ${escapedArgs}`;
-      }
-
-      this.sendAutoImplSSE({ event: 'progress', data: { function: '_init', status: 'spawning', message: `Spawning agent: ${shellCmd.substring(0, 200)}... (prompt: ${prompt.length} chars)` } });
-
-      this.autoImplStatus = { running: true, type, progress: [] };
-      const spawnedAt = Date.now();
-
-      let child: any;
-      let isPty = false;
-      const { spawn: spawnFn } = await import('child_process');
-      
-      try {
-        const pty = require('node-pty');
-        this.log(`Auto-implement spawn (PTY): ${shellCmd}`);
-        const isWin = os.platform() === 'win32';
-        child = pty.spawn(isWin ? 'cmd.exe' : (process.env.SHELL || '/bin/zsh'), [isWin ? '/c' : '-c', shellCmd], {
-          name: 'xterm-256color',
-          cols: 120,
-          rows: 40,
-          cwd: providerDir,
-          env: { ...process.env, ...(spawn.env || {}) },
-        });
-        isPty = true;
-      } catch (err: any) {
-        this.log(`PTY not available, using child_process: ${err.message}`);
-        child = spawnFn('sh', ['-c', shellCmd], {
-          cwd: providerDir,
-          shell: false,
-          timeout: 900000,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env: { 
-            ...process.env, 
-            ...(spawn.env || {}),
-            ...(command === 'gemini' ? { SANDBOX: '1', GEMINI_CLI_NO_RELAUNCH: '1' } : {}),
-          },
-        });
-        child.on('error', (err: Error) => {
-          this.log(`Auto-implement spawn error: ${err.message}`);
-          this.sendAutoImplSSE({ event: 'output', data: { chunk: `[Spawn Error] ${err.message}\n`, stream: 'stderr' } });
-        });
-      }
-
-      this.autoImplProcess = child;
-      let stdout = '';
-      let stderr = '';
-      
-      let approvalPatterns: RegExp[] = [];
-      let approvalKeys: Record<number, string> = { 0: 'y\r' };
-      let approvalBuffer = '';
-      let lastApprovalTime = 0;
-      
-      try {
-        const { normalizeCliProviderForRuntime } = await import('../cli-adapters/provider-cli-adapter.js');
-        const normalized = normalizeCliProviderForRuntime(agentProvider);
-        approvalPatterns = normalized.patterns.approval;
-        approvalKeys = (agentProvider as any)?.approvalKeys || { 0: 'y\r', 1: 'a\r' };
-      } catch (err: any) {
-        this.log(`Failed to load approval patterns: ${err.message}`);
-      }
-
-      const checkAutoApproval = (chunk: string, writeFn: (s: string) => void) => {
-        // Strip ANSI
-        const cleanData = chunk.replace(/\x1B\[\d*[A-HJKSTfG]/g, ' ')
-            .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
-            .replace(/\x1B\][^\x07]*\x07/g, '')
-            .replace(/\x1B\][^\x1B]*\x1B\\/g, '')
-            .replace(/  +/g, ' ');
-            
-        approvalBuffer = (approvalBuffer + cleanData).slice(-1500);
-        
-        // Force exit on completion signal (check cleanData directly to avoid stale buffer echo matches)
-        const elapsed = Date.now() - spawnedAt;
-        if (elapsed > 15000 && cleanData.includes('_PIPELINE_COMPLETE_SIGNAL_')) {
-          this.log(`Agent finished task after ${Math.round(elapsed/1000)}s. Terminating interactive CLI session to unblock pipeline.`);
-          this.sendAutoImplSSE({ event: 'output', data: { chunk: `\n[🤖 ADHDev Pipeline] Completion token detected. Proceeding...\n`, stream: 'stdout' } });
-          approvalBuffer = '';
-          
-          try {
-            (this.autoImplProcess as any).kill('SIGINT');
-          } catch {
-            // ignore
-          }
-          return;
-        }
-        
-        // Use a cooldown to prevent overlapping approval submissions
-        if (Date.now() - lastApprovalTime < 2000) return;
-        
-        if (approvalPatterns.some(p => p.test(approvalBuffer))) {
-          // Use 'Always allow' (1) if available, otherwise 'Allow once' (0), otherwise hard fallback to 'a\r' for newer CLIs
-          const key = approvalKeys[1] || approvalKeys[0] || 'a\r';
-          writeFn(key);
-          this.log(`Auto-Implement auto-approved prompt! Sending: ${JSON.stringify(key)}`);
-          this.sendAutoImplSSE({ event: 'output', data: { chunk: `\n[🤖 ADHDev Auto-Approve] CLI Action Approved\n`, stream: 'stdout' } });
-          approvalBuffer = '';
-          lastApprovalTime = Date.now();
-        }
-      };
-
-      if (isPty) {
-        child.onData((data: string) => {
-          stdout += data;
-          if (data.includes('\x1b[6n')) {
-            child.write('\x1b[12;1R');
-            this.log('Terminal CPR request (\\x1b[6n) intercepted in PTY, responding with dummy coordinates [12;1R]');
-          }
-          checkAutoApproval(data, (s) => child.write(s));
-          this.sendAutoImplSSE({ event: 'output', data: { chunk: data, stream: 'stdout' } });
-        });
-        child.onExit(({ exitCode: code }: { exitCode: number }) => {
-          this.autoImplProcess = null;
-          this.autoImplStatus.running = false;
-          const success = code === 0;
-          this.sendAutoImplSSE({
-            event: 'complete',
-            data: { success, exitCode: code, functions, message: success ? '✅ Auto-implement complete' : `❌ Agent exited (code: ${code})` },
-          });
-          try { this.providerLoader.reload(); } catch { /* ignore */ }
-          try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
-        });
-      } else {
-        child.stdout?.on('data', (d: Buffer) => {
-          const chunk = d.toString();
-          stdout += chunk;
-          if (chunk.includes('\x1b[6n')) child.stdin?.write('\x1b[1;1R');
-          checkAutoApproval(chunk, (s) => child.stdin?.write(s));
-          this.sendAutoImplSSE({ event: 'output', data: { chunk, stream: 'stdout' } });
-        });
-        child.stderr?.on('data', (d: Buffer) => {
-          const chunk = d.toString();
-          stderr += chunk;
-          checkAutoApproval(chunk, (s) => child.stdin?.write(s));
-          this.sendAutoImplSSE({ event: 'output', data: { chunk, stream: 'stderr' } });
-        });
-        child.on('exit', (code: number) => {
-          this.autoImplProcess = null;
-          this.autoImplStatus.running = false;
-          const success = code === 0;
-          this.sendAutoImplSSE({
-            event: 'complete',
-            data: {
-              success,
-              exitCode: code,
-              functions,
-              message: success ? '✅ Auto-implement complete' : `❌ Agent exited (code: ${code})`,
-            },
-          });
-          try { this.providerLoader.reload(); } catch { /* ignore */ }
-          try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
-          this.log(`Auto-implement ${success ? 'completed' : 'failed'}: ${type} (exit: ${code})`);
-        });
-      }
-      this.json(res, 202, {
-        started: true,
-        type,
-        agent: command,
-        functions,
-        providerDir,
-        message: 'Auto-implement started. Connect to SSE for progress.',
-        sseUrl: `/api/providers/${type}/auto-implement/status`,
-      });
-    } catch (e: any) {
-      this.autoImplStatus.running = false;
-      this.json(res, 500, { error: `Auto-implement failed: ${e.message}` });
-    }
+    return handleAutoImplement(this, type, req, res);
   }
 
   private buildAutoImplPrompt(
@@ -2397,21 +1030,51 @@ export class DevServer {
     lines.push(`Provider directory: \`${providerDir}\``);
     lines.push('');
 
-    // ── Existing target files (inline, so no reading needed) ──
-    lines.push('## Current Target Files');
-    lines.push('These are the files you need to EDIT. They contain TODO stubs — replace them with working implementations.');
-    lines.push('');
+    // ── funcToFile mapping (needed early for file classification) ──
+    const funcToFile: Record<string, string> = {
+      readChat: 'read_chat.js', sendMessage: 'send_message.js',
+      resolveAction: 'resolve_action.js', listSessions: 'list_sessions.js',
+      listChats: 'list_chats.js', switchSession: 'switch_session.js',
+      newSession: 'new_session.js', focusEditor: 'focus_editor.js',
+      openPanel: 'open_panel.js', listModels: 'list_models.js',
+      listModes: 'list_modes.js', setModel: 'set_model.js', setMode: 'set_mode.js',
+    };
+    const targetFileNames = new Set(functions.map(fn => funcToFile[fn]).filter(Boolean));
 
+    // ── Existing target files (inline, so no reading needed) ──
     const scriptsDir = path.join(providerDir, 'scripts');
     const latestScriptsDir = this.getLatestScriptVersionDir(scriptsDir);
     if (latestScriptsDir) {
       lines.push(`Scripts version directory: \`${latestScriptsDir}\``);
       lines.push('');
+
+      // Target files: editable
+      lines.push('## ✏️ Target Files (EDIT THESE)');
+      lines.push('These are the ONLY files you are allowed to modify. Replace the TODO stubs with working implementations.');
+      lines.push('');
       for (const file of fs.readdirSync(latestScriptsDir)) {
-        if (file.endsWith('.js')) {
+        if (file.endsWith('.js') && targetFileNames.has(file)) {
           try {
             const content = fs.readFileSync(path.join(latestScriptsDir, file), 'utf-8');
-            lines.push(`### \`${file}\``);
+            lines.push(`### \`${file}\` ✏️ EDIT`);
+            lines.push('```javascript');
+            lines.push(content);
+            lines.push('```');
+            lines.push('');
+          } catch { /* skip */ }
+        }
+      }
+
+      // Non-target files: reference only
+      const refFiles = fs.readdirSync(latestScriptsDir).filter(f => f.endsWith('.js') && !targetFileNames.has(f));
+      if (refFiles.length > 0) {
+        lines.push('## 🔒 Other Scripts (REFERENCE ONLY — DO NOT EDIT)');
+        lines.push('These files are shown for context only. Do NOT modify them under any circumstances.');
+        lines.push('');
+        for (const file of refFiles) {
+          try {
+            const content = fs.readFileSync(path.join(latestScriptsDir, file), 'utf-8');
+            lines.push(`### \`${file}\` 🔒`);
             lines.push('```javascript');
             lines.push(content);
             lines.push('```');
@@ -2431,15 +1094,7 @@ export class DevServer {
       lines.push('');
     }
 
-    // ── Reference implementation ──
-    const funcToFile: Record<string, string> = {
-      readChat: 'read_chat.js', sendMessage: 'send_message.js',
-      resolveAction: 'resolve_action.js', listSessions: 'list_sessions.js',
-      listChats: 'list_chats.js', switchSession: 'switch_session.js',
-      newSession: 'new_session.js', focusEditor: 'focus_editor.js',
-      openPanel: 'open_panel.js', listModels: 'list_models.js',
-      listModes: 'list_modes.js', setModel: 'set_model.js', setMode: 'set_mode.js',
-    };
+    // ── Reference implementation ── (funcToFile already defined above)
 
     if (Object.keys(referenceScripts).length > 0) {
       lines.push(`## Reference Implementation (from ${referenceType || 'antigravity'} provider)`);
@@ -2499,6 +1154,7 @@ export class DevServer {
 
     // ── Rules ──
     lines.push('## Rules');
+    lines.push('0. **🚫 SCOPE CONSTRAINT**: You may ONLY edit files marked ✏️ EDIT above. ALL other files are READ-ONLY. Do NOT modify, rewrite, refactor, or "improve" any file not explicitly marked as editable — even if you notice bugs or improvements. No exceptions.');
     lines.push('1. **Scripts WITHOUT params** → IIFE: `(() => { ... })()`');
     lines.push('2. **Scripts WITH params** → arrow: `(params) => { ... }` — router calls `(${script})(${JSON.stringify(params)})`');
     lines.push('3. If live DOM analysis is included above, use it. Otherwise, discover selectors yourself via CDP before coding.');
@@ -2664,20 +1320,29 @@ export class DevServer {
     lines.push('Provider category: `cli`');
     lines.push('');
 
-    lines.push('## Current Target Files');
-    lines.push('These are the files you need to edit. Replace TODO or heuristic-only logic with working PTY-aware implementations.');
-    lines.push('');
+    const funcToFile: Record<string, string> = {
+      parseOutput: 'parse_output.js',
+      detectStatus: 'detect_status.js',
+      parseApproval: 'parse_approval.js',
+    };
+    const targetFileNames = new Set(functions.map(fn => funcToFile[fn]).filter(Boolean));
 
     const scriptsDir = path.join(providerDir, 'scripts');
     const latestScriptsDir = this.getLatestScriptVersionDir(scriptsDir);
     if (latestScriptsDir) {
       lines.push(`Scripts version directory: \`${latestScriptsDir}\``);
       lines.push('');
+
+      // Target files: editable
+      lines.push('## ✏️ Target Files (EDIT THESE)');
+      lines.push('These are the ONLY files you are allowed to modify. Replace TODO or heuristic-only logic with working PTY-aware implementations.');
+      lines.push('');
       for (const file of fs.readdirSync(latestScriptsDir)) {
         if (!file.endsWith('.js')) continue;
+        if (!targetFileNames.has(file)) continue;
         try {
           const content = fs.readFileSync(path.join(latestScriptsDir, file), 'utf-8');
-          lines.push(`### \`${file}\``);
+          lines.push(`### \`${file}\` ✏️ EDIT`);
           lines.push('```javascript');
           lines.push(content);
           lines.push('```');
@@ -2686,13 +1351,29 @@ export class DevServer {
           // ignore
         }
       }
+
+      // Non-target files: reference only
+      const refFiles = fs.readdirSync(latestScriptsDir).filter(f => f.endsWith('.js') && !targetFileNames.has(f));
+      if (refFiles.length > 0) {
+        lines.push('## 🔒 Other Scripts (REFERENCE ONLY — DO NOT EDIT)');
+        lines.push('These files are shown for context only. Do NOT modify them under any circumstances.');
+        lines.push('');
+        for (const file of refFiles) {
+          try {
+            const content = fs.readFileSync(path.join(latestScriptsDir, file), 'utf-8');
+            lines.push(`### \`${file}\` 🔒`);
+            lines.push('```javascript');
+            lines.push(content);
+            lines.push('```');
+            lines.push('');
+          } catch {
+            // ignore
+          }
+        }
+      }
     }
 
-    const funcToFile: Record<string, string> = {
-      parseOutput: 'parse_output.js',
-      detectStatus: 'detect_status.js',
-      parseApproval: 'parse_approval.js',
-    };
+
 
     if (Object.keys(referenceScripts).length > 0) {
       lines.push(`## Reference Implementation (from ${referenceType || 'another CLI'} provider)`);
@@ -2748,6 +1429,7 @@ export class DevServer {
     lines.push('');
 
     lines.push('## Rules');
+    lines.push('0. **🚫 SCOPE CONSTRAINT**: You may ONLY edit files marked ✏️ EDIT above. ALL other files are READ-ONLY. Do NOT modify, rewrite, refactor, or "improve" any file not explicitly marked as editable — even if you notice bugs or improvements. No exceptions.');
     lines.push('1. These scripts run in Node.js CommonJS, not in the browser. Do NOT use DOM APIs.');
     lines.push('2. Prefer `screenText` for current visible UI state. That is the PTY equivalent of parsing the current IDE DOM.');
     lines.push('3. Use `messages` as prior transcript state so redraws do not duplicate old turns on every parse.');
@@ -2756,7 +1438,7 @@ export class DevServer {
     lines.push('6. `parseApproval` should understand the live approval area and return clean button labels.');
     lines.push('7. Use `rawBuffer` only when ANSI/control-sequence artifacts matter. Do not depend on raw escape noise unless necessary.');
     lines.push('8. Keep exports compatible with the existing `scripts.js` router (`module.exports = function ...`).');
-    lines.push('9. Do not rewrite unrelated provider config. Only touch the scripts needed for this task unless a tiny supporting change is required.');
+    lines.push('9. Do NOT modify ANY file not explicitly marked ✏️ EDIT above. No exceptions — no "tiny supporting changes" to other files.');
     lines.push('10. When the verification API returns `instanceId`, keep using that exact instance for follow-up `send`, `resolve`, `raw`, and `stop` calls. Do not assume type-only routing is safe if multiple sessions exist.');
     lines.push('11. Do NOT repeatedly dump the same target files. Read the target scripts once, reproduce the bug, then move directly to patching.');
     lines.push('12. If the user instructions include concrete screen text, raw PTY snippets, or a specific repro, treat that as the primary acceptance criteria.');
@@ -2845,40 +1527,14 @@ export class DevServer {
   }
 
   private handleAutoImplSSE(type: string, req: http.IncomingMessage, res: http.ServerResponse): void {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-    });
-    res.write(`data: ${JSON.stringify({ type: 'connected', running: this.autoImplStatus.running, providerType: type })}\n\n`);
-
-    // Replay existing progress
-    for (const p of this.autoImplStatus.progress) {
-      res.write(`event: ${p.event}\ndata: ${JSON.stringify(p.data)}\n\n`);
-    }
-
-    this.autoImplSSEClients.push(res);
-    req.on('close', () => {
-      this.autoImplSSEClients = this.autoImplSSEClients.filter(c => c !== res);
-    });
+    handleAutoImplSSE(this, type, req, res);
   }
 
-  private handleAutoImplCancel(_type: string, _req: http.IncomingMessage, res: http.ServerResponse): void {
-    if (this.autoImplProcess) {
-      this.autoImplProcess.kill('SIGTERM');
-      setTimeout(() => { if (this.autoImplProcess) this.autoImplProcess.kill('SIGKILL'); }, 3000);
-      this.sendAutoImplSSE({ event: 'complete', data: { success: false, exitCode: -1, message: '⛔ Aborted by user' } });
-      this.autoImplProcess = null;
-      this.autoImplStatus.running = false;
-      this.json(res, 200, { cancelled: true });
-    } else {
-      this.autoImplStatus.running = false;
-      this.json(res, 200, { cancelled: false, message: 'No running process' });
-    }
+  private async handleAutoImplCancel(_type: string, _req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    return handleAutoImplCancel(this, _type, _req, res);
   }
 
-  private sendAutoImplSSE(msg: { event: string; data: any }): void {
+  public sendAutoImplSSE(msg: { event: string; data: any }): void {
     this.autoImplStatus.progress.push(msg);
     const payload = `event: ${msg.event}\ndata: ${JSON.stringify(msg.data)}\n\n`;
     for (const client of this.autoImplSSEClients) {
@@ -2889,7 +1545,7 @@ export class DevServer {
   /** Get CDP manager — matching IDE when ideType specified, first connected one otherwise.
    *  DevServer is a debugging tool so first-connected fallback is acceptable,
    *  but callers should pass ideType when possible. */
-  private getCdp(ideType?: string): DaemonCdpManager | null {
+  public getCdp(ideType?: string): DaemonCdpManager | null {
     if (ideType) {
       const cdp = this.cdpManagers.get(ideType);
       if (cdp?.isConnected) return cdp;
@@ -2907,12 +1563,12 @@ export class DevServer {
     return null;
   }
 
-  private json(res: http.ServerResponse, status: number, data: any): void {
+  public json(res: http.ServerResponse, status: number, data: any): void {
     res.writeHead(status, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(data, null, 2));
   }
 
-  private async readBody(req: http.IncomingMessage): Promise<any> {
+  public async readBody(req: http.IncomingMessage): Promise<any> {
     return new Promise((resolve) => {
       let body = '';
       req.on('data', (chunk) => body += chunk);
@@ -2930,144 +1586,31 @@ export class DevServer {
 
   /** GET /api/cli/status — list all running CLI/ACP instances with state */
   private async handleCliStatus(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    if (!this.instanceManager) {
-      this.json(res, 503, { error: 'InstanceManager not available (daemon not fully initialized)' });
-      return;
-    }
-    const allStates = this.instanceManager.collectAllStates();
-    const cliStates = allStates.filter(s => s.category === 'cli' || s.category === 'acp');
-    const result = cliStates.map(s => ({
-      instanceId: s.instanceId,
-      type: s.type,
-      name: s.name,
-      category: s.category,
-      status: s.status,
-      mode: s.mode,
-      workspace: s.workspace,
-      messageCount: s.activeChat?.messages?.length || 0,
-      lastMessage: s.activeChat?.messages?.slice(-1)[0] || null,
-      activeModal: s.activeChat?.activeModal || null,
-      pendingEvents: s.pendingEvents || [],
-      currentModel: s.currentModel,
-      settings: s.settings,
-    }));
-    this.json(res, 200, { instances: result, count: result.length });
+    return handleCliStatus(this, _req, res);
   }
 
-  private findCliTarget(type?: string, instanceId?: string): any | null {
-    if (!this.instanceManager) return null;
-    const cliStates = this.instanceManager
-      .collectAllStates()
-      .filter(s => s.category === 'cli' || s.category === 'acp');
-    if (instanceId) return cliStates.find(s => s.instanceId === instanceId) || null;
-    if (!type) return cliStates[cliStates.length - 1] || null;
-    const matches = cliStates.filter(s => s.type === type);
-    return matches[matches.length - 1] || null;
-  }
 
   /** POST /api/cli/launch — launch a CLI agent { type, workingDir?, args? } */
   private async handleCliLaunch(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    if (!this.cliManager) {
-      this.json(res, 503, { error: 'CliManager not available' });
-      return;
-    }
-    const body = await this.readBody(req);
-    const { type, workingDir, args } = body;
-    if (!type) {
-      this.json(res, 400, { error: 'type required (e.g. claude-cli, gemini-cli)' });
-      return;
-    }
-    try {
-      await this.cliManager.startSession(type, workingDir || process.cwd(), args || []);
-      this.json(res, 200, { launched: true, type, workspace: workingDir || process.cwd() });
-    } catch (e: any) {
-      this.json(res, 500, { error: `Launch failed: ${e.message}` });
-    }
+    return handleCliLaunch(this, req, res);
   }
 
   /** POST /api/cli/send — send message to a running CLI { type, text } */
   private async handleCliSend(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    if (!this.instanceManager) {
-      this.json(res, 503, { error: 'InstanceManager not available' });
-      return;
-    }
-    const body = await this.readBody(req);
-    const { type, text, instanceId } = body;
-    if (!text) {
-      this.json(res, 400, { error: 'text required' });
-      return;
-    }
-
-    const target = this.findCliTarget(type, instanceId);
-    if (!target) {
-      this.json(res, 404, { error: `No running instance found for: ${type || instanceId}` });
-      return;
-    }
-
-    try {
-      this.instanceManager.sendEvent(target.instanceId, 'send_message', { text });
-      this.json(res, 200, { sent: true, type: target.type, instanceId: target.instanceId });
-    } catch (e: any) {
-      this.json(res, 500, { error: `Send failed: ${e.message}` });
-    }
+    return handleCliSend(this, req, res);
   }
 
   /** POST /api/cli/stop — stop a running CLI { type } */
   private async handleCliStop(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    if (!this.instanceManager) {
-      this.json(res, 503, { error: 'InstanceManager not available' });
-      return;
-    }
-    const body = await this.readBody(req);
-    const { type, instanceId } = body;
-
-    const target = this.findCliTarget(type, instanceId);
-    if (!target) {
-      this.json(res, 404, { error: `No running instance found for: ${type || instanceId}` });
-      return;
-    }
-
-    try {
-      this.instanceManager.removeInstance(target.instanceId);
-      this.json(res, 200, { stopped: true, type: target.type, instanceId: target.instanceId });
-    } catch (e: any) {
-      this.json(res, 500, { error: `Stop failed: ${e.message}` });
-    }
+    return handleCliStop(this, req, res);
   }
 
   /** GET /api/cli/events — SSE stream of CLI status events */
   private handleCliSSE(_req: http.IncomingMessage, res: http.ServerResponse): void {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-    });
-    res.write('data: {"type":"connected"}\n\n');
-    this.cliSSEClients.push(res);
-
-    // Register event listener if first client + instanceManager available
-    if (this.cliSSEClients.length === 1 && this.instanceManager) {
-      this.instanceManager.onEvent((event) => {
-        this.sendCliSSE(event);
-      });
-    }
-
-    // Send current state snapshot immediately
-    if (this.instanceManager) {
-      const allStates = this.instanceManager.collectAllStates();
-      const cliStates = allStates.filter(s => s.category === 'cli' || s.category === 'acp');
-      for (const s of cliStates) {
-        this.sendCliSSE({ event: 'snapshot', providerType: s.type, status: s.status, instanceId: s.instanceId });
-      }
-    }
-
-    _req.on('close', () => {
-      this.cliSSEClients = this.cliSSEClients.filter(c => c !== res);
-    });
+    handleCliSSE(this, this.cliSSEClients, _req, res);
   }
 
-  private sendCliSSE(data: any): void {
+  public sendCliSSE(data: any): void {
     const msg = `data: ${JSON.stringify({ ...data, timestamp: Date.now() })}\n\n`;
     for (const client of this.cliSSEClients) {
       try { client.write(msg); } catch { /* ignore */ }
@@ -3076,136 +1619,16 @@ export class DevServer {
 
   /** GET /api/cli/debug/:type — full internal debug state of a CLI adapter */
   private async handleCliDebug(type: string, _req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    if (!this.instanceManager) {
-      this.json(res, 503, { error: 'InstanceManager not available' });
-      return;
-    }
-
-    const target = this.findCliTarget(type);
-    if (!target) {
-      const allStates = this.instanceManager.collectAllStates();
-      this.json(res, 404, { error: `No running instance for: ${type}`, available: allStates.filter(s => s.category === 'cli' || s.category === 'acp').map(s => s.type) });
-      return;
-    }
-
-    // Get the ProviderInstance and access adapter debug state
-    const instance = this.instanceManager.getInstance(target.instanceId) as any;
-    if (!instance) {
-      this.json(res, 404, { error: `Instance not found: ${target.instanceId}` });
-      return;
-    }
-
-    try {
-      const adapter = instance.getAdapter?.() || instance.adapter;
-      if (adapter && typeof adapter.getDebugState === 'function') {
-        const debugState = adapter.getDebugState();
-        this.json(res, 200, {
-          instanceId: target.instanceId,
-          providerState: {
-            type: target.type,
-            name: target.name,
-            status: target.status,
-            mode: 'mode' in target ? target.mode : undefined,
-          },
-          debug: debugState,
-        });
-      } else {
-        // Fallback: return what we can from the state
-        this.json(res, 200, {
-          instanceId: target.instanceId,
-          providerState: target,
-          debug: null,
-          message: 'No debug state available (adapter.getDebugState not found)',
-        });
-      }
-    } catch (e: any) {
-      this.json(res, 500, { error: `Debug state failed: ${e.message}` });
-    }
+    return handleCliDebug(this, type, _req, res);
   }
 
   /** POST /api/cli/resolve — resolve an approval modal { type, buttonIndex } */
   private async handleCliResolve(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { type, buttonIndex, instanceId } = body;
-    if (buttonIndex === undefined || buttonIndex === null) {
-      this.json(res, 400, { error: 'buttonIndex required (0=Yes, 1=Always, 2=Deny)' });
-      return;
-    }
-
-    if (!this.cliManager) {
-      this.json(res, 503, { error: 'CliManager not available' });
-      return;
-    }
-    if (!this.instanceManager) {
-      this.json(res, 503, { error: 'InstanceManager not available' });
-      return;
-    }
-
-    const target = this.findCliTarget(type, instanceId);
-    if (!target) {
-      this.json(res, 404, { error: `No running adapter for: ${type || instanceId}` });
-      return;
-    }
-
-    const instance = this.instanceManager.getInstance(target.instanceId) as any;
-    const adapter = instance?.getAdapter?.() || instance?.adapter;
-    if (!adapter) {
-      this.json(res, 404, { error: `Adapter not found for instance: ${target.instanceId}` });
-      return;
-    }
-
-    try {
-      if (typeof adapter.resolveModal === 'function') {
-        adapter.resolveModal(buttonIndex);
-        this.json(res, 200, { resolved: true, type: target.type, instanceId: target.instanceId, buttonIndex });
-      } else {
-        this.json(res, 400, { error: 'resolveModal not available on this adapter' });
-      }
-    } catch (e: any) {
-      this.json(res, 500, { error: `Resolve failed: ${e.message}` });
-    }
+    return handleCliResolve(this, req, res);
   }
 
   /** POST /api/cli/raw — send raw keystrokes to PTY { type, keys } */
   private async handleCliRaw(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readBody(req);
-    const { type, keys, instanceId } = body;
-    if (!keys) {
-      this.json(res, 400, { error: 'keys required (raw string to send to PTY)' });
-      return;
-    }
-
-    if (!this.cliManager) {
-      this.json(res, 503, { error: 'CliManager not available' });
-      return;
-    }
-    if (!this.instanceManager) {
-      this.json(res, 503, { error: 'InstanceManager not available' });
-      return;
-    }
-
-    const target = this.findCliTarget(type, instanceId);
-    if (!target) {
-      this.json(res, 404, { error: `No running adapter for: ${type || instanceId}` });
-      return;
-    }
-
-    const instance = this.instanceManager.getInstance(target.instanceId) as any;
-    const adapter = instance?.getAdapter?.() || instance?.adapter;
-    if (!adapter) {
-      this.json(res, 404, { error: `Adapter not found for instance: ${target.instanceId}` });
-      return;
-    }
-
-    try {
-      if (typeof adapter.writeRaw === 'function') {
-        adapter.writeRaw(keys);
-        this.json(res, 200, { sent: true, type: target.type, instanceId: target.instanceId, keysLength: keys.length });
-      } else {
-        this.json(res, 400, { error: 'writeRaw not available on this adapter' });
-      }
-    } catch (e: any) {
-      this.json(res, 500, { error: `Raw send failed: ${e.message}` });
-    }
+    return handleCliRaw(this, req, res);
   }
 }

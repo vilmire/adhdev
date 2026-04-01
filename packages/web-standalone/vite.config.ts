@@ -13,8 +13,13 @@ export default defineConfig({
         rollupOptions: {
             output: {
                 manualChunks(id) {
+                    if (
+                        id.includes('packages/terminal-render-web') ||
+                        id.includes('ghostty-web') ||
+                        id.includes('@xterm') ||
+                        id.includes('xterm')
+                    ) return 'terminal'
                     if (!id.includes('node_modules')) return
-                    if (id.includes('@xterm') || id.includes('xterm')) return 'terminal'
                     return 'vendor'
                 },
             },

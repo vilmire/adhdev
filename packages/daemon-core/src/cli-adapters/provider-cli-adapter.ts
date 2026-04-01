@@ -20,6 +20,13 @@ import { execSync } from 'child_process';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import { LOG } from '../logging/logger.js';
 import { TerminalScreen } from './terminal-screen.js';
+import type { ProviderResumeCapability } from '../providers/contracts.js';
+import {
+    NodePtyTransportFactory,
+    type PtyRuntimeMetadata,
+    type PtyRuntimeTransport,
+    type PtyTransportFactory,
+} from './pty-transport.js';
 
 let pty: any;
 try {
@@ -71,7 +78,7 @@ export interface CliScripts {
     /** Lightweight status detection (high-frequency polling) → AgentStatus string */
     detectStatus?: (input: { tail: string; screenText?: string; rawBuffer?: string }) => string | null;
     /** Parse approval modal from PTY output → ModalInfo | null */
-    parseApproval?: (input: { buffer: string; rawBuffer?: string; tail: string }) => { message: string; buttons: string[] } | null;
+    parseApproval?: (input: { buffer: string; screenText?: string; rawBuffer?: string; tail: string }) => { message: string; buttons: string[] } | null;
     /** Produce a cli-specific prompt from a dashboard action payload */
     resolveAction?: (data: any) => string;
     /** Custom scripts */
@@ -128,6 +135,7 @@ export interface CliProviderModule {
  /** Output settle debounce before evaluating status (default 300ms) */
         outputSettle?: number;
     };
+    resume?: ProviderResumeCapability;
 }
 
 // ─── Utility Functions ──────────────────────────────
@@ -354,7 +362,8 @@ export class ProviderCliAdapter implements CliAdapter {
     public workingDir: string;
 
     private provider: CliProviderModule;
-    private ptyProcess: any = null;
+    private ptyProcess: PtyRuntimeTransport | null = null;
+    private transportFactory: PtyTransportFactory;
     private messages: CliChatMessage[] = [];
     private committedMessages: CliChatMessage[] = [];
     private structuredMessages: CliChatMessage[] = [];
@@ -478,8 +487,14 @@ export class ProviderCliAdapter implements CliAdapter {
     private readonly submitStrategy: 'wait_for_echo' | 'immediate';
     private static readonly SCRIPT_STATUS_DEBOUNCE_MS = 1000;
 
-    constructor(provider: CliProviderModule, workingDir: string, private extraArgs: string[] = []) {
+    constructor(
+        provider: CliProviderModule,
+        workingDir: string,
+        private extraArgs: string[] = [],
+        transportFactory: PtyTransportFactory = new NodePtyTransportFactory(),
+    ) {
         this.provider = provider;
+        this.transportFactory = transportFactory;
         this.cliType = provider.type;
         this.cliName = provider.name;
         this.workingDir = workingDir.startsWith('~')
@@ -554,7 +569,6 @@ export class ProviderCliAdapter implements CliAdapter {
 
     async spawn(): Promise<void> {
         if (this.ptyProcess) return;
-        if (!pty) throw new Error('node-pty is not installed');
 
         const { spawn: spawnConfig } = this.provider;
         const binaryPath = findBinary(spawnConfig.command);
@@ -586,7 +600,6 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         const ptyOpts = {
-            name: 'xterm-256color',
             cols: 120,
             rows: 40,
             cwd: this.workingDir,
@@ -597,7 +610,7 @@ export class ProviderCliAdapter implements CliAdapter {
         };
 
         try {
-            this.ptyProcess = pty.spawn(shellCmd, shellArgs, ptyOpts);
+            this.ptyProcess = this.transportFactory.spawn(shellCmd, shellArgs, ptyOpts);
         } catch (err: any) {
             const msg = err?.message || String(err);
             if (!isWin && !useShell && /posix_spawn|spawn/i.test(msg)) {
@@ -605,7 +618,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 shellCmd = process.env.SHELL || '/bin/zsh';
                 const fullCmd = [binaryPath, ...allArgs].map(shSingleQuote).join(' ');
                 shellArgs = ['-l', '-c', fullCmd];
-                this.ptyProcess = pty.spawn(shellCmd, shellArgs, ptyOpts);
+                this.ptyProcess = this.transportFactory.spawn(shellCmd, shellArgs, ptyOpts);
             } else {
                 throw err;
             }
@@ -659,6 +672,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.terminalHistory = '';
         this.currentTurnScope = null;
         this.ready = false;
+        await this.ptyProcess.ready;
         this.setStatus('idle', 'pty_ready');
         this.onStatusChange?.();
     }
@@ -766,6 +780,17 @@ export class ProviderCliAdapter implements CliAdapter {
         }, 60000);
     }
 
+    private looksLikeVisibleIdlePrompt(screenText: string): boolean {
+        const text = String(screenText || '');
+        if (!text.trim()) return false;
+        return /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(text)
+            || /⏎\s+send/i.test(text)
+            || /\?\s*for\s*shortcuts/i.test(text)
+            || /Type your message(?:\s+or\s+@path\/to\/file)?/i.test(text)
+            || /workspace\s*\(\/directory\)/i.test(text)
+            || /for\s*shortcuts/i.test(text);
+    }
+
     private evaluateSettled(): void {
         const now = Date.now();
         if (this.submitPendingUntil > now || this.responseSettleIgnoreUntil > now) {
@@ -779,6 +804,7 @@ export class ProviderCliAdapter implements CliAdapter {
             return;
         }
         const tail = this.settledBuffer;
+        const screenText = this.terminalScreen.getText() || '';
         const modal = this.runParseApproval(tail);
         const rawScriptStatus = this.runDetectStatus(tail);
         // detectStatus is the sole authority for status. parseApproval only enriches modal info.
@@ -827,6 +853,24 @@ export class ProviderCliAdapter implements CliAdapter {
 
         if (scriptStatus === 'waiting_approval') {
             const inCooldown = this.lastApprovalResolvedAt && (Date.now() - this.lastApprovalResolvedAt) < this.timeouts.approvalCooldown;
+            const visibleIdlePrompt = this.looksLikeVisibleIdlePrompt(screenText);
+            if ((inCooldown || visibleIdlePrompt) && !modal) {
+                if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
+                this.activeModal = null;
+                if (this.isWaitingForResponse) {
+                    this.setStatus('generating', inCooldown ? 'approval_cooldown_ignore' : 'approval_prompt_gone');
+                    if (this.idleTimeout) clearTimeout(this.idleTimeout);
+                    this.idleTimeout = setTimeout(() => {
+                        if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
+                            this.finishResponse();
+                        }
+                    }, this.timeouts.generatingIdle);
+                } else {
+                    this.setStatus('idle', inCooldown ? 'approval_cooldown_ignore' : 'approval_prompt_gone');
+                }
+                this.onStatusChange?.();
+                return;
+            }
             if (!inCooldown) {
                 this.isWaitingForResponse = true;
                 this.setStatus('waiting_approval', 'script_detect');
@@ -842,13 +886,13 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         if (scriptStatus === 'generating') {
-            const screenText = this.terminalScreen.getText() || this.accumulatedBuffer;
+            const effectiveScreenText = screenText || this.accumulatedBuffer;
             const noActiveTurn = !this.currentTurnScope;
-            const looksIdleChrome = /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(screenText)
-                || (/accept edits on/i.test(screenText)
+            const looksIdleChrome = /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(effectiveScreenText)
+                || (/accept edits on/i.test(effectiveScreenText)
                     && (/Update available!/i.test(screenText)
                         || /\/effort/i.test(screenText)
-                        || /^.*➜\s+\S+/m.test(screenText)));
+                        || /^.*➜\s+\S+/m.test(effectiveScreenText)));
             if (prevStatus === 'idle' && !this.isWaitingForResponse && noActiveTurn && !modal && looksIdleChrome) {
                 return;
             }
@@ -986,6 +1030,7 @@ export class ProviderCliAdapter implements CliAdapter {
         try {
             return this.cliScripts.parseApproval({
                 buffer: this.terminalScreen.getText() || this.accumulatedBuffer,
+                screenText: this.terminalScreen.getText(),
                 rawBuffer: this.accumulatedRawBuffer,
                 tail,
             });
@@ -1203,7 +1248,74 @@ export class ProviderCliAdapter implements CliAdapter {
         return this.responseBuffer;
     }
 
+    getRuntimeMetadata(): PtyRuntimeMetadata | null {
+        if (!this.ptyProcess || typeof this.ptyProcess.getMetadata !== 'function') return null;
+        return this.ptyProcess.getMetadata();
+    }
+
     cancel(): void { this.shutdown(); }
+
+    async saveAndStop(): Promise<void> {
+        if (!this.ptyProcess) return;
+        const resume = this.provider.resume;
+        if (!resume?.supported) {
+            this.shutdown();
+            return;
+        }
+
+        const stopStrategy = resume.stopStrategy || 'command';
+        const stopCommand = typeof resume.stopCommand === 'string' ? resume.stopCommand.trim() : '';
+        const shutdownGraceMs = Math.max(
+            this.timeouts.shutdownGrace,
+            typeof resume.shutdownGraceMs === 'number' ? resume.shutdownGraceMs : 3000,
+        );
+        const wasProcessing = this.currentStatus === 'generating' || this.currentStatus === 'waiting_approval';
+
+        try {
+            if (wasProcessing) {
+                this.ptyProcess.write('\x03');
+            }
+            if (stopStrategy === 'command' && stopCommand) {
+                const writeCommand = () => {
+                    if (!this.ptyProcess) return;
+                    const payload = stopCommand.endsWith('\r') || stopCommand.endsWith('\n')
+                        ? stopCommand
+                        : `${stopCommand}${this.sendKey}`;
+                    this.ptyProcess.write(payload);
+                };
+                if (wasProcessing) setTimeout(writeCommand, 250);
+                else writeCommand();
+            } else {
+                this.ptyProcess.write('\x03');
+            }
+        } catch (error: any) {
+            LOG.warn('CLI', `[${this.cliType}] saveAndStop signal failed: ${error?.message || error}`);
+        }
+
+        const stopped = await this.waitForStopped(shutdownGraceMs);
+        if (!stopped) {
+            LOG.warn('CLI', `[${this.cliType}] graceful stop timed out, forcing shutdown`);
+            this.shutdown();
+            await this.waitForStopped(this.timeouts.shutdownGrace + 500);
+        }
+    }
+
+    private waitForStopped(timeoutMs: number): Promise<boolean> {
+        return new Promise((resolve) => {
+            const startedAt = Date.now();
+            const timer = setInterval(() => {
+                if (!this.ptyProcess || this.currentStatus === 'stopped') {
+                    clearInterval(timer);
+                    resolve(true);
+                    return;
+                }
+                if (Date.now() - startedAt >= timeoutMs) {
+                    clearInterval(timer);
+                    resolve(false);
+                }
+            }, 100);
+        });
+    }
 
     shutdown(): void {
         if (this.settleTimer) { clearTimeout(this.settleTimer); this.settleTimer = null; }
@@ -1227,6 +1339,30 @@ export class ProviderCliAdapter implements CliAdapter {
         }
     }
 
+    detach(): void {
+        if (this.settleTimer) { clearTimeout(this.settleTimer); this.settleTimer = null; }
+        if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
+        if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
+        if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
+        this.pendingOutputParseBuffer = '';
+        if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
+        this.ptyOutputBuffer = '';
+        if (this.ptyProcess) {
+            try {
+                if (typeof this.ptyProcess.detach === 'function') {
+                    this.ptyProcess.detach();
+                } else {
+                    this.ptyProcess.kill();
+                }
+            } catch { /* noop */ }
+            this.ptyProcess = null;
+        }
+        this.ready = false;
+        this.startupParseGate = false;
+        this.spawnAt = 0;
+        this.onStatusChange?.();
+    }
+
     clearHistory(): void {
         this.committedMessages = [];
         this.syncMessageViews();
@@ -1241,6 +1377,7 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
         this.ptyOutputBuffer = '';
         this.terminalScreen.reset();
+        this.ptyProcess?.clearBuffer?.();
         this.onStatusChange?.();
     }
 

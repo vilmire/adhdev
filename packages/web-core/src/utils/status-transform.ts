@@ -133,6 +133,7 @@ export function statusPayloadToEntries(
 
     // ─── 3. CLI entries ────────────────────────────────
     for (const session of cliSessions) {
+        const runtime = (session as any).runtime
         entries.push({
             id: `${daemonId}:cli:${session.id}`,
             sessionId: session.id,
@@ -150,6 +151,12 @@ export function statusPayloadToEntries(
             mode: 'terminal',
             workspace: session.workspace || '',
             activeChat: session.activeChat,
+            resume: (session as any).resume,
+            runtimeKey: (session as any).runtimeKey ?? runtime?.runtimeKey,
+            runtimeDisplayName: (session as any).runtimeDisplayName ?? runtime?.displayName,
+            runtimeWorkspaceLabel: (session as any).runtimeWorkspaceLabel ?? runtime?.workspaceLabel,
+            runtimeWriteOwner: (session as any).runtimeWriteOwner ?? runtime?.writeOwner ?? null,
+            runtimeAttachedClients: (session as any).runtimeAttachedClients ?? runtime?.attachedClients ?? [],
             agentStreams: [{
                 sessionId: session.id,
                 instanceId: session.id,
@@ -171,6 +178,7 @@ export function statusPayloadToEntries(
 
     // ─── 4. ACP entries ────────────────────────────────
     for (const session of acpSessions) {
+        const runtime = (session as any).runtime
         entries.push({
             id: `${daemonId}:acp:${session.id}`,
             sessionId: session.id,
@@ -188,6 +196,11 @@ export function statusPayloadToEntries(
             mode: 'chat',
             workspace: session.workspace || '',
             activeChat: session.activeChat,
+            runtimeKey: (session as any).runtimeKey ?? runtime?.runtimeKey,
+            runtimeDisplayName: (session as any).runtimeDisplayName ?? runtime?.displayName,
+            runtimeWorkspaceLabel: (session as any).runtimeWorkspaceLabel ?? runtime?.workspaceLabel,
+            runtimeWriteOwner: (session as any).runtimeWriteOwner ?? runtime?.writeOwner ?? null,
+            runtimeAttachedClients: (session as any).runtimeAttachedClients ?? runtime?.attachedClients ?? [],
             currentModel: session.currentModel,
             currentPlan: session.currentPlan,
             acpConfigOptions: session.acpConfigOptions,

@@ -16,6 +16,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
+import { useHiddenTabs } from '../hooks/useHiddenTabs'
 import type { DaemonData } from '../types'
 import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel } from '../utils/daemon-utils'
 import { IconBarChart, IconMonitor, IconPlug, IconBot, IconSettings, IconClipboard } from '../components/Icons'
@@ -44,6 +45,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const daemonCtx = useDaemons() as any
     const allIdes: DaemonData[] = daemonCtx.ides || []
     const initialLoaded: boolean = daemonCtx.initialLoaded ?? true
+    const { isHidden, toggleTab } = useHiddenTabs()
     const machineEntry = allIdes.find(i => i.id === machineId && (i as any).daemonMode)
     const [activeTab, setActiveTab] = useState<TabId>('overview')
     const logsEndRef = useRef<HTMLDivElement>(null)
@@ -273,6 +275,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                         cliSessions={cliSessions}
                         acpSessions={acpSessions}
                         actions={actions}
+                        isDashboardHidden={isHidden}
+                        onToggleDashboardVisibility={toggleTab}
                     />
                 )}
 
@@ -285,6 +289,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                         managedEntries={ideSessions}
                         getIcon={getIcon}
                         actions={actions}
+                        isDashboardHidden={isHidden}
+                        onToggleDashboardVisibility={toggleTab}
                         sendDaemonCommand={sendDaemonCommand}
                     />
                 )}
@@ -298,6 +304,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                         managedEntries={cliSessions}
                         getIcon={getIcon}
                         actions={actions}
+                        isDashboardHidden={isHidden}
+                        onToggleDashboardVisibility={toggleTab}
                     />
                 )}
 
@@ -310,6 +318,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                         managedEntries={acpSessions}
                         getIcon={getIcon}
                         actions={actions}
+                        isDashboardHidden={isHidden}
+                        onToggleDashboardVisibility={toggleTab}
                     />
                 )}
 

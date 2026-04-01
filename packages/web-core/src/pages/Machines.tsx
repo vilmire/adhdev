@@ -4,7 +4,7 @@ import { useDaemons } from '../compat'
 import {
     buildProviderMaps, PLATFORM_ICONS,
     formatUptime, formatBytes,
-    isAgentActive, groupByMachine,
+    isAgentActive, groupByMachine, getWorkspaceDisplayLabel,
 } from '../utils/daemon-utils'
 import ProgressBar from '../components/ProgressBar'
 import ConnectionBadge from '../components/ConnectionBadge'
@@ -99,7 +99,7 @@ export default function MachinesPage() {
                     name: agentName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: ide.type,
                     targetId: activeStream?.sessionId || ide.sessionId || ide.id, isCli: false,
-                    workspace: ide.workspace || '',
+                    workspace: getWorkspaceDisplayLabel(ide.workspace || ''),
                 })
             }
         }
@@ -109,7 +109,7 @@ export default function MachinesPage() {
                     name: cli.cliName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: cli.cliType,
                     targetId: cli.sessionId || cli.id, isCli: true,
-                    workspace: cli.workspace?.split('/').pop() || '',
+                    workspace: getWorkspaceDisplayLabel(cli.workspace || ''),
                 })
             }
         }
@@ -119,7 +119,7 @@ export default function MachinesPage() {
                     name: acp.acpName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: acp.acpType,
                     targetId: acp.sessionId || acp.id, isCli: false,
-                    workspace: acp.workspace?.split('/').pop() || '',
+                    workspace: getWorkspaceDisplayLabel(acp.workspace || ''),
                 })
             }
         }
@@ -319,7 +319,7 @@ export default function MachinesPage() {
                                                                 name={ide.name}
                                                                 status={statusText}
                                                                 statusTone={statusTone}
-                                                                workspace={ide.workspace}
+                                                                workspace={getWorkspaceDisplayLabel(ide.workspace)}
                                                                 isActive={active}
                                                                 isHidden={isHidden(ide.id)}
                                                                 onToggleVisibility={() => toggleTab(ide.id)}
@@ -371,7 +371,7 @@ export default function MachinesPage() {
                                                             name={cli.cliName}
                                                             status={active ? 'generating' : normalizeManagedStatus(cli.status)}
                                                             statusTone={statusTone}
-                                                            workspace={cli.workspace?.split('/').pop()}
+                                                            workspace={getWorkspaceDisplayLabel(cli.workspace)}
                                                             isActive={!!active}
                                                             isHidden={isHidden(cli.id)}
                                                             onToggleVisibility={() => toggleTab(cli.id)}
@@ -402,7 +402,7 @@ export default function MachinesPage() {
                                                             name={acp.acpName}
                                                             status={active ? 'generating' : normalizeManagedStatus(acp.status)}
                                                             statusTone={statusTone}
-                                                            workspace={acp.workspace?.split('/').pop()}
+                                                            workspace={getWorkspaceDisplayLabel(acp.workspace)}
                                                             isActive={!!active}
                                                             isHidden={isHidden(acp.id)}
                                                             onToggleVisibility={() => toggleTab(acp.id)}

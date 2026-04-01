@@ -12,8 +12,10 @@ export interface IdeSessionEntry {
 }
 
 export interface CliSessionEntry {
-    id: string; type: string; cliName: string; status: string
+    id: string; sessionId?: string; type: string; cliName: string; status: string
     workspace: string; activeChat: any; daemonId: string
+    runtimeKey?: string; runtimeDisplayName?: string; runtimeWorkspaceLabel?: string
+    runtimeWriteOwner?: { clientId: string; ownerType: 'agent' | 'user' } | null
 }
 
 export interface AcpSessionEntry {

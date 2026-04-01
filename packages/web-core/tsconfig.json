@@ -9,6 +9,12 @@
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "moduleDetection": "force",
+    "baseUrl": ".",
+    "paths": {
+      "@adhdev/daemon-core/status/normalize": [
+        "../daemon-core/dist/status/normalize.d.ts"
+      ]
+    },
     "composite": true,
     "emitDeclarationOnly": true,
     "jsx": "react-jsx",

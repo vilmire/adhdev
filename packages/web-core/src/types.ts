@@ -12,6 +12,7 @@ import type {
     WorkspaceActivity,
     ActiveChatData,
     AvailableProviderInfo,
+    ProviderResumeCapability,
 } from '@adhdev/daemon-core';
 
 // Re-export shared types for convenience
@@ -28,6 +29,7 @@ export type {
     ActiveChatData,
     ChatMessage,
     AvailableProviderInfo,
+    ProviderResumeCapability,
 } from '@adhdev/daemon-core';
 
 export interface WebAgentInfo {
@@ -72,6 +74,19 @@ export interface BaseDaemonData {
     chats?: WebChatInfo[];
     activeChat?: ActiveChatData | null;
     workspace?: string | null;
+    runtimeKey?: string;
+    runtimeDisplayName?: string;
+    runtimeWorkspaceLabel?: string;
+    runtimeWriteOwner?: {
+        clientId: string;
+        ownerType: 'agent' | 'user';
+    } | null;
+    runtimeAttachedClients?: {
+        clientId: string;
+        type: 'daemon' | 'web' | 'local-terminal';
+        readOnly: boolean;
+    }[];
+    resume?: ProviderResumeCapability;
     cdpConnected?: boolean;
     currentModel?: string;
     currentPlan?: string;

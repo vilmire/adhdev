@@ -26,10 +26,26 @@ import {
   loadConfig,
   buildStatusSnapshot,
   forwardAgentStreamsToIdeInstance,
+  SessionHostPtyTransportFactory,
   type DaemonComponents,
+  type HostedCliRuntimeDescriptor,
   type StatusResponse,
   type AgentEntry,
 } from '@adhdev/daemon-core';
+import {
+  ensureSessionHostReady,
+  listHostedCliRuntimes,
+  proxySessionHostAttach,
+  proxySessionHostList,
+} from './session-host.js';
+import { SessionHostClient, type SessionHostEndpoint, type SessionHostEvent } from '@adhdev/session-host-core';
+import {
+  AdhMuxControlClient,
+  getWorkspaceSocketInfo,
+  getWorkspaceState,
+  requestWorkspaceControl,
+  type AdhMuxControlEvent,
+} from '@adhdev/terminal-mux-control/api';
 
 // ─── Constants ───
 const DEFAULT_PORT = 3847;
@@ -82,10 +98,13 @@ class StandaloneServer {
   private running = false;
   private components: DaemonComponents | null = null;
   private devServer: Awaited<ReturnType<typeof startDaemonDevSupport>> | null = null;
+  private sessionHostEndpoint: SessionHostEndpoint | null = null;
 
   async start(options: StandaloneOptions = {}): Promise<void> {
     const port = options.port || DEFAULT_PORT;
     const host = options.host || '127.0.0.1';
+    const sessionHostEndpoint = await ensureSessionHostReady();
+    this.sessionHostEndpoint = sessionHostEndpoint;
 
     // Auth token setup (opt-in only)
     this.authToken = options.token || process.env.ADHDEV_TOKEN || null;
@@ -107,6 +126,23 @@ class StandaloneServer {
         }),
         onStatusChange: () => this.broadcastStatus(),
         removeAgentTracking: () => {},
+        createPtyTransportFactory: ({ runtimeId, providerType, workspace, cliArgs, attachExisting }) => (
+          new SessionHostPtyTransportFactory({
+            endpoint: sessionHostEndpoint,
+            clientId: `daemon-${process.pid}`,
+            runtimeId,
+            providerType,
+            workspace,
+            attachExisting,
+            meta: {
+              cliArgs: cliArgs || [],
+              managedBy: 'adhdev-standalone',
+            },
+          })
+        ),
+        listHostedCliRuntimes: async (): Promise<HostedCliRuntimeDescriptor[]> => (
+          listHostedCliRuntimes(sessionHostEndpoint)
+        ),
       },
       onStatusChange: () => this.broadcastStatus(),
       onStreamsUpdated: (ideType: string, streams: any[]) => {
@@ -117,6 +153,8 @@ class StandaloneServer {
       tickIntervalMs: 3000,
       cdpScanIntervalMs: 15_000,
     });
+
+    await this.components.cliManager.restoreHostedSessions();
 
     // DevServer (optional)
     if (options.dev) {
@@ -243,12 +281,124 @@ class StandaloneServer {
 
     // ─── API Routes (v1) ───
     const apiPath = url.startsWith('/api/v1/') ? url.slice(7) : null; // /api/v1/status → /status
+    const parsedUrl = new URL(url, `http://${req.headers.host || 'localhost'}`);
 
     if (apiPath === '/status' && method === 'GET') {
       const status = this.getStatus(getSharedSnapshot());
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(status));
       return;
+    }
+
+    if (apiPath?.startsWith('/mux/')) {
+      const muxParts = parsedUrl.pathname.replace(/^\/api\/v1\/mux\//, '').split('/').filter(Boolean);
+      const [workspaceSegment, action] = muxParts;
+      const workspaceName = workspaceSegment ? decodeURIComponent(workspaceSegment) : '';
+
+      if (!workspaceName || !action) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid mux route' }));
+        return;
+      }
+
+      if (action === 'state' && method === 'GET') {
+        void (async () => {
+          const result = await getWorkspaceState(workspaceName);
+          if (!result?.success || !result.result) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: result?.error || 'Workspace not available' }));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result.result));
+        })().catch((error: any) => {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error?.message || String(error) }));
+        });
+        return;
+      }
+
+      if (action === 'socket-info' && method === 'GET') {
+        void (async () => {
+          const result = await getWorkspaceSocketInfo(workspaceName);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        })().catch((error: any) => {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error?.message || String(error) }));
+        });
+        return;
+      }
+
+      if (action === 'control' && method === 'POST') {
+        let body = '';
+        req.on('data', (chunk) => { body += chunk; });
+        req.on('end', async () => {
+          try {
+            const { type, payload } = JSON.parse(body || '{}');
+            const result = await requestWorkspaceControl(workspaceName, { type, payload });
+            if (!result?.success) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: result?.error || 'Workspace control unavailable' }));
+              return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result.result ?? { success: true }));
+          } catch (error: any) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: error?.message || String(error) }));
+          }
+        });
+        return;
+      }
+
+      if (action === 'events' && method === 'GET') {
+        void this.handleMuxEvents(req, res, workspaceName);
+        return;
+      }
+    }
+
+    if (apiPath?.startsWith('/runtime/')) {
+      const runtimeParts = parsedUrl.pathname.replace(/^\/api\/v1\/runtime\//, '').split('/').filter(Boolean);
+      const [sessionSegment, action] = runtimeParts;
+      const sessionId = sessionSegment ? decodeURIComponent(sessionSegment) : '';
+
+      if (!sessionId || !action) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid runtime route' }));
+        return;
+      }
+
+      if (action === 'snapshot' && method === 'GET') {
+        void (async () => {
+          const client = new SessionHostClient({ endpoint: this.sessionHostEndpoint || undefined });
+          try {
+            const snapshot = await client.request<{ seq: number; text: string; truncated: boolean }>({
+              type: 'get_snapshot',
+              payload: { sessionId },
+            });
+            if (!snapshot.success || !snapshot.result) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: snapshot.error || 'Runtime snapshot unavailable' }));
+              return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ sessionId, ...snapshot.result }));
+          } finally {
+            await client.close().catch(() => {});
+          }
+        })().catch((error: any) => {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error?.message || String(error) }));
+        });
+        return;
+      }
+
+      if (action === 'events' && method === 'GET') {
+        void this.handleRuntimeEvents(req, res, sessionId);
+        return;
+      }
+
     }
 
     if (apiPath === '/command' && method === 'POST') {
@@ -300,6 +450,103 @@ class StandaloneServer {
     // 404
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not found' }));
+  }
+
+  private async handleMuxEvents(
+    req: IncomingMessage,
+    res: import('http').ServerResponse,
+    workspaceName: string,
+  ): Promise<void> {
+    const socketInfo = await getWorkspaceSocketInfo(workspaceName);
+    if (!socketInfo.live) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Workspace control socket unavailable' }));
+      return;
+    }
+
+    const client = new AdhMuxControlClient(workspaceName);
+    await client.connect();
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    const writeEvent = (event: AdhMuxControlEvent) => {
+      res.write(`event: ${event.type}\n`);
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    const initial = await client.request<{ workspaceName: string; workspace: unknown; panes: unknown[] }>({
+      type: 'workspace_state',
+    });
+    if (initial.success && initial.result) {
+      writeEvent({
+        type: 'workspace_update',
+        payload: initial.result as Record<string, unknown>,
+      });
+    }
+
+    const unsubscribe = client.onEvent(writeEvent);
+    const heartbeat = setInterval(() => {
+      res.write(': ping\n\n');
+    }, 15000);
+
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+      void client.close().catch(() => {});
+    };
+
+    req.on('close', cleanup);
+    req.on('aborted', cleanup);
+  }
+
+  private async handleRuntimeEvents(
+    req: IncomingMessage,
+    res: import('http').ServerResponse,
+    sessionId: string,
+  ): Promise<void> {
+    const client = new SessionHostClient({ endpoint: this.sessionHostEndpoint || undefined });
+    await client.connect();
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    const snapshot = await client.request<{ seq: number; text: string; truncated: boolean }>({
+      type: 'get_snapshot',
+      payload: { sessionId },
+    });
+    if (snapshot.success && snapshot.result) {
+      res.write('event: runtime_snapshot\n');
+      res.write(`data: ${JSON.stringify({ sessionId, ...snapshot.result })}\n\n`);
+    }
+
+    const writeEvent = (event: SessionHostEvent) => {
+      if (event.sessionId !== sessionId) return;
+      res.write(`event: ${event.type}\n`);
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    const unsubscribe = client.onEvent(writeEvent);
+    const heartbeat = setInterval(() => {
+      res.write(': ping\n\n');
+    }, 15000);
+
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+      void client.close().catch(() => {});
+    };
+
+    req.on('close', cleanup);
+    req.on('aborted', cleanup);
   }
 
   // ─── WebSocket Handler ───
@@ -471,6 +718,23 @@ class StandaloneServer {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  const primaryCommand = args[0] || '';
+  if (primaryCommand === 'attach') {
+    const target = args[1];
+    if (!target) {
+      console.error('Usage: adhdev attach <sessionId> [--read-only|--takeover]');
+      process.exit(1);
+    }
+    const readOnly = args.includes('--read-only');
+    const takeover = args.includes('--takeover');
+    const exitCode = await proxySessionHostAttach(target, { readOnly, takeover });
+    process.exit(exitCode);
+  }
+  if (primaryCommand === 'list' || primaryCommand === 'runtimes') {
+    const showAll = args.includes('--all');
+    const exitCode = await proxySessionHostList(showAll);
+    process.exit(exitCode);
+  }
   const options: StandaloneOptions = {};
 
   // Parse simple args
@@ -499,6 +763,8 @@ async function main(): Promise<void> {
     if (args[i] === '--help' || args[i] === '-h') {
       console.log(`
 Usage: adhdev-standalone [options]
+       adhdev-standalone list [--all]
+       adhdev-standalone attach <sessionId> [--read-only|--takeover]
 
 Options:
   --port, -p <port>   Port to run the standalone server on (default: 3847)
@@ -508,6 +774,11 @@ Options:
   --public <path>     Custom path to the web dashboard distribution
   --no-open           Do not automatically open the browser on startup
   --help, -h          Show this help message
+
+Runtime commands:
+  list, runtimes      Show hosted CLI runtimes
+  attach              Attach local terminal to a runtime
+  open                Open a local terminal window running adhmux for a runtime
 `);
       process.exit(0);
     }

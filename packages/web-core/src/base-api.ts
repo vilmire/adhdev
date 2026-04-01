@@ -14,6 +14,88 @@ export interface ApiClientConfig {
     onUnauthorized?: () => void
 }
 
+export interface MuxWriteOwner {
+    clientId: string
+    ownerType: 'agent' | 'user'
+}
+
+export interface MuxAttachedClient {
+    clientId: string
+    clientType: string
+    attachedAt: number
+    readOnly: boolean
+}
+
+export interface MuxViewportState {
+    cols: number
+    rows: number
+    snapshotSeq: number
+    text: string
+}
+
+export interface MuxRuntimePaneState {
+    paneId: string
+    paneKind: 'runtime' | 'mirror'
+    runtimeId: string
+    runtimeKey: string
+    displayName: string
+    workspaceLabel: string
+    accessMode: 'interactive' | 'read-only'
+    lifecycle: string
+    writeOwner: MuxWriteOwner | null
+    attachedClients: MuxAttachedClient[]
+    viewport: MuxViewportState
+}
+
+export type MuxLayoutNode =
+    | { type: 'pane'; paneId: string }
+    | { type: 'split'; axis: 'horizontal' | 'vertical'; ratio: number; first: MuxLayoutNode; second: MuxLayoutNode }
+
+export interface MuxWorkspaceState {
+    workspaceId: string
+    title: string
+    root: MuxLayoutNode
+    focusedPaneId: string
+    zoomedPaneId?: string | null
+    panes: Record<string, MuxRuntimePaneState>
+}
+
+export interface MuxPaneSummary {
+    index: number
+    paneId: string
+    paneKind: 'runtime' | 'mirror'
+    runtimeKey: string
+    accessMode: 'interactive' | 'read-only'
+    focused: boolean
+}
+
+export interface MuxWorkspaceSnapshot {
+    workspaceName: string
+    workspace: MuxWorkspaceState
+    panes: MuxPaneSummary[]
+}
+
+export interface MuxSocketInfo {
+    workspaceName: string
+    live: boolean
+    endpoint: {
+        kind: 'unix' | 'pipe'
+        path: string
+    }
+}
+
+export interface MuxControlRequest {
+    type: string
+    payload?: Record<string, unknown>
+}
+
+export interface RuntimeSnapshot {
+    sessionId: string
+    seq: number
+    text: string
+    truncated: boolean
+}
+
 export interface ApiClient {
     // Daemons
     getDaemons(): Promise<{ daemons: DaemonData[] }>
@@ -26,12 +108,42 @@ export interface ApiClient {
     getAgentStatus(daemonId: string): Promise<any>
     approveAgent(daemonId: string, agentType: string, approve: boolean): Promise<any>
 
+    // Terminal mux
+    getMuxState(workspaceName: string): Promise<MuxWorkspaceSnapshot>
+    getMuxSocketInfo(workspaceName: string): Promise<MuxSocketInfo>
+    controlMux<T = any>(workspaceName: string, type: string, payload?: Record<string, unknown>): Promise<T>
+    getMuxEventsUrl(workspaceName: string): string
+
+    // Runtime terminal
+    getRuntimeSnapshot(sessionId: string): Promise<RuntimeSnapshot>
+    getRuntimeEventsUrl(sessionId: string): string
+
     // Raw request
     request<T>(path: string, options?: RequestInit): Promise<T>
 }
 
 export function createApiClient(config: ApiClientConfig): ApiClient {
     const { baseUrl, getToken, onUnauthorized } = config
+
+    function buildUrl(path: string): string {
+        return path.startsWith('http') ? path : `${baseUrl}${path.startsWith('/') ? '' : '/'}${path}`
+    }
+
+    function buildEventStreamUrl(path: string): string {
+        const token = getToken?.()
+        const rawUrl = buildUrl(path)
+        const url = path.startsWith('http')
+            ? new URL(rawUrl)
+            : new URL(rawUrl, typeof window !== 'undefined' ? window.location.origin : 'http://localhost')
+
+        if (token) url.searchParams.set('token', token)
+
+        if (!path.startsWith('http') && !baseUrl) {
+            return `${url.pathname}${url.search}${url.hash}`
+        }
+
+        return url.toString()
+    }
 
     async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         const headers: Record<string, string> = {
@@ -44,7 +156,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
             headers['Authorization'] = `Bearer ${token}`
         }
 
-        const url = path.startsWith('http') ? path : `${baseUrl}${path.startsWith('/') ? '' : '/'}${path}`
+        const url = buildUrl(path)
         const res = await fetch(url, { ...options, headers })
 
         if (res.status === 401) {
@@ -84,6 +196,21 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
                 method: 'POST',
                 body: JSON.stringify({ agentType, action: approve ? 'approve' : 'reject' }),
             }),
+        getMuxState: (workspaceName) =>
+            request(`/api/v1/mux/${encodeURIComponent(workspaceName)}/state`),
+        getMuxSocketInfo: (workspaceName) =>
+            request(`/api/v1/mux/${encodeURIComponent(workspaceName)}/socket-info`),
+        controlMux: (workspaceName, type, payload = {}) =>
+            request(`/api/v1/mux/${encodeURIComponent(workspaceName)}/control`, {
+                method: 'POST',
+                body: JSON.stringify({ type, payload }),
+            }),
+        getMuxEventsUrl: (workspaceName) =>
+            buildEventStreamUrl(`/api/v1/mux/${encodeURIComponent(workspaceName)}/events`),
+        getRuntimeSnapshot: (sessionId) =>
+            request(`/api/v1/runtime/${encodeURIComponent(sessionId)}/snapshot`),
+        getRuntimeEventsUrl: (sessionId) =>
+            buildEventStreamUrl(`/api/v1/runtime/${encodeURIComponent(sessionId)}/events`),
         request,
     }
 }
