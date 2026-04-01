@@ -11,7 +11,7 @@ import ChatPane from './dashboard/ChatPane';
 import ApprovalBanner from './dashboard/ApprovalBanner';
 import type { ActiveConversation } from './dashboard/types';
 import type { AgentSessionStream } from '../types';
-import { deriveStreamConversationStatus } from '../utils/daemon-utils';
+import { deriveStreamConversationStatus, formatIdeType, isGenericAgentTitle } from '../utils/daemon-utils';
 
 type StreamTab = AgentSessionStream & {
     sessionId?: string;
@@ -31,7 +31,6 @@ function getStreamKey(stream: StreamTab): string {
 
 export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: Props) {
     const [activeAgent, setActiveAgent] = useState<string | null>(null);
-    const [agentInput, setAgentInput] = useState('');
     const [isSending, setIsSending] = useState(false);
 
     // Auto-select first agent stream
@@ -52,12 +51,16 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
     // Build ActiveConversation for ChatPane (same format as Dashboard)
     const activeConv: ActiveConversation | null = useMemo(() => {
         if (!activeStream) return null;
+        const streamTitle = (activeStream.title && String(activeStream.title).trim()) || '';
+        const effectiveStreamTitle = isGenericAgentTitle(streamTitle, activeStream.agentName, activeStream.agentType)
+            ? ''
+            : streamTitle;
         return {
             ideId,
             agentName: activeStream.agentName,
             agentType: activeStream.agentType,
             status: derivedStatus,
-            title: '',
+            title: effectiveStreamTitle,
             messages: activeStream.messages.map((m: any, i: number) => ({
                 role: m.role,
                 content: m.content,
@@ -67,7 +70,7 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
             })),
             ideType: activeStream.agentType,
             workspaceName: '',
-            displayPrimary: activeStream.title || activeStream.agentName,
+            displayPrimary: effectiveStreamTitle || formatIdeType(activeStream.agentType),
             displaySecondary: '',
             cdpConnected: true,
             modalButtons: activeStream.activeModal?.buttons,
@@ -77,24 +80,24 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
         };
     }, [activeStream, ideId, derivedStatus]);
 
-    const handleSendChat = useCallback(async () => {
-        if (!agentInput.trim() || !activeAgent || isSending) return;
+    const handleSendChat = useCallback(async (rawMessage: string) => {
+        const message = rawMessage.trim();
+        if (!message || !activeAgent || isSending) return;
         setIsSending(true);
         const targetSessionId = activeStream?.sessionId;
         try {
             await sendCommand('send_chat', {
                 agentType: activeAgent,
-                text: agentInput.trim(),
-                message: agentInput.trim(),
+                text: message,
+                message,
                 ...(targetSessionId && { targetSessionId }),
             });
-            setAgentInput('');
         } catch (e) {
             console.error('Failed to send agent message', e);
         } finally {
             setIsSending(false);
         }
-    }, [agentInput, activeAgent, activeStream, isSending, sendCommand]);
+    }, [activeAgent, activeStream, isSending, sendCommand]);
 
     const handleResolve = useCallback(async (action: 'approve' | 'reject') => {
         if (!activeAgent) return;
@@ -135,6 +138,10 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
                     const normalizedStatus = deriveStreamConversationStatus(stream);
                     const isGenerating = normalizedStatus === 'generating';
                     const needsApproval = normalizedStatus === 'waiting_approval';
+                    const streamTitle = (stream.title && String(stream.title).trim()) || '';
+                    const effectiveStreamTitle = isGenericAgentTitle(streamTitle, stream.agentName, stream.agentType)
+                        ? ''
+                        : streamTitle;
 
                     return (
                         <button
@@ -153,7 +160,7 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
                                     boxShadow: isGenerating ? '0 0 6px var(--accent-primary)' : 'none',
                                 }}
                             />
-                            {stream.title || stream.agentName}
+                            {effectiveStreamTitle || formatIdeType(stream.agentType)}
                             {needsApproval && (
                                 <span className="text-[9px] px-1.5 py-px rounded-full bg-yellow-500/15 text-yellow-500 font-bold">
                                     !
@@ -198,8 +205,6 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
                     <ChatPane
                         activeConv={activeConv}
                         ides={[]}
-                        agentInput={agentInput}
-                        setAgentInput={setAgentInput}
                         handleSendChat={handleSendChat}
                         handleFocusAgent={() => {}}
                         isFocusingAgent={false}

@@ -18,9 +18,7 @@ interface PaneGroupContentProps {
     terminalRef: RefObject<CliTerminalHandle | null>
     handleModalButton: (button: string) => void
     handleRelaunch: () => void
-    agentInput: string
-    setAgentInput: (value: string | ((prev: string) => string)) => void
-    handleSendChat: () => void
+    handleSendChat: (message: string) => void
     isSendingChat: boolean
     handleFocusAgent: () => void
     isFocusingAgent: boolean
@@ -39,8 +37,6 @@ export default function PaneGroupContent({
     terminalRef,
     handleModalButton,
     handleRelaunch,
-    agentInput,
-    setAgentInput,
     handleSendChat,
     isSendingChat,
     handleFocusAgent,
@@ -81,8 +77,6 @@ export default function PaneGroupContent({
                     activeConv={activeConv}
                     ptyBuffers={ptyBuffers}
                     terminalRef={terminalRef}
-                    agentInput={agentInput}
-                    setAgentInput={setAgentInput}
                     handleSendChat={handleSendChat}
                     isSendingChat={isSendingChat}
                 />
@@ -90,8 +84,6 @@ export default function PaneGroupContent({
                 <ChatPane
                     activeConv={activeConv}
                     ides={ides}
-                    agentInput={agentInput}
-                    setAgentInput={setAgentInput}
                     handleSendChat={handleSendChat}
                     isSendingChat={isSendingChat}
                     handleFocusAgent={handleFocusAgent}

@@ -4,7 +4,7 @@ import { getProviderArgs } from './dashboardCommandUtils'
 
 interface UseIdeCommandsOptions {
     ideId: string
-    activeConv: ActiveConversation
+    activeConv: ActiveConversation | undefined
     historyModalOpen: boolean
     chats: unknown[] | undefined
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
@@ -23,15 +23,13 @@ export function useIdeCommands({
 }: UseIdeCommandsOptions) {
     const [isCreatingChat, setIsCreatingChat] = useState(false)
     const [isRefreshingHistory, setIsRefreshingHistory] = useState(false)
-    const [agentInput, setAgentInput] = useState('')
     const [isSendingChat, setIsSendingChat] = useState(false)
     const historyRefreshedRef = useRef(false)
 
-    const handleSendAgent = useCallback(async () => {
-        const message = agentInput.trim()
-        if (!message || !ideId || isSendingChat) return
+    const handleSendAgent = useCallback(async (rawMessage: string) => {
+        const message = rawMessage.trim()
+        if (!message || !ideId || isSendingChat || !activeConv) return
 
-        setAgentInput('')
         setIsSendingChat(true)
         try {
             await sendDaemonCommand(ideId, 'send_chat', {
@@ -45,10 +43,10 @@ export function useIdeCommands({
         } finally {
             setIsSendingChat(false)
         }
-    }, [agentInput, ideId, isSendingChat, sendDaemonCommand, activeConv])
+    }, [ideId, isSendingChat, sendDaemonCommand, activeConv])
 
     const handleRefreshHistory = useCallback(async () => {
-        if (!ideId || isRefreshingHistory) return
+        if (!ideId || isRefreshingHistory || !activeConv) return
 
         setIsRefreshingHistory(true)
         try {
@@ -69,7 +67,7 @@ export function useIdeCommands({
     }, [ideId, isRefreshingHistory, sendDaemonCommand, activeConv, updateIdeChats, pushToast])
 
     const handleSwitchSession = useCallback(async (_targetIdeId: string, sessionId: string) => {
-        if (!ideId) return
+        if (!ideId || !activeConv) return
 
         try {
             const res: any = await sendDaemonCommand(ideId, 'switch_chat', {
@@ -95,7 +93,7 @@ export function useIdeCommands({
     }, [ideId, sendDaemonCommand, activeConv, pushToast])
 
     const handleNewChat = useCallback(async () => {
-        if (!ideId || isCreatingChat) return
+        if (!ideId || isCreatingChat || !activeConv) return
 
         setIsCreatingChat(true)
         try {
@@ -123,8 +121,6 @@ export function useIdeCommands({
     }, [historyModalOpen, chats, isRefreshingHistory, handleRefreshHistory])
 
     return {
-        agentInput,
-        setAgentInput,
         isSendingChat,
         isCreatingChat,
         isRefreshingHistory,

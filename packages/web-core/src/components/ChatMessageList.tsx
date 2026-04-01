@@ -5,7 +5,7 @@
  * Supports 5 message types: thought, tool, system, action, standard.
  */
 
-import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { memo, useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkAlert from 'remark-github-blockquote-alert';
@@ -461,4 +461,20 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     );
 });
 
-export default ChatMessageList;
+const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
+    prev.messages === next.messages
+    && prev.actionLogs === next.actionLogs
+    && prev.agentName === next.agentName
+    && prev.userName === next.userName
+    && prev.isCliMode === next.isCliMode
+    && prev.isWorking === next.isWorking
+    && prev.contextKey === next.contextKey
+    && prev.receivedAtMap === next.receivedAtMap
+    && prev.emptyState === next.emptyState
+    && prev.onLoadMore === next.onLoadMore
+    && prev.isLoadingMore === next.isLoadingMore
+    && prev.hasMoreHistory === next.hasMoreHistory
+    && prev.loadError === next.loadError
+));
+
+export default MemoizedChatMessageList;

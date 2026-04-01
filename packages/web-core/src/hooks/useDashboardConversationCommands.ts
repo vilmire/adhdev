@@ -17,21 +17,19 @@ export function useDashboardConversationCommands({
     setActionLogs,
     isStandalone,
 }: UseDashboardConversationCommandsOptions) {
-    const [agentInput, setAgentInput] = useState('')
     const [isFocusingAgent, setIsFocusingAgent] = useState(false)
     const [isSendingChat, setIsSendingChat] = useState(false)
     const sendInFlightRef = useRef(false)
 
-    const handleSendChat = useCallback(async () => {
+    const handleSendChat = useCallback(async (rawMessage: string) => {
         if (!activeConv) return
 
-        const message = agentInput.trim()
+        const message = rawMessage.trim()
         if (!message || sendInFlightRef.current) return
 
         const tabKey = activeConv.tabKey
         sendInFlightRef.current = true
         setIsSendingChat(true)
-        setAgentInput('')
 
         const localId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         const userMsg = { role: 'user', content: message, timestamp: Date.now(), _localId: localId }
@@ -62,7 +60,6 @@ export function useDashboardConversationCommands({
             }, 60000)
         } catch (e) {
             console.error('Send failed', e)
-            setAgentInput(message)
             setLocalUserMessages(prev => ({
                 ...prev,
                 [tabKey]: (prev[tabKey] || []).filter(entry => entry._localId !== localId),
@@ -71,7 +68,7 @@ export function useDashboardConversationCommands({
             sendInFlightRef.current = false
             setIsSendingChat(false)
         }
-    }, [activeConv, agentInput, sendDaemonCommand, setLocalUserMessages])
+    }, [activeConv, sendDaemonCommand, setLocalUserMessages])
 
     const handleRelaunch = useCallback(async () => {
         if (!activeConv) return
@@ -152,8 +149,6 @@ export function useDashboardConversationCommands({
     }, [activeConv, isFocusingAgent, sendDaemonCommand])
 
     return {
-        agentInput,
-        setAgentInput,
         isSendingChat,
         isFocusingAgent,
         handleSendChat,

@@ -8,6 +8,7 @@ import { useState, useMemo } from 'react'
 import RemoteView from '../components/RemoteView'
 import ChatPane from '../components/dashboard/ChatPane'
 import HistoryModal from '../components/dashboard/HistoryModal'
+import ApprovalBanner from '../components/dashboard/ApprovalBanner'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
@@ -21,6 +22,9 @@ import { useIdeCommands } from '../hooks/useIdeCommands'
 import { useIdeConversations } from '../hooks/useIdeConversations'
 import { useIdeRemoteStream } from '../hooks/useIdeRemoteStream'
 import { useIdeToasts } from '../hooks/useIdeToasts'
+import { useDashboardConversationCommands } from '../hooks/useDashboardConversationCommands'
+import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
+import { useDashboardEventManager } from '../hooks/useDashboardEventManager'
 type ConnectionState = string
 import './IDE.css'
 
@@ -60,19 +64,34 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
     const initialView = (searchParams.get('view') as 'split' | 'remote' | 'chat') || (isMobile ? 'chat' : 'split')
     const [viewMode, setViewMode] = useState<'split' | 'remote' | 'chat'>(initialView)
     const [historyModalOpen, setHistoryModalOpen] = useState(false)
-    const { toasts, dismissToast, pushToast } = useIdeToasts()
+    const { toasts, setToasts, dismissToast, pushToast } = useIdeToasts()
+    const [messageReceivedAt, setMessageReceivedAt] = useState<Record<string, number>>({})
+    const [actionLogs, setActionLogs] = useState<{ ideId: string; text: string; timestamp: number }[]>([])
+    const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
+    const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
     const {
         activeChatTab,
         setActiveChatTab,
         activeConv,
+        conversations,
         extensionTabs,
         hasExtensions,
+        resolveConversationByTarget,
     } = useIdeConversations({
         ideId: ideId || '',
-        doId,
         ideData,
-        ideType,
+        allIdes: globalIdes,
+        connectionStates,
+        localUserMessages,
         ideName,
+    })
+    useDashboardConversationMeta({
+        conversations,
+        visibleConversations: conversations,
+        clearedTabs,
+        setClearedTabs,
+        setMessageReceivedAt,
+        setActionLogs,
     })
     const {
         connScreenshot,
@@ -86,13 +105,17 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
         viewMode,
         instanceId: ideData?.instanceId,
     })
+    const daemonEntryIsStandalone = !!globalIdes.find(ide => ide.type === 'adhdev-daemon')
+    const convoCmds = useDashboardConversationCommands({
+        sendDaemonCommand,
+        activeConv,
+        setLocalUserMessages,
+        setActionLogs,
+        isStandalone: daemonEntryIsStandalone,
+    })
     const {
-        agentInput,
-        setAgentInput,
-        isSendingChat,
         isCreatingChat,
         isRefreshingHistory,
-        handleSendAgent,
         handleRefreshHistory,
         handleSwitchSession,
         handleNewChat,
@@ -105,8 +128,16 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
         updateIdeChats,
         pushToast,
     })
+    useDashboardEventManager({
+        ides: globalIdes,
+        sendDaemonCommand,
+        setToasts: setToasts as any,
+        setLocalUserMessages,
+        resolveConversationByTarget,
+    })
 
     if (!ideId) return <div className="ide-empty">No IDE selected</div>
+    if (!activeConv) return <div className="ide-empty">IDE session not available</div>
 
     return (
         <div className="ide-page">
@@ -131,19 +162,28 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
                         ideName={ideName}
                         activeChatTab={activeChatTab}
                         extensionTabs={extensionTabs}
-                        onSelectTab={setActiveChatTab}
+                        onSelectTab={(tabKey) => {
+                            setActiveChatTab(tabKey)
+                            const nextConv = conversations.find(conversation => conversation.tabKey === tabKey)
+                            if (nextConv?.streamSource === 'agent-stream') {
+                                void sendDaemonCommand(nextConv.ideId, 'focus_session', {
+                                    agentType: nextConv.agentType,
+                                    ...(nextConv.sessionId && { targetSessionId: nextConv.sessionId }),
+                                }).catch(() => {})
+                            }
+                        }}
                     />
 
+                    <ApprovalBanner activeConv={activeConv} onModalButton={convoCmds.handleModalButton} />
                     <ChatPane
                         activeConv={activeConv}
                         ides={globalIdes}
-                        agentInput={agentInput}
-                        setAgentInput={setAgentInput}
-                        handleSendChat={handleSendAgent}
-                        handleFocusAgent={() => {}}
-                        isFocusingAgent={false}
-                        messageReceivedAt={{}}
-                        actionLogs={[]}
+                        handleSendChat={convoCmds.handleSendChat}
+                        isSendingChat={convoCmds.isSendingChat}
+                        handleFocusAgent={convoCmds.handleFocusAgent}
+                        isFocusingAgent={convoCmds.isFocusingAgent}
+                        messageReceivedAt={messageReceivedAt}
+                        actionLogs={actionLogs}
                         userName={daemonCtx.userName}
                     />
                 </div>

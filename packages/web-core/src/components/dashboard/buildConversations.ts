@@ -5,7 +5,7 @@
  * Reusable across Dashboard, mobile views, widgets, etc.
  */
 import type { DaemonData } from '../../types';
-import { deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, getMachineDisplayName } from '../../utils/daemon-utils';
+import { deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, getMachineDisplayName, isGenericAgentTitle } from '../../utils/daemon-utils';
 import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation } from './types';
@@ -150,6 +150,8 @@ export function buildConversations(
             const streamStatus = deriveStreamConversationStatus(stream);
             const streamKey = getStreamKey(stream);
             const streamTabKey = `${ide.id}:${streamKey}`;
+            const streamTitle = (stream.title && String(stream.title).trim()) || '';
+            const effectiveStreamTitle = isGenericAgentTitle(streamTitle, stream.agentName, stream.agentType) ? '' : streamTitle
             const serverMsgs = stream.messages || [];
             const localMsgs = getLocalMessages(localUserMessages, [streamTabKey, stream.sessionId, stream.instanceId]);
             const serverContentCounts = new Map<string, number>();
@@ -170,11 +172,11 @@ export function buildConversations(
                 agentName: stream.agentName,
                 agentType: stream.agentType,
                 status: streamStatus,
-                title: stream.title || '',
+                title: effectiveStreamTitle,
                 messages: [...serverMsgs, ...pendingLocal],
                 ideType: stream.agentType,
                 workspaceName,
-                displayPrimary: (stream.title && String(stream.title).trim()) || parentTitle || workspaceName || stream.agentName,
+                displayPrimary: effectiveStreamTitle || parentTitle || workspaceName || ideLabel,
                 displaySecondary: `${ideLabel}·${stream.agentName}`,
                 cdpConnected: ide.cdpConnected,
                 modalButtons: hasModal ? stream.activeModal!.buttons : undefined,

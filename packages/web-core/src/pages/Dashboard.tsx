@@ -14,6 +14,7 @@ import { useDashboardPageEffects } from '../hooks/useDashboardPageEffects'
 import { useDashboardSessionCommands } from '../hooks/useDashboardSessionCommands'
 import { useDashboardSplitView } from '../hooks/useDashboardSplitView'
 import { useDashboardVersionBanner } from '../hooks/useDashboardVersionBanner'
+import { useDevRenderTrace } from '../hooks/useDevRenderTrace'
 
 import ConnectionBanner from '../components/dashboard/ConnectionBanner'
 import DashboardHeader from '../components/dashboard/DashboardHeader'
@@ -61,6 +62,14 @@ export default function Dashboard() {
     const [actionLogs, setActionLogs] = useState<{ ideId: string; text: string; timestamp: number }[]>([])
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
     const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
+    useDevRenderTrace('Dashboard', {
+        ideCount: ides.length,
+        toastCount: toasts.length,
+        focusedGroup,
+        groupCount: Object.keys(groupAssignments).length,
+        localMessageTabs: Object.keys(localUserMessages).length,
+        actionLogCount: actionLogs.length,
+    })
 
     // Extract detectedIdes from machine-level entry (for standalone)
     const daemonEntry = ides.find(ide => ide.type === 'adhdev-daemon')

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react'
+import { useDevRenderTrace } from '../../hooks/useDevRenderTrace'
 import { useTabShortcuts } from '../../hooks/useTabShortcuts'
 import type { ActiveConversation } from './types'
 
@@ -46,6 +47,12 @@ export default function PaneGroupTabBar({
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabKey: string } | null>(null)
     const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
     const tabBarRef = useRef<HTMLDivElement>(null)
+    useDevRenderTrace('PaneGroupTabBar', {
+        groupIndex,
+        activeTabId,
+        tabCount: conversations.length,
+        ctxMenuTab: ctxMenu?.tabKey || null,
+    })
 
     const {
         isMac,

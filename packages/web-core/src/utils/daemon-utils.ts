@@ -134,6 +134,23 @@ export function getAgentDisplayName(
     return formatIdeType(type)
 }
 
+export function isGenericAgentTitle(
+    title: string | null | undefined,
+    agentName: string | null | undefined,
+    agentType: string | null | undefined,
+): boolean {
+    const normalizedTitle = (title || '').trim().toLowerCase()
+    if (!normalizedTitle) return true
+
+    const normalizedAgentName = (agentName || '').trim().toLowerCase()
+    const normalizedAgentType = (agentType || '').trim().toLowerCase()
+    const formattedAgentType = formatIdeType(agentType || '').trim().toLowerCase()
+
+    return normalizedTitle === normalizedAgentName
+        || normalizedTitle === normalizedAgentType
+        || normalizedTitle === formattedAgentType
+}
+
 
 /** Build provider icon/label map from daemon data */
 export function buildProviderMaps(daemons: DaemonData[]): {

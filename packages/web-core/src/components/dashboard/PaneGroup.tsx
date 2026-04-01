@@ -7,6 +7,7 @@
 import { useRef, useCallback, type CSSProperties, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { useTransport } from '../../context/TransportContext'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
+import { useDevRenderTrace } from '../../hooks/useDevRenderTrace'
 import { usePaneGroupDropZone } from '../../hooks/usePaneGroupDropZone'
 import { usePaneGroupTabs } from '../../hooks/usePaneGroupTabs'
 import { isCliConv, isAcpConv } from './types'
@@ -125,6 +126,12 @@ export default function PaneGroup({
     })
 
     const isCli = activeConv && isCliConv(activeConv) && !isAcpConv(activeConv)
+    useDevRenderTrace('PaneGroup', {
+        groupIndex,
+        conversationCount: conversations.length,
+        activeTabId,
+        dragOver,
+    })
 
     const handleConversationActivated = useCallback((conv: ActiveConversation) => {
         if (conv.streamSource === 'agent-stream' && conv.agentType) {
@@ -200,8 +207,6 @@ export default function PaneGroup({
                         terminalRef={terminalRef}
                         handleModalButton={cmds.handleModalButton}
                         handleRelaunch={cmds.handleRelaunch}
-                        agentInput={cmds.agentInput}
-                        setAgentInput={cmds.setAgentInput}
                         handleSendChat={cmds.handleSendChat}
                         isSendingChat={cmds.isSendingChat}
                         handleFocusAgent={cmds.handleFocusAgent}

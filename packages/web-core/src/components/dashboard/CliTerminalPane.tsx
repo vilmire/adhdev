@@ -1,7 +1,7 @@
 /**
  * CliTerminalPane — CLI agent terminal view with buffer replay and input bar.
  */
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { CliTerminal } from '../CliTerminal';
 import type { CliTerminalHandle } from '../CliTerminal';
 import { useTransport } from '../../context/TransportContext';
@@ -14,19 +14,18 @@ export interface CliTerminalPaneProps {
     ptyBuffers: React.MutableRefObject<Map<string, string[]>>;
     /** Outer terminal ref for bumpResize etc. */
     terminalRef: React.RefObject<CliTerminalHandle | null>;
-    agentInput: string;
-    setAgentInput: (v: string | ((prev: string) => string)) => void;
-    handleSendChat: () => void;
+    handleSendChat: (message: string) => void;
     isSendingChat?: boolean;
 }
 
 export default function CliTerminalPane({
     activeConv, ptyBuffers, terminalRef,
-    agentInput, setAgentInput, handleSendChat,
+    handleSendChat,
     isSendingChat = false,
 }: CliTerminalPaneProps) {
     const chatInputRef = useRef<HTMLInputElement>(null);
     const { sendCommand, sendData } = useTransport();
+    const [draftInput, setDraftInput] = useState('');
 
     // ─── Real-time PTY output: subscribe to P2P pty_output and write to xterm ───
     // Also replay existing buffer on mount so the terminal starts with past output.
@@ -62,6 +61,10 @@ export default function CliTerminalPane({
         return () => { unsub(); };
     }, [sessionId, activeConv.ideId, activeConv.tabKey]);
 
+    useEffect(() => {
+        setDraftInput('');
+    }, [activeConv.tabKey]);
+
     return (
         <>
             {/* Terminal */}
@@ -92,11 +95,11 @@ export default function CliTerminalPane({
                             ref={chatInputRef}
                             type="text"
                             placeholder={`Send message to ${activeConv.displayPrimary}...`}
-                            value={agentInput}
-                            onChange={e => setAgentInput(e.target.value)}
+                            value={draftInput}
+                            onChange={e => setDraftInput(e.target.value)}
                             onPaste={e => {
                                 const pasted = e.clipboardData.getData('text');
-                                if (pasted) setAgentInput((prev: string) => prev + pasted);
+                                if (pasted) setDraftInput(prev => prev + pasted);
                                 e.preventDefault();
                             }}
                             onKeyDown={e => {
@@ -106,21 +109,29 @@ export default function CliTerminalPane({
                                     return;
                                 }
                                 e.preventDefault();
-                                handleSendChat();
+                                const message = draftInput.trim();
+                                if (!message || isSendingChat) return;
+                                setDraftInput('');
+                                handleSendChat(message);
                             }}
                             className="w-full h-9 rounded-[18px] px-4 bg-bg-secondary text-[13px] text-text-primary"
                             style={{ border: '1px solid var(--chat-input-border, var(--border-subtle))' }}
                         />
                     </div>
                     <button
-                        onClick={handleSendChat}
-                        disabled={!agentInput.trim() || isSendingChat}
+                        onClick={() => {
+                            const message = draftInput.trim();
+                            if (!message || isSendingChat) return;
+                            setDraftInput('');
+                            handleSendChat(message);
+                        }}
+                        disabled={!draftInput.trim() || isSendingChat}
                         className={`w-9 h-9 rounded-full flex items-center justify-center border-none shrink-0 transition-all duration-300 ${
-                            agentInput.trim() && !isSendingChat ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
+                            draftInput.trim() && !isSendingChat ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
                         }`}
-                        style={agentInput.trim() && !isSendingChat ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
+                        style={draftInput.trim() && !isSendingChat ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
                     >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={agentInput.trim() ? 'text-white' : 'text-text-muted'}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={draftInput.trim() ? 'text-white' : 'text-text-muted'}>
                             <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
                         </svg>
                     </button>

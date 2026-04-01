@@ -2,21 +2,21 @@
 /**
  * ChatPane — Non-CLI chat view: message list, model/mode bar, and input area.
  */
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import ChatMessageList from '../ChatMessageList';
 import DashboardModelModeBar from './ModelModeBar';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation } from './types';
 import type { DaemonData } from '../../types';
 import { useTransport } from '../../context/TransportContext';
+import { formatIdeType } from '../../utils/daemon-utils';
+import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
 import { IconPlug, IconEye, IconFolder } from '../Icons';
 
 export interface ChatPaneProps {
     activeConv: ActiveConversation;
     ides: DaemonData[];
-    agentInput: string;
-    setAgentInput: (v: string | ((prev: string) => string)) => void;
-    handleSendChat: () => void;
+    handleSendChat: (message: string) => void;
     isSendingChat?: boolean;
     handleFocusAgent: () => void;
     isFocusingAgent: boolean;
@@ -27,12 +27,20 @@ export interface ChatPaneProps {
 }
 
 export default function ChatPane({
-    activeConv, ides, agentInput, setAgentInput, handleSendChat,
+    activeConv, ides, handleSendChat,
     isSendingChat = false,
     handleFocusAgent, isFocusingAgent, messageReceivedAt, actionLogs, userName,
 }: ChatPaneProps) {
     const chatInputRef = useRef<HTMLInputElement>(null);
     const { sendCommand } = useTransport();
+    const [draftInput, setDraftInput] = useState('');
+    useDevRenderTrace('ChatPane', {
+        tabKey: activeConv.tabKey,
+        messageCount: activeConv.messages.length,
+        actionLogCount: actionLogs.length,
+        draftLength: draftInput.length,
+        isSendingChat,
+    });
 
     // Per-tab history cache — survives tab switches
     interface TabHistoryState { messages: any[]; offset: number; hasMore: boolean; error: string | null }
@@ -116,7 +124,11 @@ export default function ChatPane({
     }, [isLoadingMore, ides, activeConv, sendCommand, getTabHistory, updateTabHistory]);
 
     // Merge history + live messages (dedup by content hash)
-    const allMessages = (() => {
+    useEffect(() => {
+        setDraftInput('');
+    }, [activeConv.tabKey]);
+
+    const allMessages = useMemo(() => {
         const live = activeConv.messages.map((m: any, i: number) => {
             const timeKey = `${activeConv.ideId}-${m.id ?? `i-${i}`}`;
             return { ...m, receivedAt: m.receivedAt || messageReceivedAt[timeKey] || 0 };
@@ -129,17 +141,77 @@ export default function ChatPane({
             m => !liveHashes.has(`${m.role}:${(m.content || '').slice(0, 100)}`)
         );
         return [...uniqueHistory, ...live];
-    })();
+    }, [activeConv.messages, activeConv.ideId, historyMessages, messageReceivedAt]);
+    const visibleActionLogs = useMemo(
+        () => actionLogs
+            .filter(l => l.ideId === activeConv.tabKey)
+            .sort((a, b) => a.timestamp - b.timestamp),
+        [actionLogs, activeConv.tabKey],
+    );
     const panelLabel = activeConv.displayPrimary || activeConv.agentName || 'Agent'
+    const emptyState = useMemo(() => {
+        if (activeConv.messages.length !== 0) return undefined;
+        if (activeConv.connectionState === 'connecting' || activeConv.connectionState === 'new') {
+            return (
+                <div className="text-center mt-16 flex flex-col items-center gap-4">
+                    <div className="connecting-logo-float">
+                        <div style={{
+                            width: 64, height: 64, borderRadius: '50%',
+                            background: 'radial-gradient(circle, rgba(96,165,250,0.12), transparent 70%)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            boxShadow: '0 0 40px rgba(96,165,250,0.08)',
+                        }}>
+                            <img src="/otter-logo.png" alt="ADHDev" style={{ width: 40, height: 40, borderRadius: '50%', opacity: 0.85 }} />
+                        </div>
+                    </div>
+                    <div className="flex flex-col items-center gap-1.5">
+                        <div className="text-[13px] text-blue-400 font-medium">Connecting to your machine<span className="connecting-dots"></span></div>
+                        <div className="text-[11px] opacity-35">Establishing P2P connection</div>
+                    </div>
+                </div>
+            );
+        }
+        if (activeConv.status === 'not_monitored') {
+            return (
+                <div className="text-center mt-16 flex flex-col items-center gap-3">
+                    <div className="text-3xl opacity-60"><IconPlug size={28} /></div>
+                    <div className="text-[13px] opacity-50">Agent not monitored</div>
+                    <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
+                        {isFocusingAgent ? '⌛ Switching...' : <span className="flex items-center gap-1.5"><IconFolder size={14} /> Open {panelLabel} Panel</span>}
+                    </button>
+                    <div className="text-[11px] opacity-35 max-w-[280px]">Click to switch monitoring to this agent</div>
+                </div>
+            );
+        }
+        if (activeConv.status === 'panel_hidden') {
+            return (
+                <div className="text-center mt-16 flex flex-col items-center gap-3">
+                    <div className="text-3xl opacity-60"><IconEye size={28} /></div>
+                    <div className="text-[13px] opacity-50">Agent panel is not visible yet</div>
+                    <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
+                        {isFocusingAgent ? '⌛ Opening...' : <span className="flex items-center gap-1.5"><IconFolder size={14} /> Open {panelLabel} Panel</span>}
+                    </button>
+                    <div className="text-[11px] opacity-35 max-w-[280px]">Open the agent panel or chat view in the app you are using to start viewing messages</div>
+                </div>
+            );
+        }
+        if (activeConv.status === 'idle' && !isLoadingMore) {
+            return (
+                <div className="text-center mt-16 flex flex-col items-center gap-3">
+                    <div className="text-2xl opacity-40 animate-pulse">💬</div>
+                    <div className="text-[13px] opacity-40">Loading chat...</div>
+                </div>
+            );
+        }
+        return undefined;
+    }, [activeConv.messages.length, activeConv.connectionState, activeConv.status, handleFocusAgent, isFocusingAgent, isLoadingMore, panelLabel]);
 
     return (
         <>
             {/* Message Stream */}
             <ChatMessageList
                 messages={allMessages}
-                actionLogs={actionLogs
-                    .filter(l => l.ideId === activeConv.tabKey)
-                    .sort((a, b) => a.timestamp - b.timestamp)}
+                actionLogs={visibleActionLogs}
                 agentName={activeConv.agentName || activeConv.displayPrimary || 'Agent'}
                 userName={userName}
                 isCliMode={isCliConv(activeConv) || isAcpConv(activeConv)}
@@ -149,51 +221,7 @@ export default function ChatPane({
                 isLoadingMore={isLoadingMore}
                 hasMoreHistory={hasMoreHistory}
                 loadError={loadError ?? undefined}
-                emptyState={
-                    activeConv.messages.length === 0 ? (
-                        (activeConv.connectionState === 'connecting' || activeConv.connectionState === 'new') ? (
-                            <div className="text-center mt-16 flex flex-col items-center gap-4">
-                                <div className="connecting-logo-float">
-                                    <div style={{
-                                        width: 64, height: 64, borderRadius: '50%',
-                                        background: 'radial-gradient(circle, rgba(96,165,250,0.12), transparent 70%)',
-                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                        boxShadow: '0 0 40px rgba(96,165,250,0.08)',
-                                    }}>
-                                        <img src="/otter-logo.png" alt="ADHDev" style={{ width: 40, height: 40, borderRadius: '50%', opacity: 0.85 }} />
-                                    </div>
-                                </div>
-                                <div className="flex flex-col items-center gap-1.5">
-                                    <div className="text-[13px] text-blue-400 font-medium">Connecting to your machine<span className="connecting-dots"></span></div>
-                                    <div className="text-[11px] opacity-35">Establishing P2P connection</div>
-                                </div>
-                            </div>
-                        ) : activeConv.status === 'not_monitored' ? (
-                            <div className="text-center mt-16 flex flex-col items-center gap-3">
-                                <div className="text-3xl opacity-60"><IconPlug size={28} /></div>
-                                <div className="text-[13px] opacity-50">Agent not monitored</div>
-                                <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
-                                    {isFocusingAgent ? '⌛ Switching...' : <span className="flex items-center gap-1.5"><IconFolder size={14} /> Open {panelLabel} Panel</span>}
-                                </button>
-                                <div className="text-[11px] opacity-35 max-w-[280px]">Click to switch monitoring to this agent</div>
-                            </div>
-                        ) : activeConv.status === 'panel_hidden' ? (
-                            <div className="text-center mt-16 flex flex-col items-center gap-3">
-                                <div className="text-3xl opacity-60"><IconEye size={28} /></div>
-                                <div className="text-[13px] opacity-50">Agent panel is not visible yet</div>
-                                <button onClick={handleFocusAgent} disabled={isFocusingAgent} className="btn btn-primary">
-                                    {isFocusingAgent ? '⌛ Opening...' : <span className="flex items-center gap-1.5"><IconFolder size={14} /> Open {panelLabel} Panel</span>}
-                                </button>
-                                <div className="text-[11px] opacity-35 max-w-[280px]">Open the agent panel or chat view in the app you are using to start viewing messages</div>
-                            </div>
-                        ) : activeConv.status === 'idle' && !isLoadingMore ? (
-                            <div className="text-center mt-16 flex flex-col items-center gap-3">
-                                <div className="text-2xl opacity-40 animate-pulse">💬</div>
-                                <div className="text-[13px] opacity-40">Loading chat...</div>
-                            </div>
-                        ) : undefined
-                    ) : undefined
-                }
+                emptyState={emptyState}
             />
 
             {/* Model/Mode Bar */}
@@ -203,7 +231,9 @@ export default function ChatPane({
                 const modelBarAgentType = isNativeConversation
                     ? activeConv.ideType
                     : activeConv.agentType
-                const modelBarLabel = activeConv.displayPrimary || activeConv.agentName || 'Agent'
+                const modelBarLabel = isNativeConversation
+                    ? (ideEntry?.type ? formatIdeType(ideEntry.type) : formatIdeType(activeConv.ideType || ''))
+                    : (activeConv.agentName || formatIdeType(activeConv.agentType || ''))
                 return (
                     <DashboardModelModeBar
                         ideId={activeConv.ideId}
@@ -227,11 +257,11 @@ export default function ChatPane({
                             ref={chatInputRef}
                             type="text"
                             placeholder={`Send message to ${panelLabel}...`}
-                            value={agentInput}
-                            onChange={e => setAgentInput(e.target.value)}
+                            value={draftInput}
+                            onChange={e => setDraftInput(e.target.value)}
                             onPaste={e => {
                                 const pasted = e.clipboardData.getData('text');
-                                if (pasted) setAgentInput((prev: string) => prev + pasted);
+                                if (pasted) setDraftInput(prev => prev + pasted);
                                 e.preventDefault();
                             }}
                             onKeyDown={e => {
@@ -241,7 +271,10 @@ export default function ChatPane({
                                     return;
                                 }
                                 e.preventDefault();
-                                handleSendChat();
+                                const message = draftInput.trim();
+                                if (!message || isSendingChat) return;
+                                setDraftInput('');
+                                handleSendChat(message);
                             }}
                             onBlur={(e) => {
                                 if (window.innerWidth < 768) {
@@ -257,14 +290,19 @@ export default function ChatPane({
                         />
                     </div>
                     <button
-                        onClick={handleSendChat}
-                        disabled={!agentInput.trim() || isSendingChat}
+                        onClick={() => {
+                            const message = draftInput.trim();
+                            if (!message || isSendingChat) return;
+                            setDraftInput('');
+                            handleSendChat(message);
+                        }}
+                        disabled={!draftInput.trim() || isSendingChat}
                         className={`w-10 h-10 rounded-full flex items-center justify-center border-none shrink-0 transition-all duration-300 ${
-                            agentInput.trim() && !isSendingChat ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
+                            draftInput.trim() && !isSendingChat ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
                         }`}
-                        style={agentInput.trim() && !isSendingChat ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
+                        style={draftInput.trim() && !isSendingChat ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
                     >
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={agentInput.trim() ? 'text-white' : 'text-text-muted'}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={draftInput.trim() ? 'text-white' : 'text-text-muted'}>
                             <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
                         </svg>
                     </button>

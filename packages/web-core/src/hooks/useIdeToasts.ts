@@ -4,6 +4,9 @@ type IdeToast = {
     id: number
     message: string
     type: 'success' | 'info' | 'warning'
+    timestamp?: number
+    targetKey?: string
+    actions?: unknown
 }
 
 export function useIdeToasts() {
@@ -23,6 +26,7 @@ export function useIdeToasts() {
 
     return {
         toasts,
+        setToasts,
         dismissToast,
         pushToast,
     }

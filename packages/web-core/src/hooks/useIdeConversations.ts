@@ -1,86 +1,47 @@
-import { useEffect, useMemo, useState } from 'react'
-import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { buildConversations } from '../components/dashboard/buildConversations'
 import type { ActiveConversation } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
-import { deriveStreamConversationStatus, getAgentDisplayName } from '../utils/daemon-utils'
+
+type LocalUserMessage = {
+    role: string
+    content: string
+    timestamp: number
+    _localId: string
+}
 
 interface UseIdeConversationsOptions {
     ideId: string
-    doId: string
     ideData: DaemonData | undefined
-    ideType: string | undefined
+    allIdes: DaemonData[]
+    connectionStates: Record<string, string>
+    localUserMessages: Record<string, LocalUserMessage[]>
     ideName: string
-}
-
-function getStreamKey(stream: { sessionId?: string; instanceId?: string; agentType: string }) {
-    return stream.sessionId || stream.instanceId || stream.agentType
 }
 
 export function useIdeConversations({
     ideId,
-    doId,
     ideData,
-    ideType,
+    allIdes,
+    connectionStates,
+    localUserMessages,
     ideName,
 }: UseIdeConversationsOptions) {
     const [activeChatTab, setActiveChatTab] = useState<string>('native')
-    const activeChat = ideData?.activeChat || null
-    const agentStreams = ideData?.agentStreams || []
-    const derivedStatus = normalizeManagedStatus(activeChat?.status, {
-        activeModal: activeChat?.activeModal,
-    })
 
-    const nativeConv: ActiveConversation = useMemo(() => ({
-        ideId,
-        sessionId: (ideData as any)?.sessionId || ideData?.instanceId,
-        daemonId: doId,
-        agentName: getAgentDisplayName(ideType || ''),
-        agentType: ideType || '',
-        status: derivedStatus,
-        title: activeChat?.title || '',
-        messages: activeChat?.messages || [],
-        ideType: ideType || '',
-        workspaceName: (ideData as any)?.workspaceName || '',
-        displayPrimary: ideName,
-        displaySecondary: (ideData as any)?.workspaceName || '',
-        cdpConnected: true,
-        modalButtons: activeChat?.activeModal?.buttons,
-        modalMessage: activeChat?.activeModal?.message,
-        streamSource: 'native',
-        tabKey: `ide-${ideId}`,
-    }), [ideId, ideData, doId, ideType, ideName, derivedStatus, activeChat])
+    const conversations = useMemo(() => {
+        if (!ideData) return []
+        return buildConversations([ideData], localUserMessages, allIdes, connectionStates)
+    }, [ideData, localUserMessages, allIdes, connectionStates])
 
-    const streamConvs: ActiveConversation[] = useMemo(
-        () => agentStreams.map(stream => {
-            const streamStatus = deriveStreamConversationStatus(stream)
-            const streamKey = getStreamKey(stream as any)
-            return {
-                ideId,
-                sessionId: (stream as any).sessionId || (stream as any).instanceId,
-                daemonId: doId,
-                agentName: stream.agentName,
-                agentType: stream.agentType,
-                status: streamStatus,
-                title: (stream as any).title || '',
-                messages: stream.messages.map((message: any, index: number) => ({
-                    role: message.role,
-                    content: message.content,
-                    kind: (message as any).kind,
-                    id: `${streamKey}-${index}`,
-                    receivedAt: message.timestamp,
-                })),
-                ideType: stream.agentType,
-                workspaceName: '',
-                displayPrimary: (stream as any).title || stream.agentName,
-                displaySecondary: '',
-                cdpConnected: true,
-                modalButtons: stream.activeModal?.buttons,
-                modalMessage: stream.activeModal?.message,
-                streamSource: 'agent-stream',
-                tabKey: `agent-stream-${streamKey}`,
-            }
-        }),
-        [agentStreams, ideId, doId],
+    const nativeConv = useMemo(
+        () => conversations.find(conversation => conversation.streamSource === 'native'),
+        [conversations],
+    )
+
+    const streamConvs = useMemo(
+        () => conversations.filter(conversation => conversation.streamSource === 'agent-stream'),
+        [conversations],
     )
 
     useEffect(() => {
@@ -90,28 +51,46 @@ export function useIdeConversations({
         }
     }, [activeChatTab, streamConvs])
 
+    useEffect(() => {
+        if (activeChatTab !== 'native') return
+        if (nativeConv) return
+        if (streamConvs[0]) setActiveChatTab(streamConvs[0].tabKey)
+    }, [activeChatTab, nativeConv, streamConvs])
+
     const activeConv = useMemo(() => {
-        if (activeChatTab === 'native') return nativeConv
-        return streamConvs.find(conversation => conversation.tabKey === activeChatTab) || nativeConv
+        if (activeChatTab === 'native' && nativeConv) return nativeConv
+        return streamConvs.find(conversation => conversation.tabKey === activeChatTab)
+            || nativeConv
+            || streamConvs[0]
     }, [activeChatTab, nativeConv, streamConvs])
 
     const extensionTabs = useMemo(
-        () => agentStreams.map(stream => {
-            const streamKey = getStreamKey(stream as any)
-            return {
-                tabKey: `agent-stream-${streamKey}`,
-                title: (stream as any).title || stream.agentName,
-                status: deriveStreamConversationStatus(stream),
-            }
-        }),
-        [agentStreams],
+        () => streamConvs.map(conversation => ({
+            tabKey: conversation.tabKey,
+            title: conversation.title || conversation.agentName || ideName,
+            status: conversation.status,
+        })),
+        [streamConvs, ideName],
     )
+
+    const resolveConversationByTarget = useCallback((target: string | null | undefined) => {
+        if (!target) return undefined
+        return conversations.find(conversation =>
+            conversation.sessionId === target
+            || conversation.ideId === target
+            || conversation.tabKey === target
+            || conversation.ideType === target
+            || conversation.agentType === target,
+        )
+    }, [conversations])
 
     return {
         activeChatTab,
         setActiveChatTab,
         activeConv,
+        conversations,
         extensionTabs,
         hasExtensions: extensionTabs.length > 0,
+        resolveConversationByTarget,
     }
 }

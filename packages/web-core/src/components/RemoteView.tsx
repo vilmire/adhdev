@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, KeyboardEvent, MouseEvent } from 'react';
 import RemoteCursorOverlay from './remote/RemoteCursorOverlay';
 import RemoteViewToolbar from './remote/RemoteViewToolbar';
 import RemoteWaitingState from './remote/RemoteWaitingState';
+import { useDevRenderTrace } from '../hooks/useDevRenderTrace';
 import { useRemoteTouchControls } from '../hooks/useRemoteTouchControls';
 
 /** Connection state */
@@ -49,6 +50,16 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
     const [zoom, setZoom] = useState(1.0);
     const [panX, setPanX] = useState(0);
     const [panY, setPanY] = useState(0);
+    useDevRenderTrace('RemoteView', {
+        connState,
+        hasScreenshot: !!connScreenshot,
+        inputMode,
+        zoom,
+        panX,
+        panY,
+        isMenuOpen,
+        isImeOpen,
+    });
 
     const lastWheelTime = useRef(0);
     const zoomRef = useRef(zoom);
