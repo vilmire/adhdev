@@ -32,6 +32,15 @@ async function waitForReady(endpoint: SessionHostEndpoint, timeoutMs = STARTUP_T
 }
 
 function resolveSessionHostEntry(): string {
+  const localCandidates = [
+    path.resolve(__dirname, '../vendor/session-host-daemon/index.js'),
+    path.resolve(__dirname, '../../vendor/session-host-daemon/index.js'),
+  ];
+  for (const candidate of localCandidates) {
+    if (require('fs').existsSync(candidate)) {
+      return candidate;
+    }
+  }
   return require.resolve('@adhdev/session-host-daemon');
 }
 

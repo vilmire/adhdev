@@ -8,10 +8,8 @@ export default defineConfig({
   target: 'node18',
   splitting: false,
   sourcemap: true,
-  external: [
-    '@adhdev/daemon-core',
-    'ws', 'chalk', 'conf', 'node-pty',
-  ],
+  external: ['ws', 'chalk', 'conf', 'node-pty'],
+  noExternal: [/^@adhdev\//],
   banner: {
     js: '#!/usr/bin/env node',
   },

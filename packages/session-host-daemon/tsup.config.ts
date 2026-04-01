@@ -8,6 +8,6 @@ export default defineConfig({
   target: 'node18',
   splitting: false,
   sourcemap: true,
-  external: ['node-pty', '@adhdev/session-host-core'],
+  external: ['node-pty'],
   noExternal: [],
 });

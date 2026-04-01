@@ -10,14 +10,16 @@
   "scripts": {
     "build": "tsup",
     "bundle:web": "node -e \"const{cpSync,mkdirSync}=require('fs');mkdirSync('public',{recursive:true});cpSync('../web-standalone/dist','public',{recursive:true});console.log('bundled web-standalone → public/')\"",
+    "bundle:vendor": "node ./scripts/vendor-runtime-deps.mjs",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "prepublishOnly": "cd ../.. && npm run build -w packages/daemon-core && npm run build -w packages/web-standalone && cd packages/daemon-standalone && npm run bundle:web && npm run build"
+    "prepublishOnly": "cd ../.. && npm run build -w packages/session-host-daemon && npm run build -w packages/daemon-core && npm run build -w packages/web-standalone && cd packages/daemon-standalone && npm run bundle:web && npm run bundle:vendor && npm run build"
   },
   "files": [
     "dist",
     "public",
+    "vendor",
     "README.md"
   ],
   "publishConfig": {
@@ -31,11 +33,9 @@
   "author": "vilmire",
   "license": "AGPL-3.0-or-later",
   "dependencies": {
-    "@adhdev/daemon-core": "*",
-    "@adhdev/session-host-core": "*",
-    "@adhdev/session-host-daemon": "*",
-    "@adhdev/terminal-mux-cli": "*",
-    "@adhdev/terminal-mux-control": "*",
+    "chalk": "^5.3.0",
+    "conf": "^13.0.0",
+    "node-pty": "^1.1.0",
     "open": "^10.1.0",
     "ws": "^8.19.0"
   },
