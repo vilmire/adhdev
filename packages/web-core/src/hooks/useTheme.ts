@@ -2,7 +2,7 @@
  * useTheme — Shared theme hook for dark/light/system mode.
  *
  * Reads from localStorage('theme') — 'dark' | 'light' | 'system'.
- * 'system' follows the OS preference via prefers-color-scheme.
+ * Default is dark so the first-run product surface matches the landing palette.
  * Sets data-theme attribute on <html> and persists choice.
  */
 import { useState, useEffect, useCallback } from 'react'
@@ -20,7 +20,7 @@ function getStoredPreference(): ThemePreference {
         const v = localStorage.getItem('theme')
         if (v === 'dark' || v === 'light' || v === 'system') return v
     } catch { /* noop */ }
-    return 'system'  // default to system
+    return 'dark'
 }
 
 function resolveTheme(pref: ThemePreference): Theme {

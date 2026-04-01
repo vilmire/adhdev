@@ -81,27 +81,27 @@ button {
 
 :root {
     /* ── Dark Mode (default) ── */
-    --bg-primary: #0f0f13;
-    --bg-secondary: #18181d;
-    --bg-card: rgba(26, 26, 32, 0.9);
+    --bg-primary: #0a0e1a;
+    --bg-secondary: #0f1320;
+    --bg-card: rgba(15, 19, 32, 0.92);
     --bg-glass: rgba(255, 255, 255, 0.04);
-    --bg-glass-hover: rgba(255, 255, 255, 0.08);
+    --bg-glass-hover: rgba(255, 255, 255, 0.06);
 
-    --surface-primary: #111116;
-    --surface-secondary: #18181d;
+    --surface-primary: #111726;
+    --surface-secondary: #151b2d;
 
-    --border-subtle: rgba(255, 255, 255, 0.09);
-    --border-default: rgba(255, 255, 255, 0.14);
-    --border-accent: rgba(139, 92, 246, 0.40);
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border-default: rgba(255, 255, 255, 0.10);
+    --border-accent: rgba(217, 119, 6, 0.24);
 
-    --text-primary: #fafafa;
-    --text-secondary: #a8a8b3;
-    --text-muted: #7e7e8a;
+    --text-primary: #f0f0f5;
+    --text-secondary: #9ca3af;
+    --text-muted: #6b7280;
 
-    --accent-primary: #cf7a45;
-    --accent-primary-light: #e5a176;
-    --accent-secondary: #edbe95;
-    --accent-gradient: linear-gradient(135deg, #cf7a45, #e5a176);
+    --accent-primary: #d97706;
+    --accent-primary-light: #f59e0b;
+    --accent-secondary: #fbbf24;
+    --accent-gradient: linear-gradient(135deg, #d97706, #f59e0b);
 
     --status-online: #22c55e;
     --status-idle: #eab308;
@@ -119,27 +119,27 @@ button {
 
 /* ── Light Mode ────────────────────────────────── */
 :root[data-theme="light"] {
-    --bg-primary: #f6f7f9;
+    --bg-primary: #fff8ee;
     --bg-secondary: #ffffff;
-    --bg-card: rgba(255, 255, 255, 0.95);
-    --bg-glass: rgba(0, 0, 0, 0.03);
-    --bg-glass-hover: rgba(0, 0, 0, 0.06);
+    --bg-card: rgba(255, 255, 255, 0.96);
+    --bg-glass: rgba(217, 119, 6, 0.05);
+    --bg-glass-hover: rgba(217, 119, 6, 0.08);
 
     --surface-primary: #ffffff;
-    --surface-secondary: #f6f7f9;
+    --surface-secondary: #fff1de;
 
-    --border-subtle: rgba(0, 0, 0, 0.08);
-    --border-default: rgba(0, 0, 0, 0.14);
-    --border-accent: rgba(207, 122, 69, 0.30);
+    --border-subtle: rgba(146, 64, 14, 0.08);
+    --border-default: rgba(146, 64, 14, 0.14);
+    --border-accent: rgba(217, 119, 6, 0.22);
 
-    --text-primary: #1a1a2e;
-    --text-secondary: #52525b;
-    --text-muted: #71717a;
+    --text-primary: #24160f;
+    --text-secondary: #6f6255;
+    --text-muted: #938374;
 
-    --accent-primary: #c86f42;
-    --accent-primary-light: #df9067;
-    --accent-secondary: #ebb38c;
-    --accent-gradient: linear-gradient(135deg, #c86f42, #df9067);
+    --accent-primary: #d97706;
+    --accent-primary-light: #f59e0b;
+    --accent-secondary: #fbbf24;
+    --accent-gradient: linear-gradient(135deg, #d97706, #f59e0b);
 
     --status-online: #16a34a;
     --status-idle: #ca8a04;
@@ -153,27 +153,27 @@ button {
 /* Also respond to system preference when no explicit data-theme */
 @media (prefers-color-scheme: light) {
     :root:not([data-theme="dark"]) {
-        --bg-primary: #f6f7f9;
+        --bg-primary: #fff8ee;
         --bg-secondary: #ffffff;
-        --bg-card: rgba(255, 255, 255, 0.95);
-        --bg-glass: rgba(0, 0, 0, 0.03);
-        --bg-glass-hover: rgba(0, 0, 0, 0.06);
+        --bg-card: rgba(255, 255, 255, 0.96);
+        --bg-glass: rgba(217, 119, 6, 0.05);
+        --bg-glass-hover: rgba(217, 119, 6, 0.08);
 
         --surface-primary: #ffffff;
-        --surface-secondary: #f6f7f9;
+        --surface-secondary: #fff1de;
 
-        --border-subtle: rgba(0, 0, 0, 0.08);
-        --border-default: rgba(0, 0, 0, 0.14);
-        --border-accent: rgba(139, 92, 246, 0.30);
+        --border-subtle: rgba(146, 64, 14, 0.08);
+        --border-default: rgba(146, 64, 14, 0.14);
+        --border-accent: rgba(217, 119, 6, 0.22);
 
-        --text-primary: #1a1a2e;
-        --text-secondary: #52525b;
-        --text-muted: #71717a;
+        --text-primary: #24160f;
+        --text-secondary: #6f6255;
+        --text-muted: #938374;
 
-        --accent-primary: #7c3aed;
-        --accent-primary-light: #6d28d9;
-        --accent-secondary: #0ea5e9;
-        --accent-gradient: linear-gradient(135deg, #7c3aed, #0ea5e9);
+        --accent-primary: #d97706;
+        --accent-primary-light: #f59e0b;
+        --accent-secondary: #fbbf24;
+        --accent-gradient: linear-gradient(135deg, #d97706, #f59e0b);
 
         --status-online: #16a34a;
         --status-idle: #ca8a04;
@@ -434,31 +434,31 @@ a:hover {
 
 /* ── Chat Theme: Ember (Dark) ──────────────────── */
 :root[data-chat-theme="ember"] {
-    --chat-user-bg: #e7a677;
+    --chat-user-bg: #f59e0b;
     --chat-user-color: #1a1a1a;
-    --chat-assistant-bg: #18181d;
+    --chat-assistant-bg: #111726;
     --chat-assistant-border: 1px solid rgba(255, 255, 255, 0.08);
-    --chat-action-bg: rgba(207, 122, 69, 0.08);
-    --chat-action-border: 1px solid rgba(207, 122, 69, 0.16);
-    --chat-action-color: #cf7a45;
-    --chat-container-bg: #0f0f13;
-    --chat-typing-bg: #18181d;
+    --chat-action-bg: rgba(217, 119, 6, 0.10);
+    --chat-action-border: 1px solid rgba(217, 119, 6, 0.20);
+    --chat-action-color: #f59e0b;
+    --chat-container-bg: #0a0e1a;
+    --chat-typing-bg: #111726;
     --chat-typing-border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 /* ── Chat Theme: Ember (Light) ─────────────────── */
 :root[data-theme="light"][data-chat-theme="ember"] {
-    --chat-user-bg: #e7a677;
+    --chat-user-bg: #f59e0b;
     --chat-user-color: #1a1a1a;
-    --chat-assistant-bg: #ffffff;
-    --chat-assistant-color: #1a1a2e;
-    --chat-assistant-border: 1px solid rgba(0, 0, 0, 0.08);
-    --chat-action-bg: rgba(200, 111, 66, 0.06);
-    --chat-action-border: 1px solid rgba(200, 111, 66, 0.14);
-    --chat-action-color: #9a4f28;
-    --chat-container-bg: #f0f1f5;
+    --chat-assistant-bg: #fffaf4;
+    --chat-assistant-color: #24160f;
+    --chat-assistant-border: 1px solid rgba(146, 64, 14, 0.10);
+    --chat-action-bg: rgba(217, 119, 6, 0.07);
+    --chat-action-border: 1px solid rgba(217, 119, 6, 0.16);
+    --chat-action-color: #b45309;
+    --chat-container-bg: #fff8ee;
     --chat-typing-bg: #ffffff;
-    --chat-typing-border: 1px solid rgba(0, 0, 0, 0.08);
+    --chat-typing-border: 1px solid rgba(146, 64, 14, 0.10);
 }
 
 /* ── Chat Element Classes ──────────────────────── */
@@ -786,17 +786,17 @@ a:hover {
     }
 
     :root:not([data-theme="dark"])[data-chat-theme="ember"] {
-        --chat-user-bg: #d6aa53;
+        --chat-user-bg: #f59e0b;
         --chat-user-color: #1a1a1a;
-        --chat-assistant-bg: #ffffff;
-        --chat-assistant-color: #1a1a2e;
-        --chat-assistant-border: 1px solid rgba(0, 0, 0, 0.08);
-        --chat-action-bg: rgba(161, 98, 7, 0.06);
-        --chat-action-border: 1px solid rgba(161, 98, 7, 0.14);
-        --chat-action-color: #92400e;
-        --chat-container-bg: #f0f1f5;
+        --chat-assistant-bg: #fffaf4;
+        --chat-assistant-color: #24160f;
+        --chat-assistant-border: 1px solid rgba(146, 64, 14, 0.10);
+        --chat-action-bg: rgba(217, 119, 6, 0.07);
+        --chat-action-border: 1px solid rgba(217, 119, 6, 0.16);
+        --chat-action-color: #b45309;
+        --chat-container-bg: #fff8ee;
         --chat-typing-bg: #ffffff;
-        --chat-typing-border: 1px solid rgba(0, 0, 0, 0.08);
+        --chat-typing-border: 1px solid rgba(146, 64, 14, 0.10);
     }
 
     :root:not([data-theme="dark"])[data-chat-theme="aurora"] {
