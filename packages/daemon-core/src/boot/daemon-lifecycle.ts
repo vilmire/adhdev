@@ -12,7 +12,11 @@ import { DaemonCdpInitializer, type CdpInitializerConfig } from '../cdp/initiali
 import { setupIdeInstance, type CdpSetupContext } from '../cdp/setup.js';
 import { DaemonCommandHandler } from '../commands/handler.js';
 import { DaemonCommandRouter, type CommandRouterDeps } from '../commands/router.js';
-import { DaemonCliManager } from '../commands/cli-manager.js';
+import {
+    DaemonCliManager,
+    type CliTransportFactoryParams,
+    type HostedCliRuntimeDescriptor,
+} from '../commands/cli-manager.js';
 import { DaemonAgentStreamManager } from '../agent-stream/manager.js';
 import { AgentStreamPoller } from '../agent-stream/poller.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
@@ -23,6 +27,7 @@ import { detectIDEs } from '../detection/ide-detector.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { installGlobalInterceptor, LOG } from '../logging/logger.js';
 import { loadConfig } from '../config/config.js';
+import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 
 // ─── Init Config ───
 
@@ -36,6 +41,8 @@ export interface DaemonInitConfig {
         getP2p: () => any;
         onStatusChange: () => void;
         removeAgentTracking: (key: string) => void;
+        createPtyTransportFactory?: (params: CliTransportFactoryParams) => PtyTransportFactory | null;
+        listHostedCliRuntimes?: () => Promise<HostedCliRuntimeDescriptor[]>;
     };
 
     /** CDP config */

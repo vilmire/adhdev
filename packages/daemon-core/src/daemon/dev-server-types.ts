@@ -37,6 +37,7 @@ export interface DevServerContext {
   sendCliSSE(data: any): void;
 
   // Provider directory resolution
+  handleRunScript(type: string, req: http.IncomingMessage, res: http.ServerResponse, parsedBody?: any): Promise<void>;
   findProviderDir(type: string): string | null;
   getLatestScriptVersionDir(scriptsDir: string): string | null;
 }

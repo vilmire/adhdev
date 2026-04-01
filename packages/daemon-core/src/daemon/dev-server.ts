@@ -315,7 +315,7 @@ export class DevServer implements DevServerContext {
     }
   }
 
-  private async handleRunScript(type: string, req: http.IncomingMessage, res: http.ServerResponse, parsedBody?: any): Promise<void> {
+  public async handleRunScript(type: string, req: http.IncomingMessage, res: http.ServerResponse, parsedBody?: any): Promise<void> {
     const body = parsedBody || await this.readBody(req);
     const { script: scriptName, params, ideType: scriptIdeType } = body;
 

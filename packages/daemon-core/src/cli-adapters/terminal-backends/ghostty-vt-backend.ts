@@ -100,6 +100,9 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
 
     constructor(options: TerminalViewportBackendOptions) {
         const binding = loadGhosttyVtBinding(true);
+        if (!binding) {
+            throw new Error('ghostty-vt backend requested but no binding is available');
+        }
         this.terminal = binding.createTerminal({
             cols: Math.max(1, options.cols | 0),
             rows: Math.max(1, options.rows | 0),

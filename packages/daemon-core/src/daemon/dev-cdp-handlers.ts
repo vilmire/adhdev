@@ -151,7 +151,7 @@ export async function handleScriptsRun(ctx: DevServerContext, req: http.Incoming
     return;
   }
   // Delegate to handleRunScript
-  await this.handleRunScript(type, req, res, body);
+  await ctx.handleRunScript(type, req, res, body);
 }
 
 export async function handleTypeAndSend(ctx: DevServerContext, type: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -191,7 +191,7 @@ export async function handleTypeAndSendAt(ctx: DevServerContext, type: string, r
 }
 
 export async function handleScriptHints(ctx: DevServerContext, type: string, _req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-  const dir = this.findProviderDir(type);
+  const dir = ctx.findProviderDir(type);
   if (!dir) { ctx.json(res, 404, { error: `Provider not found: ${type}` }); return; }
 
   // Find scripts.js in the provider dir (may be versioned)
@@ -1000,4 +1000,3 @@ export async function handleDomContext(ctx: DevServerContext, type: string, req:
     ctx.json(res, 500, { error: `DOM context collection failed: ${e.message}` });
   }
 }
-
