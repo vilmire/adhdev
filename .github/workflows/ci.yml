@@ -74,6 +74,7 @@ jobs:
         with:
           name: publish-artifacts
           path: |
+            packages/session-host-daemon/dist
             packages/daemon-core/dist
             packages/daemon-standalone/dist
             packages/web-standalone/dist
@@ -103,19 +104,22 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: publish-artifacts
-          path: .
+          path: packages
 
       - name: Bundle web into daemon-standalone
         run: npm run bundle:web -w packages/daemon-standalone
 
+      - name: Bundle vendored runtime deps into daemon-standalone
+        run: npm run bundle:vendor -w packages/daemon-standalone
+
       - name: Publish @adhdev/daemon-core
         if: env.NODE_AUTH_TOKEN != ''
-        run: cd packages/daemon-core && npm publish --access public || echo '⚠️ daemon-core publish skipped (version may already exist)'
+        run: cd packages/daemon-core && npm publish --access public --ignore-scripts || echo '⚠️ daemon-core publish skipped (version may already exist)'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @adhdev/daemon-standalone
         if: env.NODE_AUTH_TOKEN != ''
-        run: cd packages/daemon-standalone && npm publish --access public || echo '⚠️ daemon-standalone publish skipped (version may already exist)'
+        run: cd packages/daemon-standalone && npm publish --access public --ignore-scripts || echo '⚠️ daemon-standalone publish skipped (version may already exist)'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
