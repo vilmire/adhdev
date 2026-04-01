@@ -174,7 +174,7 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
                     <ApprovalBanner activeConv={activeConv} onModalButton={convoCmds.handleModalButton} />
                     <ChatPane
                         activeConv={activeConv}
-                        ides={globalIdes}
+                        ideEntry={globalIdes.find(ide => ide.id === activeConv.ideId)}
                         handleSendChat={convoCmds.handleSendChat}
                         isSendingChat={convoCmds.isSendingChat}
                         handleFocusAgent={convoCmds.handleFocusAgent}

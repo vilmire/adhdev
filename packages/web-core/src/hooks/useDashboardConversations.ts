@@ -37,6 +37,14 @@ function dedupeChatIdes(ides: DaemonData[]) {
     return Array.from(seen.values())
 }
 
+function sameArrayRefs<T>(prev: T[], next: T[]) {
+    if (prev.length !== next.length) return false
+    for (let i = 0; i < prev.length; i += 1) {
+        if (prev[i] !== next[i]) return false
+    }
+    return true
+}
+
 function applyClearedConversationState(conversations: ActiveConversation[], clearedTabs: Record<string, number>) {
     const now = Date.now()
     return conversations.map(conversation => {
@@ -92,7 +100,16 @@ export function useDashboardConversations({
     clearedTabs,
     hiddenTabs,
 }: UseDashboardConversationsOptions) {
-    const chatIdes = useMemo(() => dedupeChatIdes(ides), [ides])
+    const chatIdesRef = useRef<DaemonData[]>([])
+    const conversationsRef = useRef<ActiveConversation[]>([])
+    const visibleConversationsRef = useRef<ActiveConversation[]>([])
+    const visibleTabKeysRef = useRef<string[]>([])
+    const chatIdes = useMemo(() => {
+        const next = dedupeChatIdes(ides)
+        if (sameArrayRefs(chatIdesRef.current, next)) return chatIdesRef.current
+        chatIdesRef.current = next
+        return next
+    }, [ides])
     const machineNames = useMemo(() => buildMachineNameMap(ides), [ides])
     const cacheRef = useRef<Map<string, ConversationCacheEntry>>(new Map())
 
@@ -138,31 +155,42 @@ export function useDashboardConversations({
         return nextConversations
     }, [chatIdes, localUserMessages, connectionStates, machineNames])
 
-    const conversations = useMemo(
-        () => applyClearedConversationState(baseConversations, clearedTabs),
-        [baseConversations, clearedTabs],
-    )
+    const conversations = useMemo(() => {
+        const next = applyClearedConversationState(baseConversations, clearedTabs)
+        if (sameArrayRefs(conversationsRef.current, next)) return conversationsRef.current
+        conversationsRef.current = next
+        return next
+    }, [baseConversations, clearedTabs])
+    const conversationTargetMap = useMemo(() => {
+        const map = new Map<string, ActiveConversation>()
+        for (const conversation of conversations) {
+            if (conversation.sessionId) map.set(conversation.sessionId, conversation)
+            map.set(conversation.ideId, conversation)
+            map.set(conversation.tabKey, conversation)
+            map.set(conversation.ideType, conversation)
+            map.set(conversation.agentType, conversation)
+        }
+        return map
+    }, [conversations])
 
     const resolveConversationByTarget = useCallback((target: string | null | undefined) => {
         if (!target) return undefined
-        return conversations.find(conversation =>
-            conversation.sessionId === target
-            || conversation.ideId === target
-            || conversation.tabKey === target
-            || conversation.ideType === target
-            || conversation.agentType === target,
-        )
-    }, [conversations])
+        return conversationTargetMap.get(target)
+    }, [conversationTargetMap])
 
-    const visibleConversations = useMemo(
-        () => conversations.filter(conversation => !hiddenTabs.has(conversation.tabKey)),
-        [conversations, hiddenTabs],
-    )
+    const visibleConversations = useMemo(() => {
+        const next = conversations.filter(conversation => !hiddenTabs.has(conversation.tabKey))
+        if (sameArrayRefs(visibleConversationsRef.current, next)) return visibleConversationsRef.current
+        visibleConversationsRef.current = next
+        return next
+    }, [conversations, hiddenTabs])
 
-    const visibleTabKeys = useMemo(
-        () => visibleConversations.map(conversation => conversation.tabKey),
-        [visibleConversations],
-    )
+    const visibleTabKeys = useMemo(() => {
+        const next = visibleConversations.map(conversation => conversation.tabKey)
+        if (sameArrayRefs(visibleTabKeysRef.current, next)) return visibleTabKeysRef.current
+        visibleTabKeysRef.current = next
+        return next
+    }, [visibleConversations])
 
     return {
         chatIdes,

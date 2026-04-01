@@ -204,7 +204,7 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
                     {/* Chat — same ChatPane as Dashboard */}
                     <ChatPane
                         activeConv={activeConv}
-                        ides={[]}
+                        ideEntry={undefined}
                         handleSendChat={handleSendChat}
                         handleFocusAgent={() => {}}
                         isFocusingAgent={false}

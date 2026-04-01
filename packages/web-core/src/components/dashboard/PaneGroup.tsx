@@ -4,7 +4,7 @@
  * Like VS Code editor groups: each group has independent tabs,
  * active tab selection, and content rendering.
  */
-import { useRef, useCallback, type CSSProperties, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { useRef, useCallback, useMemo, type CSSProperties, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import { useTransport } from '../../context/TransportContext'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace'
@@ -82,7 +82,6 @@ export default function PaneGroup({
         activeTabId,
         activeConv,
         sortedConversations,
-        previewOrderRef,
         draggingTabRef,
         selectTab,
         handleTabReorder,
@@ -125,6 +124,22 @@ export default function PaneGroup({
     })
 
     const isCli = activeConv && isCliConv(activeConv) && !isAcpConv(activeConv)
+    const activeIdeEntry = useMemo(
+        () => activeConv ? ides.find(ide => ide.id === activeConv.ideId) : undefined,
+        [ides, activeConv],
+    )
+    const activeScreenshotUrl = activeConv ? screenshotMap[activeConv.ideId] : undefined
+    const clearActiveScreenshot = useCallback(() => {
+        if (!activeConv) return
+        if (!(activeConv.ideId in screenshotMap)) return
+        const next = { ...screenshotMap }
+        delete next[activeConv.ideId]
+        setScreenshotMap(next)
+    }, [activeConv, screenshotMap, setScreenshotMap])
+    const activeActionLogs = useMemo(() => {
+        if (!activeConv) return []
+        return actionLogs.filter(log => log.ideId === activeConv.tabKey)
+    }, [actionLogs, activeConv])
     useDevRenderTrace('PaneGroup', {
         groupIndex,
         conversationCount: conversations.length,
@@ -161,7 +176,6 @@ export default function PaneGroup({
                 groupIndex={groupIndex}
                 numGroups={numGroups}
                 draggingTabRef={draggingTabRef}
-                previewOrderRef={previewOrderRef}
                 onFocus={onFocus}
                 onSelectTab={selectTab}
                 onConversationActivated={handleConversationActivated}
@@ -199,9 +213,9 @@ export default function PaneGroup({
                     <PaneGroupContent
                         activeConv={activeConv}
                         isCli={!!isCli}
-                        ides={ides}
-                        screenshotMap={screenshotMap}
-                        setScreenshotMap={setScreenshotMap}
+                        ideEntry={activeIdeEntry}
+                        screenshotUrl={activeScreenshotUrl}
+                        clearScreenshot={clearActiveScreenshot}
                         ptyBuffers={ptyBuffers}
                         terminalRef={terminalRef}
                         handleModalButton={cmds.handleModalButton}
@@ -210,7 +224,7 @@ export default function PaneGroup({
                         isSendingChat={cmds.isSendingChat}
                         handleFocusAgent={cmds.handleFocusAgent}
                         isFocusingAgent={cmds.isFocusingAgent}
-                        actionLogs={actionLogs}
+                        actionLogs={activeActionLogs}
                         userName={userName}
                     />
                 )}

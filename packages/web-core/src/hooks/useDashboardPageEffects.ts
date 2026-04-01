@@ -108,4 +108,49 @@ export function useDashboardPageEffects({
         window.addEventListener('keydown', handler)
         return () => window.removeEventListener('keydown', handler)
     }, [isSplitMode, conversations, splitTabRelative, numGroups, clearAllSplits, setFocusedGroup])
+
+    useEffect(() => {
+        if (!activeConv) return
+
+        let frame: number | null = null
+        let attempts = 0
+        let lastTotalHeight = -1
+        let stableFrames = 0
+
+        const scrollVisibleChatsToBottom = () => {
+            frame = null
+            const containers = Array.from(document.querySelectorAll<HTMLElement>('[data-chat-scroll]'))
+                .filter(el => el.offsetParent !== null)
+
+            if (containers.length === 0) {
+                if (attempts < 18) {
+                    attempts += 1
+                    frame = requestAnimationFrame(scrollVisibleChatsToBottom)
+                }
+                return
+            }
+
+            let totalHeight = 0
+            for (const el of containers) {
+                el.scrollTop = el.scrollHeight
+                totalHeight += el.scrollHeight
+            }
+
+            if (totalHeight === lastTotalHeight) {
+                stableFrames += 1
+            } else {
+                stableFrames = 0
+                lastTotalHeight = totalHeight
+            }
+
+            attempts += 1
+            if (stableFrames >= 2 || attempts >= 18) return
+            frame = requestAnimationFrame(scrollVisibleChatsToBottom)
+        }
+
+        frame = requestAnimationFrame(scrollVisibleChatsToBottom)
+        return () => {
+            if (frame != null) cancelAnimationFrame(frame)
+        }
+    }, [activeConv?.tabKey])
 }

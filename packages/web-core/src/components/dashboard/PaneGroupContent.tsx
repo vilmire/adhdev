@@ -1,3 +1,4 @@
+import { memo, useCallback } from 'react'
 import type { MutableRefObject, RefObject } from 'react'
 import type { ActiveConversation } from './types'
 import type { DaemonData } from '../../types'
@@ -11,9 +12,9 @@ import { IconWarning } from '../Icons'
 interface PaneGroupContentProps {
     activeConv: ActiveConversation
     isCli: boolean
-    ides: DaemonData[]
-    screenshotMap: Record<string, string>
-    setScreenshotMap: (m: Record<string, string>) => void
+    ideEntry?: DaemonData
+    screenshotUrl?: string
+    clearScreenshot: () => void
     ptyBuffers: MutableRefObject<Map<string, string[]>>
     terminalRef: RefObject<CliTerminalHandle | null>
     handleModalButton: (button: string) => void
@@ -26,12 +27,12 @@ interface PaneGroupContentProps {
     userName?: string
 }
 
-export default function PaneGroupContent({
+const PaneGroupContent = memo(function PaneGroupContent({
     activeConv,
     isCli,
-    ides,
-    screenshotMap,
-    setScreenshotMap,
+    ideEntry,
+    screenshotUrl,
+    clearScreenshot,
     ptyBuffers,
     terminalRef,
     handleModalButton,
@@ -43,20 +44,20 @@ export default function PaneGroupContent({
     actionLogs,
     userName,
 }: PaneGroupContentProps) {
+    const handleDismissScreenshot = useCallback(() => {
+        clearScreenshot()
+    }, [clearScreenshot])
+
     return (
         <>
             <ApprovalBanner activeConv={activeConv} onModalButton={handleModalButton} />
 
             <div className="desktop-only px-3 pt-1 pb-2">
-                {!isCli && activeConv.transport !== 'acp' && screenshotMap[activeConv.ideId] ? (
+                {!isCli && activeConv.transport !== 'acp' && screenshotUrl ? (
                     <ScreenshotViewer
-                        screenshotUrl={screenshotMap[activeConv.ideId]}
+                        screenshotUrl={screenshotUrl}
                         mode="preview"
-                        onDismiss={() => {
-                            const next = { ...screenshotMap }
-                            delete next[activeConv.ideId]
-                            setScreenshotMap(next)
-                        }}
+                        onDismiss={handleDismissScreenshot}
                     />
                 ) : (!isCli && activeConv.transport !== 'acp' && activeConv.cdpConnected === false) ? (
                     <div className="flex items-center gap-2.5 px-3.5 py-2 bg-yellow-500/[0.08] border border-yellow-500/20 rounded-lg text-xs text-text-secondary">
@@ -81,7 +82,7 @@ export default function PaneGroupContent({
             ) : (
                 <ChatPane
                     activeConv={activeConv}
-                    ides={ides}
+                    ideEntry={ideEntry}
                     handleSendChat={handleSendChat}
                     isSendingChat={isSendingChat}
                     handleFocusAgent={handleFocusAgent}
@@ -92,4 +93,21 @@ export default function PaneGroupContent({
             )}
         </>
     )
-}
+}, (prev, next) => (
+    prev.activeConv === next.activeConv
+    && prev.isCli === next.isCli
+    && prev.ideEntry === next.ideEntry
+    && prev.screenshotUrl === next.screenshotUrl
+    && prev.ptyBuffers === next.ptyBuffers
+    && prev.terminalRef === next.terminalRef
+    && prev.handleModalButton === next.handleModalButton
+    && prev.handleRelaunch === next.handleRelaunch
+    && prev.handleSendChat === next.handleSendChat
+    && prev.isSendingChat === next.isSendingChat
+    && prev.handleFocusAgent === next.handleFocusAgent
+    && prev.isFocusingAgent === next.isFocusingAgent
+    && prev.actionLogs === next.actionLogs
+    && prev.userName === next.userName
+));
+
+export default PaneGroupContent

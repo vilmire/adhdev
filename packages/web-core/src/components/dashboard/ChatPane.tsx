@@ -2,9 +2,10 @@
 /**
  * ChatPane — Non-CLI chat view: message list, model/mode bar, and input area.
  */
-import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
-import ChatMessageList from '../ChatMessageList';
+import { useRef, useState, useCallback, useMemo } from 'react';
+import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import DashboardModelModeBar from './ModelModeBar';
+import ChatInputBar from './ChatInputBar';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation } from './types';
 import type { DaemonData } from '../../types';
@@ -15,7 +16,7 @@ import { IconPlug, IconEye, IconFolder } from '../Icons';
 
 export interface ChatPaneProps {
     activeConv: ActiveConversation;
-    ides: DaemonData[];
+    ideEntry?: DaemonData;
     handleSendChat: (message: string) => void;
     isSendingChat?: boolean;
     handleFocusAgent: () => void;
@@ -25,30 +26,42 @@ export interface ChatPaneProps {
     userName?: string;
 }
 
+const DEFAULT_VISIBLE_LIVE_MESSAGES = 60;
+const LIVE_MESSAGE_PAGE_SIZE = 60;
+
 export default function ChatPane({
-    activeConv, ides, handleSendChat,
+    activeConv, ideEntry, handleSendChat,
     isSendingChat = false,
     handleFocusAgent, isFocusingAgent, actionLogs, userName,
 }: ChatPaneProps) {
-    const chatInputRef = useRef<HTMLInputElement>(null);
     const receivedAtCache = useRef<Map<string, number>>(new Map());
     const { sendCommand } = useTransport();
-    const [draftInput, setDraftInput] = useState('');
     useDevRenderTrace('ChatPane', {
         tabKey: activeConv.tabKey,
         messageCount: activeConv.messages.length,
         actionLogCount: actionLogs.length,
-        draftLength: draftInput.length,
         isSendingChat,
     });
 
     // Per-tab history cache — survives tab switches
-    interface TabHistoryState { messages: any[]; offset: number; hasMore: boolean; error: string | null }
+    interface TabHistoryState {
+        messages: any[];
+        offset: number;
+        hasMore: boolean;
+        error: string | null;
+        visibleLiveCount: number;
+    }
     const historyCache = useRef<Map<string, TabHistoryState>>(new Map());
 
     const getTabHistory = useCallback((tabKey: string): TabHistoryState => {
         if (!historyCache.current.has(tabKey)) {
-            historyCache.current.set(tabKey, { messages: [], offset: 0, hasMore: true, error: null });
+            historyCache.current.set(tabKey, {
+                messages: [],
+                offset: 0,
+                hasMore: true,
+                error: null,
+                visibleLiveCount: DEFAULT_VISIBLE_LIVE_MESSAGES,
+            });
         }
         return historyCache.current.get(tabKey)!;
     }, []);
@@ -68,6 +81,7 @@ export default function ChatPane({
     const historyMessages = tabHistory.messages;
     const hasMoreHistory = tabHistory.hasMore;
     const loadError = tabHistory.error;
+    const hiddenLiveCount = Math.max(0, activeConv.messages.length - tabHistory.visibleLiveCount);
 
     const [isLoadingMore, setIsLoadingMore] = useState(false);
 
@@ -75,10 +89,19 @@ export default function ChatPane({
         if (isLoadingMore) return;
         const tk = activeConv.tabKey;
         const currentState = getTabHistory(tk);
+        if (activeConv.messages.length > currentState.visibleLiveCount) {
+            updateTabHistory(tk, {
+                visibleLiveCount: Math.min(
+                    activeConv.messages.length,
+                    currentState.visibleLiveCount + LIVE_MESSAGE_PAGE_SIZE,
+                ),
+                error: null,
+            });
+            return;
+        }
         setIsLoadingMore(true);
         updateTabHistory(tk, { error: null });
         try {
-            const ideEntry = ides.find(i => i.id === activeConv.ideId);
             const daemonId = (ideEntry as any)?.daemonId || activeConv.ideId?.split(':')[0] || '';
             if (!daemonId) {
                 updateTabHistory(tk, { hasMore: false });
@@ -121,32 +144,44 @@ export default function ChatPane({
         } finally {
             setIsLoadingMore(false);
         }
-    }, [isLoadingMore, ides, activeConv, sendCommand, getTabHistory, updateTabHistory]);
+    }, [isLoadingMore, ideEntry, activeConv, sendCommand, getTabHistory, updateTabHistory]);
 
-    // Merge history + live messages (dedup by content hash)
-    useEffect(() => {
-        setDraftInput('');
-    }, [activeConv.tabKey]);
-
-    const allMessages = useMemo(() => {
-        const live = activeConv.messages.map((m: any, i: number) => {
-            const timeKey = `${activeConv.tabKey}:${m.id ?? `i-${i}`}`;
-            let receivedAt = m.receivedAt || receivedAtCache.current.get(timeKey) || 0;
-            if (!receivedAt) {
-                receivedAt = Date.now();
-                receivedAtCache.current.set(timeKey, receivedAt);
-            }
-            return { ...m, receivedAt };
-        });
-        if (historyMessages.length === 0) return live;
+    const { allMessages, receivedAtMap } = useMemo(() => {
+        const liveMessages = hiddenLiveCount > 0
+            ? activeConv.messages.slice(-tabHistory.visibleLiveCount)
+            : activeConv.messages;
+        if (historyMessages.length === 0) {
+            const liveReceivedAtMap: Record<string, number> = {};
+            liveMessages.forEach((message: any, index: number) => {
+                const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;
+                let receivedAt = message.receivedAt || receivedAtCache.current.get(messageKey) || 0;
+                if (!receivedAt) {
+                    receivedAt = Date.now();
+                    receivedAtCache.current.set(messageKey, receivedAt);
+                }
+                liveReceivedAtMap[getChatMessageStableKey(message, index)] = receivedAt;
+            });
+            return { allMessages: liveMessages, receivedAtMap: liveReceivedAtMap };
+        }
 
         // Dedup: exclude history messages already visible in live feed
-        const liveHashes = new Set(live.map((m: any) => `${m.role}:${(m.content || '').slice(0, 100)}`));
+        const liveHashes = new Set(liveMessages.map((m: any) => `${m.role}:${(m.content || '').slice(0, 100)}`));
         const uniqueHistory = historyMessages.filter(
             m => !liveHashes.has(`${m.role}:${(m.content || '').slice(0, 100)}`)
         );
-        return [...uniqueHistory, ...live];
-    }, [activeConv.messages, activeConv.tabKey, historyMessages]);
+        const mergedMessages = [...uniqueHistory, ...liveMessages];
+        const nextReceivedAtMap: Record<string, number> = {};
+        mergedMessages.forEach((message: any, index: number) => {
+            const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;
+            let receivedAt = message.receivedAt || receivedAtCache.current.get(messageKey) || 0;
+            if (!receivedAt) {
+                receivedAt = Date.now();
+                receivedAtCache.current.set(messageKey, receivedAt);
+            }
+            nextReceivedAtMap[getChatMessageStableKey(message, index)] = receivedAt;
+        });
+        return { allMessages: mergedMessages, receivedAtMap: nextReceivedAtMap };
+    }, [activeConv.messages, activeConv.tabKey, hiddenLiveCount, historyMessages, tabHistory.visibleLiveCount]);
     const visibleActionLogs = useMemo(
         () => actionLogs
             .filter(l => l.ideId === activeConv.tabKey)
@@ -212,7 +247,7 @@ export default function ChatPane({
     }, [activeConv.messages.length, activeConv.connectionState, activeConv.status, handleFocusAgent, isFocusingAgent, isLoadingMore, panelLabel]);
 
     return (
-        <>
+        <div className="flex-1 min-h-0 flex flex-col">
             {/* Message Stream */}
             <ChatMessageList
                 messages={allMessages}
@@ -222,16 +257,17 @@ export default function ChatPane({
                 isCliMode={isCliConv(activeConv) || isAcpConv(activeConv)}
                 isWorking={activeConv.status === 'generating'}
                 contextKey={activeConv.tabKey}
+                receivedAtMap={receivedAtMap}
                 onLoadMore={handleLoadMore}
                 isLoadingMore={isLoadingMore}
                 hasMoreHistory={hasMoreHistory}
+                hiddenLiveCount={hiddenLiveCount}
                 loadError={loadError ?? undefined}
                 emptyState={emptyState}
             />
 
             {/* Model/Mode Bar */}
             {!isCliConv(activeConv) && (() => {
-                const ideEntry = ides.find(i => i.id === activeConv.ideId);
                 const isNativeConversation = activeConv.streamSource !== 'agent-stream'
                 const modelBarAgentType = isNativeConversation
                     ? activeConv.ideType
@@ -253,66 +289,12 @@ export default function ChatPane({
                     />
                 );
             })()}
-
-            {/* Input Area */}
-            <div className="dashboard-input-area px-3 py-2.5 bg-[var(--surface-primary)] border-t border-border-subtle shrink-0">
-                <div className="flex gap-2.5 items-center">
-                    <div className="flex-1 relative">
-                        <input
-                            ref={chatInputRef}
-                            type="text"
-                            placeholder={`Send message to ${panelLabel}...`}
-                            value={draftInput}
-                            onChange={e => setDraftInput(e.target.value)}
-                            onPaste={e => {
-                                const pasted = e.clipboardData.getData('text');
-                                if (pasted) setDraftInput(prev => prev + pasted);
-                                e.preventDefault();
-                            }}
-                            onKeyDown={e => {
-                                if (e.key !== 'Enter') return;
-                                if (e.nativeEvent.isComposing) {
-                                    e.preventDefault();
-                                    return;
-                                }
-                                e.preventDefault();
-                                const message = draftInput.trim();
-                                if (!message || isSendingChat) return;
-                                setDraftInput('');
-                                handleSendChat(message);
-                            }}
-                            onBlur={(e) => {
-                                if (window.innerWidth < 768) {
-                                    const related = e.relatedTarget as HTMLElement | null;
-                                    if (related?.tagName === 'BUTTON') return;
-                                    setTimeout(() => {
-                                        document.documentElement.scrollTop = 0;
-                                    }, 300);
-                                }
-                            }}
-                            className="w-full h-10 rounded-[20px] px-4 bg-bg-secondary text-sm text-text-primary"
-                            style={{ border: '1px solid var(--chat-input-border, var(--border-subtle))' }}
-                        />
-                    </div>
-                    <button
-                        onClick={() => {
-                            const message = draftInput.trim();
-                            if (!message || isSendingChat) return;
-                            setDraftInput('');
-                            handleSendChat(message);
-                        }}
-                        disabled={!draftInput.trim() || isSendingChat}
-                        className={`w-10 h-10 rounded-full flex items-center justify-center border-none shrink-0 transition-all duration-300 ${
-                            draftInput.trim() && !isSendingChat ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
-                        }`}
-                        style={draftInput.trim() && !isSendingChat ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
-                    >
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={draftInput.trim() ? 'text-white' : 'text-text-muted'}>
-                            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
-                        </svg>
-                    </button>
-                </div>
-            </div>
-        </>
+            <ChatInputBar
+                contextKey={activeConv.tabKey}
+                panelLabel={panelLabel}
+                isSending={isSendingChat}
+                onSend={handleSendChat}
+            />
+        </div>
     );
 }

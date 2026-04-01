@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MutableRefObject } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace'
 import { useTabShortcuts } from '../../hooks/useTabShortcuts'
 import type { ActiveConversation } from './types'
@@ -9,7 +9,6 @@ interface PaneGroupTabBarProps {
     groupIndex: number
     numGroups: number
     draggingTabRef: MutableRefObject<string | null>
-    previewOrderRef: MutableRefObject<string[] | null>
     onFocus: () => void
     onSelectTab: (tabKey: string) => void
     onConversationActivated: (conversation: ActiveConversation) => void
@@ -24,13 +23,192 @@ interface PaneGroupTabBarProps {
     onHideTab?: (tabKey: string) => void
 }
 
+interface PaneGroupTabBarItemProps {
+    conv: ActiveConversation
+    isActive: boolean
+    isDraggedTab: boolean
+    shortcut?: string
+    conversationKeys: string[]
+    draggingTabRef: MutableRefObject<string | null>
+    onFocus: () => void
+    onSelectTab: (tabKey: string) => void
+    onConversationActivated: (conversation: ActiveConversation) => void
+    onPreviewReorder: (draggedKey: string, targetKey: string, side: 'left' | 'right') => void
+    onReorderTab: (draggedKey: string, targetKey: string, side: 'left' | 'right') => void
+    onCommitPreviewOrder: () => void
+    onClearPreviewOrder: () => void
+    onDragStateReset: () => void
+    onDragTabKeyChange: (tabKey: string | null) => void
+    onReceiveTab?: (tabKey: string) => void
+    onOpenContextMenu: (x: number, y: number, tabKey: string) => void
+    longPressTimer: MutableRefObject<ReturnType<typeof setTimeout> | null>
+}
+
+const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
+    conv,
+    isActive,
+    isDraggedTab,
+    shortcut,
+    conversationKeys,
+    draggingTabRef,
+    onFocus,
+    onSelectTab,
+    onConversationActivated,
+    onPreviewReorder,
+    onReorderTab,
+    onCommitPreviewOrder,
+    onClearPreviewOrder,
+    onDragStateReset,
+    onDragTabKeyChange,
+    onReceiveTab,
+    onOpenContextMenu,
+    longPressTimer,
+}: PaneGroupTabBarItemProps) {
+    const tabClass = conv.status === 'generating' ? 'agent-tab-generating'
+        : conv.status === 'waiting_approval' ? 'agent-tab-waiting' : ''
+    const isReconnecting = conv.connectionState === 'failed' || conv.connectionState === 'closed'
+
+    const handleDragStart = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+        draggingTabRef.current = conv.tabKey
+        onDragTabKeyChange(conv.tabKey)
+        e.dataTransfer.setData('text/tab-key', conv.tabKey)
+        e.dataTransfer.effectAllowed = 'move'
+    }, [conv.tabKey, draggingTabRef, onDragTabKeyChange])
+
+    const handleDragEnd = useCallback(() => {
+        draggingTabRef.current = null
+        onDragTabKeyChange(null)
+        onCommitPreviewOrder()
+        onClearPreviewOrder()
+        onDragStateReset()
+    }, [draggingTabRef, onDragTabKeyChange, onCommitPreviewOrder, onClearPreviewOrder, onDragStateReset])
+
+    const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+        const draggingTabKey = draggingTabRef.current
+        if (!draggingTabKey || draggingTabKey === conv.tabKey) return
+        if (e.dataTransfer.types.includes('text/tab-key')) {
+            e.preventDefault()
+            e.stopPropagation()
+            const rect = e.currentTarget.getBoundingClientRect()
+            const side = e.clientX < rect.left + rect.width / 2 ? 'left' : 'right'
+            onPreviewReorder(draggingTabKey, conv.tabKey, side)
+        }
+    }, [conv.tabKey, draggingTabRef, onPreviewReorder])
+
+    const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        e.stopPropagation()
+        const draggedKey = e.dataTransfer.getData('text/tab-key')
+        if (draggedKey && draggedKey !== conv.tabKey) {
+            const rect = e.currentTarget.getBoundingClientRect()
+            const side = e.clientX < rect.left + rect.width / 2 ? 'left' : 'right'
+            if (conversationKeys.includes(draggedKey)) {
+                onReorderTab(draggedKey, conv.tabKey, side)
+            } else if (onReceiveTab) {
+                onReceiveTab(draggedKey)
+            }
+        }
+        onClearPreviewOrder()
+    }, [conv.tabKey, conversationKeys, onReorderTab, onReceiveTab, onClearPreviewOrder])
+
+    const handleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+        e.stopPropagation()
+        onFocus()
+        onSelectTab(conv.tabKey)
+        onConversationActivated(conv)
+    }, [conv, onConversationActivated, onFocus, onSelectTab])
+
+    const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        onOpenContextMenu(e.clientX, e.clientY, conv.tabKey)
+    }, [conv.tabKey, onOpenContextMenu])
+
+    const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+        const touch = e.touches[0]
+        longPressTimer.current = setTimeout(() => {
+            onOpenContextMenu(touch.clientX, touch.clientY, conv.tabKey)
+        }, 600)
+    }, [conv.tabKey, longPressTimer, onOpenContextMenu])
+
+    const clearLongPress = useCallback(() => {
+        if (longPressTimer.current) clearTimeout(longPressTimer.current)
+    }, [longPressTimer])
+
+    return (
+        <div
+            data-tabkey={conv.tabKey}
+            className={`${tabClass} shrink-0 px-2.5 py-1.5 rounded-t-lg cursor-pointer flex items-center gap-2 relative`}
+            draggable={true}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+            onClick={handleClick}
+            onContextMenu={handleContextMenu}
+            onTouchStart={handleTouchStart}
+            onTouchEnd={clearLongPress}
+            onTouchMove={clearLongPress}
+            style={{
+                background: isActive ? 'var(--bg-primary)' : 'var(--bg-glass)',
+                borderTop: isActive ? '1px solid var(--border-subtle)' : '1px solid transparent',
+                borderLeft: isActive ? '1px solid var(--border-subtle)' : '1px solid transparent',
+                borderRight: isActive ? '1px solid var(--border-subtle)' : '1px solid transparent',
+                opacity: isDraggedTab ? 0.4 : isReconnecting ? (isActive ? 0.6 : 0.3) : (isActive ? 1 : 0.65),
+                transition: 'transform 0.2s ease, opacity 0.15s ease',
+            }}
+        >
+            {conv.status === 'generating' ? (
+                <div className="tab-spinner" />
+            ) : conv.status === 'waiting_approval' ? (
+                <span className="text-[8px] px-[5px] py-px text-yellow-400">▲</span>
+            ) : isReconnecting ? (
+                <span className="text-[8px] px-[5px] py-px text-yellow-400 animate-pulse">○</span>
+            ) : conv.connectionState === 'connecting' || conv.connectionState === 'new' ? (
+                <div className="tab-connecting-spinner" />
+            ) : conv.connectionState === 'connected' ? (
+                <span className="text-[8px] px-[5px] py-px text-green-400">●</span>
+            ) : (
+                <span className="text-[8px] px-[5px] py-px text-text-muted animate-pulse">○</span>
+            )}
+            <div className="min-w-0">
+                <div className="text-xs font-bold whitespace-nowrap overflow-hidden text-ellipsis" style={{ maxWidth: '10ch' }} title={conv.displayPrimary}>{conv.displayPrimary}</div>
+                <div className="text-[8px] opacity-50 flex gap-1 items-center">
+                    {isReconnecting ? (
+                        <span className="text-yellow-400 opacity-100">Reconnecting…</span>
+                    ) : (conv.connectionState === 'connecting' || conv.connectionState === 'new') ? (
+                        <span className="text-blue-400 opacity-100">Connecting<span className="connecting-dots"></span></span>
+                    ) : (
+                        <>
+                            {conv.displaySecondary}
+                            {conv.machineName && (
+                                <>
+                                    <span className="opacity-40">·</span>
+                                    <span className="opacity-70">🖥 {conv.machineName}</span>
+                                </>
+                            )}
+                        </>
+                    )}
+                </div>
+            </div>
+            {shortcut && (
+                <span className="text-[9px] opacity-50 font-mono ml-0.5 shrink-0 bg-bg-secondary px-1 rounded" title={`Ctrl+${shortcut}`}>{shortcut}</span>
+            )}
+        </div>
+    )
+}, (prev, next) => (
+    prev.conv === next.conv
+    && prev.isActive === next.isActive
+    && prev.isDraggedTab === next.isDraggedTab
+    && prev.shortcut === next.shortcut
+    && prev.conversationKeys === next.conversationKeys
+));
+
 export default function PaneGroupTabBar({
     conversations,
     activeTabId,
     groupIndex,
     numGroups,
     draggingTabRef,
-    previewOrderRef,
     onFocus,
     onSelectTab,
     onConversationActivated,
@@ -47,6 +225,7 @@ export default function PaneGroupTabBar({
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabKey: string } | null>(null)
     const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
     const tabBarRef = useRef<HTMLDivElement>(null)
+    const conversationKeys = useMemo(() => conversations.map(conv => conv.tabKey), [conversations])
     useDevRenderTrace('PaneGroupTabBar', {
         groupIndex,
         activeTabId,
@@ -90,6 +269,10 @@ export default function PaneGroupTabBar({
         return () => el.removeEventListener('wheel', handler)
     }, [])
 
+    const openContextMenu = useCallback((x: number, y: number, tabKey: string) => {
+        setCtxMenu({ x, y, tabKey })
+    }, [])
+
     return (
         <>
             <div className="flex items-center bg-bg-secondary border-b border-border-subtle shrink-0 gap-0">
@@ -98,129 +281,29 @@ export default function PaneGroupTabBar({
                     className="flex-1 flex overflow-x-auto overflow-y-visible pt-1.5 pb-0 gap-1 select-none"
                     style={{ paddingLeft: 8, paddingRight: 4, scrollbarWidth: 'none' }}
                 >
-                    {conversations.map((conv) => {
-                        const isActive = activeTabId === conv.tabKey
-                        const tabClass = conv.status === 'generating' ? 'agent-tab-generating'
-                            : conv.status === 'waiting_approval' ? 'agent-tab-waiting' : ''
-                        const isReconnecting = conv.connectionState === 'failed' || conv.connectionState === 'closed'
-                        const isDraggedTab = draggingTabRef.current === conv.tabKey
-
-                        return (
-                            <div
-                                key={conv.tabKey}
-                                data-tabkey={conv.tabKey}
-                                className={`${tabClass} shrink-0 px-2.5 py-1.5 rounded-t-lg cursor-pointer flex items-center gap-2 relative`}
-                                draggable={true}
-                                onDragStart={(e) => {
-                                    draggingTabRef.current = conv.tabKey
-                                    onDragTabKeyChange(conv.tabKey)
-                                    e.dataTransfer.setData('text/tab-key', conv.tabKey)
-                                    e.dataTransfer.effectAllowed = 'move'
-                                }}
-                                onDragEnd={() => {
-                                    draggingTabRef.current = null
-                                    onDragTabKeyChange(null)
-                                    onCommitPreviewOrder()
-                                    previewOrderRef.current = null
-                                    onClearPreviewOrder()
-                                    onDragStateReset()
-                                }}
-                                onDragOver={(e) => {
-                                    const draggingTabKey = draggingTabRef.current
-                                    if (!draggingTabKey || draggingTabKey === conv.tabKey) return
-                                    if (e.dataTransfer.types.includes('text/tab-key')) {
-                                        e.preventDefault()
-                                        e.stopPropagation()
-                                        const rect = e.currentTarget.getBoundingClientRect()
-                                        const side = e.clientX < rect.left + rect.width / 2 ? 'left' : 'right'
-                                        onPreviewReorder(draggingTabKey, conv.tabKey, side)
-                                    }
-                                }}
-                                onDrop={(e) => {
-                                    e.preventDefault()
-                                    e.stopPropagation()
-                                    const draggedKey = e.dataTransfer.getData('text/tab-key')
-                                    if (draggedKey && draggedKey !== conv.tabKey) {
-                                        const rect = e.currentTarget.getBoundingClientRect()
-                                        const side = e.clientX < rect.left + rect.width / 2 ? 'left' : 'right'
-                                        if (conversations.some(c => c.tabKey === draggedKey)) {
-                                            onReorderTab(draggedKey, conv.tabKey, side)
-                                        } else if (onReceiveTab) {
-                                            onReceiveTab(draggedKey)
-                                        }
-                                    }
-                                    onClearPreviewOrder()
-                                }}
-                                onClick={(e) => {
-                                    e.stopPropagation()
-                                    onFocus()
-                                    onSelectTab(conv.tabKey)
-                                    onConversationActivated(conv)
-                                }}
-                                onContextMenu={(e) => {
-                                    e.preventDefault()
-                                    setCtxMenu({ x: e.clientX, y: e.clientY, tabKey: conv.tabKey })
-                                }}
-                                onTouchStart={(e) => {
-                                    const touch = e.touches[0]
-                                    longPressTimer.current = setTimeout(() => {
-                                        setCtxMenu({ x: touch.clientX, y: touch.clientY, tabKey: conv.tabKey })
-                                    }, 600)
-                                }}
-                                onTouchEnd={() => {
-                                    if (longPressTimer.current) clearTimeout(longPressTimer.current)
-                                }}
-                                onTouchMove={() => {
-                                    if (longPressTimer.current) clearTimeout(longPressTimer.current)
-                                }}
-                                style={{
-                                    background: isActive ? 'var(--bg-primary)' : 'var(--bg-glass)',
-                                    borderTop: isActive ? '1px solid var(--border-subtle)' : '1px solid transparent',
-                                    borderLeft: isActive ? '1px solid var(--border-subtle)' : '1px solid transparent',
-                                    borderRight: isActive ? '1px solid var(--border-subtle)' : '1px solid transparent',
-                                    opacity: isDraggedTab ? 0.4 : isReconnecting ? (isActive ? 0.6 : 0.3) : (isActive ? 1 : 0.65),
-                                    transition: 'transform 0.2s ease, opacity 0.15s ease',
-                                }}
-                            >
-                                {conv.status === 'generating' ? (
-                                    <div className="tab-spinner" />
-                                ) : conv.status === 'waiting_approval' ? (
-                                    <span className="text-[8px] px-[5px] py-px text-yellow-400">▲</span>
-                                ) : isReconnecting ? (
-                                    <span className="text-[8px] px-[5px] py-px text-yellow-400 animate-pulse">○</span>
-                                ) : conv.connectionState === 'connecting' || conv.connectionState === 'new' ? (
-                                    <div className="tab-connecting-spinner" />
-                                ) : conv.connectionState === 'connected' ? (
-                                    <span className="text-[8px] px-[5px] py-px text-green-400">●</span>
-                                ) : (
-                                    <span className="text-[8px] px-[5px] py-px text-text-muted animate-pulse">○</span>
-                                )}
-                                <div className="min-w-0">
-                                    <div className="text-xs font-bold whitespace-nowrap overflow-hidden text-ellipsis" style={{ maxWidth: '10ch' }} title={conv.displayPrimary}>{conv.displayPrimary}</div>
-                                    <div className="text-[8px] opacity-50 flex gap-1 items-center">
-                                        {isReconnecting ? (
-                                            <span className="text-yellow-400 opacity-100">Reconnecting…</span>
-                                        ) : (conv.connectionState === 'connecting' || conv.connectionState === 'new') ? (
-                                            <span className="text-blue-400 opacity-100">Connecting<span className="connecting-dots"></span></span>
-                                        ) : (
-                                            <>
-                                                {conv.displaySecondary}
-                                                {conv.machineName && (
-                                                    <>
-                                                        <span className="opacity-40">·</span>
-                                                        <span className="opacity-70">🖥 {conv.machineName}</span>
-                                                    </>
-                                                )}
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-                                {tabShortcuts[conv.tabKey] && (
-                                    <span className="text-[9px] opacity-50 font-mono ml-0.5 shrink-0 bg-bg-secondary px-1 rounded" title={`Ctrl+${tabShortcuts[conv.tabKey]}`}>{tabShortcuts[conv.tabKey]}</span>
-                                )}
-                            </div>
-                        )
-                    })}
+                    {conversations.map((conv) => (
+                        <PaneGroupTabBarItem
+                            key={conv.tabKey}
+                            conv={conv}
+                            isActive={activeTabId === conv.tabKey}
+                            isDraggedTab={draggingTabRef.current === conv.tabKey}
+                            shortcut={tabShortcuts[conv.tabKey]}
+                            conversationKeys={conversationKeys}
+                            draggingTabRef={draggingTabRef}
+                            onFocus={onFocus}
+                            onSelectTab={onSelectTab}
+                            onConversationActivated={onConversationActivated}
+                            onPreviewReorder={onPreviewReorder}
+                            onReorderTab={onReorderTab}
+                            onCommitPreviewOrder={onCommitPreviewOrder}
+                            onClearPreviewOrder={onClearPreviewOrder}
+                            onDragStateReset={onDragStateReset}
+                            onDragTabKeyChange={onDragTabKeyChange}
+                            onReceiveTab={onReceiveTab}
+                            onOpenContextMenu={openContextMenu}
+                            longPressTimer={longPressTimer}
+                        />
+                    ))}
                     {conversations.length === 0 && (
                         <div className="p-2 text-xs opacity-40">No tabs in this group</div>
                     )}

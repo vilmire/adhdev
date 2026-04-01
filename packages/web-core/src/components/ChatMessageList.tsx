@@ -39,6 +39,7 @@ export interface ChatMessageListProps {
     onLoadMore?: () => void;
     isLoadingMore?: boolean;
     hasMoreHistory?: boolean;
+    hiddenLiveCount?: number;
     /** Error message to show on load button (e.g. retry hint) */
     loadError?: string;
 }
@@ -122,6 +123,31 @@ function formatTime(ms?: number): string {
     if (!ms) return '';
     const d = new Date(ms);
     return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+
+function likelyNeedsMarkdownRender(content: string): boolean {
+    return /[`*_#[\]()>-]|https?:\/\/|\n\s*[-*]\s|\n\s*\d+\.\s|\|/.test(content);
+}
+
+export function getChatMessageStableKey(message: ChatMessage, index: number): string {
+    const anyMessage = message as any;
+    const content = typeof anyMessage.content === 'string'
+        ? anyMessage.content
+        : Array.isArray(anyMessage.content)
+            ? anyMessage.content.map((block: any) => block?.text || '').join('\n')
+            : String(anyMessage.content || '');
+    const parts = [
+        anyMessage.id ? `id:${anyMessage.id}` : '',
+        anyMessage._localId ? `local:${anyMessage._localId}` : '',
+        anyMessage._turnKey ? `turn:${anyMessage._turnKey}` : '',
+        typeof anyMessage.index === 'number' ? `msgIndex:${anyMessage.index}` : '',
+        anyMessage.timestamp ? `ts:${anyMessage.timestamp}` : '',
+        anyMessage.role ? `role:${anyMessage.role}` : '',
+        content ? `content:${content.slice(0, 80)}` : '',
+        `fallback:${index}`,
+    ].filter(Boolean);
+
+    return parts.join('|');
 }
 
 const CLI_TRUNCATE = 700;
@@ -225,6 +251,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
         : (showExpandBtn && !isTextExpanded)
             ? displayContent.slice(0, CLI_TRUNCATE)
             : displayContent;
+    const renderAsMarkdown = likelyNeedsMarkdownRender(visibleContent);
 
     return (
         <div className={`max-w-[88%] min-w-0 flex flex-col gap-1 ${isUser ? 'self-end' : 'self-start'}`}>
@@ -257,9 +284,15 @@ const ChatMessageRow = memo(function ChatMessageRow({
                     </div>
                     {displayContent && (
                         <div className="chat-markdown">
-                            <ReactMarkdown remarkPlugins={[remarkGfm, remarkAlert, remarkBreaks]}>
-                                {visibleContent}
-                            </ReactMarkdown>
+                            {renderAsMarkdown ? (
+                                <ReactMarkdown remarkPlugins={[remarkGfm, remarkAlert, remarkBreaks]}>
+                                    {visibleContent}
+                                </ReactMarkdown>
+                            ) : (
+                                <div style={{ whiteSpace: 'pre-wrap' }}>
+                                    {visibleContent}
+                                </div>
+                            )}
                         </div>
                     )}
                     {showExpandBtn && (
@@ -287,7 +320,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
 // ─── Component ────────────────────────────────
 
 const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(function ChatMessageList(
-    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, loadError },
+    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError },
     ref
 ) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -414,7 +447,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             type: 'message' as const,
             data: m,
             index: i,
-            ts: m.receivedAt || receivedAtMap[m.id ?? `i-${i}`] || 0,
+            ts: m.receivedAt || receivedAtMap[getChatMessageStableKey(m, i)] || 0,
         }));
 
         if (!actionLogs || actionLogs.length === 0) return msgItems;
@@ -434,6 +467,10 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         while (logIdx < logItems.length) merged.push(logItems[logIdx++]);
         return merged;
     }, [messages, actionLogs, receivedAtMap]);
+    const hasMoreVisibleContent = hiddenLiveCount > 0 || !!hasMoreHistory;
+    const loadMoreLabel = hiddenLiveCount > 0
+        ? `↑ Show ${Math.min(hiddenLiveCount, 80)} earlier messages${hiddenLiveCount > 80 ? ` (${hiddenLiveCount} hidden)` : ''}`
+        : (loadError ? `↻ ${loadError}` : '↑ Load older messages');
 
     return (
         <div
@@ -447,22 +484,22 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                     Loading older messages...
                 </div>
             )}
-            {hasMoreHistory && !isLoadingMore && (
+            {hasMoreVisibleContent && !isLoadingMore && (
                 <div className="text-center py-2">
                     <button
                         onClick={handleLoadMoreClick}
                         className={`text-[11px] rounded-xl px-4 py-1.5 cursor-pointer border transition-all ${
-                            loadError
+                            loadError && hiddenLiveCount === 0
                                 ? 'bg-transparent border-yellow-500/30 text-yellow-400 opacity-80 hover:opacity-100'
                                 : 'bg-transparent border-border-subtle text-text-muted opacity-70 hover:opacity-100 hover:border-accent/40'
                         }`}
                     >
-                        {loadError ? `↻ ${loadError}` : '↑ Load older messages'}
+                        {loadMoreLabel}
                     </button>
                 </div>
             )}
 
-            {items.length === 0 && !hasMoreHistory && (
+            {items.length === 0 && !hasMoreVisibleContent && (
                 emptyState || (
                     <div className="text-center mt-16 opacity-20 text-[13px]">
                         Waiting for messages...
@@ -483,13 +520,14 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
                 const m = item.data as ChatMessage;
                 const i = item.index;
-                const receivedAt = m.receivedAt || receivedAtMap[m.id ?? `i-${i}`];
-                const expandKey = `${contextKey}-${i}`;
+                const messageKey = getChatMessageStableKey(m, i);
+                const receivedAt = m.receivedAt || receivedAtMap[messageKey];
+                const expandKey = `${contextKey}-${messageKey}`;
                 const isExpanded = expandedMsgs.has(expandKey);
                 const isTextExpanded = expandedTexts.has(expandKey);
                 return (
                     <ChatMessageRow
-                        key={`msg-${m.id ?? i}`}
+                        key={`msg-${messageKey}`}
                         message={m}
                         receivedAt={receivedAt}
                         agentName={agentName}
@@ -541,6 +579,7 @@ const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     && prev.onLoadMore === next.onLoadMore
     && prev.isLoadingMore === next.isLoadingMore
     && prev.hasMoreHistory === next.hasMoreHistory
+    && prev.hiddenLiveCount === next.hiddenLiveCount
     && prev.loadError === next.loadError
 ));
 

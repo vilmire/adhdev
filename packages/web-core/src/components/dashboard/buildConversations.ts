@@ -44,6 +44,25 @@ function getStreamKey(stream: { sessionId?: string; instanceId?: string; agentTy
     return stream.sessionId || stream.instanceId || stream.agentType;
 }
 
+function normalizeMessageContent(content: unknown): string {
+    if (typeof content === 'string') return content.replace(/\s+/g, ' ').trim();
+    if (Array.isArray(content)) {
+        return content
+            .map(block => {
+                if (typeof block === 'string') return block;
+                if (block && typeof block === 'object' && 'text' in block) return String((block as any).text || '');
+                return '';
+            })
+            .join('\n')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+    if (content && typeof content === 'object' && 'text' in content) {
+        return String((content as any).text || '').replace(/\s+/g, ' ').trim();
+    }
+    return String(content || '').replace(/\s+/g, ' ').trim();
+}
+
 function getLocalMessages(
     localUserMessages: Record<string, LocalUserMessage[]>,
     keys: Array<string | undefined>,
@@ -114,11 +133,14 @@ export function buildIdeConversations(
         const nativeLocalMsgs = getLocalMessages(localUserMessages, [ide.id, nativeSessionId]);
         const serverContentCounts = new Map<string, number>();
         nativeServerMsgs.filter((m: any) => m.role === 'user').forEach((m: any) => {
-            serverContentCounts.set(m.content, (serverContentCounts.get(m.content) || 0) + 1);
+            const key = normalizeMessageContent(m.content);
+            if (!key) return;
+            serverContentCounts.set(key, (serverContentCounts.get(key) || 0) + 1);
         });
         const nativePendingLocal = nativeLocalMsgs.filter(lm => {
-            const count = serverContentCounts.get(lm.content) || 0;
-            if (count > 0) { serverContentCounts.set(lm.content, count - 1); return false; }
+            const key = normalizeMessageContent(lm.content);
+            const count = serverContentCounts.get(key) || 0;
+            if (count > 0) { serverContentCounts.set(key, count - 1); return false; }
             return true;
         });
         results.push({
@@ -163,11 +185,14 @@ export function buildIdeConversations(
         const localMsgs = getLocalMessages(localUserMessages, [streamTabKey, stream.sessionId, stream.instanceId]);
         const serverContentCounts = new Map<string, number>();
         serverMsgs.filter((m: any) => m.role === 'user').forEach((m: any) => {
-            serverContentCounts.set(m.content, (serverContentCounts.get(m.content) || 0) + 1);
+            const key = normalizeMessageContent(m.content);
+            if (!key) return;
+            serverContentCounts.set(key, (serverContentCounts.get(key) || 0) + 1);
         });
         const pendingLocal = localMsgs.filter(lm => {
-            const count = serverContentCounts.get(lm.content) || 0;
-            if (count > 0) { serverContentCounts.set(lm.content, count - 1); return false; }
+            const key = normalizeMessageContent(lm.content);
+            const count = serverContentCounts.get(key) || 0;
+            if (count > 0) { serverContentCounts.set(key, count - 1); return false; }
             return true;
         });
         results.push({
