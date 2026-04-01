@@ -119,6 +119,15 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Vendor session-host-core into daemon-core
+        run: |
+          set -euo pipefail
+          target="packages/daemon-core/node_modules/@adhdev/session-host-core"
+          rm -rf "${target}"
+          mkdir -p "${target}"
+          cp packages/session-host-core/package.json "${target}/package.json"
+          cp -R packages/session-host-core/dist "${target}/dist"
+
       - name: Publish @adhdev/daemon-core
         if: env.NODE_AUTH_TOKEN != ''
         run: cd packages/daemon-core && npm publish --access public --ignore-scripts || echo '⚠️ daemon-core publish skipped (version may already exist)'

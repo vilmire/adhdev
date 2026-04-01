@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/daemon-core",
-  "version": "0.7.12",
+  "version": "0.7.13",
   "description": "ADHDev daemon core — CDP, IDE detection, providers, command execution",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -46,6 +46,9 @@
     "node-pty": "^1.1.0",
     "ws": "^8.19.0"
   },
+  "bundleDependencies": [
+    "@adhdev/session-host-core"
+  ],
   "optionalDependencies": {
     "@adhdev/ghostty-vt-node": "*"
   },
