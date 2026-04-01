@@ -78,7 +78,6 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
         hasExtensions,
         resolveConversationByTarget,
     } = useIdeConversations({
-        ideId: ideId || '',
         ideData,
         allIdes: globalIdes,
         connectionStates,

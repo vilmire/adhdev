@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { buildConversations } from '../components/dashboard/buildConversations'
-import type { ActiveConversation } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
 
 type LocalUserMessage = {
@@ -11,7 +10,6 @@ type LocalUserMessage = {
 }
 
 interface UseIdeConversationsOptions {
-    ideId: string
     ideData: DaemonData | undefined
     allIdes: DaemonData[]
     connectionStates: Record<string, string>
@@ -20,7 +18,6 @@ interface UseIdeConversationsOptions {
 }
 
 export function useIdeConversations({
-    ideId,
     ideData,
     allIdes,
     connectionStates,

@@ -63,7 +63,6 @@ export default function App() {
 
   const [inspectResult, setInspectResult] = useState<any>(null)
   const [analyzeResult, setAnalyzeResult] = useState<any>(null)
-  const [analyzing, setAnalyzing] = useState(false)
   const [rightTab, setRightTab] = useState<'inspector' | 'analyze' | 'wizard'>('inspector')
 
   // Wizard state — tag-based conditions with auto search
@@ -84,7 +83,7 @@ export default function App() {
 
   const [fileList, setFileList] = useState<{ path: string; size: number; type: 'file' | 'dir' }[]>([])
   const [showScaffold, setShowScaffold] = useState(false)
-  const [watching, setWatching] = useState(false)
+  const watching = false
   const [spawnTesting, setSpawnTesting] = useState(false)
   const [providerConfig, setProviderConfig] = useState<any>(null)
 
@@ -359,7 +358,6 @@ export default function App() {
       return
     }
     const sel = selector || inspectResult?.element?.fullSelector
-    setAnalyzing(true)
     try {
       const result = await api.analyze({ selector: sel, ideType: ideTarget || undefined })
       setAnalyzeResult(result)
@@ -368,7 +366,6 @@ export default function App() {
       const ancestorCount = result?.ancestorAnalysis?.length || 0
       appendOutput(`🔬 Analyzed: ${sibCount > 0 ? `${sibCount} siblings found` : 'no sibling pattern'}, ${ancestorCount} ancestors scanned`, 'result')
     } catch (err: any) { appendOutput('Analyze failed: ' + err.message, 'error') }
-    setAnalyzing(false)
   }
 
   function copySel(selector: string) {
@@ -461,7 +458,7 @@ export default function App() {
   }
 
   // Insert evaluation code into editor
-  function useInEditor(selector: string, childCount: number) {
+  function useInEditor(selector: string) {
     const code = `// Evaluate: ${selector}
 const parent = document.querySelector('${selector.replace(/'/g, "\\'")}')
 if (!parent) return 'Element not found'
@@ -595,16 +592,6 @@ return children.map((el, i) => ({
       const result = await api.reload()
       if (result.reloaded) { appendOutput(`🔄 Reloaded: ${result.providers?.length || 0} providers`, 'log'); refresh() }
     } catch (e: any) { appendOutput(e.message, 'error') }
-  }
-
-  // ─── Watch ───
-  const eventSourceRef = useRef<EventSource | null>(null)
-  async function toggleWatch() {
-    if (watching) { await api.watchStop(); eventSourceRef.current?.close(); setWatching(false); return }
-    if (!provider) { appendOutput('Select a provider first', 'warn'); return }
-    await api.watchStart(provider, 'readChat'); setWatching(true)
-    const es = new EventSource('/api/watch/events'); eventSourceRef.current = es
-    es.onmessage = (e) => { try { const d = JSON.parse(e.data); if (d.type === 'watch_result') appendOutput(`[watch ${d.elapsed}ms] ${JSON.stringify(d.result, null, 2)}`, 'result'); else if (d.type === 'watch_error') appendOutput(`[watch] ${d.error}`, 'error') } catch {} }
   }
 
   // ─── Edit Source ───
@@ -1316,7 +1303,7 @@ return children.map((el, i) => ({
                               style={{ fontSize: 9, padding: '1px 6px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--accent-green)', borderRadius: 3, cursor: 'pointer' }}>
                               ▶ Test
                             </button>
-                            <button onClick={() => useInEditor(r.selector, r.childCount)}
+                            <button onClick={() => useInEditor(r.selector)}
                               style={{ fontSize: 9, padding: '1px 6px', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--accent)', borderRadius: 3, cursor: 'pointer' }}>
                               → Code
                             </button>

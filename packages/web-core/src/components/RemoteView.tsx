@@ -267,7 +267,6 @@ export default function RemoteView({ onAction, addLog, connState, connScreenshot
 
     const {
         cursorPos,
-        cursorPosRef,
         handleToggleInputMode,
         handleZoomReset,
     } = useRemoteTouchControls({
