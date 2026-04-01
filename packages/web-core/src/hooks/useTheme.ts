@@ -27,6 +27,12 @@ function resolveTheme(pref: ThemePreference): Theme {
     return pref === 'system' ? getSystemTheme() : pref
 }
 
+/** Call on app init to restore persisted general theme */
+export function initTheme() {
+    if (typeof document === 'undefined') return
+    document.documentElement.setAttribute('data-theme', resolveTheme(getStoredPreference()))
+}
+
 export function useTheme() {
     const [preference, setPreferenceState] = useState<ThemePreference>(getStoredPreference)
     const [theme, setThemeState] = useState<Theme>(() => resolveTheme(getStoredPreference()))

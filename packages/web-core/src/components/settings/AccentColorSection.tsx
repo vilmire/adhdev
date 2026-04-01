@@ -8,17 +8,17 @@ import { useState, useEffect } from 'react'
 const STORAGE_KEY = 'adhdev-accent-color'
 
 const PRESETS = [
+    { name: 'Amber', color: '#f59e0b' },
+    { name: 'Orange', color: '#f97316' },
     { name: 'Violet', color: '#8b5cf6' },
     { name: 'Indigo', color: '#6366f1' },
     { name: 'Blue', color: '#3b82f6' },
     { name: 'Cyan', color: '#06b6d4' },
     { name: 'Emerald', color: '#10b981' },
     { name: 'Rose', color: '#f43f5e' },
-    { name: 'Orange', color: '#f97316' },
-    { name: 'Amber', color: '#f59e0b' },
 ]
 
-const DEFAULT_COLOR = '#8b5cf6'
+const DEFAULT_COLOR = '#cf7a45'
 
 function hexToHSL(hex: string): { h: number; s: number; l: number } {
     const r = parseInt(hex.slice(1, 3), 16) / 255

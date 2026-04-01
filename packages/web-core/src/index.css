@@ -98,10 +98,10 @@ button {
     --text-secondary: #a8a8b3;
     --text-muted: #7e7e8a;
 
-    --accent-primary: #8b5cf6;
-    --accent-primary-light: #a78bfa;
-    --accent-secondary: #38bdf8;
-    --accent-gradient: linear-gradient(135deg, #8b5cf6, #38bdf8);
+    --accent-primary: #cf7a45;
+    --accent-primary-light: #e5a176;
+    --accent-secondary: #edbe95;
+    --accent-gradient: linear-gradient(135deg, #cf7a45, #e5a176);
 
     --status-online: #22c55e;
     --status-idle: #eab308;
@@ -130,16 +130,16 @@ button {
 
     --border-subtle: rgba(0, 0, 0, 0.08);
     --border-default: rgba(0, 0, 0, 0.14);
-    --border-accent: rgba(139, 92, 246, 0.30);
+    --border-accent: rgba(207, 122, 69, 0.30);
 
     --text-primary: #1a1a2e;
     --text-secondary: #52525b;
     --text-muted: #71717a;
 
-    --accent-primary: #7c3aed;
-    --accent-primary-light: #6d28d9;
-    --accent-secondary: #0ea5e9;
-    --accent-gradient: linear-gradient(135deg, #7c3aed, #0ea5e9);
+    --accent-primary: #c86f42;
+    --accent-primary-light: #df9067;
+    --accent-secondary: #ebb38c;
+    --accent-gradient: linear-gradient(135deg, #c86f42, #df9067);
 
     --status-online: #16a34a;
     --status-idle: #ca8a04;
@@ -344,7 +344,7 @@ a:hover {
 /* These use var() references so they follow light/dark mode automatically */
 :root {
     /* Bubble — User */
-    --chat-user-bg: linear-gradient(135deg, var(--accent-primary), #4f46e5);
+    --chat-user-bg: var(--accent-primary);
     --chat-user-color: #fff;
     --chat-user-radius: 16px 16px 4px 16px;
     --chat-user-border: none;
@@ -401,6 +401,64 @@ a:hover {
     --chat-typing-bg: var(--bg-secondary);
     --chat-typing-radius: 16px 16px 16px 4px;
     --chat-typing-border: 1px solid var(--border-subtle);
+}
+
+/* ── Chat Theme: Midnight (Dark) ───────────────── */
+:root[data-chat-theme="midnight"] {
+    --chat-user-bg: #8b5cf6;
+    --chat-user-color: #fff;
+    --chat-assistant-bg: #18181d;
+    --chat-assistant-border: 1px solid rgba(255, 255, 255, 0.08);
+    --chat-action-bg: rgba(139, 92, 246, 0.08);
+    --chat-action-border: 1px solid rgba(139, 92, 246, 0.16);
+    --chat-action-color: #8b5cf6;
+    --chat-container-bg: #0f0f13;
+    --chat-typing-bg: #18181d;
+    --chat-typing-border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ── Chat Theme: Midnight (Light) ──────────────── */
+:root[data-theme="light"][data-chat-theme="midnight"] {
+    --chat-user-bg: #7c3aed;
+    --chat-user-color: #fff;
+    --chat-assistant-bg: #ffffff;
+    --chat-assistant-color: #1a1a2e;
+    --chat-assistant-border: 1px solid rgba(0, 0, 0, 0.08);
+    --chat-action-bg: rgba(124, 58, 237, 0.06);
+    --chat-action-border: 1px solid rgba(124, 58, 237, 0.14);
+    --chat-action-color: #6d28d9;
+    --chat-container-bg: #f0f1f5;
+    --chat-typing-bg: #ffffff;
+    --chat-typing-border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+/* ── Chat Theme: Ember (Dark) ──────────────────── */
+:root[data-chat-theme="ember"] {
+    --chat-user-bg: #e7a677;
+    --chat-user-color: #1a1a1a;
+    --chat-assistant-bg: #18181d;
+    --chat-assistant-border: 1px solid rgba(255, 255, 255, 0.08);
+    --chat-action-bg: rgba(207, 122, 69, 0.08);
+    --chat-action-border: 1px solid rgba(207, 122, 69, 0.16);
+    --chat-action-color: #cf7a45;
+    --chat-container-bg: #0f0f13;
+    --chat-typing-bg: #18181d;
+    --chat-typing-border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ── Chat Theme: Ember (Light) ─────────────────── */
+:root[data-theme="light"][data-chat-theme="ember"] {
+    --chat-user-bg: #e7a677;
+    --chat-user-color: #1a1a1a;
+    --chat-assistant-bg: #ffffff;
+    --chat-assistant-color: #1a1a2e;
+    --chat-assistant-border: 1px solid rgba(0, 0, 0, 0.08);
+    --chat-action-bg: rgba(200, 111, 66, 0.06);
+    --chat-action-border: 1px solid rgba(200, 111, 66, 0.14);
+    --chat-action-color: #9a4f28;
+    --chat-container-bg: #f0f1f5;
+    --chat-typing-bg: #ffffff;
+    --chat-typing-border: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 /* ── Chat Element Classes ──────────────────────── */
@@ -602,9 +660,9 @@ a:hover {
 }
 
 /* ── Chat Theme: Aurora (Dark) ─────────────────── */
-/* Vibrant pink-to-orange gradient, rounded bubbles */
+/* Vibrant pink accent, rounded bubbles */
 :root[data-chat-theme="aurora"] {
-    --chat-user-bg: linear-gradient(135deg, #ec4899, #f97316);
+    --chat-user-bg: #ec4899;
     --chat-user-color: #fff;
     --chat-user-radius: 20px 20px 6px 20px;
     --chat-user-border: none;
@@ -713,6 +771,34 @@ a:hover {
 
 /* ── Aurora (Light) system preference ──────────── */
 @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"])[data-chat-theme="midnight"] {
+        --chat-user-bg: #7c3aed;
+        --chat-user-color: #fff;
+        --chat-assistant-bg: #ffffff;
+        --chat-assistant-color: #1a1a2e;
+        --chat-assistant-border: 1px solid rgba(0, 0, 0, 0.08);
+        --chat-action-bg: rgba(124, 58, 237, 0.06);
+        --chat-action-border: 1px solid rgba(124, 58, 237, 0.14);
+        --chat-action-color: #6d28d9;
+        --chat-container-bg: #f0f1f5;
+        --chat-typing-bg: #ffffff;
+        --chat-typing-border: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    :root:not([data-theme="dark"])[data-chat-theme="ember"] {
+        --chat-user-bg: #d6aa53;
+        --chat-user-color: #1a1a1a;
+        --chat-assistant-bg: #ffffff;
+        --chat-assistant-color: #1a1a2e;
+        --chat-assistant-border: 1px solid rgba(0, 0, 0, 0.08);
+        --chat-action-bg: rgba(161, 98, 7, 0.06);
+        --chat-action-border: 1px solid rgba(161, 98, 7, 0.14);
+        --chat-action-color: #92400e;
+        --chat-container-bg: #f0f1f5;
+        --chat-typing-bg: #ffffff;
+        --chat-typing-border: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
     :root:not([data-theme="dark"])[data-chat-theme="aurora"] {
         --chat-assistant-bg: #fef2f8;
         --chat-assistant-color: #1a1a2e;

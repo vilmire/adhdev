@@ -13,7 +13,6 @@ import {
     ConnectedMachinesSection,
     GeneralThemeSection,
     ChatThemeSection,
-    AccentColorSection,
     ToggleRow,
     useBaseDaemons,
     useTransport,
@@ -114,7 +113,7 @@ export default function StandaloneSettings() {
                 </Section>
 
                 {/* ═══ Theme ═══ */}
-                <Section title="Appearance" description="Match the rest of the dashboard with a single place for mode, theme, and accent.">
+                <Section title="Appearance" description="Match the rest of the dashboard with a single place for mode and theme.">
                     <div className="flex flex-col gap-4">
                         <div>
                             <div className="text-xs text-text-muted mb-2 font-medium">Mode</div>
@@ -122,13 +121,8 @@ export default function StandaloneSettings() {
                         </div>
                         <div className="border-t border-border-subtle pt-4">
                             <div className="text-xs text-text-muted mb-1 font-medium">Theme</div>
-                            <p className="text-[11px] text-text-muted mb-3">Choose a preset or create a custom surface and chat palette for the standalone UI.</p>
+                            <p className="text-[11px] text-text-muted mb-3">Choose a preset or create a custom surface, accent, and chat palette for the standalone UI.</p>
                             <ChatThemeSection />
-                        </div>
-                        <div className="border-t border-border-subtle pt-4">
-                            <div className="text-xs text-text-muted mb-1 font-medium">Accent color override</div>
-                            <p className="text-[11px] text-text-muted mb-3">Override preset accents without changing your full theme definition.</p>
-                            <AccentColorSection />
                         </div>
                     </div>
                 </Section>

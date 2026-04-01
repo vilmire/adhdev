@@ -48,13 +48,13 @@ const DEFAULT_CUSTOM_DARK: CustomThemeColors = {
     textMuted: '#7e7e8a',
     borderSubtle: '#1a1a22',
     borderDefault: '#2a2a35',
-    accentColor: '#8b5cf6',
-    userBubble: '#6366f1',
-    userText: '#ffffff',
+    accentColor: '#cf7a45',
+    userBubble: '#e7a677',
+    userText: '#1a1a1a',
     assistantBubble: '#1e1e24',
     assistantText: '#e0e0e0',
     containerBg: '#111114',
-    sendButton: '#6366f1',
+    sendButton: '#cf7a45',
     inputBorder: '#2a2a35',
     bubbleRadius: 16,
 }
@@ -68,13 +68,13 @@ const DEFAULT_CUSTOM_LIGHT: CustomThemeColors = {
     textMuted: '#5c5c6e',
     borderSubtle: '#d8d8e0',
     borderDefault: '#c0c0cc',
-    accentColor: '#7c3aed',
-    userBubble: '#6366f1',
-    userText: '#ffffff',
+    accentColor: '#c86f42',
+    userBubble: '#e7a677',
+    userText: '#1a1a1a',
     assistantBubble: '#f3f4f6',
     assistantText: '#1f2937',
     containerBg: '#f0f1f5',
-    sendButton: '#6366f1',
+    sendButton: '#c86f42',
     inputBorder: '#d1d5db',
     bubbleRadius: 16,
 }
@@ -83,19 +83,28 @@ export const CHAT_THEMES: ChatThemePreset[] = [
     {
         id: 'midnight',
         name: 'Midnight',
-        description: 'Default violet theme',
+        description: 'Classic violet theme',
         preview: {
-            dark: { userBubble: 'linear-gradient(135deg, #8b5cf6, #4f46e5)', assistantBubble: '#18181d', assistantBorder: '1px solid rgba(255,255,255,0.08)', containerBg: '#0f0f13', textColor: 'rgba(255,255,255,0.7)' },
-            light: { userBubble: 'linear-gradient(135deg, #7c3aed, #0ea5e9)', assistantBubble: '#ffffff', assistantBorder: '1px solid rgba(0,0,0,0.08)', containerBg: '#f0f1f5', textColor: '#52525b' },
+            dark: { userBubble: '#8b5cf6', assistantBubble: '#18181d', assistantBorder: '1px solid rgba(255,255,255,0.08)', containerBg: '#0f0f13', textColor: 'rgba(255,255,255,0.7)' },
+            light: { userBubble: '#7c3aed', assistantBubble: '#ffffff', assistantBorder: '1px solid rgba(0,0,0,0.08)', containerBg: '#f0f1f5', textColor: '#52525b' },
+        },
+    },
+    {
+        id: 'ember',
+        name: 'Ember',
+        description: 'Default warm accent theme',
+        preview: {
+            dark: { userBubble: '#e7a677', assistantBubble: '#18181d', assistantBorder: '1px solid rgba(255,255,255,0.08)', containerBg: '#0f0f13', textColor: 'rgba(255,255,255,0.7)' },
+            light: { userBubble: '#e7a677', assistantBubble: '#ffffff', assistantBorder: '1px solid rgba(0,0,0,0.08)', containerBg: '#f0f1f5', textColor: '#52525b' },
         },
     },
     {
         id: 'aurora',
         name: 'Aurora',
-        description: 'Pink-orange gradient',
+        description: 'Pink accent theme',
         preview: {
-            dark: { userBubble: 'linear-gradient(135deg, #ec4899, #f97316)', assistantBubble: '#1e1b2e', assistantBorder: '1px solid rgba(236,72,153,0.12)', containerBg: '#0f0d17', textColor: 'rgba(255,255,255,0.7)' },
-            light: { userBubble: 'linear-gradient(135deg, #ec4899, #f97316)', assistantBubble: '#fef2f8', assistantBorder: '1px solid rgba(236,72,153,0.15)', containerBg: '#f0f1f5', textColor: '#1a1a2e' },
+            dark: { userBubble: '#ec4899', assistantBubble: '#1e1b2e', assistantBorder: '1px solid rgba(236,72,153,0.12)', containerBg: '#0f0d17', textColor: 'rgba(255,255,255,0.7)' },
+            light: { userBubble: '#ec4899', assistantBubble: '#fef2f8', assistantBorder: '1px solid rgba(236,72,153,0.15)', containerBg: '#f0f1f5', textColor: '#1a1a2e' },
         },
     },
     {
@@ -113,8 +122,8 @@ const STORAGE_KEY = 'adhdev-chat-theme'
 const CUSTOM_STORAGE_KEY = 'adhdev-chat-theme-custom'
 
 export function getChatTheme(): string {
-    if (typeof window === 'undefined') return 'midnight'
-    return localStorage.getItem(STORAGE_KEY) || 'midnight'
+    if (typeof window === 'undefined') return 'ember'
+    return localStorage.getItem(STORAGE_KEY) || 'ember'
 }
 
 export function getCustomThemeColors(mode: 'dark' | 'light'): CustomThemeColors {
@@ -144,6 +153,26 @@ function lightenHex(hex: string, amount: number): string {
     const g = Math.min(255, parseInt(hex.slice(3, 5), 16) + amount)
     const b = Math.min(255, parseInt(hex.slice(5, 7), 16) + amount)
     return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
+}
+
+const PRESET_ACCENTS: Record<string, { dark: string; light: string }> = {
+    midnight: { dark: '#8b5cf6', light: '#7c3aed' },
+    ember: { dark: '#cf7a45', light: '#c86f42' },
+    aurora: { dark: '#ec4899', light: '#ec4899' },
+    honey: { dark: '#fbbf24', light: '#fbbf24' },
+}
+
+function applyPresetAccentCSSVars(themeId: string, mode: 'dark' | 'light') {
+    const accent = PRESET_ACCENTS[themeId]?.[mode]
+    if (!accent) return
+
+    const root = document.documentElement
+    root.style.setProperty('--accent-primary', accent)
+    root.style.setProperty('--accent-primary-light', lightenHex(accent, 24))
+    root.style.setProperty('--accent-gradient', `linear-gradient(135deg, ${accent}, ${lightenHex(accent, 18)})`)
+    root.style.setProperty('--border-accent', hexToRgba(accent, 0.35))
+    root.style.setProperty('--nav-active-bg', hexToRgba(accent, 0.10))
+    root.style.setProperty('--nav-active-shadow', `inset 3px 0 0 ${accent}, 0 0 12px ${hexToRgba(accent, 0.06)}`)
 }
 
 function applyCustomCSSVars(colors: CustomThemeColors) {
@@ -213,18 +242,20 @@ export function setChatTheme(themeId: string) {
         applyCustomCSSVars(getCustomThemeColors(mode))
     } else {
         clearCustomCSSVars()
+        applyPresetAccentCSSVars(themeId, isDarkMode() ? 'dark' : 'light')
     }
 }
 
 /** Call on app init to restore persisted theme */
 export function initChatTheme() {
     const theme = getChatTheme()
-    if (theme !== 'midnight') {
-        document.documentElement.setAttribute('data-chat-theme', theme)
-    }
+    document.documentElement.setAttribute('data-chat-theme', theme)
     if (theme === 'custom') {
         const mode = isDarkMode() ? 'dark' : 'light'
         applyCustomCSSVars(getCustomThemeColors(mode))
+    } else {
+        clearCustomCSSVars()
+        applyPresetAccentCSSVars(theme, isDarkMode() ? 'dark' : 'light')
     }
 }
 
@@ -409,8 +440,11 @@ export function ChatThemeSection() {
         const observer = new MutationObserver(() => {
             const d = isDarkMode()
             setDark(d)
-            if (getChatTheme() === 'custom') {
+            const theme = getChatTheme()
+            if (theme === 'custom') {
                 applyCustomCSSVars(getCustomThemeColors(d ? 'dark' : 'light'))
+            } else {
+                applyPresetAccentCSSVars(theme, d ? 'dark' : 'light')
             }
         })
         observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
@@ -418,8 +452,11 @@ export function ChatThemeSection() {
         const handler = () => {
             const d = isDarkMode()
             setDark(d)
-            if (getChatTheme() === 'custom') {
+            const theme = getChatTheme()
+            if (theme === 'custom') {
                 applyCustomCSSVars(getCustomThemeColors(d ? 'dark' : 'light'))
+            } else {
+                applyPresetAccentCSSVars(theme, d ? 'dark' : 'light')
             }
         }
         mq.addEventListener('change', handler)
@@ -427,13 +464,14 @@ export function ChatThemeSection() {
     }, [])
 
     useEffect(() => {
-        if (activeTheme !== 'midnight') {
-            document.documentElement.setAttribute('data-chat-theme', activeTheme)
-        }
+        document.documentElement.setAttribute('data-chat-theme', activeTheme)
         if (activeTheme === 'custom') {
             applyCustomCSSVars(getCustomThemeColors(dark ? 'dark' : 'light'))
+        } else {
+            clearCustomCSSVars()
+            applyPresetAccentCSSVars(activeTheme, dark ? 'dark' : 'light')
         }
-    }, [])
+    }, [activeTheme, dark])
 
     useEffect(() => {
         setCustomColors(getCustomThemeColors(dark ? 'dark' : 'light'))
@@ -442,9 +480,6 @@ export function ChatThemeSection() {
     const handleSelect = (themeId: string) => {
         setActiveTheme(themeId)
         setChatTheme(themeId)
-        if (themeId === 'midnight') {
-            document.documentElement.removeAttribute('data-chat-theme')
-        }
     }
 
     // Build the full list: presets + custom
@@ -479,7 +514,7 @@ export function ChatThemeSection() {
                 {allThemes.map((theme) => {
                     const isActive = activeTheme === theme.id
                     const p = dark ? theme.preview.dark : theme.preview.light
-                    const userTextColor = theme.id === 'honey' ? '#1a1a1a'
+                    const userTextColor = theme.id === 'honey' || theme.id === 'ember' ? '#1a1a1a'
                         : theme.id === 'custom' ? customColors.userText : '#fff'
                     return (
                         <button

@@ -6,13 +6,14 @@
  */
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { StandaloneDaemonProvider, sendCommandViaWs } from './StandaloneDaemonContext'
-import { TransportProvider, MachineDetail, Dashboard, IDEPage, CapabilitiesPage, useBaseDaemons, initChatTheme } from '@adhdev/web-core'
+import { TransportProvider, MachineDetail, Dashboard, IDEPage, CapabilitiesPage, useBaseDaemons, initTheme, initChatTheme } from '@adhdev/web-core'
 import StandaloneLayout from './StandaloneLayout'
 import StandaloneAbout from './StandaloneAbout'
 import StandaloneSettings from './StandaloneSettings'
 import '@adhdev/web-core/index.css'
 
-// Restore chat theme from localStorage on app load
+// Restore persisted appearance before first render so CSS vars resolve correctly.
+initTheme()
 initChatTheme()
 
 /**

@@ -118,7 +118,7 @@ export {
 } from './components/Icons'
 
 // ── Hooks ──
-export { useTheme } from './hooks/useTheme'
+export { useTheme, initTheme } from './hooks/useTheme'
 export type { Theme, ThemePreference } from './hooks/useTheme'
 export { useNotificationPrefs, shouldNotify, getNotificationPrefs, setNotificationPrefs } from './hooks/useNotificationPrefs'
 export type { NotificationPrefs } from './hooks/useNotificationPrefs'
