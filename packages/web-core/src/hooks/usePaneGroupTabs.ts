@@ -30,6 +30,16 @@ export function usePaneGroupTabs({
     const [previewOrder, setPreviewOrder] = useState<string[] | null>(null)
     const previewOrderRef = useRef<string[] | null>(null)
     const draggingTabRef = useRef<string | null>(null)
+    const activeTabChangeRef = useRef(onActiveTabChange)
+    const tabOrderChangeRef = useRef(onTabOrderChange)
+
+    useEffect(() => {
+        activeTabChangeRef.current = onActiveTabChange
+    }, [onActiveTabChange])
+
+    useEffect(() => {
+        tabOrderChangeRef.current = onTabOrderChange
+    }, [onTabOrderChange])
 
     useEffect(() => {
         if (initialActiveTabId && initialActiveTabId !== activeTabId) {
@@ -61,8 +71,10 @@ export function usePaneGroupTabs({
 
     useEffect(() => {
         if (sortedConversations.length === 0) {
-            setActiveTabId(null)
-            onActiveTabChange?.(null)
+            if (activeTabId !== null) {
+                setActiveTabId(null)
+                activeTabChangeRef.current?.(null)
+            }
             return
         }
 
@@ -71,9 +83,11 @@ export function usePaneGroupTabs({
         }
 
         const nextTabKey = sortedConversations[0].tabKey
-        setActiveTabId(nextTabKey)
-        onActiveTabChange?.(nextTabKey)
-    }, [sortedConversations, activeTabId, onActiveTabChange])
+        if (nextTabKey !== activeTabId) {
+            setActiveTabId(nextTabKey)
+            activeTabChangeRef.current?.(nextTabKey)
+        }
+    }, [sortedConversations, activeTabId])
 
     const activeConv = useMemo(
         () => sortedConversations.find(conversation => conversation.tabKey === activeTabId),
@@ -82,8 +96,8 @@ export function usePaneGroupTabs({
 
     const selectTab = useCallback((tabKey: string) => {
         setActiveTabId(tabKey)
-        onActiveTabChange?.(tabKey)
-    }, [onActiveTabChange])
+        activeTabChangeRef.current?.(tabKey)
+    }, [])
 
     const handleTabReorder = useCallback((draggedKey: string, targetKey: string, side: 'left' | 'right') => {
         setTabOrder(prev => {
@@ -93,11 +107,11 @@ export function usePaneGroupTabs({
 
             const insertIndex = side === 'left' ? targetIndex : targetIndex + 1
             next.splice(insertIndex, 0, draggedKey)
-            onTabOrderChange?.(next)
+            tabOrderChangeRef.current?.(next)
             return next
         })
         setPreviewOrder(null)
-    }, [onTabOrderChange])
+    }, [])
 
     const updatePreviewOrder = useCallback((draggedKey: string, targetKey: string, side: 'left' | 'right') => {
         const base = tabOrder.length > 0 ? tabOrder : conversations.map(conversation => conversation.tabKey)
@@ -116,8 +130,8 @@ export function usePaneGroupTabs({
         if (!orderToCommit) return
 
         setTabOrder(orderToCommit)
-        onTabOrderChange?.(orderToCommit)
-    }, [onTabOrderChange])
+        tabOrderChangeRef.current?.(orderToCommit)
+    }, [])
 
     const clearPreviewOrder = useCallback(() => {
         previewOrderRef.current = null
@@ -128,10 +142,10 @@ export function usePaneGroupTabs({
         setTabOrder(prev => {
             const next = prev.filter(key => key !== tabKey)
             next.push(tabKey)
-            onTabOrderChange?.(next)
+            tabOrderChangeRef.current?.(next)
             return next
         })
-    }, [onTabOrderChange])
+    }, [])
 
     return {
         activeTabId,

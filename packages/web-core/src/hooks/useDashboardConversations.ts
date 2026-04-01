@@ -1,13 +1,11 @@
-import { useCallback, useMemo } from 'react'
-import { buildConversations } from '../components/dashboard/buildConversations'
+import { useCallback, useMemo, useRef } from 'react'
+import { buildIdeConversations, buildMachineNameMap, type LocalUserMessage } from '../components/dashboard/buildConversations'
 import type { ActiveConversation } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
 
-type LocalUserMessage = {
-    role: string
-    content: string
-    timestamp: number
-    _localId: string
+type LocalMessageRef = {
+    key: string
+    ref: LocalUserMessage[] | undefined
 }
 
 interface UseDashboardConversationsOptions {
@@ -51,6 +49,42 @@ function applyClearedConversationState(conversations: ActiveConversation[], clea
     })
 }
 
+function getCachedLocalMessageRefs(
+    ide: DaemonData,
+    localUserMessages: Record<string, LocalUserMessage[]>,
+): LocalMessageRef[] {
+    const refs: LocalMessageRef[] = []
+    const nativeSessionId = (ide as any).sessionId || ide.instanceId
+    refs.push({ key: ide.id, ref: localUserMessages[ide.id] })
+    if (nativeSessionId) refs.push({ key: nativeSessionId, ref: localUserMessages[nativeSessionId] })
+
+    for (const stream of ide.agentStreams || []) {
+        const streamKey = stream.sessionId || stream.instanceId || stream.agentType
+        const tabKey = `${ide.id}:${streamKey}`
+        refs.push({ key: tabKey, ref: localUserMessages[tabKey] })
+        if (stream.sessionId) refs.push({ key: stream.sessionId, ref: localUserMessages[stream.sessionId] })
+        if (stream.instanceId) refs.push({ key: stream.instanceId, ref: localUserMessages[stream.instanceId] })
+    }
+
+    return refs
+}
+
+function sameLocalMessageRefs(prev: LocalMessageRef[], next: LocalMessageRef[]) {
+    if (prev.length !== next.length) return false
+    for (let i = 0; i < prev.length; i += 1) {
+        if (prev[i].key !== next[i].key || prev[i].ref !== next[i].ref) return false
+    }
+    return true
+}
+
+type ConversationCacheEntry = {
+    ide: DaemonData
+    connectionState: string
+    machineName?: string
+    localRefs: LocalMessageRef[]
+    conversations: ActiveConversation[]
+}
+
 export function useDashboardConversations({
     ides,
     connectionStates,
@@ -59,11 +93,55 @@ export function useDashboardConversations({
     hiddenTabs,
 }: UseDashboardConversationsOptions) {
     const chatIdes = useMemo(() => dedupeChatIdes(ides), [ides])
+    const machineNames = useMemo(() => buildMachineNameMap(ides), [ides])
+    const cacheRef = useRef<Map<string, ConversationCacheEntry>>(new Map())
 
-    const conversations = useMemo(() => {
-        const next = buildConversations(chatIdes, localUserMessages, ides, connectionStates)
-        return applyClearedConversationState(next, clearedTabs)
-    }, [chatIdes, localUserMessages, ides, connectionStates, clearedTabs])
+    const baseConversations = useMemo(() => {
+        const nextCache = new Map<string, ConversationCacheEntry>()
+        const nextConversations: ActiveConversation[] = []
+
+        for (const ide of chatIdes) {
+            const daemonId = ide.daemonId || ide.id?.split(':')[0] || ide.id
+            const connectionState = connectionStates[daemonId] || 'new'
+            const machineName = (ide.daemonId && machineNames[ide.daemonId]) || undefined
+            const localRefs = getCachedLocalMessageRefs(ide, localUserMessages)
+            const cached = cacheRef.current.get(ide.id)
+
+            if (
+                cached
+                && cached.ide === ide
+                && cached.connectionState === connectionState
+                && cached.machineName === machineName
+                && sameLocalMessageRefs(cached.localRefs, localRefs)
+            ) {
+                nextCache.set(ide.id, cached)
+                nextConversations.push(...cached.conversations)
+                continue
+            }
+
+            const conversations = buildIdeConversations(ide, localUserMessages, {
+                machineName,
+                connectionState,
+            })
+            const entry: ConversationCacheEntry = {
+                ide,
+                connectionState,
+                machineName,
+                localRefs,
+                conversations,
+            }
+            nextCache.set(ide.id, entry)
+            nextConversations.push(...conversations)
+        }
+
+        cacheRef.current = nextCache
+        return nextConversations
+    }, [chatIdes, localUserMessages, connectionStates, machineNames])
+
+    const conversations = useMemo(
+        () => applyClearedConversationState(baseConversations, clearedTabs),
+        [baseConversations, clearedTabs],
+    )
 
     const resolveConversationByTarget = useCallback((target: string | null | undefined) => {
         if (!target) return undefined

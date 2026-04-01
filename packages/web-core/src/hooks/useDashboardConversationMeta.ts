@@ -10,7 +10,6 @@ interface UseDashboardConversationMetaOptions {
     visibleConversations: ActiveConversation[]
     clearedTabs: Record<string, number>
     setClearedTabs: Dispatch<SetStateAction<Record<string, number>>>
-    setMessageReceivedAt: Dispatch<SetStateAction<Record<string, number>>>
     setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
 }
 
@@ -19,7 +18,6 @@ export function useDashboardConversationMeta({
     visibleConversations,
     clearedTabs,
     setClearedTabs,
-    setMessageReceivedAt,
     setActionLogs,
 }: UseDashboardConversationMetaOptions) {
     const ptyBuffers = useRef<Map<string, string[]>>(new Map())
@@ -38,27 +36,6 @@ export function useDashboardConversationMeta({
     [visibleConversations])
 
     useBrowserNotifications(agentStates)
-
-    useEffect(() => {
-        setMessageReceivedAt(prev => {
-            const now = Date.now()
-            let updated = false
-            const next = { ...prev }
-
-            for (const conv of conversations) {
-                if (!conv.messages?.length) continue
-                conv.messages.forEach((message: any, index: number) => {
-                    const key = `${conv.ideId}-${message.id ?? `i-${index}`}`
-                    if (next[key] == null) {
-                        next[key] = now
-                        updated = true
-                    }
-                })
-            }
-
-            return updated ? next : prev
-        })
-    }, [conversations, setMessageReceivedAt])
 
     useEffect(() => {
         const keys = Object.keys(clearedTabs)

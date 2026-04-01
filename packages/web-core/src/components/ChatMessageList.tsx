@@ -5,7 +5,7 @@
  * Supports 5 message types: thought, tool, system, action, standard.
  */
 
-import { memo, useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { memo, useState, useRef, useEffect, useMemo, useCallback, forwardRef, useImperativeHandle } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkAlert from 'remark-github-blockquote-alert';
@@ -124,6 +124,166 @@ function formatTime(ms?: number): string {
     return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
+const CLI_TRUNCATE = 700;
+
+const ActionLogRow = memo(function ActionLogRow({ log }: { log: ActionLog }) {
+    return (
+        <div className="self-center chat-msg-action">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{log.text}</ReactMarkdown>
+            <span className="action-time">{formatTime(log.timestamp)}</span>
+        </div>
+    );
+}, (prev, next) => (
+    prev.log === next.log
+));
+
+interface ChatMessageRowProps {
+    message: ChatMessage;
+    receivedAt?: number;
+    agentName: string;
+    userName?: string;
+    isCliMode: boolean;
+    isExpanded: boolean;
+    isTextExpanded: boolean;
+    onToggleExpanded: () => void;
+    onToggleTextExpanded: () => void;
+}
+
+const ChatMessageRow = memo(function ChatMessageRow({
+    message,
+    receivedAt,
+    agentName,
+    userName,
+    isCliMode,
+    isExpanded,
+    isTextExpanded,
+    onToggleExpanded,
+    onToggleTextExpanded,
+}: ChatMessageRowProps) {
+    const role = (message.role || '').toLowerCase();
+    const isUser = role === 'user' || role === 'human';
+    const kind = message.kind || (role === 'tool' ? 'tool' : 'standard');
+    const contentStr = typeof message.content === 'string'
+        ? message.content
+        : (message.content || []).map((block: any) => block.text || '').join('\n');
+
+    if (kind === 'thought') {
+        const label = (message as any).meta?.label || 'Thought';
+        return (
+            <div className="self-start chat-msg-thought">
+                <div className="chat-msg-header">
+                    <IconThought size={13} />
+                    <span>{label}</span>
+                </div>
+                <div className="chat-msg-body">
+                    {contentStr}
+                </div>
+            </div>
+        );
+    }
+
+    if (kind === 'tool') {
+        return (
+            <div className="self-start chat-msg-tool">
+                <span className="tool-icon">⏺</span>
+                <span className="tool-text">{contentStr.split('\n')[0].slice(0, 80)}</span>
+            </div>
+        );
+    }
+
+    if (kind === 'terminal') {
+        const meta = (message as any).meta || {};
+        const icon = meta.isRunning ? '⏳' : '✅';
+        const label = meta.label || 'Ran command';
+        return (
+            <div className="self-start chat-msg-terminal">
+                <div className="chat-msg-header">
+                    <span>{icon}</span>
+                    <span>{label}</span>
+                </div>
+                <pre className="chat-msg-body">
+                    {contentStr}
+                </pre>
+            </div>
+        );
+    }
+
+    if (kind === 'system') {
+        return (
+            <div className="self-center chat-msg-system">
+                {contentStr.slice(0, 100)}
+            </div>
+        );
+    }
+
+    const parsed = (!isUser && isCliMode) ? parseCliContent(contentStr) : null;
+    const displayContent = parsed ? parsed.textContent : contentStr;
+    const toolEntries = parsed ? Object.entries(parsed.toolCounts) : [];
+    const showExpandBtn = isCliMode && !isUser && !isExpanded && displayContent.length > CLI_TRUNCATE;
+    const visibleContent = isExpanded
+        ? contentStr
+        : (showExpandBtn && !isTextExpanded)
+            ? displayContent.slice(0, CLI_TRUNCATE)
+            : displayContent;
+
+    return (
+        <div className={`max-w-[88%] min-w-0 flex flex-col gap-1 ${isUser ? 'self-end' : 'self-start'}`}>
+            {toolEntries.length > 0 && (
+                <div className="flex flex-wrap gap-1 items-center mb-0.5">
+                    {toolEntries.map(([name, count]) => (
+                        <span key={name} className="chat-tool-badge">
+                            ⏺ {name}{count > 1 ? ` ×${count}` : ''}
+                        </span>
+                    ))}
+                    {parsed?.hasTools && (
+                        <button onClick={onToggleExpanded} className="text-[10px] text-text-muted px-1 py-px opacity-50">
+                            {isExpanded ? 'Collapse' : 'Original'}
+                        </button>
+                    )}
+                    {!displayContent && receivedAt != null && (
+                        <span className="text-[10px] opacity-35 ml-0.5">{formatTime(receivedAt)}</span>
+                    )}
+                </div>
+            )}
+            {(displayContent || isUser) && (
+                <div className={`chat-bubble ${isUser ? 'chat-bubble-user' : 'chat-bubble-assistant'}`}>
+                    <div className={`chat-bubble-header ${displayContent ? 'mb-1.5' : 'mb-0'}`}>
+                        <span className="chat-sender">
+                            {isUser ? (userName || 'You') : agentName}
+                        </span>
+                        {receivedAt != null && (
+                            <span className="chat-time">{formatTime(receivedAt)}</span>
+                        )}
+                    </div>
+                    {displayContent && (
+                        <div className="chat-markdown">
+                            <ReactMarkdown remarkPlugins={[remarkGfm, remarkAlert, remarkBreaks]}>
+                                {visibleContent}
+                            </ReactMarkdown>
+                        </div>
+                    )}
+                    {showExpandBtn && (
+                        <button
+                            onClick={onToggleTextExpanded}
+                            className="mt-1.5 text-[11px] font-semibold text-[var(--accent-primary)] p-0 opacity-80"
+                        >
+                            {isTextExpanded ? 'Collapse ↑' : `Show more (${Math.round(displayContent.length / 100) * 100} chars) ↓`}
+                        </button>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}, (prev, next) => (
+    prev.message === next.message
+    && prev.receivedAt === next.receivedAt
+    && prev.agentName === next.agentName
+    && prev.userName === next.userName
+    && prev.isCliMode === next.isCliMode
+    && prev.isExpanded === next.isExpanded
+    && prev.isTextExpanded === next.isTextExpanded
+));
+
 // ─── Component ────────────────────────────────
 
 const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(function ChatMessageList(
@@ -135,6 +295,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     const prevCountRef = useRef<number>(0);
     const prevContextRef = useRef<string>('');  // Empty value → always different on first render
     const mountedRef = useRef(false);
+    const scrollFrameRef = useRef<number | null>(null);
     const [expandedMsgs, setExpandedMsgs] = useState<Set<string>>(new Set());
     const [expandedTexts, setExpandedTexts] = useState<Set<string>>(new Set());
 
@@ -146,6 +307,22 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         if (!el) return true;
         return el.scrollHeight - el.scrollTop - el.clientHeight < 200;
     };
+
+    const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+        const el = containerRef.current;
+        if (!el) return;
+        el.scrollTo({ top: el.scrollHeight, behavior });
+    }, []);
+
+    const scheduleScrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+        if (scrollFrameRef.current != null) {
+            cancelAnimationFrame(scrollFrameRef.current);
+        }
+        scrollFrameRef.current = requestAnimationFrame(() => {
+            scrollFrameRef.current = null;
+            scrollToBottom(behavior);
+        });
+    }, [scrollToBottom]);
 
     // Last message content length — detect content updates during streaming
     const lastMsgFingerprint = messages.length > 0
@@ -161,12 +338,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         if (isFirstMount || isTabSwitch) {
             mountedRef.current = true;
             userScrolledUp.current = false;
-            const scrollToEnd = () => {
-                endRef.current?.scrollIntoView({ behavior: 'instant' });
-            };
-            requestAnimationFrame(() => requestAnimationFrame(scrollToEnd));
-            setTimeout(scrollToEnd, 100);
-            setTimeout(scrollToEnd, 300);
+            scheduleScrollToBottom('auto');
             prevCountRef.current = messages.length;
             return;
         }
@@ -175,21 +347,25 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         const isNewMessage = messages.length > prevCountRef.current;
         if (isNewMessage) {
             if (!userScrolledUp.current) {
-                // New message: follow instantly
-                endRef.current?.scrollIntoView({ behavior: 'instant' });
+                scheduleScrollToBottom('auto');
             }
         } else if (isNearBottom() && !userScrolledUp.current) {
-            // Streaming content update — follow smoothly
-            endRef.current?.scrollIntoView({ behavior: 'instant' });
+            scheduleScrollToBottom('auto');
         }
         prevCountRef.current = messages.length;
-    }, [lastMsgFingerprint, contextKey, isWorking]);
+    }, [lastMsgFingerprint, contextKey, isWorking, messages.length, scheduleScrollToBottom]);
+
+    useEffect(() => () => {
+        if (scrollFrameRef.current != null) {
+            cancelAnimationFrame(scrollFrameRef.current);
+        }
+    }, []);
 
     useImperativeHandle(ref, () => ({
         scrollToBottom: (behavior: ScrollBehavior = 'smooth') => {
-            endRef.current?.scrollIntoView({ behavior });
+            scrollToBottom(behavior);
         },
-    }));
+    }), [scrollToBottom]);
 
     // Track user scroll intent
     useEffect(() => {
@@ -233,7 +409,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     type LogItem = { type: 'action'; data: ActionLog; index: number; ts: number };
     type MergedItem = MsgItem | LogItem;
 
-    const items: MergedItem[] = (() => {
+    const items: MergedItem[] = useMemo(() => {
         const msgItems: MsgItem[] = messages.map((m, i) => ({
             type: 'message' as const,
             data: m,
@@ -257,9 +433,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         }
         while (logIdx < logItems.length) merged.push(logItems[logIdx++]);
         return merged;
-    })();
-
-    const CLI_TRUNCATE = 700;
+    }, [messages, actionLogs, receivedAtMap]);
 
     return (
         <div
@@ -300,147 +474,40 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                 if (item.type === 'action') {
                     const log = item.data as ActionLog;
                     return (
-                        <div key={`action-${item.index}`} className="self-center chat-msg-action">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{log.text}</ReactMarkdown>
-                            <span className="action-time">{formatTime(log.timestamp)}</span>
-                        </div>
+                        <ActionLogRow
+                            key={`action-${item.index}`}
+                            log={log}
+                        />
                     );
                 }
 
                 const m = item.data as ChatMessage;
                 const i = item.index;
-                const role = (m.role || '').toLowerCase();
-                const isUser = role === 'user' || role === 'human';
-                const kind = m.kind || (role === 'tool' ? 'tool' : 'standard');
                 const receivedAt = m.receivedAt || receivedAtMap[m.id ?? `i-${i}`];
                 const expandKey = `${contextKey}-${i}`;
                 const isExpanded = expandedMsgs.has(expandKey);
                 const isTextExpanded = expandedTexts.has(expandKey);
-
-                const contentStr = typeof m.content === 'string' ? m.content : (m.content || []).map((b: any) => b.text || '').join('\n');
-
-                // thought: collapsible thinking block
-                if (kind === 'thought') {
-                    const label = (m as any).meta?.label || 'Thought';
-                    return (
-                        <div key={`msg-${i}`} className="self-start chat-msg-thought">
-                            <div className="chat-msg-header">
-                                <IconThought size={13} />
-                                <span>{label}</span>
-                            </div>
-                            <div className="chat-msg-body">
-                                {contentStr}
-                            </div>
-                        </div>
-                    );
-                }
-
-                // tool: compact badge
-                if (kind === 'tool') {
-                    return (
-                        <div key={`msg-${i}`} className="self-start chat-msg-tool">
-                            <span className="tool-icon">⏺</span>
-                            <span className="tool-text">{contentStr.split('\n')[0].slice(0, 80)}</span>
-                        </div>
-                    );
-                }
-
-                // terminal: command execution with header + scrollable output
-                if (kind === 'terminal') {
-                    const meta = (m as any).meta || {};
-                    const icon = meta.isRunning ? '⏳' : '✅';
-                    const label = meta.label || 'Ran command';
-                    return (
-                        <div key={`msg-${i}`} className="self-start chat-msg-terminal">
-                            <div className="chat-msg-header">
-                                <span>{icon}</span>
-                                <span>{label}</span>
-                            </div>
-                            <pre className="chat-msg-body">
-                                {contentStr}
-                            </pre>
-                        </div>
-                    );
-                }
-
-                // system: center pill
-                if (kind === 'system') {
-                    return (
-                        <div key={`msg-${i}`} className="self-center chat-msg-system">
-                            {contentStr.slice(0, 100)}
-                        </div>
-                    );
-                }
-
-                // standard message (user / assistant)
-                const parsed = (!isUser && isCliMode) ? parseCliContent(contentStr) : null;
-                const displayContent = parsed ? parsed.textContent : contentStr;
-                const toolEntries = parsed ? Object.entries(parsed.toolCounts) : [];
-
-                const showExpandBtn = isCliMode && !isUser && !isExpanded && displayContent.length > CLI_TRUNCATE;
-                const visibleContent = isExpanded
-                    ? contentStr
-                    : (showExpandBtn && !isTextExpanded)
-                        ? displayContent.slice(0, CLI_TRUNCATE)
-                        : displayContent;
-
                 return (
-                    <div key={`msg-${i}`} className={`max-w-[88%] min-w-0 flex flex-col gap-1 ${isUser ? 'self-end' : 'self-start'}`}>
-                        {/* Tool activity badges (CLI) */}
-                        {toolEntries.length > 0 && (
-                            <div className="flex flex-wrap gap-1 items-center mb-0.5">
-                                {toolEntries.map(([name, count]) => (
-                                    <span key={name} className="chat-tool-badge">
-                                        ⏺ {name}{count > 1 ? ` ×${count}` : ''}
-                                    </span>
-                                ))}
-                                {parsed?.hasTools && (
-                                    <button onClick={() => setExpandedMsgs(prev => {
-                                        const next = new Set(prev);
-                                        isExpanded ? next.delete(expandKey) : next.add(expandKey);
-                                        return next;
-                                    })} className="text-[10px] text-text-muted px-1 py-px opacity-50">
-                                        {isExpanded ? 'Collapse' : 'Original'}
-                                    </button>
-                                )}
-                                {!displayContent && receivedAt != null && (
-                                    <span className="text-[10px] opacity-35 ml-0.5">{formatTime(receivedAt)}</span>
-                                )}
-                            </div>
-                        )}
-                        {/* Message bubble */}
-                        {(displayContent || isUser) && (
-                            <div className={`chat-bubble ${isUser ? 'chat-bubble-user' : 'chat-bubble-assistant'}`}>
-                                <div className={`chat-bubble-header ${displayContent ? 'mb-1.5' : 'mb-0'}`}>
-                                    <span className="chat-sender">
-                                        {isUser ? (userName || 'You') : agentName}
-                                    </span>
-                                    {receivedAt != null && (
-                                        <span className="chat-time">{formatTime(receivedAt)}</span>
-                                    )}
-                                </div>
-                                {displayContent && (
-                                    <div className="chat-markdown">
-                                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkAlert, remarkBreaks]}>
-                                            {visibleContent}
-                                        </ReactMarkdown>
-                                    </div>
-                                )}
-                                {showExpandBtn && (
-                                    <button
-                                        onClick={() => setExpandedTexts(prev => {
-                                            const next = new Set(prev);
-                                            isTextExpanded ? next.delete(expandKey) : next.add(expandKey);
-                                            return next;
-                                        })}
-                                        className="mt-1.5 text-[11px] font-semibold text-[var(--accent-primary)] p-0 opacity-80"
-                                    >
-                                        {isTextExpanded ? 'Collapse ↑' : `Show more (${Math.round(displayContent.length / 100) * 100} chars) ↓`}
-                                    </button>
-                                )}
-                            </div>
-                        )}
-                    </div>
+                    <ChatMessageRow
+                        key={`msg-${m.id ?? i}`}
+                        message={m}
+                        receivedAt={receivedAt}
+                        agentName={agentName}
+                        userName={userName}
+                        isCliMode={isCliMode}
+                        isExpanded={isExpanded}
+                        isTextExpanded={isTextExpanded}
+                        onToggleExpanded={() => setExpandedMsgs(prev => {
+                            const next = new Set(prev);
+                            isExpanded ? next.delete(expandKey) : next.add(expandKey);
+                            return next;
+                        })}
+                        onToggleTextExpanded={() => setExpandedTexts(prev => {
+                            const next = new Set(prev);
+                            isTextExpanded ? next.delete(expandKey) : next.add(expandKey);
+                            return next;
+                        })}
+                    />
                 );
             })}
 

@@ -10,7 +10,6 @@ interface DashboardPaneWorkspaceProps {
     groupSizes: number[]
     groupedConvs: ActiveConversation[][]
     ides: DaemonData[]
-    messageReceivedAt: Record<string, number>
     actionLogs: { ideId: string; text: string; timestamp: number }[]
     ptyBuffers: React.MutableRefObject<Map<string, string[]>>
     screenshotMap: Record<string, string>
@@ -42,7 +41,6 @@ export default function DashboardPaneWorkspace({
     groupSizes,
     groupedConvs,
     ides,
-    messageReceivedAt,
     actionLogs,
     ptyBuffers,
     screenshotMap,
@@ -94,7 +92,6 @@ export default function DashboardPaneWorkspace({
                             } : undefined}
                             conversations={convs}
                             ides={ides}
-                            messageReceivedAt={messageReceivedAt}
                             actionLogs={actionLogs}
                             ptyBuffers={ptyBuffers}
                             screenshotMap={screenshotMap}
@@ -117,10 +114,19 @@ export default function DashboardPaneWorkspace({
                             onReceiveTab={tabKey => moveTabToGroup(tabKey, groupIndex)}
                             detectedIdes={groupIndex === 0 ? detectedIdes : undefined}
                             handleLaunchIde={groupIndex === 0 ? handleLaunchIde : undefined}
-                            onActiveTabChange={tabKey => setGroupActiveTabIds(prev => ({ ...prev, [groupIndex]: tabKey }))}
+                            onActiveTabChange={tabKey => setGroupActiveTabIds(prev => {
+                                if ((prev[groupIndex] ?? null) === (tabKey ?? null)) return prev
+                                return { ...prev, [groupIndex]: tabKey }
+                            })}
                             initialActiveTabId={groupActiveTabIds[groupIndex]}
                             initialTabOrder={groupTabOrders[groupIndex]}
-                            onTabOrderChange={order => setGroupTabOrders(prev => ({ ...prev, [groupIndex]: order }))}
+                            onTabOrderChange={order => setGroupTabOrders(prev => {
+                                const current = prev[groupIndex] || []
+                                if (current.length === order.length && current.every((tabKey, index) => tabKey === order[index])) {
+                                    return prev
+                                }
+                                return { ...prev, [groupIndex]: order }
+                            })}
                             onHideTab={toggleHiddenTab}
                         />
                     </React.Fragment>

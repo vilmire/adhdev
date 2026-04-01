@@ -9,7 +9,7 @@
  *   // standalone: receive data from localhost WS and call injectEntries
  *   // cloud: receive data from CF WS + P2P and call injectEntries
  */
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
 import type { DaemonData } from '../types'
 
 // ─── Types ────────────────────────────────────────────
@@ -240,6 +240,14 @@ export function reconcileIdes(incoming: DaemonData[], prev: DaemonData[]): Daemo
     return Array.from(resultMap.values())
 }
 
+function daemonArraysEqual(prev: DaemonData[], next: DaemonData[]): boolean {
+    if (prev.length !== next.length) return false
+    for (let i = 0; i < prev.length; i += 1) {
+        if (prev[i] !== next[i]) return false
+    }
+    return true
+}
+
 /**
  * expandCompactDaemons — server compact format → flat DaemonData[]
  * standalone/cloud shared
@@ -408,42 +416,80 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
     const [initialLoaded, setInitialLoaded] = useState(false)
     const [toasts, setToasts] = useState<Toast[]>([])
     const [userName, setUserName] = useState<string | undefined>(undefined)
+    const idesRef = useRef(ides)
+
+    useEffect(() => {
+        idesRef.current = ides
+    }, [ides])
 
     const updateIdeChats = useCallback((ideId: string, chats: DaemonData['chats']) => {
-        setIdes(prev => prev.map(ide => ide.id === ideId ? { ...ide, chats } : ide))
+        setIdes(prev => {
+            let changed = false
+            const next = prev.map(ide => {
+                if (ide.id !== ideId) return ide
+                if (ide.chats === chats) return ide
+                changed = true
+                return { ...ide, chats }
+            })
+            return changed ? next : prev
+        })
     }, [])
 
-    const actions: BaseDaemonActions = {
-        injectEntries: (entries: DaemonData[]) => {
-            setIdes(prev => prev.length === 0 ? entries : reconcileIdes(entries, prev))
-        },
-        markLoaded: () => setInitialLoaded(true),
-        getIdes: () => ides,
-    }
+    const injectEntries = useCallback((entries: DaemonData[]) => {
+        setIdes(prev => {
+            const next = prev.length === 0 ? entries : reconcileIdes(entries, prev)
+            return daemonArraysEqual(prev, next) ? prev : next
+        })
+    }, [])
+
+    const markLoaded = useCallback(() => setInitialLoaded(true), [])
+
+    const actions = useMemo<BaseDaemonActions>(() => ({
+        injectEntries,
+        markLoaded,
+        getIdes: () => idesRef.current,
+    }), [injectEntries, markLoaded])
 
     const co = connectionOverrides
+    const contextValue = useMemo<BaseDaemonContextValue>(() => ({
+        ides, updateIdeChats,
+        screenshotMap, setScreenshotMap,
+        initialLoaded,
+        toasts, setToasts,
+        // Connection state — overrides from platform or defaults for standalone
+        wsStatus: co?.wsStatus ?? 'connected',
+        isConnected: co?.isConnected ?? true,
+        connectionStates: co?.connectionStates ?? {},
+        connectionTransports: co?.connectionTransports ?? {},
+        showReconnected: co?.showReconnected ?? false,
+        retryConnection: co?.retryConnection,
+        // Cloud-specific
+        isP2PActive: co?.isP2PActive ?? false,
+        p2pStates: co?.p2pStates ?? {},
+        userRole: co?.userRole,
+        userName,
+        setUserName,
+    }), [
+        ides,
+        updateIdeChats,
+        screenshotMap,
+        initialLoaded,
+        toasts,
+        co?.wsStatus,
+        co?.isConnected,
+        co?.connectionStates,
+        co?.connectionTransports,
+        co?.showReconnected,
+        co?.retryConnection,
+        co?.isP2PActive,
+        co?.p2pStates,
+        co?.userRole,
+        userName,
+    ])
 
     return (
         <ActionsCtx.Provider value={actions}>
-            <BaseDaemonCtx.Provider value={{
-                ides, updateIdeChats,
-                screenshotMap, setScreenshotMap,
-                initialLoaded,
-                toasts, setToasts,
-                // Connection state — overrides from platform or defaults for standalone
-                wsStatus: co?.wsStatus ?? 'connected',
-                isConnected: co?.isConnected ?? true,
-                connectionStates: co?.connectionStates ?? {},
-                connectionTransports: co?.connectionTransports ?? {},
-                showReconnected: co?.showReconnected ?? false,
-                retryConnection: co?.retryConnection,
-                // Cloud-specific
-                isP2PActive: co?.isP2PActive ?? false,
-                p2pStates: co?.p2pStates ?? {},
-                userRole: co?.userRole,
-                userName,
-                setUserName,
-            }}>
+            <BaseDaemonCtx.Provider value={contextValue}>
                 {children}
             </BaseDaemonCtx.Provider>
         </ActionsCtx.Provider>

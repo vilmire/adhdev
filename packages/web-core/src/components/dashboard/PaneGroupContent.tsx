@@ -22,7 +22,6 @@ interface PaneGroupContentProps {
     isSendingChat: boolean
     handleFocusAgent: () => void
     isFocusingAgent: boolean
-    messageReceivedAt: Record<string, number>
     actionLogs: { ideId: string; text: string; timestamp: number }[]
     userName?: string
 }
@@ -41,7 +40,6 @@ export default function PaneGroupContent({
     isSendingChat,
     handleFocusAgent,
     isFocusingAgent,
-    messageReceivedAt,
     actionLogs,
     userName,
 }: PaneGroupContentProps) {
@@ -88,7 +86,6 @@ export default function PaneGroupContent({
                     isSendingChat={isSendingChat}
                     handleFocusAgent={handleFocusAgent}
                     isFocusingAgent={isFocusingAgent}
-                    messageReceivedAt={messageReceivedAt}
                     actionLogs={actionLogs}
                     userName={userName}
                 />

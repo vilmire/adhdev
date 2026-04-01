@@ -65,7 +65,6 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
     const [viewMode, setViewMode] = useState<'split' | 'remote' | 'chat'>(initialView)
     const [historyModalOpen, setHistoryModalOpen] = useState(false)
     const { toasts, setToasts, dismissToast, pushToast } = useIdeToasts()
-    const [messageReceivedAt, setMessageReceivedAt] = useState<Record<string, number>>({})
     const [actionLogs, setActionLogs] = useState<{ ideId: string; text: string; timestamp: number }[]>([])
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
     const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
@@ -89,7 +88,6 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
         visibleConversations: conversations,
         clearedTabs,
         setClearedTabs,
-        setMessageReceivedAt,
         setActionLogs,
     })
     const {
@@ -181,7 +179,6 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
                         isSendingChat={convoCmds.isSendingChat}
                         handleFocusAgent={convoCmds.handleFocusAgent}
                         isFocusingAgent={convoCmds.isFocusingAgent}
-                        messageReceivedAt={messageReceivedAt}
                         actionLogs={actionLogs}
                         userName={daemonCtx.userName}
                     />

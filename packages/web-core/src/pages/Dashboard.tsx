@@ -57,7 +57,6 @@ export default function Dashboard() {
         isMobile,
     } = useDashboardGroupState()
 
-    const [messageReceivedAt, setMessageReceivedAt] = useState<Record<string, number>>({})
     const [historyModalOpen, setHistoryModalOpen] = useState(false)
     const [actionLogs, setActionLogs] = useState<{ ideId: string; text: string; timestamp: number }[]>([])
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
@@ -130,7 +129,6 @@ export default function Dashboard() {
         visibleConversations,
         clearedTabs,
         setClearedTabs,
-        setMessageReceivedAt,
         setActionLogs,
     })
 
@@ -234,7 +232,6 @@ export default function Dashboard() {
                 groupSizes={groupSizes}
                 groupedConvs={groupedConvs}
                 ides={ides}
-                messageReceivedAt={messageReceivedAt}
                 actionLogs={actionLogs}
                 ptyBuffers={ptyBuffers}
                 screenshotMap={screenshotMap}

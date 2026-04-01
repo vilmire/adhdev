@@ -165,9 +165,11 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
     const reconnectTimer = useRef<ReturnType<typeof setTimeout>>()
     const reconnectDelay = useRef(RECONNECT_INTERVAL)
     const mountedRef = useRef(true)
+    const cleaningUpRef = useRef(false)
 
     useEffect(() => {
         mountedRef.current = true
+        cleaningUpRef.current = false
 
         function connect() {
             if (!mountedRef.current) return
@@ -261,6 +263,7 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
             }
 
             ws.onerror = (err) => {
+                if (cleaningUpRef.current || !mountedRef.current) return
                 console.warn('[Standalone WS] Error, will reconnect:', err)
                 // Don't close here — onclose will fire automatically
             }
@@ -282,8 +285,10 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
 
         return () => {
             mountedRef.current = false
+            cleaningUpRef.current = true
             clearTimeout(reconnectTimer.current)
             if (wsRef.current) {
+                wsRef.current.onerror = null
                 wsRef.current.onclose = null // Prevent reconnect on cleanup
                 wsRef.current.close()
                 wsRef.current = null

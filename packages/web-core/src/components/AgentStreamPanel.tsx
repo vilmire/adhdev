@@ -208,7 +208,6 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
                         handleSendChat={handleSendChat}
                         handleFocusAgent={() => {}}
                         isFocusingAgent={false}
-                        messageReceivedAt={{}}
                         actionLogs={[]}
                     />
                 </>

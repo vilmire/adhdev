@@ -20,7 +20,6 @@ export interface ChatPaneProps {
     isSendingChat?: boolean;
     handleFocusAgent: () => void;
     isFocusingAgent: boolean;
-    messageReceivedAt: Record<string, number>;
     actionLogs: { ideId: string; text: string; timestamp: number }[];
     /** Display name for user messages */
     userName?: string;
@@ -29,9 +28,10 @@ export interface ChatPaneProps {
 export default function ChatPane({
     activeConv, ides, handleSendChat,
     isSendingChat = false,
-    handleFocusAgent, isFocusingAgent, messageReceivedAt, actionLogs, userName,
+    handleFocusAgent, isFocusingAgent, actionLogs, userName,
 }: ChatPaneProps) {
     const chatInputRef = useRef<HTMLInputElement>(null);
+    const receivedAtCache = useRef<Map<string, number>>(new Map());
     const { sendCommand } = useTransport();
     const [draftInput, setDraftInput] = useState('');
     useDevRenderTrace('ChatPane', {
@@ -130,8 +130,13 @@ export default function ChatPane({
 
     const allMessages = useMemo(() => {
         const live = activeConv.messages.map((m: any, i: number) => {
-            const timeKey = `${activeConv.ideId}-${m.id ?? `i-${i}`}`;
-            return { ...m, receivedAt: m.receivedAt || messageReceivedAt[timeKey] || 0 };
+            const timeKey = `${activeConv.tabKey}:${m.id ?? `i-${i}`}`;
+            let receivedAt = m.receivedAt || receivedAtCache.current.get(timeKey) || 0;
+            if (!receivedAt) {
+                receivedAt = Date.now();
+                receivedAtCache.current.set(timeKey, receivedAt);
+            }
+            return { ...m, receivedAt };
         });
         if (historyMessages.length === 0) return live;
 
@@ -141,7 +146,7 @@ export default function ChatPane({
             m => !liveHashes.has(`${m.role}:${(m.content || '').slice(0, 100)}`)
         );
         return [...uniqueHistory, ...live];
-    }, [activeConv.messages, activeConv.ideId, historyMessages, messageReceivedAt]);
+    }, [activeConv.messages, activeConv.tabKey, historyMessages]);
     const visibleActionLogs = useMemo(
         () => actionLogs
             .filter(l => l.ideId === activeConv.tabKey)

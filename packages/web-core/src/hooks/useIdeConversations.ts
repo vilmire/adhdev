@@ -1,13 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { buildConversations } from '../components/dashboard/buildConversations'
+import { buildIdeConversations, buildMachineNameMap, type LocalUserMessage } from '../components/dashboard/buildConversations'
 import type { DaemonData } from '../types'
-
-type LocalUserMessage = {
-    role: string
-    content: string
-    timestamp: number
-    _localId: string
-}
 
 interface UseIdeConversationsOptions {
     ideData: DaemonData | undefined
@@ -25,11 +18,16 @@ export function useIdeConversations({
     ideName,
 }: UseIdeConversationsOptions) {
     const [activeChatTab, setActiveChatTab] = useState<string>('native')
+    const machineNames = useMemo(() => buildMachineNameMap(allIdes), [allIdes])
 
     const conversations = useMemo(() => {
         if (!ideData) return []
-        return buildConversations([ideData], localUserMessages, allIdes, connectionStates)
-    }, [ideData, localUserMessages, allIdes, connectionStates])
+        const daemonId = ideData.daemonId || ideData.id?.split(':')[0] || ideData.id
+        return buildIdeConversations(ideData, localUserMessages, {
+            machineName: (ideData.daemonId && machineNames[ideData.daemonId]) || undefined,
+            connectionState: connectionStates[daemonId] || 'new',
+        })
+    }, [ideData, localUserMessages, machineNames, connectionStates])
 
     const nativeConv = useMemo(
         () => conversations.find(conversation => conversation.streamSource === 'native'),

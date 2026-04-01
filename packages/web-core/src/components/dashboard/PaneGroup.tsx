@@ -24,7 +24,6 @@ export interface PaneGroupProps {
     conversations: ActiveConversation[];
     ides: DaemonData[];
     /** Shared state refs */
-    messageReceivedAt: Record<string, number>;
     actionLogs: { ideId: string; text: string; timestamp: number }[];
     ptyBuffers: MutableRefObject<Map<string, string[]>>;
     screenshotMap: Record<string, string>;
@@ -63,7 +62,7 @@ export interface PaneGroupProps {
 
 export default function PaneGroup({
     conversations, ides,
-    messageReceivedAt, actionLogs, ptyBuffers,
+    actionLogs, ptyBuffers,
     screenshotMap, setScreenshotMap,
     sendDaemonCommand, setLocalUserMessages, setActionLogs,
     isStandalone, userName,
@@ -211,7 +210,6 @@ export default function PaneGroup({
                         isSendingChat={cmds.isSendingChat}
                         handleFocusAgent={cmds.handleFocusAgent}
                         isFocusingAgent={cmds.isFocusingAgent}
-                        messageReceivedAt={messageReceivedAt}
                         actionLogs={actionLogs}
                         userName={userName}
                     />
