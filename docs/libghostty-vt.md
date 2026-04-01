@@ -86,6 +86,9 @@ This is intentionally narrower than the full C API. It matches exactly what
 - `cmake`
 - `zig`
 - a C/C++ toolchain supported by CMake
+- optional prebuilt lookup:
+  - local package path: `packages/ghostty-vt-node/prebuilt/<platform>-<arch>-node<abi>/ghostty_vt_node.node`
+  - override root: `ADHDEV_GHOSTTY_VT_PREBUILT_DIR=/path/to/prebuilt-root`
 
 Example:
 

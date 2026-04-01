@@ -1,0 +1,61 @@
+name: Ghostty VT Native
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/ghostty-vt-node/**'
+      - '.github/workflows/ghostty-vt-node.yml'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  native-build:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - runner: macos-14
+            platform: darwin
+            arch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build ghostty-vt-node
+        run: npm run build -w packages/ghostty-vt-node
+
+      - name: Compute artifact triplet
+        run: echo "GHOSTTY_TRIPLET=${{ matrix.platform }}-${{ matrix.arch }}-node$(node -p 'process.versions.modules')" >> "$GITHUB_ENV"
+
+      - name: Stage native artifact
+        run: |
+          mkdir -p "dist-prebuilt/${GHOSTTY_TRIPLET}"
+          cp "packages/ghostty-vt-node/build/Release/ghostty_vt_node.node" "dist-prebuilt/${GHOSTTY_TRIPLET}/ghostty_vt_node.node"
+
+      - name: Upload native artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghostty-vt-node-${{ env.GHOSTTY_TRIPLET }}
+          path: dist-prebuilt/${{ env.GHOSTTY_TRIPLET }}/ghostty_vt_node.node
+          if-no-files-found: error

@@ -21,6 +21,8 @@ jobs:
     strategy:
       matrix:
         node-version: [22]
+    env:
+      ADHDEV_SKIP_GHOSTTY_VT_BUILD: '1'
 
     steps:
       - uses: actions/checkout@v4
@@ -30,17 +32,6 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
-
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: latest
-
-      - name: Restore ghostty native build cache
-        uses: actions/cache@v4
-        with:
-          path: packages/ghostty-vt-node/build
-          key: ${{ runner.os }}-node${{ matrix.node-version }}-ghostty-build-${{ hashFiles('package-lock.json', 'packages/ghostty-vt-node/package.json', 'packages/ghostty-vt-node/CMakeLists.txt', 'packages/ghostty-vt-node/src/**') }}
 
       - name: Install dependencies
         run: npm ci
@@ -66,6 +57,8 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    env:
+      ADHDEV_SKIP_GHOSTTY_VT_BUILD: '1'
 
     steps:
       - uses: actions/checkout@v4
@@ -76,11 +69,6 @@ jobs:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
-
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: latest
 
       - name: Install dependencies
         run: npm ci

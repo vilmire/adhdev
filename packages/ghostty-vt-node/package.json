@@ -12,7 +12,7 @@
     "src"
   ],
   "scripts": {
-    "build": "cmake-js compile",
+    "build": "node ./scripts/build-or-use-prebuilt.mjs",
     "rebuild": "cmake-js rebuild",
     "clean": "cmake-js clean"
   },
