@@ -227,8 +227,8 @@ class EventManager {
             if (ide.id === targetSessionId || (ide as any).sessionId === targetSessionId) {
                 return ide
             }
-            const streams = Array.isArray((ide as any).agentStreams) ? (ide as any).agentStreams : []
-            if (streams.some((stream: any) => stream?.sessionId === targetSessionId)) {
+            const childSessions = Array.isArray((ide as any).childSessions) ? (ide as any).childSessions : []
+            if (childSessions.some((child: any) => child?.id === targetSessionId)) {
                 return ide
             }
         }

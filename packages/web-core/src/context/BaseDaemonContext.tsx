@@ -91,7 +91,7 @@ const ActionsCtx = createContext<BaseDaemonActions>({
 
 /**
  * Payload richness score — higher = richer data.
- * P2P payloads contain activeChat, agentStreams, workspace etc.
+ * P2P payloads contain activeChat, childSessions, workspace etc.
  * WS compact payloads only have routing metadata (id, type, cdpConnected).
  * 
  * This score is the SINGLE source of truth for data quality comparison.
@@ -100,7 +100,7 @@ const ActionsCtx = createContext<BaseDaemonActions>({
 function payloadRichness(ide: DaemonData): number {
     let score = 0;
     if ('activeChat' in ide) score += 4;      // P2P always has this
-    if (ide.agentStreams?.length) score += 2;  // agent stream data
+    if ((ide as any).childSessions?.length) score += 2;  // child session data
     if (ide.workspace) score += 1;             // workspace info
     if ((ide as any).machine) score += 1;      // machine info (daemon entry)
     if (ide.agents?.length) score += 1;        // detected agents
@@ -341,20 +341,7 @@ export function expandCompactDaemons(
                 currentPlan: ide.currentPlan,
                 currentAutoApprove: ide.currentAutoApprove,
                 workspace: ide.workspace || null,
-                agentStreams: childSessions.map(child => ({
-                    sessionId: child.id,
-                    instanceId: child.id,
-                    parentSessionId: child.parentId,
-                    agentType: child.providerType,
-                    agentName: child.providerName || child.providerType,
-                    extensionId: child.providerType,
-                    transport: child.transport,
-                    status: child.status || 'idle',
-                    title: child.title,
-                    messages: [],
-                    inputContent: '',
-                    activeModal: null,
-                })),
+                childSessions,
                 timestamp: ts,
             } as any)
         }

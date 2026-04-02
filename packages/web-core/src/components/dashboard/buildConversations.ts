@@ -104,8 +104,18 @@ export function buildIdeConversations(
     const connectionState = context.connectionState;
     const workspaceName = getWorkspaceName(ide);
     const ideLabel = formatIdeType(ide.type);
-    const rawStreams = ide.agentStreams;
-    const streams: { sessionId?: string; instanceId?: string; agentType: string; agentName: string; status: string; title?: string; messages: any[]; activeModal?: { message: string; buttons: string[] } }[] = Array.isArray(rawStreams) ? rawStreams.map(s => ({ ...s, activeModal: s.activeModal ?? undefined })) : [];
+    const streams: { sessionId?: string; instanceId?: string; agentType: string; agentName: string; status: string; title?: string; messages: any[]; activeModal?: { message: string; buttons: string[] } }[] = Array.isArray(ide.childSessions)
+        ? ide.childSessions.map(child => ({
+            sessionId: child.id,
+            instanceId: child.id,
+            agentType: child.providerType,
+            agentName: child.providerName,
+            status: child.status,
+            title: child.title,
+            messages: child.activeChat?.messages || [],
+            activeModal: child.activeChat?.activeModal || undefined,
+        }))
+        : [];
     const useConversationFirst = isConversationFirstIde(ide);
 
     // Parent IDE chat title — shared with extension tabs

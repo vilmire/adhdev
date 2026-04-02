@@ -66,12 +66,11 @@ function getCachedLocalMessageRefs(
     refs.push({ key: ide.id, ref: localUserMessages[ide.id] })
     if (nativeSessionId) refs.push({ key: nativeSessionId, ref: localUserMessages[nativeSessionId] })
 
-    for (const stream of ide.agentStreams || []) {
-        const streamKey = stream.sessionId || stream.instanceId || stream.agentType
+    for (const child of ide.childSessions || []) {
+        const streamKey = child.id || child.providerType
         const tabKey = `${ide.id}:${streamKey}`
         refs.push({ key: tabKey, ref: localUserMessages[tabKey] })
-        if (stream.sessionId) refs.push({ key: stream.sessionId, ref: localUserMessages[stream.sessionId] })
-        if (stream.instanceId) refs.push({ key: stream.instanceId, ref: localUserMessages[stream.instanceId] })
+        refs.push({ key: child.id, ref: localUserMessages[child.id] })
     }
 
     return refs

@@ -13,6 +13,7 @@ import type {
     ActiveChatData,
     AvailableProviderInfo,
     ProviderResumeCapability,
+    SessionEntry,
 } from '@adhdev/daemon-core';
 
 // Re-export shared types for convenience
@@ -102,6 +103,7 @@ export interface BaseDaemonData {
         dir: string;
         homeDir: string;
     };
+    childSessions?: SessionEntry[];
     agentStreams?: AgentSessionStream[];
     availableProviders?: AvailableProviderInfo[];
     daemonMode?: boolean;

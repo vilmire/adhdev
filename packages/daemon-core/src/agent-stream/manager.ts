@@ -108,7 +108,7 @@ export class DaemonAgentStreamManager {
 
     private resolveSessionIdForTarget(parentSessionId: string, agentType: string): string | null {
         const child = (this.sessionRegistry?.listChildren(parentSessionId) || [])
-            .find((entry) => entry.providerCategory === 'extension' && entry.providerType === agentType);
+            .find((entry) => entry.transport === 'cdp-webview' && entry.providerType === agentType);
         return child?.sessionId || null;
     }
 
@@ -118,7 +118,7 @@ export class DaemonAgentStreamManager {
         runtimeSessionId: string,
     ): Promise<ManagedAgent | null> {
         const target = this.getSessionTarget(runtimeSessionId);
-        if (!target || target.providerCategory !== 'extension') return null;
+        if (!target || target.transport !== 'cdp-webview') return null;
         const adapter = this.adaptersByType.get(target.providerType);
         if (!adapter) return null;
         const targets = await cdp.discoverAgentWebviews();

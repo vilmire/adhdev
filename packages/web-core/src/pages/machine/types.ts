@@ -2,12 +2,14 @@
  * MachineDetail — Shared types & utils for machine sub-tabs.
  */
 
+import type { SessionEntry } from '../../types'
+
 // ─── Types ───────────────────────────────────────────
 export interface IdeSessionEntry {
     id: string; type: string; version: string; instanceId: string; status: string
     workspace: string | null; terminals: number
     aiAgents: { id: string; name: string; status: string; version?: string }[]
-    activeChat: any; chats: any[]; agentStreams: any[]
+    activeChat: any; chats: any[]; childSessions: SessionEntry[]
     cdpConnected: boolean; daemonId: string
 }
 

@@ -121,7 +121,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             aiAgents: dedupeAgents((i as any).aiAgents || i.agents || []),
             activeChat: (i as any).activeChat || null,
             chats: (i as any).chats || [],
-            agentStreams: (i as any).agentStreams || [],
+            childSessions: (i as any).childSessions || [],
             cdpConnected: (i as any).cdpConnected || false,
             daemonId: machineId!,
         }))

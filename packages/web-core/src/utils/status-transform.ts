@@ -8,7 +8,6 @@
  *   - web-standalone: StandaloneDaemonContext (localhost WS)
  */
 import type { StatusReportPayload, SessionEntry } from '@adhdev/daemon-core'
-import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import type { DaemonData } from '../types'
 
 export interface StatusTransformOptions {
@@ -100,6 +99,7 @@ export function statusPayloadToEntries(
             instanceId: session.id,
             workspace: session.workspace,
             terminals: 0,
+            childSessions,
             agents: childSessions.map((child) => ({
                 id: child.id,
                 name: child.providerName,
@@ -108,21 +108,6 @@ export function statusPayloadToEntries(
             })),
             activeChat: session.activeChat,
             chats: [],
-            agentStreams: childSessions.map((child) => ({
-                sessionId: child.id,
-                instanceId: child.id,
-                parentSessionId: child.parentId,
-                agentType: child.providerType,
-                agentName: child.providerName,
-                extensionId: child.providerType,
-                transport: child.transport,
-                status: normalizeManagedStatus(child.status, { activeModal: child.activeChat?.activeModal }),
-                title: child.title,
-                messages: child.activeChat?.messages || [],
-                inputContent: child.activeChat?.inputContent || '',
-                activeModal: child.activeChat?.activeModal || null,
-                model: child.currentModel,
-            })),
             cdpConnected: session.cdpConnected,
             currentModel: session.currentModel,
             currentPlan: session.currentPlan,
@@ -157,20 +142,6 @@ export function statusPayloadToEntries(
             runtimeWorkspaceLabel: (session as any).runtimeWorkspaceLabel ?? runtime?.workspaceLabel,
             runtimeWriteOwner: (session as any).runtimeWriteOwner ?? runtime?.writeOwner ?? null,
             runtimeAttachedClients: (session as any).runtimeAttachedClients ?? runtime?.attachedClients ?? [],
-            agentStreams: [{
-                sessionId: session.id,
-                instanceId: session.id,
-                parentSessionId: session.parentId,
-                agentType: session.providerType,
-                agentName: session.providerName,
-                extensionId: 'cli-agent',
-                transport: session.transport,
-                status: normalizeManagedStatus(session.status, { activeModal: session.activeChat?.activeModal }),
-                title: session.title,
-                messages: session.activeChat?.messages || [],
-                inputContent: session.activeChat?.inputContent || '',
-                activeModal: session.activeChat?.activeModal,
-            }],
             timestamp: ts,
             _isCli: true,
         } as any)
@@ -205,20 +176,6 @@ export function statusPayloadToEntries(
             currentPlan: session.currentPlan,
             acpConfigOptions: session.acpConfigOptions,
             acpModes: session.acpModes,
-            agentStreams: [{
-                sessionId: session.id,
-                instanceId: session.id,
-                parentSessionId: session.parentId,
-                agentType: session.providerType,
-                agentName: session.providerName,
-                extensionId: 'acp-agent',
-                transport: session.transport,
-                status: normalizeManagedStatus(session.status, { activeModal: session.activeChat?.activeModal }),
-                title: session.title,
-                messages: session.activeChat?.messages || [],
-                inputContent: session.activeChat?.inputContent || '',
-                activeModal: session.activeChat?.activeModal,
-            }],
             timestamp: ts,
             _isAcp: true,
         } as any)

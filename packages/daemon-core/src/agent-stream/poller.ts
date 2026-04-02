@@ -117,7 +117,6 @@ export class AgentStreamPoller {
                                     sessionId: extInstance.getInstanceId(),
                                     parentSessionId,
                                     providerType: extType,
-                                    providerCategory: 'extension',
                                     transport: 'cdp-webview',
                                     cdpManagerKey: ideType,
                                     instanceKey: `ide:${ideType}`,

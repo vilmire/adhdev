@@ -90,21 +90,21 @@ export default function MachinesPage() {
     const allActiveAgents: { name: string; machine: string; machineId: string; status: string; type: string; targetId: string; isCli: boolean; workspace: string }[] = []
     for (const m of machines) {
         for (const ide of m.ideSessions) {
-            if (isAgentActive(ide.agents, ide.agentStreams, ide.activeChat)) {
-                const activeStream = ide.agentStreams.find(s => isManagedStatusWorking(s.status))
-                const agentName = activeStream?.agentName
+            if (isAgentActive(ide.agents, ide.childSessions, ide.activeChat)) {
+                const activeStream = ide.childSessions.find(s => isManagedStatusWorking(s.status))
+                const agentName = activeStream?.providerName
                     || ide.agents.find(a => isManagedStatusWorking(a.status))?.name
                     || ide.name
                 allActiveAgents.push({
                     name: agentName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: ide.type,
-                    targetId: activeStream?.sessionId || ide.sessionId || ide.id, isCli: false,
+                    targetId: activeStream?.id || ide.sessionId || ide.id, isCli: false,
                     workspace: getWorkspaceDisplayLabel(ide.workspace || ''),
                 })
             }
         }
         for (const cli of m.cliSessions) {
-            if (cli.agentStreams?.some(s => isManagedStatusWorking(s.status))) {
+            if (isManagedStatusWorking(cli.status)) {
                 allActiveAgents.push({
                     name: cli.cliName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: cli.cliType,
@@ -114,7 +114,7 @@ export default function MachinesPage() {
             }
         }
         for (const acp of m.acpSessions) {
-            if (acp.agentStreams?.some(s => isManagedStatusWorking(s.status))) {
+            if (isManagedStatusWorking(acp.status)) {
                 allActiveAgents.push({
                     name: acp.acpName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: acp.acpType,
@@ -297,7 +297,7 @@ export default function MachinesPage() {
                                             <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">IDEs</div>
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.ideSessions.map(ide => {
-                                                    const active = isAgentActive(ide.agents, ide.agentStreams, ide.activeChat)
+                                                    const active = isAgentActive(ide.agents, ide.childSessions, ide.activeChat)
                                                     const statusText = active ? 'generating'
                                                         : isManagedStatusWaiting(ide.activeChat?.status, { activeModal: (ide.activeChat as any)?.activeModal }) ? 'approval'
                                                         : 'idle'
@@ -309,7 +309,7 @@ export default function MachinesPage() {
                                                                 ? 'offline'
                                                                 : 'idle'
                                                     // Extensions / agent streams running inside this IDE
-                                                    const activeStreams = (ide.agentStreams || []).filter(
+                                                    const activeStreams = (ide.childSessions || []).filter(
                                                         s => isManagedStatusWorking(s.status)
                                                     )
                                                     return (
@@ -333,8 +333,8 @@ export default function MachinesPage() {
                                                                             key={si}
                                                                             className="flex items-center gap-1.5 px-2 py-0.5 text-[10px] text-text-secondary"
                                                                         >
-                                                                            <span className="text-[8px]">{getIcon(stream.agentName) || '🧩'}</span>
-                                                                            <span className="font-medium">{stream.agentName}</span>
+                                                                            <span className="text-[8px]">{getIcon(stream.providerType) || '🧩'}</span>
+                                                                            <span className="font-medium">{stream.providerName}</span>
                                                                             <span className={`ml-auto text-[9px] ${
                                                                                 isManagedStatusWorking(stream.status)
                                                                                     ? 'text-orange-400' : 'text-text-muted'
@@ -358,7 +358,7 @@ export default function MachinesPage() {
                                             <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">CLIs</div>
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.cliSessions.map(cli => {
-                                                    const active = cli.agentStreams?.some(s => isManagedStatusWorking(s.status))
+                                                    const active = isManagedStatusWorking(cli.status)
                                                     const statusTone = active
                                                         ? 'active'
                                                         : normalizeManagedStatus(cli.status) === 'stopped'
@@ -389,7 +389,7 @@ export default function MachinesPage() {
                                             <div className="text-[9px] text-text-muted uppercase tracking-wide font-semibold mb-1">ACP Agents</div>
                                             <div className="flex flex-col gap-0.5">
                                                 {machine.acpSessions.map(acp => {
-                                                    const active = acp.agentStreams?.some(s => isManagedStatusWorking(s.status))
+                                                    const active = isManagedStatusWorking(acp.status)
                                                     const statusTone = active
                                                         ? 'active'
                                                         : normalizeManagedStatus(acp.status) === 'stopped'

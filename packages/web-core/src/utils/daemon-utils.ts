@@ -4,7 +4,7 @@
  * Commonly used by Machines, MachineDetail, Dashboard, etc.
  */
 import type { DaemonData } from '../types'
-import type { MachineInfo, DetectedIdeInfo } from '@adhdev/daemon-core'
+import type { MachineInfo, DetectedIdeInfo, SessionEntry } from '@adhdev/daemon-core'
 import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 
 // ─── Formatters ──────────────────────────────────
@@ -277,7 +277,7 @@ export interface IdeSessionSummary {
     status: string
     workspace: string
     agents: { id: string; name: string; status: string }[]
-    agentStreams: { sessionId?: string; agentName: string; status: string }[]
+    childSessions: SessionEntry[]
     activeChat?: { status?: string }
 }
 
@@ -293,7 +293,6 @@ export interface CliSessionSummary {
     runtimeDisplayName?: string
     runtimeWorkspaceLabel?: string
     runtimeWriteOwner?: { clientId: string; ownerType: 'agent' | 'user' } | null
-    agentStreams: { sessionId?: string; agentName: string; status: string }[]
 }
 
 /** ACP session summary for machine detail/overview display */
@@ -305,7 +304,6 @@ export interface AcpSessionSummary {
     status: string
     workspace: string
     model?: string
-    agentStreams: { sessionId?: string; agentName: string; status: string }[]
 }
 
 /** Group daemon array by machine */
@@ -359,7 +357,6 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                     status: daemon.status || 'online',
                     workspace: daemon.workspace || '',
                     model: (daemon as any).model,
-                    agentStreams: daemon.agentStreams || [],
                 })
             }
         } else if (isCliEntry(daemon)) {
@@ -375,7 +372,6 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                     runtimeDisplayName: daemon.runtimeDisplayName,
                     runtimeWorkspaceLabel: daemon.runtimeWorkspaceLabel,
                     runtimeWriteOwner: daemon.runtimeWriteOwner || null,
-                    agentStreams: daemon.agentStreams || [],
                 })
             }
         } else {
@@ -388,7 +384,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                     status: daemon.status || 'online',
                     workspace: daemon.workspace || '',
                     agents: (daemon.agents || daemon.aiAgents || []).map(a => ({ id: (a as any).id || a.name, name: a.name, status: a.status })),
-                    agentStreams: daemon.agentStreams || [],
+                    childSessions: daemon.childSessions || [],
                     activeChat: daemon.activeChat || undefined,
                 })
             }

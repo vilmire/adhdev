@@ -4,7 +4,6 @@ export interface SessionRuntimeTarget {
     sessionId: string;
     parentSessionId: string | null;
     providerType: string;
-    providerCategory: 'ide' | 'extension' | 'cli' | 'acp';
     transport: SessionTransport;
     cdpManagerKey?: string;
     adapterKey?: string;

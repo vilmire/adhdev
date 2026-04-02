@@ -6,6 +6,7 @@
 import type { CommandResult, CommandHelpers } from './handler.js';
 import { readChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
+import type { SessionTransport } from '../shared-types.js';
 
 const RECENT_SEND_WINDOW_MS = 1200;
 const recentSendByTarget = new Map<string, number>();
@@ -22,7 +23,32 @@ function getTargetedCliAdapter(h: CommandHelpers, args: any, providerType?: stri
     return h.getCliAdapter(args?.targetSessionId || providerType || h.currentSession?.providerType || h.currentManagerKey);
 }
 
+function getTargetTransport(h: CommandHelpers, provider?: any): SessionTransport | null {
+    if (h.currentSession?.transport) return h.currentSession.transport;
+    switch (provider?.category) {
+        case 'cli':
+            return 'pty';
+        case 'acp':
+            return 'acp';
+        case 'extension':
+            return 'cdp-webview';
+        case 'ide':
+            return 'cdp-page';
+        default:
+            return null;
+    }
+}
+
+function isCliLikeTransport(transport: SessionTransport | null): boolean {
+    return transport === 'pty' || transport === 'acp';
+}
+
+function isExtensionTransport(transport: SessionTransport | null): boolean {
+    return transport === 'cdp-webview';
+}
+
 function buildRecentSendKey(h: CommandHelpers, args: any, provider: any, text: string): string {
+    const transport = getTargetTransport(h, provider) || 'unknown';
     const target =
         args?.targetSessionId
         || args?.agentType
@@ -30,7 +56,7 @@ function buildRecentSendKey(h: CommandHelpers, args: any, provider: any, text: s
         || h.currentProviderType
         || h.currentManagerKey
         || 'unknown';
-    return `${provider?.category || 'unknown'}:${target}:${text.trim()}`;
+    return `${transport}:${target}:${text.trim()}`;
 }
 
 function isRecentDuplicateSend(key: string): boolean {
@@ -59,14 +85,15 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
 
 export async function handleReadChat(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
+    const transport = getTargetTransport(h, provider);
 
     const _log = (msg: string) => LOG.debug('Command', `[read_chat] ${msg}`);
 
-    // CLI / ACP category: read from adapter
-    if (provider?.category === 'cli' || provider?.category === 'acp') {
-        const adapter = getTargetedCliAdapter(h, args, provider.type);
+    // PTY / ACP transport: read from adapter
+    if (isCliLikeTransport(transport)) {
+        const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (adapter) {
-            _log(`${provider.category} adapter: ${(adapter as any).cliType}`);
+            _log(`${transport} adapter: ${(adapter as any).cliType}`);
             const status = (adapter as any).getStatus?.();
             if (status) {
                 return {
@@ -74,15 +101,14 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     messages: status.messages || [],
                     status: status.status,
                     activeModal: status.activeModal,
-                    terminalHistory: status.terminalHistory || '',
                 };
             }
         }
-        return { success: false, error: `${provider.category} adapter not found` };
+        return { success: false, error: `${transport} adapter not found` };
     }
 
-    // Extension category: evaluateInSession
-    if (provider?.category === 'extension') {
+    // Extension transport: evaluateInSession
+    if (isExtensionTransport(transport)) {
         try {
             const evalResult = await h.evaluateProviderScript('readChat', undefined, 50000);
             if (evalResult?.result) {
@@ -188,6 +214,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
     if (!text) return { success: false, error: 'text required' };
     const _log = (msg: string) => LOG.debug('Command', `[send_chat] ${msg}`);
     const provider = h.getProvider(args?.agentType);
+    const transport = getTargetTransport(h, provider);
     const dedupeKey = buildRecentSendKey(h, args, provider, text);
 
     const _logSendSuccess = (method: string, targetAgent?: string) => {
@@ -205,22 +232,22 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
         return { success: true, sent: false, deduplicated: true };
     }
 
-    // CLI / ACP category: transmit via adapter
-    if (provider?.category === 'cli' || provider?.category === 'acp') {
-        const adapter = getTargetedCliAdapter(h, args, provider.type);
+    // PTY / ACP transport: transmit via adapter
+    if (isCliLikeTransport(transport)) {
+        const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (adapter) {
-            _log(`${provider.category} adapter: ${(adapter as any).cliType}`);
+            _log(`${transport} adapter: ${(adapter as any).cliType}`);
             try {
                 await adapter.sendMessage(text);
-                return _logSendSuccess(`${provider.category}-adapter`, (adapter as any).cliType);
+                return _logSendSuccess(`${transport}-adapter`, (adapter as any).cliType);
             } catch (e: any) {
-                return { success: false, error: `${provider.category} send failed: ${e.message}` };
+                return { success: false, error: `${transport} send failed: ${e.message}` };
             }
         }
     }
 
-    // Extension category: via AgentStreamManager
-    if (provider?.category === 'extension') {
+    // Extension transport: via AgentStreamManager
+    if (isExtensionTransport(transport)) {
         _log(`Extension: ${provider.type}`);
         // Method 1: provider sendMessage script via evaluateInSession
         try {
@@ -366,9 +393,10 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
 
 export async function handleListChats(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
+    const transport = getTargetTransport(h, provider);
 
-    // Extension: via AgentStreamManager
-    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
+    // Extension transport: via AgentStreamManager
+    if (isExtensionTransport(transport) && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
         try {
             const chats = await h.agentStream.listSessionChats(h.getCdp()!, h.currentSession.sessionId);
             LOG.info('Command', `[list_chats] Extension: ${chats.length} chats`);
@@ -416,9 +444,10 @@ export async function handleListChats(h: CommandHelpers, args: any): Promise<Com
 
 export async function handleNewChat(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
+    const transport = getTargetTransport(h, provider);
 
-    if (provider?.category === 'cli') {
-        const adapter = getTargetedCliAdapter(h, args, provider.type);
+    if (transport === 'pty') {
+        const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (!adapter) return { success: false, error: 'CLI adapter not running' };
         if (typeof (adapter as any).clearHistory === 'function') {
             (adapter as any).clearHistory();
@@ -427,7 +456,7 @@ export async function handleNewChat(h: CommandHelpers, args: any): Promise<Comma
         return { success: false, error: 'new_chat not supported by this CLI provider' };
     }
 
-    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
+    if (isExtensionTransport(transport) && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
         const ok = await h.agentStream.newSession(h.getCdp()!, h.currentSession.sessionId);
         return { success: ok };
     }
@@ -457,12 +486,13 @@ export async function handleNewChat(h: CommandHelpers, args: any): Promise<Comma
 
 export async function handleSwitchChat(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
+    const transport = getTargetTransport(h, provider);
     const managerKey = getCurrentManagerKey(h);
     const sessionId = args?.sessionId || args?.id || args?.chatId;
     if (!sessionId) return { success: false, error: 'sessionId required' };
     LOG.info('Command', `[switch_chat] sessionId=${sessionId}, manager=${managerKey}`);
 
-    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
+    if (isExtensionTransport(transport) && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
         const ok = await h.agentStream.switchConversation(h.getCdp()!, h.currentSession.sessionId, sessionId);
         return { success: ok, result: ok ? 'switched' : 'failed' };
     }
@@ -544,11 +574,12 @@ export async function handleSwitchChat(h: CommandHelpers, args: any): Promise<Co
 
 export async function handleSetMode(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
+    const transport = getTargetTransport(h, provider);
     const mode = args?.mode || 'agent';
 
-    // ACP provider
-    if (provider?.category === 'acp') {
-        const adapter = getTargetedCliAdapter(h, args, provider.type);
+    // ACP transport
+    if (transport === 'acp') {
+        const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (adapter) {
             const acpInstance = (adapter as any)._acpInstance;
             if (acpInstance && typeof acpInstance.onEvent === 'function') {
@@ -597,13 +628,14 @@ export async function handleSetMode(h: CommandHelpers, args: any): Promise<Comma
 
 export async function handleChangeModel(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
+    const transport = getTargetTransport(h, provider);
     const model = args?.model;
 
-    LOG.info('Command', `[change_model] model=${model} provider=${provider?.type} category=${provider?.category} manager=${getCurrentManagerKey(h)} providerType=${getCurrentProviderType(h)}`);
+    LOG.info('Command', `[change_model] model=${model} provider=${provider?.type} transport=${transport} manager=${getCurrentManagerKey(h)} providerType=${getCurrentProviderType(h)}`);
 
-    // ACP provider
-    if (provider?.category === 'acp') {
-        const adapter = getTargetedCliAdapter(h, args, provider.type);
+    // ACP transport
+    if (transport === 'acp') {
+        const adapter = getTargetedCliAdapter(h, args, provider?.type);
         LOG.info('Command', `[change_model] ACP adapter found: ${!!adapter}, type=${(adapter as any)?.cliType}, hasAcpInstance=${!!(adapter as any)?._acpInstance}`);
         if (adapter) {
             const acpInstance = (adapter as any)._acpInstance;
@@ -658,10 +690,11 @@ export async function handleSetThoughtLevel(h: CommandHelpers, args: any): Promi
     if (!configId || !value) return { success: false, error: 'configId and value required' };
 
     const provider = h.getProvider(args?.agentType);
-    if (!provider || provider.category !== 'acp') {
+    const transport = getTargetTransport(h, provider);
+    if (transport !== 'acp') {
         return { success: false, error: 'set_thought_level only for ACP providers' };
     }
-    const adapter = getTargetedCliAdapter(h, args, provider.type);
+    const adapter = getTargetedCliAdapter(h, args, provider?.type);
     const acpInstance = adapter?._acpInstance;
     if (!acpInstance) return { success: false, error: 'ACP instance not found' };
 
@@ -676,15 +709,16 @@ export async function handleSetThoughtLevel(h: CommandHelpers, args: any): Promi
 
 export async function handleResolveAction(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
+    const transport = getTargetTransport(h, provider);
     const action = args?.action || 'approve';
     const button = args?.button || args?.buttonText
         || (action === 'approve' ? 'Accept' : action === 'reject' ? 'Reject' : 'Accept');
 
     LOG.info('Command', `[resolveAction] action=${action} button="${button}" provider=${provider?.type}`);
 
-    // 0. CLI / ACP category: navigate approval dialog via PTY arrow keys + Enter
-    if (provider?.category === 'cli') {
-        const adapter = getTargetedCliAdapter(h, args, provider.type);
+    // 0. PTY transport: navigate approval dialog via PTY arrow keys + Enter
+    if (transport === 'pty') {
+        const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (!adapter) return { success: false, error: 'CLI adapter not running' };
 
         // Handle data-driven resolve actions (like from the dashboard 'Fix' button)
@@ -730,8 +764,8 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         return { success: true, buttonIndex, button: buttons[buttonIndex] ?? button };
     }
 
-    // 1. Extension: via AgentStreamManager
-    if (provider?.category === 'extension' && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
+    // 1. Extension transport: via AgentStreamManager
+    if (isExtensionTransport(transport) && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
         const ok = await h.agentStream.resolveSessionAction(h.getCdp()!, h.currentSession.sessionId, action);
         return { success: ok };
     }
