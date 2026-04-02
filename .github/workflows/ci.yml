@@ -103,7 +103,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Check ghostty release need
+        id: ghostty_release
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./packages/ghostty-vt-node/package.json').version")"
+          published_version="$(npm view @adhdev/ghostty-vt-node version 2>/dev/null || true)"
+          if [ "${package_version}" = "${published_version}" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Ghostty package version ${package_version} is already published; skipping ghostty release work."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Ghostty package version ${package_version} is unpublished; running ghostty release work."
+          fi
+
       - name: Download release ghostty prebuilt artifacts
+        if: steps.ghostty_release.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -163,7 +178,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @adhdev/ghostty-vt-node
-        if: env.NODE_AUTH_TOKEN != ''
+        if: env.NODE_AUTH_TOKEN != '' && steps.ghostty_release.outputs.publish == 'true'
         run: cd packages/ghostty-vt-node && npm publish --access public --ignore-scripts || echo '⚠️ ghostty-vt-node publish skipped (version may already exist)'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

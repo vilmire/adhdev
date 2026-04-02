@@ -3,11 +3,9 @@ name: Ghostty VT Native
 on:
   push:
     branches: [main]
-    tags: ['v*']
     paths:
       - 'packages/ghostty-vt-node/**'
       - '.github/workflows/ghostty-vt-node.yml'
-      - 'package-lock.json'
   workflow_dispatch:
 
 env:

@@ -2,7 +2,7 @@
 # ADHDev OSS — Version bump script
 # Usage: ./scripts/version-bump.sh <patch|minor|major|x.y.z>
 #
-# Bumps all OSS package.json files, commits, tags, and pushes.
+# Bumps OSS package versions, commits, tags, and pushes.
 # Includes local CI verification (build + shebang check).
 # Cloud repo pulls this via submodule update.
 
@@ -29,6 +29,28 @@ else
 fi
 
 echo "🚀 Target version: $NEW_VERSION"
+
+LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+if [ -n "$LAST_TAG" ]; then
+    GHOSTTY_RELEASE_BASE="$LAST_TAG"
+else
+    GHOSTTY_RELEASE_BASE="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+fi
+
+GHOSTTY_RELEASE_PATHS=(
+    "packages/ghostty-vt-node"
+    ".github/workflows/ghostty-vt-node.yml"
+)
+
+GHOSTTY_CHANGED=0
+if git diff --quiet "$GHOSTTY_RELEASE_BASE"..HEAD -- "${GHOSTTY_RELEASE_PATHS[@]}" \
+    && git diff --quiet -- "${GHOSTTY_RELEASE_PATHS[@]}" \
+    && git diff --cached --quiet -- "${GHOSTTY_RELEASE_PATHS[@]}"; then
+    echo "🧩 Ghostty release paths unchanged since ${GHOSTTY_RELEASE_BASE}; ghostty version will stay at ${CURRENT}."
+else
+    GHOSTTY_CHANGED=1
+    echo "🧩 Ghostty release paths changed since ${GHOSTTY_RELEASE_BASE}; ghostty version will be bumped."
+fi
 
 # ── CI verification (mirrors GitHub Actions) ──
 
@@ -64,7 +86,6 @@ PACKAGES=(
     "package.json"
     "packages/daemon-core/package.json"
     "packages/daemon-standalone/package.json"
-    "packages/ghostty-vt-node/package.json"
     "packages/session-host-core/package.json"
     "packages/session-host-daemon/package.json"
     "packages/terminal-mux-cli/package.json"
@@ -75,6 +96,10 @@ PACKAGES=(
     "packages/web-standalone/package.json"
     "packages/web-devconsole/package.json"
 )
+
+if [ "$GHOSTTY_CHANGED" -eq 1 ]; then
+    PACKAGES+=("packages/ghostty-vt-node/package.json")
+fi
 
 for pkg in "${PACKAGES[@]}"; do
     if [ -f "$pkg" ]; then
