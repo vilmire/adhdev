@@ -36,6 +36,7 @@
     --color-status-online: var(--status-online);
     --color-status-idle: var(--status-idle);
     --color-status-busy: var(--status-busy);
+    --color-status-warning: var(--status-warning);
     --color-status-error: var(--status-error);
     --color-status-offline: var(--status-offline);
 
@@ -105,6 +106,7 @@ button {
 
     --status-online: #22c55e;
     --status-idle: #eab308;
+    --status-warning: #f59e0b;
     --status-busy: #f97316;
     --status-error: #ef4444;
     --status-offline: #71717a;
@@ -143,6 +145,7 @@ button {
 
     --status-online: #16a34a;
     --status-idle: #ca8a04;
+    --status-warning: #d97706;
     --status-busy: #ea580c;
     --status-error: #dc2626;
     --status-offline: #a1a1aa;
@@ -177,6 +180,7 @@ button {
 
         --status-online: #16a34a;
         --status-idle: #ca8a04;
+        --status-warning: #d97706;
         --status-busy: #ea580c;
         --status-error: #dc2626;
         --status-offline: #a1a1aa;

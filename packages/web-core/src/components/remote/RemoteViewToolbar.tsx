@@ -124,7 +124,7 @@ export default function RemoteViewToolbar({
                     {transportType === 'relay' && (
                         <span
                             className="text-[8px] font-bold px-1 py-0.5 rounded"
-                            style={{ color: '#f59e0b', background: 'rgba(245,158,11,0.12)' }}
+                            style={{ color: 'var(--status-warning)', background: 'color-mix(in srgb, var(--status-warning) 12%, transparent)' }}
                             title="TURN relay in use"
                         >
                             Relay

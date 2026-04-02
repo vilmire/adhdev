@@ -322,22 +322,25 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
 
     // 6. Construct the complete shell command per-agent
     let shellCmd: string;
+    const isWin = os.platform() === 'win32';
+    const escapeArg = (a: string) => isWin ? `"${a.replace(/"/g, '""')}"` : `'${a.replace(/'/g, "'\\''")}'`;
 
     if (command === 'claude') {
       // Claude Code: autonomous agent mode (no --print), skip permissions, prompt via meta-prompt
       const args = [...baseArgs, '--dangerously-skip-permissions'];
       if (model) args.push('--model', model);
-      const escapedArgs = args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
+      const escapedArgs = args.map(escapeArg).join(' ');
       const metaPrompt = `Read the file at ${promptFile} and follow ALL the instructions. Implement the specific function requested, then test it via CDP curl targeting 127.0.0.1:19280, wait for confirmation of success, and then close. DO NOT start working on other features not listed in the prompt constraint.`;
-      shellCmd = `${command} ${escapedArgs} -p "${metaPrompt}"`;
+      shellCmd = `${command} ${escapedArgs} -p ${escapeArg(metaPrompt)}`;
     } else if (command === 'gemini') {
       // Gemini CLI: non-interactive prompt mode
       // We can't use @file syntax (causes Parts object parsing bug) or $(cat) (arg too long).
       // Solution: meta-prompt that tells Gemini to read the instructions file itself.
       const args = [...baseArgs, '-y', '-s', 'false'];
       if (model) args.push('-m', model);
-      const escapedArgs = args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
-      shellCmd = `${command} ${escapedArgs} -p "Read the file at ${promptFile} and follow ALL the instructions in it exactly. Do not ask questions, just execute."`;
+      const escapedArgs = args.map(escapeArg).join(' ');
+      const metaPrompt = `Read the file at ${promptFile} and follow ALL the instructions in it exactly. Do not ask questions, just execute.`;
+      shellCmd = `${command} ${escapedArgs} -p ${escapeArg(metaPrompt)}`;
 
     } else if (command === 'codex') {
       const args = ['exec', ...baseArgs];
@@ -348,13 +351,17 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
         args.push('--skip-git-repo-check');
       }
       if (model) args.push('--model', model);
-      const escapedArgs = args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
+      const escapedArgs = args.map(escapeArg).join(' ');
       const metaPrompt = `Read the file at ${promptFile} and follow ALL instructions strictly. DO NOT spend time exploring the filesystem or other providers. You have full authority to implement ALL required script files and independently test them against 127.0.0.1:19280 via CDP CURL. Upon complete validation of ALL assigned files, print exactly "_PIPELINE_COMPLETE_SIGNAL_" to gracefully close the pipeline. DO NOT WAIT FOR APPROVAL, execute completely autonomously.`;
-      shellCmd = `${command} ${escapedArgs} "${metaPrompt}"`;
+      shellCmd = `${command} ${escapedArgs} ${escapeArg(metaPrompt)}`;
     } else {
       // Generic fallback: pipe prompt via stdin
-      const escapedArgs = baseArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
-      shellCmd = `cat '${promptFile}' | ${command} ${escapedArgs}`;
+      const escapedArgs = baseArgs.map(escapeArg).join(' ');
+      if (isWin) {
+        shellCmd = `type "${promptFile}" | ${command} ${escapedArgs}`;
+      } else {
+        shellCmd = `cat '${promptFile}' | ${command} ${escapedArgs}`;
+      }
     }
 
     sendAutoImplSSE(ctx, { event: 'progress', data: { function: '_init', status: 'spawning', message: `Spawning agent: ${shellCmd.substring(0, 200)}... (prompt: ${prompt.length} chars)` } });
@@ -380,7 +387,7 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
       isPty = true;
     } catch (err: any) {
       ctx.log(`PTY not available, using child_process: ${err.message}`);
-      child = spawnFn('sh', ['-c', shellCmd], {
+      child = spawnFn(isWin ? 'cmd.exe' : 'sh', [isWin ? '/c' : '-c', shellCmd], {
         cwd: providerDir,
         shell: false,
         timeout: 900000,

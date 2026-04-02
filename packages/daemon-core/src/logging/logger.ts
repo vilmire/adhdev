@@ -36,9 +36,11 @@ export function setLogLevel(level: LogLevel): void {
 
 export function getLogLevel(): LogLevel { return currentLevel; }
 // ─── File logging (date-based rolling) ──────────────────────────────
-const LOG_DIR = process.platform === 'darwin'
-    ? path.join(os.homedir(), 'Library', 'Logs', 'adhdev')
-    : path.join(os.homedir(), '.local', 'share', 'adhdev', 'logs');
+const LOG_DIR = process.platform === 'win32'
+    ? path.join(process.env.LOCALAPPDATA || process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'adhdev', 'logs')
+    : process.platform === 'darwin'
+        ? path.join(os.homedir(), 'Library', 'Logs', 'adhdev')
+        : path.join(os.homedir(), '.local', 'share', 'adhdev', 'logs');
 
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB per day
 const MAX_LOG_DAYS = 7; // 7-day retention

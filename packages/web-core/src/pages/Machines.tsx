@@ -21,7 +21,7 @@ function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive
     const statusDotColor = statusTone === 'active'
         ? '#f97316'
         : statusTone === 'waiting'
-            ? '#f59e0b'
+            ? 'var(--status-warning)'
             : statusTone === 'offline'
                 ? '#ef4444'
                 : '#64748b'

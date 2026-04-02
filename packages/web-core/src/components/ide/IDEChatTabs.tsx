@@ -41,13 +41,13 @@ export default function IDEChatTabs({
                                 height: 6,
                                 borderRadius: '50%',
                                 marginRight: 5,
-                                background: needsApproval ? '#f59e0b' : isGenerating ? 'var(--accent-primary)' : '#64748b',
+                                background: needsApproval ? 'var(--status-warning)' : isGenerating ? 'var(--accent-primary)' : '#64748b',
                                 boxShadow: isGenerating ? '0 0 6px var(--accent-primary)' : 'none',
                             }}
                         />
                         {tab.title}
                         {needsApproval && (
-                            <span className="ide-ext-badge" style={{ background: '#f59e0b22', color: '#f59e0b', marginLeft: 4 }}>!</span>
+                            <span className="ide-ext-badge" style={{ background: 'color-mix(in srgb, var(--status-warning) 13%, transparent)', color: 'var(--status-warning)', marginLeft: 4 }}>!</span>
                         )}
                     </button>
                 )

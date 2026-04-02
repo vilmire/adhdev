@@ -20,7 +20,7 @@ export default function RemoteWaitingState({
             <div className="text-white/85 text-[13px] font-semibold tracking-wide">{waitingLabel}</div>
             <div className="text-[11px] text-white/40">{waitingHint}</div>
             {transportType === 'relay' && (
-                <div className="text-[10px] text-amber-300/80">TURN relay active</div>
+                <div className="text-[10px] font-medium" style={{ color: 'var(--status-warning)', opacity: 0.8 }}>TURN relay active</div>
             )}
         </div>
     )

@@ -51,7 +51,7 @@ const CAT_COLORS: Record<string, { bg: string; text: string; border: string }> =
     acp: { bg: 'rgba(139,92,246,0.08)', text: '#a78bfa', border: 'rgba(139,92,246,0.2)' },
     cli: { bg: 'rgba(59,130,246,0.08)', text: '#60a5fa', border: 'rgba(59,130,246,0.2)' },
     ide: { bg: 'rgba(34,197,94,0.08)', text: '#86efac', border: 'rgba(34,197,94,0.2)' },
-    extension: { bg: 'rgba(245,158,11,0.08)', text: '#fbbf24', border: 'rgba(245,158,11,0.2)' },
+    extension: { bg: 'color-mix(in srgb, var(--status-warning) 8%, transparent)', text: 'var(--status-warning)', border: 'color-mix(in srgb, var(--status-warning) 20%, transparent)' },
 }
 
 /* ─── Main Component ──────────────────────────────────────── */

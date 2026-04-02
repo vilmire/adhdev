@@ -156,7 +156,7 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
                             <span
                                 className="w-1.5 h-1.5 rounded-full shrink-0"
                                 style={{
-                                    background: needsApproval ? '#f59e0b' : isGenerating ? 'var(--accent-primary)' : '#64748b',
+                                    background: needsApproval ? 'var(--status-warning)' : isGenerating ? 'var(--accent-primary)' : '#64748b',
                                     boxShadow: isGenerating ? '0 0 6px var(--accent-primary)' : 'none',
                                 }}
                             />

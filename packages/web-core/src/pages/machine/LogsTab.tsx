@@ -93,13 +93,13 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
                 )}
                 {daemonLogs.map((log, i) => (
                     <div key={i} className="flex gap-2 py-px" style={{
-                        color: log.level === 'error' ? '#ef4444' : log.level === 'warn' ? '#f59e0b' : (log.level as string) === 'debug' ? '#64748b' : '#94a3b8',
+                        color: log.level === 'error' ? '#ef4444' : log.level === 'warn' ? 'var(--status-warning)' : (log.level as string) === 'debug' ? '#64748b' : '#94a3b8',
                     }}>
                         <span className="text-text-muted min-w-[75px] shrink-0">
                             {new Date(log.timestamp).toLocaleTimeString()}
                         </span>
                         <span className="font-semibold min-w-[32px] shrink-0 text-[9px]" style={{
-                            color: log.level === 'error' ? '#ef4444' : log.level === 'warn' ? '#f59e0b' : (log.level as string) === 'debug' ? '#475569' : '#8b5cf6',
+                            color: log.level === 'error' ? '#ef4444' : log.level === 'warn' ? 'var(--status-warning)' : (log.level as string) === 'debug' ? '#475569' : '#8b5cf6',
                         }}>
                             {log.level === 'error' ? 'ERR' : log.level === 'warn' ? 'WRN' : (log.level as string) === 'debug' ? 'DBG' : 'INF'}
                         </span>

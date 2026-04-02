@@ -360,7 +360,7 @@ export default function AgentTab({
             ) : (
                 <div className="flex flex-col gap-2.5 mb-5">
                     {visiblePendingLaunches.map(type => (
-                            <div key={`pending:${type}`} className="px-4.5 py-3.5 rounded-xl bg-bg-secondary border border-amber-500/20">
+                            <div key={`pending:${type}`} className="px-4.5 py-3.5 rounded-xl bg-bg-secondary" style={{ border: '1px solid color-mix(in srgb, var(--status-warning) 20%, transparent)' }}>
                                 <div className="flex justify-between items-center">
                                     <div className="flex items-center gap-2.5">
                                         <span className="text-lg">{getIcon(type)}</span>
@@ -375,7 +375,10 @@ export default function AgentTab({
                                             </div>
                                         </div>
                                     </div>
-                                    <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/[0.08] text-amber-400">
+                                    <span
+                                        className="px-2 py-0.5 rounded-md text-[10px] font-semibold"
+                                        style={{ background: 'color-mix(in srgb, var(--status-warning) 8%, transparent)', color: 'var(--status-warning)' }}
+                                    >
                                         starting
                                     </span>
                                 </div>
@@ -401,7 +404,7 @@ export default function AgentTab({
                                             <div className="text-[11px] text-text-muted flex gap-2">
                                                 <span>{(entry as any).workspace || '—'}</span>
                                                 {acp?.currentModel && <span className="text-cyan-500">🤖 {acp.currentModel}</span>}
-                                                {acp?.currentPlan && <span className="text-amber-500">📋 {acp.currentPlan}</span>}
+                                                {acp?.currentPlan && <span style={{ color: 'var(--status-warning)' }}>📋 {acp.currentPlan}</span>}
                                             </div>
                                             {cli && (cli.runtimeKey || cli.runtimeWriteOwner) && (
                                                 <div className="text-[10px] text-text-muted flex gap-2 mt-0.5 flex-wrap">
@@ -425,7 +428,7 @@ export default function AgentTab({
                                                         </>
                                                     )}
                                                     {cli.runtimeWriteOwner && (
-                                                        <span className={cli.runtimeWriteOwner.ownerType === 'user' ? 'text-amber-500' : 'text-violet-400'}>
+                                                        <span style={{ color: cli.runtimeWriteOwner.ownerType === 'user' ? 'var(--status-warning)' : undefined }} className={cli.runtimeWriteOwner.ownerType !== 'user' ? 'text-violet-400' : ''}>
                                                             {describeMuxOwner(cli.runtimeWriteOwner)}
                                                         </span>
                                                     )}
@@ -456,7 +459,7 @@ export default function AgentTab({
                                         {isIde && (
                                             <>
                                                 <button onClick={() => navigate(`/ide/${entry.id}`)} className="machine-btn flex items-center gap-1"><IconMonitor size={13} /> Control</button>
-                                                <button onClick={() => handleRestartIde(entry as IdeSessionEntry)} className="machine-btn text-amber-500 border-amber-500/30">↻</button>
+                                                <button onClick={() => handleRestartIde(entry as IdeSessionEntry)} className="machine-btn" style={{ color: 'var(--status-warning)', borderColor: 'color-mix(in srgb, var(--status-warning) 30%, transparent)' }}>↻</button>
                                             </>
                                         )}
                                         {/* ACP: Chat */}

@@ -31,8 +31,8 @@ const DEFAULT_LABELS: Record<string, string> = {
 
 const STATE_COLORS: Record<string, string> = {
     connected: '#10b981',
-    connecting: '#f59e0b',
-    new: '#f59e0b',
+    connecting: 'var(--status-warning)',
+    new: 'var(--status-warning)',
     disconnected: '#ef4444',
     failed: '#ef4444',
     closed: '#6b7280',

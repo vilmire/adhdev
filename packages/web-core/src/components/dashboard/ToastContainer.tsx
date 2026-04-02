@@ -12,7 +12,7 @@ export interface ToastContainerProps {
 
 const TYPE_BG: Record<string, string> = {
     success: 'rgba(16, 185, 129, 0.95)',
-    warning: 'rgba(245, 158, 11, 0.95)',
+    warning: 'color-mix(in srgb, var(--status-warning) 95%, transparent)',
     info: 'rgba(99, 102, 241, 0.95)',
 }
 
@@ -45,7 +45,7 @@ export default function ToastContainer({ toasts, onDismiss, onClickToast }: Toas
                                     key={idx}
                                     className={`text-xs px-3 py-1 rounded-md font-bold transition-all cursor-pointer ${
                                         action.variant === 'primary'
-                                            ? 'bg-white text-amber-700 hover:bg-gray-100'
+                                            ? 'bg-white text-text-primary hover:bg-gray-100'
                                             : action.variant === 'danger'
                                             ? 'bg-red-500/30 text-white hover:bg-red-500/50'
                                             : 'bg-white/20 text-white hover:bg-white/30'

@@ -35,7 +35,10 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
             .trim();
 
     return (
-        <div className="bg-gradient-to-br from-amber-600 to-amber-700 text-white py-2.5 px-4 shrink-0 z-[5]">
+        <div
+            className="text-white py-2.5 px-4 shrink-0 z-[5]"
+            style={{ background: 'linear-gradient(135deg, var(--status-warning), color-mix(in srgb, var(--status-warning) 85%, #000))' }}
+        >
             {activeConv.modalMessage && (
                 <div className="text-[11px] opacity-85 mb-1.5 whitespace-nowrap overflow-hidden text-ellipsis max-w-full">
                     {activeConv.modalMessage.replace(/[\n\r]+/g, ' ').slice(0, 120)}
@@ -58,10 +61,11 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
                                 onClick={() => handleClick(btnText)}
                                 disabled={isDisabled}
                                 className={`btn btn-sm border-none rounded-md text-xs px-3 py-1 ${
-                                    isPrimary ? 'bg-white text-amber-700 font-extrabold'
+                                    isPrimary ? 'bg-white font-extrabold'
                                     : isDanger ? 'bg-red-500/30 text-white font-semibold'
                                     : 'bg-white/15 text-white font-semibold'
                                 } ${isDisabled && !isThisPending ? 'opacity-40' : 'opacity-100'} ${isDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                                style={isPrimary ? { color: 'var(--status-warning)' } : undefined}
                             >
                                 {isThisPending ? '⏳ ...' : cleanBtnText(btnText)}
                             </button>

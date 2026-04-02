@@ -217,7 +217,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 )}
                                 {(machineEntry as any)?.versionMismatch && (
                                     <button
-                                        className="px-1.5 py-px rounded text-[9px] font-semibold bg-amber-500/[0.08] border border-amber-500/20 text-amber-400 cursor-pointer hover:bg-amber-500/[0.15] transition-colors shrink-0"
+                                        className="px-1.5 py-px rounded text-[9px] font-semibold cursor-pointer transition-colors shrink-0"
+                                        style={{ background: 'color-mix(in srgb, var(--status-warning) 8%, transparent)', border: '1px solid color-mix(in srgb, var(--status-warning) 20%, transparent)', color: 'var(--status-warning)' }}
                                         onClick={async () => {
                                             try { await sendDaemonCommand(machineId!, 'daemon_upgrade', {}) } catch {}
                                         }}

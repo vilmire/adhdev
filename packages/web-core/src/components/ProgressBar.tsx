@@ -20,7 +20,7 @@ export default function ProgressBar({
     value, max, label, color = '#8b5cf6', detail, compact = false,
 }: ProgressBarProps) {
     const pct = max > 0 ? Math.min(Math.round((value / max) * 100), 100) : 0
-    const barColor = pct > 85 ? '#ef4444' : pct > 60 ? '#f59e0b' : color
+    const barColor = pct > 85 ? '#ef4444' : pct > 60 ? 'var(--status-warning)' : color
 
     if (compact) {
         return (

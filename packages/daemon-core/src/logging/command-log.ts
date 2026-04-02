@@ -15,9 +15,11 @@ import * as path from 'path';
 import * as os from 'os';
 
 // ─── Config ──────────────────────────────────
-const LOG_DIR = process.platform === 'darwin'
-    ? path.join(os.homedir(), 'Library', 'Logs', 'adhdev')
-    : path.join(os.homedir(), '.local', 'share', 'adhdev', 'logs');
+const LOG_DIR = process.platform === 'win32'
+    ? path.join(process.env.LOCALAPPDATA || process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'adhdev', 'logs')
+    : process.platform === 'darwin'
+        ? path.join(os.homedir(), 'Library', 'Logs', 'adhdev')
+        : path.join(os.homedir(), '.local', 'share', 'adhdev', 'logs');
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const MAX_DAYS = 7;

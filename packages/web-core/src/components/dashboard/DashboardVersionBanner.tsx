@@ -20,8 +20,11 @@ export default function DashboardVersionBanner({
     const latest = daemons[0] as any
 
     return (
-        <div className="flex items-center gap-2.5 px-4 py-2 bg-amber-500/[0.08] border-b border-amber-500/20 text-xs text-text-secondary shrink-0 flex-wrap">
-            <span className="text-sm shrink-0 mt-0.5"><IconRefresh size={14} className="text-amber-500" /></span>
+        <div
+            className="flex items-center gap-2.5 px-4 py-2 border-b text-xs text-text-secondary shrink-0 flex-wrap"
+            style={{ background: 'color-mix(in srgb, var(--status-warning) 8%, transparent)', borderColor: 'color-mix(in srgb, var(--status-warning) 20%, transparent)' }}
+        >
+            <span className="text-sm shrink-0 mt-0.5" style={{ color: 'var(--status-warning)' }}><IconRefresh size={14} /></span>
             <span className="flex-1 flex items-center gap-2 flex-wrap min-w-0">
                 <span>
                     Update available: <strong>v{latest.version}</strong> → <strong>v{latest.serverVersion}</strong>
@@ -31,11 +34,15 @@ export default function DashboardVersionBanner({
                     const state = upgradingDaemons[daemon.id]
 
                     return (
-                        <span key={daemon.id} className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-amber-500/[0.08] border border-amber-500/15">
+                        <span
+                            key={daemon.id}
+                            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md"
+                            style={{ background: 'color-mix(in srgb, var(--status-warning) 8%, transparent)', border: '1px solid color-mix(in srgb, var(--status-warning) 15%, transparent)' }}
+                        >
                             <span className="font-medium text-text-primary">{name}</span>
                             <span className="text-[10px] text-text-muted">v{daemon.version}</span>
                             {state === 'upgrading' ? (
-                                <span className="text-[10px] text-amber-400 animate-pulse">upgrading…</span>
+                                <span className="text-[10px] animate-pulse" style={{ color: 'var(--status-warning)' }}>upgrading…</span>
                             ) : state === 'done' ? (
                                 <span className="text-[10px] text-green-400">✓ restarting</span>
                             ) : state === 'error' ? (
@@ -45,7 +52,12 @@ export default function DashboardVersionBanner({
                                 >retry</button>
                             ) : (
                                 <button
-                                    className="text-[10px] font-semibold text-amber-400 hover:text-amber-300 cursor-pointer px-1.5 py-px rounded bg-amber-500/10 border border-amber-500/20 transition-colors"
+                                    className="text-[10px] font-semibold cursor-pointer px-1.5 py-px rounded transition-colors"
+                                    style={{
+                                        color: 'var(--status-warning)',
+                                        background: 'color-mix(in srgb, var(--status-warning) 10%, transparent)',
+                                        border: '1px solid color-mix(in srgb, var(--status-warning) 20%, transparent)',
+                                    }}
                                     onClick={() => onUpgrade(daemon.id)}
                                 >Upgrade</button>
                             )}

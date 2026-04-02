@@ -165,8 +165,8 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                                 <span
                                     className="px-1.5 py-px rounded text-[9px] font-semibold"
                                     style={{
-                                        background: prov.category === 'acp' ? 'rgba(139,92,246,0.08)' : prov.category === 'cli' ? 'rgba(59,130,246,0.08)' : prov.category === 'ide' ? 'rgba(34,197,94,0.08)' : 'rgba(245,158,11,0.08)',
-                                        color: prov.category === 'acp' ? '#a78bfa' : prov.category === 'cli' ? '#60a5fa' : prov.category === 'ide' ? '#86efac' : '#fbbf24',
+                                        background: prov.category === 'acp' ? 'rgba(139,92,246,0.08)' : prov.category === 'cli' ? 'rgba(59,130,246,0.08)' : prov.category === 'ide' ? 'rgba(34,197,94,0.08)' : 'color-mix(in srgb, var(--status-warning) 8%, transparent)',
+                                        color: prov.category === 'acp' ? '#a78bfa' : prov.category === 'cli' ? '#60a5fa' : prov.category === 'ide' ? '#86efac' : 'var(--status-warning)',
                                     }}
                                 >{prov.category}</span>
                                 {prov.category === 'ide' && (

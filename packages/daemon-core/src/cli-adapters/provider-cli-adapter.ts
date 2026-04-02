@@ -228,6 +228,9 @@ function looksLikeMachOOrElf(filePath: string): boolean {
 
 function shSingleQuote(arg: string): string {
     if (/^[a-zA-Z0-9@%_+=:,./-]+$/.test(arg)) return arg;
+    if (os.platform() === 'win32') {
+        return `"${arg.replace(/"/g, '""')}"`;
+    }
     return `'${arg.replace(/'/g, `'\\''`)}'`;
 }
 

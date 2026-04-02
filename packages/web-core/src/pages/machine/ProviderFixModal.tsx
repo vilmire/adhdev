@@ -209,7 +209,7 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                                 style={{ maxHeight: 320, minHeight: 200 }}
                             >
                                 {logs.map((line, i) => (
-                                    <div key={i} className={line.startsWith('✅') ? 'text-green-400' : line.startsWith('❌') || line.startsWith('⚠') ? 'text-amber-400' : ''}>
+                                    <div key={i} className={line.startsWith('✅') ? 'text-green-400' : ''} style={(line.startsWith('❌') || line.startsWith('⚠')) ? { color: 'var(--status-warning)' } : undefined}>
                                         {line}
                                     </div>
                                 ))}

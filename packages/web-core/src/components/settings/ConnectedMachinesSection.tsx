@@ -62,7 +62,7 @@ function ConfirmDialog({ title, message, confirmLabel, confirmColor, onConfirm, 
 }) {
     const colorClass = confirmColor === 'red'
         ? 'bg-red-500/20 text-red-400 border-red-500/30 hover:bg-red-500/30'
-        : 'bg-amber-500/20 text-amber-400 border-amber-500/30 hover:bg-amber-500/30'
+        : ''
 
     return createPortal(
         <div className="fixed inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm"
@@ -85,6 +85,7 @@ function ConfirmDialog({ title, message, confirmLabel, confirmColor, onConfirm, 
                     <button
                         onClick={onConfirm}
                         className={`text-xs px-3 py-1.5 rounded-lg font-medium border transition-colors ${colorClass}`}
+                        style={confirmColor === 'amber' ? { background: 'color-mix(in srgb, var(--status-warning) 20%, transparent)', color: 'var(--status-warning)', borderColor: 'color-mix(in srgb, var(--status-warning) 30%, transparent)' } : undefined}
                     >
                         {confirmLabel}
                     </button>
@@ -211,9 +212,10 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                             <div className="text-xs text-text-muted font-mono flex items-center gap-2">
                                 <span>{ide.id.substring(0, 12)}…</span>
                                 {version && (
-                                    <span className={`px-1.5 py-0.5 rounded text-[10px] ${
-                                        isOutdated ? 'bg-amber-500/15 text-amber-400' : 'bg-bg-secondary'
-                                    }`}>
+                                    <span
+                                        className={`px-1.5 py-0.5 rounded text-[10px] ${!isOutdated ? 'bg-bg-secondary' : ''}`}
+                                        style={isOutdated ? { background: 'color-mix(in srgb, var(--status-warning) 15%, transparent)', color: 'var(--status-warning)' } : undefined}
+                                    >
                                         v{version}
                                         {!isOutdated && ' ✓'}
                                     </span>
@@ -269,11 +271,13 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                     {/* P2P Status */}
                     {p2p && (
                         <div className="flex items-center gap-1.5 text-[11px]">
-                            <span className={`w-1.5 h-1.5 rounded-full ${
-                                p2p.state === 'connected' ? 'bg-green-400' :
-                                p2p.state === 'connecting' || p2p.state === 'new' ? 'bg-amber-400 animate-pulse' :
-                                'bg-text-muted/30'
-                            }`} />
+                            <span
+                                className={`w-1.5 h-1.5 rounded-full ${
+                                    p2p.state === 'connected' ? 'bg-green-400' :
+                                    'bg-text-muted/30'
+                                } ${p2p.state === 'connecting' || p2p.state === 'new' ? 'animate-pulse' : ''}`}
+                                style={(p2p.state === 'connecting' || p2p.state === 'new') ? { background: 'var(--status-warning)' } : undefined}
+                            />
                             <span className="text-text-muted">
                                 P2P {p2p.state === 'connected' ? 'connected' :
                                      p2p.state === 'connecting' || p2p.state === 'new' ? 'connecting...' :
@@ -301,7 +305,9 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                                         <span>{label.icon}</span>
                                         <span>{label.name}</span>
                                         {cdp !== undefined && (
-                                            <span className={`w-1.5 h-1.5 rounded-full ${cdp ? 'bg-green-400' : 'bg-amber-400 animate-pulse'}`}
+                                            <span
+                                                className={`w-1.5 h-1.5 rounded-full ${cdp ? 'bg-green-400' : 'animate-pulse'}`}
+                                                style={!cdp ? { background: 'var(--status-warning)' } : undefined}
                                                 title={cdp ? 'CDP connected' : 'CDP connecting...'} />
                                         )}
                                     </span>

@@ -118,7 +118,7 @@
 }
 
 .ide-dot.connecting {
-    background: #fbbf24;
+    background: var(--status-warning);
     animation: pulse-dot 1.5s ease-in-out infinite;
 }
 
@@ -407,8 +407,8 @@
 /* ─── Approval Bar ───────────────────────────────────── */
 .ide-approval {
     padding: 14px 18px;
-    background: linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(217, 119, 6, 0.08));
-    border-bottom: 1px solid rgba(245, 158, 11, 0.2);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--status-warning) 12%, transparent), color-mix(in srgb, var(--status-warning) 8%, transparent));
+    border-bottom: 1px solid color-mix(in srgb, var(--status-warning) 20%, transparent);
     flex-shrink: 0;
     animation: slide-down 0.2s ease-out;
 }
@@ -416,7 +416,7 @@
 .ide-approval-label {
     font-size: 11px;
     font-weight: 800;
-    color: #f59e0b;
+    color: var(--status-warning);
     margin-bottom: 8px;
     letter-spacing: 0.03em;
 }
@@ -720,7 +720,7 @@
 }
 
 .ide-toast.warning {
-    background: rgba(245, 158, 11, 0.92);
+    background: color-mix(in srgb, var(--status-warning) 92%, transparent);
     color: white;
 }
 
