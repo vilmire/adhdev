@@ -32,6 +32,8 @@ add_library(${PROJECT_NAME} SHARED
   src/ghostty_bridge.c
 )
 
+set(GHOSTTY_VT_RUNTIME_ALIAS "${CMAKE_SHARED_LIBRARY_PREFIX}ghostty-vt${CMAKE_SHARED_LIBRARY_SUFFIX}")
+
 target_include_directories(${PROJECT_NAME} PRIVATE
   ${CMAKE_JS_INC}
   ${NODE_ADDON_API_DIR}
@@ -69,4 +71,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     $<TARGET_FILE:ghostty-vt>
     $<TARGET_FILE_DIR:${PROJECT_NAME}>/$<TARGET_FILE_NAME:ghostty-vt>
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:ghostty-vt>
+    $<TARGET_FILE_DIR:${PROJECT_NAME}>/${GHOSTTY_VT_RUNTIME_ALIAS}
 )
