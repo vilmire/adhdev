@@ -54,6 +54,22 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
   SUFFIX ".node"
 )
 
+if(MSVC)
+  # cmake-js injects CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded (/MT) globally.
+  # Node.js addons must use /MD (dynamic CRT) to match node.exe.
+  # Override to MultiThreadedDLL, suppress static CRT, and explicitly link the
+  # three dynamic-CRT import libs (msvcrt/vcruntime/ucrt) that the auto-link
+  # mechanism may not pick up when cmake-js has overridden the global setting.
+  set_target_properties(${PROJECT_NAME} PROPERTIES
+    MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
+  )
+  target_link_options(${PROJECT_NAME} PRIVATE
+    /NODEFAULTLIB:LIBCMT
+    /NODEFAULTLIB:LIBCMTD
+  )
+  target_link_libraries(${PROJECT_NAME} PRIVATE msvcrt vcruntime ucrt)
+endif()
+
 if(APPLE)
   set_target_properties(${PROJECT_NAME} PROPERTIES
     BUILD_RPATH "@loader_path"
