@@ -9,14 +9,21 @@ export interface StandaloneConnectionAdapter {
     stopScreenshots(ideType?: string): void
 }
 
-type PtyOutputCallback = (cliId: string, data: string) => void
+type PtyOutputCallback = (cliId: string, data: string, meta?: { scrollback?: boolean }) => void
 type ScreenshotCallback = (sourceDaemonId: string, blob: Blob) => void
 type StatusCallback = (sourceDaemonId: string, payload: any) => void
+type RuntimeEvent =
+    | { type: 'runtime_snapshot'; sessionId: string; seq: number; text: string; truncated?: boolean }
+    | { type: 'session_output'; sessionId: string; seq: number; data: string }
+    | { type: 'session_cleared'; sessionId: string }
 
 class StandaloneConnectionManager {
     private adapters = new Map<string, StandaloneConnectionAdapter>()
     private states = new Map<string, string>()
     private ptyCallbacks = new Set<PtyOutputCallback>()
+    private runtimeListeners = new Map<string, Set<(event: RuntimeEvent) => void>>()
+    private runtimeBuffers = new Map<string, string>()
+    private runtimeSeqs = new Map<string, number>()
     private screenshotCallbacks = new Map<string, ScreenshotCallback>()
     private statusCallbacks = new Set<StatusCallback>()
 
@@ -83,8 +90,70 @@ class StandaloneConnectionManager {
         return () => { this.ptyCallbacks.delete(callback) }
     }
 
-    emitPtyOutput(cliId: string, data: string): void {
-        this.ptyCallbacks.forEach((callback) => callback(cliId, data))
+    emitPtyOutput(cliId: string, data: string, meta?: { scrollback?: boolean }): void {
+        if (meta?.scrollback) {
+            const seq = (this.runtimeSeqs.get(cliId) || 0) + 1
+            this.runtimeBuffers.set(cliId, typeof data === 'string' ? data : '')
+            this.runtimeSeqs.set(cliId, seq)
+            this.emitRuntimeEvent(cliId, {
+                type: 'runtime_snapshot',
+                sessionId: cliId,
+                seq,
+                text: typeof data === 'string' ? data : '',
+                truncated: false,
+            })
+        } else if (typeof data === 'string' && data) {
+            const prev = this.runtimeBuffers.get(cliId) || ''
+            const next = prev + data
+            const trimmed = next.length > 64 * 1024 ? next.slice(-(64 * 1024)) : next
+            const seq = (this.runtimeSeqs.get(cliId) || 0) + 1
+            this.runtimeBuffers.set(cliId, trimmed)
+            this.runtimeSeqs.set(cliId, seq)
+            this.emitRuntimeEvent(cliId, {
+                type: 'session_output',
+                sessionId: cliId,
+                seq,
+                data,
+            })
+        }
+        this.ptyCallbacks.forEach((callback) => callback(cliId, data, meta))
+    }
+
+    emitRuntimeSnapshot(sessionId: string, text: string, seq = 0, truncated = false): void {
+        this.runtimeBuffers.set(sessionId, text)
+        this.runtimeSeqs.set(sessionId, seq)
+        this.emitRuntimeEvent(sessionId, {
+            type: 'runtime_snapshot',
+            sessionId,
+            seq,
+            text,
+            truncated,
+        })
+    }
+
+    getRuntimeSnapshot(sessionId: string): Promise<{ sessionId: string; seq: number; text: string; truncated?: boolean } | null> {
+        return Promise.resolve({
+            sessionId,
+            seq: this.runtimeSeqs.get(sessionId) || 0,
+            text: this.runtimeBuffers.get(sessionId) || '',
+            truncated: false,
+        })
+    }
+
+    onRuntimeEvent(sessionId: string, callback: (event: RuntimeEvent) => void): () => void {
+        const listeners = this.runtimeListeners.get(sessionId) || new Set<(event: RuntimeEvent) => void>()
+        listeners.add(callback)
+        this.runtimeListeners.set(sessionId, listeners)
+        return () => {
+            const current = this.runtimeListeners.get(sessionId)
+            if (!current) return
+            current.delete(callback)
+            if (current.size === 0) this.runtimeListeners.delete(sessionId)
+        }
+    }
+
+    private emitRuntimeEvent(sessionId: string, event: RuntimeEvent): void {
+        this.runtimeListeners.get(sessionId)?.forEach((callback) => callback(event))
     }
 }
 

@@ -36,7 +36,7 @@ class DashboardWSStub {
 
 export let dashboardWS: any = new DashboardWSStub()
 
-type PtyOutputCallback = (cliId: string, data: string) => void
+type PtyOutputCallback = (cliId: string, data: string, meta?: { scrollback?: boolean }) => void
 
 /**
  * ConnectionManager stub — abstract connection interface.
@@ -64,8 +64,19 @@ class ConnectionManagerStub {
         return () => { this.ptyCallbacks.delete(callback) }
     }
 
-    emitPtyOutput(cliId: string, data: string) {
-        this.ptyCallbacks.forEach(cb => cb(cliId, data))
+    emitPtyOutput(cliId: string, data: string, meta?: { scrollback?: boolean }) {
+        this.ptyCallbacks.forEach(cb => cb(cliId, data, meta))
+    }
+
+    getRuntimeSnapshot(_sessionId: string): Promise<{ sessionId: string; seq: number; text: string; truncated?: boolean } | null> {
+        return Promise.resolve(null)
+    }
+
+    onRuntimeEvent(
+        _sessionId: string,
+        _callback: (event: { type: string; sessionId: string; seq?: number; text?: string; data?: string; truncated?: boolean }) => void,
+    ): () => void {
+        return () => {}
     }
 }
 

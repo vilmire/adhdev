@@ -222,6 +222,16 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                         return
                     }
 
+                    if (msg.type === 'runtime_snapshot') {
+                        standaloneConnectionManager.emitRuntimeSnapshot(
+                            msg.sessionId,
+                            typeof msg.text === 'string' ? msg.text : '',
+                            typeof msg.seq === 'number' ? msg.seq : 0,
+                            !!msg.truncated,
+                        )
+                        return
+                    }
+
                     if (msg.type === 'status' || msg.type === 'initial_state') {
                         const statusData = msg.data as StatusResponse
                         if (!statusData) return

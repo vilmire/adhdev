@@ -5,10 +5,8 @@ import { useRef, useEffect, useState } from 'react';
 import { CliTerminal } from '../CliTerminal';
 import type { CliTerminalHandle } from '../CliTerminal';
 import { useTransport } from '../../context/TransportContext';
-import { useApi } from '../../context/ApiContext';
 import { connectionManager } from '../../compat';
 import type { ActiveConversation } from './types';
-import type { RuntimeSnapshot } from '../../base-api';
 
 export interface CliTerminalPaneProps {
     activeConv: ActiveConversation;
@@ -28,7 +26,6 @@ export default function CliTerminalPane({
 }: CliTerminalPaneProps) {
     const chatInputRef = useRef<HTMLInputElement>(null);
     const { sendCommand, sendData } = useTransport();
-    const api = useApi();
     const [draftInput, setDraftInput] = useState('');
     const [runtimeReady, setRuntimeReady] = useState(false);
     const seededSnapshotSeqRef = useRef(0);
@@ -37,9 +34,6 @@ export default function CliTerminalPane({
     const tabKey = activeConv.tabKey;
     const sessionId = activeConv.sessionId || '';
     const daemonRouteId = activeConv.daemonId || activeConv.ideId?.split(':')[0] || activeConv.ideId || '';
-    const matchesCliId = (cliId: string) =>
-        cliId === sessionId || cliId === activeConv.ideId || cliId === activeConv.tabKey;
-
     const resetRuntimeView = () => {
         seededSnapshotSeqRef.current = 0;
         liveOutputStartedRef.current = false;
@@ -69,79 +63,44 @@ export default function CliTerminalPane({
 
     useEffect(() => {
         if (!sessionId) return;
-        const es = new EventSource(api.getRuntimeEventsUrl(sessionId));
+        let cancelled = false;
+        void connectionManager.getRuntimeSnapshot?.(sessionId).then((snapshot: any) => {
+            if (cancelled || !snapshot || snapshot.sessionId !== sessionId) return;
+            seedTerminal(snapshot.text || '', snapshot.seq || 0);
+        }).catch(() => {});
 
-        const handleSnapshot = (raw: MessageEvent<string>) => {
-            try {
-                const snapshot = JSON.parse(raw.data) as RuntimeSnapshot;
-                if (snapshot.sessionId !== sessionId) return;
-                seedTerminal(snapshot.text || '', snapshot.seq || 0);
-            } catch {
-                // noop
+        const unsubRuntime = connectionManager.onRuntimeEvent?.(sessionId, (event: any) => {
+            if (!event || event.sessionId !== sessionId) return;
+            if (event.type === 'runtime_snapshot') {
+                seedTerminal(event.text || '', event.seq || 0);
+                return;
             }
-        };
-
-        const handleOutput = (raw: MessageEvent<string>) => {
-            try {
-                const event = JSON.parse(raw.data) as { sessionId: string; data?: string; seq?: number };
-                if (event.sessionId !== sessionId) return;
+            if (event.type === 'session_output') {
                 liveOutputStartedRef.current = true;
                 if (typeof event.seq === 'number') {
                     seededSnapshotSeqRef.current = Math.max(seededSnapshotSeqRef.current, event.seq);
                 }
                 setRuntimeReady(true);
                 if (typeof event.data === 'string') terminalRef.current?.write(event.data);
-            } catch {
-                // noop
+                return;
             }
-        };
-
-        const handleCleared = (raw: MessageEvent<string>) => {
-            try {
-                const event = JSON.parse(raw.data) as { sessionId: string };
-                if (event.sessionId !== sessionId) return;
+            if (event.type === 'session_cleared') {
                 clearRuntimeView();
-            } catch {
-                // noop
             }
-        };
-
-        es.addEventListener('runtime_snapshot', handleSnapshot as EventListener);
-        es.addEventListener('session_output', handleOutput as EventListener);
-        es.addEventListener('session_cleared', handleCleared as EventListener);
-
-        es.onerror = () => {
-            // EventSource reconnects automatically. Do not clear the terminal on transient stream errors.
-        };
+        }) || (() => {});
 
         return () => {
-            es.removeEventListener('runtime_snapshot', handleSnapshot as EventListener);
-            es.removeEventListener('session_output', handleOutput as EventListener);
-            es.removeEventListener('session_cleared', handleCleared as EventListener);
-            es.close();
+            cancelled = true;
+            unsubRuntime();
         };
-    }, [api, sessionId]);
+    }, [sessionId, terminalRef]);
 
     useEffect(() => {
         if (!sessionId) return;
 
-        const buffered = ptyBuffers.current.get(tabKey)?.join('') || '';
-        if (buffered) {
-            seedTerminal(buffered, 2);
-        } else if (activeConv.terminalHistory) {
-            seedTerminal(activeConv.terminalHistory, 1);
-        }
-
         if (daemonRouteId && connectionManager.getState?.(daemonRouteId) === 'connected') {
             setRuntimeReady(true);
         }
-
-        const unsubPty = connectionManager.onPtyOutput?.((cliId: string, data: string) => {
-            if (!matchesCliId(cliId)) return;
-            liveOutputStartedRef.current = true;
-            setRuntimeReady(true);
-            if (typeof data === 'string' && data) terminalRef.current?.write(data);
-        }) || (() => {});
 
         const unsubState = connectionManager.onStateChange?.((connectedDaemonId: string, state: string) => {
             if (connectedDaemonId !== daemonRouteId || state !== 'connected') return;
@@ -149,10 +108,9 @@ export default function CliTerminalPane({
         });
 
         return () => {
-            unsubPty();
             unsubState?.();
         };
-    }, [activeConv.ideId, activeConv.tabKey, activeConv.terminalHistory, daemonRouteId, ptyBuffers, sessionId, terminalRef]);
+    }, [daemonRouteId, sessionId, terminalRef]);
 
     useEffect(() => {
         if (!clearToken) return;

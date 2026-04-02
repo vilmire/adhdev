@@ -568,6 +568,7 @@ class StandaloneServer {
     // Send initial status immediately
     const status = this.getStatus();
     ws.send(JSON.stringify({ type: 'status', data: status }));
+    void this.pushWsRuntimeSnapshots(ws);
 
     ws.on('message', async (raw) => {
       try {
@@ -610,6 +611,35 @@ class StandaloneServer {
       version: pkgVersion,
       daemonMode: false,
     });
+  }
+
+  private async pushWsRuntimeSnapshots(ws: WebSocket): Promise<void> {
+    if (!this.components || !this.sessionHostEndpoint || ws.readyState !== WebSocket.OPEN) return;
+
+    const client = new SessionHostClient({ endpoint: this.sessionHostEndpoint || undefined });
+    await client.connect();
+    try {
+      const states = this.components.instanceManager.collectAllStates();
+      for (const state of states as any[]) {
+        const sessionId = typeof state?.instanceId === 'string' ? state.instanceId : '';
+        if (!sessionId || state?.category !== 'cli') continue;
+
+        const snapshot = await client.request<{ seq: number; text: string; truncated: boolean }>({
+          type: 'get_snapshot',
+          payload: { sessionId },
+        });
+        if (!snapshot.success || !snapshot.result || ws.readyState !== WebSocket.OPEN) continue;
+        ws.send(JSON.stringify({
+          type: 'runtime_snapshot',
+          sessionId,
+          ...snapshot.result,
+        }));
+      }
+    } catch {
+      // noop
+    } finally {
+      await client.close().catch(() => {});
+    }
   }
 
   private getStatus(snapshot: ReturnType<StandaloneServer['buildSharedSnapshot']> = this.buildSharedSnapshot()): StatusResponse {

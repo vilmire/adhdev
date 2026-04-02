@@ -68,7 +68,7 @@ export function useDashboardConversationMeta({
     }, [setActionLogs])
 
     useEffect(() => {
-        const writePty = (cliId: string, data: string) => {
+        const writePty = (cliId: string, data: string, meta?: { scrollback?: boolean }) => {
             if (!data) return
 
             ptyBus.emit(cliId, data)
@@ -77,8 +77,8 @@ export function useDashboardConversationMeta({
                 const convCliMatch = cliId === conv.sessionId || cliId === conv.ideId || cliId === conv.tabKey
                 if (!convCliMatch) continue
 
-                const buf = ptyBuffers.current.get(conv.tabKey) || []
-                buf.push(data)
+                const buf = meta?.scrollback ? [data] : (ptyBuffers.current.get(conv.tabKey) || [])
+                if (!meta?.scrollback) buf.push(data)
                 if (buf.length > 10000) buf.splice(0, buf.length - 5000)
                 ptyBuffers.current.set(conv.tabKey, buf)
             }
