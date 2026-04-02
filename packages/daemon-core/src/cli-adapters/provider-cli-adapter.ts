@@ -702,40 +702,23 @@ export class ProviderCliAdapter implements CliAdapter {
         this.accumulatedBuffer = (this.accumulatedBuffer + cleanData).slice(-ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
         this.accumulatedRawBuffer = (this.accumulatedRawBuffer + rawData).slice(-ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
 
-        // ─── Startup window: auto-proceed first-run dialogs
+        // ─── Startup: detect CLI readiness (no auto-proceed)
         if (this.startupParseGate) {
             this.startupBuffer += cleanData;
-
-            const dialogPatterns = [
-                /Do you want to connect/i,
-                /Do you trust the files/i,
-                /Quick safety check/i,
-                /Is this a project/i,
-                /Enter to confirm/i,
-                /be able to read, edit, and execute/i,
-                /Security guide/i,
-            ];
-            if (dialogPatterns.some(p => p.test(this.startupBuffer))) {
-                setTimeout(() => this.ptyProcess?.write('\r'), this.timeouts.dialogAccept);
-                this.startupBuffer = '';
-                return;
-            }
-
             const elapsed = Date.now() - this.spawnAt;
-            const bufCap = this.startupBuffer.length > 12000;
-
-            // Use detectStatus script to check if CLI is ready (shows a prompt)
             const scriptStatus = this.runDetectStatus(this.startupBuffer);
-            const isReady = scriptStatus === 'idle' || elapsed > 8000 || bufCap;
+            const isReady = scriptStatus === 'idle'
+                || scriptStatus === 'waiting_approval'
+                || elapsed > 8000
+                || this.startupBuffer.length > 12000;
 
             if (isReady) {
                 this.startupParseGate = false;
                 this.ready = true;
-                LOG.info('CLI', `[${this.cliType}] Startup gate end (${elapsed}ms, scriptStatus=${scriptStatus})`);
+                LOG.info('CLI', `[${this.cliType}] Startup ready (${elapsed}ms, scriptStatus=${scriptStatus})`);
                 this.onStatusChange?.();
-            } else {
-                return;
             }
+            // No early return — status detection runs from the start
         }
 
         // ─── Script-based status detection
@@ -957,56 +940,8 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     private commitCurrentTranscript(): void {
-        const baseMessages = [...this.committedMessages];
-        const parsed = this.parseCurrentTranscript(baseMessages, '', this.currentTurnScope);
-        if (parsed && Array.isArray(parsed.messages) && parsed.messages.length > 0) {
-            const parsedMessages = parsed.messages
-                .filter((m: any) => m && (m.role === 'user' || m.role === 'assistant'))
-                .map((m: any) => ({
-                    role: m.role,
-                    content: typeof m.content === 'string' ? m.content : String(m.content || ''),
-                    timestamp: m.timestamp,
-                }));
-            const latestAssistant = [...parsedMessages]
-                .reverse()
-                .find((m: CliChatMessage) => m.role === 'assistant' && m.content.trim());
-            if (latestAssistant) {
-                LOG.info('CLI', `[${this.cliType}] commitCurrentTranscript parsed assistant len=${latestAssistant.content.length} scopePrompt=${JSON.stringify(this.currentTurnScope?.prompt || '').slice(0, 120)}`);
-                const nextMessages = [...baseMessages];
-                const last = nextMessages[nextMessages.length - 1];
-                if (last?.role === 'assistant') {
-                    last.content = latestAssistant.content;
-                    last.timestamp = latestAssistant.timestamp || last.timestamp;
-                } else if (last?.role === 'user') {
-                    nextMessages.push({
-                        role: 'assistant',
-                        content: latestAssistant.content,
-                        timestamp: latestAssistant.timestamp || Date.now(),
-                    });
-                } else {
-                    nextMessages.push({
-                        role: 'assistant',
-                        content: latestAssistant.content,
-                        timestamp: latestAssistant.timestamp || Date.now(),
-                    });
-                }
-                this.committedMessages = nextMessages;
-                this.syncMessageViews();
-                return;
-            }
-        }
-
-        const fallback = String(this.responseBuffer || '').trim();
-        LOG.info('CLI', `[${this.cliType}] commitCurrentTranscript fallback len=${fallback.length} scopePrompt=${JSON.stringify(this.currentTurnScope?.prompt || '').slice(0, 120)}`);
-        if (!fallback) return;
-        const last = baseMessages[baseMessages.length - 1];
-        if (last?.role === 'assistant') {
-            last.content = fallback;
-        } else {
-            baseMessages.push({ role: 'assistant', content: fallback, timestamp: Date.now() });
-        }
-        this.committedMessages = baseMessages;
-        this.syncMessageViews();
+        // No-op: terminal output is the canonical display for CLI providers.
+        // Assistant text extraction from PTY output has been removed.
     }
 
  // ─── Script Execution ──────────────────────────

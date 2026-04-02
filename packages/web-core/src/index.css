@@ -436,29 +436,29 @@ a:hover {
 :root[data-chat-theme="ember"] {
     --chat-user-bg: #f59e0b;
     --chat-user-color: #1a1a1a;
-    --chat-assistant-bg: #111726;
-    --chat-assistant-border: 1px solid rgba(255, 255, 255, 0.08);
+    --chat-assistant-bg: var(--bg-secondary);
+    --chat-assistant-border: 1px solid var(--border-subtle);
     --chat-action-bg: rgba(217, 119, 6, 0.10);
     --chat-action-border: 1px solid rgba(217, 119, 6, 0.20);
     --chat-action-color: #f59e0b;
-    --chat-container-bg: #0a0e1a;
-    --chat-typing-bg: #111726;
-    --chat-typing-border: 1px solid rgba(255, 255, 255, 0.08);
+    --chat-container-bg: var(--bg-primary);
+    --chat-typing-bg: var(--bg-secondary);
+    --chat-typing-border: 1px solid var(--border-subtle);
 }
 
 /* ── Chat Theme: Ember (Light) ─────────────────── */
 :root[data-theme="light"][data-chat-theme="ember"] {
     --chat-user-bg: #f59e0b;
     --chat-user-color: #1a1a1a;
-    --chat-assistant-bg: #fffaf4;
-    --chat-assistant-color: #24160f;
-    --chat-assistant-border: 1px solid rgba(146, 64, 14, 0.10);
+    --chat-assistant-bg: var(--bg-secondary);
+    --chat-assistant-color: var(--text-primary);
+    --chat-assistant-border: 1px solid var(--border-subtle);
     --chat-action-bg: rgba(217, 119, 6, 0.07);
     --chat-action-border: 1px solid rgba(217, 119, 6, 0.16);
     --chat-action-color: #b45309;
-    --chat-container-bg: #fff8ee;
-    --chat-typing-bg: #ffffff;
-    --chat-typing-border: 1px solid rgba(146, 64, 14, 0.10);
+    --chat-container-bg: var(--bg-primary);
+    --chat-typing-bg: var(--bg-secondary);
+    --chat-typing-border: 1px solid var(--border-subtle);
 }
 
 /* ── Chat Element Classes ──────────────────────── */
@@ -788,15 +788,15 @@ a:hover {
     :root:not([data-theme="dark"])[data-chat-theme="ember"] {
         --chat-user-bg: #f59e0b;
         --chat-user-color: #1a1a1a;
-        --chat-assistant-bg: #fffaf4;
-        --chat-assistant-color: #24160f;
-        --chat-assistant-border: 1px solid rgba(146, 64, 14, 0.10);
+        --chat-assistant-bg: var(--bg-secondary);
+        --chat-assistant-color: var(--text-primary);
+        --chat-assistant-border: 1px solid var(--border-subtle);
         --chat-action-bg: rgba(217, 119, 6, 0.07);
         --chat-action-border: 1px solid rgba(217, 119, 6, 0.16);
         --chat-action-color: #b45309;
-        --chat-container-bg: #fff8ee;
-        --chat-typing-bg: #ffffff;
-        --chat-typing-border: 1px solid rgba(146, 64, 14, 0.10);
+        --chat-container-bg: var(--bg-primary);
+        --chat-typing-bg: var(--bg-secondary);
+        --chat-typing-border: 1px solid var(--border-subtle);
     }
 
     :root:not([data-theme="dark"])[data-chat-theme="aurora"] {
