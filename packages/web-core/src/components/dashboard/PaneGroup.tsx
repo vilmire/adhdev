@@ -4,7 +4,7 @@
  * Like VS Code editor groups: each group has independent tabs,
  * active tab selection, and content rendering.
  */
-import { useRef, useCallback, useMemo, type CSSProperties, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
+import { useRef, useCallback, useMemo, type CSSProperties, type Dispatch, type SetStateAction } from 'react'
 import { useTransport } from '../../context/TransportContext'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace'
@@ -26,7 +26,6 @@ export interface PaneGroupProps {
     ides: DaemonData[];
     /** Shared state refs */
     actionLogs: { ideId: string; text: string; timestamp: number }[];
-    ptyBuffers: MutableRefObject<Map<string, string[]>>;
     screenshotMap: Record<string, string>;
     setScreenshotMap: (m: Record<string, string>) => void;
     /** Dashboard-level state setters */
@@ -64,7 +63,7 @@ export interface PaneGroupProps {
 export default function PaneGroup({
     conversations, ides,
     clearedTabs,
-    actionLogs, ptyBuffers,
+    actionLogs,
     screenshotMap, setScreenshotMap,
     sendDaemonCommand, setLocalUserMessages, setActionLogs,
     isStandalone, userName,
@@ -216,7 +215,6 @@ export default function PaneGroup({
                         ideEntry={activeIdeEntry}
                         screenshotUrl={activeScreenshotUrl}
                         clearScreenshot={clearActiveScreenshot}
-                        ptyBuffers={ptyBuffers}
                         terminalRef={terminalRef}
                         handleModalButton={cmds.handleModalButton}
                         handleRelaunch={cmds.handleRelaunch}

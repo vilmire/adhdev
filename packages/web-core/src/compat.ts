@@ -68,10 +68,6 @@ class ConnectionManagerStub {
         this.ptyCallbacks.forEach(cb => cb(cliId, data, meta))
     }
 
-    getRuntimeSnapshot(_sessionId: string): Promise<{ sessionId: string; seq: number; text: string; truncated?: boolean } | null> {
-        return Promise.resolve(null)
-    }
-
     onRuntimeEvent(
         _sessionId: string,
         _callback: (event: { type: string; sessionId: string; seq?: number; text?: string; data?: string; truncated?: boolean }) => void,

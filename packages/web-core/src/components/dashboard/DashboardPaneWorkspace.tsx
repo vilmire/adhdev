@@ -12,7 +12,6 @@ interface DashboardPaneWorkspaceProps {
     clearedTabs: Record<string, number>
     ides: DaemonData[]
     actionLogs: { ideId: string; text: string; timestamp: number }[]
-    ptyBuffers: React.MutableRefObject<Map<string, string[]>>
     screenshotMap: Record<string, string>
     setScreenshotMap: (m: Record<string, string>) => void
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
@@ -44,7 +43,6 @@ export default function DashboardPaneWorkspace({
     clearedTabs,
     ides,
     actionLogs,
-    ptyBuffers,
     screenshotMap,
     setScreenshotMap,
     sendDaemonCommand,
@@ -96,7 +94,6 @@ export default function DashboardPaneWorkspace({
                             clearedTabs={clearedTabs}
                             ides={ides}
                             actionLogs={actionLogs}
-                            ptyBuffers={ptyBuffers}
                             screenshotMap={screenshotMap}
                             setScreenshotMap={setScreenshotMap}
                             sendDaemonCommand={sendDaemonCommand}

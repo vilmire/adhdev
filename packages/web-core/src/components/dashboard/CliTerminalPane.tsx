@@ -11,8 +11,6 @@ import type { ActiveConversation } from './types';
 export interface CliTerminalPaneProps {
     activeConv: ActiveConversation;
     clearToken?: number;
-    /** PTY buffer map (ref from Dashboard) */
-    ptyBuffers: React.MutableRefObject<Map<string, string[]>>;
     /** Outer terminal ref for bumpResize etc. */
     terminalRef: React.RefObject<CliTerminalHandle | null>;
     handleSendChat: (message: string) => void;
@@ -20,7 +18,7 @@ export interface CliTerminalPaneProps {
 }
 
 export default function CliTerminalPane({
-    activeConv, clearToken = 0, ptyBuffers, terminalRef,
+    activeConv, clearToken = 0, terminalRef,
     handleSendChat,
     isSendingChat = false,
 }: CliTerminalPaneProps) {
@@ -63,12 +61,6 @@ export default function CliTerminalPane({
 
     useEffect(() => {
         if (!sessionId) return;
-        let cancelled = false;
-        void connectionManager.getRuntimeSnapshot?.(sessionId).then((snapshot: any) => {
-            if (cancelled || !snapshot || snapshot.sessionId !== sessionId) return;
-            seedTerminal(snapshot.text || '', snapshot.seq || 0);
-        }).catch(() => {});
-
         const unsubRuntime = connectionManager.onRuntimeEvent?.(sessionId, (event: any) => {
             if (!event || event.sessionId !== sessionId) return;
             if (event.type === 'runtime_snapshot') {
@@ -90,7 +82,6 @@ export default function CliTerminalPane({
         }) || (() => {});
 
         return () => {
-            cancelled = true;
             unsubRuntime();
         };
     }, [sessionId, terminalRef]);
@@ -114,10 +105,8 @@ export default function CliTerminalPane({
 
     useEffect(() => {
         if (!clearToken) return;
-
-        ptyBuffers.current.delete(tabKey);
         resetRuntimeView();
-    }, [clearToken, tabKey, ptyBuffers, terminalRef]);
+    }, [clearToken, tabKey, terminalRef]);
 
     useEffect(() => {
         setDraftInput('');

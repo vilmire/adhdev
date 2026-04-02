@@ -1,5 +1,5 @@
 import { memo, useCallback } from 'react'
-import type { MutableRefObject, RefObject } from 'react'
+import type { RefObject } from 'react'
 import type { ActiveConversation } from './types'
 import type { DaemonData } from '../../types'
 import type { CliTerminalHandle } from '../CliTerminal'
@@ -16,7 +16,6 @@ interface PaneGroupContentProps {
     ideEntry?: DaemonData
     screenshotUrl?: string
     clearScreenshot: () => void
-    ptyBuffers: MutableRefObject<Map<string, string[]>>
     terminalRef: RefObject<CliTerminalHandle | null>
     handleModalButton: (button: string) => void
     handleRelaunch: () => void
@@ -35,7 +34,6 @@ const PaneGroupContent = memo(function PaneGroupContent({
     ideEntry,
     screenshotUrl,
     clearScreenshot,
-    ptyBuffers,
     terminalRef,
     handleModalButton,
     handleRelaunch,
@@ -77,7 +75,6 @@ const PaneGroupContent = memo(function PaneGroupContent({
                 <CliTerminalPane
                     activeConv={activeConv}
                     clearToken={clearToken}
-                    ptyBuffers={ptyBuffers}
                     terminalRef={terminalRef}
                     handleSendChat={handleSendChat}
                     isSendingChat={isSendingChat}
@@ -101,7 +98,6 @@ const PaneGroupContent = memo(function PaneGroupContent({
     && prev.isCli === next.isCli
     && prev.ideEntry === next.ideEntry
     && prev.screenshotUrl === next.screenshotUrl
-    && prev.ptyBuffers === next.ptyBuffers
     && prev.terminalRef === next.terminalRef
     && prev.handleModalButton === next.handleModalButton
     && prev.handleRelaunch === next.handleRelaunch

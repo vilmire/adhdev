@@ -156,7 +156,6 @@ export function buildIdeConversations(
             status: agentStatus,
             title,
             messages: [...nativeServerMsgs, ...nativePendingLocal],
-            terminalHistory: typeof (chat as any).terminalHistory === 'string' ? (chat as any).terminalHistory : '',
             resume: (ide as any).resume,
             ideType: (ide as any).cliType || (ide as any).acpType || ide.type,
             workspaceName,

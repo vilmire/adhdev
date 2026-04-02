@@ -84,7 +84,6 @@ export default function IDEPage({ renderHeaderActions }: IDEPageProps = {}) {
         ideName,
     })
     useDashboardConversationMeta({
-        conversations,
         visibleConversations: conversations,
         clearedTabs,
         setClearedTabs,

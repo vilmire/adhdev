@@ -128,8 +128,7 @@ export default function Dashboard() {
         return groupedConvs[focusedGroup]?.[0] || groupedConvs[0]?.[0]
     }, [groupActiveTabIds, focusedGroup, conversations, groupedConvs])
 
-    const { ptyBuffers } = useDashboardConversationMeta({
-        conversations,
+    useDashboardConversationMeta({
         visibleConversations,
         clearedTabs,
         setClearedTabs,
@@ -262,7 +261,6 @@ export default function Dashboard() {
                 clearedTabs={clearedTabs}
                 ides={ides}
                 actionLogs={actionLogs}
-                ptyBuffers={ptyBuffers}
                 screenshotMap={screenshotMap}
                 setScreenshotMap={setScreenshotMap}
                 sendDaemonCommand={sendDaemonCommand}

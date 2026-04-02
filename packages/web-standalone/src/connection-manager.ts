@@ -131,19 +131,12 @@ class StandaloneConnectionManager {
         })
     }
 
-    getRuntimeSnapshot(sessionId: string): Promise<{ sessionId: string; seq: number; text: string; truncated?: boolean } | null> {
-        return Promise.resolve({
-            sessionId,
-            seq: this.runtimeSeqs.get(sessionId) || 0,
-            text: this.runtimeBuffers.get(sessionId) || '',
-            truncated: false,
-        })
-    }
-
     onRuntimeEvent(sessionId: string, callback: (event: RuntimeEvent) => void): () => void {
         const listeners = this.runtimeListeners.get(sessionId) || new Set<(event: RuntimeEvent) => void>()
         listeners.add(callback)
         this.runtimeListeners.set(sessionId, listeners)
+        const snapshot = this.getCachedRuntimeSnapshot(sessionId)
+        if (snapshot) callback(snapshot)
         return () => {
             const current = this.runtimeListeners.get(sessionId)
             if (!current) return
@@ -154,6 +147,17 @@ class StandaloneConnectionManager {
 
     private emitRuntimeEvent(sessionId: string, event: RuntimeEvent): void {
         this.runtimeListeners.get(sessionId)?.forEach((callback) => callback(event))
+    }
+
+    private getCachedRuntimeSnapshot(sessionId: string): RuntimeEvent | null {
+        if (!this.runtimeBuffers.has(sessionId) && !this.runtimeSeqs.has(sessionId)) return null
+        return {
+            type: 'runtime_snapshot',
+            sessionId,
+            seq: this.runtimeSeqs.get(sessionId) || 0,
+            text: this.runtimeBuffers.get(sessionId) || '',
+            truncated: false,
+        }
     }
 }
 

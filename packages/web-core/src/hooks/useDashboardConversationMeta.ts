@@ -1,12 +1,8 @@
-import { useEffect, useMemo, useRef, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useMemo, type Dispatch, type SetStateAction } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
-import { isCliConv } from '../components/dashboard/types'
-import { ptyBus } from '../components/dashboard/ptyBus'
-import { connectionManager } from '../compat'
 import { requestNotificationPermission, useBrowserNotifications } from './useBrowserNotifications'
 
 interface UseDashboardConversationMetaOptions {
-    conversations: ActiveConversation[]
     visibleConversations: ActiveConversation[]
     clearedTabs: Record<string, number>
     setClearedTabs: Dispatch<SetStateAction<Record<string, number>>>
@@ -14,14 +10,11 @@ interface UseDashboardConversationMetaOptions {
 }
 
 export function useDashboardConversationMeta({
-    conversations,
     visibleConversations,
     clearedTabs,
     setClearedTabs,
     setActionLogs,
 }: UseDashboardConversationMetaOptions) {
-    const ptyBuffers = useRef<Map<string, string[]>>(new Map())
-
     useEffect(() => {
         requestNotificationPermission()
     }, [])
@@ -67,26 +60,5 @@ export function useDashboardConversationMeta({
         return () => clearInterval(timer)
     }, [setActionLogs])
 
-    useEffect(() => {
-        const writePty = (cliId: string, data: string, meta?: { scrollback?: boolean }) => {
-            if (!data) return
-
-            ptyBus.emit(cliId, data)
-            for (const conv of conversations) {
-                if (!isCliConv(conv)) continue
-                const convCliMatch = cliId === conv.sessionId || cliId === conv.ideId || cliId === conv.tabKey
-                if (!convCliMatch) continue
-
-                const buf = meta?.scrollback ? [data] : (ptyBuffers.current.get(conv.tabKey) || [])
-                if (!meta?.scrollback) buf.push(data)
-                if (buf.length > 10000) buf.splice(0, buf.length - 5000)
-                ptyBuffers.current.set(conv.tabKey, buf)
-            }
-        }
-
-        const unsubP2P = connectionManager.onPtyOutput(writePty)
-        return () => { unsubP2P() }
-    }, [conversations])
-
-    return { ptyBuffers }
+    return null
 }
