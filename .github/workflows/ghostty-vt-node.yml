@@ -22,17 +22,35 @@ jobs:
           - runner: ubuntu-latest
             platform: linux
             arch: x64
+            node-version: 20
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+            node-version: 22
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+            node-version: 24
           - runner: macos-14
             platform: darwin
             arch: arm64
+            node-version: 20
+          - runner: macos-14
+            platform: darwin
+            arch: arm64
+            node-version: 22
+          - runner: macos-14
+            platform: darwin
+            arch: arm64
+            node-version: 24
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Use Node.js 22
+      - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
       - name: Setup Zig

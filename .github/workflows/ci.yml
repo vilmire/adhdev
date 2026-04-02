@@ -108,10 +108,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          triplets=(
-            "linux-x64-node$(node -p 'process.versions.modules')"
-            "darwin-arm64-node$(node -p 'process.versions.modules')"
-          )
           run_id=""
           for attempt in $(seq 1 30); do
             run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ghostty-vt-node.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.head_sha == "'"${GITHUB_SHA}"'" and .conclusion == "success") | .id' | head -n 1 || true)"
@@ -130,16 +126,23 @@ jobs:
             echo "Timed out waiting for Ghostty VT Native run on ${GITHUB_SHA}."
             exit 1
           fi
-          for triplet in "${triplets[@]}"; do
+          artifact_names="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false and (.name | startswith("ghostty-vt-node-"))) | .name')"
+          if [ -z "${artifact_names}" ]; then
+            echo "No ghostty native artifacts found for run ${run_id}."
+            exit 1
+          fi
+          while IFS= read -r artifact_name; do
+            [ -n "${artifact_name}" ] || continue
+            triplet="${artifact_name#ghostty-vt-node-}"
             mkdir -p "packages/ghostty-vt-node/prebuilt/${triplet}"
             gh run download "${run_id}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --name "ghostty-vt-node-${triplet}" \
+              --name "${artifact_name}" \
               --dir "packages/ghostty-vt-node/prebuilt/${triplet}"
             find "packages/ghostty-vt-node/prebuilt/${triplet}" -mindepth 2 -maxdepth 2 -type f -exec mv {} "packages/ghostty-vt-node/prebuilt/${triplet}/" \;
             find "packages/ghostty-vt-node/prebuilt/${triplet}" -mindepth 1 -type d -empty -delete
-          done
-          find packages/ghostty-vt-node/prebuilt -maxdepth 2 -type f -name 'ghostty_vt_node.node' -print
+          done <<< "${artifact_names}"
+          find packages/ghostty-vt-node/prebuilt -maxdepth 2 -type f -print | sort
 
       - name: Download publish artifacts
         uses: actions/download-artifact@v4
