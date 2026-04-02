@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/ghostty-vt-node",
-  "version": "0.7.32",
+  "version": "0.7.33",
   "description": "Native Node binding for libghostty-vt",
   "main": "index.js",
   "types": "index.d.ts",
