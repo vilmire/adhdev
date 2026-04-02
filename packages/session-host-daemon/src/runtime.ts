@@ -1,7 +1,25 @@
 import * as os from 'os';
+import * as path from 'path';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import type { CreateSessionPayload } from '@adhdev/session-host-core';
+
+if (os.platform() !== 'win32') {
+  try {
+    const fs = require('fs');
+    const ptyDir = path.resolve(path.dirname(require.resolve('node-pty')), '..');
+    const platformArch = `${os.platform()}-${os.arch()}`;
+    const helper = path.join(ptyDir, 'prebuilds', platformArch, 'spawn-helper');
+    if (fs.existsSync(helper)) {
+      const stat = fs.statSync(helper);
+      if (!(stat.mode & 0o111)) {
+        fs.chmodSync(helper, stat.mode | 0o755);
+      }
+    }
+  } catch {
+    // best-effort: node-pty still works on most installs without this
+  }
+}
 
 export interface PtyRuntimeOptions {
   sessionId: string;

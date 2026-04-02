@@ -62,6 +62,15 @@ export interface HostedCliRuntimeDescriptor {
     cliArgs?: string[];
 }
 
+const chalkApi: any = (chalk as any)?.yellow
+    ? (chalk as any)
+    : (chalk as any)?.default || null;
+
+function colorize(color: 'red' | 'green' | 'yellow' | 'cyan', text: string): string {
+    const fn = chalkApi?.[color];
+    return typeof fn === 'function' ? fn(text) : text;
+}
+
 // ─── DaemonCliManager ────────────────────────────
 
 export class DaemonCliManager {
@@ -87,16 +96,16 @@ export class DaemonCliManager {
             const provider = this.providerLoader.getByAlias(cliType);
             const actKind = provider?.category === 'acp' ? 'acp' : 'cli';
             let next = loadConfig();
-            console.log(chalk.cyan(`  📂 Saving recent workspace: ${dir}`));
+            console.log(colorize('cyan', `  📂 Saving recent workspace: ${dir}`));
             const recent = next.recentCliWorkspaces || [];
             if (!recent.includes(dir)) {
                 next = { ...next, recentCliWorkspaces: [dir, ...recent].slice(0, 10) };
             }
             next = appendWorkspaceActivity(next, dir, { kind: actKind, agentType: normalizedType });
             saveConfig(next);
-            console.log(chalk.green(`  ✓ Recent workspace saved: ${dir}`));
+            console.log(colorize('green', `  ✓ Recent workspace saved: ${dir}`));
         } catch (e) {
-            console.error(chalk.red(`  ✗ Failed to save recent workspace: ${e}`));
+            console.error(colorize('red', `  ✗ Failed to save recent workspace: ${e}`));
         }
     }
 
@@ -129,7 +138,7 @@ export class DaemonCliManager {
  // Load CLI config from provider.js
         const provider = this.providerLoader.getMeta(normalizedType);
         if (provider && provider.category === 'cli' && provider.patterns && provider.spawn) {
-            console.log(chalk.cyan(`  📦 Using provider: ${provider.name} (${provider.type})`));
+            console.log(colorize('cyan', `  📦 Using provider: ${provider.name} (${provider.type})`));
             const resolvedProvider = this.providerLoader.resolve(normalizedType) || provider;
             const transportFactory = this.getTransportFactory(runtimeId, normalizedType, workingDir, cliArgs, attachExisting);
             return new ProviderCliAdapter(resolvedProvider as any, workingDir, cliArgs, transportFactory);
@@ -243,7 +252,7 @@ export class DaemonCliManager {
                 }
             }
 
-            console.log(chalk.cyan(`  🔌 Starting ACP agent: ${provider.name} (${provider.type}) in ${resolvedDir}`));
+            console.log(colorize('cyan', `  🔌 Starting ACP agent: ${provider.name} (${provider.type}) in ${resolvedDir}`));
 
             const acpInstance = new AcpProviderInstance(provider, resolvedDir, cliArgs);
             await instanceManager.addInstance(key, acpInstance, {
@@ -280,13 +289,13 @@ export class DaemonCliManager {
                 setOnPtyData: () => {},
             } as any);
 
-            console.log(chalk.green(`  ✓ ACP agent started: ${provider.name} in ${resolvedDir}`));
+            console.log(colorize('green', `  ✓ ACP agent started: ${provider.name} in ${resolvedDir}`));
 
  // If initialModel exists, change model after session start
             if (initialModel) {
                 try {
                     await acpInstance.setConfigOption('model', initialModel);
-                    console.log(chalk.green(`  🤖 Initial model set: ${initialModel}`));
+                    console.log(colorize('green', `  🤖 Initial model set: ${initialModel}`));
                 } catch (e: any) {
                     LOG.warn('CLI', `[ACP] Initial model set failed: ${e?.message}`);
                 }
@@ -301,9 +310,9 @@ export class DaemonCliManager {
         const cliInfo = await detectCLI(cliType, this.providerLoader);
         if (!cliInfo) throw new Error(`${cliType} not found`);
 
-        console.log(chalk.yellow(`  ⚡ Starting CLI ${cliType} in ${resolvedDir}...`));
+        console.log(colorize('yellow', `  ⚡ Starting CLI ${cliType} in ${resolvedDir}...`));
         if (provider) {
-            console.log(chalk.cyan(`  📦 Using provider: ${provider.name} (${provider.type})`));
+            console.log(colorize('cyan', `  📦 Using provider: ${provider.name} (${provider.type})`));
         }
 
  // If InstanceManager exists, manage as CliProviderInstance unified
@@ -320,7 +329,7 @@ export class DaemonCliManager {
                 {},
                 false,
             );
-            console.log(chalk.green(`  ✓ CLI started: ${cliInfo.displayName} v${cliInfo.version || 'unknown'} in ${resolvedDir}`));
+            console.log(colorize('green', `  ✓ CLI started: ${cliInfo.displayName} v${cliInfo.version || 'unknown'} in ${resolvedDir}`));
         } else {
  // Fallback: InstanceManager without directly adapter manage
             const adapter = this.createAdapter(cliType, resolvedDir, cliArgs, key, false);
@@ -357,7 +366,7 @@ export class DaemonCliManager {
             }
 
             this.adapters.set(key, adapter);
-            console.log(chalk.green(`  ✓ CLI started: ${cliInfo.displayName} v${cliInfo.version || 'unknown'} in ${resolvedDir}`));
+            console.log(colorize('green', `  ✓ CLI started: ${cliInfo.displayName} v${cliInfo.version || 'unknown'} in ${resolvedDir}`));
         }
 
         try { addCliHistory({ category: 'cli', cliType, dir: resolvedDir, workspace: resolvedDir, cliArgs, model: initialModel }); } catch (e) { LOG.warn('CLI', `CLI history save failed: ${(e as Error)?.message}`); }
@@ -541,7 +550,7 @@ export class DaemonCliManager {
                 if (found) {
                     await this.stopSessionWithMode(found.key, mode);
                 } else {
-                    console.log(chalk.yellow(`  ⚠ No adapter found for ${cliType}`));
+                    console.log(colorize('yellow', `  ⚠ No adapter found for ${cliType}`));
                 }
                 return { success: true, cliType, dir, stopped: true, mode };
             }
