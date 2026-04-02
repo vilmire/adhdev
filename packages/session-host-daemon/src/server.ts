@@ -19,7 +19,7 @@ import type {
   SessionHostResponse,
 } from '@adhdev/session-host-core';
 import { PtySessionRuntime } from './runtime.js';
-import { SessionHostStorage } from './storage.js';
+import { SessionHostStorage, type PersistedRuntimeState } from './storage.js';
 
 export interface SessionHostServerOptions {
   endpoint?: SessionHostEndpoint;
@@ -42,7 +42,6 @@ export class SessionHostServer extends EventEmitter {
   }
 
   async start(): Promise<void> {
-    this.restorePersistedRuntimes();
     if (this.endpoint.kind === 'unix') {
       try {
         fs.unlinkSync(this.endpoint.path);
@@ -69,6 +68,15 @@ export class SessionHostServer extends EventEmitter {
     });
 
     this.emit('log', `session host endpoint ready: ${this.endpoint.path}`);
+    // Do not block readiness on restoring/resuming persisted runtimes.
+    // Startup callers only need the IPC endpoint to accept connections.
+    setTimeout(() => {
+      try {
+        this.restorePersistedRuntimes();
+      } catch (error: any) {
+        this.emit('log', `session host restore failed: ${error?.message || String(error)}`);
+      }
+    }, 0);
   }
 
   async stop(): Promise<void> {
@@ -271,6 +279,10 @@ export class SessionHostServer extends EventEmitter {
 
   private restorePersistedRuntimes(): void {
     const states = this.storage.loadAll();
+    const runtimesToResume: Array<{
+      persisted: PersistedRuntimeState;
+      recoveredRecord: SessionHostRecord;
+    }> = [];
     for (const persisted of states) {
       const wasLiveRuntime = !['stopped', 'failed'].includes(persisted.record.lifecycle);
       const recoveredRecord: SessionHostRecord = {
@@ -288,35 +300,39 @@ export class SessionHostServer extends EventEmitter {
       this.registry.restoreSession(recoveredRecord, persisted.snapshot);
       this.storage.save(recoveredRecord, persisted.snapshot);
       if (wasLiveRuntime) {
-        try {
-          const resumed = this.startRuntime(
-            recoveredRecord,
-            this.buildPayloadFromRecord(recoveredRecord),
-            'session_resumed',
-          );
-          const resumedMeta = {
-            ...(resumed.meta || {}),
+        runtimesToResume.push({ persisted, recoveredRecord });
+      }
+    }
+
+    for (const { persisted, recoveredRecord } of runtimesToResume) {
+      try {
+        const resumed = this.startRuntime(
+          recoveredRecord,
+          this.buildPayloadFromRecord(recoveredRecord),
+          'session_resumed',
+        );
+        const resumedMeta = {
+          ...(resumed.meta || {}),
+          restoredFromStorage: true,
+          runtimeRecoveryState: 'auto_resumed',
+        };
+        this.registry.restoreSession(
+          { ...resumed, meta: resumedMeta },
+          this.registry.getSnapshot(resumed.sessionId),
+        );
+        this.persistNow(resumed.sessionId);
+      } catch (error: any) {
+        const interrupted = this.registry.setLifecycle(recoveredRecord.sessionId, 'interrupted');
+        this.registry.restoreSession({
+          ...interrupted,
+          meta: {
+            ...(interrupted.meta || {}),
             restoredFromStorage: true,
-            runtimeRecoveryState: 'auto_resumed',
-          };
-          this.registry.restoreSession(
-            { ...resumed, meta: resumedMeta },
-            this.registry.getSnapshot(resumed.sessionId),
-          );
-          this.persistNow(resumed.sessionId);
-        } catch (error: any) {
-          const interrupted = this.registry.setLifecycle(recoveredRecord.sessionId, 'interrupted');
-          this.registry.restoreSession({
-            ...interrupted,
-            meta: {
-              ...(interrupted.meta || {}),
-              restoredFromStorage: true,
-              runtimeRecoveryState: 'resume_failed',
-              runtimeRecoveryError: error?.message || String(error),
-            },
-          }, persisted.snapshot);
-          this.persistNow(recoveredRecord.sessionId);
-        }
+            runtimeRecoveryState: 'resume_failed',
+            runtimeRecoveryError: error?.message || String(error),
+          },
+        }, persisted.snapshot);
+        this.persistNow(recoveredRecord.sessionId);
       }
     }
   }
