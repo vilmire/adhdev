@@ -16,6 +16,9 @@ env:
 jobs:
   native-build:
     runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       matrix:
         include:
@@ -42,6 +45,18 @@ jobs:
           - runner: macos-14
             platform: darwin
             arch: arm64
+            node-version: 24
+          - runner: windows-latest
+            platform: win32
+            arch: x64
+            node-version: 20
+          - runner: windows-latest
+            platform: win32
+            arch: x64
+            node-version: 22
+          - runner: windows-latest
+            platform: win32
+            arch: x64
             node-version: 24
 
     steps:
@@ -70,8 +85,24 @@ jobs:
       - name: Stage native artifact
         run: |
           mkdir -p "dist-prebuilt/${GHOSTTY_TRIPLET}"
-          find "packages/ghostty-vt-node/build/Release" -maxdepth 1 -type f \( -name 'ghostty_vt_node.node' -o -name 'libghostty-vt.*' \) -exec cp {} "dist-prebuilt/${GHOSTTY_TRIPLET}/" \;
+          shopt -s nullglob
+          staged=0
+          for pattern in \
+            "packages/ghostty-vt-node/build/Release/ghostty_vt_node.node" \
+            "packages/ghostty-vt-node/build/Release/libghostty-vt.*" \
+            "packages/ghostty-vt-node/build/Release/ghostty-vt.dll"
+          do
+            for file in $pattern; do
+              [ -f "$file" ] || continue
+              cp "$file" "dist-prebuilt/${GHOSTTY_TRIPLET}/"
+              staged=1
+            done
+          done
           ls -l "dist-prebuilt/${GHOSTTY_TRIPLET}"
+          if [ "$staged" -ne 1 ]; then
+            echo "No native artifacts were staged for ${GHOSTTY_TRIPLET}."
+            exit 1
+          fi
 
       - name: Upload native artifact
         uses: actions/upload-artifact@v4
