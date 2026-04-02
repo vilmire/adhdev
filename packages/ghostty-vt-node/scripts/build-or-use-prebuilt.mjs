@@ -40,11 +40,20 @@ if (installPrebuiltIfPresent()) {
   process.exit(0);
 }
 
-const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-const result = spawnSync(npx, ['cmake-js', 'compile'], {
+const isWindows = process.platform === 'win32';
+const command = isWindows ? (process.env.ComSpec || 'cmd.exe') : 'npm';
+const args = isWindows
+  ? ['/d', '/s', '/c', 'npm exec -- cmake-js compile']
+  : ['exec', '--', 'cmake-js', 'compile'];
+console.log(`[ghostty-vt-node] compiling ${triplet} via ${command} ${args.join(' ')}`);
+const result = spawnSync(command, args, {
   cwd: packageDir,
   env: process.env,
   stdio: 'inherit',
 });
+
+if (result.error) {
+  console.error(`[ghostty-vt-node] failed to launch native build for ${triplet}:`, result.error);
+}
 
 process.exit(result.status ?? 1);
