@@ -3,6 +3,7 @@ name: Ghostty VT Native
 on:
   push:
     branches: [main]
+    tags: ['v*']
     paths:
       - 'packages/ghostty-vt-node/**'
       - '.github/workflows/ghostty-vt-node.yml'
@@ -51,11 +52,12 @@ jobs:
       - name: Stage native artifact
         run: |
           mkdir -p "dist-prebuilt/${GHOSTTY_TRIPLET}"
-          cp "packages/ghostty-vt-node/build/Release/ghostty_vt_node.node" "dist-prebuilt/${GHOSTTY_TRIPLET}/ghostty_vt_node.node"
+          find "packages/ghostty-vt-node/build/Release" -maxdepth 1 -type f \( -name 'ghostty_vt_node.node' -o -name 'libghostty-vt.*' \) -exec cp {} "dist-prebuilt/${GHOSTTY_TRIPLET}/" \;
+          ls -l "dist-prebuilt/${GHOSTTY_TRIPLET}"
 
       - name: Upload native artifact
         uses: actions/upload-artifact@v4
         with:
           name: ghostty-vt-node-${{ env.GHOSTTY_TRIPLET }}
-          path: dist-prebuilt/${{ env.GHOSTTY_TRIPLET }}/ghostty_vt_node.node
+          path: dist-prebuilt/${{ env.GHOSTTY_TRIPLET }}
           if-no-files-found: error

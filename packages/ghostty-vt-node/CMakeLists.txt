@@ -53,5 +53,20 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 )
 
 if(APPLE)
+  set_target_properties(${PROJECT_NAME} PROPERTIES
+    BUILD_RPATH "@loader_path"
+    INSTALL_RPATH "@loader_path"
+  )
   target_link_options(${PROJECT_NAME} PRIVATE "-undefined dynamic_lookup")
+elseif(UNIX)
+  set_target_properties(${PROJECT_NAME} PROPERTIES
+    BUILD_RPATH "$ORIGIN"
+    INSTALL_RPATH "$ORIGIN"
+  )
 endif()
+
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:ghostty-vt>
+    $<TARGET_FILE_DIR:${PROJECT_NAME}>/$<TARGET_FILE_NAME:ghostty-vt>
+)

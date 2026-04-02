@@ -58,6 +58,8 @@ jobs:
               echo "Ghostty prebuilt artifact download failed; continuing without it."
               exit 0
             }
+          find "packages/ghostty-vt-node/prebuilt/${GHOSTTY_TRIPLET}" -mindepth 2 -maxdepth 2 -type f -exec mv {} "packages/ghostty-vt-node/prebuilt/${GHOSTTY_TRIPLET}/" \;
+          find "packages/ghostty-vt-node/prebuilt/${GHOSTTY_TRIPLET}" -mindepth 1 -type d -empty -delete
 
       - name: Install dependencies
         run: npm ci
@@ -101,6 +103,44 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Download release ghostty prebuilt artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          triplets=(
+            "linux-x64-node$(node -p 'process.versions.modules')"
+            "darwin-arm64-node$(node -p 'process.versions.modules')"
+          )
+          run_id=""
+          for attempt in $(seq 1 30); do
+            run_id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ghostty-vt-node.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.head_sha == "'"${GITHUB_SHA}"'" and .conclusion == "success") | .id' | head -n 1 || true)"
+            if [ -n "${run_id}" ]; then
+              break
+            fi
+            pending_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ghostty-vt-node.yml/runs?per_page=30" --jq '.workflow_runs[] | select(.head_sha == "'"${GITHUB_SHA}"'" and (.status == "queued" or .status == "in_progress" or .status == "pending" or .status == "waiting")) | .id' | head -n 1 || true)"
+            if [ -z "${pending_run}" ]; then
+              echo "No successful Ghostty VT Native run found for ${GITHUB_SHA}."
+              exit 1
+            fi
+            echo "Waiting for Ghostty VT Native run ${pending_run} to finish..."
+            sleep 10
+          done
+          if [ -z "${run_id}" ]; then
+            echo "Timed out waiting for Ghostty VT Native run on ${GITHUB_SHA}."
+            exit 1
+          fi
+          for triplet in "${triplets[@]}"; do
+            mkdir -p "packages/ghostty-vt-node/prebuilt/${triplet}"
+            gh run download "${run_id}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --name "ghostty-vt-node-${triplet}" \
+              --dir "packages/ghostty-vt-node/prebuilt/${triplet}"
+            find "packages/ghostty-vt-node/prebuilt/${triplet}" -mindepth 2 -maxdepth 2 -type f -exec mv {} "packages/ghostty-vt-node/prebuilt/${triplet}/" \;
+            find "packages/ghostty-vt-node/prebuilt/${triplet}" -mindepth 1 -type d -empty -delete
+          done
+          find packages/ghostty-vt-node/prebuilt -maxdepth 2 -type f -name 'ghostty_vt_node.node' -print
+
       - name: Download publish artifacts
         uses: actions/download-artifact@v4
         with:
@@ -116,6 +156,12 @@ jobs:
       - name: Publish @adhdev/session-host-core
         if: env.NODE_AUTH_TOKEN != ''
         run: cd packages/session-host-core && npm publish --access public --ignore-scripts || echo '⚠️ session-host-core publish skipped (version may already exist)'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish @adhdev/ghostty-vt-node
+        if: env.NODE_AUTH_TOKEN != ''
+        run: cd packages/ghostty-vt-node && npm publish --access public --ignore-scripts || echo '⚠️ ghostty-vt-node publish skipped (version may already exist)'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

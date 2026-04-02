@@ -1,13 +1,14 @@
 {
   "name": "@adhdev/ghostty-vt-node",
   "version": "0.7.30",
-  "private": true,
   "description": "Native Node binding for libghostty-vt",
   "main": "index.js",
   "types": "index.d.ts",
   "files": [
     "index.js",
     "index.d.ts",
+    "prebuilt",
+    "scripts",
     "CMakeLists.txt",
     "src"
   ],
@@ -16,11 +17,18 @@
     "rebuild": "cmake-js rebuild",
     "clean": "cmake-js clean"
   },
+  "author": "vilmire",
   "dependencies": {
     "node-addon-api": "^8.7.0"
   },
   "devDependencies": {
     "cmake-js": "^8.0.0"
   },
-  "license": "AGPL-3.0-or-later"
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vilmire/adhdev.git",
+    "directory": "packages/ghostty-vt-node"
+  },
+  "homepage": "https://github.com/vilmire/adhdev#readme"
 }
