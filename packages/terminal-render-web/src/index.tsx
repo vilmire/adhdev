@@ -72,6 +72,7 @@ const TERMINAL_THEME = {
 };
 
 let terminalRuntimePromise: Promise<RendererRuntime> | null = null;
+let rendererRuntimeLogged = false;
 
 async function loadRendererRuntime(): Promise<RendererRuntime> {
   if (!terminalRuntimePromise) {
@@ -183,6 +184,10 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         termForCleanup = term;
         fitAddonRef.current = fitAddon;
         setRendererKind(runtime.kind);
+        if (!rendererRuntimeLogged) {
+          rendererRuntimeLogged = true;
+          console.info(`[terminal-render-web] renderer=${runtime.kind}`);
+        }
 
         disposable = term.onData((data: string) => {
           if (readOnlyRef.current) return;

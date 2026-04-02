@@ -81,21 +81,25 @@ export default function CliTerminalPane({
             }
         }) || (() => {});
 
+        connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId).catch(() => {});
+
         return () => {
             unsubRuntime();
         };
-    }, [sessionId, terminalRef]);
+    }, [daemonRouteId, sessionId, terminalRef]);
 
     useEffect(() => {
         if (!sessionId) return;
 
         if (daemonRouteId && connectionManager.getState?.(daemonRouteId) === 'connected') {
             setRuntimeReady(true);
+            connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId).catch(() => {});
         }
 
         const unsubState = connectionManager.onStateChange?.((connectedDaemonId: string, state: string) => {
             if (connectedDaemonId !== daemonRouteId || state !== 'connected') return;
             setRuntimeReady(true);
+            connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId).catch(() => {});
         });
 
         return () => {

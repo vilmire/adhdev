@@ -171,7 +171,6 @@ export class ProviderInstanceManager {
                     providerType,
                     instanceId: state.instanceId,
                     targetSessionId: state.instanceId,
-                    providerCategory: state.category,
                     workspaceName: state.workspace || undefined,
                     ...extra,
                 });

@@ -74,6 +74,10 @@ class ConnectionManagerStub {
     ): () => void {
         return () => {}
     }
+
+    requestRuntimeSnapshot(_daemonId: string, _sessionId: string): Promise<void> {
+        return Promise.resolve()
+    }
 }
 
 export let connectionManager: any = new ConnectionManagerStub()

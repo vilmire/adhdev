@@ -117,7 +117,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 if (parsed && typeof parsed === 'object') {
                     _log(`Extension OK: ${parsed.messages?.length || 0} msgs`);
                     h.historyWriter.appendNewMessages(
-                        provider.type || 'unknown_extension',
+                        provider?.type || 'unknown_extension',
                         parsed.messages || [],
                         parsed.title,
                         args?.targetSessionId
@@ -134,7 +134,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const parentSessionId = h.currentSession?.parentSessionId;
             if (cdp && parentSessionId) {
                 const stream = await h.agentStream.collectActiveSession(cdp, parentSessionId);
-                if (stream?.agentType !== provider.type) {
+                if (stream?.agentType !== provider?.type) {
                     return { success: true, messages: [], status: 'idle' };
                 }
                 if (stream) {
@@ -248,7 +248,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
 
     // Extension transport: via AgentStreamManager
     if (isExtensionTransport(transport)) {
-        _log(`Extension: ${provider.type}`);
+        _log(`Extension: ${provider?.type || 'unknown_extension'}`);
         // Method 1: provider sendMessage script via evaluateInSession
         try {
             const evalResult = await h.evaluateProviderScript('sendMessage', { MESSAGE: text }, 30000);
@@ -275,7 +275,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                 return _logSendSuccess('agent-stream');
             }
         }
-        return { success: false, error: `Extension '${provider.type}' send failed` };
+        return { success: false, error: `Extension '${provider?.type || 'unknown_extension'}' send failed` };
     }
 
     // IDE category (default): provider sendMessage script is authoritative when present.
@@ -700,7 +700,7 @@ export async function handleSetThoughtLevel(h: CommandHelpers, args: any): Promi
 
     try {
         await acpInstance.setConfigOption(configId, value);
-        LOG.info('Command', `[set_thought_level] ${configId}=${value} for ${provider.type}`);
+        LOG.info('Command', `[set_thought_level] ${configId}=${value} for ${provider?.type || 'unknown_acp'}`);
         return { success: true, configId, value };
     } catch (e: any) {
         return { success: false, error: e?.message };

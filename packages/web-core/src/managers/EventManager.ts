@@ -25,7 +25,6 @@ export interface StatusEventPayload {
     targetSessionId?: string
     instanceId?: string
     providerType?: string
-    providerCategory?: string
     event: string
     chatTitle?: string
     duration?: number

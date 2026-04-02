@@ -89,13 +89,6 @@ export interface MuxControlRequest {
     payload?: Record<string, unknown>
 }
 
-export interface RuntimeSnapshot {
-    sessionId: string
-    seq: number
-    text: string
-    truncated: boolean
-}
-
 export interface ApiClient {
     // Daemons
     getDaemons(): Promise<{ daemons: DaemonData[] }>
@@ -115,7 +108,6 @@ export interface ApiClient {
     getMuxEventsUrl(workspaceName: string): string
 
     // Runtime terminal
-    getRuntimeSnapshot(sessionId: string): Promise<RuntimeSnapshot>
     getRuntimeEventsUrl(sessionId: string): string
 
     // Raw request
@@ -207,8 +199,6 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
             }),
         getMuxEventsUrl: (workspaceName) =>
             buildEventStreamUrl(`/api/v1/mux/${encodeURIComponent(workspaceName)}/events`),
-        getRuntimeSnapshot: (sessionId) =>
-            request(`/api/v1/runtime/${encodeURIComponent(sessionId)}/snapshot`),
         getRuntimeEventsUrl: (sessionId) =>
             buildEventStreamUrl(`/api/v1/runtime/${encodeURIComponent(sessionId)}/events`),
         request,

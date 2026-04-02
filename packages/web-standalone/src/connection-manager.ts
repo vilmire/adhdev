@@ -14,7 +14,7 @@ type ScreenshotCallback = (sourceDaemonId: string, blob: Blob) => void
 type StatusCallback = (sourceDaemonId: string, payload: any) => void
 type RuntimeEvent =
     | { type: 'runtime_snapshot'; sessionId: string; seq: number; text: string; truncated?: boolean }
-    | { type: 'session_output'; sessionId: string; seq: number; data: string }
+    | { type: 'session_output'; sessionId: string; seq?: number; data: string }
     | { type: 'session_cleared'; sessionId: string }
 
 class StandaloneConnectionManager {
@@ -22,8 +22,6 @@ class StandaloneConnectionManager {
     private states = new Map<string, string>()
     private ptyCallbacks = new Set<PtyOutputCallback>()
     private runtimeListeners = new Map<string, Set<(event: RuntimeEvent) => void>>()
-    private runtimeBuffers = new Map<string, string>()
-    private runtimeSeqs = new Map<string, number>()
     private screenshotCallbacks = new Map<string, ScreenshotCallback>()
     private statusCallbacks = new Set<StatusCallback>()
 
@@ -92,27 +90,17 @@ class StandaloneConnectionManager {
 
     emitPtyOutput(cliId: string, data: string, meta?: { scrollback?: boolean }): void {
         if (meta?.scrollback) {
-            const seq = (this.runtimeSeqs.get(cliId) || 0) + 1
-            this.runtimeBuffers.set(cliId, typeof data === 'string' ? data : '')
-            this.runtimeSeqs.set(cliId, seq)
             this.emitRuntimeEvent(cliId, {
                 type: 'runtime_snapshot',
                 sessionId: cliId,
-                seq,
+                seq: 0,
                 text: typeof data === 'string' ? data : '',
                 truncated: false,
             })
         } else if (typeof data === 'string' && data) {
-            const prev = this.runtimeBuffers.get(cliId) || ''
-            const next = prev + data
-            const trimmed = next.length > 64 * 1024 ? next.slice(-(64 * 1024)) : next
-            const seq = (this.runtimeSeqs.get(cliId) || 0) + 1
-            this.runtimeBuffers.set(cliId, trimmed)
-            this.runtimeSeqs.set(cliId, seq)
             this.emitRuntimeEvent(cliId, {
                 type: 'session_output',
                 sessionId: cliId,
-                seq,
                 data,
             })
         }
@@ -120,8 +108,6 @@ class StandaloneConnectionManager {
     }
 
     emitRuntimeSnapshot(sessionId: string, text: string, seq = 0, truncated = false): void {
-        this.runtimeBuffers.set(sessionId, text)
-        this.runtimeSeqs.set(sessionId, seq)
         this.emitRuntimeEvent(sessionId, {
             type: 'runtime_snapshot',
             sessionId,
@@ -135,8 +121,6 @@ class StandaloneConnectionManager {
         const listeners = this.runtimeListeners.get(sessionId) || new Set<(event: RuntimeEvent) => void>()
         listeners.add(callback)
         this.runtimeListeners.set(sessionId, listeners)
-        const snapshot = this.getCachedRuntimeSnapshot(sessionId)
-        if (snapshot) callback(snapshot)
         return () => {
             const current = this.runtimeListeners.get(sessionId)
             if (!current) return
@@ -145,19 +129,22 @@ class StandaloneConnectionManager {
         }
     }
 
-    private emitRuntimeEvent(sessionId: string, event: RuntimeEvent): void {
-        this.runtimeListeners.get(sessionId)?.forEach((callback) => callback(event))
-    }
-
-    private getCachedRuntimeSnapshot(sessionId: string): RuntimeEvent | null {
-        if (!this.runtimeBuffers.has(sessionId) && !this.runtimeSeqs.has(sessionId)) return null
-        return {
+    async requestRuntimeSnapshot(_daemonId: string, sessionId: string): Promise<void> {
+        if (!sessionId) return
+        const res = await fetch(`/api/v1/runtime/${encodeURIComponent(sessionId)}/snapshot`)
+        if (!res.ok) return
+        const snapshot = await res.json() as { seq?: number; text?: string; truncated?: boolean }
+        this.emitRuntimeEvent(sessionId, {
             type: 'runtime_snapshot',
             sessionId,
-            seq: this.runtimeSeqs.get(sessionId) || 0,
-            text: this.runtimeBuffers.get(sessionId) || '',
-            truncated: false,
-        }
+            seq: typeof snapshot.seq === 'number' ? snapshot.seq : 0,
+            text: typeof snapshot.text === 'string' ? snapshot.text : '',
+            truncated: !!snapshot.truncated,
+        })
+    }
+
+    private emitRuntimeEvent(sessionId: string, event: RuntimeEvent): void {
+        this.runtimeListeners.get(sessionId)?.forEach((callback) => callback(event))
     }
 }
 

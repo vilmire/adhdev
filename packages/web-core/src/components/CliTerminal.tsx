@@ -21,6 +21,7 @@ export type { CliTerminalHandle };
 
 type CliTerminalProps = GhosttyTerminalViewProps;
 type TerminalViewComponent = ForwardRefExoticComponent<GhosttyTerminalViewProps & RefAttributes<CliTerminalHandle>>;
+let rendererLoadLogged = false;
 
 export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
     ({ onInput, onResize, fontSize = 13, readOnly = false }, ref) => {
@@ -89,6 +90,10 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
             let cancelled = false;
             void import('@adhdev/terminal-render-web')
                 .then((mod) => {
+                    if (!rendererLoadLogged) {
+                        rendererLoadLogged = true;
+                        console.info('[CliTerminal] renderer module loaded: ghostty-web');
+                    }
                     if (!cancelled) setLoadedTerminal(() => mod.GhosttyTerminalView as TerminalViewComponent);
                 })
                 .catch((error) => {
