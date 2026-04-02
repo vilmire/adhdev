@@ -4,6 +4,7 @@ import { getMachineDisplayName } from '../../utils/daemon-utils'
 
 interface DashboardVersionBannerProps {
     daemons: DaemonData[]
+    targetVersion?: string | null
     upgradingDaemons: Record<string, 'upgrading' | 'done' | 'error'>
     onUpgrade: (daemonId: string) => void
     onDismiss: () => void
@@ -11,13 +12,12 @@ interface DashboardVersionBannerProps {
 
 export default function DashboardVersionBanner({
     daemons,
+    targetVersion,
     upgradingDaemons,
     onUpgrade,
     onDismiss,
 }: DashboardVersionBannerProps) {
     if (daemons.length === 0) return null
-
-    const latest = daemons[0] as any
 
     return (
         <div
@@ -27,11 +27,12 @@ export default function DashboardVersionBanner({
             <span className="text-sm shrink-0 mt-0.5" style={{ color: 'var(--status-warning)' }}><IconRefresh size={14} /></span>
             <span className="flex-1 flex items-center gap-2 flex-wrap min-w-0">
                 <span>
-                    Update available: <strong>v{latest.version}</strong> → <strong>v{latest.serverVersion}</strong>
+                    Update available{targetVersion ? <>: <strong>v{targetVersion}</strong></> : null}
                 </span>
                 {daemons.map((daemon: any) => {
                     const name = getMachineDisplayName(daemon, { fallbackId: daemon.id })
                     const state = upgradingDaemons[daemon.id]
+                    const currentVersion = daemon.version || daemon.daemonVersion || 'unknown'
 
                     return (
                         <span
@@ -40,7 +41,7 @@ export default function DashboardVersionBanner({
                             style={{ background: 'color-mix(in srgb, var(--status-warning) 8%, transparent)', border: '1px solid color-mix(in srgb, var(--status-warning) 15%, transparent)' }}
                         >
                             <span className="font-medium text-text-primary">{name}</span>
-                            <span className="text-[10px] text-text-muted">v{daemon.version}</span>
+                            <span className="text-[10px] text-text-muted">v{currentVersion}</span>
                             {state === 'upgrading' ? (
                                 <span className="text-[10px] animate-pulse" style={{ color: 'var(--status-warning)' }}>upgrading…</span>
                             ) : state === 'done' ? (
