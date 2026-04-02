@@ -124,6 +124,8 @@ export { NodePtyTransportFactory } from './cli-adapters/pty-transport.js';
 export type { PtyRuntimeTransport, PtyTransportFactory, PtySpawnOptions } from './cli-adapters/pty-transport.js';
 export { SessionHostPtyTransportFactory } from './cli-adapters/session-host-transport.js';
 export type { HostedCliRuntimeDescriptor, CliTransportFactoryParams } from './commands/cli-manager.js';
+export { ensureSessionHostReady, listHostedCliRuntimes } from './session-host/runtime-support.js';
+export type { SessionHostEndpoint } from '@adhdev/session-host-core';
 
 // ── Installer ──
 export { getAIExtensions, installExtensions, launchIDE, isExtensionInstalled } from './installer.js';
