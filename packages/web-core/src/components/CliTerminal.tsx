@@ -26,13 +26,64 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
     ({ onInput, onResize, fontSize = 13, readOnly = false }, ref) => {
         const innerRef = useRef<CliTerminalHandle>(null);
         const [LoadedTerminal, setLoadedTerminal] = useState<TerminalViewComponent | null>(null);
+        const pendingWritesRef = useRef<string[]>([]);
+        const pendingClearRef = useRef(false);
+        const pendingFitRef = useRef(false);
+        const pendingBumpResizeRef = useRef(false);
+
+        const flushPending = () => {
+            const terminal = innerRef.current;
+            if (!terminal) return;
+
+            if (pendingClearRef.current) {
+                terminal.clear();
+                pendingClearRef.current = false;
+            }
+
+            for (const chunk of pendingWritesRef.current) terminal.write(chunk);
+            pendingWritesRef.current = [];
+
+            if (pendingFitRef.current) {
+                terminal.fit();
+                pendingFitRef.current = false;
+            }
+
+            if (pendingBumpResizeRef.current) {
+                terminal.bumpResize();
+                pendingBumpResizeRef.current = false;
+            }
+        };
 
         useImperativeHandle(ref, () => ({
-            write: (data: string) => innerRef.current?.write(data),
-            clear: () => innerRef.current?.clear(),
-            fit: () => innerRef.current?.fit(),
-            bumpResize: () => innerRef.current?.bumpResize(),
+            write: (data: string) => {
+                if (innerRef.current) innerRef.current.write(data);
+                else pendingWritesRef.current.push(data);
+            },
+            clear: () => {
+                if (innerRef.current) innerRef.current.clear();
+                else {
+                    pendingWritesRef.current = [];
+                    pendingClearRef.current = true;
+                }
+            },
+            fit: () => {
+                if (innerRef.current) innerRef.current.fit();
+                else pendingFitRef.current = true;
+            },
+            bumpResize: () => {
+                if (innerRef.current) innerRef.current.bumpResize();
+                else pendingBumpResizeRef.current = true;
+            },
         }), []);
+
+        useEffect(() => {
+            if (!LoadedTerminal) return;
+            const frame = requestAnimationFrame(() => {
+                flushPending();
+                innerRef.current?.fit();
+            });
+            return () => cancelAnimationFrame(frame);
+        }, [LoadedTerminal]);
 
         useEffect(() => {
             let cancelled = false;

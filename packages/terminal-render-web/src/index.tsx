@@ -103,6 +103,21 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
     const [ready, setReady] = useState(false);
     const [rendererKind, setRendererKind] = useState<'ghostty-web' | null>(null);
 
+    const fitAndReport = (force = false) => {
+      try {
+        fitAddonRef.current?.fit();
+        const term = terminalRef.current;
+        if (!term) return;
+        const cols = term.cols;
+        const rows = term.rows;
+        const last = lastReportedSizeRef.current;
+        if (force || !last || last.cols !== cols || last.rows !== rows) {
+          lastReportedSizeRef.current = { cols, rows };
+          onResizeRef.current?.(cols, rows);
+        }
+      } catch {}
+    };
+
     useEffect(() => {
       onInputRef.current = onInput;
     }, [onInput]);
@@ -125,34 +140,18 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         else pendingWritesRef.current = [];
       },
       fit: () => {
-        try {
-          fitAddonRef.current?.fit();
-          if (terminalRef.current) {
-            const cols = terminalRef.current.cols;
-            const rows = terminalRef.current.rows;
-            lastReportedSizeRef.current = { cols, rows };
-            onResizeRef.current?.(cols, rows);
-          }
-        } catch {}
+        fitAndReport(true);
       },
       bumpResize: () => {
-        try {
-          fitAddonRef.current?.fit();
-          const term = terminalRef.current;
-          if (!term) return;
-          const cols = term.cols;
-          const rows = term.rows;
-          const last = lastReportedSizeRef.current;
-          if (!last || last.cols !== cols || last.rows !== rows) {
-            lastReportedSizeRef.current = { cols, rows };
-            onResizeRef.current?.(cols, rows);
-          }
-        } catch {}
+        fitAndReport(false);
       },
     }), []);
 
     useEffect(() => {
       let cancelled = false;
+      let observer: ResizeObserver | null = null;
+      let disposable: { dispose: () => void } | null = null;
+      let termForCleanup: TerminalLike | null = null;
 
       async function init(): Promise<void> {
         if (!containerRef.current) return;
@@ -181,17 +180,18 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         }
 
         terminalRef.current = term;
+        termForCleanup = term;
         fitAddonRef.current = fitAddon;
         setRendererKind(runtime.kind);
 
-        const disposable = term.onData((data: string) => {
+        disposable = term.onData((data: string) => {
           if (readOnlyRef.current) return;
           onInputRef.current(data);
         });
 
         requestAnimationFrame(() => {
           try {
-            lastReportedSizeRef.current = { cols: term.cols, rows: term.rows };
+            fitAndReport(true);
             setReady(true);
             term.focus?.();
             for (const chunk of pendingWritesRef.current) term.write(chunk);
@@ -199,8 +199,17 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           } catch {}
         });
 
+        const ResizeObserverCtor = globalThis.ResizeObserver;
+        observer = ResizeObserverCtor && containerRef.current
+          ? new ResizeObserverCtor(() => {
+              requestAnimationFrame(() => fitAndReport(false));
+            })
+          : null;
+        observer?.observe(containerRef.current);
+
         if (cancelled) {
           disposable.dispose();
+          observer?.disconnect();
           term.dispose();
         }
       }
@@ -212,7 +221,9 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
       return () => {
         cancelled = true;
         lastReportedSizeRef.current = null;
-        terminalRef.current?.dispose();
+        observer?.disconnect();
+        disposable?.dispose();
+        termForCleanup?.dispose();
         terminalRef.current = null;
         fitAddonRef.current = null;
       };

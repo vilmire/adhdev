@@ -178,6 +178,14 @@ export default function CliTerminalPane({
         };
     }, [runtimeReady, sessionId, terminalRef]);
 
+    useEffect(() => {
+        if (!runtimeReady) return;
+        const frame = requestAnimationFrame(() => {
+            terminalRef.current?.fit();
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [runtimeReady, sessionId, terminalRef]);
+
     return (
         <>
             {/* Terminal */}
