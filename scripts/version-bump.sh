@@ -34,6 +34,7 @@ echo "🚀 Target version: $NEW_VERSION"
 
 echo ""
 echo "⏳ [1/3] Build verification..."
+export ADHDEV_SKIP_GHOSTTY_VT_BUILD="${ADHDEV_SKIP_GHOSTTY_VT_BUILD:-1}"
 if ! npm run build; then
     echo "❌ Build failed! Fix errors before bumping."
     exit 1

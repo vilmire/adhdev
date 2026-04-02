@@ -6,6 +6,7 @@ import { CliTerminal } from '../CliTerminal';
 import type { CliTerminalHandle } from '../CliTerminal';
 import { useTransport } from '../../context/TransportContext';
 import { useApi } from '../../context/ApiContext';
+import { connectionManager } from '../../compat';
 import type { ActiveConversation } from './types';
 import type { RuntimeSnapshot } from '../../base-api';
 
@@ -35,6 +36,9 @@ export default function CliTerminalPane({
 
     const tabKey = activeConv.tabKey;
     const sessionId = activeConv.sessionId || '';
+    const daemonRouteId = activeConv.daemonId || activeConv.ideId?.split(':')[0] || activeConv.ideId || '';
+    const matchesCliId = (cliId: string) =>
+        cliId === sessionId || cliId === activeConv.ideId || cliId === activeConv.tabKey;
 
     const resetRuntimeView = () => {
         seededSnapshotSeqRef.current = 0;
@@ -119,6 +123,38 @@ export default function CliTerminalPane({
     }, [api, sessionId]);
 
     useEffect(() => {
+        if (!sessionId) return;
+
+        const buffered = ptyBuffers.current.get(tabKey)?.join('') || '';
+        if (buffered) {
+            seedTerminal(buffered, 2);
+        } else if (activeConv.terminalHistory) {
+            seedTerminal(activeConv.terminalHistory, 1);
+        }
+
+        if (daemonRouteId && connectionManager.getState?.(daemonRouteId) === 'connected') {
+            setRuntimeReady(true);
+        }
+
+        const unsubPty = connectionManager.onPtyOutput?.((cliId: string, data: string) => {
+            if (!matchesCliId(cliId)) return;
+            liveOutputStartedRef.current = true;
+            setRuntimeReady(true);
+            if (typeof data === 'string' && data) terminalRef.current?.write(data);
+        }) || (() => {});
+
+        const unsubState = connectionManager.onStateChange?.((connectedDaemonId: string, state: string) => {
+            if (connectedDaemonId !== daemonRouteId || state !== 'connected') return;
+            setRuntimeReady(true);
+        });
+
+        return () => {
+            unsubPty();
+            unsubState?.();
+        };
+    }, [activeConv.ideId, activeConv.tabKey, activeConv.terminalHistory, daemonRouteId, ptyBuffers, sessionId, terminalRef]);
+
+    useEffect(() => {
         if (!clearToken) return;
 
         ptyBuffers.current.delete(tabKey);
@@ -152,16 +188,14 @@ export default function CliTerminalPane({
                     readOnly={!runtimeReady}
                     onInput={(data) => {
                         if (!runtimeReady) return;
-                        const daemonId = activeConv.ideId || activeConv.daemonId || ''
-                        if (!sendData?.(daemonId, { type: 'pty_input', targetSessionId: sessionId, data })) {
-                            sendCommand(daemonId, 'pty_input', { targetSessionId: sessionId, data }).catch(console.error)
+                        if (!sendData?.(daemonRouteId, { type: 'pty_input', targetSessionId: sessionId, data })) {
+                            sendCommand(daemonRouteId, 'pty_input', { targetSessionId: sessionId, data }).catch(console.error)
                         }
                     }}
                     onResize={(cols, rows) => {
                         if (!runtimeReady) return;
-                        const daemonId = activeConv.ideId || activeConv.daemonId || ''
-                        if (!sendData?.(daemonId, { type: 'pty_resize', targetSessionId: sessionId, cols, rows })) {
-                            sendCommand(daemonId, 'pty_resize', { targetSessionId: sessionId, cols, rows, force: true }).catch(() => { })
+                        if (!sendData?.(daemonRouteId, { type: 'pty_resize', targetSessionId: sessionId, cols, rows })) {
+                            sendCommand(daemonRouteId, 'pty_resize', { targetSessionId: sessionId, cols, rows, force: true }).catch(() => { })
                         }
                     }}
                 />
