@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
 import { randomUUID } from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
   SessionHostClient,
   formatRuntimeOwner,
@@ -15,6 +18,24 @@ export { SessionHostServer } from './server.js';
 export type { SessionHostServerOptions } from './server.js';
 
 const SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev';
+
+function getSessionHostPidFile(appName: string): string {
+  const dir = path.join(os.homedir(), '.adhdev');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `${appName}-session-host.pid`);
+}
+
+function writeSessionHostPid(appName: string): void {
+  fs.writeFileSync(getSessionHostPidFile(appName), String(process.pid), 'utf8');
+}
+
+function removeSessionHostPid(appName: string): void {
+  try {
+    fs.unlinkSync(getSessionHostPidFile(appName));
+  } catch {
+    // noop
+  }
+}
 
 function parseArgs(argv: string[]) {
   const [command, ...rest] = argv;
@@ -33,21 +54,25 @@ function parseArgs(argv: string[]) {
 
 async function runServer(): Promise<void> {
   const server = new SessionHostServer({ appName: SESSION_HOST_APP_NAME });
+  writeSessionHostPid(SESSION_HOST_APP_NAME);
   await server.start();
 
   process.on('SIGINT', async () => {
     await server.stop();
+    removeSessionHostPid(SESSION_HOST_APP_NAME);
     process.exit(0);
   });
 
   process.on('SIGTERM', async () => {
     await server.stop();
+    removeSessionHostPid(SESSION_HOST_APP_NAME);
     process.exit(0);
   });
 
   // Fallback: flush persistence on any exit (covers Windows where SIGTERM is unsupported)
   process.on('exit', () => {
     server.flushAllPersistence();
+    removeSessionHostPid(SESSION_HOST_APP_NAME);
   });
 
   // Keep the host alive; IPC transport wiring comes next.
