@@ -60,7 +60,7 @@ export async function detectCLIs(providerLoader?: ProviderLoader): Promise<CLIIn
     const results = await Promise.all(
         cliList.map(async (cli): Promise<CLIInfo> => {
             try {
-                const pathResult = await execAsync(`${whichCmd} ${cli.command} 2>/dev/null`);
+                const pathResult = await execAsync(`${whichCmd} ${cli.command}`);
                 if (!pathResult) return { ...cli, installed: false };
 
                 const firstPath = pathResult.split('\n')[0];
@@ -70,9 +70,9 @@ export async function detectCLIs(providerLoader?: ProviderLoader): Promise<CLIIn
                 try {
                     const versionCommands = [
                         cli.versionCommand,
-                        `${cli.command} --version 2>/dev/null`,
-                        `${cli.command} -V 2>/dev/null`,
-                        `${cli.command} -v 2>/dev/null`,
+                        `${cli.command} --version`,
+                        `${cli.command} -V`,
+                        `${cli.command} -v`,
                     ].filter((v): v is string => !!v);
                     for (const versionCommand of versionCommands) {
                         const versionResult = await execAsync(versionCommand, 3000);

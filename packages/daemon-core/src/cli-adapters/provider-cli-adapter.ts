@@ -595,8 +595,16 @@ export class ProviderCliAdapter implements CliAdapter {
                 LOG.info('CLI', `[${this.cliType}] Using login shell (script shim or non-native binary)`);
             }
             shellCmd = isWin ? 'cmd.exe' : (process.env.SHELL || '/bin/zsh');
-            const fullCmd = [binaryPath, ...allArgs].map(shSingleQuote).join(' ');
-            shellArgs = isWin ? ['/c', fullCmd] : ['-l', '-c', fullCmd];
+            if (isWin) {
+                // On Windows, pass binaryPath and args as separate items so node-pty's
+                // argvToCommandLine quotes each one individually. Joining them into a
+                // single pre-quoted string causes cmd.exe to receive \"path\" (backslash-
+                // escaped quotes) which it does not recognise as a valid executable name.
+                shellArgs = ['/c', binaryPath, ...allArgs];
+            } else {
+                const fullCmd = [binaryPath, ...allArgs].map(shSingleQuote).join(' ');
+                shellArgs = ['-l', '-c', fullCmd];
+            }
         } else {
             shellCmd = binaryPath;
             shellArgs = allArgs;
