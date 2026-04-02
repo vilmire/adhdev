@@ -194,15 +194,6 @@ export class ProviderLoader {
 
  /**
  * Get raw provider metadata by type (NO scripts loaded).
- * Use resolve() when you need scripts (readChat, listModels, etc).
- * @deprecated Use getMeta() for metadata or resolve() for scripts.
- */
-  get(type: string): ProviderModule | undefined {
-    return this.providers.get(type);
-  }
-
- /**
- * Get raw provider metadata by type (NO scripts loaded).
  * Safe for: category checks, icon, displayName, targetFilter, cdpPorts.
  * NOT safe for: script execution (readChat, listModels, sendMessage).
  * Use resolve() when scripts are needed.

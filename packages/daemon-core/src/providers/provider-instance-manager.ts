@@ -84,6 +84,13 @@ export class ProviderInstanceManager {
         return this.instances.size;
     }
 
+ /**
+ * All Instance IDs (for iteration without exposing the private Map)
+ */
+    listInstanceIds(): string[] {
+        return [...this.instances.keys()];
+    }
+
  // ─── State collect ────────────────────────────────
 
  /**

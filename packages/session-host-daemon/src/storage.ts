@@ -52,4 +52,13 @@ export class SessionHostStorage {
     };
     fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
   }
+
+  remove(sessionId: string): void {
+    const filePath = path.join(this.runtimesDir, `${sessionId}.json`);
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      // File may not exist — ignore.
+    }
+  }
 }

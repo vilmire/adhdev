@@ -45,6 +45,11 @@ async function runServer(): Promise<void> {
     process.exit(0);
   });
 
+  // Fallback: flush persistence on any exit (covers Windows where SIGTERM is unsupported)
+  process.on('exit', () => {
+    server.flushAllPersistence();
+  });
+
   // Keep the host alive; IPC transport wiring comes next.
   await new Promise<void>(() => {});
 }

@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/web-core",
-  "version": "0.7.31",
+  "version": "0.7.32",
   "private": true,
   "type": "module",
   "main": "src/index.ts",
@@ -16,6 +16,7 @@
     "@adhdev/daemon-core": "*",
     "@adhdev/terminal-render-web": "*",
     "clsx": "^2.1.1",
+    "dockview": "^5.2.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "react-markdown": "^9.0.1",

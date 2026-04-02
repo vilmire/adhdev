@@ -1,3 +1,5 @@
+import type { SerializedDockview } from 'dockview'
+
 export type DashboardLayoutProfile = 'desktop-wide' | 'desktop-narrow' | 'mobile'
 
 export interface DashboardStoredLayout {
@@ -8,7 +10,13 @@ export interface DashboardStoredLayout {
     groupSizes: number[]
 }
 
+export interface DashboardStoredDockviewLayout {
+    activeTabId?: string | null
+    layout: SerializedDockview
+}
+
 const STORAGE_PREFIX = 'adhdev_dashboardLayout_v1'
+const DOCKVIEW_STORAGE_PREFIX = 'adhdev_dashboardDockview_v1'
 const LEGACY_KEYS = {
     splitGroups: 'adhdev_splitGroups',
     focusedGroup: 'adhdev_focusedGroup',
@@ -78,6 +86,10 @@ function readLegacyDashboardLayout(): DashboardStoredLayout | null {
     }
 }
 
+export function readLegacyDashboardStoredLayout(): DashboardStoredLayout | null {
+    return readLegacyDashboardLayout()
+}
+
 export function readDashboardStoredLayout(profile: DashboardLayoutProfile): DashboardStoredLayout | null {
     const key = getDashboardLayoutStorageKey(profile)
     const stored = safeRead<DashboardStoredLayout | null>(key, null)
@@ -104,6 +116,31 @@ export function writeDashboardStoredLayout(
             return
         }
 
+        localStorage.setItem(key, JSON.stringify(layout))
+    } catch {
+        // noop
+    }
+}
+
+export function getDashboardDockviewStorageKey(profile: DashboardLayoutProfile) {
+    return `${DOCKVIEW_STORAGE_PREFIX}:${profile}`
+}
+
+export function readDashboardDockviewStoredLayout(profile: DashboardLayoutProfile): DashboardStoredDockviewLayout | null {
+    const key = getDashboardDockviewStorageKey(profile)
+    return safeRead<DashboardStoredDockviewLayout | null>(key, null)
+}
+
+export function writeDashboardDockviewStoredLayout(
+    profile: DashboardLayoutProfile,
+    layout: DashboardStoredDockviewLayout | null,
+) {
+    try {
+        const key = getDashboardDockviewStorageKey(profile)
+        if (!layout) {
+            localStorage.removeItem(key)
+            return
+        }
         localStorage.setItem(key, JSON.stringify(layout))
     } catch {
         // noop

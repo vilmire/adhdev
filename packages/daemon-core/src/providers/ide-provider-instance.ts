@@ -440,10 +440,13 @@ export class IdeProviderInstance implements ProviderInstance {
                 // Coordinate-based click (fallback when script cannot .click() directly)
                 const x = result.x;
                 const y = result.y;
-                const anyCdp = cdp as any;
-                await anyCdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
-                await anyCdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
-                LOG.info('IdeInstance', `[IdeInstance:${this.type}] autoApprove: dispatched mouse event at ${x},${y}`);
+                if (cdp.send) {
+                    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+                    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+                    LOG.info('IdeInstance', `[IdeInstance:${this.type}] autoApprove: dispatched mouse event at ${x},${y}`);
+                } else {
+                    LOG.warn('IdeInstance', `[IdeInstance:${this.type}] autoApprove: cdp.send() not available for coordinate click`);
+                }
             }
 
             this.pushEvent({

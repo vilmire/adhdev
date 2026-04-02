@@ -17,6 +17,7 @@ import { useDashboardVersionBanner } from '../hooks/useDashboardVersionBanner'
 import { useDevRenderTrace } from '../hooks/useDevRenderTrace'
 
 import ConnectionBanner from '../components/dashboard/ConnectionBanner'
+import DashboardDockviewWorkspace from '../components/dashboard/DashboardDockviewWorkspace'
 import DashboardHeader from '../components/dashboard/DashboardHeader'
 import DashboardPaneWorkspace from '../components/dashboard/DashboardPaneWorkspace'
 import DashboardVersionBanner from '../components/dashboard/DashboardVersionBanner'
@@ -65,6 +66,7 @@ export default function Dashboard() {
     const [actionLogs, setActionLogs] = useState<{ ideId: string; text: string; timestamp: number }[]>([])
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
     const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
+    const [desktopActiveTabKey, setDesktopActiveTabKey] = useState<string | null>(null)
     useDevRenderTrace('Dashboard', {
         ideCount: ides.length,
         toastCount: toasts.length,
@@ -104,7 +106,6 @@ export default function Dashboard() {
         closeGroup,
         handleResizeStart,
         splitTabRelative,
-        clearAllSplits,
     } = useDashboardSplitView({
         groupAssignments,
         setGroupAssignments,
@@ -120,13 +121,25 @@ export default function Dashboard() {
     })
 
     const activeConv = useMemo(() => {
+        if (!isMobile) {
+            if (desktopActiveTabKey) {
+                const found = conversations.find(conversation => conversation.tabKey === desktopActiveTabKey)
+                if (found) return found
+            }
+            return visibleConversations[0]
+        }
         const focusedTabKey = groupActiveTabIds[focusedGroup]
         if (focusedTabKey) {
             const found = conversations.find(conversation => conversation.tabKey === focusedTabKey)
             if (found) return found
         }
         return groupedConvs[focusedGroup]?.[0] || groupedConvs[0]?.[0]
-    }, [groupActiveTabIds, focusedGroup, conversations, groupedConvs])
+    }, [desktopActiveTabKey, isMobile, groupActiveTabIds, focusedGroup, conversations, groupedConvs, visibleConversations])
+
+    const requestedDesktopTabKey = useMemo(() => {
+        if (isMobile || !urlActiveTab) return null
+        return resolveConversationByTarget(urlActiveTab)?.tabKey ?? null
+    }, [isMobile, resolveConversationByTarget, urlActiveTab])
 
     useDashboardConversationMeta({
         visibleConversations,
@@ -161,12 +174,12 @@ export default function Dashboard() {
     })
 
     useDashboardPageEffects({
-        urlActiveTab,
+        urlActiveTab: isMobile ? urlActiveTab : null,
         conversations,
         resolveConversationByTarget,
         normalizedGroupAssignments,
-        hasHydratedStoredLayout,
-        hydrateStoredLayout,
+        hasHydratedStoredLayout: isMobile ? hasHydratedStoredLayout : true,
+        hydrateStoredLayout: isMobile ? hydrateStoredLayout : (() => {}),
         setGroupActiveTabIds,
         setFocusedGroup,
         setSearchParams,
@@ -175,10 +188,6 @@ export default function Dashboard() {
         isRefreshingHistory,
         ides,
         handleRefreshHistory,
-        isSplitMode,
-        splitTabRelative,
-        numGroups,
-        clearAllSplits,
     })
 
     const performActiveCliStop = useCallback(async (mode: 'hard' | 'save') => {
@@ -254,36 +263,65 @@ export default function Dashboard() {
                 onStopCli={handleActiveCliStop}
             />
 
-            <DashboardPaneWorkspace
-                containerRef={containerRef}
-                isSplitMode={isSplitMode}
-                numGroups={numGroups}
-                groupSizes={groupSizes}
-                groupedConvs={groupedConvs}
-                clearedTabs={clearedTabs}
-                ides={ides}
-                actionLogs={actionLogs}
-                screenshotMap={screenshotMap}
-                setScreenshotMap={setScreenshotMap}
-                sendDaemonCommand={sendDaemonCommand}
-                setLocalUserMessages={setLocalUserMessages}
-                setActionLogs={setActionLogs}
-                isStandalone={isStandalone}
-                userName={daemonCtx.userName}
-                focusedGroup={focusedGroup}
-                setFocusedGroup={setFocusedGroup}
-                moveTabToGroup={moveTabToGroup}
-                splitTabRelative={splitTabRelative}
-                closeGroup={closeGroup}
-                handleResizeStart={handleResizeStart}
-                detectedIdes={detectedIdes}
-                handleLaunchIde={handleLaunchIde}
-                groupActiveTabIds={groupActiveTabIds}
-                setGroupActiveTabIds={setGroupActiveTabIds}
-                groupTabOrders={groupTabOrders}
-                setGroupTabOrders={setGroupTabOrders}
-                toggleHiddenTab={toggleHiddenTab}
-            />
+            {isMobile ? (
+                <DashboardPaneWorkspace
+                    containerRef={containerRef}
+                    isSplitMode={isSplitMode}
+                    numGroups={numGroups}
+                    groupSizes={groupSizes}
+                    groupedConvs={groupedConvs}
+                    clearedTabs={clearedTabs}
+                    ides={ides}
+                    actionLogs={actionLogs}
+                    screenshotMap={screenshotMap}
+                    setScreenshotMap={setScreenshotMap}
+                    sendDaemonCommand={sendDaemonCommand}
+                    setLocalUserMessages={setLocalUserMessages}
+                    setActionLogs={setActionLogs}
+                    isStandalone={isStandalone}
+                    userName={daemonCtx.userName}
+                    focusedGroup={focusedGroup}
+                    setFocusedGroup={setFocusedGroup}
+                    moveTabToGroup={moveTabToGroup}
+                    splitTabRelative={splitTabRelative}
+                    closeGroup={closeGroup}
+                    handleResizeStart={handleResizeStart}
+                    detectedIdes={detectedIdes}
+                    handleLaunchIde={handleLaunchIde}
+                    groupActiveTabIds={groupActiveTabIds}
+                    setGroupActiveTabIds={setGroupActiveTabIds}
+                    groupTabOrders={groupTabOrders}
+                    setGroupTabOrders={setGroupTabOrders}
+                    toggleHiddenTab={toggleHiddenTab}
+                />
+            ) : (
+                <DashboardDockviewWorkspace
+                    visibleConversations={visibleConversations}
+                    clearedTabs={clearedTabs}
+                    ides={ides}
+                    actionLogs={actionLogs}
+                    screenshotMap={screenshotMap}
+                    setScreenshotMap={setScreenshotMap}
+                    sendDaemonCommand={sendDaemonCommand}
+                    setLocalUserMessages={setLocalUserMessages}
+                    setActionLogs={setActionLogs}
+                    isStandalone={isStandalone}
+                    userName={daemonCtx.userName}
+                    detectedIdes={detectedIdes}
+                    handleLaunchIde={handleLaunchIde}
+                    toggleHiddenTab={toggleHiddenTab}
+                    onActiveTabChange={setDesktopActiveTabKey}
+                    requestedActiveTabKey={requestedDesktopTabKey}
+                    onRequestedActiveTabConsumed={() => {
+                        if (!urlActiveTab) return
+                        setSearchParams(prev => {
+                            const next = new URLSearchParams(prev)
+                            next.delete('activeTab')
+                            return next
+                        }, { replace: true })
+                    }}
+                />
+            )}
 
             {/* History Modal */}
             {historyModalOpen && activeConv && (

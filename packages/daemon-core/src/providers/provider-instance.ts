@@ -135,6 +135,8 @@ export interface InstanceContext {
         evaluate(script: string, timeout?: number): Promise<unknown>;
         evaluateInWebviewFrame?(expression: string, matchFn?: (bodyPreview: string) => boolean): Promise<string | null>;
         discoverAgentWebviews?(): Promise<any[]>;
+        /** Low-level CDP protocol method (e.g. Input.dispatchMouseEvent) */
+        send?(method: string, params?: Record<string, unknown>): Promise<unknown>;
     };
  /** Server log transmit */
     serverConn?: {

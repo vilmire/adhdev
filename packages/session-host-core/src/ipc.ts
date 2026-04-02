@@ -119,7 +119,14 @@ export class SessionHostClient {
     };
 
     const response = await new Promise<SessionHostResponse>((resolve, reject) => {
-      this.requestWaiters.set(requestId, { resolve, reject });
+      const timeout = setTimeout(() => {
+        this.requestWaiters.delete(requestId);
+        reject(new Error(`Session host request timed out after 30s (${request.type})`));
+      }, 30_000);
+      this.requestWaiters.set(requestId, {
+        resolve: (value) => { clearTimeout(timeout); resolve(value); },
+        reject: (error) => { clearTimeout(timeout); reject(error); },
+      });
       this.socket?.write(serializeEnvelope(envelope));
     });
 

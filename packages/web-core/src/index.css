@@ -1,4 +1,5 @@
 @layer theme, base, components, utilities;
+@import "dockview/dist/styles/dockview.css";
 @import "tailwindcss/theme.css" layer(theme);
 /* NOTE: Preflight (tailwindcss/preflight.css) intentionally excluded —
    it conflicts with our existing CSS reset and component styles */
@@ -213,6 +214,160 @@ button {
 :root[data-theme="light"] .dashboard-header {
     background: var(--bg-secondary);
     border-bottom-color: var(--border-default);
+}
+
+.adhdev-dockview {
+    --dv-border-radius: 10px;
+    --dv-tabs-and-actions-container-background-color: var(--surface-secondary);
+    --dv-group-view-background-color: var(--surface-primary);
+    --dv-activegroup-visiblepanel-tab-background-color: var(--surface-primary);
+    --dv-activegroup-hiddenpanel-tab-background-color: color-mix(in srgb, var(--surface-secondary) 88%, black 12%);
+    --dv-inactivegroup-visiblepanel-tab-background-color: var(--surface-primary);
+    --dv-inactivegroup-hiddenpanel-tab-background-color: color-mix(in srgb, var(--surface-secondary) 90%, black 10%);
+    --dv-activegroup-visiblepanel-tab-color: var(--text-primary);
+    --dv-activegroup-hiddenpanel-tab-color: var(--text-secondary);
+    --dv-inactivegroup-visiblepanel-tab-color: var(--text-secondary);
+    --dv-inactivegroup-hiddenpanel-tab-color: var(--text-muted);
+    --dv-tab-divider-color: var(--border-subtle);
+    --dv-separator-border: var(--border-default);
+    --dv-paneview-header-border-color: var(--border-default);
+    --dv-icon-hover-background-color: var(--bg-glass-hover);
+    --dv-drag-over-background-color: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+    --dv-tabs-and-actions-container-height: 50px;
+}
+
+.adhdev-dockview .dv-tabs-and-actions-container {
+    padding-inline: 10px;
+    gap: 8px;
+    border-bottom: 1px solid var(--border-default);
+}
+
+.adhdev-dockview .dv-tabs-container {
+    gap: 8px;
+}
+
+.adhdev-dockview .dv-tab {
+    border: 0 !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+.adhdev-dockview .dv-tab.dv-active-tab,
+.adhdev-dockview .dv-tab.dv-inactive-tab {
+    background: transparent !important;
+}
+
+.adhdev-dockview .dv-tab-content {
+    min-width: 0;
+}
+
+.adhdev-dockview .dv-groupview {
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.adhdev-dockview-tab {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    min-height: 42px;
+    padding: 8px 12px;
+    border-radius: 10px 10px 0 0;
+    border: 1px solid transparent;
+    background: var(--bg-glass);
+    opacity: 0.68;
+    transition: opacity 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.adhdev-dockview-tab.is-active {
+    background: var(--bg-primary);
+    border-color: var(--border-subtle);
+    opacity: 1;
+}
+
+.adhdev-dockview-tab.is-reconnecting:not(.is-active) {
+    opacity: 0.35;
+}
+
+.adhdev-dockview-tab-status {
+    width: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+
+.adhdev-dockview-tab-status-text {
+    font-size: 8px;
+    line-height: 1;
+}
+
+.adhdev-dockview-tab-status-text.is-connected {
+    color: #4ade80;
+}
+
+.adhdev-dockview-tab-status-text.is-waiting,
+.adhdev-dockview-tab-status-text.is-reconnecting {
+    color: #facc15;
+}
+
+.adhdev-dockview-tab-status-text.is-idle {
+    color: var(--text-muted);
+}
+
+.adhdev-dockview-tab-copy {
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.adhdev-dockview-tab-primary {
+    min-width: 0;
+    max-width: 14ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.1;
+    color: var(--text-primary);
+    flex: 0 1 auto;
+}
+
+.adhdev-dockview-tab-meta {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 8px;
+    line-height: 1.1;
+    color: var(--text-secondary);
+    opacity: 0.72;
+    flex: 1 1 auto;
+}
+
+.adhdev-dockview-tab-dot {
+    opacity: 0.45;
+}
+
+.adhdev-dockview-tab-machine {
+    opacity: 0.85;
+}
+
+.adhdev-dockview-tab-reconnecting,
+.adhdev-dockview-tab-connecting {
+    color: #facc15;
+    opacity: 1;
+}
+
+.adhdev-dockview-tab-empty {
+    opacity: 0.5;
 }
 
 /* Header action buttons — more visible in light mode */

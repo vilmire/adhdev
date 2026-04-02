@@ -351,7 +351,7 @@ export class DaemonCommandRouter {
 
         // 2. Remove IDE instance(s) from InstanceManager
         const keysToRemove: string[] = [];
-        for (const key of (this.deps.instanceManager as any).instances?.keys?.() || []) {
+        for (const key of this.deps.instanceManager.listInstanceIds()) {
             if (key === `ide:${ideType}` || (typeof key === 'string' && key.startsWith(`ide:${ideType}_`))) {
                 keysToRemove.push(key);
             }

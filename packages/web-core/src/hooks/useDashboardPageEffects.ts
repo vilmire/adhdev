@@ -18,10 +18,6 @@ interface UseDashboardPageEffectsOptions {
     isRefreshingHistory: boolean
     ides: DaemonData[]
     handleRefreshHistory: () => void | Promise<void>
-    isSplitMode: boolean
-    splitTabRelative: (tabKey: string, targetGroup: number, side: 'left' | 'right') => void
-    numGroups: number
-    clearAllSplits: () => void
 }
 
 export function useDashboardPageEffects({
@@ -39,10 +35,6 @@ export function useDashboardPageEffects({
     isRefreshingHistory,
     ides,
     handleRefreshHistory,
-    isSplitMode,
-    splitTabRelative,
-    numGroups,
-    clearAllSplits,
 }: UseDashboardPageEffectsOptions) {
     const urlTabAppliedRef = useRef(false)
     const initialLayoutAppliedRef = useRef(false)
@@ -137,32 +129,6 @@ export function useDashboardPageEffects({
             void handleRefreshHistory()
         }
     }, [historyModalOpen, activeConv, isRefreshingHistory, ides, handleRefreshHistory])
-
-    useEffect(() => {
-        const handler = (event: KeyboardEvent) => {
-            if (event.ctrlKey && event.key === '\\') {
-                event.preventDefault()
-                if (isSplitMode) {
-                    clearAllSplits()
-                } else {
-                    const second = conversations[1]
-                    if (second) splitTabRelative(second.tabKey, 0, 'right')
-                }
-                return
-            }
-
-            if (event.ctrlKey && (event.key === '[' || event.key === ']') && isSplitMode) {
-                event.preventDefault()
-                setFocusedGroup(prev => {
-                    if (event.key === ']') return Math.min(prev + 1, numGroups - 1)
-                    return Math.max(prev - 1, 0)
-                })
-            }
-        }
-
-        window.addEventListener('keydown', handler)
-        return () => window.removeEventListener('keydown', handler)
-    }, [isSplitMode, conversations, splitTabRelative, numGroups, clearAllSplits, setFocusedGroup])
 
     useEffect(() => {
         if (!activeConv) return

@@ -268,7 +268,7 @@ export class SessionHostServer extends EventEmitter {
     this.storage.save(record, snapshot);
   }
 
-  private flushAllPersistence(): void {
+  flushAllPersistence(): void {
     for (const sessionId of this.runtimes.keys()) {
       this.persistNow(sessionId);
     }
@@ -370,6 +370,8 @@ export class SessionHostServer extends EventEmitter {
         this.runtimes.delete(record.sessionId);
         this.persistNow(record.sessionId);
         this.emitEvent({ type: 'session_exit', sessionId: record.sessionId, exitCode });
+        // Clean up persistence file after a brief delay (allow post-mortem reads)
+        setTimeout(() => this.storage.remove(record.sessionId), 5_000);
       },
     });
 
