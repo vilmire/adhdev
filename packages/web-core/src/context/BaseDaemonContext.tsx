@@ -54,7 +54,7 @@ export interface BaseDaemonContextValue {
 /** Data injection interface (used by standalone/cloud) */
 export interface BaseDaemonActions {
     /** Merge entries received from server/WS into status */
-    injectEntries: (entries: DaemonData[]) => void
+    injectEntries: (entries: DaemonData[], options?: { authoritativeDaemonIds?: string[] }) => void
     /** Mark initial load complete */
     markLoaded: () => void
     /** Current ides reference */
@@ -139,8 +139,13 @@ function mergeDaemonVersionFlags(existing: DaemonData, incoming: DaemonData, mer
  * This eliminates the "phantom connection" bug where WS routing metadata
  * would silently discard P2P chat data.
  */
-export function reconcileIdes(incoming: DaemonData[], prev: DaemonData[]): DaemonData[] {
+export function reconcileIdes(
+    incoming: DaemonData[],
+    prev: DaemonData[],
+    options?: { authoritativeDaemonIds?: string[] },
+): DaemonData[] {
     const now = Date.now()
+    const authoritativeDaemonIds = new Set(options?.authoritativeDaemonIds || [])
     if (prev.length === 0) {
         return incoming.map(ide => ({ ...ide, _lastUpdate: now }))
     }
@@ -218,6 +223,11 @@ export function reconcileIdes(incoming: DaemonData[], prev: DaemonData[]): Daemo
     for (const [key, ide] of resultMap) {
         const entryDaemonId = (ide as any).daemonId || key.split(':')[0]
         if (!incomingDaemonIds.has(entryDaemonId)) continue
+
+        if (authoritativeDaemonIds.has(entryDaemonId) && !incomingIds.has(key)) {
+            resultMap.delete(key)
+            continue
+        }
 
         const age = now - (ide._lastUpdate || ide.timestamp || 0)
 
@@ -433,9 +443,9 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
         })
     }, [])
 
-    const injectEntries = useCallback((entries: DaemonData[]) => {
+    const injectEntries = useCallback((entries: DaemonData[], options?: { authoritativeDaemonIds?: string[] }) => {
         setIdes(prev => {
-            const next = prev.length === 0 ? entries : reconcileIdes(entries, prev)
+            const next = prev.length === 0 ? entries : reconcileIdes(entries, prev, options)
             return daemonArraysEqual(prev, next) ? prev : next
         })
     }, [])

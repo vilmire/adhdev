@@ -59,8 +59,10 @@ export interface ADHDevConfig {
 
     /** Unified recent activity across IDE / CLI / ACP launch flows */
     recentActivity?: RecentActivityEntry[];
-    /** Last seen timestamps for machine-facing recent/session entries */
-    recentSessionReads?: Record<string, number>;
+    /** Last seen timestamps for live sessions, keyed by sessionId */
+    sessionReads?: Record<string, number>;
+    /** Last seen completion marker for live sessions, keyed by sessionId */
+    sessionReadMarkers?: Record<string, string>;
 
  // Machine nickname (user-customizable label for this machine)
     machineNickname: string | null;
@@ -122,7 +124,8 @@ const DEFAULT_CONFIG: ADHDevConfig = {
     workspaces: [],
     defaultWorkspaceId: null,
     recentActivity: [],
-    recentSessionReads: {},
+    sessionReads: {},
+    sessionReadMarkers: {},
     machineNickname: null,
     machineId: undefined,
     machineSecret: null,

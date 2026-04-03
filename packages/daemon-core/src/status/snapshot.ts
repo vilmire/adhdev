@@ -8,17 +8,18 @@
 
 import * as os from 'os';
 import { loadConfig } from '../config/config.js';
-import { buildRecentActivityKey, getRecentActivity, getRecentSessionSeenAt } from '../config/recent-activity.js';
+import { getRecentActivity, getSessionSeenAt, getSessionSeenMarker } from '../config/recent-activity.js';
 import { getWorkspaceState } from '../config/workspaces.js';
 import { getHostMemorySnapshot } from '../system/host-memory.js';
 import { getTerminalBackendRuntimeStatus } from '../cli-adapters/terminal-screen.js';
+import { LOG } from '../logging/logger.js';
 import { buildSessionEntries, isCdpConnected } from './builders.js';
 import type { ProviderState } from '../providers/provider-instance.js';
 import type {
     AvailableProviderInfo,
     DetectedIdeInfo,
+    RecentLaunchEntry,
     RecentSessionBucket,
-    RecentSessionEntry,
     SessionEntry,
     StatusReportPayload,
 } from '../shared-types.js';
@@ -52,6 +53,8 @@ export interface StatusSnapshotOptions {
 export interface StatusSnapshot extends StatusReportPayload {
     availableProviders: AvailableProviderInfo[];
 }
+
+const READ_DEBUG_ENABLED = process.argv.includes('--dev') || process.env.ADHDEV_READ_DEBUG === '1';
 
 function buildDetectedIdeInfos(
     detectedIdes: StatusSnapshotOptions['detectedIdes'],
@@ -104,6 +107,30 @@ function getSessionMessageUpdatedAt(session: {
     );
 }
 
+export function getSessionCompletionMarker(session: {
+    activeChat?: {
+        messages?: Array<{
+            role?: string;
+            id?: string;
+            index?: number;
+            timestamp?: number | string;
+            receivedAt?: number | string;
+            createdAt?: number | string;
+            _turnKey?: string;
+        }> | null
+    } | null
+}) {
+    const lastMessage = session.activeChat?.messages?.at?.(-1) as any;
+    if (!lastMessage) return '';
+    const role = typeof lastMessage.role === 'string' ? lastMessage.role : '';
+    if (role === 'user' || role === 'human') return '';
+    if (typeof lastMessage._turnKey === 'string' && lastMessage._turnKey) return `turn:${lastMessage._turnKey}`;
+    if (typeof lastMessage.id === 'string' && lastMessage.id) return `id:${lastMessage.id}`;
+    if (typeof lastMessage.index === 'number' && Number.isFinite(lastMessage.index)) return `idx:${lastMessage.index}`;
+    const timestamp = parseMessageTime(lastMessage.timestamp) || parseMessageTime(lastMessage.receivedAt) || parseMessageTime(lastMessage.createdAt);
+    return timestamp > 0 ? `ts:${timestamp}` : '';
+}
+
 function getSessionLastUsedAt(session: {
     activeChat?: {
         messages?: Array<{ timestamp?: number | string; receivedAt?: number | string; createdAt?: number | string }> | null
@@ -113,7 +140,7 @@ function getSessionLastUsedAt(session: {
     return getSessionMessageUpdatedAt(session) || session.lastUpdated || Date.now();
 }
 
-function getSessionKind(session: SessionEntry): RecentSessionEntry['kind'] {
+function getSessionKind(session: SessionEntry): RecentLaunchEntry['kind'] {
     return session.transport === 'cdp-page' || session.transport === 'cdp-webview'
         ? 'ide'
         : session.transport === 'acp'
@@ -132,6 +159,8 @@ function getUnreadState(
     lastUsedAt: number,
     lastSeenAt: number,
     lastRole: string,
+    completionMarker: string,
+    seenCompletionMarker: string,
 ): { unread: boolean; inboxBucket: RecentSessionBucket } {
     if (status === 'waiting_approval') {
         return { unread: false, inboxBucket: 'needs_attention' };
@@ -139,88 +168,27 @@ function getUnreadState(
     if (status === 'generating' || status === 'starting') {
         return { unread: false, inboxBucket: 'working' };
     }
-    const unread = hasContentChange && lastUsedAt > lastSeenAt && lastRole !== 'user' && lastRole !== 'human';
+    const unread = completionMarker
+        ? completionMarker !== seenCompletionMarker
+        : hasContentChange && lastUsedAt > lastSeenAt && lastRole !== 'user' && lastRole !== 'human';
     return { unread, inboxBucket: unread ? 'task_complete' : 'idle' };
 }
 
-function buildRecentSessions(
-    sessions: ReturnType<typeof buildSessionEntries>,
+function buildRecentLaunches(
     recentActivity: ReturnType<typeof getRecentActivity>,
-    readState: Record<string, number>,
-): RecentSessionEntry[] {
-    const visibleKeys = new Set<string>();
-    const hiddenKeys = new Set<string>();
-    const live = sessions
-        .filter((session) => !session.surfaceHidden && session.status !== 'stopped')
-        .map((session) => {
-            const kind = getSessionKind(session);
-            const recentKey = buildRecentActivityKey({
-                kind,
-                providerType: session.providerType,
-                workspace: session.workspace,
-            });
-            const lastSeenAt = readState[recentKey] || 0;
-            const lastUsedAt = getSessionLastUsedAt(session);
-            const { unread, inboxBucket } = getUnreadState(
-                getSessionMessageUpdatedAt(session) > 0,
-                session.status,
-                lastUsedAt,
-                lastSeenAt,
-                getLastMessageRole(session),
-            );
-            return {
-                id: session.id,
-                recentKey,
-                sessionId: session.id,
-                providerType: session.providerType,
-                providerName: session.providerName,
-                kind,
-                title: session.activeChat?.title || session.title || session.providerName,
-                workspace: session.workspace,
-                currentModel: session.currentModel,
-                status: session.status,
-                lastUsedAt,
-                unread,
-                lastSeenAt,
-                inboxBucket,
-                surfaceHidden: false,
-            };
-        });
-    for (const item of live) {
-        visibleKeys.add(`${item.kind}:${item.providerType}:${item.workspace || ''}`);
-    }
-    for (const session of sessions) {
-        if (!session.surfaceHidden) continue;
-        hiddenKeys.add(`${getSessionKind(session)}:${session.providerType}:${session.workspace || ''}`);
-    }
-    const persisted = recentActivity
-        .filter((item) => {
-            const key = `${item.kind}:${item.providerType}:${item.workspace || ''}`;
-            return !visibleKeys.has(key) && !hiddenKeys.has(key);
-        })
-        .map((item) => {
-            const lastSeenAt = readState[item.id] || 0;
-            const unread = item.lastUsedAt > lastSeenAt;
-            return {
-                id: item.id,
-                recentKey: item.id,
-                sessionId: item.sessionId || null,
-                providerType: item.providerType,
-                providerName: item.providerName,
-                kind: item.kind,
-                title: item.title || item.providerName,
-                workspace: item.workspace,
-                currentModel: item.currentModel,
-                lastUsedAt: item.lastUsedAt,
-                unread,
-                lastSeenAt,
-                inboxBucket: unread ? 'task_complete' : 'idle' as RecentSessionBucket,
-                surfaceHidden: false,
-            };
-        });
-
-    return [...live, ...persisted]
-        .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+): RecentLaunchEntry[] {
+    return recentActivity
+        .map((item) => ({
+            id: item.id,
+            providerType: item.providerType,
+            providerName: item.providerName,
+            kind: item.kind,
+            title: item.title || item.providerName,
+            workspace: item.workspace,
+            currentModel: item.currentModel,
+            lastLaunchedAt: item.lastUsedAt,
+        }))
+        .sort((a, b) => b.lastLaunchedAt - a.lastLaunchedAt)
         .slice(0, 12);
 }
 
@@ -233,16 +201,11 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
         options.allStates,
         options.cdpManagers as Map<string, any>,
     );
-    const readState = cfg.recentSessionReads || {};
     for (const session of sessions) {
-        const kind = getSessionKind(session);
-        const recentKey = buildRecentActivityKey({
-            kind,
-            providerType: session.providerType,
-            workspace: session.workspace,
-        });
-        const lastSeenAt = getRecentSessionSeenAt(cfg, recentKey);
+        const lastSeenAt = getSessionSeenAt(cfg, session.id);
+        const seenCompletionMarker = getSessionSeenMarker(cfg, session.id);
         const lastUsedAt = getSessionLastUsedAt(session);
+        const completionMarker = getSessionCompletionMarker(session);
         const { unread, inboxBucket } = session.surfaceHidden
             ? { unread: false, inboxBucket: 'idle' as RecentSessionBucket }
             : getUnreadState(
@@ -251,11 +214,18 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
                 lastUsedAt,
                 lastSeenAt,
                 getLastMessageRole(session),
+                completionMarker,
+                seenCompletionMarker,
             );
-        session.recentKey = recentKey;
         session.lastSeenAt = lastSeenAt;
         session.unread = unread;
         session.inboxBucket = inboxBucket;
+        if (READ_DEBUG_ENABLED && (session.unread || session.inboxBucket !== 'idle' || session.providerType.includes('codex'))) {
+            LOG.info(
+                'RecentRead',
+                `snapshot session id=${session.id} provider=${session.providerType} status=${String(session.status || '')} bucket=${inboxBucket} unread=${String(unread)} lastSeenAt=${lastSeenAt} completionMarker=${completionMarker || '-'} seenMarker=${seenCompletionMarker || '-'} lastUpdated=${String(session.lastUpdated || 0)} lastUsedAt=${lastUsedAt} lastRole=${getLastMessageRole(session)} msgUpdatedAt=${getSessionMessageUpdatedAt(session)}`,
+            );
+        }
     }
     const terminalBackend = getTerminalBackendRuntimeStatus();
 
@@ -283,7 +253,7 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
         workspaces: wsState.workspaces,
         defaultWorkspaceId: wsState.defaultWorkspaceId,
         defaultWorkspacePath: wsState.defaultWorkspacePath,
-        recentSessions: buildRecentSessions(sessions, recentActivity, readState),
+        recentLaunches: buildRecentLaunches(recentActivity),
         terminalBackend,
         availableProviders: buildAvailableProviders(options.providerLoader),
     };

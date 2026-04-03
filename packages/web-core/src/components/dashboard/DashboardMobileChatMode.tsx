@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { DaemonData } from '../../types'
@@ -9,15 +9,12 @@ import DashboardMobileChatRoom from './DashboardMobileChatRoom'
 import DashboardMobileChatInbox from './DashboardMobileChatInbox'
 import DashboardMobileMachineScreen from './DashboardMobileMachineScreen'
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
-import { isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared'
+import { buildLiveSessionInboxStateMap, getConversationLiveInboxState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared'
 import { isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
 import { normalizeTextContent } from '../../utils/text'
-import type { MachineRecentSession } from '../../pages/machine/types'
+import type { MachineRecentLaunch } from '../../pages/machine/types'
 
-const MOBILE_CHAT_READS_KEY = 'adhdev_mobileChatReads_v1'
 declare const __APP_VERSION__: string
-
-type ReadStateMap = Record<string, number>
 
 interface DashboardMobileChatModeProps {
     conversations: ActiveConversation[]
@@ -36,31 +33,6 @@ interface DashboardMobileChatModeProps {
     onOpenRemote: (conversation: ActiveConversation) => void
 }
 
-function readStoredReadState(): ReadStateMap {
-    try {
-        const raw = localStorage.getItem(MOBILE_CHAT_READS_KEY)
-        if (!raw) return {}
-        const parsed = JSON.parse(raw) as Record<string, unknown>
-        const next: ReadStateMap = {}
-        for (const [key, value] of Object.entries(parsed)) {
-            if (typeof value === 'number' && Number.isFinite(value)) {
-                next[key] = value
-            }
-        }
-        return next
-    } catch {
-        return {}
-    }
-}
-
-function writeStoredReadState(next: ReadStateMap) {
-    try {
-        localStorage.setItem(MOBILE_CHAT_READS_KEY, JSON.stringify(next))
-    } catch {
-        // noop
-    }
-}
-
 function normalizePreviewText(content: unknown) {
     return normalizeTextContent(content)
 }
@@ -72,6 +44,10 @@ function getConversationTimestamp(conversation: ActiveConversation) {
     return typeof ts === 'number' ? ts : Date.parse(String(ts)) || 0
 }
 
+function getConversationActivityAt(conversation: ActiveConversation, lastUpdated = 0) {
+    return getConversationTimestamp(conversation) || lastUpdated || 0
+}
+
 function getConversationPreview(conversation: ActiveConversation) {
     const lastMessage = [...conversation.messages].reverse().find((message: any) => !(message as any)?._localId) as any
         || conversation.messages[conversation.messages.length - 1] as any
@@ -81,16 +57,21 @@ function getConversationPreview(conversation: ActiveConversation) {
     return conversation.displaySecondary || 'No messages yet'
 }
 
-function getConversationKind(conversation: ActiveConversation): 'ide' | 'cli' | 'acp' {
-    if (conversation.transport === 'acp') return 'acp'
-    if (conversation.transport === 'pty') return 'cli'
-    return 'ide'
-}
-
 function getAvatarText(primary: string) {
     const text = primary.trim()
     if (!text) return '?'
     return text[0]!.toUpperCase()
+}
+
+function logMobileReadDebug(event: string, payload: Record<string, unknown>) {
+    if (typeof window === 'undefined') return
+    try {
+        const debugEnabled = (import.meta as any).env?.DEV || window.localStorage.getItem('adhdev_mobile_debug') === '1'
+        if (!debugEnabled) return
+        console.debug(`[mobile-read] ${event}`, payload)
+    } catch {
+        // noop
+    }
 }
 
 export default function DashboardMobileChatMode({
@@ -112,11 +93,11 @@ export default function DashboardMobileChatMode({
     const [selectedTabKey, setSelectedTabKey] = useState<string | null>(() => conversations[0]?.tabKey || null)
     const [screen, setScreen] = useState<'inbox' | 'chat' | 'machine'>(() => (conversations[0] ? 'chat' : 'inbox'))
     const [section, setSection] = useState<'machines' | 'chats' | 'settings'>('chats')
-    const [readState, setReadState] = useState<ReadStateMap>(() => readStoredReadState())
     const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null)
     const [machineBackTarget, setMachineBackTarget] = useState<'inbox' | 'chat'>('inbox')
     const [machineActionState, setMachineActionState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
     const [machineActionMessage, setMachineActionMessage] = useState('')
+    const lastAutoReadKeyRef = useRef<string | null>(null)
     const navigate = useNavigate()
     const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
 
@@ -136,9 +117,13 @@ export default function DashboardMobileChatMode({
         () => machineEntries.find(machine => machine.id === selectedMachineId) || null,
         [machineEntries, selectedMachineId],
     )
+    const liveSessionInboxState = useMemo(
+        () => buildLiveSessionInboxStateMap(ides),
+        [ides],
+    )
     const mobileInboxConversations = useMemo(
-        () => conversations.filter(conversation => !isHiddenNativeIdeParentConversation(conversation, conversations)),
-        [conversations],
+        () => conversations.filter(conversation => !isHiddenNativeIdeParentConversation(conversation, conversations, liveSessionInboxState)),
+        [conversations, liveSessionInboxState],
     )
 
     const cmds = useDashboardConversationCommands({
@@ -151,31 +136,53 @@ export default function DashboardMobileChatMode({
 
     const markConversationRead = useCallback((conversation: ActiveConversation | null) => {
         if (!conversation) return
-        const readAt = Math.max(Date.now(), getConversationTimestamp(conversation))
-        setReadState(prev => {
-            const next = { ...prev }
-            const readKey = conversation.recentKey || conversation.tabKey
-            if ((next[readKey] || 0) >= readAt) return prev
-            next[readKey] = readAt
-            writeStoredReadState(next)
-            return next
+        if (!conversation.sessionId) return
+        const liveState = getConversationLiveInboxState(conversation, liveSessionInboxState)
+        const readAt = Math.max(Date.now(), getConversationTimestamp(conversation), liveState.lastUpdated || 0)
+        logMobileReadDebug('mark_read:start', {
+            tabKey: conversation.tabKey,
+            sessionId: conversation.sessionId,
+            displayPrimary: conversation.displayPrimary,
+            inboxBucket: liveState.inboxBucket,
+            unread: liveState.unread,
+            lastSeenAt: liveState.lastSeenAt,
+            lastUpdated: liveState.lastUpdated,
+            activityAt: getConversationActivityAt(conversation, liveState.lastUpdated),
+            readAt,
         })
-        void sendDaemonCommand(conversation.daemonId || conversation.ideId, 'mark_recent_seen', {
-            recentKey: conversation.recentKey,
-            kind: getConversationKind(conversation),
-            providerType: conversation.agentType || conversation.ideType,
-            workspace: conversation.workspaceName || null,
+        void sendDaemonCommand(conversation.daemonId || conversation.ideId, 'mark_session_seen', {
+            sessionId: conversation.sessionId,
             seenAt: readAt,
-        }).catch(() => { })
-    }, [sendDaemonCommand])
+        }).then((result) => {
+            logMobileReadDebug('mark_read:result', {
+                tabKey: conversation.tabKey,
+                sessionId: conversation.sessionId,
+                result,
+            })
+        }).catch((error) => {
+            logMobileReadDebug('mark_read:error', {
+                tabKey: conversation.tabKey,
+                sessionId: conversation.sessionId,
+                error: error instanceof Error ? error.message : String(error),
+            })
+        })
+    }, [liveSessionInboxState, sendDaemonCommand])
 
     useEffect(() => {
         if (!selectedConversation) {
             setScreen('inbox')
             setSelectedTabKey(conversations[0]?.tabKey || null)
+            lastAutoReadKeyRef.current = null
             return
         }
-        if (screen === 'chat') markConversationRead(selectedConversation)
+        if (screen !== 'chat') {
+            lastAutoReadKeyRef.current = null
+            return
+        }
+        const autoReadKey = `${selectedConversation.tabKey}:${selectedConversation.sessionId || ''}`
+        if (lastAutoReadKeyRef.current === autoReadKey) return
+        lastAutoReadKeyRef.current = autoReadKey
+        markConversationRead(selectedConversation)
     }, [conversations, markConversationRead, screen, selectedConversation])
 
     useEffect(() => {
@@ -201,21 +208,17 @@ export default function DashboardMobileChatMode({
     }, [machineEntries, onRequestedMachineConsumed, requestedMachineId])
 
     const items = useMemo<MobileConversationListItem[]>(() => mobileInboxConversations.map(conversation => {
-        const timestamp = getConversationTimestamp(conversation)
+        const liveState = getConversationLiveInboxState(conversation, liveSessionInboxState)
+        const timestamp = getConversationActivityAt(conversation, liveState.lastUpdated)
         const preview = getConversationPreview(conversation)
-        const daemonBucket = conversation.inboxBucket || 'idle'
+        const daemonBucket = liveState.inboxBucket || 'idle'
         const isWorking = daemonBucket === 'working'
         const requiresAction = daemonBucket === 'needs_attention'
         const isOpenConversation = screen === 'chat' && selectedConversation?.tabKey === conversation.tabKey
-        const readKey = conversation.recentKey || conversation.tabKey
-        const daemonSeenAt = conversation.lastSeenAt || 0
-        const localSeenAt = readState[readKey] || 0
-        const hasOptimisticRead = localSeenAt > daemonSeenAt && timestamp > 0 && timestamp <= localSeenAt
         const unread = (
             daemonBucket === 'task_complete'
             && !isOpenConversation
-            && !!conversation.unread
-            && !hasOptimisticRead
+            && liveState.unread
         )
         const inboxBucket: MobileConversationListItem['inboxBucket'] = requiresAction
             ? 'needs_attention'
@@ -233,7 +236,32 @@ export default function DashboardMobileChatMode({
             isWorking,
             inboxBucket,
         }
-    }).sort((a, b) => b.timestamp - a.timestamp), [mobileInboxConversations, readState, screen, selectedConversation])
+    }).sort((a, b) => b.timestamp - a.timestamp), [liveSessionInboxState, mobileInboxConversations, screen, selectedConversation])
+
+    useEffect(() => {
+        const taskCompleteItems = items.filter(item => item.inboxBucket === 'task_complete' || item.unread)
+        if (taskCompleteItems.length === 0) return
+        logMobileReadDebug('inbox_state', {
+            screen,
+            selectedTabKey,
+            items: taskCompleteItems.map(item => {
+                const liveState = getConversationLiveInboxState(item.conversation, liveSessionInboxState)
+                return {
+                    liveState,
+                    tabKey: item.conversation.tabKey,
+                    sessionId: item.conversation.sessionId,
+                    displayPrimary: item.conversation.displayPrimary,
+                    serverBucket: liveState.inboxBucket,
+                    computedBucket: item.inboxBucket,
+                    serverUnread: liveState.unread,
+                    computedUnread: item.unread,
+                    lastSeenAt: liveState.lastSeenAt,
+                    lastUpdated: liveState.lastUpdated,
+                    activityAt: getConversationActivityAt(item.conversation, liveState.lastUpdated),
+                }
+            }),
+        })
+    }, [items, liveSessionInboxState, screen, selectedTabKey])
 
     const attentionItems = useMemo(
         () => items.filter(item => item.requiresAction),
@@ -258,30 +286,28 @@ export default function DashboardMobileChatMode({
             : [],
         [items, selectedMachineEntry],
     )
-    const selectedMachineRecentSessions = useMemo<MachineRecentSession[]>(
+    const selectedMachineRecentLaunches = useMemo<MachineRecentLaunch[]>(
         () => {
             if (!selectedMachineEntry) return []
-            const snapshotRecent = ((selectedMachineEntry as any).recentSessions || []) as any[]
-            if (snapshotRecent.length > 0) {
-                return snapshotRecent.map((session) => ({
-                    id: session.id,
-                    sessionId: session.sessionId || session.id,
-                    label: session.title || session.providerName || session.providerType,
-                    kind: session.kind,
-                    providerType: session.providerType,
-                    subtitle: session.currentModel || session.workspace || undefined,
-                    workspace: session.workspace,
-                    currentModel: session.currentModel,
+            const recentLaunches = ((selectedMachineEntry as any).recentLaunches || []) as any[]
+            if (recentLaunches.length > 0) {
+                return recentLaunches.map((launch) => ({
+                    id: launch.id,
+                    label: launch.title || launch.providerName || launch.providerType,
+                    kind: launch.kind,
+                    providerType: launch.providerType,
+                    subtitle: launch.currentModel || launch.workspace || undefined,
+                    workspace: launch.workspace,
+                    currentModel: launch.currentModel,
                 }))
             }
 
             return ides
                 .filter((entry: any) => !(entry as any).daemonMode && (entry as any).daemonId === selectedMachineEntry.id)
                 .map((entry: any) => {
-                    const kind: MachineRecentSession['kind'] = isCliEntry(entry) ? 'cli' : isAcpEntry(entry) ? 'acp' : 'ide'
+                    const kind: MachineRecentLaunch['kind'] = isCliEntry(entry) ? 'cli' : isAcpEntry(entry) ? 'acp' : 'ide'
                     return {
-                        id: entry.id,
-                        sessionId: entry.id,
+                        id: `${kind}:${entry.type}:${entry.workspace || ''}`,
                         label: entry.activeChat?.title
                             || (isCliEntry(entry)
                                 ? ((entry as any).cliName || entry.type)
@@ -498,11 +524,7 @@ export default function DashboardMobileChatMode({
         }
     }, [navigate, sendDaemonCommand])
 
-    const handleOpenRecent = useCallback(async (session: MachineRecentSession) => {
-        if (session.sessionId) {
-            navigate(`/dashboard?activeTab=${encodeURIComponent(session.sessionId)}`)
-            return
-        }
+    const handleOpenRecent = useCallback(async (session: MachineRecentLaunch) => {
         if (!selectedMachineEntry) return
         if (session.kind === 'ide' && session.providerType) {
             await handleLaunchDetectedIde(selectedMachineEntry.id, session.providerType, {
@@ -541,7 +563,7 @@ export default function DashboardMobileChatMode({
                 <DashboardMobileMachineScreen
                     selectedMachineEntry={selectedMachineEntry}
                     selectedMachineConversations={selectedMachineConversations}
-                    selectedMachineRecentSessions={selectedMachineRecentSessions}
+                    selectedMachineRecentLaunches={selectedMachineRecentLaunches}
                     cliProviders={selectedMachineCliProviders}
                     acpProviders={selectedMachineAcpProviders}
                     selectedMachineNeedsUpgrade={selectedMachineNeedsUpgrade}

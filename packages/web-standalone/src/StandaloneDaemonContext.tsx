@@ -38,11 +38,22 @@ const _pendingRequests = new Map<string, { resolve: (v: any) => void; reject: (e
 let _screenshotTimer: any = null
 let _wsStatusChangeCallback: ((status: ConnectionStatus, daemonId?: string) => void) | null = null
 
+function logStandaloneStatusDebug(event: string, payload: Record<string, unknown>) {
+    if (typeof window === 'undefined') return
+    try {
+        const debugEnabled = (import.meta as any).env?.DEV || window.localStorage.getItem('adhdev_mobile_debug') === '1'
+        if (!debugEnabled) return
+        console.debug(`[standalone-status] ${event}`, payload)
+    } catch {
+        // noop
+    }
+}
+
 function mapStandaloneConnectionState(status: ConnectionStatus): ConnectionStatus {
     return status === 'connected' ? 'connected' : status
 }
 
-/** Send a command via the shared WS connection. Falls back to HTTP if WS unavailable. */
+/** Send a command via the shared WS connection. Commands must never bypass WS. */
 export async function sendCommandViaWs(
     daemonId: string, command: string, data?: Record<string, unknown>
 ): Promise<any> {
@@ -66,14 +77,7 @@ export async function sendCommandViaWs(
             }))
         })
     }
-    // Fallback to HTTP if WS not connected
-    const res = await fetch('/api/v1/command', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: command, payload: route.payload }),
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res.json()
+    throw new Error(`WS command channel unavailable: ${command}`)
 }
 
 /**
@@ -249,7 +253,47 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                         // Convert StatusResponse → DaemonData[] using shared utility
                         const entries = statusPayloadToEntries(statusData, { daemonId })
 
-                        if (entries.length > 0) injectEntries(entries)
+                        logStandaloneStatusDebug('ws_status', {
+                            type: msg.type,
+                            daemonId,
+                            sessions: (statusData.sessions || []).map(session => ({
+                                id: session.id,
+                                parentId: session.parentId,
+                                providerType: session.providerType,
+                                kind: session.kind,
+                                transport: session.transport,
+                                unread: session.unread,
+                                inboxBucket: session.inboxBucket,
+                                lastSeenAt: session.lastSeenAt,
+                                lastUpdated: session.lastUpdated,
+                                title: session.title,
+                            })),
+                            recentLaunches: (((statusData as any).recentLaunches || []) as any[]).map(launch => ({
+                                id: launch.id,
+                                providerType: launch.providerType,
+                                kind: launch.kind,
+                                workspace: launch.workspace,
+                                lastLaunchedAt: launch.lastLaunchedAt,
+                            })),
+                        })
+                        logStandaloneStatusDebug('entries', {
+                            daemonId,
+                            entries: entries
+                                .filter(entry => entry.type !== 'adhdev-daemon')
+                                .map(entry => ({
+                                    id: entry.id,
+                                    type: entry.type,
+                                    unread: entry.unread,
+                                    inboxBucket: entry.inboxBucket,
+                                    lastSeenAt: entry.lastSeenAt,
+                                    lastUpdated: (entry as any).lastUpdated,
+                                    sessionId: entry.sessionId,
+                                })),
+                        })
+
+                        if (entries.length > 0) {
+                            injectEntries(entries, { authoritativeDaemonIds: [daemonId] })
+                        }
                         markLoaded()
 
                         // Inject userName from daemon config

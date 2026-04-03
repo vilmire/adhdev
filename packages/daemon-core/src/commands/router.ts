@@ -18,12 +18,14 @@ import type { ProviderInstanceManager } from '../providers/provider-instance-man
 import { launchWithCdp, killIdeProcess, isIdeRunning } from '../launch.js';
 import { loadConfig, saveConfig, updateConfig } from '../config/config.js';
 import { resolveIdeLaunchWorkspace } from '../config/workspaces.js';
-import { appendRecentActivity, buildRecentActivityKey, markRecentSessionSeen } from '../config/recent-activity.js';
+import { appendRecentActivity, markSessionSeen } from '../config/recent-activity.js';
 import { detectIDEs } from '../detection/ide-detector.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 import { logCommand } from '../logging/command-log.js';
 import { getRecentLogs, LOG_PATH } from '../logging/logger.js';
+import { buildSessionEntries } from '../status/builders.js';
+import { getSessionCompletionMarker } from '../status/snapshot.js';
 import * as fs from 'fs';
 
 // ─── Types ───
@@ -61,6 +63,7 @@ const CHAT_COMMANDS = [
     'send_chat', 'new_chat', 'switch_chat', 'set_mode',
     'change_model',
 ];
+const READ_DEBUG_ENABLED = process.argv.includes('--dev') || process.env.ADHDEV_READ_DEBUG === '1';
 
 export class DaemonCommandRouter {
     private deps: CommandRouterDeps;
@@ -265,28 +268,35 @@ export class DaemonCommandRouter {
                 return { success: true, userName: name };
             }
 
-            case 'mark_recent_seen': {
-                const kind = args?.kind;
-                const providerType = args?.providerType;
-                if (!kind || !providerType) {
-                    return { success: false, error: 'kind and providerType are required' };
+            case 'mark_session_seen': {
+                const sessionId = args?.sessionId;
+                if (!sessionId || typeof sessionId !== 'string') {
+                    return { success: false, error: 'sessionId is required' };
                 }
-                const recentKey = args?.recentKey || buildRecentActivityKey({
-                    kind,
-                    providerType,
-                    workspace: args?.workspace || null,
-                });
-                const next = markRecentSessionSeen(
-                    loadConfig(),
-                    recentKey,
-                    typeof args?.seenAt === 'number' ? args.seenAt : Date.now(),
+                const currentConfig = loadConfig();
+                const prevSeenAt = currentConfig.sessionReads?.[sessionId] || 0;
+                const sessionEntries = buildSessionEntries(
+                    this.deps.instanceManager.collectAllStates(),
+                    this.deps.cdpManagers as Map<string, any>,
                 );
+                const targetSession = sessionEntries.find((entry) => entry.id === sessionId);
+                const completionMarker = targetSession ? getSessionCompletionMarker(targetSession) : '';
+                const next = markSessionSeen(
+                    currentConfig,
+                    sessionId,
+                    typeof args?.seenAt === 'number' ? args.seenAt : Date.now(),
+                    completionMarker,
+                );
+                if (READ_DEBUG_ENABLED) {
+                    LOG.info('RecentRead', `mark_session_seen sessionId=${sessionId} seenAt=${String(args?.seenAt || '')} prevSeenAt=${String(prevSeenAt)} nextSeenAt=${String(next.sessionReads?.[sessionId] || 0)} marker=${completionMarker || '-'}`);
+                }
                 saveConfig(next);
                 this.deps.onStatusChange?.();
                 return {
                     success: true,
-                    recentKey,
-                    seenAt: next.recentSessionReads?.[recentKey] || Date.now(),
+                    sessionId,
+                    seenAt: next.sessionReads?.[sessionId] || Date.now(),
+                    completionMarker,
                 };
             }
 

@@ -147,17 +147,15 @@ export interface WorkspaceActivity {
     kind?: string;
     agentType?: string;
 }
-export interface RecentSessionEntry {
+export interface RecentLaunchEntry {
     id: string;
-    sessionId?: string | null;
     providerType: string;
     providerName: string;
     kind: 'ide' | 'cli' | 'acp';
-    title: string;
+    title?: string;
     workspace?: string | null;
     currentModel?: string;
-    status?: SessionEntry['status'];
-    lastUsedAt: number;
+    lastLaunchedAt: number;
 }
 export interface StatusReportPayload {
     /** Daemon instance ID */
@@ -188,5 +186,5 @@ export interface StatusReportPayload {
     defaultWorkspaceId?: string | null;
     defaultWorkspacePath?: string | null;
     workspaceActivity?: WorkspaceActivity[];
-    recentSessions?: RecentSessionEntry[];
+    recentLaunches?: RecentLaunchEntry[];
 }

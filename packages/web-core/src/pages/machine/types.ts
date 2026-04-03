@@ -53,9 +53,8 @@ export type TabId = 'workspace' | 'overview' | 'providers' | 'logs' | 'ides' | '
 
 export type ProviderInfo = AvailableProviderInfo
 
-export interface MachineRecentSession {
+export interface MachineRecentLaunch {
     id: string
-    sessionId?: string | null
     label: string
     kind: 'ide' | 'cli' | 'acp'
     providerType?: string

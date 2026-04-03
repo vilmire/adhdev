@@ -203,7 +203,7 @@ export class DaemonStatusReporter {
                 currentModel: session.currentModel,
                 currentPlan: session.currentPlan,
                 currentAutoApprove: session.currentAutoApprove,
-                recentKey: (session as any).recentKey,
+                lastUpdated: session.lastUpdated,
                 unread: (session as any).unread,
                 lastSeenAt: (session as any).lastSeenAt,
                 inboxBucket: (session as any).inboxBucket,

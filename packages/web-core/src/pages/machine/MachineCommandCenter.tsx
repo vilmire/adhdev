@@ -1,15 +1,15 @@
 import type { ReactNode } from 'react'
 
 import type { DaemonData } from '../../types'
-import type { MachineRecentSession, ProviderInfo, TabId, WorkspaceLaunchKind } from './types'
+import type { MachineRecentLaunch, ProviderInfo, TabId, WorkspaceLaunchKind } from './types'
 
 interface MachineCommandCenterProps {
     machineEntry: DaemonData
     providers: ProviderInfo[]
-    recentSessions: MachineRecentSession[]
+    recentLaunches: MachineRecentLaunch[]
     onUpgradeDaemon: () => void
     onOpenLogs: () => void
-    onOpenRecent: (session: MachineRecentSession) => void
+    onOpenRecent: (launch: MachineRecentLaunch) => void
     onOpenWorkspace: (kind: WorkspaceLaunchKind) => void
     onGoTab: (tab: Extract<TabId, 'providers' | 'overview' | 'logs'>) => void
 }
@@ -21,7 +21,7 @@ function SectionTitle({ children }: { children: ReactNode }) {
 export default function MachineCommandCenter({
     machineEntry,
     providers,
-    recentSessions,
+    recentLaunches,
     onUpgradeDaemon,
     onOpenLogs,
     onOpenRecent,
@@ -31,14 +31,14 @@ export default function MachineCommandCenter({
     const detectedIdes = machineEntry.detectedIdes || []
     const cliProviders = providers.filter(provider => provider.category === 'cli')
     const acpProviders = providers.filter(provider => provider.category === 'acp')
-    const topRecentSessions = recentSessions.slice(0, 4)
+    const topRecentLaunches = recentLaunches.slice(0, 4)
     const startTargets = [
         detectedIdes.length > 0 ? { id: 'ide', kind: 'ide' as const, label: 'IDE' } : null,
         cliProviders.length > 0 ? { id: 'cli', kind: 'cli' as const, label: 'CLI' } : null,
         acpProviders.length > 0 ? { id: 'acp', kind: 'acp' as const, label: 'ACP' } : null,
     ].filter(Boolean) as Array<{ id: string; kind: WorkspaceLaunchKind; label: string }>
 
-    const formatKindLabel = (kind: MachineRecentSession['kind']) => {
+    const formatKindLabel = (kind: MachineRecentLaunch['kind']) => {
         if (kind === 'ide') return 'IDE'
         if (kind === 'cli') return 'CLI'
         return 'ACP'
@@ -46,16 +46,16 @@ export default function MachineCommandCenter({
 
     return (
         <div className="machine-command-center">
-            {topRecentSessions.length > 0 && (
+            {topRecentLaunches.length > 0 && (
                 <>
                     <SectionTitle>Recent</SectionTitle>
                     <div className="machine-command-links">
-                        {topRecentSessions.map(session => (
-                            <button key={session.id} type="button" className="machine-command-link" onClick={() => onOpenRecent(session)}>
-                                <span className="machine-command-link-title">{session.label}</span>
+                        {topRecentLaunches.map(launch => (
+                            <button key={launch.id} type="button" className="machine-command-link" onClick={() => onOpenRecent(launch)}>
+                                <span className="machine-command-link-title">{launch.label}</span>
                                 <span className="machine-command-link-meta">
-                                    {formatKindLabel(session.kind)}
-                                    {session.subtitle ? ` · ${session.subtitle}` : ''}
+                                    {formatKindLabel(launch.kind)}
+                                    {launch.subtitle ? ` · ${launch.subtitle}` : ''}
                                 </span>
                             </button>
                         ))}

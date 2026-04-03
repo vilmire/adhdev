@@ -12,7 +12,6 @@ import type {
     ActiveChatData,
     AvailableProviderInfo,
     ProviderResumeCapability,
-    RecentSessionEntry,
     SessionEntry,
     SessionTransport,
     RuntimeWriteOwner,
@@ -40,8 +39,18 @@ export type {
     ChatMessage,
     AvailableProviderInfo,
     ProviderResumeCapability,
-    RecentSessionEntry,
 } from '@adhdev/daemon-core';
+
+export interface RecentLaunchEntry {
+    id: string;
+    providerType: string;
+    providerName: string;
+    kind: 'ide' | 'cli' | 'acp';
+    title?: string;
+    workspace?: string | null;
+    currentModel?: string;
+    lastLaunchedAt: number;
+}
 
 export interface WebAgentInfo {
     name: string;
@@ -130,16 +139,16 @@ export interface BaseDaemonData {
     workspaces?: WorkspaceEntry[];
     defaultWorkspaceId?: string | null;
     defaultWorkspacePath?: string | null;
-    recentSessions?: RecentSessionEntry[];
+    recentLaunches?: RecentLaunchEntry[];
     terminalBackend?: TerminalBackendStatus;
     aiAgents?: WebAiAgentInfo[];
     // ── Inbox / recent session metadata ──
-    /** Unique key for recent session tracking */
-    recentKey?: string;
     /** Whether this session has unread content */
     unread?: boolean;
     /** Timestamp of last user interaction */
     lastSeenAt?: number;
+    /** Last activity timestamp used by daemon unread calculations */
+    lastUpdated?: number;
     /** Inbox categorization bucket */
     inboxBucket?: import('@adhdev/daemon-core').RecentSessionBucket;
     surfaceHidden?: boolean;

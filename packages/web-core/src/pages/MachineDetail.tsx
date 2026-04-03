@@ -25,7 +25,7 @@ import { eventManager, type ToastConfig } from '../managers/EventManager'
 import ToastContainer from '../components/dashboard/ToastContainer'
 
 // Machine sub-components
-import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, MachineRecentSession, TabId, ProviderInfo } from './machine/types'
+import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, MachineRecentLaunch, TabId, ProviderInfo } from './machine/types'
 import { useMachineActions } from './machine/useMachineActions'
 import OverviewTab from './machine/OverviewTab'
 import ProvidersTab from './machine/ProvidersTab'
@@ -184,10 +184,9 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             : requestedMachineTab === 'acps'
                 ? 'acp'
                 : requestedWorkspaceCategory
-    const fallbackRecentSessions: MachineRecentSession[] = [
+    const fallbackRecentLaunches: MachineRecentLaunch[] = [
         ...ideSessions.map(session => ({
-            id: session.id,
-            sessionId: session.id,
+            id: `ide:${session.type}:${session.workspace || ''}`,
             label: session.activeChat?.title || session.type,
             kind: 'ide' as const,
             providerType: session.type,
@@ -196,8 +195,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             timestamp: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
         })),
         ...cliSessions.map(session => ({
-            id: session.id,
-            sessionId: session.id,
+            id: `cli:${session.type}:${session.workspace || ''}`,
             label: session.activeChat?.title || session.cliName,
             kind: 'cli' as const,
             providerType: session.type,
@@ -206,8 +204,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             timestamp: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
         })),
         ...acpSessions.map(session => ({
-            id: session.id,
-            sessionId: session.id,
+            id: `acp:${session.type}:${session.workspace || ''}`,
             label: session.activeChat?.title || session.acpName,
             kind: 'acp' as const,
             providerType: session.type,
@@ -219,24 +216,19 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     ]
         .sort((a, b) => b.timestamp - a.timestamp)
         .map(({ timestamp, ...session }) => session)
-    const recentSessions: MachineRecentSession[] = ((machineEntry as any).recentSessions || []).length > 0
-        ? ((machineEntry as any).recentSessions as any[]).map((session) => ({
-            id: session.id,
-            sessionId: session.sessionId || session.id,
-            label: session.title || session.providerName || session.providerType,
-            kind: session.kind,
-            providerType: session.providerType,
-            subtitle: session.currentModel || session.workspace || undefined,
-            workspace: session.workspace,
-            currentModel: session.currentModel,
+    const recentLaunches: MachineRecentLaunch[] = ((machineEntry as any).recentLaunches || []).length > 0
+        ? ((machineEntry as any).recentLaunches as any[]).map((launch) => ({
+            id: launch.id,
+            label: launch.title || launch.providerName || launch.providerType,
+            kind: launch.kind,
+            providerType: launch.providerType,
+            subtitle: launch.currentModel || launch.workspace || undefined,
+            workspace: launch.workspace,
+            currentModel: launch.currentModel,
         }))
-        : fallbackRecentSessions
+        : fallbackRecentLaunches
 
-    const handleOpenRecent = async (session: MachineRecentSession) => {
-        if (session.sessionId) {
-            navigate(`/dashboard?activeTab=${encodeURIComponent(session.sessionId)}`)
-            return
-        }
+    const handleOpenRecent = async (session: MachineRecentLaunch) => {
         if (session.kind === 'ide' && session.providerType) {
             await actions.handleLaunchIde(
                 session.providerType,
@@ -351,7 +343,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 <MachineCommandCenter
                                     machineEntry={machineEntry as DaemonData}
                                     providers={providers}
-                                    recentSessions={recentSessions}
+                                    recentLaunches={recentLaunches}
                                     onUpgradeDaemon={async () => {
                                         try { await sendDaemonCommand(machineId!, 'daemon_upgrade', {}) } catch {}
                                     }}

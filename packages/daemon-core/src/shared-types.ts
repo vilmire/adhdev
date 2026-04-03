@@ -120,7 +120,6 @@ export interface SessionEntry {
     errorMessage?: string;
     errorReason?: _ProviderErrorReason;
     lastUpdated?: number;
-    recentKey?: string;
     unread?: boolean;
     lastSeenAt?: number;
     inboxBucket?: RecentSessionBucket;
@@ -215,22 +214,15 @@ export type { RecentSessionBucket, TerminalBackendStatus } from './shared-types-
 import type { RecentSessionBucket } from './shared-types-extra.js';
 import type { TerminalBackendStatus } from './shared-types-extra.js';
 
-export interface RecentSessionEntry {
+export interface RecentLaunchEntry {
     id: string;
-    recentKey: string;
-    sessionId?: string | null;
     providerType: string;
     providerName: string;
     kind: 'ide' | 'cli' | 'acp';
-    title: string;
+    title?: string;
     workspace?: string | null;
     currentModel?: string;
-    status?: SessionEntry['status'];
-    lastUsedAt: number;
-    unread?: boolean;
-    lastSeenAt?: number;
-    inboxBucket?: RecentSessionBucket;
-    surfaceHidden?: boolean;
+    lastLaunchedAt: number;
 }
 
 // ─── Status Report Payload (daemon → server) ────────────────────────
@@ -259,7 +251,7 @@ export interface StatusReportPayload {
     workspaces?: WorkspaceEntry[];
     defaultWorkspaceId?: string | null;
     defaultWorkspacePath?: string | null;
-    recentSessions?: RecentSessionEntry[];
+    recentLaunches?: RecentLaunchEntry[];
     terminalBackend?: TerminalBackendStatus;
     /** Available providers (present in StatusSnapshot, optional in raw payload) */
     availableProviders?: AvailableProviderInfo[];

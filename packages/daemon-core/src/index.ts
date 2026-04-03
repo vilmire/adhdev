@@ -46,11 +46,11 @@ export type {
 // rollup-dts cannot resolve re-exports from shared-types.ts for them.
 import type { RuntimeWriteOwner as _RuntimeWriteOwner } from './shared-types-extra.js';
 import type { RuntimeAttachedClient as _RuntimeAttachedClient } from './shared-types-extra.js';
-import type { RecentSessionEntry as _RecentSessionEntry } from './shared-types.js';
+import type { RecentLaunchEntry as _RecentLaunchEntry } from './shared-types.js';
 import type { TerminalBackendStatus as _TerminalBackendStatus } from './shared-types-extra.js';
 export type RuntimeWriteOwner = _RuntimeWriteOwner;
 export type RuntimeAttachedClient = _RuntimeAttachedClient;
-export type RecentSessionEntry = _RecentSessionEntry;
+export type RecentLaunchEntry = _RecentLaunchEntry;
 export type TerminalBackendStatus = _TerminalBackendStatus;
 
 // Type aliases — rollup-dts cannot bundle re-exported type aliases at all.

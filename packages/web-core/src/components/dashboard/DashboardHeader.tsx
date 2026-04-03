@@ -10,7 +10,7 @@ import type { ActiveConversation } from './types';
 import { isCliConv, isAcpConv } from './types';
 import { IconBell, IconChat, IconScroll, IconMonitor } from '../Icons';
 import { useDaemons } from '../../compat';
-import { isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared';
+import { buildLiveSessionInboxStateMap, getConversationLiveInboxState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared';
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -50,6 +50,10 @@ export default function DashboardHeader({
 
     // Derive connection stage summary
     const daemons = ides.filter((i: any) => i.type === 'adhdev-daemon');
+    const liveSessionInboxState = useMemo(
+        () => buildLiveSessionInboxStateMap(ides),
+        [ides],
+    );
     const p2pValues = Object.values(p2pStates) as string[];
     const p2pConnected = p2pValues.filter(s => s === 'connected').length;
     const p2pConnecting = p2pValues.filter(s => s === 'connecting' || s === 'new' || s === 'checking').length;
@@ -64,16 +68,19 @@ export default function DashboardHeader({
     };
     const statusText = getStatusText();
     const desktopInboxConversations = useMemo(
-        () => conversations.filter(conversation => !isHiddenNativeIdeParentConversation(conversation, conversations)),
-        [conversations],
+        () => conversations.filter(conversation => !isHiddenNativeIdeParentConversation(conversation, conversations, liveSessionInboxState)),
+        [conversations, liveSessionInboxState],
     );
     const inboxAttention = useMemo(
-        () => desktopInboxConversations.filter(conversation => conversation.inboxBucket === 'needs_attention'),
-        [desktopInboxConversations],
+        () => desktopInboxConversations.filter(conversation => getConversationLiveInboxState(conversation, liveSessionInboxState).inboxBucket === 'needs_attention'),
+        [desktopInboxConversations, liveSessionInboxState],
     );
     const inboxUnread = useMemo(
-        () => desktopInboxConversations.filter(conversation => conversation.inboxBucket === 'task_complete' && conversation.unread),
-        [desktopInboxConversations],
+        () => desktopInboxConversations.filter(conversation => {
+            const liveState = getConversationLiveInboxState(conversation, liveSessionInboxState);
+            return liveState.inboxBucket === 'task_complete' && liveState.unread;
+        }),
+        [desktopInboxConversations, liveSessionInboxState],
     );
     const inboxCount = inboxAttention.length + inboxUnread.length;
 

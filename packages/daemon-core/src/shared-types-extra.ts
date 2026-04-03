@@ -20,7 +20,7 @@ export interface RuntimeAttachedClient {
     readOnly: boolean;
 }
 
-/** Session status union (used by SessionEntry.status, RecentSessionEntry.status, etc.) */
+/** Session status union (used by SessionEntry.status, legacy recent-launch metadata, etc.) */
 export type SessionStatus = 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
 
 /** Inbox bucket categories for recent sessions */

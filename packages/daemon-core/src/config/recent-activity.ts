@@ -1,10 +1,10 @@
 /**
- * Unified recent activity — machine-facing "pick up where you left off".
+ * Unified recent activity — launcher-facing "pick up where you launched".
  *
- * Unlike cliHistory or workspaceActivity, this is task/session oriented:
+ * Unlike live session state, this is launch oriented:
  * - one normalized row shape for IDE / CLI / ACP
  * - deduped by kind + providerType + workspace
- * - optionally linked to a live sessionId when known
+ * - used only for quick-launch shortcuts
  */
 
 import * as path from 'path';
@@ -18,7 +18,6 @@ export interface RecentActivityEntry {
     providerName: string;
     workspace?: string | null;
     currentModel?: string;
-    sessionId?: string | null;
     title?: string;
     lastUsedAt: number;
 }
@@ -62,22 +61,35 @@ export function getRecentActivity(config: ADHDevConfig, limit = 20): RecentActiv
         .slice(0, limit);
 }
 
-export function getRecentSessionSeenAt(config: ADHDevConfig, recentKey: string): number {
-    return config.recentSessionReads?.[recentKey] || 0;
+export function getSessionSeenAt(config: ADHDevConfig, sessionId: string): number {
+    return config.sessionReads?.[sessionId] || 0;
 }
 
-export function markRecentSessionSeen(
+export function getSessionSeenMarker(config: ADHDevConfig, sessionId: string): string {
+    return config.sessionReadMarkers?.[sessionId] || '';
+}
+
+export function markSessionSeen(
     config: ADHDevConfig,
-    recentKey: string,
+    sessionId: string,
     seenAt = Date.now(),
+    completionMarker?: string | null,
 ): ADHDevConfig {
-    const prev = config.recentSessionReads || {};
-    const nextSeenAt = Math.max(prev[recentKey] || 0, seenAt);
+    const prev = config.sessionReads || {};
+    const nextSeenAt = Math.max(prev[sessionId] || 0, seenAt);
+    const prevMarkers = config.sessionReadMarkers || {};
+    const nextMarker = typeof completionMarker === 'string' ? completionMarker : '';
     return {
         ...config,
-        recentSessionReads: {
+        sessionReads: {
             ...prev,
-            [recentKey]: nextSeenAt,
+            [sessionId]: nextSeenAt,
         },
+        sessionReadMarkers: nextMarker
+            ? {
+                ...prevMarkers,
+                [sessionId]: nextMarker,
+            }
+            : prevMarkers,
     };
 }

@@ -2,7 +2,7 @@ import { IconChevronLeft } from '../Icons'
 import type { DaemonData } from '../../types'
 import { formatRelativeTime, type MobileConversationListItem, type MobileMachineActionState } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
-import type { MachineRecentSession, WorkspaceLaunchKind } from '../../pages/machine/types'
+import type { MachineRecentLaunch, WorkspaceLaunchKind } from '../../pages/machine/types'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 interface LaunchProviderInfo {
@@ -14,7 +14,7 @@ interface LaunchProviderInfo {
 interface DashboardMobileMachineScreenProps {
     selectedMachineEntry: DaemonData
     selectedMachineConversations: MobileConversationListItem[]
-    selectedMachineRecentSessions: MachineRecentSession[]
+    selectedMachineRecentLaunches: MachineRecentLaunch[]
     cliProviders: LaunchProviderInfo[]
     acpProviders: LaunchProviderInfo[]
     selectedMachineNeedsUpgrade: boolean
@@ -22,7 +22,7 @@ interface DashboardMobileMachineScreenProps {
     machineAction: MobileMachineActionState
     onBack: () => void
     onOpenConversation: (conversation: ActiveConversation) => void
-    onOpenRecent: (session: MachineRecentSession) => void
+    onOpenRecent: (launch: MachineRecentLaunch) => void
     onOpenMachineDetails: () => void
     onMachineUpgrade: () => void
     onLaunchDetectedIde: (ideType: string, opts?: { workspacePath?: string | null }) => void
@@ -33,7 +33,7 @@ interface DashboardMobileMachineScreenProps {
 export default function DashboardMobileMachineScreen({
     selectedMachineEntry,
     selectedMachineConversations,
-    selectedMachineRecentSessions,
+    selectedMachineRecentLaunches,
     cliProviders,
     acpProviders,
     selectedMachineNeedsUpgrade,
@@ -57,17 +57,17 @@ export default function DashboardMobileMachineScreen({
     )
 
     const [showAllRecent, setShowAllRecent] = useState(false)
-    const formatKindLabel = (kind: MachineRecentSession['kind']) => {
+    const formatKindLabel = (kind: MachineRecentLaunch['kind']) => {
         if (kind === 'ide') return 'IDE'
         if (kind === 'cli') return 'CLI'
         return 'ACP'
     }
 
-    const topRecentSessions = selectedMachineRecentSessions.slice(0, 4)
+    const topRecentLaunches = selectedMachineRecentLaunches.slice(0, 4)
     const topConversationItems = selectedMachineConversations.slice(0, 3)
     const recentCards = useMemo(() => {
-        const sessionCards = topRecentSessions.map(session => ({
-            key: `recent-session:${session.id}`,
+        const launchCards = topRecentLaunches.map(session => ({
+            key: `recent-launch:${session.id}`,
             type: 'session' as const,
             primary: session.label,
             secondary: `${formatKindLabel(session.kind)}${session.subtitle ? ` · ${session.subtitle}` : ''}`,
@@ -82,8 +82,8 @@ export default function DashboardMobileMachineScreen({
             unread: item.unread,
             onClick: () => onOpenConversation(item.conversation),
         }))
-        return [...sessionCards, ...conversationCards]
-    }, [onOpenConversation, onOpenRecent, topConversationItems, topRecentSessions])
+        return [...launchCards, ...conversationCards]
+    }, [onOpenConversation, onOpenRecent, topConversationItems, topRecentLaunches])
     const visibleRecentCards = showAllRecent ? recentCards : recentCards.slice(0, 5)
     const hasRecentItems = recentCards.length > 0
     const hasIdeOptions = (selectedMachineEntry.detectedIdes?.length || 0) > 0
