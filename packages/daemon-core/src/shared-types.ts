@@ -124,6 +124,7 @@ export interface SessionEntry {
     unread?: boolean;
     lastSeenAt?: number;
     inboxBucket?: RecentSessionBucket;
+    surfaceHidden?: boolean;
 }
 
 /** Available provider information */
@@ -229,6 +230,7 @@ export interface RecentSessionEntry {
     unread?: boolean;
     lastSeenAt?: number;
     inboxBucket?: RecentSessionBucket;
+    surfaceHidden?: boolean;
 }
 
 // ─── Status Report Payload (daemon → server) ────────────────────────

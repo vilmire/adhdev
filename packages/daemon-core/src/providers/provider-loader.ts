@@ -284,14 +284,22 @@ export class ProviderLoader {
   isEnabled(type: string, ideType?: string): boolean {
     if (!ideType) return true;
     try {
-      const { loadConfig } = require('../config/config.js');
-      const config = loadConfig();
-      const baseIdeType = ideType.split('_')[0];
-      const val = config.ideSettings?.[baseIdeType]?.extensions?.[type]?.enabled;
-      return val === true; // undefined → false (default inactive)
+      return this.getIdeExtensionEnabledState(ideType, type);
     } catch {
       return false;
     }
+  }
+
+ /**
+ * Resolve per-IDE extension enabled state using the same normalization
+ * that runtime attach/remove uses.
+ */
+  getIdeExtensionEnabledState(ideType: string, extensionType: string): boolean {
+    const { loadConfig } = require('../config/config.js');
+    const config = loadConfig();
+    const baseIdeType = ideType.split('_')[0];
+    const val = config.ideSettings?.[baseIdeType]?.extensions?.[extensionType]?.enabled;
+    return val === true;
   }
 
  /**

@@ -142,6 +142,7 @@ export interface BaseDaemonData {
     lastSeenAt?: number;
     /** Inbox categorization bucket */
     inboxBucket?: import('@adhdev/daemon-core').RecentSessionBucket;
+    surfaceHidden?: boolean;
     /** Provider control current values */
     controlValues?: Record<string, string | number | boolean>;
     /** Provider-declared controls schema */

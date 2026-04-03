@@ -104,6 +104,7 @@ export function buildIdeConversations(
         unread?: boolean;
         lastSeenAt?: number;
         inboxBucket?: RecentSessionBucket;
+        surfaceHidden?: boolean;
     }[] = Array.isArray(ide.childSessions)
         ? ide.childSessions.map(child => ({
             sessionId: child.id,
@@ -118,6 +119,7 @@ export function buildIdeConversations(
             unread: (child as any).unread,
             lastSeenAt: (child as any).lastSeenAt,
             inboxBucket: (child as any).inboxBucket,
+            surfaceHidden: (child as any).surfaceHidden,
         }))
         : [];
     const useConversationFirst = isConversationFirstIde(ide);
@@ -182,6 +184,7 @@ export function buildIdeConversations(
             unread: (ide as any).unread,
             lastSeenAt: (ide as any).lastSeenAt,
             inboxBucket: (ide as any).inboxBucket,
+            surfaceHidden: (ide as any).surfaceHidden,
             streamSource: 'native',
             tabKey: ide.id,
             machineName,
@@ -236,6 +239,7 @@ export function buildIdeConversations(
             unread: (stream as any).unread,
             lastSeenAt: (stream as any).lastSeenAt,
             inboxBucket: (stream as any).inboxBucket,
+            surfaceHidden: (stream as any).surfaceHidden,
             streamSource: 'agent-stream',
             tabKey: streamTabKey,
             machineName,
@@ -265,6 +269,7 @@ export function buildIdeConversations(
             unread: (ide as any).unread,
             lastSeenAt: (ide as any).lastSeenAt,
             inboxBucket: (ide as any).inboxBucket,
+            surfaceHidden: (ide as any).surfaceHidden,
             streamSource: 'native',
             tabKey: ide.id,
             connectionState,

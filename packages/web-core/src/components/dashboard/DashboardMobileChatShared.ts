@@ -27,14 +27,9 @@ export interface MobileMachineActionState {
 
 export function isHiddenNativeIdeParentConversation(
     conversation: ActiveConversation,
-    conversations: ActiveConversation[],
+    _conversations: ActiveConversation[],
 ) {
-    if (conversation.streamSource !== 'native' || conversation.transport !== 'cdp-page') return false
-    return conversations.some(other => (
-        other.ideId === conversation.ideId
-        && other.tabKey !== conversation.tabKey
-        && other.streamSource === 'agent-stream'
-    ))
+    return !!conversation.surfaceHidden
 }
 
 export { formatRelativeCompact as formatRelativeTime } from '../../utils/time'

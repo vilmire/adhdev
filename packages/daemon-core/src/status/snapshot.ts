@@ -148,8 +148,10 @@ function buildRecentSessions(
     recentActivity: ReturnType<typeof getRecentActivity>,
     readState: Record<string, number>,
 ): RecentSessionEntry[] {
+    const visibleKeys = new Set<string>();
+    const hiddenKeys = new Set<string>();
     const live = sessions
-        .filter((session) => !session.parentId && session.status !== 'stopped')
+        .filter((session) => !session.surfaceHidden && session.status !== 'stopped')
         .map((session) => {
             const kind = getSessionKind(session);
             const recentKey = buildRecentActivityKey({
@@ -181,11 +183,21 @@ function buildRecentSessions(
                 unread,
                 lastSeenAt,
                 inboxBucket,
+                surfaceHidden: false,
             };
-        })
-    const seen = new Set(live.map((item) => `${item.kind}:${item.providerType}:${item.workspace || ''}`));
+        });
+    for (const item of live) {
+        visibleKeys.add(`${item.kind}:${item.providerType}:${item.workspace || ''}`);
+    }
+    for (const session of sessions) {
+        if (!session.surfaceHidden) continue;
+        hiddenKeys.add(`${getSessionKind(session)}:${session.providerType}:${session.workspace || ''}`);
+    }
     const persisted = recentActivity
-        .filter((item) => !seen.has(`${item.kind}:${item.providerType}:${item.workspace || ''}`))
+        .filter((item) => {
+            const key = `${item.kind}:${item.providerType}:${item.workspace || ''}`;
+            return !visibleKeys.has(key) && !hiddenKeys.has(key);
+        })
         .map((item) => {
             const lastSeenAt = readState[item.id] || 0;
             const unread = item.lastUsedAt > lastSeenAt;
@@ -203,6 +215,7 @@ function buildRecentSessions(
                 unread,
                 lastSeenAt,
                 inboxBucket: unread ? 'task_complete' : 'idle' as RecentSessionBucket,
+                surfaceHidden: false,
             };
         });
 
@@ -230,13 +243,15 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
         });
         const lastSeenAt = getRecentSessionSeenAt(cfg, recentKey);
         const lastUsedAt = getSessionLastUsedAt(session);
-        const { unread, inboxBucket } = getUnreadState(
-            getSessionMessageUpdatedAt(session) > 0,
-            session.status,
-            lastUsedAt,
-            lastSeenAt,
-            getLastMessageRole(session),
-        );
+        const { unread, inboxBucket } = session.surfaceHidden
+            ? { unread: false, inboxBucket: 'idle' as RecentSessionBucket }
+            : getUnreadState(
+                getSessionMessageUpdatedAt(session) > 0,
+                session.status,
+                lastUsedAt,
+                lastSeenAt,
+                getLastMessageRole(session),
+            );
         session.recentKey = recentKey;
         session.lastSeenAt = lastSeenAt;
         session.unread = unread;

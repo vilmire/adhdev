@@ -5,7 +5,6 @@
 
 import type { CommandResult, CommandHelpers } from './handler.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
-import { loadConfig } from '../config/config.js';
 import { LOG } from '../logging/logger.js';
 
 export async function handleFocusSession(h: CommandHelpers, args: any): Promise<CommandResult> {
@@ -193,14 +192,13 @@ export function handleGetIdeExtensions(h: CommandHelpers, args: any): CommandRes
     if (!loader) return { success: false, error: 'ProviderLoader not initialized' };
 
     const allExtProviders = loader.getByCategory?.('extension') || [];
-    const config = loadConfig();
 
     if (ideType) {
         const extensions = allExtProviders.map(p => ({
             type: p.type,
             name: p.name,
             extensionId: p.extensionId,
-            enabled: config.ideSettings?.[ideType]?.extensions?.[p.type]?.enabled === true,
+            enabled: loader.getIdeExtensionEnabledState?.(ideType, p.type) === true,
         }));
         return { success: true, ideType, extensions };
     }
@@ -212,7 +210,7 @@ export function handleGetIdeExtensions(h: CommandHelpers, args: any): CommandRes
             type: p.type,
             name: p.name,
             extensionId: p.extensionId,
-            enabled: config.ideSettings?.[ide]?.extensions?.[p.type]?.enabled === true,
+            enabled: loader.getIdeExtensionEnabledState?.(ide, p.type) === true,
         }));
     }
     return { success: true, ideExtensions: result };

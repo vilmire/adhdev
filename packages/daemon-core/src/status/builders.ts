@@ -337,5 +337,17 @@ export function buildSessionEntries(
         sessions.push(buildAcpSession(state));
     }
 
+    // Hide native IDE parent rows from inbox/recent surfaces when extension tabs exist.
+    const extensionParentIds = new Set(
+        sessions
+            .filter((session) => session.transport === 'cdp-webview' && !!session.parentId)
+            .map((session) => session.parentId as string)
+    );
+    for (const session of sessions) {
+        if (session.transport === 'cdp-page' && extensionParentIds.has(session.id)) {
+            session.surfaceHidden = true;
+        }
+    }
+
     return sessions;
 }

@@ -28,6 +28,7 @@ export interface ActiveConversation {
     unread?: boolean;
     lastSeenAt?: number;
     inboxBucket?: RecentSessionBucket;
+    surfaceHidden?: boolean;
     streamSource: 'native' | 'agent-stream';
     tabKey: string;
     /** Parent machine name (hostname or nickname) */

@@ -207,6 +207,7 @@ export class DaemonStatusReporter {
                 unread: (session as any).unread,
                 lastSeenAt: (session as any).lastSeenAt,
                 inboxBucket: (session as any).inboxBucket,
+                surfaceHidden: (session as any).surfaceHidden,
                 controlValues: session.controlValues,
                 providerControls: session.providerControls,
                 acpConfigOptions: session.acpConfigOptions,
