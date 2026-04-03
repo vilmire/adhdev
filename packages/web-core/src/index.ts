@@ -150,7 +150,6 @@ export { useDaemons, dashboardWS, connectionManager, setupCompat } from './compa
 
 // ── Pages ──
 export { default as Dashboard } from './pages/Dashboard'
-export { default as IDEPage } from './pages/IDE'
 export { default as MachineDetail } from './pages/MachineDetail'
 export { default as MachinesPage } from './pages/Machines'
 export { default as NotificationsPage } from './pages/Notifications'

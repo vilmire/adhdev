@@ -160,17 +160,27 @@ export function useDashboardConversations({
         conversationsRef.current = next
         return next
     }, [baseConversations, clearedTabs])
+    const conversationBySessionId = useMemo(() => {
+        const map = new Map<string, ActiveConversation>()
+        for (const conversation of conversations) {
+            if (conversation.sessionId) map.set(conversation.sessionId, conversation)
+        }
+        return map
+    }, [conversations])
     const conversationTargetMap = useMemo(() => {
         const map = new Map<string, ActiveConversation>()
         for (const conversation of conversations) {
             if (conversation.sessionId) map.set(conversation.sessionId, conversation)
             map.set(conversation.ideId, conversation)
             map.set(conversation.tabKey, conversation)
-            map.set(conversation.ideType, conversation)
-            map.set(conversation.agentType, conversation)
         }
         return map
     }, [conversations])
+
+    const resolveConversationBySessionId = useCallback((sessionId: string | null | undefined) => {
+        if (!sessionId) return undefined
+        return conversationBySessionId.get(sessionId)
+    }, [conversationBySessionId])
 
     const resolveConversationByTarget = useCallback((target: string | null | undefined) => {
         if (!target) return undefined
@@ -196,6 +206,7 @@ export function useDashboardConversations({
         conversations,
         visibleConversations,
         visibleTabKeys,
+        resolveConversationBySessionId,
         resolveConversationByTarget,
     }
 }

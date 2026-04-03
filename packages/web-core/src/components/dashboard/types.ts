@@ -7,6 +7,7 @@ import type { SessionTransport } from '@adhdev/daemon-core';
 export interface ActiveConversation {
     ideId: string;
     sessionId?: string;
+    nativeSessionId?: string;
     transport?: SessionTransport;
     /** Daemon DO ID — actual server connection ID for command routing */
     daemonId?: string;

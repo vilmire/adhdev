@@ -92,6 +92,7 @@ export default function Dashboard() {
         conversations,
         visibleConversations,
         visibleTabKeys,
+        resolveConversationBySessionId,
         resolveConversationByTarget,
     } = useDashboardConversations({
         ides,
@@ -148,7 +149,7 @@ export default function Dashboard() {
     } = useDashboardActiveTabRequests({
         isMobile,
         urlActiveTab,
-        resolveConversationByTarget,
+        resolveConversationBySessionId,
         setSearchParams,
     })
 
@@ -224,7 +225,7 @@ export default function Dashboard() {
     useDashboardPageEffects({
         urlActiveTab: isMobile && !showMobileChatMode ? urlActiveTab : null,
         conversations,
-        resolveConversationByTarget,
+        resolveConversationBySessionId,
         normalizedGroupAssignments,
         hasHydratedStoredLayout: isMobile && !showMobileChatMode ? hasHydratedStoredLayout : true,
         hydrateStoredLayout: isMobile && !showMobileChatMode ? hydrateStoredLayout : (() => {}),
@@ -282,6 +283,16 @@ export default function Dashboard() {
         ides,
         sendDaemonCommand,
     })
+
+    const handleOpenDesktopConversation = useCallback((conversation: import('../components/dashboard/types').ActiveConversation) => {
+        setDesktopActiveTabKey(conversation.tabKey)
+        setSearchParams(prev => {
+            const next = new URLSearchParams(prev)
+            if (conversation.sessionId) next.set('activeTab', conversation.sessionId)
+            else next.delete('activeTab')
+            return next
+        }, { replace: true })
+    }, [setSearchParams])
 
     return (
         <div className="page-dashboard flex-1 min-h-0 bg-bg-primary text-text-primary flex flex-col overflow-hidden">
@@ -351,6 +362,7 @@ export default function Dashboard() {
                 requestedDesktopTabKey={requestedDesktopTabKey}
                 onRequestedDesktopTabConsumed={consumeRequestedActiveTab}
                 onDesktopActiveTabChange={setDesktopActiveTabKey}
+                onOpenDesktopConversation={handleOpenDesktopConversation}
             />
 
             <style>{`

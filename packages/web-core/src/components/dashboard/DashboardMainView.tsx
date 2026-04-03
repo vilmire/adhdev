@@ -55,6 +55,7 @@ interface DashboardMainViewProps {
     requestedDesktopTabKey: string | null
     onRequestedDesktopTabConsumed: () => void
     onDesktopActiveTabChange: React.Dispatch<React.SetStateAction<string | null>>
+    onOpenDesktopConversation: (conversation: ActiveConversation) => void
 }
 
 export default function DashboardMainView({
@@ -105,6 +106,7 @@ export default function DashboardMainView({
     requestedDesktopTabKey,
     onRequestedDesktopTabConsumed,
     onDesktopActiveTabChange,
+    onOpenDesktopConversation,
 }: DashboardMainViewProps) {
     return (
         <>
@@ -116,7 +118,7 @@ export default function DashboardMainView({
                     isConnected={isConnected}
                     conversations={visibleConversations}
                     onOpenHistory={onOpenHistory}
-                    onOpenConversation={(conversation) => onDesktopActiveTabChange(conversation.tabKey)}
+                    onOpenConversation={onOpenDesktopConversation}
                     onOpenRemote={() => {
                         if (!activeConv || isCliConv(activeConv) || isAcpConv(activeConv)) return
                         onOpenRemote(activeConv)

@@ -6,25 +6,25 @@ import type { ActiveConversation } from '../components/dashboard/types'
 interface UseDashboardActiveTabRequestsOptions {
     isMobile: boolean
     urlActiveTab: string | null
-    resolveConversationByTarget: (target: string | null | undefined) => ActiveConversation | undefined
+    resolveConversationBySessionId: (sessionId: string | null | undefined) => ActiveConversation | undefined
     setSearchParams: SetURLSearchParams
 }
 
 export function useDashboardActiveTabRequests({
     isMobile,
     urlActiveTab,
-    resolveConversationByTarget,
+    resolveConversationBySessionId,
     setSearchParams,
 }: UseDashboardActiveTabRequestsOptions) {
     const requestedDesktopTabKey = useMemo(() => {
         if (isMobile || !urlActiveTab) return null
-        return resolveConversationByTarget(urlActiveTab)?.tabKey ?? null
-    }, [isMobile, resolveConversationByTarget, urlActiveTab])
+        return resolveConversationBySessionId(urlActiveTab)?.tabKey ?? null
+    }, [isMobile, resolveConversationBySessionId, urlActiveTab])
 
     const requestedMobileTabKey = useMemo(() => {
         if (!isMobile || !urlActiveTab) return null
-        return resolveConversationByTarget(urlActiveTab)?.tabKey ?? null
-    }, [isMobile, resolveConversationByTarget, urlActiveTab])
+        return resolveConversationBySessionId(urlActiveTab)?.tabKey ?? null
+    }, [isMobile, resolveConversationBySessionId, urlActiveTab])
 
     const consumeRequestedActiveTab = useCallback(() => {
         if (!urlActiveTab) return

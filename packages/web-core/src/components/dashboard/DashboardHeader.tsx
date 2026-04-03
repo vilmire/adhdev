@@ -78,9 +78,10 @@ export default function DashboardHeader({
     const inboxUnread = useMemo(
         () => desktopInboxConversations.filter(conversation => {
             const liveState = getConversationLiveInboxState(conversation, liveSessionInboxState);
-            return liveState.inboxBucket === 'task_complete' && liveState.unread;
+            const isOpenConversation = activeConv?.tabKey === conversation.tabKey;
+            return liveState.inboxBucket === 'task_complete' && liveState.unread && !isOpenConversation;
         }),
-        [desktopInboxConversations, liveSessionInboxState],
+        [activeConv, desktopInboxConversations, liveSessionInboxState],
     );
     const inboxCount = inboxAttention.length + inboxUnread.length;
 

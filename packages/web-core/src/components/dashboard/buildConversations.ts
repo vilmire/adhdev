@@ -46,6 +46,10 @@ function getStreamKey(stream: { sessionId?: string; instanceId?: string; agentTy
     return stream.sessionId || stream.instanceId || stream.agentType;
 }
 
+function getConversationTabKey(sessionId: string | undefined, fallbackKey: string): string {
+    return sessionId || fallbackKey;
+}
+
 function normalizeMessageContent(content: unknown): string {
     return normalizeTextContent(content)
 }
@@ -162,6 +166,7 @@ export function buildIdeConversations(
         results.push({
             ideId: ide.id,
             sessionId: nativeSessionId,
+            nativeSessionId,
             transport: ide.transport,
             daemonId: ide.daemonId || undefined,
             mode: isCliConv(ide as any) ? (((ide as any).mode as 'terminal' | 'chat' | undefined) || 'terminal') : 'chat',
@@ -181,7 +186,7 @@ export function buildIdeConversations(
             modalButtons: hasRealModal ? (modal.buttons as string[]) : undefined,
             modalMessage: hasRealModal ? (modal.message as string) : undefined,
             streamSource: 'native',
-            tabKey: ide.id,
+            tabKey: getConversationTabKey(nativeSessionId, ide.id),
             machineName,
             connectionState,
         });
@@ -215,6 +220,7 @@ export function buildIdeConversations(
         results.push({
             ideId: ide.id,
             sessionId: (stream as any).sessionId || (stream as any).instanceId,
+            nativeSessionId: (ide as any).sessionId || ide.instanceId,
             transport: (stream as any).transport || 'cdp-webview',
             daemonId: ide.daemonId || undefined,
             mode: 'chat',
@@ -231,7 +237,7 @@ export function buildIdeConversations(
             modalButtons: hasModal ? stream.activeModal!.buttons : undefined,
             modalMessage: hasModal ? stream.activeModal!.message : undefined,
             streamSource: 'agent-stream',
-            tabKey: streamTabKey,
+            tabKey: getConversationTabKey((stream as any).sessionId || (stream as any).instanceId, streamTabKey),
             machineName,
             connectionState,
         });
@@ -242,6 +248,7 @@ export function buildIdeConversations(
         results.push({
             ideId: ide.id,
             sessionId: (ide as any).sessionId || ide.instanceId,
+            nativeSessionId: (ide as any).sessionId || ide.instanceId,
             transport: ide.transport,
             daemonId: ide.daemonId || undefined,
             mode: 'chat',
@@ -256,7 +263,7 @@ export function buildIdeConversations(
             displaySecondary: ideLabel,
             cdpConnected: ide.cdpConnected,
             streamSource: 'native',
-            tabKey: ide.id,
+            tabKey: getConversationTabKey((ide as any).sessionId || ide.instanceId, ide.id),
             connectionState,
         });
     }

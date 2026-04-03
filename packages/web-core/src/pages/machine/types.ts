@@ -6,7 +6,7 @@ import type { SessionEntry, RuntimeWriteOwner, AvailableProviderInfo } from '../
 
 // ─── Types ───────────────────────────────────────────
 export interface IdeSessionEntry {
-    id: string; type: string; version: string; instanceId: string; status: string
+    id: string; sessionId?: string; type: string; version: string; instanceId: string; status: string
     workspace: string | null; terminals: number
     aiAgents: { id: string; name: string; status: string; version?: string }[]
     activeChat: any; chats: any[]; childSessions: SessionEntry[]
@@ -21,7 +21,7 @@ export interface CliSessionEntry {
 }
 
 export interface AcpSessionEntry {
-    id: string; type: string; acpName: string; status: string
+    id: string; sessionId?: string; type: string; acpName: string; status: string
     workspace: string; activeChat: any; daemonId: string
     currentModel?: string; currentPlan?: string
 }

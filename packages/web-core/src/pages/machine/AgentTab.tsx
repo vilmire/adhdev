@@ -291,9 +291,16 @@ export default function AgentTab({
                                         key={d.type}
                                         onClick={() => {
                                             if (isReady && matchingEntry) {
-                                                navigate(`/dashboard?activeTab=${encodeURIComponent(matchingEntry.id)}`, {
-                                                    state: { openRemoteForTabKey: matchingEntry.id },
-                                                })
+                                                const targetSessionId = (matchingEntry as IdeSessionEntry).sessionId
+                                                if (targetSessionId) {
+                                                    navigate(`/dashboard?activeTab=${encodeURIComponent(targetSessionId)}`, {
+                                                        state: { openRemoteForTabKey: targetSessionId },
+                                                    })
+                                                } else {
+                                                    navigate('/dashboard', {
+                                                        state: { openRemoteForTabKey: matchingEntry.id },
+                                                    })
+                                                }
                                                 return
                                             }
                                             if (isPending) return
@@ -479,9 +486,18 @@ export default function AgentTab({
                                         {isIde && (
                                             <>
                                                 <button
-                                                    onClick={() => navigate(`/dashboard?activeTab=${encodeURIComponent(entry.id)}`, {
-                                                        state: { openRemoteForTabKey: entry.id },
-                                                    })}
+                                                    onClick={() => {
+                                                        const targetSessionId = (entry as IdeSessionEntry).sessionId
+                                                        if (targetSessionId) {
+                                                            navigate(`/dashboard?activeTab=${encodeURIComponent(targetSessionId)}`, {
+                                                                state: { openRemoteForTabKey: targetSessionId },
+                                                            })
+                                                            return
+                                                        }
+                                                        navigate('/dashboard', {
+                                                            state: { openRemoteForTabKey: entry.id },
+                                                        })
+                                                    }}
                                                     className="machine-btn flex items-center gap-1"
                                                 >
                                                     <IconMonitor size={13} /> Control
@@ -491,13 +507,25 @@ export default function AgentTab({
                                         )}
                                         {/* ACP: Chat */}
                                         {isAcp && (
-                                            <button onClick={() => navigate(`/dashboard?activeTab=${encodeURIComponent(entry.id)}`)} className="machine-btn" title="View chat"><IconChat size={14} /></button>
+                                            <button
+                                                onClick={() => {
+                                                    const targetSessionId = (entry as AcpSessionEntry).sessionId
+                                                    if (targetSessionId) openSessionInDashboard(targetSessionId)
+                                                }}
+                                                className="machine-btn"
+                                                title="View chat"
+                                                disabled={!(entry as AcpSessionEntry).sessionId}
+                                            ><IconChat size={14} /></button>
                                         )}
                                         {cli && normalizedStatus !== 'stopped' && (
                                             <button
-                                                onClick={() => openSessionInDashboard(entry.id)}
+                                                onClick={() => {
+                                                    const targetSessionId = (entry as CliSessionEntry).sessionId
+                                                    if (targetSessionId) openSessionInDashboard(targetSessionId)
+                                                }}
                                                 className="machine-btn flex items-center gap-1"
                                                 title="Open terminal in dashboard"
+                                                disabled={!(entry as CliSessionEntry).sessionId}
                                             >
                                                 <IconMonitor size={13} /> Open
                                             </button>

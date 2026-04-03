@@ -85,9 +85,16 @@ export default function MachinesPage() {
     const machines = groupByMachine(daemons, providerLabels)
     const onlineCount = machines.filter(m => m.daemonIde.status === 'online').length
     const { isHidden, toggleTab } = useHiddenTabs()
+    const openDashboardSession = (sessionId?: string | null, fallbackMachineId?: string | null) => {
+        if (sessionId) {
+            navigate(`/dashboard?activeTab=${encodeURIComponent(sessionId)}`)
+            return
+        }
+        if (fallbackMachineId) navigate(`/machines/${encodeURIComponent(fallbackMachineId)}`)
+    }
 
     // Cross-machine active agents
-    const allActiveAgents: { name: string; machine: string; machineId: string; status: string; type: string; targetId: string; isCli: boolean; workspace: string }[] = []
+    const allActiveAgents: { name: string; machine: string; machineId: string; status: string; type: string; targetSessionId?: string; isCli: boolean; workspace: string }[] = []
     for (const m of machines) {
         for (const ide of m.ideSessions) {
             if (isAgentActive(ide.agents, ide.childSessions, ide.activeChat)) {
@@ -98,7 +105,7 @@ export default function MachinesPage() {
                 allActiveAgents.push({
                     name: agentName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: ide.type,
-                    targetId: activeStream?.id || ide.sessionId || ide.id, isCli: false,
+                    targetSessionId: activeStream?.id || ide.sessionId || undefined, isCli: false,
                     workspace: getWorkspaceDisplayLabel(ide.workspace || ''),
                 })
             }
@@ -108,7 +115,7 @@ export default function MachinesPage() {
                 allActiveAgents.push({
                     name: cli.cliName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: cli.cliType,
-                    targetId: cli.sessionId || cli.id, isCli: true,
+                    targetSessionId: cli.sessionId || undefined, isCli: true,
                     workspace: getWorkspaceDisplayLabel(cli.workspace || ''),
                 })
             }
@@ -118,7 +125,7 @@ export default function MachinesPage() {
                 allActiveAgents.push({
                     name: acp.acpName, machine: m.nickname || m.hostname,
                     machineId: m.machineId, status: 'generating', type: acp.acpType,
-                    targetId: acp.sessionId || acp.id, isCli: false,
+                    targetSessionId: acp.sessionId || undefined, isCli: false,
                     workspace: getWorkspaceDisplayLabel(acp.workspace || ''),
                 })
             }
@@ -160,7 +167,7 @@ export default function MachinesPage() {
                                 <div
                                     key={idx}
                                     onClick={() => {
-                                        navigate(`/dashboard?activeTab=${encodeURIComponent(agent.targetId)}`)
+                                        openDashboardSession(agent.targetSessionId, agent.machineId)
                                     }}
                                     className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-orange-500/[0.04] cursor-pointer transition-colors duration-150 hover:bg-orange-500/10"
                                 >
@@ -323,7 +330,7 @@ export default function MachinesPage() {
                                                                 isActive={active}
                                                                 isHidden={isHidden(ide.id)}
                                                                 onToggleVisibility={() => toggleTab(ide.id)}
-                                                                onClick={() => navigate(`/dashboard?activeTab=${encodeURIComponent(ide.sessionId || ide.id)}`)}
+                                                                onClick={() => openDashboardSession(ide.sessionId, machine.machineId)}
                                                             />
                                                             {/* Extension sub-rows */}
                                                             {activeStreams.length > 0 && (
@@ -375,7 +382,7 @@ export default function MachinesPage() {
                                                             isActive={!!active}
                                                             isHidden={isHidden(cli.id)}
                                                             onToggleVisibility={() => toggleTab(cli.id)}
-                                                            onClick={() => navigate(`/dashboard?activeTab=${encodeURIComponent(cli.sessionId || cli.id)}`)}
+                                                            onClick={() => openDashboardSession(cli.sessionId, machine.machineId)}
                                                         />
                                                     )
                                                 })}
@@ -406,7 +413,7 @@ export default function MachinesPage() {
                                                             isActive={!!active}
                                                             isHidden={isHidden(acp.id)}
                                                             onToggleVisibility={() => toggleTab(acp.id)}
-                                                            onClick={() => navigate(`/dashboard?activeTab=${encodeURIComponent(acp.sessionId || acp.id)}`)}
+                                                            onClick={() => openDashboardSession(acp.sessionId, machine.machineId)}
                                                         />
                                                     )
                                                 })}

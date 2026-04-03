@@ -43,9 +43,12 @@ export default function ConversationMetaChips({
             onOpenNativeConversation()
             return
         }
-        if (!conversation.ideId) return
-        navigate(`/dashboard?activeTab=${encodeURIComponent(conversation.ideId)}`)
-    }, [conversation.ideId, navigate, onOpenNativeConversation])
+        const targetSessionId = conversation.streamSource === 'agent-stream'
+            ? conversation.nativeSessionId
+            : conversation.sessionId
+        if (!targetSessionId) return
+        navigate(`/dashboard?activeTab=${encodeURIComponent(targetSessionId)}`)
+    }, [conversation.nativeSessionId, conversation.sessionId, conversation.streamSource, navigate, onOpenNativeConversation])
 
     return (
         <div className={`conversation-meta-chips ${className}`.trim()}>

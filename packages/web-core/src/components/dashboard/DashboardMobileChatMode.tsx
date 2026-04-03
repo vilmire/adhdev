@@ -510,10 +510,11 @@ export default function DashboardMobileChatMode({
             else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
             const res: any = await sendDaemonCommand(machineId, 'launch_cli', payload)
             const result = res?.result || res
-            if (res?.success && result?.id) {
+            const launchedSessionId = result?.sessionId || result?.id
+            if (res?.success && launchedSessionId) {
                 setMachineActionState('done')
                 setMachineActionMessage(`${providerType} launched`)
-                navigate(`/dashboard?activeTab=${encodeURIComponent(result.id)}`)
+                navigate(`/dashboard?activeTab=${encodeURIComponent(launchedSessionId)}`)
                 return
             }
             setMachineActionState('error')

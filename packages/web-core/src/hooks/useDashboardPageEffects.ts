@@ -6,7 +6,7 @@ import type { DaemonData } from '../types'
 interface UseDashboardPageEffectsOptions {
     urlActiveTab: string | null
     conversations: ActiveConversation[]
-    resolveConversationByTarget: (target: string | null | undefined) => ActiveConversation | undefined
+    resolveConversationBySessionId: (sessionId: string | null | undefined) => ActiveConversation | undefined
     normalizedGroupAssignments: Map<string, number>
     hasHydratedStoredLayout: boolean
     hydrateStoredLayout: () => void
@@ -23,7 +23,7 @@ interface UseDashboardPageEffectsOptions {
 export function useDashboardPageEffects({
     urlActiveTab,
     conversations,
-    resolveConversationByTarget,
+    resolveConversationBySessionId,
     normalizedGroupAssignments,
     hasHydratedStoredLayout,
     hydrateStoredLayout,
@@ -49,7 +49,7 @@ export function useDashboardPageEffects({
             return
         }
 
-        const match = resolveConversationByTarget(urlActiveTab)
+        const match = resolveConversationBySessionId(urlActiveTab)
         if (!match) return
 
         const targetGroup = normalizedGroupAssignments.get(match.tabKey) ?? 0
@@ -71,7 +71,7 @@ export function useDashboardPageEffects({
     }, [
         urlActiveTab,
         conversations,
-        resolveConversationByTarget,
+        resolveConversationBySessionId,
         normalizedGroupAssignments,
         hasHydratedStoredLayout,
         hydrateStoredLayout,

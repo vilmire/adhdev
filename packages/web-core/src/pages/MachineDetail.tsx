@@ -114,7 +114,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         .filter(i => (i as any).daemonId === machineId && !(i as any).daemonMode)
         .filter(i => !isCliEntry(i) && !isAcpEntry(i))
         .map(i => ({
-            id: i.id, type: i.type, version: i.version || '',
+            id: i.id, sessionId: i.sessionId, type: i.type, version: i.version || '',
             instanceId: (i as any).instanceId || '', status: i.status,
             workspace: (i as any).workspace || null,
             terminals: (i as any).terminals || 0,
@@ -129,7 +129,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const cliSessions: CliSessionEntry[] = allIdes
         .filter(i => (i as any).daemonId === machineId && isCliEntry(i))
         .map(i => ({
-            id: i.id, type: i.type, cliName: (i as any).cliName || i.type,
+            id: i.id, sessionId: i.sessionId, type: i.type, cliName: (i as any).cliName || i.type,
             status: i.status,
             workspace: (i as any).workspace || '',
             activeChat: (i as any).activeChat || null,
@@ -139,7 +139,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const acpSessions: AcpSessionEntry[] = allIdes
         .filter(i => (i as any).daemonId === machineId && isAcpEntry(i))
         .map(i => ({
-            id: i.id, type: i.type, acpName: (i as any).cliName || i.type,
+            id: i.id, sessionId: i.sessionId, type: i.type, acpName: (i as any).cliName || i.type,
             status: i.status,
             workspace: (i as any).workspace || '',
             activeChat: (i as any).activeChat || null,

@@ -4,7 +4,7 @@
  * Imports shared components and pages from web-core,
  * wraps them with StandaloneDaemonContext + TransportContext.
  */
-import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { StandaloneDaemonProvider, sendCommandViaWs } from './StandaloneDaemonContext'
 import { TransportProvider, MachineDetail, Dashboard, CapabilitiesPage, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient } from '@adhdev/web-core'
 import StandaloneLayout from './StandaloneLayout'
@@ -39,12 +39,6 @@ function SingleMachineRedirect() {
     return <Navigate to="/dashboard" replace />
 }
 
-function LegacyIdeRedirect() {
-    const { id } = useParams<{ id: string }>()
-    if (!id) return <Navigate to="/dashboard" replace />
-    return <Navigate to={`/dashboard?activeTab=${encodeURIComponent(id)}`} replace />
-}
-
 export default function App() {
     return (
         <BrowserRouter
@@ -62,7 +56,6 @@ export default function App() {
                         <StandaloneLayout>
                             <Routes>
                                 <Route path="/dashboard" element={<Dashboard />} />
-                                <Route path="/ide/:id" element={<LegacyIdeRedirect />} />
                                 <Route path="/machine" element={<SingleMachineRedirect />} />
                                 <Route path="/machines/:id" element={<MachineDetail />} />
                                 <Route path="/machines" element={<SingleMachineRedirect />} />
