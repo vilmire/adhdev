@@ -66,7 +66,9 @@ export declare function resolveIdeLaunchWorkspace(args: {
     useDefaultWorkspace?: boolean;
 } | undefined, config: ADHDevConfig): string | undefined;
 export declare function findWorkspaceByPath(config: ADHDevConfig, rawPath: string): WorkspaceEntry | undefined;
-export declare function addWorkspaceEntry(config: ADHDevConfig, rawPath: string, label?: string): {
+export declare function addWorkspaceEntry(config: ADHDevConfig, rawPath: string, label?: string, options?: {
+    createIfMissing?: boolean;
+}): {
     config: ADHDevConfig;
     entry: WorkspaceEntry;
 } | {

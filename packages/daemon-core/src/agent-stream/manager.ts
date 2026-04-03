@@ -67,6 +67,15 @@ export class DaemonAgentStreamManager {
         return this.activeSessionIdByParent.get(parentSessionId) || null;
     }
 
+    private isRecoverableSessionError(message: string): boolean {
+        return message.includes('timeout')
+            || message.includes('not connected')
+            || message.includes('Session')
+            || message.includes('Target closed')
+            || message.includes('execution context')
+            || message.includes('context with specified id');
+    }
+
     private getSessionTarget(sessionId: string) {
         return this.sessionRegistry?.get(sessionId);
     }
@@ -186,6 +195,10 @@ export class DaemonAgentStreamManager {
                 cdp.evaluateInSessionFrame(agent.cdpSessionId, expr, timeout);
             const state = await agent.adapter.readChat(evaluate);
             LOG.debug('AgentStream', `[AgentStream] readChat(${type}) result: status=${state.status} msgs=${state.messages?.length || 0} model=${state.model || ''}${state.status === 'error' ? ' error=' + JSON.stringify((state as any).error || (state as any)._error || 'unknown') : ''}`);
+            const stateError = String((state as any).error || (state as any)._error || '');
+            if (state.status === 'error' && this.isRecoverableSessionError(stateError)) {
+                throw new Error(stateError);
+            }
             agent.lastState = state;
             agent.lastError = null;
             if (state.status === 'panel_hidden') {
@@ -196,7 +209,7 @@ export class DaemonAgentStreamManager {
             const errorMsg = (e as Error)?.message || String(e);
             this.logFn(`[AgentStream] readChat(${type}) error: ${errorMsg.slice(0, 200)}`);
             agent.lastError = errorMsg;
-            if (errorMsg.includes('timeout') || errorMsg.includes('not connected') || errorMsg.includes('Session')) {
+            if (this.isRecoverableSessionError(errorMsg)) {
                 try { await cdp.detachAgent(agent.cdpSessionId); } catch { }
                 this.managedBySessionId.delete(activeSessionId);
                 this.lastDiscoveryTimeByParent.set(parentSessionId, 0);

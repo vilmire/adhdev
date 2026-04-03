@@ -29,9 +29,13 @@ export interface AgentStreamState {
     status: 'idle' | 'streaming' | 'waiting_approval' | 'error' | 'disconnected' | 'panel_hidden' | 'not_monitored';
     messages: AgentChatMessage[];
     inputContent: string;
+    /** @deprecated Use controlValues['model'] — kept for backward compatibility */
     model?: string;
+    /** @deprecated Use controlValues['mode'] — kept for backward compatibility */
     mode?: string;
     activeModal?: { message: string; buttons: string[] };
+    /** Dynamic control current values (populated from readChat + provider controls schema) */
+    controlValues?: Record<string, string | number | boolean>;
 }
 
 /** Agent webview target info */

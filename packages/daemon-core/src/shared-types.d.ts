@@ -67,6 +67,8 @@ export interface SessionEntry {
     currentAutoApprove?: string;
     acpConfigOptions?: AcpConfigOption[];
     acpModes?: AcpMode[];
+    controlValues?: Record<string, string | number | boolean>;
+    providerControls?: ProviderControlSchema[];
     errorMessage?: string;
     errorReason?: _ProviderErrorReason;
 }
@@ -95,6 +97,26 @@ export interface AcpMode {
     id: string;
     name: string;
     description?: string;
+}
+/** Provider control schema (daemon → frontend) */
+export interface ProviderControlSchema {
+    id: string;
+    type: 'select' | 'toggle' | 'cycle' | 'slider' | 'action';
+    label: string;
+    icon?: string;
+    placement: 'bar' | 'header' | 'menu';
+    options?: { value: string; label: string; description?: string; group?: string }[];
+    dynamic?: boolean;
+    listScript?: string;
+    setScript?: string;
+    readFrom?: string;
+    defaultValue?: string | number | boolean;
+    invokeScript?: string;
+    resultDisplay?: 'toast' | 'inline' | 'none';
+    min?: number;
+    max?: number;
+    step?: number;
+    order?: number;
 }
 /** Machine hardware/OS info (reported by daemon, displayed by web) */
 export interface MachineInfo {
@@ -125,6 +147,18 @@ export interface WorkspaceActivity {
     kind?: string;
     agentType?: string;
 }
+export interface RecentSessionEntry {
+    id: string;
+    sessionId?: string | null;
+    providerType: string;
+    providerName: string;
+    kind: 'ide' | 'cli' | 'acp';
+    title: string;
+    workspace?: string | null;
+    currentModel?: string;
+    status?: SessionEntry['status'];
+    lastUsedAt: number;
+}
 export interface StatusReportPayload {
     /** Daemon instance ID */
     instanceId: string;
@@ -154,4 +188,5 @@ export interface StatusReportPayload {
     defaultWorkspaceId?: string | null;
     defaultWorkspacePath?: string | null;
     workspaceActivity?: WorkspaceActivity[];
+    recentSessions?: RecentSessionEntry[];
 }

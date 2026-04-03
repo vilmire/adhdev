@@ -8,6 +8,7 @@ interface UseIdeConversationsOptions {
     connectionStates: Record<string, string>
     localUserMessages: Record<string, LocalUserMessage[]>
     ideName: string
+    preferredTabKey?: string
 }
 
 export function useIdeConversations({
@@ -16,8 +17,9 @@ export function useIdeConversations({
     connectionStates,
     localUserMessages,
     ideName,
+    preferredTabKey,
 }: UseIdeConversationsOptions) {
-    const [activeChatTab, setActiveChatTab] = useState<string>('native')
+    const [activeChatTab, setActiveChatTab] = useState<string>(() => preferredTabKey || 'native')
     const machineNames = useMemo(() => buildMachineNameMap(allIdes), [allIdes])
 
     const conversations = useMemo(() => {
@@ -38,6 +40,11 @@ export function useIdeConversations({
         () => conversations.filter(conversation => conversation.streamSource === 'agent-stream'),
         [conversations],
     )
+
+    useEffect(() => {
+        if (!preferredTabKey) return
+        setActiveChatTab(preferredTabKey)
+    }, [preferredTabKey])
 
     useEffect(() => {
         if (activeChatTab === 'native') return

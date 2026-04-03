@@ -104,7 +104,20 @@ export function buildIdeConversations(
     const connectionState = context.connectionState;
     const workspaceName = getWorkspaceName(ide);
     const ideLabel = formatIdeType(ide.type);
-    const streams: { sessionId?: string; instanceId?: string; agentType: string; agentName: string; status: string; title?: string; messages: any[]; activeModal?: { message: string; buttons: string[] } }[] = Array.isArray(ide.childSessions)
+    const streams: {
+        sessionId?: string;
+        instanceId?: string;
+        agentType: string;
+        agentName: string;
+        status: string;
+        title?: string;
+        messages: any[];
+        activeModal?: { message: string; buttons: string[] };
+        recentKey?: string;
+        unread?: boolean;
+        lastSeenAt?: number;
+        inboxBucket?: 'needs_attention' | 'working' | 'task_complete' | 'idle';
+    }[] = Array.isArray(ide.childSessions)
         ? ide.childSessions.map(child => ({
             sessionId: child.id,
             instanceId: child.id,
@@ -114,6 +127,10 @@ export function buildIdeConversations(
             title: child.title,
             messages: child.activeChat?.messages || [],
             activeModal: child.activeChat?.activeModal || undefined,
+            recentKey: (child as any).recentKey,
+            unread: (child as any).unread,
+            lastSeenAt: (child as any).lastSeenAt,
+            inboxBucket: (child as any).inboxBucket,
         }))
         : [];
     const useConversationFirst = isConversationFirstIde(ide);
@@ -172,8 +189,12 @@ export function buildIdeConversations(
             displayPrimary: title || workspaceName || ((isCliConv(ide as any) || isAcpConv(ide as any)) ? 'Terminal' : agentName),
             displaySecondary: ideLabel,
             cdpConnected: ide.cdpConnected,
+            recentKey: (ide as any).recentKey,
             modalButtons: hasRealModal ? (modal.buttons as string[]) : undefined,
             modalMessage: hasRealModal ? (modal.message as string) : undefined,
+            unread: (ide as any).unread,
+            lastSeenAt: (ide as any).lastSeenAt,
+            inboxBucket: (ide as any).inboxBucket,
             streamSource: 'native',
             tabKey: ide.id,
             machineName,
@@ -222,8 +243,12 @@ export function buildIdeConversations(
             displayPrimary: effectiveStreamTitle || parentTitle || workspaceName || ideLabel,
             displaySecondary: `${ideLabel}·${stream.agentName}`,
             cdpConnected: ide.cdpConnected,
+            recentKey: (stream as any).recentKey ?? (stream as any).id,
             modalButtons: hasModal ? stream.activeModal!.buttons : undefined,
             modalMessage: hasModal ? stream.activeModal!.message : undefined,
+            unread: (stream as any).unread,
+            lastSeenAt: (stream as any).lastSeenAt,
+            inboxBucket: (stream as any).inboxBucket,
             streamSource: 'agent-stream',
             tabKey: streamTabKey,
             machineName,
@@ -249,6 +274,10 @@ export function buildIdeConversations(
             displayPrimary: workspaceName || ideLabel,
             displaySecondary: ideLabel,
             cdpConnected: ide.cdpConnected,
+            recentKey: (ide as any).recentKey,
+            unread: (ide as any).unread,
+            lastSeenAt: (ide as any).lastSeenAt,
+            inboxBucket: (ide as any).inboxBucket,
             streamSource: 'native',
             tabKey: ide.id,
             connectionState,

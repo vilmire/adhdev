@@ -5,8 +5,10 @@
  */
 import type { WorkspaceEntry } from './workspaces.js';
 import type { WorkspaceActivityEntry } from './workspace-activity.js';
+import type { RecentActivityEntry } from './recent-activity.js';
 export type { WorkspaceEntry } from './workspaces.js';
 export type { WorkspaceActivityEntry } from './workspace-activity.js';
+export type { RecentActivityEntry } from './recent-activity.js';
 export interface ADHDevConfig {
     serverUrl: string;
     apiToken: string | null;
@@ -35,6 +37,8 @@ export interface ADHDevConfig {
     defaultWorkspaceId?: string | null;
     /** Recently used workspaces (IDE / CLI / ACP / default) for quick resume */
     recentWorkspaceActivity?: WorkspaceActivityEntry[];
+    /** Unified recent activity across IDE / CLI / ACP launch flows */
+    recentActivity?: RecentActivityEntry[];
     machineNickname: string | null;
     /**
      * Stable local machine ID (prefix: `mach_`) — generated locally on first run.

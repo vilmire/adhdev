@@ -11,8 +11,10 @@ import { randomUUID } from 'crypto';
 import { migrateWorkspacesFromRecent } from './workspaces.js';
 import type { WorkspaceEntry } from './workspaces.js';
 import type { WorkspaceActivityEntry } from './workspace-activity.js';
+import type { RecentActivityEntry } from './recent-activity.js';
 export type { WorkspaceEntry } from './workspaces.js';
 export type { WorkspaceActivityEntry } from './workspace-activity.js';
+export type { RecentActivityEntry } from './recent-activity.js';
 
 export interface ADHDevConfig {
  // Server connection
@@ -59,8 +61,12 @@ export interface ADHDevConfig {
  /** Default workspace id (from workspaces[]) — never used implicitly for launch */
     defaultWorkspaceId?: string | null;
 
- /** Recently used workspaces (IDE / CLI / ACP / default) for quick resume */
+    /** Recently used workspaces (IDE / CLI / ACP / default) for quick resume */
     recentWorkspaceActivity?: WorkspaceActivityEntry[];
+    /** Unified recent activity across IDE / CLI / ACP launch flows */
+    recentActivity?: RecentActivityEntry[];
+    /** Last seen timestamps for machine-facing recent/session entries */
+    recentSessionReads?: Record<string, number>;
 
  // Machine nickname (user-customizable label for this machine)
     machineNickname: string | null;
@@ -138,6 +144,8 @@ const DEFAULT_CONFIG: ADHDevConfig = {
     workspaces: [],
     defaultWorkspaceId: null,
     recentWorkspaceActivity: [],
+    recentActivity: [],
+    recentSessionReads: {},
     machineNickname: null,
     machineId: undefined,
     machineSecret: null,

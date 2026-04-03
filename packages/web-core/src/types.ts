@@ -13,6 +13,7 @@ import type {
     ActiveChatData,
     AvailableProviderInfo,
     ProviderResumeCapability,
+    RecentSessionEntry,
     SessionEntry,
 } from '@adhdev/daemon-core';
 
@@ -31,7 +32,14 @@ export type {
     ChatMessage,
     AvailableProviderInfo,
     ProviderResumeCapability,
+    RecentSessionEntry,
 } from '@adhdev/daemon-core';
+
+export interface TerminalBackendStatus {
+    backend: 'xterm' | 'ghostty-vt';
+    preference: 'auto' | 'xterm' | 'ghostty-vt';
+    ghosttyAvailable: boolean;
+}
 
 export interface WebAgentInfo {
     name: string;
@@ -123,6 +131,8 @@ export interface BaseDaemonData {
     defaultWorkspaceId?: string | null;
     defaultWorkspacePath?: string | null;
     workspaceActivity?: WorkspaceActivity[];
+    recentSessions?: RecentSessionEntry[];
+    terminalBackend?: TerminalBackendStatus;
     aiAgents?: WebAiAgentInfo[];
 }
 

@@ -9,7 +9,7 @@
  */
 
 import type { ProviderModule, ProviderSettingDef, ProviderResumeCapability } from './contracts.js';
-import type { AcpConfigOption, AcpMode } from '../shared-types.js';
+import type { AcpConfigOption, AcpMode, ProviderControlSchema } from '../shared-types.js';
 import type { ChatMessage } from '../types.js';
 
 // ─── ProviderState — Discriminated union by category ─────────────
@@ -83,6 +83,10 @@ interface ProviderStateBase {
     pendingEvents: ProviderEvent[];
     runtime?: ProviderRuntimeInfo;
     resume?: ProviderResumeCapability;
+ /** Dynamic control current values */
+    controlValues?: Record<string, string | number | boolean>;
+ /** Provider-declared controls schema (from provider.controls) */
+    providerControls?: ProviderControlSchema[];
 }
 
 /** IDE provider state */

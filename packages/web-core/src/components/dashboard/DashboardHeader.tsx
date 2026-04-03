@@ -5,10 +5,9 @@
  * Connection state is abstract — injected by platform (cloud=P2P, standalone=local).
  */
 
-import { useNavigate } from 'react-router-dom';
 import type { ActiveConversation } from './types';
 import { isCliConv, isAcpConv } from './types';
-import { IconChat, IconScroll, IconMonitor, IconTerminal } from '../Icons';
+import { IconChat, IconScroll, IconMonitor } from '../Icons';
 import { useDaemons } from '../../compat';
 
 export interface DashboardHeaderProps {
@@ -17,7 +16,8 @@ export interface DashboardHeaderProps {
     wsStatus: string;
     /** Overall connection readiness (green=ready, yellow=partial, red=disconnected) */
     isConnected: boolean;
-    onOpenHistory: () => void;
+    onOpenHistory: (conversation?: ActiveConversation) => void;
+    onOpenRemote?: () => void;
     onStopCli?: () => void;
     onFitCli?: () => void;
 }
@@ -28,10 +28,10 @@ export default function DashboardHeader({
     wsStatus,
     isConnected,
     onOpenHistory,
+    onOpenRemote,
     onStopCli,
     onFitCli,
 }: DashboardHeaderProps) {
-    const navigate = useNavigate();
     const daemonCtx = useDaemons() as any;
     const p2pStates: Record<string, string> = daemonCtx.p2pStates || {};
     const ides = daemonCtx.ides || [];
@@ -59,8 +59,9 @@ export default function DashboardHeader({
     return (
         <div className="dashboard-header">
             <div className="flex items-center gap-3">
-                <div className="leading-tight">
-                    <h1 className="header-title m-0 flex items-center gap-1.5">
+                <div className="header-title-block">
+                    <div className="header-title-row">
+                        <h1 className="header-title m-0 flex items-center gap-1.5">
                         <IconChat size={18} />
                         {/* Mobile: show active tab title; Desktop: "Dashboard" */}
                         <span className="header-title-desktop">Dashboard</span>
@@ -73,19 +74,22 @@ export default function DashboardHeader({
                                 style={{ background: dotColor, boxShadow: dotGlow }}
                             />
                         </span>
-                    </h1>
-                    <div className="header-subtitle text-xs items-center gap-1">
-                        {agentCount} agent{agentCount !== 1 ? 's' : ''} active
-                        <span
-                            title={isConnected ? 'Connected' : wsStatus === 'connected' ? 'Partial' : 'Disconnected'}
-                            className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
-                            style={{ background: dotColor, boxShadow: dotGlow }}
-                        />
-                        {statusText && (
-                            <span className="text-[10px] text-text-muted animate-pulse ml-1">
-                                · {statusText}
+                        </h1>
+                        <div className="header-subtitle">
+                            <span className="header-subtitle-copy">
+                                {agentCount} agent{agentCount !== 1 ? 's' : ''} active
                             </span>
-                        )}
+                            <span
+                                title={isConnected ? 'Connected' : wsStatus === 'connected' ? 'Partial' : 'Disconnected'}
+                                className="header-subtitle-dot inline-block w-1.5 h-1.5 rounded-full shrink-0"
+                                style={{ background: dotColor, boxShadow: dotGlow }}
+                            />
+                            {statusText && (
+                                <span className="header-subtitle-status">
+                                    · {statusText}
+                                </span>
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -111,17 +115,7 @@ export default function DashboardHeader({
 
                 {activeConv && !isCliActive && !isAcpConv(activeConv) && (
                     <button
-                        onClick={() => navigate(`/ide/${activeConv.ideId}`)}
-                        className="btn btn-primary btn-sm"
-                        title="IDE View"
-                    >
-                        <IconTerminal size={14} /> IDE
-                    </button>
-                )}
-
-                {activeConv && !isCliActive && !isAcpConv(activeConv) && (
-                    <button
-                        onClick={onOpenHistory}
+                        onClick={() => onOpenHistory(activeConv)}
                         className="btn btn-secondary btn-sm"
                         title="Chat History"
                     >
@@ -129,7 +123,11 @@ export default function DashboardHeader({
                     </button>
                 )}
                 {activeConv && !isCliActive && !isAcpConv(activeConv) && (
-                    <button onClick={() => navigate(`/ide/${activeConv.ideId}?view=remote`)} className="btn btn-secondary btn-sm" title="Remote Control">
+                    <button
+                        onClick={onOpenRemote}
+                        className="btn btn-secondary btn-sm"
+                        title="Remote Control"
+                    >
                         <IconMonitor size={16} />
                     </button>
                 )}

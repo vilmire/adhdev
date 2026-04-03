@@ -50,10 +50,31 @@ export interface ProviderSettingsEntry {
     values: Record<string, any>;
 }
 
-export type TabId = 'overview' | 'ides' | 'clis' | 'acps' | 'providers' | 'logs'
+export type WorkspaceLaunchKind = 'ide' | 'cli' | 'acp'
+
+export type TabId = 'workspace' | 'overview' | 'providers' | 'logs' | 'ides' | 'clis' | 'acps'
 
 export interface ProviderInfo {
     type: string; displayName: string; icon: string; category: string;
+}
+
+export interface MachineRecentSession {
+    id: string
+    sessionId?: string | null
+    label: string
+    kind: 'ide' | 'cli' | 'acp'
+    providerType?: string
+    subtitle?: string
+    workspace?: string | null
+    currentModel?: string
+}
+
+export interface MachineLaunchTarget {
+    id: string
+    kind: WorkspaceLaunchKind
+    label: string
+    providerType?: string
+    subtitle: string
 }
 
 // ─── Utils ───────────────────────────────────────────

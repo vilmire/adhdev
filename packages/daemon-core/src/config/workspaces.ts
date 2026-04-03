@@ -208,8 +208,22 @@ export function findWorkspaceByPath(config: ADHDevConfig, rawPath: string): Work
     return (config.workspaces || []).find(w => path.resolve(expandPath(w.path)) === abs);
 }
 
-export function addWorkspaceEntry(config: ADHDevConfig, rawPath: string, label?: string): { config: ADHDevConfig; entry: WorkspaceEntry } | { error: string } {
+export function addWorkspaceEntry(
+    config: ADHDevConfig,
+    rawPath: string,
+    label?: string,
+    options?: { createIfMissing?: boolean },
+): { config: ADHDevConfig; entry: WorkspaceEntry } | { error: string } {
     const abs = expandPath(rawPath);
+    const createIfMissing = options?.createIfMissing === true;
+    if (!abs) return { error: 'Path required' };
+    if (!fs.existsSync(abs) && createIfMissing) {
+        try {
+            fs.mkdirSync(abs, { recursive: true });
+        } catch (e: any) {
+            return { error: e?.message || 'Could not create directory' };
+        }
+    }
     const v = validateWorkspacePath(abs);
     if (!v.ok) return { error: v.error };
 

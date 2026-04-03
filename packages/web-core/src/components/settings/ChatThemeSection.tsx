@@ -207,6 +207,7 @@ function applyCustomCSSVars(colors: CustomThemeColors) {
     root.style.setProperty('--chat-assistant-radius', `${colors.bubbleRadius}px ${colors.bubbleRadius}px ${colors.bubbleRadius}px 4px`)
     root.style.setProperty('--chat-assistant-border', `1px solid ${hexToRgba(colors.accentColor, 0.12)}`)
     root.style.setProperty('--chat-container-bg', colors.containerBg)
+    root.style.setProperty('--dashboard-pane-bg', colors.containerBg)
     root.style.setProperty('--chat-thought-accent', colors.accentColor)
     root.style.setProperty('--chat-tool-accent', colors.accentColor)
     root.style.setProperty('--chat-action-color', colors.accentColor)
@@ -227,7 +228,7 @@ function clearCustomCSSVars() {
         // Chat
         '--chat-user-bg', '--chat-user-color', '--chat-user-radius',
         '--chat-assistant-bg', '--chat-assistant-color', '--chat-assistant-radius',
-        '--chat-assistant-border', '--chat-container-bg',
+        '--chat-assistant-border', '--chat-container-bg', '--dashboard-pane-bg',
         '--chat-thought-accent', '--chat-tool-accent', '--chat-action-color',
         '--chat-send-bg', '--chat-input-border',
     ]

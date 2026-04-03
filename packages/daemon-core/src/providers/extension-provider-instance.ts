@@ -25,6 +25,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
     private activeModal: any = null;
     private currentModel: string = '';
     private currentMode: string = '';
+    private controlValues: Record<string, string | number | boolean> = {};
     private lastAgentStatus: string = 'idle';
     private generatingStartedAt: number = 0;
     private monitor: StatusMonitor;
@@ -82,6 +83,8 @@ export class ExtensionProviderInstance implements ProviderInstance {
             } : null,
             currentModel: this.currentModel || undefined,
             currentPlan: this.currentMode || undefined,
+            controlValues: this.controlValues,
+            providerControls: this.provider.controls as any,
             agentStreams: this.agentStreams,
             instanceId: this.instanceId,
             lastUpdated: Date.now(),
@@ -98,6 +101,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
             if (data?.activeModal !== undefined) this.activeModal = data.activeModal;
             if (data?.model) this.currentModel = data.model;
             if (data?.mode) this.currentMode = data.mode;
+            if (data?.controlValues) this.controlValues = data.controlValues;
             if (typeof data?.sessionId === 'string' && data.sessionId.trim()) this.chatId = data.sessionId;
             if (typeof data?.title === 'string' && data.title.trim()) this.chatTitle = data.title;
             if (typeof data?.agentName === 'string' && data.agentName.trim()) this.agentName = data.agentName;

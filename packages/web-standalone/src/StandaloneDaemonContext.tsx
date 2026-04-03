@@ -78,7 +78,7 @@ export async function sendCommandViaWs(
 
 /**
  * WS-based connection adapter — implements the same interface as
- * connectionManager connections so IDE.tsx works without any code changes.
+ * connectionManager connections so dashboard/remote flows work without platform-specific code.
  */
 class WsConnectionAdapter {
     private daemonId: string

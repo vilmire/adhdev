@@ -126,6 +126,8 @@ export class CliProviderInstance implements ProviderInstance {
                 attachedClients: runtime.attachedClients || [],
             } : undefined,
             resume: this.provider.resume,
+            controlValues: undefined, // CLI controls not yet wired from stream
+            providerControls: this.provider.controls as any,
         };
     }
 

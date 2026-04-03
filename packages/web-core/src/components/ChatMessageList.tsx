@@ -324,11 +324,14 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     ref
 ) {
     const containerRef = useRef<HTMLDivElement>(null);
+    const contentRef = useRef<HTMLDivElement>(null);
     const endRef = useRef<HTMLDivElement>(null);
     const prevCountRef = useRef<number>(0);
     const prevContextRef = useRef<string>('');  // Empty value → always different on first render
     const mountedRef = useRef(false);
     const scrollFrameRef = useRef<number | null>(null);
+    const contextAutoScrollRef = useRef(false);
+    const contextAutoScrollTimerRef = useRef<number | null>(null);
     const [expandedMsgs, setExpandedMsgs] = useState<Set<string>>(new Set());
     const [expandedTexts, setExpandedTexts] = useState<Set<string>>(new Set());
 
@@ -371,6 +374,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         if (isFirstMount || isTabSwitch) {
             mountedRef.current = true;
             userScrolledUp.current = false;
+            contextAutoScrollRef.current = true;
             scheduleScrollToBottom('auto');
             prevCountRef.current = messages.length;
             return;
@@ -392,7 +396,40 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         if (scrollFrameRef.current != null) {
             cancelAnimationFrame(scrollFrameRef.current);
         }
+        if (contextAutoScrollTimerRef.current != null) {
+            window.clearTimeout(contextAutoScrollTimerRef.current);
+        }
     }, []);
+
+    useEffect(() => {
+        const contentEl = contentRef.current;
+        if (!contentEl) return;
+
+        const finishContextAutoScroll = () => {
+            if (contextAutoScrollTimerRef.current != null) {
+                window.clearTimeout(contextAutoScrollTimerRef.current);
+            }
+            contextAutoScrollTimerRef.current = window.setTimeout(() => {
+                contextAutoScrollRef.current = false;
+                contextAutoScrollTimerRef.current = null;
+            }, 180);
+        };
+
+        const observer = new ResizeObserver(() => {
+            if (!contextAutoScrollRef.current) return;
+            scheduleScrollToBottom('auto');
+            finishContextAutoScroll();
+        });
+
+        observer.observe(contentEl);
+        return () => {
+            observer.disconnect();
+            if (contextAutoScrollTimerRef.current != null) {
+                window.clearTimeout(contextAutoScrollTimerRef.current);
+                contextAutoScrollTimerRef.current = null;
+            }
+        };
+    }, [scheduleScrollToBottom, contextKey]);
 
     useImperativeHandle(ref, () => ({
         scrollToBottom: (behavior: ScrollBehavior = 'smooth') => {
@@ -478,6 +515,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             data-chat-scroll
             className="chat-container"
         >
+            <div ref={contentRef} className="chat-container-content">
             {/* Load more button — shown at top when there's history available */}
             {isLoadingMore && (
                 <div className="text-center py-3 text-text-muted text-xs opacity-60 animate-pulse">
@@ -562,6 +600,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             )}
 
             <div className="min-h-10" ref={endRef} />
+            </div>
         </div>
     );
 });

@@ -32,7 +32,7 @@ export default function HistoryModal({
     const activeChatId = (ideEntry as any)?.activeChat?.id;
 
     return (
-        <div className="fixed inset-0 z-[1000] flex items-center justify-center">
+        <div className="fixed inset-0 z-[1300] flex items-center justify-center">
             <div onClick={onClose} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
             <div className="card fade-in relative w-[90%] max-w-[500px] max-h-[80vh] flex flex-col p-0 overflow-hidden shadow-[0_20px_40px_rgba(0,0,0,0.4)] rounded-[20px]">
                 <div className="px-6 py-5 border-b border-border-subtle flex justify-between items-center bg-[var(--surface-primary)]">

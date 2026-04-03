@@ -50,6 +50,16 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
         }
     }
 
+    private isTransportError(reason: string): boolean {
+        return /Session with given id not found/i.test(reason)
+            || /CDP not connected/i.test(reason)
+            || /Target closed/i.test(reason)
+            || /WebSocket not open/i.test(reason)
+            || /not connected/i.test(reason)
+            || /execution context/i.test(reason)
+            || /Cannot find context with specified id/i.test(reason);
+    }
+
     async readChat(evaluate: AgentEvaluateFn): Promise<AgentStreamState> {
         const script = this.callScript('readChat');
         if (!script) return this.errorState('readChat script not available');
@@ -76,12 +86,30 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
                 mode: data.mode,
                 activeModal: data.activeModal,
             };
+            // Build controlValues from provider controls schema
+            if (this.provider.controls?.length) {
+                const cv: Record<string, string | number | boolean> = {};
+                for (const ctrl of this.provider.controls) {
+                    if (!ctrl.readFrom) continue; // action type — no value
+                    const val = data[ctrl.readFrom];
+                    if (val !== undefined && val !== null) {
+                        cv[ctrl.id] = typeof val === 'object' ? (val.name || val.id || String(val)) : val;
+                    }
+                }
+                // Also include model/mode as fallback controls
+                if (data.model && !cv['model']) cv['model'] = data.model;
+                if (data.mode && !cv['mode']) cv['mode'] = data.mode;
+                if (Object.keys(cv).length > 0) state.controlValues = cv;
+            }
             if (state.messages.length > 0) {
                 this.lastSuccessState = state;
             }
             return state;
         } catch (error) {
             const reason = error instanceof Error ? error.message : String(error);
+            if (this.isTransportError(reason)) {
+                throw (error instanceof Error ? error : new Error(reason));
+            }
             const preview = this.summarizeRaw(raw);
             const detail = preview ? ` (reason=${reason}; raw=${preview})` : ` (reason=${reason})`;
             const state = this.errorState(`Failed to parse ${this.agentName} state${detail}`);

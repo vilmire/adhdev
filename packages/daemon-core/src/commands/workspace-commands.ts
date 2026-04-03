@@ -24,10 +24,11 @@ export function handleWorkspaceList(): WorkspaceCommandResult {
 export function handleWorkspaceAdd(args: any): WorkspaceCommandResult {
     const rawPath = (args?.path || args?.dir || '').trim();
     const label = (args?.label || '').trim() || undefined;
+    const createIfMissing = args?.createIfMissing === true;
     if (!rawPath) return { success: false, error: 'path required' };
 
     const config = loadConfig();
-    const result = W.addWorkspaceEntry(config, rawPath, label);
+    const result = W.addWorkspaceEntry(config, rawPath, label, { createIfMissing });
     if ('error' in result) return { success: false, error: result.error };
 
     let cfg = appendWorkspaceActivity(result.config, result.entry.path, {});

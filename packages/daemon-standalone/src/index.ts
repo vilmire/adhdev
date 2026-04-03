@@ -95,10 +95,50 @@ class StandaloneServer {
   private clients = new Set<WebSocket>();
   private authToken: string | null = null;
   private statusTimer: NodeJS.Timeout | null = null;
+  private lastStatusBroadcastAt = 0;
+  private statusBroadcastPending = false;
   private running = false;
   private components: DaemonComponents | null = null;
   private devServer: Awaited<ReturnType<typeof startDaemonDevSupport>> | null = null;
   private sessionHostEndpoint: SessionHostEndpoint | null = null;
+
+  private isRecoverableSessionHostError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return (
+      message.includes('ECONNREFUSED') ||
+      message.includes('ENOENT') ||
+      message.includes('Session host socket unavailable')
+    );
+  }
+
+  private async ensureActiveSessionHostEndpoint(): Promise<SessionHostEndpoint> {
+    const endpoint = await ensureSessionHostReady();
+    this.sessionHostEndpoint = endpoint;
+    return endpoint;
+  }
+
+  private async createSessionHostClient(): Promise<SessionHostClient> {
+    let endpoint = this.sessionHostEndpoint;
+    if (!endpoint) {
+      endpoint = await this.ensureActiveSessionHostEndpoint();
+    }
+
+    let client = new SessionHostClient({ endpoint });
+    try {
+      await client.connect();
+      return client;
+    } catch (error) {
+      await client.close().catch(() => {});
+      if (!this.isRecoverableSessionHostError(error)) {
+        throw error;
+      }
+    }
+
+    endpoint = await this.ensureActiveSessionHostEndpoint();
+    client = new SessionHostClient({ endpoint });
+    await client.connect();
+    return client;
+  }
 
   async start(options: StandaloneOptions = {}): Promise<void> {
     const port = options.port || DEFAULT_PORT;
@@ -124,7 +164,7 @@ class StandaloneServer {
             }
           }
         }),
-        onStatusChange: () => this.broadcastStatus(),
+        onStatusChange: () => this.scheduleBroadcastStatus(),
         removeAgentTracking: () => {},
         createPtyTransportFactory: ({ runtimeId, providerType, workspace, cliArgs, attachExisting }) => (
           new SessionHostPtyTransportFactory({
@@ -144,11 +184,11 @@ class StandaloneServer {
           listHostedCliRuntimes(sessionHostEndpoint)
         ),
       },
-      onStatusChange: () => this.broadcastStatus(),
+      onStatusChange: () => this.scheduleBroadcastStatus(),
       onStreamsUpdated: (ideType: string, streams: any[]) => {
         if (!this.components) return;
         forwardAgentStreamsToIdeInstance(this.components.instanceManager, ideType, streams);
-        this.broadcastStatus();
+        this.scheduleBroadcastStatus();
       },
       tickIntervalMs: 3000,
       cdpScanIntervalMs: 15_000,
@@ -193,7 +233,7 @@ class StandaloneServer {
 
     // 7. Status broadcast timer
     this.statusTimer = setInterval(() => {
-      this.broadcastStatus();
+      this.scheduleBroadcastStatus();
     }, STATUS_INTERVAL);
 
     // 8. Start listening
@@ -371,7 +411,7 @@ class StandaloneServer {
 
       if (action === 'snapshot' && method === 'GET') {
         void (async () => {
-          const client = new SessionHostClient({ endpoint: this.sessionHostEndpoint || undefined });
+          const client = await this.createSessionHostClient();
           try {
             const snapshot = await client.request<{ seq: number; text: string; truncated: boolean }>({
               type: 'get_snapshot',
@@ -509,8 +549,7 @@ class StandaloneServer {
     res: import('http').ServerResponse,
     sessionId: string,
   ): Promise<void> {
-    const client = new SessionHostClient({ endpoint: this.sessionHostEndpoint || undefined });
-    await client.connect();
+    const client = await this.createSessionHostClient();
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -614,10 +653,9 @@ class StandaloneServer {
   }
 
   private async pushWsRuntimeSnapshots(ws: WebSocket): Promise<void> {
-    if (!this.components || !this.sessionHostEndpoint || ws.readyState !== WebSocket.OPEN) return;
+    if (!this.components || ws.readyState !== WebSocket.OPEN) return;
 
-    const client = new SessionHostClient({ endpoint: this.sessionHostEndpoint || undefined });
-    await client.connect();
+    const client = await this.createSessionHostClient();
     try {
       const states = this.components.instanceManager.collectAllStates();
       for (const state of states as any[]) {
@@ -670,12 +708,29 @@ class StandaloneServer {
       return { success: false, error: 'Components not initialized' };
     }
     const result = await this.components.router.execute(type, args, 'standalone');
-    if (type.startsWith('workspace_')) this.broadcastStatus();
+    if (type.startsWith('workspace_')) this.scheduleBroadcastStatus();
     return result;
+  }
+
+  private scheduleBroadcastStatus(): void {
+    const now = Date.now();
+    const elapsed = now - this.lastStatusBroadcastAt;
+    const minInterval = 500;
+    if (elapsed >= minInterval) {
+      this.broadcastStatus();
+      return;
+    }
+    if (this.statusBroadcastPending) return;
+    this.statusBroadcastPending = true;
+    setTimeout(() => {
+      this.statusBroadcastPending = false;
+      this.broadcastStatus();
+    }, minInterval - elapsed);
   }
 
   private broadcastStatus(): void {
     if (this.clients.size === 0) return;
+    this.lastStatusBroadcastAt = Date.now();
     const status = this.getStatus();
     const msg = JSON.stringify({ type: 'status', data: status });
     const cdpCount = [...this.components!.cdpManagers.values()].filter(m => m.isConnected).length;

@@ -13,25 +13,26 @@
  * Shared types: ./machine/types.ts
  */
 import { useState, useRef, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
 import { useHiddenTabs } from '../hooks/useHiddenTabs'
 import type { DaemonData } from '../types'
 import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel } from '../utils/daemon-utils'
-import { IconBarChart, IconMonitor, IconPlug, IconBot, IconSettings, IconClipboard } from '../components/Icons'
+import { IconBarChart, IconMonitor, IconSettings, IconClipboard } from '../components/Icons'
 import type { ReactNode } from 'react'
 import { eventManager, type ToastConfig } from '../managers/EventManager'
 import ToastContainer from '../components/dashboard/ToastContainer'
 
 // Machine sub-components
-import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, TabId, ProviderInfo } from './machine/types'
+import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, MachineRecentSession, TabId, ProviderInfo } from './machine/types'
 import { useMachineActions } from './machine/useMachineActions'
 import OverviewTab from './machine/OverviewTab'
-import AgentTab from './machine/AgentTab'
 import ProvidersTab from './machine/ProvidersTab'
 import LogsTab from './machine/LogsTab'
 import LaunchPickModal from './machine/LaunchPickModal'
+import MachineCommandCenter from './machine/MachineCommandCenter'
+import MachineWorkspaceTab from './machine/MachineWorkspaceTab'
 
 // ─── Component ───────────────────────────────────────
 interface MachineDetailProps {
@@ -41,13 +42,15 @@ interface MachineDetailProps {
 export default function MachineDetail({ onNicknameSynced }: MachineDetailProps = {}) {
     const { id: machineId } = useParams<{ id: string }>()
     const navigate = useNavigate()
+    const location = useLocation()
     const { sendCommand: sendDaemonCommand } = useTransport()
     const daemonCtx = useDaemons() as any
     const allIdes: DaemonData[] = daemonCtx.ides || []
     const initialLoaded: boolean = daemonCtx.initialLoaded ?? true
     const { isHidden, toggleTab } = useHiddenTabs()
     const machineEntry = allIdes.find(i => i.id === machineId && (i as any).daemonMode)
-    const [activeTab, setActiveTab] = useState<TabId>('overview')
+    const [activeTab, setActiveTab] = useState<TabId>('workspace')
+    const [workspaceCategoryHint, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
     const logsEndRef = useRef<HTMLDivElement>(null)
 
     // ─── Actions hook ────────────────────────────────
@@ -163,26 +166,126 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     }
 
     const displayName = getMachineDisplayName(machineEntry as any, { fallbackId: machine.id })
+    const defaultTab: TabId = 'workspace'
+    const locationState = (location.state as {
+        initialMachineTab?: TabId
+        initialWorkspaceCategory?: 'ide' | 'cli' | 'acp'
+        initialWorkspaceId?: string | null
+        initialWorkspacePath?: string | null
+    } | null)
+    const requestedMachineTab = locationState?.initialMachineTab
+    const requestedWorkspaceCategory = locationState?.initialWorkspaceCategory
+    const requestedWorkspaceId = locationState?.initialWorkspaceId
+    const requestedWorkspacePath = locationState?.initialWorkspacePath
+    const effectiveTab: TabId = requestedMachineTab === 'ides' || requestedMachineTab === 'clis' || requestedMachineTab === 'acps'
+        ? 'workspace'
+        : (requestedMachineTab || defaultTab)
+    const initialWorkspaceCategory = requestedMachineTab === 'ides'
+        ? 'ide'
+        : requestedMachineTab === 'clis'
+            ? 'cli'
+            : requestedMachineTab === 'acps'
+                ? 'acp'
+                : requestedWorkspaceCategory
+    const fallbackRecentSessions: MachineRecentSession[] = [
+        ...ideSessions.map(session => ({
+            id: session.id,
+            sessionId: session.id,
+            label: session.activeChat?.title || session.type,
+            kind: 'ide' as const,
+            providerType: session.type,
+            subtitle: session.workspace || undefined,
+            workspace: session.workspace || undefined,
+            timestamp: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
+        })),
+        ...cliSessions.map(session => ({
+            id: session.id,
+            sessionId: session.id,
+            label: session.activeChat?.title || session.cliName,
+            kind: 'cli' as const,
+            providerType: session.type,
+            subtitle: session.workspace || undefined,
+            workspace: session.workspace || undefined,
+            timestamp: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
+        })),
+        ...acpSessions.map(session => ({
+            id: session.id,
+            sessionId: session.id,
+            label: session.activeChat?.title || session.acpName,
+            kind: 'acp' as const,
+            providerType: session.type,
+            subtitle: session.currentModel || session.workspace || undefined,
+            workspace: session.workspace || undefined,
+            currentModel: session.currentModel,
+            timestamp: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
+        })),
+    ]
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .map(({ timestamp, ...session }) => session)
+    const recentSessions: MachineRecentSession[] = ((machineEntry as any).recentSessions || []).length > 0
+        ? ((machineEntry as any).recentSessions as any[]).map((session) => ({
+            id: session.id,
+            sessionId: session.sessionId || session.id,
+            label: session.title || session.providerName || session.providerType,
+            kind: session.kind,
+            providerType: session.providerType,
+            subtitle: session.currentModel || session.workspace || undefined,
+            workspace: session.workspace,
+            currentModel: session.currentModel,
+        }))
+        : fallbackRecentSessions
+
+    const handleOpenRecent = async (session: MachineRecentSession) => {
+        if (session.sessionId) {
+            navigate(`/dashboard?activeTab=${encodeURIComponent(session.sessionId)}`)
+            return
+        }
+        if (session.kind === 'ide' && session.providerType) {
+            await actions.handleLaunchIde(
+                session.providerType,
+                session.workspace ? { workspace: session.workspace } : undefined,
+            )
+            return
+        }
+        if ((session.kind === 'cli' || session.kind === 'acp') && session.providerType) {
+            await actions.runLaunchCliCore({
+                cliType: session.providerType,
+                dir: session.workspace || '',
+                model: session.kind === 'acp' ? session.currentModel : undefined,
+            })
+            return
+        }
+        setWorkspaceCategoryHint(session.kind)
+        setActiveTab('workspace')
+    }
+
+    useEffect(() => {
+        setActiveTab(effectiveTab)
+    }, [defaultTab, effectiveTab, machine.id])
+
+    useEffect(() => {
+        if (initialWorkspaceCategory) {
+            setWorkspaceCategoryHint(initialWorkspaceCategory)
+        }
+    }, [initialWorkspaceCategory, machine.id])
 
     const TABS: { id: TabId; label: string | ReactNode; count?: number }[] = [
-        { id: 'overview', label: <span className="flex items-center gap-1.5"><IconBarChart size={14} /> Overview</span> },
-        { id: 'ides', label: <span className="flex items-center gap-1.5"><IconMonitor size={14} /> IDEs</span>, count: ideSessions.length },
-        { id: 'clis', label: <span className="flex items-center gap-1.5"><IconPlug size={14} /> CLIs</span>, count: cliSessions.length },
-        { id: 'acps', label: <span className="flex items-center gap-1.5"><IconBot size={14} /> ACP Agents</span>, count: acpSessions.length },
+        { id: 'workspace', label: <span className="flex items-center gap-1.5"><IconMonitor size={14} /> Workspace</span>, count: ideSessions.length + cliSessions.length + acpSessions.length },
         { id: 'providers', label: <span className="flex items-center gap-1.5"><IconSettings size={14} /> Providers</span> },
+        { id: 'overview', label: <span className="flex items-center gap-1.5"><IconBarChart size={14} /> System</span> },
         { id: 'logs', label: <span className="flex items-center gap-1.5"><IconClipboard size={14} /> Logs</span> },
     ]
 
     return (
         <div className="flex flex-col h-full">
             {/* ═══ Header ═══ */}
-            <div className="dashboard-header !flex-col !items-stretch">
+            <div className="dashboard-header machine-detail-header !flex-col !items-stretch">
                 <div className="flex items-center justify-between w-full">
-                    <div className="flex items-center gap-2 md:gap-3.5 w-full min-w-0">
+                    <div className="machine-detail-header-row flex items-center gap-2 md:gap-3.5 w-full min-w-0">
                         <button onClick={() => navigate('/machines')} className="machine-btn-back flex shrink-0">
                             ←
                         </button>
-                        <div className="min-w-0">
+                        <div className="machine-detail-title-wrap min-w-0">
                             <div className="flex items-center gap-2">
                                 {!actions.editingNickname ? (
                                     <h1
@@ -208,42 +311,16 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 )}
                                 <span className="status-dot-md online shrink-0" />
                             </div>
-                            <div className="header-subtitle mt-1 flex-wrap gap-1 md:gap-2 items-center display-none-mobile">
-                                <span>{machine.platform} · {machine.arch} · {machine.cpus} cores</span>
-                                {(machineEntry as any)?.version && (
-                                    <span className="px-1.5 py-px rounded text-[9px] font-semibold bg-bg-glass border border-border-subtle text-text-muted shrink-0">
-                                        v{(machineEntry as any).version}
-                                    </span>
-                                )}
-                                {(machineEntry as any)?.versionMismatch && (
-                                    <button
-                                        className="px-1.5 py-px rounded text-[9px] font-semibold cursor-pointer transition-colors shrink-0"
-                                        style={{ background: 'color-mix(in srgb, var(--status-warning) 8%, transparent)', border: '1px solid color-mix(in srgb, var(--status-warning) 20%, transparent)', color: 'var(--status-warning)' }}
-                                        onClick={async () => {
-                                            try { await sendDaemonCommand(machineId!, 'daemon_upgrade', {}) } catch {}
-                                        }}
-                                    >
-                                        🔄 Update to v{(machineEntry as any).serverVersion}
-                                    </button>
-                                )}
+                            <div className="header-subtitle machine-detail-subtitle mt-1 flex-wrap gap-1 md:gap-2 items-center display-none-mobile">
+                                <span>{machine.platform} · {machine.arch}</span>
+                                <span>{machine.cpus} cores</span>
+                                {(machineEntry as any)?.version && <span>v{(machineEntry as any).version}</span>}
                                 {machine.p2p.available && (
-                                    <span
-                                        className="px-1.5 py-px rounded text-[9px] font-semibold"
-                                        style={{
-                                            background: machine.p2p.state === 'connected' ? 'rgba(34,197,94,0.08)' : 'rgba(234,179,8,0.08)',
-                                            color: machine.p2p.state === 'connected' ? '#22c55e' : '#eab308',
-                                        }}
-                                    >
-                                        P2P {machine.p2p.state === 'connected' ? `● ${machine.p2p.peers}` : '○'}
-                                    </span>
+                                    <span>P2P {machine.p2p.state === 'connected' ? 'connected' : machine.p2p.state}</span>
                                 )}
-                                {machine.cdpConnected && (
-                                    <span className="px-1.5 py-px rounded text-[9px] font-semibold bg-green-500/[0.08] text-green-500 shrink-0">
-                                        CDP ●
-                                    </span>
-                                )}
+                                {machine.cdpConnected && <span>CDP ready</span>}
                                 {machine.machineNickname && (
-                                    <span className="text-text-muted opacity-80 shrink-0">({machine.hostname})</span>
+                                    <span className="text-text-muted opacity-80 shrink-0">{machine.hostname}</span>
                                 )}
                             </div>
                         </div>
@@ -263,81 +340,79 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 <span className="tab-count">{tab.count}</span>
                             )}
                         </button>
-                    ))}
-                </div>
+                        ))}
+                    </div>
+
             </div>
 
             {/* ═══ Content ═══ */}
             <div className="page-content">
-                {activeTab === 'overview' && (
-                    <OverviewTab
-                        machine={machine}
-                        ideSessions={ideSessions}
-                        cliSessions={cliSessions}
-                        acpSessions={acpSessions}
-                        actions={actions}
-                        isDashboardHidden={isHidden}
-                        onToggleDashboardVisibility={toggleTab}
-                    />
-                )}
+                <div className="machine-page-shell">
+                    <div className="machine-tab-panel">
+                        {activeTab === 'workspace' && (
+                            <div className="machine-workspace-panel">
+                                <MachineCommandCenter
+                                    machineEntry={machineEntry as DaemonData}
+                                    providers={providers}
+                                    recentSessions={recentSessions}
+                                    onUpgradeDaemon={async () => {
+                                        try { await sendDaemonCommand(machineId!, 'daemon_upgrade', {}) } catch {}
+                                    }}
+                                    onOpenLogs={() => setActiveTab('logs')}
+                                    onOpenRecent={handleOpenRecent}
+                                    onOpenWorkspace={(kind) => {
+                                        setWorkspaceCategoryHint(kind)
+                                        setActiveTab('workspace')
+                                    }}
+                                    onGoTab={setActiveTab}
+                                />
+                                <MachineWorkspaceTab
+                                    machine={machine}
+                                    machineId={machineId!}
+                                    providers={providers}
+                                    ideSessions={ideSessions}
+                                    cliSessions={cliSessions}
+                                    acpSessions={acpSessions}
+                                actions={actions}
+                                getIcon={getIcon}
+                                initialCategory={workspaceCategoryHint}
+                                initialWorkspaceId={requestedWorkspaceId}
+                                initialWorkspacePath={requestedWorkspacePath}
+                                isDashboardHidden={isHidden}
+                                onToggleDashboardVisibility={toggleTab}
+                                sendDaemonCommand={sendDaemonCommand}
+                                />
+                            </div>
+                        )}
 
-                {activeTab === 'ides' && (
-                    <AgentTab
-                        category="ide"
-                        machine={machine}
-                        machineId={machineId!}
-                        providers={providers}
-                        managedEntries={ideSessions}
-                        getIcon={getIcon}
-                        actions={actions}
-                        isDashboardHidden={isHidden}
-                        onToggleDashboardVisibility={toggleTab}
-                        sendDaemonCommand={sendDaemonCommand}
-                    />
-                )}
+                        {activeTab === 'providers' && (
+                            <ProvidersTab
+                                machineId={machineId!}
+                                providers={providers}
+                                sendDaemonCommand={sendDaemonCommand}
+                            />
+                        )}
 
-                {activeTab === 'clis' && (
-                    <AgentTab
-                        category="cli"
-                        machine={machine}
-                        machineId={machineId!}
-                        providers={providers}
-                        managedEntries={cliSessions}
-                        getIcon={getIcon}
-                        actions={actions}
-                        isDashboardHidden={isHidden}
-                        onToggleDashboardVisibility={toggleTab}
-                    />
-                )}
+                        {activeTab === 'overview' && (
+                            <OverviewTab
+                                machine={machine}
+                                ideSessions={ideSessions}
+                                cliSessions={cliSessions}
+                                acpSessions={acpSessions}
+                                actions={actions}
+                                isDashboardHidden={isHidden}
+                                onToggleDashboardVisibility={toggleTab}
+                            />
+                        )}
 
-                {activeTab === 'acps' && (
-                    <AgentTab
-                        category="acp"
-                        machine={machine}
-                        machineId={machineId!}
-                        providers={providers}
-                        managedEntries={acpSessions}
-                        getIcon={getIcon}
-                        actions={actions}
-                        isDashboardHidden={isHidden}
-                        onToggleDashboardVisibility={toggleTab}
-                    />
-                )}
-
-                {activeTab === 'providers' && (
-                    <ProvidersTab
-                        machineId={machineId!}
-                        providers={providers}
-                        sendDaemonCommand={sendDaemonCommand}
-                    />
-                )}
-
-                {activeTab === 'logs' && (
-                    <LogsTab
-                        machineId={machineId!}
-                        sendDaemonCommand={sendDaemonCommand}
-                    />
-                )}
+                        {activeTab === 'logs' && (
+                            <LogsTab
+                                machineId={machineId!}
+                                sendDaemonCommand={sendDaemonCommand}
+                            />
+                        )}
+                    </div>
+                </div>
             </div>
 
             {actions.launchPick && machine && (

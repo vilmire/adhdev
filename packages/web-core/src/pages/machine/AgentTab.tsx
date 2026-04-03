@@ -37,6 +37,8 @@ interface AgentTabProps {
     onToggleDashboardVisibility?: (tabKey: string) => void
     /** Required for IDE extension toggles */
     sendDaemonCommand?: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
+    initialWorkspaceId?: string | null
+    initialWorkspacePath?: string | null
 }
 
 // ─── Category Config ────────────────────────────────
@@ -50,6 +52,8 @@ export default function AgentTab({
     category, machine, machineId, providers, managedEntries, getIcon, actions, sendDaemonCommand,
     isDashboardHidden,
     onToggleDashboardVisibility,
+    initialWorkspaceId,
+    initialWorkspacePath,
 }: AgentTabProps) {
     const navigate = useNavigate()
     const {
@@ -74,8 +78,10 @@ export default function AgentTab({
     const [launchArgs, setLaunchArgs] = useState('')
     const [launchModel, setLaunchModel] = useState('')
     // Workspace selection: workspace-id | '__custom__' | '' (home)
-    const [selectedWorkspace, setSelectedWorkspace] = useState(machine.defaultWorkspaceId || '')
-    const [customPath, setCustomPath] = useState('')
+    const [selectedWorkspace, setSelectedWorkspace] = useState(
+        initialWorkspacePath ? '__custom__' : (initialWorkspaceId || machine.defaultWorkspaceId || ''),
+    )
+    const [customPath, setCustomPath] = useState(initialWorkspacePath || '')
     const [pendingLaunchTypes, setPendingLaunchTypes] = useState<string[]>([])
     const visiblePendingLaunches = pendingLaunchTypes
         .filter(type => !managedEntries.some(entry => entry.type === type && normalizeManagedStatus(entry.status) !== 'stopped'))
@@ -94,6 +100,18 @@ export default function AgentTab({
             setSelectedWorkspace(machine.defaultWorkspaceId)
         }
     }, [machine.defaultWorkspaceId])
+
+    useEffect(() => {
+        if (initialWorkspacePath) {
+            setSelectedWorkspace('__custom__')
+            setCustomPath(initialWorkspacePath)
+            return
+        }
+        if (initialWorkspaceId) {
+            setSelectedWorkspace(initialWorkspaceId)
+            setCustomPath('')
+        }
+    }, [initialWorkspaceId, initialWorkspacePath])
 
     // Resolve the actual workspace path from selection
     const resolvedWorkspacePath = (() => {
@@ -273,7 +291,9 @@ export default function AgentTab({
                                         key={d.type}
                                         onClick={() => {
                                             if (isReady && matchingEntry) {
-                                                navigate(`/ide/${matchingEntry.id}`)
+                                                navigate(`/dashboard?activeTab=${encodeURIComponent(matchingEntry.id)}`, {
+                                                    state: { openRemoteForTabKey: matchingEntry.id },
+                                                })
                                                 return
                                             }
                                             if (isPending) return
@@ -458,13 +478,20 @@ export default function AgentTab({
                                         {/* IDE: Control + Restart */}
                                         {isIde && (
                                             <>
-                                                <button onClick={() => navigate(`/ide/${entry.id}`)} className="machine-btn flex items-center gap-1"><IconMonitor size={13} /> Control</button>
+                                                <button
+                                                    onClick={() => navigate(`/dashboard?activeTab=${encodeURIComponent(entry.id)}`, {
+                                                        state: { openRemoteForTabKey: entry.id },
+                                                    })}
+                                                    className="machine-btn flex items-center gap-1"
+                                                >
+                                                    <IconMonitor size={13} /> Control
+                                                </button>
                                                 <button onClick={() => handleRestartIde(entry as IdeSessionEntry)} className="machine-btn" style={{ color: 'var(--status-warning)', borderColor: 'color-mix(in srgb, var(--status-warning) 30%, transparent)' }}>↻</button>
                                             </>
                                         )}
                                         {/* ACP: Chat */}
                                         {isAcp && (
-                                            <button onClick={() => navigate(`/ide/${entry.id}`)} className="machine-btn" title="View chat"><IconChat size={14} /></button>
+                                            <button onClick={() => navigate(`/dashboard?activeTab=${encodeURIComponent(entry.id)}`)} className="machine-btn" title="View chat"><IconChat size={14} /></button>
                                         )}
                                         {cli && normalizedStatus !== 'stopped' && (
                                             <button

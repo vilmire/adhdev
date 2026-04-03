@@ -19,6 +19,21 @@ import { XtermTerminalBackend } from './terminal-backends/xterm-backend.js';
 const DEFAULT_SCROLLBACK = 2000;
 const loggedTerminalBackends = new Set<string>();
 
+export function getTerminalBackendRuntimeStatus(): {
+    backend: TerminalViewportBackendKind;
+    preference: TerminalViewportBackendPreference;
+    ghosttyAvailable: boolean;
+} {
+    const preference = resolveTerminalBackendPreference();
+    const ghosttyAvailable = isGhosttyVtBackendAvailable();
+    const backend: TerminalViewportBackendKind = (
+        preference === 'ghostty-vt' || (preference === 'auto' && ghosttyAvailable)
+            ? 'ghostty-vt'
+            : 'xterm'
+    );
+    return { backend, preference, ghosttyAvailable };
+}
+
 function createTerminalBackend(
     options: TerminalViewportBackendOptions,
     preference: TerminalViewportBackendPreference,

@@ -13,6 +13,7 @@ import {
     ConnectedMachinesSection,
     GeneralThemeSection,
     ChatThemeSection,
+    MobileDashboardModeSection,
     ToggleRow,
     useBaseDaemons,
     useTransport,
@@ -123,6 +124,11 @@ export default function StandaloneSettings() {
                             <div className="text-xs text-text-muted mb-1 font-medium">Theme</div>
                             <p className="text-[11px] text-text-muted mb-3">Choose a preset or create a custom surface, accent, and chat palette for the standalone UI.</p>
                             <ChatThemeSection />
+                        </div>
+                        <div className="border-t border-border-subtle pt-4">
+                            <div className="text-xs text-text-muted mb-1 font-medium">Mobile</div>
+                            <p className="text-[11px] text-text-muted mb-3">Choose whether phones open the dashboard as a chat app first or in the full workspace layout.</p>
+                            <MobileDashboardModeSection />
                         </div>
                     </div>
                 </Section>

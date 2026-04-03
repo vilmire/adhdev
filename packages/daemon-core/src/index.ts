@@ -28,6 +28,7 @@ export type {
   AvailableProviderInfo,
   AcpConfigOption,
   AcpMode,
+  ProviderControlSchema,
   StatusReportPayload,
   MachineInfo,
   DetectedIdeInfo,
@@ -42,6 +43,19 @@ export type {
   ExtensionProviderState,
 } from './shared-types.js';
 
+export interface RecentSessionEntry {
+  id: string;
+  sessionId?: string | null;
+  providerType: string;
+  providerName: string;
+  kind: 'ide' | 'cli' | 'acp';
+  title: string;
+  workspace?: string | null;
+  currentModel?: string;
+  status?: 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
+  lastUsedAt: number;
+}
+
 // ── Core Interface ──
 export type { IDaemonCore, DaemonCoreOptions } from './daemon-core.js';
 
@@ -49,6 +63,8 @@ export type { IDaemonCore, DaemonCoreOptions } from './daemon-core.js';
 export { loadConfig, saveConfig, resetConfig, isSetupComplete, addCliHistory, markSetupComplete, updateConfig } from './config/config.js';
 export { getWorkspaceState } from './config/workspaces.js';
 export { getWorkspaceActivity } from './config/workspace-activity.js';
+export { appendRecentActivity, getRecentActivity } from './config/recent-activity.js';
+export type { RecentActivityEntry } from './config/recent-activity.js';
 
 // ── Detection ──
 export { detectIDEs } from './detection/ide-detector.js';

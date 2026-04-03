@@ -5,6 +5,7 @@
 export interface ActiveConversation {
     ideId: string;
     sessionId?: string;
+    recentKey?: string;
     transport?: 'cdp-page' | 'cdp-webview' | 'pty' | 'acp';
     /** Daemon DO ID — actual server connection ID for command routing */
     daemonId?: string;
@@ -22,6 +23,9 @@ export interface ActiveConversation {
     cdpConnected?: boolean;
     modalButtons?: string[];
     modalMessage?: string;
+    unread?: boolean;
+    lastSeenAt?: number;
+    inboxBucket?: 'needs_attention' | 'working' | 'task_complete' | 'idle';
     streamSource: 'native' | 'agent-stream';
     tabKey: string;
     /** Parent machine name (hostname or nickname) */

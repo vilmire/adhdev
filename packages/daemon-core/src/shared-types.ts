@@ -117,8 +117,17 @@ export interface SessionEntry {
     currentAutoApprove?: string;
     acpConfigOptions?: AcpConfigOption[];
     acpModes?: AcpMode[];
+    /** Dynamic control current values (generic key-value) */
+    controlValues?: Record<string, string | number | boolean>;
+    /** Provider-declared controls schema (transmitted once, cached by frontend) */
+    providerControls?: ProviderControlSchema[];
     errorMessage?: string;
     errorReason?: _ProviderErrorReason;
+    lastUpdated?: number;
+    recentKey?: string;
+    unread?: boolean;
+    lastSeenAt?: number;
+    inboxBucket?: RecentSessionBucket;
 }
 
 /** Available provider information */
@@ -143,6 +152,40 @@ export interface AcpMode {
     id: string;
     name: string;
     description?: string;
+}
+
+// ─── Provider Controls Schema (daemon → frontend) ──────────────────
+// Serializable subset of ProviderControlDef — used for dynamic UI rendering
+
+/** Provider control schema transmitted to frontend */
+export interface ProviderControlSchema {
+    id: string;
+    type: 'select' | 'toggle' | 'cycle' | 'slider' | 'action';
+    label: string;
+    icon?: string;
+    placement: 'bar' | 'header' | 'menu';
+    /** Static options (for select/cycle) */
+    options?: { value: string; label: string; description?: string; group?: string }[];
+    /** Dynamic options — frontend should call listScript to load */
+    dynamic?: boolean;
+    /** Script name to list options */
+    listScript?: string;
+    /** Script name to change value (value-based controls) */
+    setScript?: string;
+    /** Field name in readChat result for current value */
+    readFrom?: string;
+    /** Default value */
+    defaultValue?: string | number | boolean;
+    /** Script name to invoke (action type) */
+    invokeScript?: string;
+    /** How to display action result */
+    resultDisplay?: 'toast' | 'inline' | 'none';
+    /** Slider range */
+    min?: number;
+    max?: number;
+    step?: number;
+    /** Sort order */
+    order?: number;
 }
 
 // ─── Common Sub-Types (used across StatusReportPayload, BaseDaemonData, etc.) ──
@@ -179,6 +222,31 @@ export interface WorkspaceActivity {
     agentType?: string;
 }
 
+export interface RecentSessionEntry {
+    id: string;
+    recentKey: string;
+    sessionId?: string | null;
+    providerType: string;
+    providerName: string;
+    kind: 'ide' | 'cli' | 'acp';
+    title: string;
+    workspace?: string | null;
+    currentModel?: string;
+    status?: SessionEntry['status'];
+    lastUsedAt: number;
+    unread?: boolean;
+    lastSeenAt?: number;
+    inboxBucket?: RecentSessionBucket;
+}
+
+export type RecentSessionBucket = 'needs_attention' | 'working' | 'task_complete' | 'idle';
+
+export interface TerminalBackendStatus {
+    backend: 'xterm' | 'ghostty-vt';
+    preference: 'auto' | 'xterm' | 'ghostty-vt';
+    ghosttyAvailable: boolean;
+}
+
 // ─── Status Report Payload (daemon → server) ────────────────────────
 // Full payload shape sent via WebSocket status_report
 
@@ -206,4 +274,6 @@ export interface StatusReportPayload {
     defaultWorkspaceId?: string | null;
     defaultWorkspacePath?: string | null;
     workspaceActivity?: WorkspaceActivity[];
+    recentSessions?: RecentSessionEntry[];
+    terminalBackend?: TerminalBackendStatus;
 }

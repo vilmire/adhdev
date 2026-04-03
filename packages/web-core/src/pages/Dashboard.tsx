@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
@@ -8,30 +8,32 @@ import { isCliConv, isAcpConv } from '../components/dashboard/types'
 import { useHiddenTabs } from '../hooks/useHiddenTabs'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
+import { useDashboardActiveTabRequests } from '../hooks/useDashboardActiveTabRequests'
 import { useDashboardEventManager } from '../hooks/useDashboardEventManager'
 import { useDashboardGroupState } from '../hooks/useDashboardGroupState'
 import { useDashboardPageEffects } from '../hooks/useDashboardPageEffects'
+import { useDashboardRemoteDialogState } from '../hooks/useDashboardRemoteDialogState'
 import { useDashboardSessionCommands } from '../hooks/useDashboardSessionCommands'
 import { useDashboardSplitView } from '../hooks/useDashboardSplitView'
 import { useDashboardVersionBanner } from '../hooks/useDashboardVersionBanner'
 import { useDevRenderTrace } from '../hooks/useDevRenderTrace'
 
 import ConnectionBanner from '../components/dashboard/ConnectionBanner'
-import DashboardDockviewWorkspace from '../components/dashboard/DashboardDockviewWorkspace'
-import DashboardHeader from '../components/dashboard/DashboardHeader'
-import DashboardPaneWorkspace from '../components/dashboard/DashboardPaneWorkspace'
+import TerminalBackendBanner from '../components/dashboard/TerminalBackendBanner'
+import DashboardMainView from '../components/dashboard/DashboardMainView'
+import DashboardOverlays from '../components/dashboard/DashboardOverlays'
 import DashboardVersionBanner from '../components/dashboard/DashboardVersionBanner'
-import HistoryModal from '../components/dashboard/HistoryModal'
-import CliStopDialog from '../components/dashboard/CliStopDialog'
-import ToastContainer from '../components/dashboard/ToastContainer'
-import OnboardingModal from '../components/OnboardingModal'
+import type { Toast } from '../components/dashboard/ToastContainer'
+import { getMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
 
 export default function Dashboard() {
     const { sendCommand: sendDaemonCommand } = useTransport()
+    const location = useLocation()
+    const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
     const urlActiveTab = searchParams.get('activeTab')
+    const requestedRemoteTabTarget = (location.state as { openRemoteForTabKey?: string } | null)?.openRemoteForTabKey || null
 
-    type Toast = { id: number; message: string; type: 'success' | 'info' | 'warning'; timestamp: number; targetKey?: string }
     const daemonCtx = useDaemons() as any
     const { updateIdeChats, screenshotMap, setScreenshotMap } = daemonCtx
     const ides: DaemonData[] = daemonCtx.ides || []
@@ -63,6 +65,7 @@ export default function Dashboard() {
 
     const [historyModalOpen, setHistoryModalOpen] = useState(false)
     const [cliStopDialogOpen, setCliStopDialogOpen] = useState(false)
+    const [mobileViewMode] = useState<'chat' | 'workspace'>(() => getMobileDashboardMode())
     const [actionLogs, setActionLogs] = useState<{ ideId: string; text: string; timestamp: number }[]>([])
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
     const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
@@ -80,6 +83,7 @@ export default function Dashboard() {
     const daemonEntry = ides.find(ide => ide.type === 'adhdev-daemon')
     const detectedIdes: { type: string; name: string; running: boolean; id?: string }[] = (daemonEntry as any)?.detectedIdes || []
     const isStandalone = !!daemonEntry
+    const terminalBackend = (daemonEntry as any)?.terminalBackend || null
     // ─── Hidden Tabs ───
     const { hiddenTabs, toggleTab: toggleHiddenTab } = useHiddenTabs();
     const {
@@ -136,10 +140,41 @@ export default function Dashboard() {
         return groupedConvs[focusedGroup]?.[0] || groupedConvs[0]?.[0]
     }, [desktopActiveTabKey, isMobile, groupActiveTabIds, focusedGroup, conversations, groupedConvs, visibleConversations])
 
-    const requestedDesktopTabKey = useMemo(() => {
-        if (isMobile || !urlActiveTab) return null
-        return resolveConversationByTarget(urlActiveTab)?.tabKey ?? null
-    }, [isMobile, resolveConversationByTarget, urlActiveTab])
+    const {
+        requestedDesktopTabKey,
+        requestedMobileTabKey,
+        consumeRequestedActiveTab,
+    } = useDashboardActiveTabRequests({
+        isMobile,
+        urlActiveTab,
+        resolveConversationByTarget,
+        setSearchParams,
+    })
+
+    const {
+        remoteDialogConv,
+        remoteDialogIdeEntry,
+        remoteDialogActiveConv,
+        setRemoteDialogActiveConv,
+        openRemoteDialog,
+        closeRemoteDialog,
+    } = useDashboardRemoteDialogState({
+        isMobile,
+        location,
+        navigate,
+        requestedRemoteTabTarget,
+        requestedDesktopTabKey,
+        conversations,
+        ides,
+        resolveConversationByTarget,
+    })
+
+    const historyTargetConv = (remoteDialogActiveConv || remoteDialogConv) || activeConv
+    const mobileChatConversations = useMemo(
+        () => visibleConversations,
+        [visibleConversations],
+    )
+    const showMobileChatMode = isMobile && mobileViewMode === 'chat'
 
     useDashboardConversationMeta({
         visibleConversations,
@@ -158,11 +193,8 @@ export default function Dashboard() {
 
     // ─── Command Handlers (header/history use activeConv) ──────
     const {
-        isCreatingChat,
         isRefreshingHistory,
         handleLaunchIde,
-        handleSwitchSession,
-        handleNewChat,
         handleRefreshHistory,
     } = useDashboardSessionCommands({
         sendDaemonCommand,
@@ -173,13 +205,28 @@ export default function Dashboard() {
         setClearedTabs,
     })
 
+    const {
+        isCreatingChat: isHistoryCreatingChat,
+        isRefreshingHistory: isHistoryRefreshingHistory,
+        handleSwitchSession: handleHistorySwitchSession,
+        handleNewChat: handleHistoryNewChat,
+        handleRefreshHistory: handleHistoryRefresh,
+    } = useDashboardSessionCommands({
+        sendDaemonCommand,
+        activeConv: historyTargetConv,
+        updateIdeChats,
+        setToasts,
+        setLocalUserMessages,
+        setClearedTabs,
+    })
+
     useDashboardPageEffects({
-        urlActiveTab: isMobile ? urlActiveTab : null,
+        urlActiveTab: isMobile && !showMobileChatMode ? urlActiveTab : null,
         conversations,
         resolveConversationByTarget,
         normalizedGroupAssignments,
-        hasHydratedStoredLayout: isMobile ? hasHydratedStoredLayout : true,
-        hydrateStoredLayout: isMobile ? hydrateStoredLayout : (() => {}),
+        hasHydratedStoredLayout: isMobile && !showMobileChatMode ? hasHydratedStoredLayout : true,
+        hydrateStoredLayout: isMobile && !showMobileChatMode ? hydrateStoredLayout : (() => {}),
         setGroupActiveTabIds,
         setFocusedGroup,
         setSearchParams,
@@ -239,6 +286,7 @@ export default function Dashboard() {
         <div className="page-dashboard flex-1 min-h-0 bg-bg-primary text-text-primary flex flex-col overflow-hidden">
 
             <ConnectionBanner wsStatus={wsStatus} showReconnected={showReconnected} />
+            <TerminalBackendBanner terminalBackend={terminalBackend} isStandalone={isStandalone} />
 
             {!versionBannerDismissed && (
                 <DashboardVersionBanner
@@ -249,132 +297,113 @@ export default function Dashboard() {
                     onDismiss={() => setVersionBannerDismissed(true)}
                 />
             )}
-
-
-
-            {/* 1. Header Area */}
-            <DashboardHeader
+            <DashboardMainView
+                showMobileChatMode={showMobileChatMode}
+                isMobile={isMobile}
                 activeConv={activeConv}
-                agentCount={chatIdes.length}
+                chatIdes={chatIdes}
                 wsStatus={wsStatus}
                 isConnected={isConnected}
-                onOpenHistory={() => setHistoryModalOpen(true)}
+                onOpenHistory={(conversation) => {
+                    if (conversation) setRemoteDialogActiveConv(conversation)
+                    setHistoryModalOpen(true)
+                }}
+                onOpenRemote={openRemoteDialog}
                 onFitCli={handleActiveCliFit}
                 onStopCli={handleActiveCliStop}
+                mobileChatConversations={mobileChatConversations}
+                ides={ides}
+                actionLogs={actionLogs}
+                sendDaemonCommand={sendDaemonCommand}
+                setLocalUserMessages={setLocalUserMessages}
+                setActionLogs={setActionLogs}
+                isStandalone={isStandalone}
+                userName={daemonCtx.userName}
+                requestedMobileTabKey={requestedMobileTabKey}
+                onRequestedMobileTabConsumed={consumeRequestedActiveTab}
+                containerRef={containerRef}
+                isSplitMode={isSplitMode}
+                numGroups={numGroups}
+                groupSizes={groupSizes}
+                groupedConvs={groupedConvs}
+                clearedTabs={clearedTabs}
+                screenshotMap={screenshotMap}
+                setScreenshotMap={setScreenshotMap}
+                focusedGroup={focusedGroup}
+                setFocusedGroup={setFocusedGroup}
+                moveTabToGroup={moveTabToGroup}
+                splitTabRelative={splitTabRelative}
+                closeGroup={closeGroup}
+                handleResizeStart={handleResizeStart}
+                detectedIdes={detectedIdes}
+                handleLaunchIde={handleLaunchIde}
+                groupActiveTabIds={groupActiveTabIds}
+                setGroupActiveTabIds={setGroupActiveTabIds}
+                groupTabOrders={groupTabOrders}
+                setGroupTabOrders={setGroupTabOrders}
+                toggleHiddenTab={toggleHiddenTab}
+                visibleConversations={visibleConversations}
+                requestedDesktopTabKey={requestedDesktopTabKey}
+                onRequestedDesktopTabConsumed={consumeRequestedActiveTab}
+                onDesktopActiveTabChange={setDesktopActiveTabKey}
             />
-
-            {isMobile ? (
-                <DashboardPaneWorkspace
-                    containerRef={containerRef}
-                    isSplitMode={isSplitMode}
-                    numGroups={numGroups}
-                    groupSizes={groupSizes}
-                    groupedConvs={groupedConvs}
-                    clearedTabs={clearedTabs}
-                    ides={ides}
-                    actionLogs={actionLogs}
-                    screenshotMap={screenshotMap}
-                    setScreenshotMap={setScreenshotMap}
-                    sendDaemonCommand={sendDaemonCommand}
-                    setLocalUserMessages={setLocalUserMessages}
-                    setActionLogs={setActionLogs}
-                    isStandalone={isStandalone}
-                    userName={daemonCtx.userName}
-                    focusedGroup={focusedGroup}
-                    setFocusedGroup={setFocusedGroup}
-                    moveTabToGroup={moveTabToGroup}
-                    splitTabRelative={splitTabRelative}
-                    closeGroup={closeGroup}
-                    handleResizeStart={handleResizeStart}
-                    detectedIdes={detectedIdes}
-                    handleLaunchIde={handleLaunchIde}
-                    groupActiveTabIds={groupActiveTabIds}
-                    setGroupActiveTabIds={setGroupActiveTabIds}
-                    groupTabOrders={groupTabOrders}
-                    setGroupTabOrders={setGroupTabOrders}
-                    toggleHiddenTab={toggleHiddenTab}
-                />
-            ) : (
-                <DashboardDockviewWorkspace
-                    visibleConversations={visibleConversations}
-                    clearedTabs={clearedTabs}
-                    ides={ides}
-                    actionLogs={actionLogs}
-                    screenshotMap={screenshotMap}
-                    setScreenshotMap={setScreenshotMap}
-                    sendDaemonCommand={sendDaemonCommand}
-                    setLocalUserMessages={setLocalUserMessages}
-                    setActionLogs={setActionLogs}
-                    isStandalone={isStandalone}
-                    userName={daemonCtx.userName}
-                    detectedIdes={detectedIdes}
-                    handleLaunchIde={handleLaunchIde}
-                    toggleHiddenTab={toggleHiddenTab}
-                    onActiveTabChange={setDesktopActiveTabKey}
-                    requestedActiveTabKey={requestedDesktopTabKey}
-                    onRequestedActiveTabConsumed={() => {
-                        if (!urlActiveTab) return
-                        setSearchParams(prev => {
-                            const next = new URLSearchParams(prev)
-                            next.delete('activeTab')
-                            return next
-                        }, { replace: true })
-                    }}
-                />
-            )}
-
-            {/* History Modal */}
-            {historyModalOpen && activeConv && (
-                <HistoryModal
-                    activeConv={activeConv}
-                    ides={ides}
-                    isCreatingChat={isCreatingChat}
-                    isRefreshingHistory={isRefreshingHistory}
-                    onClose={() => setHistoryModalOpen(false)}
-                    onNewChat={handleNewChat}
-                    onSwitchSession={handleSwitchSession}
-                    onRefreshHistory={handleRefreshHistory}
-                />
-            )}
-
-            {cliStopDialogOpen && activeConv && isCliConv(activeConv) && !isAcpConv(activeConv) && (
-                <CliStopDialog
-                    activeConv={activeConv}
-                    onCancel={() => setCliStopDialogOpen(false)}
-                    onStopNow={async () => {
-                        setCliStopDialogOpen(false)
-                        await performActiveCliStop('hard')
-                    }}
-                    onSaveAndStop={async () => {
-                        setCliStopDialogOpen(false)
-                        await performActiveCliStop('save')
-                    }}
-                />
-            )}
 
             <style>{`
                 body { overflow: hidden; overscroll-behavior: none; }
 `}</style>
-
-            {/* Toast Notifications */}
-            <ToastContainer
+            <DashboardOverlays
+                historyModalOpen={historyModalOpen}
+                historyTargetConv={historyTargetConv}
+                ides={ides}
+                isHistoryCreatingChat={isHistoryCreatingChat}
+                isHistoryRefreshingHistory={isHistoryRefreshingHistory}
+                onCloseHistory={() => setHistoryModalOpen(false)}
+                onNewHistoryChat={handleHistoryNewChat}
+                onSwitchHistorySession={handleHistorySwitchSession}
+                onRefreshHistory={handleHistoryRefresh}
+                remoteDialogConv={remoteDialogConv}
+                remoteDialogIdeEntry={remoteDialogIdeEntry}
+                connectionStates={connectionStates}
+                actionLogs={actionLogs}
+                localUserMessages={localUserMessages}
+                sendDaemonCommand={sendDaemonCommand}
+                setLocalUserMessages={setLocalUserMessages}
+                setActionLogs={setActionLogs}
+                isStandalone={isStandalone}
+                userName={daemonCtx.userName}
+                onOpenRemoteHistory={(conversation) => {
+                    if (conversation) setRemoteDialogActiveConv(conversation)
+                    setHistoryModalOpen(true)
+                }}
+                onRemoteConversationChange={setRemoteDialogActiveConv}
+                onCloseRemoteDialog={closeRemoteDialog}
+                cliStopDialogOpen={cliStopDialogOpen}
+                activeConv={activeConv}
+                onCancelCliStop={() => setCliStopDialogOpen(false)}
+                onStopCliNow={async () => {
+                    setCliStopDialogOpen(false)
+                    await performActiveCliStop('hard')
+                }}
+                onSaveCliAndStop={async () => {
+                    setCliStopDialogOpen(false)
+                    await performActiveCliStop('save')
+                }}
                 toasts={toasts}
-                onDismiss={(id) => setToasts(prev => prev.filter(t => t.id !== id))}
+                onDismissToast={(id) => setToasts(prev => prev.filter(t => t.id !== id))}
                 onClickToast={(toast) => {
                     if (toast.targetKey) {
-                        const matchedConv = resolveConversationByTarget(toast.targetKey);
+                        const matchedConv = resolveConversationByTarget(toast.targetKey)
                         if (matchedConv) {
-                            setFocusedGroup(normalizedGroupAssignments.get(matchedConv.tabKey) ?? 0);
+                            setFocusedGroup(normalizedGroupAssignments.get(matchedConv.tabKey) ?? 0)
                         }
                     }
                 }}
-            />
-            {showOnboarding && (
-                <OnboardingModal onClose={() => {
+                showOnboarding={showOnboarding}
+                onCloseOnboarding={() => {
                     try { localStorage.setItem('adhdev_onboarding_v1', 'done') } catch {}
                     setShowOnboarding(false)
-                }} />
-            )}
+                }}
+            />
         </div>
     )
 }

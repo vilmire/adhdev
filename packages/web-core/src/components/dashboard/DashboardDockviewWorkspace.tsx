@@ -23,7 +23,9 @@ import type { DaemonData } from '../../types'
 import type { CliTerminalHandle } from '../CliTerminal'
 import PaneGroupContent from './PaneGroupContent'
 import PaneGroupEmptyState from './PaneGroupEmptyState'
+import RemoteView from '../RemoteView'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
+import { useIdeRemoteStream } from '../../hooks/useIdeRemoteStream'
 import {
     getDashboardLayoutProfile,
     readDashboardDockviewStoredLayout,
@@ -51,6 +53,7 @@ interface DashboardDockviewWorkspaceProps {
     toggleHiddenTab: (tabKey: string) => void
     onActiveTabChange: (tabKey: string | null) => void
     requestedActiveTabKey?: string | null
+    requestedRemoteIdeId?: string | null
     onRequestedActiveTabConsumed?: () => void
 }
 
@@ -72,7 +75,13 @@ interface DashboardDockviewContextValue {
 }
 
 interface DashboardDockviewPanelParams {
+    kind: 'conversation'
     tabKey: string
+}
+
+interface DashboardDockviewRemotePanelParams {
+    kind: 'remote'
+    ideId: string
 }
 
 const DashboardDockviewContext = createContext<DashboardDockviewContextValue | null>(null)
@@ -85,6 +94,23 @@ function useDashboardDockviewContext() {
 
 function getDockviewTitle(conversation: ActiveConversation) {
     return conversation.displayPrimary || conversation.title || conversation.agentName || conversation.tabKey
+}
+
+function getRemotePanelId(ideId: string) {
+    return `remote:${ideId}`
+}
+
+function isRemotePanelId(panelId: string) {
+    return panelId.startsWith('remote:')
+}
+
+function getPreferredConversationForIde(
+    conversations: ActiveConversation[],
+    ideId: string,
+) {
+    return conversations.find(conversation => conversation.ideId === ideId && conversation.streamSource === 'native')
+        ?? conversations.find(conversation => conversation.ideId === ideId)
+        ?? null
 }
 
 function useDockviewHeaderRenderTick(props: Pick<IDockviewPanelHeaderProps, 'api' | 'containerApi'>) {
@@ -153,7 +179,7 @@ function buildInitialDockviewLayout(
                 id: conversation.tabKey,
                 component: 'conversation',
                 title: getDockviewTitle(conversation),
-                params: { tabKey: conversation.tabKey },
+                params: { kind: 'conversation', tabKey: conversation.tabKey },
                 ...(groupAnchorId
                     ? { position: { referencePanel: groupAnchorId, direction: 'within' as const }, inactive: true }
                     : previousGroupAnchorId
@@ -178,6 +204,7 @@ function syncDockviewPanels(api: DockviewApi, visibleConversations: ActiveConver
     const visibleKeys = new Set(visibleConversations.map(conversation => conversation.tabKey))
 
     for (const panel of [...api.panels]) {
+        if (isRemotePanelId(panel.id)) continue
         if (!visibleKeys.has(panel.id)) api.removePanel(panel)
     }
 
@@ -195,7 +222,7 @@ function syncDockviewPanels(api: DockviewApi, visibleConversations: ActiveConver
             id: conversation.tabKey,
             component: 'conversation',
             title: getDockviewTitle(conversation),
-            params: { tabKey: conversation.tabKey },
+            params: { kind: 'conversation', tabKey: conversation.tabKey },
             ...(api.activePanel
                 ? { position: { referencePanel: api.activePanel.id, direction: 'within' as const }, inactive: true }
                 : api.panels[0]
@@ -203,6 +230,52 @@ function syncDockviewPanels(api: DockviewApi, visibleConversations: ActiveConver
                     : {}),
         })
     }
+}
+
+function syncRemotePanels(
+    api: DockviewApi,
+    visibleConversations: ActiveConversation[],
+    requestedRemoteIdeId?: string | null,
+) {
+    const desiredPanelId = requestedRemoteIdeId ? getRemotePanelId(requestedRemoteIdeId) : null
+
+    for (const panel of [...api.panels]) {
+        if (!isRemotePanelId(panel.id)) continue
+        if (!desiredPanelId || panel.id !== desiredPanelId) {
+            api.removePanel(panel)
+        }
+    }
+
+    if (!requestedRemoteIdeId || !desiredPanelId) return
+
+    const preferredConversation = getPreferredConversationForIde(visibleConversations, requestedRemoteIdeId)
+    if (!preferredConversation && api.totalPanels === 0) return
+
+    const existing = api.getPanel(desiredPanelId)
+    const nextTitle = preferredConversation
+        ? `Remote · ${preferredConversation.displayPrimary || preferredConversation.workspaceName || preferredConversation.agentName}`
+        : 'Remote'
+
+    if (existing) {
+        if (existing.title !== nextTitle) {
+            existing.api.setTitle(nextTitle)
+        }
+        return
+    }
+
+    const referencePanelId = preferredConversation?.tabKey
+        ?? api.activePanel?.id
+        ?? api.panels.find(panel => !isRemotePanelId(panel.id))?.id
+
+    api.addPanel<DashboardDockviewRemotePanelParams>({
+        id: desiredPanelId,
+        component: 'remote',
+        title: nextTitle,
+        params: { kind: 'remote', ideId: requestedRemoteIdeId },
+        ...(referencePanelId
+            ? { position: { referencePanel: referencePanelId, direction: 'right' as const }, inactive: true }
+            : {}),
+    })
 }
 
 function DashboardDockviewPanel({ params }: IDockviewPanelProps<DashboardDockviewPanelParams>) {
@@ -273,6 +346,48 @@ function DashboardDockviewPanel({ params }: IDockviewPanelProps<DashboardDockvie
     )
 }
 
+function DashboardDockviewRemotePanel({ params }: IDockviewPanelProps<DashboardDockviewRemotePanelParams>) {
+    const ctx = useDashboardDockviewContext()
+    const activeConv = useMemo(
+        () => getPreferredConversationForIde([...ctx.conversationsByTabKey.values()], params.ideId),
+        [ctx.conversationsByTabKey, params.ideId],
+    )
+    const ideEntry = useMemo(
+        () => ctx.ides.find(ide => ide.id === params.ideId),
+        [ctx.ides, params.ideId],
+    )
+    const daemonRouteId = activeConv?.daemonId || activeConv?.ideId?.split(':')[0] || params.ideId.split(':')[0] || params.ideId
+    const { connScreenshot, screenshotUsage, handleRemoteAction } = useIdeRemoteStream({
+        doId: daemonRouteId,
+        ideId: params.ideId,
+        ideType: activeConv?.ideType || ideEntry?.type,
+        connState: activeConv?.connectionState || 'new',
+        viewMode: 'remote',
+        instanceId: ideEntry?.instanceId,
+    })
+
+    if (!activeConv) {
+        return (
+            <div className="h-full min-h-0 min-w-0 flex items-center justify-center text-sm text-text-muted">
+                Remote view unavailable
+            </div>
+        )
+    }
+
+    return (
+        <div className="h-full min-h-0 min-w-0 flex flex-col overflow-hidden bg-black">
+            <RemoteView
+                addLog={() => {}}
+                connState={(activeConv.connectionState || 'new') as any}
+                connScreenshot={connScreenshot}
+                screenshotUsage={screenshotUsage}
+                transportType={activeConv.transport}
+                onAction={handleRemoteAction}
+            />
+        </div>
+    )
+}
+
 function DashboardDockviewWatermark() {
     const ctx = useDashboardDockviewContext()
     return (
@@ -288,9 +403,39 @@ function DashboardDockviewWatermark() {
     )
 }
 
-function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockviewPanelParams>) {
+function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockviewPanelParams | DashboardDockviewRemotePanelParams>) {
     useDockviewHeaderRenderTick(props)
     const ctx = useDashboardDockviewContext()
+    if (props.params.kind === 'remote') {
+        const remoteConversation = getPreferredConversationForIde([...ctx.conversationsByTabKey.values()], props.params.ideId)
+        const isActive = props.api.group.activePanel?.id === props.api.id
+        const isGroupActive = props.api.isGroupActive
+        return (
+            <div
+                className={`adhdev-dockview-tab${isActive ? ' is-active' : ''}${isGroupActive ? ' is-group-active' : ''}`}
+                title={props.api.title || 'Remote'}
+            >
+                <div className="adhdev-dockview-tab-status" aria-hidden="true">
+                    <span className="adhdev-dockview-tab-status-text is-connected">◫</span>
+                </div>
+                <div className="adhdev-dockview-tab-copy">
+                    <div className="adhdev-dockview-tab-primary">{props.api.title || 'Remote'}</div>
+                    <div className="adhdev-dockview-tab-meta">
+                        {remoteConversation?.machineName ? (
+                            <>
+                                <span>Live remote view</span>
+                                <span className="adhdev-dockview-tab-dot">·</span>
+                                <span className="adhdev-dockview-tab-machine">{remoteConversation.machineName}</span>
+                            </>
+                        ) : (
+                            <span>Live remote view</span>
+                        )}
+                    </div>
+                </div>
+            </div>
+        )
+    }
+
     const conversation = ctx.conversationsByTabKey.get(props.params.tabKey)
 
     if (!conversation) {
@@ -371,6 +516,7 @@ export default function DashboardDockviewWorkspace({
     toggleHiddenTab,
     onActiveTabChange,
     requestedActiveTabKey,
+    requestedRemoteIdeId,
     onRequestedActiveTabConsumed,
 }: DashboardDockviewWorkspaceProps) {
     const { theme } = useTheme()
@@ -502,6 +648,7 @@ export default function DashboardDockviewWorkspace({
         }
 
         syncDockviewPanels(event.api, visibleConversations)
+        syncRemotePanels(event.api, visibleConversations, requestedRemoteIdeId)
 
         if (event.api.totalPanels === 0 && visibleConversations.length > 0) {
             buildInitialDockviewLayout(event.api, visibleConversations, requestedActiveTabKey)
@@ -512,6 +659,12 @@ export default function DashboardDockviewWorkspace({
         hasInitializedRef.current = true
 
         event.api.onDidActivePanelChange(panel => {
+            if (panel && isRemotePanelId(panel.id)) {
+                const remoteIdeId = (panel.params as DashboardDockviewRemotePanelParams | undefined)?.ideId || panel.id.slice('remote:'.length)
+                const relatedConversation = getPreferredConversationForIde(visibleConversations, remoteIdeId)
+                onActiveTabChange(relatedConversation?.tabKey ?? null)
+                return
+            }
             onActiveTabChange(panel?.id ?? null)
             if (!panel) return
             const conversation = conversationsByTabKey.get(panel.id)
@@ -567,11 +720,12 @@ export default function DashboardDockviewWorkspace({
         if (!api || !hasInitializedRef.current) return
 
         syncDockviewPanels(api, visibleConversations)
+        syncRemotePanels(api, visibleConversations, requestedRemoteIdeId)
 
         if (!api.activePanel && api.panels[0]) {
             api.panels[0].group.model.openPanel(api.panels[0])
         }
-    }, [visibleConversations])
+    }, [requestedRemoteIdeId, visibleConversations])
 
     useEffect(() => {
         if (!hasInitializedRef.current) return
@@ -607,7 +761,7 @@ export default function DashboardDockviewWorkspace({
             <div ref={dockviewContainerRef} className="flex-1 min-h-0 min-w-0 overflow-hidden">
                 <DockviewReact
                     className={`h-full min-h-0 min-w-0 adhdev-dockview${isDraggingDockview ? ' is-dragging-dockview' : ''}${isShowingDockviewOverlay ? ' is-showing-dockview-overlay' : ''}`}
-                    components={{ conversation: DashboardDockviewPanel }}
+                    components={{ conversation: DashboardDockviewPanel, remote: DashboardDockviewRemotePanel }}
                     defaultTabComponent={DashboardDockviewTab}
                     watermarkComponent={DashboardDockviewWatermark}
                     onReady={handleReady}

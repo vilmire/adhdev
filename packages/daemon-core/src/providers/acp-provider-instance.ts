@@ -228,6 +228,11 @@ export class AcpProviderInstance implements ProviderInstance {
  // Error details for dashboard display
             errorMessage: this.errorMessage || undefined,
             errorReason: this.errorReason || undefined,
+            controlValues: {
+                ...(this.currentModel ? { model: this.currentModel } : {}),
+                ...(this.currentMode ? { mode: this.currentMode } : {}),
+            },
+            providerControls: this.provider.controls as any,
         };
     }
 

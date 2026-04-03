@@ -4,7 +4,7 @@
  */
 import { useRef, useState, useCallback, useMemo } from 'react';
 import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
-import DashboardModelModeBar from './ModelModeBar';
+import ControlsBar from './ControlsBar';
 import ChatInputBar from './ChatInputBar';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation } from './types';
@@ -13,6 +13,50 @@ import { useTransport } from '../../context/TransportContext';
 import { formatIdeType } from '../../utils/daemon-utils';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
 import { IconPlug, IconEye, IconFolder } from '../Icons';
+
+function normalizeMessageContent(content: unknown): string {
+    if (typeof content === 'string') return content.replace(/\s+/g, ' ').trim();
+    if (Array.isArray(content)) {
+        return content
+            .map(block => {
+                if (typeof block === 'string') return block;
+                if (block && typeof block === 'object' && 'text' in block) return String((block as any).text || '');
+                return '';
+            })
+            .join('\n')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+    if (content && typeof content === 'object' && 'text' in content) {
+        return String((content as any).text || '').replace(/\s+/g, ' ').trim();
+    }
+    return String(content || '').replace(/\s+/g, ' ').trim();
+}
+
+function dedupeOptimisticMessages(messages: any[]) {
+    const result: any[] = [];
+    for (const message of messages) {
+        const normalized = normalizeMessageContent(message?.content);
+        const role = message?.role;
+        const isLocal = !!message?._localId;
+        const duplicateIndex = result.findIndex(existing => (
+            existing?.role === role
+            && normalizeMessageContent(existing?.content) === normalized
+            && (!!existing?._localId !== isLocal)
+        ));
+
+        if (duplicateIndex >= 0) {
+            if (isLocal) {
+                continue;
+            }
+            result.splice(duplicateIndex, 1, message);
+            continue;
+        }
+
+        result.push(message);
+    }
+    return result;
+}
 
 export interface ChatPaneProps {
     activeConv: ActiveConversation;
@@ -151,8 +195,9 @@ export default function ChatPane({
             ? activeConv.messages.slice(-tabHistory.visibleLiveCount)
             : activeConv.messages;
         if (historyMessages.length === 0) {
+            const dedupedLiveMessages = dedupeOptimisticMessages(liveMessages);
             const liveReceivedAtMap: Record<string, number> = {};
-            liveMessages.forEach((message: any, index: number) => {
+            dedupedLiveMessages.forEach((message: any, index: number) => {
                 const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;
                 let receivedAt = message.receivedAt || receivedAtCache.current.get(messageKey) || 0;
                 if (!receivedAt) {
@@ -161,7 +206,7 @@ export default function ChatPane({
                 }
                 liveReceivedAtMap[getChatMessageStableKey(message, index)] = receivedAt;
             });
-            return { allMessages: liveMessages, receivedAtMap: liveReceivedAtMap };
+            return { allMessages: dedupedLiveMessages, receivedAtMap: liveReceivedAtMap };
         }
 
         // Dedup: exclude history messages already visible in live feed
@@ -169,7 +214,7 @@ export default function ChatPane({
         const uniqueHistory = historyMessages.filter(
             m => !liveHashes.has(`${m.role}:${(m.content || '').slice(0, 100)}`)
         );
-        const mergedMessages = [...uniqueHistory, ...liveMessages];
+        const mergedMessages = dedupeOptimisticMessages([...uniqueHistory, ...liveMessages]);
         const nextReceivedAtMap: Record<string, number> = {};
         mergedMessages.forEach((message: any, index: number) => {
             const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;
@@ -266,7 +311,7 @@ export default function ChatPane({
                 emptyState={emptyState}
             />
 
-            {/* Model/Mode Bar */}
+            {/* Controls Bar (dynamic or legacy fallback) */}
             {!isCliConv(activeConv) && (() => {
                 const isNativeConversation = activeConv.streamSource !== 'agent-stream'
                 const modelBarAgentType = isNativeConversation
@@ -275,17 +320,28 @@ export default function ChatPane({
                 const modelBarLabel = isNativeConversation
                     ? (ideEntry?.type ? formatIdeType(ideEntry.type) : formatIdeType(activeConv.ideType || ''))
                     : (activeConv.agentName || formatIdeType(activeConv.agentType || ''))
+
+                const targetEntry = (!isNativeConversation && ideEntry?.childSessions)
+                    ? (ideEntry.childSessions.find((s: any) => s.id === activeConv.sessionId || s.providerType === activeConv.agentType) || ideEntry)
+                    : ideEntry;
+
+                // Use new ControlsBar (schema-driven) when providerControls are available
+                const providerControls = (targetEntry as any)?.providerControls;
+                const controlValues = (targetEntry as any)?.controlValues;
+
                 return (
-                    <DashboardModelModeBar
+                    <ControlsBar
                         ideId={activeConv.ideId}
                         sessionId={activeConv.sessionId}
                         ideType={activeConv.ideType}
                         providerType={modelBarAgentType}
                         displayLabel={modelBarLabel}
-                        serverModel={(ideEntry as any)?.currentModel || undefined}
-                        serverMode={(ideEntry as any)?.currentPlan || undefined}
-                        acpConfigOptions={isAcpConv(activeConv) ? (ideEntry as any)?.acpConfigOptions : undefined}
-                        acpModes={isAcpConv(activeConv) ? (ideEntry as any)?.acpModes : undefined}
+                        controls={providerControls}
+                        controlValues={controlValues}
+                        serverModel={(targetEntry as any)?.currentModel || undefined}
+                        serverMode={(targetEntry as any)?.currentPlan || undefined}
+                        acpConfigOptions={isAcpConv(activeConv) ? (targetEntry as any)?.acpConfigOptions : undefined}
+                        acpModes={isAcpConv(activeConv) ? (targetEntry as any)?.acpModes : undefined}
                     />
                 );
             })()}

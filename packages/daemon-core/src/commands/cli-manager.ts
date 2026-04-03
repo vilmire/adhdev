@@ -14,6 +14,7 @@ import { detectCLI } from '../detection/cli-detector.js';
 import { loadConfig, saveConfig, addCliHistory } from '../config/config.js';
 import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.js';
 import { appendWorkspaceActivity } from '../config/workspace-activity.js';
+import { appendRecentActivity } from '../config/recent-activity.js';
 import { CliProviderInstance } from '../providers/cli-provider-instance.js';
 import { AcpProviderInstance } from '../providers/acp-provider-instance.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
@@ -106,6 +107,22 @@ export class DaemonCliManager {
             console.log(colorize('green', `  ✓ Recent workspace saved: ${dir}`));
         } catch (e) {
             console.error(colorize('red', `  ✗ Failed to save recent workspace: ${e}`));
+        }
+    }
+
+    private persistRecentActivity(entry: {
+        kind: 'ide' | 'cli' | 'acp';
+        providerType: string;
+        providerName: string;
+        workspace?: string;
+        currentModel?: string;
+        sessionId?: string;
+        title?: string;
+    }): void {
+        try {
+            saveConfig(appendRecentActivity(loadConfig(), entry));
+        } catch (e) {
+            console.error(colorize('red', `  ✗ Failed to save recent activity: ${e}`));
         }
     }
 
@@ -300,6 +317,15 @@ export class DaemonCliManager {
             }
 
             try { addCliHistory({ category: 'acp', cliType: normalizedType, dir: resolvedDir, workspace: resolvedDir, cliArgs, model: initialModel }); } catch (e) { LOG.warn('CLI', `ACP history save failed: ${(e as Error)?.message}`); }
+            this.persistRecentActivity({
+                kind: 'acp',
+                providerType: normalizedType,
+                providerName: provider.displayName || provider.name || normalizedType,
+                workspace: resolvedDir,
+                currentModel: initialModel,
+                sessionId,
+                title: provider.displayName || provider.name || normalizedType,
+            });
             this.deps.onStatusChange();
             return;
         }
@@ -368,6 +394,15 @@ export class DaemonCliManager {
         }
 
         try { addCliHistory({ category: 'cli', cliType, dir: resolvedDir, workspace: resolvedDir, cliArgs, model: initialModel }); } catch (e) { LOG.warn('CLI', `CLI history save failed: ${(e as Error)?.message}`); }
+        this.persistRecentActivity({
+            kind: 'cli',
+            providerType: normalizedType,
+            providerName: provider?.displayName || provider?.name || normalizedType,
+            workspace: resolvedDir,
+            currentModel: initialModel,
+            sessionId: key,
+            title: provider?.displayName || provider?.name || normalizedType,
+        });
 
         this.deps.onStatusChange();
     }

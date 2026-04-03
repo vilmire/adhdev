@@ -8,7 +8,7 @@
  *   - web-standalone: StandaloneDaemonContext (localhost WS)
  */
 import type { StatusReportPayload, SessionEntry } from '@adhdev/daemon-core'
-import type { DaemonData } from '../types'
+import type { DaemonData, TerminalBackendStatus } from '../types'
 
 export interface StatusTransformOptions {
     /** Override daemon ID */
@@ -45,6 +45,7 @@ export function statusPayloadToEntries(
     options: StatusTransformOptions,
 ): DaemonData[] {
     const entries: DaemonData[] = []
+    const payloadWithTerminal = payload as StatusReportPayload & { terminalBackend?: TerminalBackendStatus }
     const { daemonId, existingDaemon, timestamp: tsOverride } = options
     const ts = tsOverride || payload.timestamp || Date.now()
     const sessions = payload.sessions || []
@@ -77,6 +78,8 @@ export function statusPayloadToEntries(
         ...(payload.defaultWorkspaceId !== undefined && { defaultWorkspaceId: payload.defaultWorkspaceId }),
         ...(payload.defaultWorkspacePath !== undefined && { defaultWorkspacePath: payload.defaultWorkspacePath }),
         ...(payload.workspaceActivity && { workspaceActivity: payload.workspaceActivity }),
+        ...(('recentSessions' in (payload as any)) && (payload as any).recentSessions && { recentSessions: (payload as any).recentSessions }),
+        ...(payloadWithTerminal.terminalBackend && { terminalBackend: payloadWithTerminal.terminalBackend }),
         ...(payload.detectedIdes && { detectedIdes: payload.detectedIdes }),
         ...(('availableProviders' in payload) && { availableProviders: (payload as any).availableProviders }),
         cdpConnected: ideSessions.some((session) => !!session.cdpConnected),
@@ -112,6 +115,12 @@ export function statusPayloadToEntries(
             currentModel: session.currentModel,
             currentPlan: session.currentPlan,
             currentAutoApprove: session.currentAutoApprove,
+            recentKey: (session as any).recentKey,
+            unread: (session as any).unread,
+            lastSeenAt: (session as any).lastSeenAt,
+            inboxBucket: (session as any).inboxBucket,
+            controlValues: (session as any).controlValues,
+            providerControls: (session as any).providerControls,
             timestamp: ts,
         } as any)
     }
@@ -142,6 +151,12 @@ export function statusPayloadToEntries(
             runtimeWorkspaceLabel: (session as any).runtimeWorkspaceLabel ?? runtime?.workspaceLabel,
             runtimeWriteOwner: (session as any).runtimeWriteOwner ?? runtime?.writeOwner ?? null,
             runtimeAttachedClients: (session as any).runtimeAttachedClients ?? runtime?.attachedClients ?? [],
+            recentKey: (session as any).recentKey,
+            unread: (session as any).unread,
+            lastSeenAt: (session as any).lastSeenAt,
+            inboxBucket: (session as any).inboxBucket,
+            controlValues: (session as any).controlValues,
+            providerControls: (session as any).providerControls,
             timestamp: ts,
             _isCli: true,
         } as any)
@@ -174,8 +189,14 @@ export function statusPayloadToEntries(
             runtimeAttachedClients: (session as any).runtimeAttachedClients ?? runtime?.attachedClients ?? [],
             currentModel: session.currentModel,
             currentPlan: session.currentPlan,
+            recentKey: (session as any).recentKey,
+            unread: (session as any).unread,
+            lastSeenAt: (session as any).lastSeenAt,
+            inboxBucket: (session as any).inboxBucket,
             acpConfigOptions: session.acpConfigOptions,
             acpModes: session.acpModes,
+            controlValues: (session as any).controlValues,
+            providerControls: (session as any).providerControls,
             timestamp: ts,
             _isAcp: true,
         } as any)

@@ -68,6 +68,7 @@ export { default as ApprovalBanner } from './components/dashboard/ApprovalBanner
 export { default as ChatPane } from './components/dashboard/ChatPane'
 export { default as CliTerminalPane } from './components/dashboard/CliTerminalPane'
 export { default as ConnectionBanner } from './components/dashboard/ConnectionBanner'
+export { default as TerminalBackendBanner } from './components/dashboard/TerminalBackendBanner'
 export { default as DashboardHeader } from './components/dashboard/DashboardHeader'
 export { default as HistoryModal } from './components/dashboard/HistoryModal'
 export { default as DashboardModelModeBar } from './components/dashboard/ModelModeBar'
@@ -117,10 +118,16 @@ export { GeneralThemeSection } from './components/settings/GeneralThemeSection'
 export { ChatThemeSection, initChatTheme, getChatTheme, setChatTheme, CHAT_THEMES } from './components/settings/ChatThemeSection'
 export type { ChatThemePreset } from './components/settings/ChatThemeSection'
 export { AccentColorSection, initAccentColor, getAccentColor, setAccentColor } from './components/settings/AccentColorSection'
+export {
+    MobileDashboardModeSection,
+    getMobileDashboardMode,
+    setMobileDashboardMode,
+} from './components/settings/MobileDashboardModeSection'
+export type { MobileDashboardMode } from './components/settings/MobileDashboardModeSection'
 
 // ── Icons ──
 export {
-    IconDashboard, IconServer, IconUsers, IconUser, IconCreditCard, IconKey,
+    IconDashboard, IconChevronLeft, IconServer, IconUsers, IconUser, IconCreditCard, IconKey,
     IconBook, IconWebhook, IconClipboard, IconSettings, IconInfo,
     IconLogout, IconShield, IconCpu, IconSun, IconMoon, IconSystem,
     IconChat, IconMonitor, IconEye, IconRefresh, IconSearch, IconPlug,

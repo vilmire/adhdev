@@ -20,6 +20,7 @@ import { loadConfig, saveConfig, updateConfig } from '../config/config.js';
 import { resolveIdeLaunchWorkspace } from '../config/workspaces.js';
 import { appendWorkspaceActivity } from '../config/workspace-activity.js';
 import { addCliHistory } from '../config/config.js';
+import { appendRecentActivity, buildRecentActivityKey, markRecentSessionSeen } from '../config/recent-activity.js';
 import { detectIDEs } from '../detection/ide-detector.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
@@ -240,9 +241,26 @@ export class DaemonCommandRouter {
                 this.deps.onIdeConnected?.();
                 if (result.success && resolvedWorkspace) {
                     try {
-                        saveConfig(appendWorkspaceActivity(loadConfig(), resolvedWorkspace, {
+                        let next = appendWorkspaceActivity(loadConfig(), resolvedWorkspace, {
                             kind: 'ide',
                             agentType: result.ideId,
+                        });
+                        next = appendRecentActivity(next, {
+                            kind: 'ide',
+                            providerType: result.ideId || ideKey,
+                            providerName: result.ideId || ideKey,
+                            workspace: resolvedWorkspace,
+                            title: result.ideId || ideKey,
+                        });
+                        saveConfig(next);
+                    } catch { /* ignore activity persist errors */ }
+                } else if (result.success && (result.ideId || ideKey)) {
+                    try {
+                        saveConfig(appendRecentActivity(loadConfig(), {
+                            kind: 'ide',
+                            providerType: result.ideId || ideKey,
+                            providerName: result.ideId || ideKey,
+                            title: result.ideId || ideKey,
                         }));
                     } catch { /* ignore activity persist errors */ }
                 }
@@ -262,6 +280,31 @@ export class DaemonCommandRouter {
                 if (!name || typeof name !== 'string') throw new Error('userName required');
                 updateConfig({ userName: name });
                 return { success: true, userName: name };
+            }
+
+            case 'mark_recent_seen': {
+                const kind = args?.kind;
+                const providerType = args?.providerType;
+                if (!kind || !providerType) {
+                    return { success: false, error: 'kind and providerType are required' };
+                }
+                const recentKey = args?.recentKey || buildRecentActivityKey({
+                    kind,
+                    providerType,
+                    workspace: args?.workspace || null,
+                });
+                const next = markRecentSessionSeen(
+                    loadConfig(),
+                    recentKey,
+                    typeof args?.seenAt === 'number' ? args.seenAt : Date.now(),
+                );
+                saveConfig(next);
+                this.deps.onStatusChange?.();
+                return {
+                    success: true,
+                    recentKey,
+                    seenAt: next.recentSessionReads?.[recentKey] || Date.now(),
+                };
             }
 
             // ─── Daemon Self-Upgrade ───

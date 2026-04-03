@@ -125,6 +125,8 @@ export class IdeProviderInstance implements ProviderInstance {
             currentModel: this.cachedChat?.model || undefined,
             currentPlan: this.cachedChat?.mode || undefined,
             currentAutoApprove: this.cachedChat?.autoApprove || undefined,
+            controlValues: this.cachedChat?.controlValues || undefined,
+            providerControls: this.provider.controls as any,
             instanceId: this.instanceId,
             lastUpdated: Date.now(),
             settings: this.settings,
