@@ -4,7 +4,6 @@ import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
 import ApprovalBanner from './ApprovalBanner'
 import ChatPane from './ChatPane'
-import ConversationMetaChips from './ConversationMetaChips'
 import RemoteView from '../RemoteView'
 import IDEChatTabs from '../ide/IDEChatTabs'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
@@ -135,12 +134,6 @@ export default function DashboardRemoteDialog({
                         <div className="dashboard-remote-dialog-title">
                             <IconMonitor size={16} />
                             <span>{effectiveConv.displayPrimary || effectiveConv.agentName || 'Remote'}</span>
-                        </div>
-                        <div className="dashboard-remote-dialog-subtitle">
-                            <ConversationMetaChips
-                                conversation={effectiveConv}
-                                onOpenNativeConversation={() => setDialogChatTab('native')}
-                            />
                         </div>
                     </div>
                     <div className="dashboard-remote-dialog-actions">

@@ -79,7 +79,7 @@ export default function ChatPane({
     activeConv, ideEntry, handleSendChat,
     isSendingChat = false,
     handleFocusAgent, isFocusingAgent, actionLogs, userName,
-    showMetaChips = true,
+    showMetaChips = false,
 }: ChatPaneProps) {
     const receivedAtCache = useRef<Map<string, number>>(new Map());
     const { sendCommand } = useTransport();
