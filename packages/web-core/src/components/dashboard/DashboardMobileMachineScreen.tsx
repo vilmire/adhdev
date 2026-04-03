@@ -279,7 +279,7 @@ export default function DashboardMobileMachineScreen({
                                 </div>
                                 <div className="dashboard-mobile-machine-provider-grid">
                                     {activeLauncherKind === 'ide'
-                                        ? selectedMachineEntry.detectedIdes.slice(0, 6).map(ide => (
+                                        ? (selectedMachineEntry.detectedIdes || []).slice(0, 6).map(ide => (
                                             <button
                                                 key={ide.type}
                                                 type="button"

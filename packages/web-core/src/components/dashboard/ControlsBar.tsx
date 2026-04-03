@@ -156,6 +156,7 @@ export default function ControlsBar({
 
         try {
             // Map setScript to the appropriate daemon command
+            if (!ctrl.setScript) return;
             const cmd = mapSetScript(ctrl.setScript, providerType);
             await exec(cmd, {
                 agentType: providerType,
@@ -174,11 +175,13 @@ export default function ControlsBar({
         const currentIdx = options.indexOf(current);
         const nextIdx = (currentIdx + 1) % options.length;
         const nextValue = options[nextIdx];
+        if (typeof nextValue !== 'string') return;
 
         setLocalValues(prev => ({ ...prev, [ctrl.id]: nextValue }));
         localOverrideUntil.current = Date.now() + 5000;
 
         try {
+            if (!ctrl.setScript) return;
             const cmd = mapSetScript(ctrl.setScript, providerType);
             await exec(cmd, { agentType: providerType, ideType, value: nextValue });
         } catch { /* silent */ }
@@ -192,10 +195,9 @@ export default function ControlsBar({
         localOverrideUntil.current = Date.now() + 5000;
 
         try {
-            if (ctrl.setScript) {
-                const cmd = mapSetScript(ctrl.setScript, providerType);
-                await exec(cmd, { agentType: providerType, ideType, value: nextValue });
-            }
+            if (!ctrl.setScript) return;
+            const cmd = mapSetScript(ctrl.setScript, providerType);
+            await exec(cmd, { agentType: providerType, ideType, value: nextValue });
         } catch { /* silent */ }
     };
 

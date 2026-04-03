@@ -28,7 +28,7 @@ interface DashboardMainViewProps {
     userName?: string
     requestedMobileTabKey: string | null
     onRequestedMobileTabConsumed: () => void
-    containerRef: React.RefObject<HTMLDivElement | null>
+    containerRef: React.RefObject<HTMLDivElement>
     isSplitMode: boolean
     numGroups: number
     groupSizes: number[]
@@ -44,8 +44,8 @@ interface DashboardMainViewProps {
     handleResizeStart: (dividerIdx: number, event: React.MouseEvent) => void
     detectedIdes: { type: string; name: string; running: boolean; id?: string }[]
     handleLaunchIde: (ideType: string) => Promise<void>
-    groupActiveTabIds: Record<number, string>
-    setGroupActiveTabIds: React.Dispatch<React.SetStateAction<Record<number, string>>>
+    groupActiveTabIds: Record<number, string | null>
+    setGroupActiveTabIds: React.Dispatch<React.SetStateAction<Record<number, string | null>>>
     groupTabOrders: Record<number, string[]>
     setGroupTabOrders: React.Dispatch<React.SetStateAction<Record<number, string[]>>>
     toggleHiddenTab: (tabKey: string) => void

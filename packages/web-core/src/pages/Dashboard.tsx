@@ -41,7 +41,7 @@ export default function Dashboard() {
         try { return !localStorage.getItem('adhdev_onboarding_v1') } catch { return false }
     })
     const toasts: Toast[] = daemonCtx.toasts || []
-    const setToasts: React.Dispatch<React.SetStateAction<Toast[]>> = daemonCtx.setToasts || (() => {})
+    const setToasts = (daemonCtx.setToasts || (() => {})) as React.Dispatch<React.SetStateAction<Toast[]>>
     // Abstract connection state (injected by platform)
     const wsStatus = daemonCtx.wsStatus || 'connected'
     const isConnected = daemonCtx.isConnected ?? true
@@ -186,7 +186,7 @@ export default function Dashboard() {
     useDashboardEventManager({
         ides,
         sendDaemonCommand,
-        setToasts,
+        setToasts: setToasts as any,
         setLocalUserMessages,
         resolveConversationByTarget,
     })
