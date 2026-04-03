@@ -62,7 +62,7 @@ export type RecentSessionBucket = 'needs_attention' | 'working' | 'task_complete
 export type { IDaemonCore, DaemonCoreOptions } from './daemon-core.js';
 
 // ── Config ──
-export { loadConfig, saveConfig, resetConfig, isSetupComplete, addCliHistory, markSetupComplete, updateConfig } from './config/config.js';
+export { loadConfig, saveConfig, resetConfig, isSetupComplete, markSetupComplete, updateConfig } from './config/config.js';
 export { getWorkspaceState } from './config/workspaces.js';
 export { appendRecentActivity, getRecentActivity } from './config/recent-activity.js';
 export type { RecentActivityEntry } from './config/recent-activity.js';

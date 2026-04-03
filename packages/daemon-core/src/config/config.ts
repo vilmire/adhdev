@@ -8,12 +8,9 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { migrateWorkspacesFromRecent } from './workspaces.js';
 import type { WorkspaceEntry } from './workspaces.js';
-import type { WorkspaceActivityEntry } from './workspace-activity.js';
 import type { RecentActivityEntry } from './recent-activity.js';
 export type { WorkspaceEntry } from './workspaces.js';
-export type { WorkspaceActivityEntry } from './workspace-activity.js';
 export type { RecentActivityEntry } from './recent-activity.js';
 
 export interface ADHDevConfig {
@@ -54,15 +51,12 @@ export interface ADHDevConfig {
 
  // Daemon: which IDEs to connect (empty = all)
     enabledIdes: string[];
-    recentCliWorkspaces: string[];
 
  /** Saved workspaces for IDE/CLI/ACP launch (daemon-local) */
     workspaces?: WorkspaceEntry[];
  /** Default workspace id (from workspaces[]) — never used implicitly for launch */
     defaultWorkspaceId?: string | null;
 
-    /** Recently used workspaces (IDE / CLI / ACP / default) for quick resume */
-    recentWorkspaceActivity?: WorkspaceActivityEntry[];
     /** Unified recent activity across IDE / CLI / ACP launch flows */
     recentActivity?: RecentActivityEntry[];
     /** Last seen timestamps for machine-facing recent/session entries */
@@ -94,9 +88,6 @@ export interface ADHDevConfig {
      */
     registeredMachineId?: string;
 
- // CLI launch history
-    cliHistory: CliHistoryEntry[];
-
  // Per-provider user config (public setting values)
     providerSettings: Record<string, Record<string, any>>;
 
@@ -111,18 +102,6 @@ export interface ADHDevConfig {
 
  // Optional custom provider directory for local development
     providerDir?: string;
-}
-
-export interface CliHistoryEntry {
-    category?: 'ide' | 'cli' | 'acp';
-    cliType: string;
-    dir: string;
-    cliArgs?: string[];
-    workspace?: string;
-    newWindow?: boolean;
-    model?: string;
-    timestamp: number;
-    label?: string;
 }
 
 const DEFAULT_CONFIG: ADHDevConfig = {
@@ -140,17 +119,14 @@ const DEFAULT_CONFIG: ADHDevConfig = {
     setupDate: null,
     configuredCLIs: [],
     enabledIdes: [],
-    recentCliWorkspaces: [],
     workspaces: [],
     defaultWorkspaceId: null,
-    recentWorkspaceActivity: [],
     recentActivity: [],
     recentSessionReads: {},
     machineNickname: null,
     machineId: undefined,
     machineSecret: null,
     registeredMachineId: undefined,
-    cliHistory: [],
     providerSettings: {},
     ideSettings: {},
     disableUpstream: false,
@@ -227,18 +203,9 @@ export function loadConfig(): ADHDevConfig {
             (merged as ADHDevConfig).defaultWorkspaceId = merged.activeWorkspaceId;
         }
         delete (merged as any).activeWorkspaceId;
-        const hadStoredWorkspaces = Array.isArray(parsed.workspaces) && parsed.workspaces.length > 0;
         const ensured = ensureMachineId(merged);
         const normalized = ensured.config as ADHDevConfig & { activeWorkspaceId?: string | null };
-        migrateWorkspacesFromRecent(normalized);
-        
-        let configChanged = ensured.changed;
-
-        if (!hadStoredWorkspaces && (normalized.workspaces?.length || 0) > 0) {
-            configChanged = true;
-        }
-
-        if (configChanged) {
+        if (ensured.changed) {
             try {
                 saveConfig(normalized);
             } catch { /* ignore */ }
@@ -317,48 +284,4 @@ export function generateConnectionToken(): string {
         token += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return token;
-}
-/**
- * Add launch to history (max 20, dedup by category+type+dir+args+workspace+model)
- */
-export function addCliHistory(entry: Omit<CliHistoryEntry, 'timestamp'>): void {
-    const config = loadConfig();
-    const history = config.cliHistory || [];
-    const argsKey = (entry.cliArgs || []).join(' ');
-    const category = entry.category || 'cli';
-    const workspaceKey = entry.workspace || '';
-    const modelKey = entry.model || '';
-    
- // Remove duplicate (same category + type + dir + args + workspace + model)
-    const filtered = history.filter(h => {
-        const hArgsKey = (h.cliArgs || []).join(' ');
-        return !(
-            (h.category || 'cli') === category &&
-            h.cliType === entry.cliType &&
-            h.dir === entry.dir &&
-            hArgsKey === argsKey &&
-            (h.workspace || '') === workspaceKey &&
-            (h.model || '') === modelKey
-        );
-    });
-    
- // Add to front
-    filtered.unshift({
-        ...entry,
-        category,
-        timestamp: Date.now(),
-        label: entry.label || (() => {
-            const base = `${entry.cliType} · ${entry.dir.split('/').filter(Boolean).pop() || 'root'}`;
-            const suffix: string[] = [];
-            if (entry.workspace && entry.workspace !== entry.dir) suffix.push(entry.workspace.split('/').filter(Boolean).pop() || entry.workspace);
-            if (entry.model) suffix.push(`model=${entry.model}`);
-            if (argsKey) suffix.push(argsKey);
-            if (entry.newWindow) suffix.push('new window');
-            return suffix.length > 0 ? `${base} (${suffix.join(' · ')})` : base;
-        })(),
-    });
-    
- // Keep max 20
-    config.cliHistory = filtered.slice(0, 20);
-    saveConfig(config);
 }

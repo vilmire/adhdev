@@ -42,30 +42,6 @@ export function defaultWorkspaceLabel(absPath: string): string {
     return base;
 }
 
-/**
- * Ensure config.workspaces exists; seed from recentCliWorkspaces once (same paths).
- */
-export function migrateWorkspacesFromRecent(config: ADHDevConfig): ADHDevConfig {
-    if (!config.workspaces) config.workspaces = [];
-    if (config.workspaces.length > 0) return config;
-
-    const recent = config.recentCliWorkspaces || [];
-    const now = Date.now();
-    for (const raw of recent) {
-        const abs = expandPath(raw);
-        if (!abs || validateWorkspacePath(abs).ok !== true) continue;
-        if (config.workspaces.some(w => path.resolve(w.path) === abs)) continue;
-        config.workspaces.push({
-            id: randomUUID(),
-            path: abs,
-            label: defaultWorkspaceLabel(abs),
-            addedAt: now,
-        });
-        if (config.workspaces.length >= MAX_WORKSPACES) break;
-    }
-    return config;
-}
-
 export function getDefaultWorkspacePath(config: ADHDevConfig): string | null {
     const id = config.defaultWorkspaceId;
     if (!id) return null;

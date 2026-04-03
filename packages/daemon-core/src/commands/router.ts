@@ -18,8 +18,6 @@ import type { ProviderInstanceManager } from '../providers/provider-instance-man
 import { launchWithCdp, killIdeProcess, isIdeRunning } from '../launch.js';
 import { loadConfig, saveConfig, updateConfig } from '../config/config.js';
 import { resolveIdeLaunchWorkspace } from '../config/workspaces.js';
-import { appendWorkspaceActivity } from '../config/workspace-activity.js';
-import { addCliHistory } from '../config/config.js';
 import { appendRecentActivity, buildRecentActivityKey, markRecentSessionSeen } from '../config/recent-activity.js';
 import { detectIDEs } from '../detection/ide-detector.js';
 import { SessionRegistry } from '../sessions/registry.js';
@@ -208,17 +206,6 @@ export class DaemonCommandRouter {
                 };
                 LOG.info('LaunchIDE', `target=${ideKey || 'auto'}`);
                 const result = await launchWithCdp(launchArgs);
-                if (result.success && (result.ideId || ideKey)) {
-                    try {
-                        addCliHistory({
-                            category: 'ide',
-                            cliType: result.ideId || ideKey,
-                            dir: resolvedWorkspace || '',
-                            workspace: resolvedWorkspace || '',
-                            newWindow: args?.newWindow === true,
-                        });
-                    } catch { /* ignore history failure */ }
-                }
 
                 if (result.success && result.port && result.ideId && !this.deps.cdpManagers.has(result.ideId)) {
                     const logFn = this.deps.getCdpLogFn
@@ -241,11 +228,7 @@ export class DaemonCommandRouter {
                 this.deps.onIdeConnected?.();
                 if (result.success && resolvedWorkspace) {
                     try {
-                        let next = appendWorkspaceActivity(loadConfig(), resolvedWorkspace, {
-                            kind: 'ide',
-                            agentType: result.ideId,
-                        });
-                        next = appendRecentActivity(next, {
+                        const next = appendRecentActivity(loadConfig(), {
                             kind: 'ide',
                             providerType: result.ideId || ideKey,
                             providerName: result.ideId || ideKey,

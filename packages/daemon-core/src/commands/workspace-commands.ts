@@ -4,7 +4,6 @@
 
 import { loadConfig, saveConfig } from '../config/config.js';
 import * as W from '../config/workspaces.js';
-import { appendWorkspaceActivity, removeActivityForPath } from '../config/workspace-activity.js';
 
 export type WorkspaceCommandResult = { success: boolean;[key: string]: unknown };
 
@@ -29,9 +28,8 @@ export function handleWorkspaceAdd(args: any): WorkspaceCommandResult {
     const result = W.addWorkspaceEntry(config, rawPath, label, { createIfMissing });
     if ('error' in result) return { success: false, error: result.error };
 
-    let cfg = appendWorkspaceActivity(result.config, result.entry.path, {});
-    saveConfig(cfg);
-    const state = W.getWorkspaceState(cfg);
+    saveConfig(result.config);
+    const state = W.getWorkspaceState(result.config);
     return { success: true, entry: result.entry, ...state };
 }
 
@@ -44,12 +42,8 @@ export function handleWorkspaceRemove(args: any): WorkspaceCommandResult {
     const result = W.removeWorkspaceEntry(config, id);
     if ('error' in result) return { success: false, error: result.error };
 
-    let cfg = result.config;
-    if (removed) {
-        cfg = removeActivityForPath(cfg, removed.path);
-    }
-    saveConfig(cfg);
-    const state = W.getWorkspaceState(cfg);
+    saveConfig(result.config);
+    const state = W.getWorkspaceState(result.config);
     return { success: true, removedId: id, ...state };
 }
 
@@ -95,12 +89,7 @@ export function handleWorkspaceSetDefault(args: any): WorkspaceCommandResult {
     const result = W.setDefaultWorkspaceId(config, nextId);
     if ('error' in result) return { success: false, error: result.error };
 
-    let out = result.config;
-    const ap = W.getDefaultWorkspacePath(out);
-    if (ap) {
-        out = appendWorkspaceActivity(out, ap, { kind: 'default' });
-    }
-    saveConfig(out);
-    const state = W.getWorkspaceState(out);
+    saveConfig(result.config);
+    const state = W.getWorkspaceState(result.config);
     return { success: true, ...state };
 }

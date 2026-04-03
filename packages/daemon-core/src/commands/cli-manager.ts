@@ -11,9 +11,8 @@ import * as crypto from 'crypto';
 import chalk from 'chalk';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import { detectCLI } from '../detection/cli-detector.js';
-import { loadConfig, saveConfig, addCliHistory } from '../config/config.js';
+import { loadConfig, saveConfig } from '../config/config.js';
 import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.js';
-import { appendWorkspaceActivity } from '../config/workspace-activity.js';
 import { appendRecentActivity } from '../config/recent-activity.js';
 import { CliProviderInstance } from '../providers/cli-provider-instance.js';
 import { AcpProviderInstance } from '../providers/acp-provider-instance.js';
@@ -89,25 +88,6 @@ export class DaemonCliManager {
     getCliKey(cliType: string, dir: string): string {
         const hash = require('crypto').createHash('md5').update(require('path').resolve(dir)).digest('hex').slice(0, 8);
         return `${cliType}_${hash}`;
-    }
-
-    private persistRecentDir(cliType: string, dir: string): void {
-        try {
-            const normalizedType = this.providerLoader.resolveAlias(cliType);
-            const provider = this.providerLoader.getByAlias(cliType);
-            const actKind = provider?.category === 'acp' ? 'acp' : 'cli';
-            let next = loadConfig();
-            console.log(colorize('cyan', `  📂 Saving recent workspace: ${dir}`));
-            const recent = next.recentCliWorkspaces || [];
-            if (!recent.includes(dir)) {
-                next = { ...next, recentCliWorkspaces: [dir, ...recent].slice(0, 10) };
-            }
-            next = appendWorkspaceActivity(next, dir, { kind: actKind, agentType: normalizedType });
-            saveConfig(next);
-            console.log(colorize('green', `  ✓ Recent workspace saved: ${dir}`));
-        } catch (e) {
-            console.error(colorize('red', `  ✗ Failed to save recent workspace: ${e}`));
-        }
     }
 
     private persistRecentActivity(entry: {
@@ -316,7 +296,6 @@ export class DaemonCliManager {
                 }
             }
 
-            try { addCliHistory({ category: 'acp', cliType: normalizedType, dir: resolvedDir, workspace: resolvedDir, cliArgs, model: initialModel }); } catch (e) { LOG.warn('CLI', `ACP history save failed: ${(e as Error)?.message}`); }
             this.persistRecentActivity({
                 kind: 'acp',
                 providerType: normalizedType,
@@ -393,7 +372,6 @@ export class DaemonCliManager {
             console.log(colorize('green', `  ✓ CLI started: ${cliInfo.displayName} v${cliInfo.version || 'unknown'} in ${resolvedDir}`));
         }
 
-        try { addCliHistory({ category: 'cli', cliType, dir: resolvedDir, workspace: resolvedDir, cliArgs, model: initialModel }); } catch (e) { LOG.warn('CLI', `CLI history save failed: ${(e as Error)?.message}`); }
         this.persistRecentActivity({
             kind: 'cli',
             providerType: normalizedType,
@@ -569,8 +547,6 @@ export class DaemonCliManager {
                     }
                 }
 
-                this.persistRecentDir(cliType, dir);
-
                 return { success: true, cliType, dir, id: newKey, launchSource };
             }
             case 'stop_cli': {
@@ -614,7 +590,6 @@ export class DaemonCliManager {
                 const found = this.findAdapter(cliType, { instanceKey: args?.targetSessionId, dir });
                 if (found) await this.stopSession(found.key);
                 await this.startSession(cliType, dir);
-                this.persistRecentDir(cliType, dir);
                 return { success: true, restarted: true };
             }
             case 'agent_command': {
