@@ -142,6 +142,17 @@ export default function DashboardMobileChatMode({
         () => machineEntries.find(machine => machine.id === selectedMachineId) || null,
         [machineEntries, selectedMachineId],
     )
+    const mobileInboxConversations = useMemo(
+        () => conversations.filter(conversation => {
+            if (conversation.streamSource !== 'native' || conversation.transport !== 'cdp-page') return true
+            return !conversations.some(other => (
+                other.ideId === conversation.ideId
+                && other.tabKey !== conversation.tabKey
+                && other.streamSource === 'agent-stream'
+            ))
+        }),
+        [conversations],
+    )
 
     const cmds = useDashboardConversationCommands({
         sendDaemonCommand,
@@ -189,7 +200,7 @@ export default function DashboardMobileChatMode({
         onRequestedActiveTabConsumed?.()
     }, [conversations, onRequestedActiveTabConsumed, requestedActiveTabKey])
 
-    const items = useMemo<MobileConversationListItem[]>(() => conversations.map(conversation => {
+    const items = useMemo<MobileConversationListItem[]>(() => mobileInboxConversations.map(conversation => {
         const timestamp = getConversationTimestamp(conversation)
         const preview = getConversationPreview(conversation)
         const daemonBucket = conversation.inboxBucket || 'idle'
@@ -222,7 +233,7 @@ export default function DashboardMobileChatMode({
             isWorking,
             inboxBucket,
         }
-    }).sort((a, b) => b.timestamp - a.timestamp), [conversations, readState, screen, selectedConversation])
+    }).sort((a, b) => b.timestamp - a.timestamp), [mobileInboxConversations, readState, screen, selectedConversation])
 
     const attentionItems = useMemo(
         () => items.filter(item => item.requiresAction),
