@@ -265,6 +265,8 @@ function buildCliSession(state: CliProviderState): SessionEntry {
         runtimeWorkspaceLabel: state.runtime?.workspaceLabel,
         runtimeWriteOwner: state.runtime?.writeOwner || null,
         runtimeAttachedClients: state.runtime?.attachedClients || [],
+        launchMode: state.launchMode,
+        mode: state.mode,
         resume: state.resume,
         activeChat,
         capabilities: PTY_SESSION_CAPABILITIES,

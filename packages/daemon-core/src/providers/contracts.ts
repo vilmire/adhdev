@@ -317,6 +317,20 @@ export interface ProviderModule {
     shell?: boolean;
     env?: Record<string, string>;
   };
+ /**
+  * Configurable options shown at session launch time (schema declaration).
+  * The frontend renders these as a launch config UI.
+  * Values are passed to launchArgBuilder to produce the final args.
+  */
+  launchOptions?: ProviderLaunchOption[];
+ /**
+  * Builds extra spawn args from user-selected launch option values.
+  * Called with the merged defaults + mode preset + user overrides.
+  * When defined, takes precedence over launchMode.extraArgs.
+  */
+  launchArgBuilder?: (options: Record<string, string | boolean | number>) => string[];
+ /** Named presets — shortcuts that set launchOption values in bulk */
+  launchModes?: ProviderLaunchMode[];
   patterns?: {
     prompt?: RegExp[];
     generating?: RegExp[];
@@ -391,6 +405,72 @@ export interface ProviderModule {
  // ─── ACP Authentication (auth method definitions) ───
  /** ACP agent auth methods (multiple supported — in priority order) */
   auth?: AcpAuthMethod[];
+}
+
+// ─── CLI Launch Options (individual configurable flags) ────────────────
+
+export type ProviderLaunchOptionType = 'select' | 'boolean' | 'string' | 'number';
+
+/**
+ * A single configurable option exposed at session launch time.
+ * Providers declare these so the frontend can render a launch config UI.
+ * The final args are built by launchArgBuilder(selectedValues).
+ *
+ * Example — Claude Code:
+ *   { id: 'outputFormat', type: 'select', options: [
+ *       { value: 'terminal', label: 'Terminal' },
+ *       { value: 'stream-json', label: 'Chat' },
+ *   ], default: 'terminal' }
+ */
+export interface ProviderLaunchOption {
+ /** Unique identifier — key used in launchArgBuilder options map */
+  id: string;
+ /** Display label */
+  name: string;
+  description?: string;
+  type: ProviderLaunchOptionType;
+ /** Options for 'select' type */
+  options?: { value: string; label: string; description?: string }[];
+ /** Default value — applied when not explicitly set */
+  default?: string | boolean | number;
+ /**
+  * Maps specific values of this option to a frontend rendering hint.
+  * e.g. { 'stream-json': 'stream-json' } tells the UI to switch to Chat mode.
+  */
+  outputFormatMap?: Record<string, 'terminal' | 'stream-json'>;
+}
+
+/**
+ * A named launch preset — shorthand for a specific set of launchOption values.
+ * When selected, its `options` are merged with user-configured values before
+ * calling launchArgBuilder. Falls back to `extraArgs` if no launchArgBuilder defined.
+ */
+export interface ProviderLaunchMode {
+ /** Unique mode identifier (e.g. 'terminal', 'chat') */
+  id: string;
+ /** Display name */
+  name: string;
+  description?: string;
+ /**
+  * Preset option values — merged over defaults before calling launchArgBuilder.
+  * Keys correspond to ProviderLaunchOption.id.
+  */
+  options?: Record<string, string | boolean | number>;
+ /**
+  * Fallback: raw args appended when no launchArgBuilder is defined.
+  * Use launchArgBuilder + options for anything more than trivial cases.
+  */
+  extraArgs?: string[];
+ /** Env var overrides applied on top of spawn.env */
+  env?: Record<string, string>;
+ /**
+  * Output rendering hint (shorthand when not using launchOptions/outputFormatMap).
+  * - 'terminal' — raw PTY stream (default)
+  * - 'stream-json' — structured JSON events → chat messages
+  */
+  outputFormat?: 'terminal' | 'stream-json';
+ /** Whether this is the default mode when none is specified */
+  default?: boolean;
 }
 
 export interface ProviderResumeCapability {

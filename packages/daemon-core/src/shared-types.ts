@@ -102,6 +102,10 @@ export interface SessionEntry {
     runtimeKey?: string;
     runtimeDisplayName?: string;
     runtimeWorkspaceLabel?: string;
+    /** CLI only: active launch mode id (e.g. 'terminal', 'chat') */
+    launchMode?: string;
+    /** CLI only: output rendering mode derived from launchMode.outputFormat */
+    mode?: 'terminal' | 'chat';
     runtimeWriteOwner?: RuntimeWriteOwner | null;
     runtimeAttachedClients?: RuntimeAttachedClient[];
     resume?: ProviderResumeCapability;

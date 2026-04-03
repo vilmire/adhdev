@@ -47,8 +47,8 @@ export default function CliTerminalPane({
     };
 
     const seedTerminal = (text: string, seq = 0) => {
-        if (liveOutputStartedRef.current) return;
-        if (seededSnapshotSeqRef.current >= seq && seededSnapshotSeqRef.current !== 0) return;
+        if (seq > 0 && seededSnapshotSeqRef.current >= seq) return;
+        if (seq === 0 && liveOutputStartedRef.current) return;
         seededSnapshotSeqRef.current = seq;
         setRuntimeReady(true);
         terminalRef.current?.clear();
@@ -80,8 +80,6 @@ export default function CliTerminalPane({
                 clearRuntimeView();
             }
         }) || (() => {});
-
-        connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId).catch(() => {});
 
         return () => {
             unsubRuntime();
