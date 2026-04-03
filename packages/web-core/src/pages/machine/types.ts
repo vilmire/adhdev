@@ -2,7 +2,7 @@
  * MachineDetail — Shared types & utils for machine sub-tabs.
  */
 
-import type { SessionEntry } from '../../types'
+import type { SessionEntry, RuntimeWriteOwner, AvailableProviderInfo } from '../../types'
 
 // ─── Types ───────────────────────────────────────────
 export interface IdeSessionEntry {
@@ -17,7 +17,7 @@ export interface CliSessionEntry {
     id: string; sessionId?: string; type: string; cliName: string; status: string
     workspace: string; activeChat: any; daemonId: string
     runtimeKey?: string; runtimeDisplayName?: string; runtimeWorkspaceLabel?: string
-    runtimeWriteOwner?: { clientId: string; ownerType: 'agent' | 'user' } | null
+    runtimeWriteOwner?: RuntimeWriteOwner | null
 }
 
 export interface AcpSessionEntry {
@@ -28,8 +28,6 @@ export interface AcpSessionEntry {
 
 export interface WorkspaceRow { id: string; path: string; label?: string; addedAt: number }
 
-export interface WorkspaceActivityRow { path: string; lastUsedAt: number; kind?: string; agentType?: string }
-
 export interface MachineData {
     id: string; hostname: string; platform: string; arch: string
     cpus: number; totalMem: number; freeMem: number; availableMem?: number; loadavg: number[]
@@ -39,7 +37,6 @@ export interface MachineData {
     workspaces: WorkspaceRow[]
     defaultWorkspaceId: string | null
     defaultWorkspacePath: string | null
-    workspaceActivity: WorkspaceActivityRow[]
 }
 
 export interface LogEntry { timestamp: number; level: 'info' | 'warn' | 'error'; message: string }
@@ -54,9 +51,7 @@ export type WorkspaceLaunchKind = 'ide' | 'cli' | 'acp'
 
 export type TabId = 'workspace' | 'overview' | 'providers' | 'logs' | 'ides' | 'clis' | 'acps'
 
-export interface ProviderInfo {
-    type: string; displayName: string; icon: string; category: string;
-}
+export type ProviderInfo = AvailableProviderInfo
 
 export interface MachineRecentSession {
     id: string
@@ -78,13 +73,7 @@ export interface MachineLaunchTarget {
 }
 
 // ─── Utils ───────────────────────────────────────────
-export function formatRelativeAgo(ts: number): string {
-    const s = Math.floor((Date.now() - ts) / 1000);
-    if (s < 45) return 'just now';
-    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-    return `${Math.floor(s / 86400)}d ago`;
-}
+export { formatRelativeAgo } from '../../utils/time'
 
 /** Shared context passed from MachineDetail to each tab component. */
 export interface MachineTabContext {

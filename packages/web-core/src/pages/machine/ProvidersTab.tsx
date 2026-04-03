@@ -171,7 +171,13 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                                 >{prov.category}</span>
                                 {prov.category === 'ide' && (
                                     <button
-                                        onClick={() => setFixTarget(providers.find(p => p.type === prov.type) || { type: prov.type, displayName: prov.displayName, icon: prov.icon, category: prov.category })}
+                                        onClick={() => setFixTarget(providers.find(p => p.type === prov.type) || {
+                                            type: prov.type,
+                                            name: prov.displayName,
+                                            displayName: prov.displayName,
+                                            icon: prov.icon,
+                                            category: prov.category as 'ide' | 'cli' | 'acp' | 'extension',
+                                        })}
                                         className="ml-auto machine-btn text-[9px] px-2 py-0.5 bg-violet-500/[0.06] border-violet-500/20 text-violet-400 hover:bg-violet-500/[0.12]"
                                     >🔧 Auto-Fix</button>
                                 )}

@@ -28,6 +28,8 @@ interface DashboardMainViewProps {
     userName?: string
     requestedMobileTabKey: string | null
     onRequestedMobileTabConsumed: () => void
+    requestedMachineId: string | null
+    onRequestedMachineConsumed: () => void
     containerRef: React.RefObject<HTMLDivElement>
     isSplitMode: boolean
     numGroups: number
@@ -76,6 +78,8 @@ export default function DashboardMainView({
     userName,
     requestedMobileTabKey,
     onRequestedMobileTabConsumed,
+    requestedMachineId,
+    onRequestedMachineConsumed,
     containerRef,
     isSplitMode,
     numGroups,
@@ -134,6 +138,8 @@ export default function DashboardMainView({
                     userName={userName}
                     requestedActiveTabKey={requestedMobileTabKey}
                     onRequestedActiveTabConsumed={onRequestedMobileTabConsumed}
+                    requestedMachineId={requestedMachineId}
+                    onRequestedMachineConsumed={onRequestedMachineConsumed}
                     onOpenHistory={onOpenHistory}
                     onOpenRemote={onOpenRemote}
                 />

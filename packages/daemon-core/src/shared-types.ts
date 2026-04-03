@@ -86,6 +86,9 @@ export type SessionCapability =
     | 'set_mode'
     | 'set_thought_level';
 
+import type { RuntimeWriteOwner, RuntimeAttachedClient, SessionStatus } from './shared-types-extra.js';
+export type { RuntimeWriteOwner, RuntimeAttachedClient, SessionStatus } from './shared-types-extra.js';
+
 export interface SessionEntry {
     id: string;
     parentId: string | null;
@@ -93,21 +96,14 @@ export interface SessionEntry {
     providerName: string;
     kind: SessionKind;
     transport: SessionTransport;
-    status: 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
+    status: SessionStatus;
     title: string;
     workspace: string | null;
     runtimeKey?: string;
     runtimeDisplayName?: string;
     runtimeWorkspaceLabel?: string;
-    runtimeWriteOwner?: {
-        clientId: string;
-        ownerType: 'agent' | 'user';
-    } | null;
-    runtimeAttachedClients?: {
-        clientId: string;
-        type: 'daemon' | 'web' | 'local-terminal';
-        readOnly: boolean;
-    }[];
+    runtimeWriteOwner?: RuntimeWriteOwner | null;
+    runtimeAttachedClients?: RuntimeAttachedClient[];
     resume?: ProviderResumeCapability;
     activeChat: _ActiveChatData | null;
     capabilities: SessionCapability[];
@@ -222,6 +218,10 @@ export interface WorkspaceActivity {
     agentType?: string;
 }
 
+export type { RecentSessionBucket, TerminalBackendStatus } from './shared-types-extra.js';
+import type { RecentSessionBucket } from './shared-types-extra.js';
+import type { TerminalBackendStatus } from './shared-types-extra.js';
+
 export interface RecentSessionEntry {
     id: string;
     recentKey: string;
@@ -239,19 +239,11 @@ export interface RecentSessionEntry {
     inboxBucket?: RecentSessionBucket;
 }
 
-export type RecentSessionBucket = 'needs_attention' | 'working' | 'task_complete' | 'idle';
-
-export interface TerminalBackendStatus {
-    backend: 'xterm' | 'ghostty-vt';
-    preference: 'auto' | 'xterm' | 'ghostty-vt';
-    ghosttyAvailable: boolean;
-}
-
 // ─── Status Report Payload (daemon → server) ────────────────────────
 // Full payload shape sent via WebSocket status_report
 
 export interface StatusReportPayload {
-    /** Daemon instance ID */
+    /** Unique daemon instance identifier */
     instanceId: string;
     /** Daemon version */
     version: string;
@@ -276,4 +268,6 @@ export interface StatusReportPayload {
     workspaceActivity?: WorkspaceActivity[];
     recentSessions?: RecentSessionEntry[];
     terminalBackend?: TerminalBackendStatus;
+    /** Available providers (present in StatusSnapshot, optional in raw payload) */
+    availableProviders?: AvailableProviderInfo[];
 }

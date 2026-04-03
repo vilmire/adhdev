@@ -4,7 +4,7 @@
  * Commonly used by Machines, MachineDetail, Dashboard, etc.
  */
 import type { DaemonData } from '../types'
-import type { MachineInfo, DetectedIdeInfo, SessionEntry } from '@adhdev/daemon-core'
+import type { MachineInfo, DetectedIdeInfo, SessionEntry, RuntimeWriteOwner } from '@adhdev/daemon-core'
 import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 
 // ─── Formatters ──────────────────────────────────
@@ -292,7 +292,7 @@ export interface CliSessionSummary {
     runtimeKey?: string
     runtimeDisplayName?: string
     runtimeWorkspaceLabel?: string
-    runtimeWriteOwner?: { clientId: string; ownerType: 'agent' | 'user' } | null
+    runtimeWriteOwner?: RuntimeWriteOwner | null
 }
 
 /** ACP session summary for machine detail/overview display */

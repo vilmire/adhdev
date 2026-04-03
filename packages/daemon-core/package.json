@@ -19,7 +19,8 @@
     }
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && npm run build:types",
+    "build:types": "tsc -p tsconfig.json --emitDeclarationOnly --declaration --declarationMap false",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

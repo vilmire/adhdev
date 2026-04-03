@@ -27,11 +27,7 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
     const [logs, setLogs] = useState<LogEntry[]>([])
     const [launchingIde, setLaunchingIde] = useState<string | null>(null)
     const [launchingAgentType, setLaunchingAgentType] = useState<string | null>(null)
-    const [loadingWorkspaces, setLoadingWorkspaces] = useState(false)
     const [workspaceBusy, setWorkspaceBusy] = useState(false)
-    const [loadingHistory, setLoadingHistory] = useState(false)
-    const [cliHistory, setCliHistory] = useState<any[]>([])
-    const [recentWorkspaces, setRecentWorkspaces] = useState<string[]>([])
     const [launchPick, setLaunchPick] = useState<LaunchPickState | null>(null)
     const [editingNickname, setEditingNickname] = useState(false)
     const [nicknameInput, setNicknameInput] = useState('')
@@ -156,16 +152,6 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         } catch (e: any) { addLog('error', `Detection failed: ${e.message}`, true) }
     }, [machineId, addLog, sendDaemonCommand])
 
-    const handleLoadRecentWorkspaces = useCallback(async () => {
-        if (!machineId) return
-        setLoadingWorkspaces(true)
-        try {
-            const res: any = await sendDaemonCommand(machineId, 'get_recent_workspaces', {})
-            if (res?.success && Array.isArray(res?.result)) setRecentWorkspaces(res.result)
-        } catch (e: any) { addLog('error', `Failed: ${e.message}`) }
-        finally { setLoadingWorkspaces(false) }
-    }, [machineId, addLog, sendDaemonCommand])
-
     const handleWorkspaceAdd = useCallback(async (path: string) => {
         if (!machineId || !path.trim()) return
         setWorkspaceBusy(true)
@@ -220,17 +206,6 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         finally { setWorkspaceBusy(false) }
     }, [machineId, addLog, sendDaemonCommand])
 
-    const loadCliHistory = useCallback(async () => {
-        if (!machineId) return
-        setLoadingHistory(true)
-        try {
-            const res: any = await sendDaemonCommand(machineId, 'get_cli_history', {})
-            const hist = res?.history ?? res?.result?.history
-            if (res?.success && Array.isArray(hist)) setCliHistory(hist)
-        } catch { }
-        setLoadingHistory(false)
-    }, [machineId, sendDaemonCommand])
-
     const handleSaveNickname = useCallback(async () => {
         if (!machineId) return
         try {
@@ -253,8 +228,7 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
 
     return {
         // State
-        logs, launchingIde, launchingAgentType, loadingWorkspaces, workspaceBusy,
-        loadingHistory, cliHistory, recentWorkspaces,
+        logs, launchingIde, launchingAgentType, workspaceBusy,
         launchPick, setLaunchPick,
         editingNickname, setEditingNickname,
         nicknameInput, setNicknameInput,
@@ -262,10 +236,9 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         addLog,
         handleLaunchIde, runLaunchCliCore, handleLaunchCli,
         handleStopCli, handleRestartIde, handleStopIde, handleDetectIdes,
-        handleLoadRecentWorkspaces,
         handleWorkspaceAdd, handleWorkspaceRemove,
         handleWorkspaceSetDefault, handleWorkspaceResumePath,
-        loadCliHistory, handleSaveNickname,
+        handleSaveNickname,
         setOnDefaultWorkspaceChanged,
     }
 }

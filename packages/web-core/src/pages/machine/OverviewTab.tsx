@@ -6,7 +6,7 @@ import { formatUptime, formatBytes, getWorkspaceDisplayLabel } from '../../utils
 import ProgressBar from '../../components/ProgressBar'
 import StatCard from '../../components/StatCard'
 import { IconClock, IconMonitor, IconFolder, IconTerminal, IconBot } from '../../components/Icons'
-import { formatRelativeAgo, type MachineData, type IdeSessionEntry, type CliSessionEntry, type AcpSessionEntry } from './types'
+import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
 import type { useMachineActions } from './useMachineActions'
 
 interface OverviewTabProps {
@@ -37,9 +37,6 @@ export default function OverviewTab({
         ? Math.min(100, Math.max(0, Math.round(((machine.totalMem - memAvail) / machine.totalMem) * 100)))
         : 0
     const loadAvg1m = machine.loadavg[0] || 0
-    const recentWorkspaceActivity = [...(machine.workspaceActivity || [])]
-        .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
-        .slice(0, 5)
     const hiddenEntries = [
         ...ideSessions.map(entry => ({ id: entry.id, label: `IDE · ${entry.type}`, workspace: entry.workspace || '' })),
         ...cliSessions.map(entry => ({ id: entry.id, label: `CLI · ${entry.cliName}`, workspace: entry.workspace || '' })),
@@ -121,26 +118,6 @@ export default function OverviewTab({
                             </li>
                         ))}
                     </ul>
-                )}
-                {recentWorkspaceActivity.length > 0 && (
-                    <div className="mt-4">
-                        <div className="text-[10px] text-text-muted uppercase tracking-wide font-semibold mb-2">
-                            Recent activity
-                        </div>
-                        <div className="space-y-1.5">
-                            {recentWorkspaceActivity.map((item) => (
-                                <div key={`${item.path}:${item.lastUsedAt}`} className="flex items-center gap-2 text-[11px] rounded-lg border border-border-subtle bg-bg-primary px-2.5 py-2">
-                                    <div className="min-w-0 flex-1">
-                                        <div className="text-text-primary truncate">{getWorkspaceDisplayLabel(item.path)}</div>
-                                        <div className="text-[10px] text-text-muted font-mono truncate" title={item.path}>{item.path}</div>
-                                    </div>
-                                    <span className="text-[10px] text-text-muted shrink-0">
-                                        {item.kind ? `${item.kind} · ` : ''}{formatRelativeAgo(item.lastUsedAt)}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
                 )}
             </div>
 

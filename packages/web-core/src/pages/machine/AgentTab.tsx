@@ -4,7 +4,7 @@
  * All three categories share:
  *   1. Launch form (provider selector + dir + args + buttons)
  *   2. Running agents list with status badges and actions
- *   3. History / Recent workspaces
+ *   3. Running session management
  *
  * Category-specific features are handled via conditional rendering:
  *   - IDE: Detected IDEs list, extension toggles, Control button, multi-window
@@ -59,7 +59,7 @@ export default function AgentTab({
     const {
         handleLaunchIde, handleLaunchCli, handleStopCli, handleRestartIde, handleStopIde,
         handleDetectIdes,
-        cliHistory, loadingHistory, loadCliHistory, launchingIde, launchingAgentType,
+        launchingIde, launchingAgentType,
     } = actions
     const [copiedRuntimeKey, setCopiedRuntimeKey] = useState<string | null>(null)
     const openSessionInDashboard = useCallback((sessionId: string) => {
@@ -594,64 +594,6 @@ export default function AgentTab({
                         )
                     })}
                 </div>
-            )}
-
-            {/* ═══ History ═══ */}
-            {(
-                <>
-                    <div className="flex items-center gap-2 mb-2.5">
-                        <span className="text-[11px] text-text-muted font-semibold uppercase tracking-wider">History</span>
-                        <button onClick={loadCliHistory} disabled={loadingHistory} className="machine-btn">
-                            {loadingHistory ? '⏳' : '↻ Load'}
-                        </button>
-                    </div>
-                    {(() => {
-                        const categoryTypes = new Set(categoryProviders.map(p => p.type))
-                        const filtered = cliHistory.filter((item: any) => {
-                            const itemCategory = item.category || 'cli'
-                            if (itemCategory !== category) return false
-                            return category === 'ide' ? true : categoryTypes.has(item.cliType)
-                        })
-                        return filtered.length > 0 ? (
-                            <div className="flex flex-col gap-1 max-h-[200px] overflow-y-auto">
-                                {filtered.map((item: any, i: number) => (
-                                    <div
-                                        key={i}
-                                        onClick={() => {
-                                            setSelectedType(item.cliType)
-                                            if (item.workspace || item.dir) {
-                                                setSelectedWorkspace('__custom__')
-                                                setCustomPath(item.workspace || item.dir)
-                                            }
-                                            setLaunchArgs((item.cliArgs || []).join(' '))
-                                            setLaunchModel(item.model || '')
-                                            if (isIde) {
-                                                void (async () => {
-                                                    const launched = await handleLaunchIde(item.cliType, item.workspace ? { workspace: item.workspace } : undefined)
-                                                    if (launched) markPendingLaunch(item.cliType)
-                                                })()
-                                            }
-                                        }}
-                                        className="flex justify-between items-center px-2.5 py-1.5 rounded-md cursor-pointer bg-bg-glass border border-border-subtle text-xs transition-colors duration-150 hover:bg-bg-glass-hover"
-                                    >
-                                        <div className="flex gap-1.5 items-center text-text-secondary">
-                                            <span>{getIcon(item.cliType)}</span>
-                                            <span>{(item.workspace || item.dir)?.split('/').filter(Boolean).pop() || item.cliType || 'root'}</span>
-                                            {item.model && <span className="text-cyan-500 text-[10px]">model={item.model}</span>}
-                                            {item.newWindow && <span className="text-text-muted text-[10px]">new window</span>}
-                                            {item.cliArgs?.length > 0 && <span className="text-text-muted text-[10px]">{item.cliArgs.join(' ')}</span>}
-                                        </div>
-                                        <span className="text-text-muted text-[10px]">
-                                            {item.timestamp ? new Date(item.timestamp).toLocaleDateString() : ''}
-                                        </span>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="text-[11px] text-text-muted italic mb-2">No {config.label} launch history yet.</div>
-                        )
-                    })()}
-                </>
             )}
         </div>
     )

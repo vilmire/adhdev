@@ -8,7 +8,7 @@
  *   - web-standalone: StandaloneDaemonContext (localhost WS)
  */
 import type { StatusReportPayload, SessionEntry } from '@adhdev/daemon-core'
-import type { DaemonData, TerminalBackendStatus } from '../types'
+import type { DaemonData } from '../types'
 
 export interface StatusTransformOptions {
     /** Override daemon ID */
@@ -45,7 +45,6 @@ export function statusPayloadToEntries(
     options: StatusTransformOptions,
 ): DaemonData[] {
     const entries: DaemonData[] = []
-    const payloadWithTerminal = payload as StatusReportPayload & { terminalBackend?: TerminalBackendStatus }
     const { daemonId, existingDaemon, timestamp: tsOverride } = options
     const ts = tsOverride || payload.timestamp || Date.now()
     const sessions = payload.sessions || []
@@ -77,13 +76,12 @@ export function statusPayloadToEntries(
         ...(payload.workspaces && { workspaces: payload.workspaces }),
         ...(payload.defaultWorkspaceId !== undefined && { defaultWorkspaceId: payload.defaultWorkspaceId }),
         ...(payload.defaultWorkspacePath !== undefined && { defaultWorkspacePath: payload.defaultWorkspacePath }),
-        ...(payload.workspaceActivity && { workspaceActivity: payload.workspaceActivity }),
-        ...(('recentSessions' in (payload as any)) && (payload as any).recentSessions && { recentSessions: (payload as any).recentSessions }),
-        ...(payloadWithTerminal.terminalBackend && { terminalBackend: payloadWithTerminal.terminalBackend }),
+        ...(payload.recentSessions && { recentSessions: payload.recentSessions }),
+        ...(payload.terminalBackend && { terminalBackend: payload.terminalBackend }),
         ...(payload.detectedIdes && { detectedIdes: payload.detectedIdes }),
-        ...(('availableProviders' in payload) && { availableProviders: (payload as any).availableProviders }),
+        ...(payload.availableProviders && { availableProviders: payload.availableProviders }),
         cdpConnected: ideSessions.some((session) => !!session.cdpConnected),
-    } as any)
+    } as DaemonData)
 
     // ─── 2. IDE entries ────────────────────────────────
     for (const session of ideSessions) {
@@ -115,19 +113,18 @@ export function statusPayloadToEntries(
             currentModel: session.currentModel,
             currentPlan: session.currentPlan,
             currentAutoApprove: session.currentAutoApprove,
-            recentKey: (session as any).recentKey,
-            unread: (session as any).unread,
-            lastSeenAt: (session as any).lastSeenAt,
-            inboxBucket: (session as any).inboxBucket,
-            controlValues: (session as any).controlValues,
-            providerControls: (session as any).providerControls,
+            recentKey: session.recentKey,
+            unread: session.unread,
+            lastSeenAt: session.lastSeenAt,
+            inboxBucket: session.inboxBucket,
+            controlValues: session.controlValues,
+            providerControls: session.providerControls,
             timestamp: ts,
-        } as any)
+        } as DaemonData)
     }
 
     // ─── 3. CLI entries ────────────────────────────────
     for (const session of cliSessions) {
-        const runtime = (session as any).runtime
         entries.push({
             id: `${daemonId}:cli:${session.id}`,
             sessionId: session.id,
@@ -145,26 +142,25 @@ export function statusPayloadToEntries(
             mode: 'terminal',
             workspace: session.workspace || '',
             activeChat: session.activeChat,
-            resume: (session as any).resume,
-            runtimeKey: (session as any).runtimeKey ?? runtime?.runtimeKey,
-            runtimeDisplayName: (session as any).runtimeDisplayName ?? runtime?.displayName,
-            runtimeWorkspaceLabel: (session as any).runtimeWorkspaceLabel ?? runtime?.workspaceLabel,
-            runtimeWriteOwner: (session as any).runtimeWriteOwner ?? runtime?.writeOwner ?? null,
-            runtimeAttachedClients: (session as any).runtimeAttachedClients ?? runtime?.attachedClients ?? [],
-            recentKey: (session as any).recentKey,
-            unread: (session as any).unread,
-            lastSeenAt: (session as any).lastSeenAt,
-            inboxBucket: (session as any).inboxBucket,
-            controlValues: (session as any).controlValues,
-            providerControls: (session as any).providerControls,
+            resume: session.resume,
+            runtimeKey: session.runtimeKey,
+            runtimeDisplayName: session.runtimeDisplayName,
+            runtimeWorkspaceLabel: session.runtimeWorkspaceLabel,
+            runtimeWriteOwner: session.runtimeWriteOwner ?? null,
+            runtimeAttachedClients: session.runtimeAttachedClients ?? [],
+            recentKey: session.recentKey,
+            unread: session.unread,
+            lastSeenAt: session.lastSeenAt,
+            inboxBucket: session.inboxBucket,
+            controlValues: session.controlValues,
+            providerControls: session.providerControls,
             timestamp: ts,
             _isCli: true,
-        } as any)
+        } as DaemonData)
     }
 
     // ─── 4. ACP entries ────────────────────────────────
     for (const session of acpSessions) {
-        const runtime = (session as any).runtime
         entries.push({
             id: `${daemonId}:acp:${session.id}`,
             sessionId: session.id,
@@ -182,24 +178,24 @@ export function statusPayloadToEntries(
             mode: 'chat',
             workspace: session.workspace || '',
             activeChat: session.activeChat,
-            runtimeKey: (session as any).runtimeKey ?? runtime?.runtimeKey,
-            runtimeDisplayName: (session as any).runtimeDisplayName ?? runtime?.displayName,
-            runtimeWorkspaceLabel: (session as any).runtimeWorkspaceLabel ?? runtime?.workspaceLabel,
-            runtimeWriteOwner: (session as any).runtimeWriteOwner ?? runtime?.writeOwner ?? null,
-            runtimeAttachedClients: (session as any).runtimeAttachedClients ?? runtime?.attachedClients ?? [],
+            runtimeKey: session.runtimeKey,
+            runtimeDisplayName: session.runtimeDisplayName,
+            runtimeWorkspaceLabel: session.runtimeWorkspaceLabel,
+            runtimeWriteOwner: session.runtimeWriteOwner ?? null,
+            runtimeAttachedClients: session.runtimeAttachedClients ?? [],
             currentModel: session.currentModel,
             currentPlan: session.currentPlan,
-            recentKey: (session as any).recentKey,
-            unread: (session as any).unread,
-            lastSeenAt: (session as any).lastSeenAt,
-            inboxBucket: (session as any).inboxBucket,
+            recentKey: session.recentKey,
+            unread: session.unread,
+            lastSeenAt: session.lastSeenAt,
+            inboxBucket: session.inboxBucket,
             acpConfigOptions: session.acpConfigOptions,
             acpModes: session.acpModes,
-            controlValues: (session as any).controlValues,
-            providerControls: (session as any).providerControls,
+            controlValues: session.controlValues,
+            providerControls: session.providerControls,
             timestamp: ts,
             _isAcp: true,
-        } as any)
+        } as DaemonData)
     }
 
     return entries

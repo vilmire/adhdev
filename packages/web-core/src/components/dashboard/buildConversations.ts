@@ -5,10 +5,12 @@
  * Reusable across Dashboard, mobile views, widgets, etc.
  */
 import type { DaemonData } from '../../types';
+import type { RecentSessionBucket } from '@adhdev/daemon-core';
 import { deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, getMachineDisplayName, isGenericAgentTitle } from '../../utils/daemon-utils';
 import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation } from './types';
+import { normalizeTextContent } from '../../utils/text';
 
 export type LocalUserMessage = {
     role: string;
@@ -45,22 +47,7 @@ function getStreamKey(stream: { sessionId?: string; instanceId?: string; agentTy
 }
 
 function normalizeMessageContent(content: unknown): string {
-    if (typeof content === 'string') return content.replace(/\s+/g, ' ').trim();
-    if (Array.isArray(content)) {
-        return content
-            .map(block => {
-                if (typeof block === 'string') return block;
-                if (block && typeof block === 'object' && 'text' in block) return String((block as any).text || '');
-                return '';
-            })
-            .join('\n')
-            .replace(/\s+/g, ' ')
-            .trim();
-    }
-    if (content && typeof content === 'object' && 'text' in content) {
-        return String((content as any).text || '').replace(/\s+/g, ' ').trim();
-    }
-    return String(content || '').replace(/\s+/g, ' ').trim();
+    return normalizeTextContent(content)
 }
 
 function getLocalMessages(
@@ -116,7 +103,7 @@ export function buildIdeConversations(
         recentKey?: string;
         unread?: boolean;
         lastSeenAt?: number;
-        inboxBucket?: 'needs_attention' | 'working' | 'task_complete' | 'idle';
+        inboxBucket?: RecentSessionBucket;
     }[] = Array.isArray(ide.childSessions)
         ? ide.childSessions.map(child => ({
             sessionId: child.id,

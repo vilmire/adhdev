@@ -84,9 +84,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
 
     // ─── Derive machine data ─────────────────────────
     // Build provider info from daemon
-    const providers: ProviderInfo[] = ((machineEntry as any)?.availableProviders || []).map((p: any) => ({
-        type: p.type, displayName: p.displayName, icon: p.icon, category: p.category,
-    }))
+    const providers: ProviderInfo[] = (((machineEntry as any)?.availableProviders || []) as ProviderInfo[])
     const providerIconMap: Record<string, string> = {}
     for (const p of providers) { providerIconMap[p.type] = p.icon }
     const getIcon = (type: string) => providerIconMap[type] || ''
@@ -110,7 +108,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         workspaces: (machineEntry as any).workspaces || [],
         defaultWorkspaceId: (machineEntry as any).defaultWorkspaceId ?? (machineEntry as any).activeWorkspaceId ?? null,
         defaultWorkspacePath: (machineEntry as any).defaultWorkspacePath ?? (machineEntry as any).activeWorkspacePath ?? null,
-        workspaceActivity: (machineEntry as any).workspaceActivity || [],
     } : null
 
     const ideSessions: IdeSessionEntry[] = allIdes

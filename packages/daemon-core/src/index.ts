@@ -43,18 +43,21 @@ export type {
   ExtensionProviderState,
 } from './shared-types.js';
 
-export interface RecentSessionEntry {
-  id: string;
-  sessionId?: string | null;
-  providerType: string;
-  providerName: string;
-  kind: 'ide' | 'cli' | 'acp';
-  title: string;
-  workspace?: string | null;
-  currentModel?: string;
-  status?: 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
-  lastUsedAt: number;
-}
+// These types live in shared-types-extra.ts — imported directly because
+// rollup-dts cannot resolve re-exports from shared-types.ts for them.
+import type { RuntimeWriteOwner as _RuntimeWriteOwner } from './shared-types-extra.js';
+import type { RuntimeAttachedClient as _RuntimeAttachedClient } from './shared-types-extra.js';
+import type { RecentSessionEntry as _RecentSessionEntry } from './shared-types.js';
+import type { TerminalBackendStatus as _TerminalBackendStatus } from './shared-types-extra.js';
+export type RuntimeWriteOwner = _RuntimeWriteOwner;
+export type RuntimeAttachedClient = _RuntimeAttachedClient;
+export type RecentSessionEntry = _RecentSessionEntry;
+export type TerminalBackendStatus = _TerminalBackendStatus;
+
+// Type aliases — rollup-dts cannot bundle re-exported type aliases at all.
+// Canonical definition lives in shared-types-extra.ts — keep these in sync.
+export type SessionStatus = 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
+export type RecentSessionBucket = 'needs_attention' | 'working' | 'task_complete' | 'idle';
 
 // ── Core Interface ──
 export type { IDaemonCore, DaemonCoreOptions } from './daemon-core.js';

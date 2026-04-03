@@ -9,7 +9,9 @@ import DashboardMobileChatRoom from './DashboardMobileChatRoom'
 import DashboardMobileChatInbox from './DashboardMobileChatInbox'
 import DashboardMobileMachineScreen from './DashboardMobileMachineScreen'
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
+import { isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared'
 import { isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
+import { normalizeTextContent } from '../../utils/text'
 import type { MachineRecentSession } from '../../pages/machine/types'
 
 const MOBILE_CHAT_READS_KEY = 'adhdev_mobileChatReads_v1'
@@ -28,6 +30,8 @@ interface DashboardMobileChatModeProps {
     userName?: string
     requestedActiveTabKey?: string | null
     onRequestedActiveTabConsumed?: () => void
+    requestedMachineId?: string | null
+    onRequestedMachineConsumed?: () => void
     onOpenHistory: (conversation?: ActiveConversation) => void
     onOpenRemote: (conversation: ActiveConversation) => void
 }
@@ -58,32 +62,19 @@ function writeStoredReadState(next: ReadStateMap) {
 }
 
 function normalizePreviewText(content: unknown) {
-    if (typeof content === 'string') return content.replace(/\s+/g, ' ').trim()
-    if (Array.isArray(content)) {
-        return content
-            .map(block => {
-                if (typeof block === 'string') return block
-                if (block && typeof block === 'object' && 'text' in block) return String((block as any).text || '')
-                return ''
-            })
-            .join(' ')
-            .replace(/\s+/g, ' ')
-            .trim()
-    }
-    if (content && typeof content === 'object' && 'text' in content) {
-        return String((content as any).text || '').replace(/\s+/g, ' ').trim()
-    }
-    return ''
+    return normalizeTextContent(content)
 }
 
 function getConversationTimestamp(conversation: ActiveConversation) {
-    const lastMessage = conversation.messages[conversation.messages.length - 1] as any
+    const lastMessage = [...conversation.messages].reverse().find((message: any) => !(message as any)?._localId) as any
+        || conversation.messages[conversation.messages.length - 1] as any
     const ts = lastMessage?.timestamp || lastMessage?.receivedAt || 0
     return typeof ts === 'number' ? ts : Date.parse(String(ts)) || 0
 }
 
 function getConversationPreview(conversation: ActiveConversation) {
-    const lastMessage = conversation.messages[conversation.messages.length - 1] as any
+    const lastMessage = [...conversation.messages].reverse().find((message: any) => !(message as any)?._localId) as any
+        || conversation.messages[conversation.messages.length - 1] as any
     const preview = normalizePreviewText(lastMessage?.content)
     if (preview) return preview
     if (conversation.title) return conversation.title
@@ -113,6 +104,8 @@ export default function DashboardMobileChatMode({
     userName,
     requestedActiveTabKey,
     onRequestedActiveTabConsumed,
+    requestedMachineId,
+    onRequestedMachineConsumed,
     onOpenHistory,
     onOpenRemote,
 }: DashboardMobileChatModeProps) {
@@ -121,6 +114,7 @@ export default function DashboardMobileChatMode({
     const [section, setSection] = useState<'machines' | 'chats' | 'settings'>('chats')
     const [readState, setReadState] = useState<ReadStateMap>(() => readStoredReadState())
     const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null)
+    const [machineBackTarget, setMachineBackTarget] = useState<'inbox' | 'chat'>('inbox')
     const [machineActionState, setMachineActionState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
     const [machineActionMessage, setMachineActionMessage] = useState('')
     const navigate = useNavigate()
@@ -143,14 +137,7 @@ export default function DashboardMobileChatMode({
         [machineEntries, selectedMachineId],
     )
     const mobileInboxConversations = useMemo(
-        () => conversations.filter(conversation => {
-            if (conversation.streamSource !== 'native' || conversation.transport !== 'cdp-page') return true
-            return !conversations.some(other => (
-                other.ideId === conversation.ideId
-                && other.tabKey !== conversation.tabKey
-                && other.streamSource === 'agent-stream'
-            ))
-        }),
+        () => conversations.filter(conversation => !isHiddenNativeIdeParentConversation(conversation, conversations)),
         [conversations],
     )
 
@@ -179,7 +166,7 @@ export default function DashboardMobileChatMode({
             providerType: conversation.agentType || conversation.ideType,
             workspace: conversation.workspaceName || null,
             seenAt: readAt,
-        }).catch(() => {})
+        }).catch(() => { })
     }, [sendDaemonCommand])
 
     useEffect(() => {
@@ -199,6 +186,19 @@ export default function DashboardMobileChatMode({
         setScreen('chat')
         onRequestedActiveTabConsumed?.()
     }, [conversations, onRequestedActiveTabConsumed, requestedActiveTabKey])
+
+    useEffect(() => {
+        if (!requestedMachineId) return
+        const matched = machineEntries.find(machine => machine.id === requestedMachineId)
+        if (!matched) return
+        setSelectedMachineId(matched.id)
+        setMachineActionState('idle')
+        setMachineActionMessage('')
+        setSection('machines')
+        setMachineBackTarget('inbox')
+        setScreen('machine')
+        onRequestedMachineConsumed?.()
+    }, [machineEntries, onRequestedMachineConsumed, requestedMachineId])
 
     const items = useMemo<MobileConversationListItem[]>(() => mobileInboxConversations.map(conversation => {
         const timestamp = getConversationTimestamp(conversation)
@@ -367,6 +367,17 @@ export default function DashboardMobileChatMode({
         markConversationRead(conversation)
     }, [markConversationRead])
 
+    const handleOpenNativeConversation = useCallback((conversation: ActiveConversation) => {
+        const nativeConversation = mobileInboxConversations.find(candidate => (
+            candidate.ideId === conversation.ideId
+            && candidate.streamSource === 'native'
+        ))
+        if (!nativeConversation) return
+        setSelectedTabKey(nativeConversation.tabKey)
+        setScreen('chat')
+        markConversationRead(nativeConversation)
+    }, [markConversationRead, mobileInboxConversations])
+
     const handleBackFromConversation = useCallback(() => {
         markConversationRead(selectedConversation)
         setScreen('inbox')
@@ -376,8 +387,25 @@ export default function DashboardMobileChatMode({
         setSelectedMachineId(machineId)
         setMachineActionState('idle')
         setMachineActionMessage('')
+        setSection('machines')
+        setMachineBackTarget('inbox')
         setScreen('machine')
     }, [])
+
+    const handleOpenConversationMachine = useCallback((conversation: ActiveConversation) => {
+        const machineId = conversation.daemonId || conversation.ideId?.split(':')[0] || conversation.ideId
+        if (!machineId) return
+        setSelectedMachineId(machineId)
+        setMachineActionState('idle')
+        setMachineActionMessage('')
+        setSection('machines')
+        setMachineBackTarget('chat')
+        setScreen('machine')
+    }, [])
+
+    const handleBackFromMachine = useCallback(() => {
+        setScreen(machineBackTarget)
+    }, [machineBackTarget])
 
     const handleLaunchDetectedIde = useCallback(async (machineId: string, ideType: string, opts?: { workspacePath?: string | null }) => {
         try {
@@ -502,6 +530,8 @@ export default function DashboardMobileChatMode({
                     isSendingChat={cmds.isSendingChat}
                     isFocusingAgent={cmds.isFocusingAgent}
                     onBack={handleBackFromConversation}
+                    onOpenNativeConversation={handleOpenNativeConversation}
+                    onOpenMachine={handleOpenConversationMachine}
                     onOpenHistory={onOpenHistory}
                     onOpenRemote={onOpenRemote}
                     handleSendChat={cmds.handleSendChat}
@@ -517,7 +547,7 @@ export default function DashboardMobileChatMode({
                     selectedMachineNeedsUpgrade={selectedMachineNeedsUpgrade}
                     appVersion={appVersion}
                     machineAction={{ state: machineActionState, message: machineActionMessage }}
-                    onBack={() => setScreen('inbox')}
+                    onBack={handleBackFromMachine}
                     onOpenConversation={handleOpenConversation}
                     onOpenRecent={handleOpenRecent}
                     onOpenMachineDetails={() => navigate(`/machines/${selectedMachineEntry.id}`)}

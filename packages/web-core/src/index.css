@@ -1513,6 +1513,59 @@
         display: inline;
     }
 
+    .conversation-meta-chips {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        min-width: 0;
+    }
+
+    .conversation-meta-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        max-width: 100%;
+        padding: 4px 9px;
+        border-radius: 999px;
+        border: 1px solid color-mix(in srgb, var(--border-default) 82%, transparent);
+        background: color-mix(in srgb, var(--surface-primary) 86%, transparent);
+        color: var(--text-secondary);
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+        white-space: nowrap;
+    }
+
+    .conversation-meta-chip span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    button.conversation-meta-chip {
+        cursor: pointer;
+        font-family: var(--font);
+        transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    }
+
+    button.conversation-meta-chip:hover {
+        background: color-mix(in srgb, var(--surface-primary) 70%, var(--accent-primary) 10%);
+        border-color: color-mix(in srgb, var(--border-accent) 74%, transparent);
+        color: var(--text-primary);
+    }
+
+    .conversation-meta-chip.is-active {
+        background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+        border-color: color-mix(in srgb, var(--accent-primary) 18%, var(--border-default));
+        color: var(--accent-primary);
+    }
+
+    .chat-pane-meta-row {
+        padding: 10px 16px 6px;
+        border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 68%, transparent);
+        background: color-mix(in srgb, var(--surface-primary) 96%, transparent);
+    }
+
     .header-title-mobile {
         display: none;
     }
@@ -1716,18 +1769,11 @@
     .dashboard-remote-dialog-subtitle {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 6px;
         min-width: 0;
         font-size: 11px;
         color: var(--text-muted);
-        white-space: nowrap;
-        overflow: hidden;
-    }
-
-    .dashboard-remote-dialog-subtitle span {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
 
     .dashboard-remote-dialog-dot {

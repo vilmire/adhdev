@@ -10,7 +10,7 @@
  *   // cloud: receive data from CF WS + P2P and call injectEntries
  */
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
-import type { DaemonData } from '../types'
+import type { DaemonData, SessionTransport, RuntimeWriteOwner, RuntimeAttachedClient } from '../types'
 
 // ─── Types ────────────────────────────────────────────
 
@@ -269,14 +269,14 @@ export interface CompactDaemon {
         providerType: string
         providerName?: string
         kind: 'workspace' | 'agent'
-        transport: 'cdp-page' | 'cdp-webview' | 'pty' | 'acp'
+        transport: SessionTransport
         status?: string
         workspace?: string | null
         runtimeKey?: string
         runtimeDisplayName?: string
         runtimeWorkspaceLabel?: string
-        runtimeWriteOwner?: { clientId: string; ownerType: 'agent' | 'user' } | null
-        runtimeAttachedClients?: { clientId: string; type: 'daemon' | 'web' | 'local-terminal'; readOnly: boolean }[]
+        runtimeWriteOwner?: RuntimeWriteOwner | null
+        runtimeAttachedClients?: RuntimeAttachedClient[]
         title?: string
         cdpConnected?: boolean
         currentModel?: string

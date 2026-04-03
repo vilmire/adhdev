@@ -10,6 +10,7 @@ import type { ActiveConversation } from './types';
 import { isCliConv, isAcpConv } from './types';
 import { IconBell, IconChat, IconScroll, IconMonitor } from '../Icons';
 import { useDaemons } from '../../compat';
+import { isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared';
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -63,14 +64,7 @@ export default function DashboardHeader({
     };
     const statusText = getStatusText();
     const desktopInboxConversations = useMemo(
-        () => conversations.filter(conversation => {
-            if (conversation.streamSource !== 'native' || conversation.transport !== 'cdp-page') return true;
-            return !conversations.some(other => (
-                other.ideId === conversation.ideId
-                && other.tabKey !== conversation.tabKey
-                && other.streamSource === 'agent-stream'
-            ));
-        }),
+        () => conversations.filter(conversation => !isHiddenNativeIdeParentConversation(conversation, conversations)),
         [conversations],
     );
     const inboxAttention = useMemo(

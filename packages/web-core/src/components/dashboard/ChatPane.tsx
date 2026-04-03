@@ -6,6 +6,7 @@ import { useRef, useState, useCallback, useMemo } from 'react';
 import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import ControlsBar from './ControlsBar';
 import ChatInputBar from './ChatInputBar';
+import ConversationMetaChips from './ConversationMetaChips';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation } from './types';
 import type { DaemonData } from '../../types';
@@ -68,6 +69,7 @@ export interface ChatPaneProps {
     actionLogs: { ideId: string; text: string; timestamp: number }[];
     /** Display name for user messages */
     userName?: string;
+    showMetaChips?: boolean;
 }
 
 const DEFAULT_VISIBLE_LIVE_MESSAGES = 60;
@@ -77,6 +79,7 @@ export default function ChatPane({
     activeConv, ideEntry, handleSendChat,
     isSendingChat = false,
     handleFocusAgent, isFocusingAgent, actionLogs, userName,
+    showMetaChips = true,
 }: ChatPaneProps) {
     const receivedAtCache = useRef<Map<string, number>>(new Map());
     const { sendCommand } = useTransport();
@@ -293,6 +296,10 @@ export default function ChatPane({
 
     return (
         <div className="flex-1 min-h-0 flex flex-col">
+            {showMetaChips && (
+                <ConversationMetaChips conversation={activeConv} className="chat-pane-meta-row" />
+            )}
+
             {/* Message Stream */}
             <ChatMessageList
                 messages={allMessages}

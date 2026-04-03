@@ -1,4 +1,5 @@
 import type { ActiveConversation } from './types'
+import type { RecentSessionBucket } from '@adhdev/daemon-core'
 
 export interface MobileConversationListItem {
     conversation: ActiveConversation
@@ -7,7 +8,7 @@ export interface MobileConversationListItem {
     unread: boolean
     requiresAction: boolean
     isWorking: boolean
-    inboxBucket?: 'needs_attention' | 'working' | 'task_complete' | 'idle'
+    inboxBucket?: RecentSessionBucket
 }
 
 export interface MobileMachineCard {
@@ -24,15 +25,16 @@ export interface MobileMachineActionState {
     message: string
 }
 
-export function formatRelativeTime(timestamp: number) {
-    if (!timestamp) return ''
-    const diff = Date.now() - timestamp
-    const minutes = Math.floor(diff / 60000)
-    if (minutes < 1) return 'now'
-    if (minutes < 60) return `${minutes}m`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h`
-    const days = Math.floor(hours / 24)
-    if (days < 7) return `${days}d`
-    return new Date(timestamp).toLocaleDateString()
+export function isHiddenNativeIdeParentConversation(
+    conversation: ActiveConversation,
+    conversations: ActiveConversation[],
+) {
+    if (conversation.streamSource !== 'native' || conversation.transport !== 'cdp-page') return false
+    return conversations.some(other => (
+        other.ideId === conversation.ideId
+        && other.tabKey !== conversation.tabKey
+        && other.streamSource === 'agent-stream'
+    ))
 }
+
+export { formatRelativeCompact as formatRelativeTime } from '../../utils/time'

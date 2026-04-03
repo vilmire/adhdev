@@ -33,6 +33,7 @@ export default function Dashboard() {
     const [searchParams, setSearchParams] = useSearchParams()
     const urlActiveTab = searchParams.get('activeTab')
     const requestedRemoteTabTarget = (location.state as { openRemoteForTabKey?: string } | null)?.openRemoteForTabKey || null
+    const requestedMachineId = (location.state as { openMachineId?: string } | null)?.openMachineId || null
 
     const daemonCtx = useDaemons() as any
     const { updateIdeChats, screenshotMap, setScreenshotMap } = daemonCtx
@@ -321,6 +322,10 @@ export default function Dashboard() {
                 userName={daemonCtx.userName}
                 requestedMobileTabKey={requestedMobileTabKey}
                 onRequestedMobileTabConsumed={consumeRequestedActiveTab}
+                requestedMachineId={requestedMachineId}
+                onRequestedMachineConsumed={() => {
+                    navigate(location.pathname + location.search, { replace: true, state: null })
+                }}
                 containerRef={containerRef}
                 isSplitMode={isSplitMode}
                 numGroups={numGroups}

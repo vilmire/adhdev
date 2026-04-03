@@ -2,6 +2,7 @@ import type { DaemonData } from '../../types'
 import { IconChevronLeft, IconMonitor, IconScroll } from '../Icons'
 import ChatPane from './ChatPane'
 import CliTerminalPane from './CliTerminalPane'
+import ConversationMetaChips from './ConversationMetaChips'
 import type { ActiveConversation } from './types'
 import { isCliConv } from './types'
 import { useRef } from 'react'
@@ -16,6 +17,8 @@ interface DashboardMobileChatRoomProps {
     isSendingChat: boolean
     isFocusingAgent: boolean
     onBack: () => void
+    onOpenNativeConversation: (conversation: ActiveConversation) => void
+    onOpenMachine: (conversation: ActiveConversation) => void
     onOpenHistory: (conversation: ActiveConversation) => void
     onOpenRemote: (conversation: ActiveConversation) => void
     handleSendChat: (message: string, images?: string[]) => Promise<void>
@@ -31,6 +34,8 @@ export default function DashboardMobileChatRoom({
     isSendingChat,
     isFocusingAgent,
     onBack,
+    onOpenNativeConversation,
+    onOpenMachine,
     onOpenHistory,
     onOpenRemote,
     handleSendChat,
@@ -56,8 +61,11 @@ export default function DashboardMobileChatRoom({
                             {selectedConversation.displayPrimary || selectedConversation.agentName}
                         </div>
                         <div className="dashboard-mobile-chat-subtitle">
-                            {selectedConversation.displaySecondary}
-                            {selectedConversation.machineName ? ` · ${selectedConversation.machineName}` : ''}
+                            <ConversationMetaChips
+                                conversation={selectedConversation}
+                                onOpenNativeConversation={() => onOpenNativeConversation(selectedConversation)}
+                                onOpenMachine={() => onOpenMachine(selectedConversation)}
+                            />
                         </div>
                     </div>
                 </div>
@@ -85,6 +93,7 @@ export default function DashboardMobileChatRoom({
                         key={selectedConversation.tabKey}
                         activeConv={selectedConversation}
                         ideEntry={selectedIdeEntry}
+                        showMetaChips={false}
                         handleSendChat={handleSendChat}
                         isSendingChat={isSendingChat}
                         handleFocusAgent={handleFocusAgent}
