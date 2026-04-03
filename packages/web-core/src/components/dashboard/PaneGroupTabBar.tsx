@@ -134,10 +134,17 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
         if (longPressTimer.current) clearTimeout(longPressTimer.current)
     }, [longPressTimer])
 
+    const tabClasses = [
+        'adhdev-dockview-tab',
+        tabClass,
+        isActive && 'is-active',
+        isReconnecting && 'is-reconnecting',
+    ].filter(Boolean).join(' ')
+
     return (
         <div
             data-tabkey={conv.tabKey}
-            className={`${tabClass} shrink-0 px-2.5 py-1.5 rounded-t-lg cursor-pointer flex items-center gap-2 relative`}
+            className={tabClasses}
             draggable={true}
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
@@ -149,46 +156,44 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
             onTouchEnd={clearLongPress}
             onTouchMove={clearLongPress}
             style={{
-                background: isActive ? 'var(--bg-primary)' : 'var(--bg-glass)',
-                borderTop: isActive ? '1px solid var(--border-subtle)' : '1px solid transparent',
-                borderLeft: isActive ? '1px solid var(--border-subtle)' : '1px solid transparent',
-                borderRight: isActive ? '1px solid var(--border-subtle)' : '1px solid transparent',
-                opacity: isDraggedTab ? 0.4 : isReconnecting ? (isActive ? 0.6 : 0.3) : (isActive ? 1 : 0.65),
-                transition: 'transform 0.2s ease, opacity 0.15s ease',
+                cursor: 'pointer',
+                opacity: isDraggedTab ? 0.4 : undefined,
             }}
         >
-            {conv.status === 'generating' ? (
-                <div className="tab-spinner" />
-            ) : conv.status === 'waiting_approval' ? (
-                <span className="text-[8px] px-[5px] py-px text-yellow-400">▲</span>
-            ) : isReconnecting ? (
-                <span className="text-[8px] px-[5px] py-px text-yellow-400 animate-pulse">○</span>
-            ) : conv.connectionState === 'connecting' || conv.connectionState === 'new' ? (
-                <div className="tab-connecting-spinner" />
-            ) : conv.connectionState === 'connected' ? (
-                <span className="text-[8px] px-[5px] py-px text-green-400">●</span>
-            ) : (
-                <span className="text-[8px] px-[5px] py-px text-text-muted animate-pulse">○</span>
-            )}
-            <div className="min-w-0">
-                <div className="text-xs font-bold whitespace-nowrap overflow-hidden text-ellipsis" style={{ maxWidth: '10ch' }} title={conv.displayPrimary}>{conv.displayPrimary}</div>
-                <div className="text-[8px] opacity-50 flex gap-1 items-center">
+            <div className="adhdev-dockview-tab-status">
+                {conv.status === 'generating' ? (
+                    <div className="tab-spinner" />
+                ) : conv.status === 'waiting_approval' ? (
+                    <span className="adhdev-dockview-tab-status-text is-waiting">▲</span>
+                ) : isReconnecting ? (
+                    <span className="adhdev-dockview-tab-reconnecting">○</span>
+                ) : conv.connectionState === 'connecting' || conv.connectionState === 'new' ? (
+                    <div className="tab-connecting-spinner" />
+                ) : conv.connectionState === 'connected' ? (
+                    <span className="adhdev-dockview-tab-status-text is-connected">●</span>
+                ) : (
+                    <span className="adhdev-dockview-tab-status-text is-idle">○</span>
+                )}
+            </div>
+            <div className="adhdev-dockview-tab-copy">
+                <span className="adhdev-dockview-tab-primary" title={conv.displayPrimary}>{conv.displayPrimary}</span>
+                <span className="adhdev-dockview-tab-meta">
                     {isReconnecting ? (
-                        <span className="text-yellow-400 opacity-100">Reconnecting…</span>
+                        <span className="adhdev-dockview-tab-reconnecting">Reconnecting…</span>
                     ) : (conv.connectionState === 'connecting' || conv.connectionState === 'new') ? (
-                        <span className="text-blue-400 opacity-100">Connecting<span className="connecting-dots"></span></span>
+                        <span className="adhdev-dockview-tab-connecting">Connecting<span className="connecting-dots"></span></span>
                     ) : (
                         <>
                             {conv.displaySecondary}
                             {conv.machineName && (
                                 <>
-                                    <span className="opacity-40">·</span>
-                                    <span className="opacity-70">🖥 {conv.machineName}</span>
+                                    <span className="adhdev-dockview-tab-dot">·</span>
+                                    <span className="adhdev-dockview-tab-machine">🖥 {conv.machineName}</span>
                                 </>
                             )}
                         </>
                     )}
-                </div>
+                </span>
             </div>
             {shortcut && (
                 <span className="text-[9px] opacity-50 font-mono ml-0.5 shrink-0 bg-bg-secondary px-1 rounded" title={`Ctrl+${shortcut}`}>{shortcut}</span>
@@ -275,11 +280,16 @@ export default function PaneGroupTabBar({
 
     return (
         <>
-            <div className="flex items-center bg-bg-secondary border-b border-border-subtle shrink-0 gap-0">
+            <div className="flex items-end shrink-0 gap-0" style={{
+                background: 'var(--surface-secondary)',
+                paddingInline: 8,
+                paddingTop: 6,
+                paddingBottom: 0,
+            }}>
                 <div
                     ref={tabBarRef}
-                    className="flex-1 flex overflow-x-auto overflow-y-visible pt-1.5 pb-0 gap-1 select-none"
-                    style={{ paddingLeft: 8, paddingRight: 4, scrollbarWidth: 'none' }}
+                    className="flex-1 flex overflow-x-auto overflow-y-visible gap-1.5 select-none"
+                    style={{ scrollbarWidth: 'none' }}
                 >
                     {conversations.map((conv) => (
                         <PaneGroupTabBarItem

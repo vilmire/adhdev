@@ -32,6 +32,7 @@ import {
 } from '../../utils/dashboardLayoutStorage'
 import { isAcpConv, isCliConv } from './types'
 import { useTransport } from '../../context/TransportContext'
+import { useTheme } from '../../hooks/useTheme'
 
 interface DashboardDockviewWorkspaceProps {
     visibleConversations: ActiveConversation[]
@@ -86,21 +87,22 @@ function getDockviewTitle(conversation: ActiveConversation) {
     return conversation.displayPrimary || conversation.title || conversation.agentName || conversation.tabKey
 }
 
-function useDockviewHeaderRenderTick(api: IDockviewPanelHeaderProps['api']) {
+function useDockviewHeaderRenderTick(props: Pick<IDockviewPanelHeaderProps, 'api' | 'containerApi'>) {
     const [, setTick] = useState(0)
 
     useEffect(() => {
         const bump = () => setTick(value => value + 1)
         const disposables = [
-            api.onDidActiveGroupChange(bump),
-            api.onDidTitleChange(bump),
-            api.onDidGroupChange(bump),
+            props.api.onDidActiveGroupChange(bump),
+            props.api.onDidTitleChange(bump),
+            props.api.onDidGroupChange(bump),
+            props.containerApi.onDidActivePanelChange(bump),
         ]
 
         return () => {
             for (const disposable of disposables) disposable.dispose()
         }
-    }, [api])
+    }, [props.api, props.containerApi])
 }
 
 function groupConversationsFromLegacy(
@@ -287,7 +289,7 @@ function DashboardDockviewWatermark() {
 }
 
 function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockviewPanelParams>) {
-    useDockviewHeaderRenderTick(props.api)
+    useDockviewHeaderRenderTick(props)
     const ctx = useDashboardDockviewContext()
     const conversation = ctx.conversationsByTabKey.get(props.params.tabKey)
 
@@ -371,9 +373,14 @@ export default function DashboardDockviewWorkspace({
     requestedActiveTabKey,
     onRequestedActiveTabConsumed,
 }: DashboardDockviewWorkspaceProps) {
+    const { theme } = useTheme()
     const { sendCommand } = useTransport()
     const apiRef = useRef<DockviewApi | null>(null)
+    const dockviewContainerRef = useRef<HTMLDivElement | null>(null)
     const hasInitializedRef = useRef(false)
+    const [isDraggingDockview, setIsDraggingDockview] = useState(false)
+    const [isShowingDockviewOverlay, setIsShowingDockviewOverlay] = useState(false)
+    const overlayCleanupTimeoutRef = useRef<number | null>(null)
     const layoutProfile = useMemo(
         () => getDashboardLayoutProfile(typeof window !== 'undefined' ? window.innerWidth : 1280),
         [],
@@ -425,6 +432,67 @@ export default function DashboardDockviewWorkspace({
         return true
     }, [onRequestedActiveTabConsumed])
 
+    const markDockviewOverlaysHidden = useCallback(() => {
+        const root = dockviewContainerRef.current
+        if (!root) return
+        const nodes = root.querySelectorAll<HTMLElement>(
+            '.dv-drop-target-container, .dv-drop-target-anchor, .dv-drop-target-dropzone, .dv-drop-target-selection, .dv-render-overlay',
+        )
+        for (const node of nodes) {
+            node.setAttribute('data-adhdev-force-hidden', 'true')
+        }
+    }, [])
+
+    const clearDockviewOverlayHiddenMarks = useCallback(() => {
+        const root = dockviewContainerRef.current
+        if (!root) return
+        const nodes = root.querySelectorAll<HTMLElement>('[data-adhdev-force-hidden="true"]')
+        for (const node of nodes) {
+            node.removeAttribute('data-adhdev-force-hidden')
+        }
+    }, [])
+
+    const removeDockviewOverlayNodes = useCallback(() => {
+        const root = dockviewContainerRef.current
+        if (!root) return
+
+        const dropTargetRoots = root.querySelectorAll<HTMLElement>('.dv-drop-target-container')
+        for (const node of dropTargetRoots) {
+            node.remove()
+        }
+
+        const dropzones = root.querySelectorAll<HTMLElement>('.dv-drop-target-dropzone')
+        for (const node of dropzones) {
+            node.remove()
+        }
+
+        const dropTargetParents = root.querySelectorAll<HTMLElement>('.dv-drop-target')
+        for (const node of dropTargetParents) {
+            node.classList.remove('dv-drop-target')
+        }
+    }, [])
+
+    const cleanupDockviewOverlays = useCallback(() => {
+        setIsDraggingDockview(false)
+        setIsShowingDockviewOverlay(false)
+        clearDockviewOverlayHiddenMarks()
+        markDockviewOverlaysHidden()
+        removeDockviewOverlayNodes()
+        if (typeof window === 'undefined') return
+        if (overlayCleanupTimeoutRef.current != null) {
+            window.clearTimeout(overlayCleanupTimeoutRef.current)
+        }
+        window.requestAnimationFrame(() => {
+            markDockviewOverlaysHidden()
+            removeDockviewOverlayNodes()
+        })
+        overlayCleanupTimeoutRef.current = window.setTimeout(() => {
+            markDockviewOverlaysHidden()
+            removeDockviewOverlayNodes()
+            overlayCleanupTimeoutRef.current = null
+        }, 80)
+    }, [clearDockviewOverlayHiddenMarks, markDockviewOverlaysHidden, removeDockviewOverlayNodes])
+
     const handleReady = useCallback((event: DockviewReadyEvent) => {
         apiRef.current = event.api
 
@@ -462,11 +530,32 @@ export default function DashboardDockviewWorkspace({
             })
         })
 
+        event.api.onWillDragPanel(() => {
+            setIsDraggingDockview(true)
+            setIsShowingDockviewOverlay(false)
+            markDockviewOverlaysHidden()
+        })
+        event.api.onWillDragGroup(() => {
+            setIsDraggingDockview(true)
+            setIsShowingDockviewOverlay(false)
+            markDockviewOverlaysHidden()
+        })
+        event.api.onWillShowOverlay(() => {
+            clearDockviewOverlayHiddenMarks()
+            setIsShowingDockviewOverlay(true)
+        })
+        event.api.onDidMovePanel(cleanupDockviewOverlays)
+        event.api.onDidDrop(cleanupDockviewOverlays)
+
         onActiveTabChange(event.api.activePanel?.id ?? null)
     }, [
         activateRequestedTab,
+        cleanupDockviewOverlays,
+        clearDockviewOverlayHiddenMarks,
         conversationsByTabKey,
         layoutProfile,
+        markDockviewOverlaysHidden,
+        removeDockviewOverlayNodes,
         onActiveTabChange,
         requestedActiveTabKey,
         sendCommand,
@@ -489,15 +578,35 @@ export default function DashboardDockviewWorkspace({
         activateRequestedTab(requestedActiveTabKey)
     }, [activateRequestedTab, requestedActiveTabKey])
 
-    const dockviewTheme = typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light'
-        ? themeLight
-        : themeDark
+    useEffect(() => {
+        if (!isDraggingDockview || typeof window === 'undefined') return
+        const handlePointerUp = () => cleanupDockviewOverlays()
+        window.addEventListener('pointerup', handlePointerUp)
+        window.addEventListener('mouseup', handlePointerUp)
+        window.addEventListener('dragend', handlePointerUp)
+        return () => {
+            window.removeEventListener('pointerup', handlePointerUp)
+            window.removeEventListener('mouseup', handlePointerUp)
+            window.removeEventListener('dragend', handlePointerUp)
+        }
+    }, [cleanupDockviewOverlays, isDraggingDockview])
+
+    useEffect(() => {
+        return () => {
+            if (typeof window === 'undefined') return
+            if (overlayCleanupTimeoutRef.current != null) {
+                window.clearTimeout(overlayCleanupTimeoutRef.current)
+            }
+        }
+    }, [])
+
+    const dockviewTheme = theme === 'light' ? themeLight : themeDark
 
     return (
         <DashboardDockviewContext.Provider value={contextValue}>
-            <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
+            <div ref={dockviewContainerRef} className="flex-1 min-h-0 min-w-0 overflow-hidden">
                 <DockviewReact
-                    className="h-full min-h-0 min-w-0 adhdev-dockview"
+                    className={`h-full min-h-0 min-w-0 adhdev-dockview${isDraggingDockview ? ' is-dragging-dockview' : ''}${isShowingDockviewOverlay ? ' is-showing-dockview-overlay' : ''}`}
                     components={{ conversation: DashboardDockviewPanel }}
                     defaultTabComponent={DashboardDockviewTab}
                     watermarkComponent={DashboardDockviewWatermark}

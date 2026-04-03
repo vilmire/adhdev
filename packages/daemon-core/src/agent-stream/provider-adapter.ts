@@ -40,12 +40,23 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
         return typeof (this.provider.scripts as any)?.[name] === 'function';
     }
 
+    private summarizeRaw(raw: unknown): string {
+        try {
+            if (typeof raw === 'string') return raw.replace(/\s+/g, ' ').trim().slice(0, 240);
+            if (raw == null) return String(raw);
+            return JSON.stringify(raw).replace(/\s+/g, ' ').trim().slice(0, 240);
+        } catch {
+            return Object.prototype.toString.call(raw);
+        }
+    }
+
     async readChat(evaluate: AgentEvaluateFn): Promise<AgentStreamState> {
         const script = this.callScript('readChat');
         if (!script) return this.errorState('readChat script not available');
 
+        let raw: unknown = null;
         try {
-            const raw = await evaluate(script) as string;
+            raw = await evaluate(script) as string;
             const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
             if (data?.error) {
                 const state = this.errorState(data.error);
@@ -69,8 +80,11 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
                 this.lastSuccessState = state;
             }
             return state;
-        } catch {
-            const state = this.errorState(`Failed to parse ${this.agentName} state`);
+        } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            const preview = this.summarizeRaw(raw);
+            const detail = preview ? ` (reason=${reason}; raw=${preview})` : ` (reason=${reason})`;
+            const state = this.errorState(`Failed to parse ${this.agentName} state${detail}`);
             if (this.lastSuccessState?.messages?.length) {
                 state.messages = this.lastSuccessState.messages;
             }
