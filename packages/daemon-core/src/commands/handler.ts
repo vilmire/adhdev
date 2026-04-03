@@ -29,7 +29,6 @@ import * as Cdp from './cdp-commands.js';
 import * as Stream from './stream-commands.js';
 import * as WorkspaceCmd from './workspace-commands.js';
 import { getWorkspaceState } from '../config/workspaces.js';
-import { getWorkspaceActivity } from '../config/workspace-activity.js';
 
 export interface CommandResult {
     success: boolean;
@@ -416,27 +415,11 @@ export class DaemonCommandHandler implements CommandHelpers {
             case 'file_list': return Cdp.handleFileList(this, args);
             case 'file_list_browse': return Cdp.handleFileListBrowse(this, args);
 
-            // ─── VSCode API commands (not available) ────
-            case 'vscode_command_exec':
-            case 'execute_vscode_command': {
-                const resolvedCmd = args?.commandId || args?.command;
-                if (resolvedCmd === 'adhdev.captureCdpScreenshot') {
-                    return Cdp.handleScreenshot(this, args);
-                }
-                return { success: false, error: `VSCode command not available: ${resolvedCmd || cmd}` };
-            }
             // ─── Workspace cmds ──────────────
-            case 'get_recent_workspaces': return this.handleGetRecentWorkspaces(args);
-            case 'get_cli_history': {
-                const config = loadConfig();
-                return { success: true, history: config.cliHistory || [] };
-            }
-
             case 'workspace_list': return WorkspaceCmd.handleWorkspaceList();
             case 'workspace_add': return WorkspaceCmd.handleWorkspaceAdd(args);
             case 'workspace_remove': return WorkspaceCmd.handleWorkspaceRemove(args);
             case 'workspace_set_default':
-            case 'workspace_set_active':
                 return WorkspaceCmd.handleWorkspaceSetDefault(args);
 
             // ─── Script manage ───────────────────
@@ -475,20 +458,6 @@ export class DaemonCommandHandler implements CommandHelpers {
     }
 
     // ─── Misc (kept in handler — too small to extract) ───────
-
-    private async handleGetRecentWorkspaces(_args: any): Promise<CommandResult> {
-        const config = loadConfig();
-        const cliRecent = config.recentCliWorkspaces || [];
-        const ws = getWorkspaceState(config);
-        return {
-            success: true,
-            result: cliRecent,
-            workspaces: ws.workspaces,
-            defaultWorkspaceId: ws.defaultWorkspaceId,
-            defaultWorkspacePath: ws.defaultWorkspacePath,
-            activity: getWorkspaceActivity(config, 25),
-        };
-    }
 
     private async handleRefreshScripts(_args: any): Promise<CommandResult> {
         if (this._ctx.providerLoader) {

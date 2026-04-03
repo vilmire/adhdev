@@ -10,7 +10,6 @@ import * as os from 'os';
 import { loadConfig } from '../config/config.js';
 import { buildRecentActivityKey, getRecentActivity, getRecentSessionSeenAt } from '../config/recent-activity.js';
 import { getWorkspaceState } from '../config/workspaces.js';
-import { getWorkspaceActivity } from '../config/workspace-activity.js';
 import { getHostMemorySnapshot } from '../system/host-memory.js';
 import { getTerminalBackendRuntimeStatus } from '../cli-adapters/terminal-screen.js';
 import { buildSessionEntries, isCdpConnected } from './builders.js';
@@ -269,7 +268,6 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
         workspaces: wsState.workspaces,
         defaultWorkspaceId: wsState.defaultWorkspaceId,
         defaultWorkspacePath: wsState.defaultWorkspacePath,
-        workspaceActivity: getWorkspaceActivity(cfg, 15),
         recentSessions: buildRecentSessions(sessions, recentActivity, readState),
         terminalBackend,
         availableProviders: buildAvailableProviders(options.providerLoader),

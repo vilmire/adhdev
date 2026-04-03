@@ -4,7 +4,7 @@
 
 import { loadConfig, saveConfig } from '../config/config.js';
 import * as W from '../config/workspaces.js';
-import { appendWorkspaceActivity, getWorkspaceActivity, removeActivityForPath } from '../config/workspace-activity.js';
+import { appendWorkspaceActivity, removeActivityForPath } from '../config/workspace-activity.js';
 
 export type WorkspaceCommandResult = { success: boolean;[key: string]: unknown };
 
@@ -16,8 +16,6 @@ export function handleWorkspaceList(): WorkspaceCommandResult {
         workspaces: state.workspaces,
         defaultWorkspaceId: state.defaultWorkspaceId,
         defaultWorkspacePath: state.defaultWorkspacePath,
-        legacyRecentPaths: config.recentCliWorkspaces || [],
-        activity: getWorkspaceActivity(config, 25),
     };
 }
 
@@ -34,7 +32,7 @@ export function handleWorkspaceAdd(args: any): WorkspaceCommandResult {
     let cfg = appendWorkspaceActivity(result.config, result.entry.path, {});
     saveConfig(cfg);
     const state = W.getWorkspaceState(cfg);
-    return { success: true, entry: result.entry, ...state, activity: getWorkspaceActivity(cfg, 25) };
+    return { success: true, entry: result.entry, ...state };
 }
 
 export function handleWorkspaceRemove(args: any): WorkspaceCommandResult {
@@ -52,7 +50,7 @@ export function handleWorkspaceRemove(args: any): WorkspaceCommandResult {
     }
     saveConfig(cfg);
     const state = W.getWorkspaceState(cfg);
-    return { success: true, removedId: id, ...state, activity: getWorkspaceActivity(cfg, 25) };
+    return { success: true, removedId: id, ...state };
 }
 
 export function handleWorkspaceSetDefault(args: any): WorkspaceCommandResult {
@@ -66,7 +64,6 @@ export function handleWorkspaceSetDefault(args: any): WorkspaceCommandResult {
         return {
             success: true,
             ...state,
-            activity: getWorkspaceActivity(result.config, 25),
         };
     }
 
@@ -105,5 +102,5 @@ export function handleWorkspaceSetDefault(args: any): WorkspaceCommandResult {
     }
     saveConfig(out);
     const state = W.getWorkspaceState(out);
-    return { success: true, ...state, activity: getWorkspaceActivity(out, 25) };
+    return { success: true, ...state };
 }

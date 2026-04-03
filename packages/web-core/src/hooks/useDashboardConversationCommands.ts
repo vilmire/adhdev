@@ -15,7 +15,7 @@ export function useDashboardConversationCommands({
     activeConv,
     setLocalUserMessages,
     setActionLogs,
-    isStandalone,
+    isStandalone: _isStandalone,
 }: UseDashboardConversationCommandsOptions) {
     const [isFocusingAgent, setIsFocusingAgent] = useState(false)
     const [isSendingChat, setIsSendingChat] = useState(false)
@@ -74,22 +74,14 @@ export function useDashboardConversationCommands({
         if (!activeConv) return
 
         try {
-            if (isStandalone) {
-                await sendDaemonCommand(activeConv.ideId, 'launch_ide', {
-                    ideType: activeConv.ideType,
-                    enableCdp: true,
-                })
-                return
-            }
-
-            await sendDaemonCommand(activeConv.ideId, 'vscode_command_exec', {
-                commandId: 'adhdev.relaunchWithCdp',
-                args: [{ force: true }],
+            await sendDaemonCommand(activeConv.ideId, 'launch_ide', {
+                ideType: activeConv.ideType,
+                enableCdp: true,
             })
         } catch (e) {
             console.error('Relaunch failed', e)
         }
-    }, [activeConv, isStandalone, sendDaemonCommand])
+    }, [activeConv, sendDaemonCommand])
 
     const handleModalButton = useCallback(async (buttonText: string) => {
         if (!activeConv) return

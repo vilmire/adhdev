@@ -33,7 +33,6 @@ export type {
   MachineInfo,
   DetectedIdeInfo,
   WorkspaceEntry,
-  WorkspaceActivity,
   ProviderStatus,
   ProviderErrorReason,
   ActiveChatData,
@@ -65,7 +64,6 @@ export type { IDaemonCore, DaemonCoreOptions } from './daemon-core.js';
 // ── Config ──
 export { loadConfig, saveConfig, resetConfig, isSetupComplete, addCliHistory, markSetupComplete, updateConfig } from './config/config.js';
 export { getWorkspaceState } from './config/workspaces.js';
-export { getWorkspaceActivity } from './config/workspace-activity.js';
 export { appendRecentActivity, getRecentActivity } from './config/recent-activity.js';
 export type { RecentActivityEntry } from './config/recent-activity.js';
 

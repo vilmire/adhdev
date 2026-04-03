@@ -210,14 +210,6 @@ export interface DetectedIdeInfo {
     path?: string;
 }
 
-/** Workspace recent activity */
-export interface WorkspaceActivity {
-    path: string;
-    lastUsedAt: number;
-    kind?: string;
-    agentType?: string;
-}
-
 export type { RecentSessionBucket, TerminalBackendStatus } from './shared-types-extra.js';
 import type { RecentSessionBucket } from './shared-types-extra.js';
 import type { TerminalBackendStatus } from './shared-types-extra.js';
@@ -265,7 +257,6 @@ export interface StatusReportPayload {
     workspaces?: WorkspaceEntry[];
     defaultWorkspaceId?: string | null;
     defaultWorkspacePath?: string | null;
-    workspaceActivity?: WorkspaceActivity[];
     recentSessions?: RecentSessionEntry[];
     terminalBackend?: TerminalBackendStatus;
     /** Available providers (present in StatusSnapshot, optional in raw payload) */

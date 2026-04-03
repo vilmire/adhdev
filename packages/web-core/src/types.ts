@@ -36,7 +36,6 @@ export type {
     MachineInfo,
     DetectedIdeInfo,
     WorkspaceEntry,
-    WorkspaceActivity,
     ActiveChatData,
     ChatMessage,
     AvailableProviderInfo,
