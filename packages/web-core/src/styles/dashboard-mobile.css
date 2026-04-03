@@ -703,4 +703,11 @@
             padding: 40px 20px;
         }
     }
+
+    @media (display-mode: standalone) and (max-width: 768px) {
+        .dashboard-mobile-chat-nav {
+            padding-top: 8px;
+            padding-bottom: max(6px, env(safe-area-inset-bottom, 0px));
+        }
+    }
 }

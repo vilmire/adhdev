@@ -5,9 +5,10 @@
  * Connection state is abstract — injected by platform (cloud=P2P, standalone=local).
  */
 
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActiveConversation } from './types';
 import { isCliConv, isAcpConv } from './types';
-import { IconChat, IconScroll, IconMonitor } from '../Icons';
+import { IconBell, IconChat, IconScroll, IconMonitor } from '../Icons';
 import { useDaemons } from '../../compat';
 
 export interface DashboardHeaderProps {
@@ -16,10 +17,12 @@ export interface DashboardHeaderProps {
     wsStatus: string;
     /** Overall connection readiness (green=ready, yellow=partial, red=disconnected) */
     isConnected: boolean;
+    conversations: ActiveConversation[];
     onOpenHistory: (conversation?: ActiveConversation) => void;
     onOpenRemote?: () => void;
     onStopCli?: () => void;
     onFitCli?: () => void;
+    onOpenConversation?: (conversation: ActiveConversation) => void;
 }
 
 export default function DashboardHeader({
@@ -27,15 +30,19 @@ export default function DashboardHeader({
     agentCount,
     wsStatus,
     isConnected,
+    conversations,
     onOpenHistory,
     onOpenRemote,
     onStopCli,
     onFitCli,
+    onOpenConversation,
 }: DashboardHeaderProps) {
     const daemonCtx = useDaemons() as any;
     const p2pStates: Record<string, string> = daemonCtx.p2pStates || {};
     const ides = daemonCtx.ides || [];
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
+    const [inboxOpen, setInboxOpen] = useState(false);
+    const inboxRef = useRef<HTMLDivElement | null>(null);
 
     const dotColor = isConnected ? '#22c55e' : wsStatus === 'connected' ? '#eab308' : '#ef4444';
     const dotGlow = isConnected ? '0 0 4px #22c55e80' : wsStatus === 'connected' ? '0 0 4px #eab30880' : '0 0 4px #ef444480';
@@ -55,6 +62,35 @@ export default function DashboardHeader({
         return null;
     };
     const statusText = getStatusText();
+    const desktopInboxConversations = useMemo(
+        () => conversations.filter(conversation => {
+            if (conversation.streamSource !== 'native' || conversation.transport !== 'cdp-page') return true;
+            return !conversations.some(other => (
+                other.ideId === conversation.ideId
+                && other.tabKey !== conversation.tabKey
+                && other.streamSource === 'agent-stream'
+            ));
+        }),
+        [conversations],
+    );
+    const inboxAttention = useMemo(
+        () => desktopInboxConversations.filter(conversation => conversation.inboxBucket === 'needs_attention'),
+        [desktopInboxConversations],
+    );
+    const inboxUnread = useMemo(
+        () => desktopInboxConversations.filter(conversation => conversation.inboxBucket === 'task_complete' && conversation.unread),
+        [desktopInboxConversations],
+    );
+    const inboxCount = inboxAttention.length + inboxUnread.length;
+
+    useEffect(() => {
+        if (!inboxOpen) return;
+        const onPointerDown = (event: MouseEvent) => {
+            if (!inboxRef.current?.contains(event.target as Node)) setInboxOpen(false);
+        };
+        document.addEventListener('mousedown', onPointerDown);
+        return () => document.removeEventListener('mousedown', onPointerDown);
+    }, [inboxOpen]);
 
     return (
         <div className="dashboard-header">
@@ -94,6 +130,62 @@ export default function DashboardHeader({
                 </div>
             </div>
             <div className="flex gap-2 items-center">
+                <div className="dashboard-header-inbox" ref={inboxRef}>
+                    <button
+                        type="button"
+                        onClick={() => setInboxOpen(open => !open)}
+                        className="btn btn-secondary btn-sm dashboard-header-inbox-button"
+                        title="Activity inbox"
+                    >
+                        <IconBell size={16} />
+                        {inboxCount > 0 && <span className="dashboard-header-inbox-badge">{inboxCount}</span>}
+                    </button>
+                    {inboxOpen && (
+                        <div className="dashboard-header-inbox-popover">
+                            {inboxAttention.length > 0 && (
+                                <div className="dashboard-header-inbox-section">
+                                    <div className="dashboard-header-inbox-section-title">Needs attention</div>
+                                    {inboxAttention.map(conversation => (
+                                        <button
+                                            key={conversation.tabKey}
+                                            type="button"
+                                            className="dashboard-header-inbox-item is-attention"
+                                            onClick={() => {
+                                                onOpenConversation?.(conversation);
+                                                setInboxOpen(false);
+                                            }}
+                                        >
+                                            <span className="dashboard-header-inbox-item-title">{conversation.displayPrimary}</span>
+                                            <span className="dashboard-header-inbox-item-meta">{conversation.displaySecondary}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                            {inboxUnread.length > 0 && (
+                                <div className="dashboard-header-inbox-section">
+                                    <div className="dashboard-header-inbox-section-title">Task complete</div>
+                                    {inboxUnread.map(conversation => (
+                                        <button
+                                            key={conversation.tabKey}
+                                            type="button"
+                                            className="dashboard-header-inbox-item"
+                                            onClick={() => {
+                                                onOpenConversation?.(conversation);
+                                                setInboxOpen(false);
+                                            }}
+                                        >
+                                            <span className="dashboard-header-inbox-item-title">{conversation.displayPrimary}</span>
+                                            <span className="dashboard-header-inbox-item-meta">{conversation.displaySecondary}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                            {inboxCount === 0 && (
+                                <div className="dashboard-header-inbox-empty">No pending activity.</div>
+                            )}
+                        </div>
+                    )}
+                </div>
                 {isCliActive && onStopCli && (
                     <>
                         <button

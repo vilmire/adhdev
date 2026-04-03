@@ -29,7 +29,6 @@ import { useIdeRemoteStream } from '../../hooks/useIdeRemoteStream'
 import {
     getDashboardLayoutProfile,
     readDashboardDockviewStoredLayout,
-    readLegacyDashboardStoredLayout,
     writeDashboardDockviewStoredLayout,
 } from '../../utils/dashboardLayoutStorage'
 import { isAcpConv, isCliConv } from './types'
@@ -131,45 +130,12 @@ function useDockviewHeaderRenderTick(props: Pick<IDockviewPanelHeaderProps, 'api
     }, [props.api, props.containerApi])
 }
 
-function groupConversationsFromLegacy(
-    visibleConversations: ActiveConversation[],
-    legacy: ReturnType<typeof readLegacyDashboardStoredLayout>,
-) {
-    if (!legacy) return [visibleConversations]
-
-    const legacyAssignments = new Map(legacy.groupAssignments)
-    const conversationsByTabKey = new Map(visibleConversations.map(conversation => [conversation.tabKey, conversation]))
-    const assignedByGroup = new Map<number, ActiveConversation[]>()
-
-    for (const conversation of visibleConversations) {
-        const groupIndex = legacyAssignments.get(conversation.tabKey) ?? 0
-        const bucket = assignedByGroup.get(groupIndex) ?? []
-        bucket.push(conversation)
-        assignedByGroup.set(groupIndex, bucket)
-    }
-
-    const sortedGroupIndexes = [...assignedByGroup.keys()].sort((a, b) => a - b)
-    return sortedGroupIndexes.map(groupIndex => {
-        const conversations = assignedByGroup.get(groupIndex) ?? []
-        const preferredOrder = legacy.groupTabOrders[groupIndex] ?? []
-        const ordered = preferredOrder
-            .map(tabKey => conversationsByTabKey.get(tabKey))
-            .filter((conversation): conversation is ActiveConversation => !!conversation)
-        const seen = new Set(ordered.map(conversation => conversation.tabKey))
-        for (const conversation of conversations) {
-            if (!seen.has(conversation.tabKey)) ordered.push(conversation)
-        }
-        return ordered
-    }).filter(group => group.length > 0)
-}
-
 function buildInitialDockviewLayout(
     api: DockviewApi,
     visibleConversations: ActiveConversation[],
     requestedActiveTabKey?: string | null,
 ) {
-    const legacy = readLegacyDashboardStoredLayout()
-    const groups = groupConversationsFromLegacy(visibleConversations, legacy)
+    const groups = [visibleConversations]
     let previousGroupAnchorId: string | undefined
 
     for (const group of groups) {
@@ -192,7 +158,6 @@ function buildInitialDockviewLayout(
     }
 
     const preferredActiveTabKey = requestedActiveTabKey
-        ?? (legacy ? legacy.groupActiveTabIds[legacy.focusedGroup] : null)
         ?? visibleConversations[0]?.tabKey
         ?? null
     if (!preferredActiveTabKey) return

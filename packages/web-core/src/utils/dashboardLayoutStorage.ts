@@ -17,13 +17,6 @@ export interface DashboardStoredDockviewLayout {
 
 const STORAGE_PREFIX = 'adhdev_dashboardLayout_v1'
 const DOCKVIEW_STORAGE_PREFIX = 'adhdev_dashboardDockview_v1'
-const LEGACY_KEYS = {
-    splitGroups: 'adhdev_splitGroups',
-    focusedGroup: 'adhdev_focusedGroup',
-    groupActiveTabs: 'adhdev_groupActiveTabs',
-    groupTabOrders: 'adhdev_groupTabOrders',
-    splitSizes: 'adhdev_splitSizes',
-} as const
 
 const EMPTY_LAYOUT: DashboardStoredLayout = {
     groupAssignments: [],
@@ -42,14 +35,6 @@ function safeRead<T>(key: string, fallback: T): T {
     }
 }
 
-function safeReadString(key: string): string | null {
-    try {
-        return localStorage.getItem(key)
-    } catch {
-        return null
-    }
-}
-
 export function getDashboardLayoutProfile(width: number): DashboardLayoutProfile {
     if (width < 768) return 'mobile'
     if (width < 1280) return 'desktop-narrow'
@@ -60,41 +45,9 @@ export function getDashboardLayoutStorageKey(profile: DashboardLayoutProfile) {
     return `${STORAGE_PREFIX}:${profile}`
 }
 
-function readLegacyDashboardLayout(): DashboardStoredLayout | null {
-    const focusedGroupRaw = safeReadString(LEGACY_KEYS.focusedGroup)
-    const groupAssignments = safeRead<[string, number][]>(LEGACY_KEYS.splitGroups, [])
-    const groupActiveTabIds = safeRead<Record<number, string | null>>(LEGACY_KEYS.groupActiveTabs, {})
-    const groupTabOrders = safeRead<Record<number, string[]>>(LEGACY_KEYS.groupTabOrders, {})
-    const groupSizes = safeRead<number[]>(LEGACY_KEYS.splitSizes, [])
-
-    const hasData = (
-        focusedGroupRaw !== null ||
-        groupAssignments.length > 0 ||
-        Object.keys(groupActiveTabIds).length > 0 ||
-        Object.keys(groupTabOrders).length > 0 ||
-        groupSizes.length > 0
-    )
-
-    if (!hasData) return null
-
-    return {
-        groupAssignments,
-        focusedGroup: focusedGroupRaw ? parseInt(focusedGroupRaw, 10) || 0 : 0,
-        groupActiveTabIds,
-        groupTabOrders,
-        groupSizes,
-    }
-}
-
-export function readLegacyDashboardStoredLayout(): DashboardStoredLayout | null {
-    return readLegacyDashboardLayout()
-}
-
 export function readDashboardStoredLayout(profile: DashboardLayoutProfile): DashboardStoredLayout | null {
     const key = getDashboardLayoutStorageKey(profile)
-    const stored = safeRead<DashboardStoredLayout | null>(key, null)
-    if (stored) return stored
-    return readLegacyDashboardLayout()
+    return safeRead<DashboardStoredLayout | null>(key, null)
 }
 
 export function writeDashboardStoredLayout(

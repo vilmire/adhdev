@@ -1550,6 +1550,112 @@
         margin-top: 1px;
     }
 
+    .dashboard-header-inbox {
+        position: relative;
+    }
+
+    .dashboard-header-inbox-button {
+        position: relative;
+    }
+
+    .dashboard-header-inbox-badge {
+        position: absolute;
+        top: -5px;
+        right: -5px;
+        min-width: 16px;
+        height: 16px;
+        padding: 0 4px;
+        border-radius: 999px;
+        background: var(--accent-primary);
+        color: white;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 16px;
+        text-align: center;
+        box-shadow: 0 0 0 2px var(--surface-primary);
+    }
+
+    .dashboard-header-inbox-popover {
+        position: absolute;
+        top: calc(100% + 10px);
+        right: 0;
+        width: min(360px, 82vw);
+        max-height: min(70vh, 520px);
+        overflow-y: auto;
+        border: 1px solid var(--border-default);
+        border-radius: 16px;
+        background: var(--surface-primary);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.22);
+        padding: 12px;
+        z-index: 40;
+    }
+
+    .dashboard-header-inbox-section + .dashboard-header-inbox-section {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid var(--border-subtle);
+    }
+
+    .dashboard-header-inbox-section-title {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--text-muted);
+        margin-bottom: 8px;
+        letter-spacing: 0.01em;
+        text-transform: uppercase;
+    }
+
+    .dashboard-header-inbox-item {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        text-align: left;
+        padding: 10px 12px;
+        border: 1px solid var(--border-subtle);
+        border-radius: 12px;
+        background: var(--surface-secondary);
+        transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+    }
+
+    .dashboard-header-inbox-item + .dashboard-header-inbox-item {
+        margin-top: 8px;
+    }
+
+    .dashboard-header-inbox-item:hover {
+        background: var(--surface-tertiary);
+        border-color: var(--border-default);
+        transform: translateY(-1px);
+    }
+
+    .dashboard-header-inbox-item.is-attention {
+        border-color: color-mix(in srgb, var(--accent-primary) 24%, var(--border-default));
+    }
+
+    .dashboard-header-inbox-item.is-working {
+        opacity: 0.88;
+    }
+
+    .dashboard-header-inbox-item-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-primary);
+        line-height: 1.25;
+    }
+
+    .dashboard-header-inbox-item-meta {
+        font-size: 11px;
+        color: var(--text-muted);
+        line-height: 1.25;
+    }
+
+    .dashboard-header-inbox-empty {
+        padding: 12px 10px;
+        color: var(--text-muted);
+        font-size: 12px;
+    }
+
     .dashboard-remote-dialog-overlay {
         position: fixed;
         inset: 0;

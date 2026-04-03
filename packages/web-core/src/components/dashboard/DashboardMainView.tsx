@@ -110,7 +110,9 @@ export default function DashboardMainView({
                     agentCount={chatIdes.length}
                     wsStatus={wsStatus}
                     isConnected={isConnected}
+                    conversations={visibleConversations}
                     onOpenHistory={onOpenHistory}
+                    onOpenConversation={(conversation) => onDesktopActiveTabChange(conversation.tabKey)}
                     onOpenRemote={() => {
                         if (!activeConv || isCliConv(activeConv) || isAcpConv(activeConv)) return
                         onOpenRemote(activeConv)

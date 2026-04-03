@@ -332,6 +332,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     const scrollFrameRef = useRef<number | null>(null);
     const contextAutoScrollRef = useRef(false);
     const contextAutoScrollTimerRef = useRef<number | null>(null);
+    const hasSelectionRef = useRef(false);
     const [expandedMsgs, setExpandedMsgs] = useState<Set<string>>(new Set());
     const [expandedTexts, setExpandedTexts] = useState<Set<string>>(new Set());
 
@@ -348,6 +349,23 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         const el = containerRef.current;
         if (!el) return;
         el.scrollTo({ top: el.scrollHeight, behavior });
+    }, []);
+
+    const updateSelectionState = useCallback(() => {
+        const container = containerRef.current;
+        const selection = window.getSelection?.();
+        if (!container || !selection || selection.rangeCount === 0 || selection.isCollapsed) {
+            hasSelectionRef.current = false;
+            return;
+        }
+        const anchorNode = selection.anchorNode;
+        const focusNode = selection.focusNode;
+        hasSelectionRef.current = !!(
+            anchorNode
+            && focusNode
+            && container.contains(anchorNode)
+            && container.contains(focusNode)
+        );
     }, []);
 
     const scheduleScrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
@@ -375,7 +393,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             mountedRef.current = true;
             userScrolledUp.current = false;
             contextAutoScrollRef.current = true;
-            scheduleScrollToBottom('auto');
+            if (!hasSelectionRef.current) scheduleScrollToBottom('auto');
             prevCountRef.current = messages.length;
             return;
         }
@@ -383,10 +401,10 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         // When new message added — follow if user hasn't scrolled up
         const isNewMessage = messages.length > prevCountRef.current;
         if (isNewMessage) {
-            if (!userScrolledUp.current) {
+            if (!userScrolledUp.current && !hasSelectionRef.current) {
                 scheduleScrollToBottom('auto');
             }
-        } else if (isNearBottom() && !userScrolledUp.current) {
+        } else if (isNearBottom() && !userScrolledUp.current && !hasSelectionRef.current) {
             scheduleScrollToBottom('auto');
         }
         prevCountRef.current = messages.length;
@@ -417,6 +435,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
         const observer = new ResizeObserver(() => {
             if (!contextAutoScrollRef.current) return;
+            if (hasSelectionRef.current) return;
             scheduleScrollToBottom('auto');
             finishContextAutoScroll();
         });
@@ -452,6 +471,11 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         el.addEventListener('scroll', onScroll, { passive: true });
         return () => { el.removeEventListener('scroll', onScroll); clearTimeout(scrollTimer); };
     }, []);
+
+    useEffect(() => {
+        document.addEventListener('selectionchange', updateSelectionState);
+        return () => document.removeEventListener('selectionchange', updateSelectionState);
+    }, [updateSelectionState]);
 
     // After messages prepended, restore scroll position so content doesn't jump
     const prevScrollHeight = useRef(0);
