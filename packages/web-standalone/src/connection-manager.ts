@@ -9,7 +9,7 @@ export interface StandaloneConnectionAdapter {
     stopScreenshots(ideType?: string): void
 }
 
-type PtyOutputCallback = (cliId: string, data: string, meta?: { scrollback?: boolean }) => void
+type PtyOutputCallback = (sessionId: string, data: string, meta?: { scrollback?: boolean }) => void
 type ScreenshotCallback = (sourceDaemonId: string, blob: Blob) => void
 type StatusCallback = (sourceDaemonId: string, payload: any) => void
 type RuntimeEvent =
@@ -62,8 +62,8 @@ class StandaloneConnectionManager {
     }
 
     sendData(_daemonId: string, _data: any): boolean { return false }
-    sendPtyInput(_daemonId: string, _cliId: string, _data: string): boolean { return false }
-    sendPtyResize(_daemonId: string, _cliId: string, _cols: number, _rows: number): boolean { return false }
+    sendPtyInput(_daemonId: string, _sessionId: string, _data: string): boolean { return false }
+    sendPtyResize(_daemonId: string, _sessionId: string, _cols: number, _rows: number): boolean { return false }
 
     onScreenshot(key: string, callback: ScreenshotCallback): () => void {
         this.screenshotCallbacks.set(key, callback)
@@ -88,23 +88,23 @@ class StandaloneConnectionManager {
         return () => { this.ptyCallbacks.delete(callback) }
     }
 
-    emitPtyOutput(cliId: string, data: string, meta?: { scrollback?: boolean }): void {
+    emitPtyOutput(sessionId: string, data: string, meta?: { scrollback?: boolean }): void {
         if (meta?.scrollback) {
-            this.emitRuntimeEvent(cliId, {
+            this.emitRuntimeEvent(sessionId, {
                 type: 'runtime_snapshot',
-                sessionId: cliId,
+                sessionId,
                 seq: 0,
                 text: typeof data === 'string' ? data : '',
                 truncated: false,
             })
         } else if (typeof data === 'string' && data) {
-            this.emitRuntimeEvent(cliId, {
+            this.emitRuntimeEvent(sessionId, {
                 type: 'session_output',
-                sessionId: cliId,
+                sessionId,
                 data,
             })
         }
-        this.ptyCallbacks.forEach((callback) => callback(cliId, data, meta))
+        this.ptyCallbacks.forEach((callback) => callback(sessionId, data, meta))
     }
 
     emitRuntimeSnapshot(sessionId: string, text: string, seq = 0, truncated = false): void {

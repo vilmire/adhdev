@@ -156,7 +156,7 @@ class StandaloneServer {
         getP2p: () => ({
           broadcastPtyOutput: (key: string, data: string) => {
             if (this.clients.size === 0) return;
-            const msg = JSON.stringify({ type: 'pty_output', cliId: key, data });
+            const msg = JSON.stringify({ type: 'pty_output', sessionId: key, data });
             for (const client of this.clients) {
               if (client.readyState === 1) { // OPEN
                 client.send(msg);
