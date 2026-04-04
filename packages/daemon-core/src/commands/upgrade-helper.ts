@@ -106,6 +106,13 @@ function removeDaemonPidFile(): void {
 function cleanupStaleGlobalInstallDirs(pkgName: string): void {
   const npmRoot = execFileSync(getNpmExecutable(), ['root', '-g'], { encoding: 'utf8' }).trim();
   if (!npmRoot) return;
+  const npmPrefix = execFileSync(getNpmExecutable(), ['prefix', '-g'], { encoding: 'utf8' }).trim();
+  const binDir = process.platform === 'win32' ? npmPrefix : path.join(npmPrefix, 'bin');
+  const packageBaseName = pkgName.startsWith('@') ? pkgName.split('/')[1] : pkgName;
+  const binNames = new Set<string>([packageBaseName]);
+  if (pkgName === '@adhdev/daemon-standalone') {
+    binNames.add('adhdev-standalone');
+  }
 
   if (pkgName.startsWith('@')) {
     const [scope, name] = pkgName.split('/');
@@ -116,13 +123,20 @@ function cleanupStaleGlobalInstallDirs(pkgName: string): void {
       fs.rmSync(path.join(scopeDir, entry), { recursive: true, force: true });
       appendUpgradeLog(`Removed stale scoped staging dir: ${path.join(scopeDir, entry)}`);
     }
-    return;
+  } else {
+    for (const entry of fs.readdirSync(npmRoot)) {
+      if (!entry.startsWith(`.${pkgName}-`)) continue;
+      fs.rmSync(path.join(npmRoot, entry), { recursive: true, force: true });
+      appendUpgradeLog(`Removed stale staging dir: ${path.join(npmRoot, entry)}`);
+    }
   }
 
-  for (const entry of fs.readdirSync(npmRoot)) {
-    if (!entry.startsWith(`.${pkgName}-`)) continue;
-    fs.rmSync(path.join(npmRoot, entry), { recursive: true, force: true });
-    appendUpgradeLog(`Removed stale staging dir: ${path.join(npmRoot, entry)}`);
+  if (fs.existsSync(binDir)) {
+    for (const entry of fs.readdirSync(binDir)) {
+      if (![...binNames].some((name) => entry.startsWith(`.${name}-`))) continue;
+      fs.rmSync(path.join(binDir, entry), { recursive: true, force: true });
+      appendUpgradeLog(`Removed stale bin staging entry: ${path.join(binDir, entry)}`);
+    }
   }
 }
 
