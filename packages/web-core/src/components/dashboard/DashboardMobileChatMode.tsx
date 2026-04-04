@@ -298,8 +298,6 @@ export default function DashboardMobileChatMode({
                     providerType: launch.providerType,
                     subtitle: launch.currentModel || launch.workspace || undefined,
                     workspace: launch.workspace,
-                    launchMode: launch.launchMode,
-                    mode: launch.mode,
                     currentModel: launch.currentModel,
                 }))
             }
@@ -322,8 +320,6 @@ export default function DashboardMobileChatMode({
                             ? ((entry as any).currentModel || (entry as any).workspace || undefined)
                             : ((entry as any).workspace || undefined),
                         workspace: (entry as any).workspace || undefined,
-                        launchMode: (entry as any).launchMode,
-                        mode: (entry as any).mode,
                         currentModel: (entry as any).currentModel,
                         timestamp: entry.activeChat?.messages?.at?.(-1)?.timestamp || 0,
                     }
@@ -341,13 +337,6 @@ export default function DashboardMobileChatMode({
             displayName?: string
             icon?: string
             category?: string
-            launchModes?: Array<{
-                id: string
-                name: string
-                description?: string
-                outputFormat?: 'terminal' | 'stream-json'
-                default?: boolean
-            }>
         }>,
         [selectedMachineEntry],
     )
@@ -358,7 +347,6 @@ export default function DashboardMobileChatMode({
                 type: provider.type,
                 displayName: provider.displayName || provider.type,
                 icon: provider.icon,
-                launchModes: provider.launchModes,
             })),
         [selectedMachineProviders],
     )
@@ -369,7 +357,6 @@ export default function DashboardMobileChatMode({
                 type: provider.type,
                 displayName: provider.displayName || provider.type,
                 icon: provider.icon,
-                launchModes: provider.launchModes,
             })),
         [selectedMachineProviders],
     )
@@ -535,15 +522,14 @@ export default function DashboardMobileChatMode({
         machineId: string,
         kind: 'cli' | 'acp',
         providerType: string,
-        opts?: { workspaceId?: string | null; workspacePath?: string | null; launchMode?: string | null },
+        opts?: { workspaceId?: string | null; workspacePath?: string | null },
     ) => {
         try {
             setMachineActionState('loading')
-            setMachineActionMessage(`Launching ${providerType}${opts?.launchMode ? ` · ${opts.launchMode}` : ''}…`)
+            setMachineActionMessage(`Launching ${providerType}…`)
             const payload: Record<string, unknown> = { cliType: providerType }
             if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
             else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
-            if (opts?.launchMode) payload.launchMode = opts.launchMode
             const res: any = await sendDaemonCommand(machineId, 'launch_cli', payload)
             const result = res?.result || res
             const launchedSessionId = result?.sessionId || result?.id
@@ -572,7 +558,6 @@ export default function DashboardMobileChatMode({
         if ((session.kind === 'cli' || session.kind === 'acp') && session.providerType) {
             await handleLaunchWorkspaceProvider(selectedMachineEntry.id, session.kind, session.providerType, {
                 workspacePath: session.workspace || null,
-                launchMode: session.launchMode || null,
             })
             return
         }

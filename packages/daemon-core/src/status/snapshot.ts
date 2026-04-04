@@ -33,13 +33,6 @@ export interface StatusSnapshotOptions {
             icon?: string;
             displayName?: string;
             category: 'ide' | 'extension' | 'cli' | 'acp';
-            launchModes?: Array<{
-                id: string;
-                name: string;
-                description?: string;
-                outputFormat?: 'terminal' | 'stream-json';
-                default?: boolean;
-            }>;
         }>;
     };
     detectedIdes: Array<{
@@ -87,17 +80,6 @@ function buildAvailableProviders(
         displayName: provider.displayName || provider.type,
         icon: provider.icon || '💻',
         category: provider.category,
-        ...(provider.launchModes?.length
-            ? {
-                launchModes: provider.launchModes.map((mode) => ({
-                    id: mode.id,
-                    name: mode.name,
-                    ...(mode.description ? { description: mode.description } : {}),
-                    ...(mode.outputFormat ? { outputFormat: mode.outputFormat } : {}),
-                    ...(mode.default ? { default: true } : {}),
-                })),
-            }
-            : {}),
     }));
 }
 
@@ -203,8 +185,6 @@ function buildRecentLaunches(
             kind: item.kind,
             title: item.title || item.providerName,
             workspace: item.workspace,
-            launchMode: item.launchMode,
-            mode: item.mode,
             currentModel: item.currentModel,
             lastLaunchedAt: item.lastUsedAt,
         }))

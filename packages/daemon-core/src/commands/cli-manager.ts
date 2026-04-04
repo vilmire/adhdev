@@ -60,7 +60,6 @@ export interface HostedCliRuntimeDescriptor {
     cliType: string;
     workspace: string;
     cliArgs?: string[];
-    launchMode?: string;
 }
 
 const chalkApi: any = (chalk as any)?.yellow
@@ -109,8 +108,6 @@ export class DaemonCliManager {
         providerType: string;
         providerName: string;
         workspace?: string;
-        launchMode?: string;
-        mode?: 'terminal' | 'chat';
         currentModel?: string;
         sessionId?: string;
         title?: string;
@@ -194,13 +191,12 @@ export class DaemonCliManager {
         provider: any,
         settings: Record<string, any>,
         attachExisting = false,
-        launchModeId?: string,
     ): Promise<void> {
         const instanceManager = this.deps.getInstanceManager();
         const sessionRegistry = this.deps.getSessionRegistry?.() || null;
         if (!instanceManager) throw new Error('InstanceManager not available');
         const transportFactory = this.getTransportFactory(key, normalizedType, resolvedDir, cliArgs, attachExisting);
-        const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key, transportFactory, launchModeId);
+        const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key, transportFactory);
         try {
             await instanceManager.addInstance(key, cliInstance, {
                 serverConn: this.deps.getServerConn(),
@@ -229,7 +225,7 @@ export class DaemonCliManager {
 
  // ─── Session start/management ──────────────────────────────
 
-    async startSession(cliType: string, workingDir: string, cliArgs?: string[], initialModel?: string, launchMode?: string, launchOptionValues?: Record<string, string | boolean | number>): Promise<void> {
+    async startSession(cliType: string, workingDir: string, cliArgs?: string[], initialModel?: string): Promise<void> {
         const trimmed = (workingDir || '').trim();
         if (!trimmed) throw new Error('working directory required');
         const resolvedDir = trimmed.startsWith('~')
@@ -336,38 +332,7 @@ export class DaemonCliManager {
         }
 
  // ─── Resolve launch options → extra args ───
-        let resolvedCliArgs = cliArgs;
-        let resolvedLaunchMode = launchMode;
-
-        const activeMode = provider?.launchModes?.length
-            ? (launchMode
-                ? provider.launchModes.find((m: any) => m.id === launchMode)
-                : provider.launchModes.find((m: any) => m.default))
-            : undefined;
-
-        if (activeMode) {
-            resolvedLaunchMode = activeMode.id;
-        }
-
-        if (provider?.launchArgBuilder) {
-            // Build option values: schema defaults → mode preset → user args?.launchOptionValues
-            const defaults: Record<string, string | boolean | number> = {};
-            for (const opt of (provider.launchOptions || [])) {
-                if (opt.default !== undefined) defaults[opt.id] = opt.default;
-            }
-            const modeOptions: Record<string, string | boolean | number> = activeMode?.options || {};
-            const userOptions: Record<string, string | boolean | number> = launchOptionValues || {};
-            const merged = { ...defaults, ...modeOptions, ...userOptions };
-            const extraArgs = provider.launchArgBuilder(merged);
-            if (extraArgs.length) {
-                resolvedCliArgs = [...(cliArgs || []), ...extraArgs];
-                console.log(colorize('cyan', `  🚀 Launch options applied: ${extraArgs.join(' ')}`));
-            }
-        } else if (activeMode?.extraArgs?.length) {
-            // Fallback: simple extraArgs from mode (no launchArgBuilder)
-            resolvedCliArgs = [...(cliArgs || []), ...activeMode.extraArgs];
-            console.log(colorize('cyan', `  🚀 Launch mode '${activeMode.name}': appending args ${activeMode.extraArgs.join(' ')}`));
-        }
+        const resolvedCliArgs = cliArgs;
 
  // If InstanceManager exists, manage as CliProviderInstance unified
         const instanceManager = this.deps.getInstanceManager();
@@ -382,7 +347,6 @@ export class DaemonCliManager {
                 resolvedProvider,
                 {},
                 false,
-                resolvedLaunchMode,
             );
             console.log(colorize('green', `  ✓ CLI started: ${cliInfo.displayName} v${cliInfo.version || 'unknown'} in ${resolvedDir}`));
         } else {
@@ -429,8 +393,6 @@ export class DaemonCliManager {
             providerType: normalizedType,
             providerName: provider?.displayName || provider?.name || normalizedType,
             workspace: resolvedDir,
-            launchMode: resolvedLaunchMode,
-            mode: activeMode?.outputFormat === 'stream-json' ? 'chat' : 'terminal',
             currentModel: initialModel,
             sessionId: key,
             title: provider?.displayName || provider?.name || normalizedType,
@@ -512,7 +474,6 @@ export class DaemonCliManager {
                     resolvedProvider,
                     {},
                     true,
-                    record.launchMode,
                 );
                 restored += 1;
                 LOG.info('CLI', `♻ Restored hosted runtime: ${record.runtimeKey || record.runtimeId} (${record.displayName || record.workspace})`);
@@ -601,7 +562,7 @@ export class DaemonCliManager {
                 const launchSource = resolved.source;
                 if (!cliType) throw new Error('cliType required');
 
-                await this.startSession(cliType, dir, args?.cliArgs, args?.initialModel, args?.launchMode, args?.launchOptionValues);
+                await this.startSession(cliType, dir, args?.cliArgs, args?.initialModel);
 
  // On startSession success, new UUID key exists in adapters (last added item)
                 let newKey: string | null = null;

@@ -43,10 +43,6 @@ export default function MachineCommandCenter({
         if (kind === 'cli') return 'CLI'
         return 'ACP'
     }
-    const formatLaunchModeLabel = (launch: MachineRecentLaunch) => {
-        if (!launch.launchMode) return ''
-        return launch.mode === 'chat' ? `chat:${launch.launchMode}` : launch.launchMode
-    }
 
     return (
         <div className="machine-command-center">
@@ -59,7 +55,6 @@ export default function MachineCommandCenter({
                                 <span className="machine-command-link-title">{launch.label}</span>
                                 <span className="machine-command-link-meta">
                                     {formatKindLabel(launch.kind)}
-                                    {formatLaunchModeLabel(launch) ? ` · ${formatLaunchModeLabel(launch)}` : ''}
                                     {launch.subtitle ? ` · ${launch.subtitle}` : ''}
                                 </span>
                             </button>

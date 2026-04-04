@@ -141,7 +141,6 @@ export function statusPayloadToEntries(
             instanceId: session.id,
             cliName: session.providerName,
             mode: (session as any).mode || 'terminal',
-            launchMode: session.launchMode,
             workspace: session.workspace || '',
             activeChat: session.activeChat,
             resume: session.resume,

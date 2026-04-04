@@ -103,8 +103,6 @@ export interface CliProviderState extends ProviderStateBase {
     category: 'cli';
  /** terminal = PTY stream, chat = parsed conversation */
     mode: 'terminal' | 'chat';
- /** Active launch mode id (e.g. 'chat') — undefined means default terminal */
-    launchMode?: string;
 }
 
 /** ACP provider state */

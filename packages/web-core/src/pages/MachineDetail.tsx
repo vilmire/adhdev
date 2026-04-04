@@ -133,7 +133,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             status: i.status,
             workspace: (i as any).workspace || '',
             activeChat: (i as any).activeChat || null,
-            launchMode: (i as any).launchMode,
             mode: (i as any).mode,
             daemonId: machineId!,
         }))
@@ -203,8 +202,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             providerType: session.type,
             subtitle: session.workspace || undefined,
             workspace: session.workspace || undefined,
-            launchMode: session.launchMode,
-            mode: session.mode,
             timestamp: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
         })),
         ...acpSessions.map(session => ({
@@ -228,8 +225,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             providerType: launch.providerType,
             subtitle: launch.currentModel || launch.workspace || undefined,
             workspace: launch.workspace,
-            launchMode: launch.launchMode,
-            mode: launch.mode,
             currentModel: launch.currentModel,
         }))
         : fallbackRecentLaunches
@@ -246,7 +241,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             await actions.runLaunchCliCore({
                 cliType: session.providerType,
                 dir: session.workspace || '',
-                launchMode: session.launchMode,
                 model: session.kind === 'acp' ? session.currentModel : undefined,
             })
             return

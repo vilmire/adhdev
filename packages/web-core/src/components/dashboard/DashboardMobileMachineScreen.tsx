@@ -10,13 +10,6 @@ interface LaunchProviderInfo {
     type: string
     displayName: string
     icon?: string
-    launchModes?: Array<{
-        id: string
-        name: string
-        description?: string
-        outputFormat?: 'terminal' | 'stream-json'
-        default?: boolean
-    }>
 }
 
 interface DashboardMobileMachineScreenProps {
@@ -35,7 +28,7 @@ interface DashboardMobileMachineScreenProps {
     onMachineUpgrade: () => void
     onLaunchDetectedIde: (ideType: string, opts?: { workspacePath?: string | null }) => void
     onAddWorkspace: (path: string, opts?: { createIfMissing?: boolean }) => void
-    onLaunchWorkspaceProvider: (kind: Extract<WorkspaceLaunchKind, 'cli' | 'acp'>, providerType: string, opts?: { workspaceId?: string | null; workspacePath?: string | null; launchMode?: string | null }) => void
+    onLaunchWorkspaceProvider: (kind: Extract<WorkspaceLaunchKind, 'cli' | 'acp'>, providerType: string, opts?: { workspaceId?: string | null; workspacePath?: string | null }) => void
 }
 
 export default function DashboardMobileMachineScreen({
@@ -70,10 +63,6 @@ export default function DashboardMobileMachineScreen({
         if (kind === 'cli') return 'CLI'
         return 'ACP'
     }
-    const formatLaunchModeLabel = (launch: MachineRecentLaunch) => {
-        if (!launch.launchMode) return ''
-        return launch.mode === 'chat' ? `chat:${launch.launchMode}` : launch.launchMode
-    }
 
     const topRecentLaunches = selectedMachineRecentLaunches.slice(0, 4)
     const topConversationItems = selectedMachineConversations.slice(0, 3)
@@ -82,7 +71,7 @@ export default function DashboardMobileMachineScreen({
             key: `recent-launch:${session.id}`,
             type: 'session' as const,
             primary: session.label,
-            secondary: `${formatKindLabel(session.kind)}${formatLaunchModeLabel(session) ? ` · ${formatLaunchModeLabel(session)}` : ''}${session.subtitle ? ` · ${session.subtitle}` : ''}`,
+            secondary: `${formatKindLabel(session.kind)}${session.subtitle ? ` · ${session.subtitle}` : ''}`,
             unread: false,
             onClick: () => onOpenRecent(session),
         }))
@@ -306,30 +295,24 @@ export default function DashboardMobileMachineScreen({
                                                 </span>
                                             </button>
                                         ))
-                                        : (activeLauncherKind === 'cli' ? cliProviders : acpProviders).flatMap(provider => {
-                                            const launchModes = provider.launchModes?.length
-                                                ? provider.launchModes
-                                                : [{ id: '', name: '', description: '', default: true }]
-                                            return launchModes.map(mode => (
-                                                <button
-                                                    key={`${provider.type}:${mode.id || 'default'}`}
-                                                    type="button"
-                                                    className="dashboard-mobile-machine-provider-btn"
-                                                    onClick={() => onLaunchWorkspaceProvider(activeLauncherKind, provider.type, {
-                                                        workspaceId: workspaceChoice !== '__custom__' ? workspaceChoice : null,
-                                                        workspacePath: resolvedWorkspacePath || null,
-                                                        launchMode: mode.id || null,
-                                                    })}
-                                                >
-                                                    <span className="dashboard-mobile-machine-provider-name">
-                                                        {provider.icon ? `${provider.icon} ` : ''}{provider.displayName}{mode.name ? ` · ${mode.name}` : ''}
-                                                    </span>
-                                                    <span className="dashboard-mobile-machine-provider-meta">
-                                                        {mode.description || resolvedWorkspacePath || 'Use selected workspace'}
-                                                    </span>
-                                                </button>
-                                            ))
-                                        })}
+                                        : (activeLauncherKind === 'cli' ? cliProviders : acpProviders).map(provider => (
+                                            <button
+                                                key={provider.type}
+                                                type="button"
+                                                className="dashboard-mobile-machine-provider-btn"
+                                                onClick={() => onLaunchWorkspaceProvider(activeLauncherKind, provider.type, {
+                                                    workspaceId: workspaceChoice !== '__custom__' ? workspaceChoice : null,
+                                                    workspacePath: resolvedWorkspacePath || null,
+                                                })}
+                                            >
+                                                <span className="dashboard-mobile-machine-provider-name">
+                                                    {provider.icon ? `${provider.icon} ` : ''}{provider.displayName}
+                                                </span>
+                                                <span className="dashboard-mobile-machine-provider-meta">
+                                                    {resolvedWorkspacePath || 'Use selected workspace'}
+                                                </span>
+                                            </button>
+                                        ))}
                                 </div>
                             </div>
                         )}

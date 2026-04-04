@@ -48,8 +48,6 @@ export interface RecentLaunchEntry {
     kind: 'ide' | 'cli' | 'acp';
     title?: string;
     workspace?: string | null;
-    launchMode?: string;
-    mode?: 'terminal' | 'chat';
     currentModel?: string;
     lastLaunchedAt: number;
 }

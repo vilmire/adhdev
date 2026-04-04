@@ -44,7 +44,6 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                                         workspaceId: w.id,
                                         argsStr: launchPick.argsStr,
                                         model: launchPick.model,
-                                        launchMode: launchPick.launchMode,
                                     })
                                 }}
                             >
@@ -66,7 +65,6 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                                 useDefaultWorkspace: true,
                                 argsStr: launchPick.argsStr,
                                 model: launchPick.model,
-                                launchMode: launchPick.launchMode,
                             })
                         }}
                     >
@@ -82,7 +80,6 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
                                 useHome: true,
                                 argsStr: launchPick.argsStr,
                                 model: launchPick.model,
-                                launchMode: launchPick.launchMode,
                             })
                         }}
                     >

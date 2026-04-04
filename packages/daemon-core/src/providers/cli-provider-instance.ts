@@ -7,7 +7,7 @@
 
 import * as path from 'path';
 import * as crypto from 'crypto';
-import type { ProviderModule, ProviderLaunchMode, ProviderLaunchOption } from './contracts.js';
+import type { ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
@@ -33,8 +33,6 @@ export class CliProviderInstance implements ProviderInstance {
     private historyWriter: ChatHistoryWriter;
     readonly instanceId: string;
 
-    private launchMode: ProviderLaunchMode | null;
-    private resolvedOutputFormat: 'terminal' | 'stream-json';
     private presentationMode: 'terminal' | 'chat';
 
     constructor(
@@ -43,36 +41,13 @@ export class CliProviderInstance implements ProviderInstance {
         private cliArgs: string[] = [],
         instanceId?: string,
         transportFactory?: PtyTransportFactory,
-        launchModeId?: string,
     ) {
         this.type = provider.type;
         this.instanceId = instanceId || crypto.randomUUID();
-        this.launchMode = (launchModeId && provider.launchModes?.find(m => m.id === launchModeId)) || null;
-        this.resolvedOutputFormat = this.resolveOutputFormat();
-        this.presentationMode = this.resolvedOutputFormat === 'stream-json' ? 'chat' : 'terminal';
+        this.presentationMode = 'terminal';
         this.adapter = new ProviderCliAdapter(provider as any as CliProviderModule, workingDir, cliArgs, transportFactory);
         this.monitor = new StatusMonitor();
         this.historyWriter = new ChatHistoryWriter();
-    }
-
-    /**
-     * Determine output rendering format from:
-     * 1. launchMode.outputFormat (explicit override)
-     * 2. launchOptions[].outputFormatMap — check actual args for matching values
-     * 3. Default: 'terminal'
-     */
-    private resolveOutputFormat(): 'terminal' | 'stream-json' {
-        if (this.launchMode?.outputFormat) return this.launchMode.outputFormat;
-        if (this.provider.launchOptions?.length) {
-            for (const opt of this.provider.launchOptions) {
-                if (!opt.outputFormatMap) continue;
-                // Check if any cliArg matches a value with an outputFormatMap entry
-                for (const [val, fmt] of Object.entries(opt.outputFormatMap)) {
-                    if (this.cliArgs.includes(val)) return fmt;
-                }
-            }
-        }
-        return 'terminal';
     }
 
  // ─── Lifecycle ─────────────────────────────────
@@ -132,7 +107,6 @@ export class CliProviderInstance implements ProviderInstance {
             category: 'cli',
             status: adapterStatus.status,
             mode: this.presentationMode,
-            launchMode: this.launchMode?.id,
             activeChat: {
                 id: `${this.type}_${this.workingDir}`,
                 title: parsedStatus?.title || `${this.provider.name} · ${dirName}`,

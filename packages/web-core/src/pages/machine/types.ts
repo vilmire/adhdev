@@ -16,7 +16,7 @@ export interface IdeSessionEntry {
 export interface CliSessionEntry {
     id: string; sessionId?: string; type: string; cliName: string; status: string
     workspace: string; activeChat: any; daemonId: string
-    launchMode?: string; mode?: 'terminal' | 'chat'
+    mode?: 'terminal' | 'chat'
     runtimeKey?: string; runtimeDisplayName?: string; runtimeWorkspaceLabel?: string
     runtimeWriteOwner?: RuntimeWriteOwner | null
 }
@@ -52,15 +52,7 @@ export type WorkspaceLaunchKind = 'ide' | 'cli' | 'acp'
 
 export type TabId = 'workspace' | 'overview' | 'providers' | 'logs' | 'ides' | 'clis' | 'acps'
 
-export type ProviderInfo = AvailableProviderInfo & {
-    launchModes?: Array<{
-        id: string
-        name: string
-        description?: string
-        outputFormat?: 'terminal' | 'stream-json'
-        default?: boolean
-    }>
-}
+export type ProviderInfo = AvailableProviderInfo
 
 export interface MachineRecentLaunch {
     id: string
@@ -69,8 +61,6 @@ export interface MachineRecentLaunch {
     providerType?: string
     subtitle?: string
     workspace?: string | null
-    launchMode?: string
-    mode?: 'terminal' | 'chat'
     currentModel?: string
 }
 
