@@ -12,19 +12,21 @@ export interface ConnectionBannerProps {
 export default function ConnectionBanner({ wsStatus, showReconnected, loginUrl }: ConnectionBannerProps) {
     const showDisconnected = wsStatus === 'disconnected' || wsStatus === 'reconnecting' || wsStatus === 'offline' || wsStatus === 'auth_failed';
 
-    const bannerColor = wsStatus === 'auth_failed' ? 'red' : wsStatus === 'offline' ? 'orange' : 'violet';
+    const bannerColor = wsStatus === 'auth_failed' ? 'red' : wsStatus === 'offline' ? 'orange' : 'accent';
     const gradients: Record<string, string> = {
         red: 'linear-gradient(90deg, rgba(239,68,68,0.12), rgba(239,68,68,0.04))',
         orange: 'linear-gradient(90deg, rgba(255,107,53,0.12), rgba(255,107,53,0.04))',
-        violet: 'linear-gradient(90deg, rgba(139,92,246,0.12), rgba(139,92,246,0.04))',
+        accent: 'linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 18%, transparent), color-mix(in srgb, var(--accent-primary) 6%, transparent))',
     };
     const borders: Record<string, string> = {
         red: '1px solid rgba(239,68,68,0.2)',
         orange: '1px solid rgba(255,107,53,0.2)',
-        violet: '1px solid rgba(139,92,246,0.2)',
+        accent: '1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent)',
     };
     const colors: Record<string, string> = {
-        red: '#ef4444', orange: '#ff6b35', violet: '#a78bfa',
+        red: '#ef4444',
+        orange: '#ff6b35',
+        accent: 'var(--accent-primary-light)',
     };
 
     return (

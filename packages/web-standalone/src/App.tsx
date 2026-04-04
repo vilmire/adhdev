@@ -25,17 +25,18 @@ const standaloneApiClient = createApiClient({
  * Redirect /machines and /machine to the single machine's detail page.
  */
 function SingleMachineRedirect() {
-    const { ides } = useBaseDaemons()
-    // In standalone, there's typically one daemon entry with the machine ID
-    const daemonEntry = ides.find((d: any) => d.daemonMode || d.id?.startsWith('standalone'))
+    const { ides, initialLoaded } = useBaseDaemons()
+    // In standalone, redirect only after the initial status payload has arrived.
+    // Otherwise `/machines` briefly bounces back to `/dashboard` before daemon data exists.
+    if (!initialLoaded) {
+        return <div className="p-10 text-center text-text-muted">⏳ Loading machine...</div>
+    }
+
+    const daemonEntry = ides.find((d: any) => d.daemonMode || d.type === 'adhdev-daemon')
     if (daemonEntry) {
         return <Navigate to={`/machines/${daemonEntry.id}`} replace />
     }
-    // Fallback: use first available entry's ID
-    if (ides.length > 0) {
-        return <Navigate to={`/machines/${ides[0].id}`} replace />
-    }
-    // No data yet — show machine detail with fallback
+
     return <Navigate to="/dashboard" replace />
 }
 

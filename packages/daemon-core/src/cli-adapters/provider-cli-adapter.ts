@@ -440,6 +440,18 @@ export class ProviderCliAdapter implements CliAdapter {
         this.structuredMessages = [...this.committedMessages];
     }
 
+    private normalizeParsedMessages(parsedMessages: any[]): CliChatMessage[] {
+        return parsedMessages
+            .filter((message) => message && (message.role === 'user' || message.role === 'assistant'))
+            .map((message) => ({
+                role: message.role,
+                content: typeof message.content === 'string' ? message.content : String(message.content || ''),
+                timestamp: typeof message.timestamp === 'number' && Number.isFinite(message.timestamp)
+                    ? message.timestamp
+                    : Date.now(),
+            }));
+    }
+
     private sliceFromOffset(text: string, start: number): string {
         if (!text) return '';
         if (!Number.isFinite(start) || start <= 0) return text;
@@ -951,8 +963,15 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     private commitCurrentTranscript(): void {
-        // No-op: terminal output is the canonical display for CLI providers.
-        // Assistant text extraction from PTY output has been removed.
+        const parsed = this.parseCurrentTranscript(
+            this.committedMessages,
+            this.responseBuffer,
+            this.currentTurnScope,
+        );
+        if (parsed && Array.isArray(parsed.messages)) {
+            this.committedMessages = this.normalizeParsedMessages(parsed.messages);
+            this.syncMessageViews();
+        }
     }
 
  // ─── Script Execution ──────────────────────────
@@ -1003,6 +1022,22 @@ export class ProviderCliAdapter implements CliAdapter {
      * Called by command handler / dashboard for rich content rendering.
      */
     getScriptParsedStatus(): any {
+        const parsed = this.parseCurrentTranscript(
+            this.committedMessages,
+            this.responseBuffer,
+            this.currentTurnScope,
+        );
+        if (parsed && Array.isArray(parsed.messages)) {
+            return {
+                id: parsed.id || 'cli_session',
+                status: parsed.status || this.currentStatus,
+                title: parsed.title || this.cliName,
+                terminalHistory: this.terminalHistory,
+                messages: parsed.messages,
+                activeModal: parsed.activeModal ?? this.activeModal,
+            };
+        }
+
         const messages = [...this.committedMessages];
         return {
             id: 'cli_session',

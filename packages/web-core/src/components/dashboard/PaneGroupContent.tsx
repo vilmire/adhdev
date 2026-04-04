@@ -12,7 +12,7 @@ import { IconWarning } from '../Icons'
 interface PaneGroupContentProps {
     activeConv: ActiveConversation
     clearToken: number
-    isCli: boolean
+    isCliTerminal: boolean
     ideEntry?: DaemonData
     screenshotUrl?: string
     clearScreenshot: () => void
@@ -30,7 +30,7 @@ interface PaneGroupContentProps {
 const PaneGroupContent = memo(function PaneGroupContent({
     activeConv,
     clearToken,
-    isCli,
+    isCliTerminal,
     ideEntry,
     screenshotUrl,
     clearScreenshot,
@@ -53,13 +53,13 @@ const PaneGroupContent = memo(function PaneGroupContent({
             <ApprovalBanner activeConv={activeConv} onModalButton={handleModalButton} />
 
             <div className="desktop-only px-3 pt-1 pb-2">
-                {!isCli && activeConv.transport !== 'acp' && screenshotUrl ? (
+                {activeConv.transport !== 'pty' && activeConv.transport !== 'acp' && screenshotUrl ? (
                     <ScreenshotViewer
                         screenshotUrl={screenshotUrl}
                         mode="preview"
                         onDismiss={handleDismissScreenshot}
                     />
-                ) : (!isCli && activeConv.transport !== 'acp' && activeConv.cdpConnected === false) ? (
+                ) : (activeConv.transport !== 'pty' && activeConv.transport !== 'acp' && activeConv.cdpConnected === false) ? (
                     <div className="flex items-center gap-2.5 px-3.5 py-2 bg-yellow-500/[0.08] border border-yellow-500/20 rounded-lg text-xs text-text-secondary">
                         <span className="text-sm"><IconWarning size={14} /></span>
                         <span className="flex-1">CDP not connected — chat history & screenshots unavailable.</span>
@@ -71,7 +71,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
                 ) : null}
             </div>
 
-            {isCli ? (
+            {isCliTerminal ? (
                 <CliTerminalPane
                     activeConv={activeConv}
                     clearToken={clearToken}
@@ -95,7 +95,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     )
 }, (prev, next) => (
     prev.activeConv === next.activeConv
-    && prev.isCli === next.isCli
+    && prev.isCliTerminal === next.isCliTerminal
     && prev.ideEntry === next.ideEntry
     && prev.screenshotUrl === next.screenshotUrl
     && prev.terminalRef === next.terminalRef

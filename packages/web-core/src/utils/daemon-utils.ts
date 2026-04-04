@@ -72,6 +72,13 @@ export interface MachineNameOptions {
     fallbackLabel?: string
 }
 
+function isSyntheticMachineHostname(raw: string): boolean {
+    const value = raw.trim().toLowerCase()
+    return value.startsWith('mach_')
+        || value.startsWith('standalone_mach_')
+        || value.startsWith('daemon_mach_')
+}
+
 function normalizeMachineHostname(raw: string): string {
     return formatMachineName(raw.trim().replace(/\.local$/i, ''))
 }
@@ -91,7 +98,11 @@ export function getMachineHostnameLabel(
         source.hostname,
         source.machine?.hostname,
         source.system?.hostname,
-    ].find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    ].find((value): value is string => (
+        typeof value === 'string'
+        && value.trim().length > 0
+        && !isSyntheticMachineHostname(value)
+    ))
 
     if (rawHostname && rawHostname !== 'Unknown') {
         return normalizeMachineHostname(rawHostname)
@@ -268,6 +279,76 @@ export interface MachineGroup {
     p2p?: { available: boolean; state: string; peers: number }
 }
 
+function parseActivityTimestamp(value: unknown): number {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'string') {
+        const parsed = Date.parse(value)
+        if (Number.isFinite(parsed)) return parsed
+    }
+    return 0
+}
+
+function getActiveChatActivityAt(activeChat?: { messages?: Array<{ timestamp?: unknown; receivedAt?: unknown; createdAt?: unknown }> | null } | null): number {
+    const lastMessage = activeChat?.messages?.at?.(-1)
+    if (!lastMessage) return 0
+    return (
+        parseActivityTimestamp(lastMessage.timestamp)
+        || parseActivityTimestamp(lastMessage.receivedAt)
+        || parseActivityTimestamp(lastMessage.createdAt)
+        || 0
+    )
+}
+
+function getRecentLaunchActivityAt(entry: DaemonData): number {
+    const recentLaunches = entry.recentLaunches || []
+    return recentLaunches.reduce((maxTs, launch) => Math.max(maxTs, launch.lastLaunchedAt || 0), 0)
+}
+
+export function getDaemonEntryActivityAt(entry: DaemonData): number {
+    return Math.max(
+        getRecentLaunchActivityAt(entry),
+        getActiveChatActivityAt(entry.activeChat),
+        entry.lastUpdated || 0,
+    )
+}
+
+function compareActivityThenLabel(
+    leftActivity: number,
+    rightActivity: number,
+    leftLabel: string,
+    rightLabel: string,
+    leftId: string,
+    rightId: string,
+): number {
+    const activityDiff = rightActivity - leftActivity
+    if (activityDiff !== 0) return activityDiff
+
+    const labelDiff = leftLabel.localeCompare(rightLabel)
+    if (labelDiff !== 0) return labelDiff
+
+    return leftId.localeCompare(rightId)
+}
+
+function getMachineGroupActivityAt(group: MachineGroup): number {
+    return Math.max(
+        getDaemonEntryActivityAt(group.daemonIde),
+        ...group.ideSessions.map((session) => session.lastActivityAt),
+        ...group.cliSessions.map((session) => session.lastActivityAt),
+        ...group.acpSessions.map((session) => session.lastActivityAt),
+    )
+}
+
+export function compareMachineEntries(left: DaemonData, right: DaemonData): number {
+    return compareActivityThenLabel(
+        getDaemonEntryActivityAt(left),
+        getDaemonEntryActivityAt(right),
+        getMachineDisplayName(left, { fallbackId: left.id }),
+        getMachineDisplayName(right, { fallbackId: right.id }),
+        left.id,
+        right.id,
+    )
+}
+
 /** IDE session summary for machine detail/overview display */
 export interface IdeSessionSummary {
     id: string
@@ -279,6 +360,7 @@ export interface IdeSessionSummary {
     agents: { id: string; name: string; status: string }[]
     childSessions: SessionEntry[]
     activeChat?: { status?: string }
+    lastActivityAt: number
 }
 
 /** CLI session summary for machine detail/overview display */
@@ -293,6 +375,7 @@ export interface CliSessionSummary {
     runtimeDisplayName?: string
     runtimeWorkspaceLabel?: string
     runtimeWriteOwner?: RuntimeWriteOwner | null
+    lastActivityAt: number
 }
 
 /** ACP session summary for machine detail/overview display */
@@ -304,6 +387,7 @@ export interface AcpSessionSummary {
     status: string
     workspace: string
     model?: string
+    lastActivityAt: number
 }
 
 /** Group daemon array by machine */
@@ -357,6 +441,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                     status: daemon.status || 'online',
                     workspace: daemon.workspace || '',
                     model: (daemon as any).model,
+                    lastActivityAt: getDaemonEntryActivityAt(daemon),
                 })
             }
         } else if (isCliEntry(daemon)) {
@@ -372,6 +457,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                     runtimeDisplayName: daemon.runtimeDisplayName,
                     runtimeWorkspaceLabel: daemon.runtimeWorkspaceLabel,
                     runtimeWriteOwner: daemon.runtimeWriteOwner || null,
+                    lastActivityAt: getDaemonEntryActivityAt(daemon),
                 })
             }
         } else {
@@ -386,10 +472,45 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                     agents: (daemon.agents || daemon.aiAgents || []).map(a => ({ id: (a as any).id || a.name, name: a.name, status: a.status })),
                     childSessions: daemon.childSessions || [],
                     activeChat: daemon.activeChat || undefined,
+                    lastActivityAt: getDaemonEntryActivityAt(daemon),
                 })
             }
         }
     }
 
-    return machines
+    for (const machine of machines) {
+        machine.ideSessions.sort((left, right) => compareActivityThenLabel(
+            left.lastActivityAt,
+            right.lastActivityAt,
+            left.name,
+            right.name,
+            left.id,
+            right.id,
+        ))
+        machine.cliSessions.sort((left, right) => compareActivityThenLabel(
+            left.lastActivityAt,
+            right.lastActivityAt,
+            left.cliName,
+            right.cliName,
+            left.id,
+            right.id,
+        ))
+        machine.acpSessions.sort((left, right) => compareActivityThenLabel(
+            left.lastActivityAt,
+            right.lastActivityAt,
+            left.acpName,
+            right.acpName,
+            left.id,
+            right.id,
+        ))
+    }
+
+    return machines.sort((left, right) => compareActivityThenLabel(
+        getMachineGroupActivityAt(left),
+        getMachineGroupActivityAt(right),
+        left.nickname || left.hostname,
+        right.nickname || right.hostname,
+        left.machineId,
+        right.machineId,
+    ))
 }

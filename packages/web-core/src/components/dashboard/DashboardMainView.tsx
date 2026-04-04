@@ -1,6 +1,6 @@
 import React from 'react'
 import type { DaemonData } from '../../types'
-import type { ActiveConversation } from './types'
+import type { ActiveConversation, CliConversationViewMode } from './types'
 import { isAcpConv, isCliConv } from './types'
 import DashboardHeader from './DashboardHeader'
 import DashboardMobileChatMode from './DashboardMobileChatMode'
@@ -18,6 +18,8 @@ interface DashboardMainViewProps {
     onOpenRemote: (conversation: ActiveConversation) => void
     onFitCli: () => void
     onStopCli: () => void
+    activeCliViewMode: CliConversationViewMode | null
+    onToggleActiveCliViewMode: () => void
     mobileChatConversations: ActiveConversation[]
     ides: DaemonData[]
     actionLogs: { ideId: string; text: string; timestamp: number }[]
@@ -69,6 +71,8 @@ export default function DashboardMainView({
     onOpenRemote,
     onFitCli,
     onStopCli,
+    activeCliViewMode,
+    onToggleActiveCliViewMode,
     mobileChatConversations,
     ides,
     actionLogs,
@@ -125,6 +129,8 @@ export default function DashboardMainView({
                     }}
                     onFitCli={onFitCli}
                     onStopCli={onStopCli}
+                    activeCliViewMode={activeCliViewMode}
+                    onToggleCliViewMode={onToggleActiveCliViewMode}
                 />
             )}
 

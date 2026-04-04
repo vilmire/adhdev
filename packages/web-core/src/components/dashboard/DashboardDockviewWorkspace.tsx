@@ -31,7 +31,7 @@ import {
     readDashboardDockviewStoredLayout,
     writeDashboardDockviewStoredLayout,
 } from '../../utils/dashboardLayoutStorage'
-import { isAcpConv, isCliConv } from './types'
+import { getCliConversationViewMode, isAcpConv } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
 
@@ -286,14 +286,15 @@ function DashboardDockviewPanel({ params }: IDockviewPanelProps<DashboardDockvie
         )
     }
 
-    const isCli = isCliConv(activeConv) && !isAcpConv(activeConv)
+    const isCliTerminal = !isAcpConv(activeConv)
+        && getCliConversationViewMode(activeConv) === 'terminal'
 
     return (
         <div className="h-full min-h-0 min-w-0 flex flex-col overflow-hidden">
             <PaneGroupContent
                 activeConv={activeConv}
                 clearToken={ctx.clearedTabs[activeConv.tabKey] || 0}
-                isCli={isCli}
+                isCliTerminal={isCliTerminal}
                 ideEntry={activeIdeEntry}
                 screenshotUrl={activeScreenshotUrl}
                 clearScreenshot={clearActiveScreenshot}

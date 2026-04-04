@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef } from 'react'
 import { buildIdeConversations, buildMachineNameMap, type LocalUserMessage } from '../components/dashboard/buildConversations'
+import { compareConversationRecency } from '../components/dashboard/conversation-sort'
 import type { ActiveConversation } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
 
@@ -151,7 +152,7 @@ export function useDashboardConversations({
         }
 
         cacheRef.current = nextCache
-        return nextConversations
+        return [...nextConversations].sort(compareConversationRecency)
     }, [chatIdes, localUserMessages, connectionStates, machineNames])
 
     const conversations = useMemo(() => {

@@ -208,7 +208,7 @@ export default function MachinesPage() {
                         const machineDotColor = connState === 'connected'
                             ? '#22c55e'
                             : isConnecting
-                                ? '#a78bfa'
+                                ? 'var(--accent-primary-light)'
                                 : '#64748b'
                         const totalAgents = machine.ideSessions.length + machine.cliSessions.length + machine.acpSessions.length
 
@@ -221,10 +221,17 @@ export default function MachinesPage() {
                                 {isConnecting && (
                                     <div className="p2p-overlay">
                                         <div
-                                            className="w-7 h-7 rounded-full border-[2.5px] border-violet-500/25"
-                                            style={{ borderTopColor: '#a78bfa', animation: 'spin 0.9s linear infinite' }}
+                                            className="w-7 h-7 rounded-full"
+                                            style={{
+                                                border: '2.5px solid color-mix(in srgb, var(--accent-primary) 22%, transparent)',
+                                                borderTopColor: 'var(--accent-primary-light)',
+                                                animation: 'spin 0.9s linear infinite',
+                                            }}
                                         />
-                                        <div className="text-[11px] text-violet-600 font-semibold tracking-tight">
+                                        <div
+                                            className="text-[11px] font-semibold tracking-tight"
+                                            style={{ color: 'var(--accent-primary-light)' }}
+                                        >
                                             Connecting...
                                         </div>
                                         <div className="text-[10px] text-text-muted">

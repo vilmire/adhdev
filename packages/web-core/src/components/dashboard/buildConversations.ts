@@ -180,7 +180,11 @@ export function buildIdeConversations(
             resume: (ide as any).resume,
             ideType: (ide as any).cliType || (ide as any).acpType || ide.type,
             workspaceName,
-            displayPrimary: title || workspaceName || ((isCliConv(ide as any) || isAcpConv(ide as any)) ? 'Terminal' : agentName),
+            displayPrimary: title
+                || workspaceName
+                || (isCliConv(ide as any)
+                    ? (((ide as any).mode as 'terminal' | 'chat' | undefined) === 'chat' ? agentName : 'Terminal')
+                    : agentName),
             displaySecondary: ideLabel,
             cdpConnected: ide.cdpConnected,
             modalButtons: hasRealModal ? (modal.buttons as string[]) : undefined,
@@ -217,6 +221,13 @@ export function buildIdeConversations(
             if (count > 0) { serverContentCounts.set(key, count - 1); return false; }
             return true;
         });
+        const hasMeaningfulStream =
+            serverMsgs.length > 0
+            || pendingLocal.length > 0
+            || hasModal
+            || !!effectiveStreamTitle
+            || !['idle', 'panel_hidden', 'disconnected', 'not_monitored'].includes(streamStatus);
+        if (!hasMeaningfulStream) continue;
         results.push({
             ideId: ide.id,
             sessionId: (stream as any).sessionId || (stream as any).instanceId,

@@ -10,12 +10,20 @@ export function forwardAgentStreamsToIdeInstance(
     streams: any[],
 ): void {
     const ideInstance = instanceManager.getInstance(`ide:${ideType}`) as
-        | { onEvent?: (event: string, payload: Record<string, unknown>) => void }
+        | {
+            onEvent?: (event: string, payload?: Record<string, unknown>) => void;
+            getExtensionTypes?: () => string[];
+        }
         | undefined;
 
     if (!ideInstance?.onEvent) return;
 
+    const seenExtensionTypes = new Set<string>();
+
     for (const stream of streams) {
+        if (typeof stream.agentType === 'string' && stream.agentType) {
+            seenExtensionTypes.add(stream.agentType);
+        }
         ideInstance.onEvent('stream_update', {
             extensionType: stream.agentType,
             streams: [stream],
@@ -31,5 +39,17 @@ export function forwardAgentStreamsToIdeInstance(
             extensionId: stream.extensionId || undefined,
             inputContent: stream.inputContent || '',
         });
+    }
+
+    const extensionTypes = ideInstance.getExtensionTypes?.() || [];
+    if (streams.length === 0) {
+        ideInstance.onEvent('stream_reset_all');
+        return;
+    }
+
+    for (const extensionType of extensionTypes) {
+        if (!seenExtensionTypes.has(extensionType)) {
+            ideInstance.onEvent('stream_reset', { extensionType });
+        }
     }
 }

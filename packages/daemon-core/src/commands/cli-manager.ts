@@ -91,11 +91,26 @@ export class DaemonCliManager {
         return `${cliType}_${hash}`;
     }
 
+    getSessionPresentationMode(sessionId: string): 'terminal' | 'chat' | null {
+        if (!sessionId) return null;
+        const instance = this.deps.getInstanceManager()?.getInstance(sessionId) as any;
+        const mode = instance?.category === 'cli'
+            ? instance.getPresentationMode?.()
+            : null;
+        return mode === 'chat' || mode === 'terminal' ? mode : null;
+    }
+
+    isTerminalSession(sessionId: string): boolean {
+        return this.getSessionPresentationMode(sessionId) === 'terminal';
+    }
+
     private persistRecentActivity(entry: {
         kind: 'ide' | 'cli' | 'acp';
         providerType: string;
         providerName: string;
         workspace?: string;
+        launchMode?: string;
+        mode?: 'terminal' | 'chat';
         currentModel?: string;
         sessionId?: string;
         title?: string;
@@ -414,6 +429,8 @@ export class DaemonCliManager {
             providerType: normalizedType,
             providerName: provider?.displayName || provider?.name || normalizedType,
             workspace: resolvedDir,
+            launchMode: resolvedLaunchMode,
+            mode: activeMode?.outputFormat === 'stream-json' ? 'chat' : 'terminal',
             currentModel: initialModel,
             sessionId: key,
             title: provider?.displayName || provider?.name || normalizedType,
@@ -545,6 +562,15 @@ export class DaemonCliManager {
         return null;
     }
 
+    private findAdapterBySessionId(instanceKey?: string): { adapter: CliAdapter; key: string } | null {
+        if (!instanceKey) return null;
+        let ik = instanceKey;
+        const colonIdx = ik.lastIndexOf(':');
+        if (colonIdx >= 0) ik = ik.substring(colonIdx + 1);
+        const adapter = this.adapters.get(ik);
+        return adapter ? { adapter, key: ik } : null;
+    }
+
  // ─── CLI command handling ────────────────────────────
 
     async handleCliCommand(cmd: string, args: any): Promise<CommandResult | null> {
@@ -600,6 +626,24 @@ export class DaemonCliManager {
                     console.log(colorize('yellow', `  ⚠ No adapter found for ${cliType}`));
                 }
                 return { success: true, cliType, dir, stopped: true, mode };
+            }
+            case 'set_cli_view_mode': {
+                const mode = args?.mode === 'chat' ? 'chat' : 'terminal';
+                const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId : '';
+                const cliType = args?.cliType || args?.agentType || '';
+                const dir = args?.dir || '';
+                const found = this.findAdapterBySessionId(targetSessionId)
+                    || (cliType ? this.findAdapter(cliType, { instanceKey: targetSessionId, dir }) : null);
+                if (!found) {
+                    return { success: false, error: 'CLI session not found', code: 'CLI_SESSION_NOT_FOUND' };
+                }
+                const instance = this.deps.getInstanceManager()?.getInstance(found.key);
+                if (!(instance instanceof CliProviderInstance)) {
+                    return { success: false, error: 'CLI instance not found', code: 'CLI_INSTANCE_NOT_FOUND' };
+                }
+                instance.setPresentationMode(mode);
+                this.deps.onStatusChange();
+                return { success: true, id: found.key, mode };
             }
             case 'restart_session': {
                 const cliType = args?.cliType || args?.agentType || args?.ideType;

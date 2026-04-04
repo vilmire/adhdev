@@ -4,7 +4,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
 import type { DaemonData } from '../types'
-import { isCliConv, isAcpConv } from '../components/dashboard/types'
+import { isCliConv, isCliTerminalConv, isAcpConv, getCliConversationViewMode } from '../components/dashboard/types'
 import { useHiddenTabs } from '../hooks/useHiddenTabs'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
@@ -265,8 +265,28 @@ export default function Dashboard() {
         await performActiveCliStop('hard')
     }, [activeConv, performActiveCliStop])
 
+    const activeCliViewMode = useMemo(() => {
+        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return null
+        return getCliConversationViewMode(activeConv)
+    }, [activeConv])
+
+    const toggleActiveCliViewMode = useCallback(async () => {
+        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return
+        const currentMode = getCliConversationViewMode(activeConv)
+        const nextMode = currentMode === 'chat' ? 'terminal' : 'chat'
+        try {
+            await sendDaemonCommand(activeConv.daemonId || activeConv.ideId, 'set_cli_view_mode', {
+                targetSessionId: activeConv.sessionId,
+                cliType: activeConv.ideType || activeConv.agentType,
+                mode: nextMode,
+            })
+        } catch (error) {
+            console.error('Failed to switch CLI view mode:', error)
+        }
+    }, [activeConv, sendDaemonCommand])
+
     const handleActiveCliFit = useCallback(() => {
-        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv) || !activeConv.sessionId) return
+        if (!activeConv || !isCliTerminalConv(activeConv) || isAcpConv(activeConv) || !activeConv.sessionId) return
         window.dispatchEvent(new CustomEvent('adhdev:fit-cli-terminal', {
             detail: { sessionId: activeConv.sessionId },
         }))
@@ -323,6 +343,8 @@ export default function Dashboard() {
                 onOpenRemote={openRemoteDialog}
                 onFitCli={handleActiveCliFit}
                 onStopCli={handleActiveCliStop}
+                activeCliViewMode={activeCliViewMode}
+                onToggleActiveCliViewMode={toggleActiveCliViewMode}
                 mobileChatConversations={mobileChatConversations}
                 ides={ides}
                 actionLogs={actionLogs}

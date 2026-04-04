@@ -121,6 +121,7 @@ export class DaemonCommandRouter {
             // ─── CLI / ACP commands ───
             case 'launch_cli':
             case 'stop_cli':
+            case 'set_cli_view_mode':
             case 'agent_command': {
                 return this.deps.cliManager.handleCliCommand(cmd, args);
             }

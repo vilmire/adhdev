@@ -35,6 +35,7 @@ export class CliProviderInstance implements ProviderInstance {
 
     private launchMode: ProviderLaunchMode | null;
     private resolvedOutputFormat: 'terminal' | 'stream-json';
+    private presentationMode: 'terminal' | 'chat';
 
     constructor(
         private provider: ProviderModule,
@@ -48,6 +49,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.instanceId = instanceId || crypto.randomUUID();
         this.launchMode = (launchModeId && provider.launchModes?.find(m => m.id === launchModeId)) || null;
         this.resolvedOutputFormat = this.resolveOutputFormat();
+        this.presentationMode = this.resolvedOutputFormat === 'stream-json' ? 'chat' : 'terminal';
         this.adapter = new ProviderCliAdapter(provider as any as CliProviderModule, workingDir, cliArgs, transportFactory);
         this.monitor = new StatusMonitor();
         this.historyWriter = new ChatHistoryWriter();
@@ -110,6 +112,7 @@ export class CliProviderInstance implements ProviderInstance {
 
     getState(): ProviderState {
         const adapterStatus = this.adapter.getStatus();
+        const parsedStatus = this.adapter.getScriptParsedStatus?.() || null;
         const runtime = this.adapter.getRuntimeMetadata();
 
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
@@ -128,14 +131,14 @@ export class CliProviderInstance implements ProviderInstance {
             name: this.provider.name,
             category: 'cli',
             status: adapterStatus.status,
-            mode: this.resolvedOutputFormat === 'stream-json' ? 'chat' : 'terminal',
+            mode: this.presentationMode,
             launchMode: this.launchMode?.id,
             activeChat: {
                 id: `${this.type}_${this.workingDir}`,
-                title: `${this.provider.name} · ${dirName}`,
-                status: adapterStatus.status,
-                messages: [],
-                activeModal: adapterStatus.activeModal,
+                title: parsedStatus?.title || `${this.provider.name} · ${dirName}`,
+                status: parsedStatus?.status || adapterStatus.status,
+                messages: Array.isArray(parsedStatus?.messages) ? parsedStatus.messages : [],
+                activeModal: parsedStatus?.activeModal ?? adapterStatus.activeModal,
                 terminalHistory: adapterStatus.terminalHistory,
                 inputContent: '',
             },
@@ -156,6 +159,15 @@ export class CliProviderInstance implements ProviderInstance {
             controlValues: undefined, // CLI controls not yet wired from stream
             providerControls: this.provider.controls as any,
         };
+    }
+
+    setPresentationMode(mode: 'terminal' | 'chat'): void {
+        if (this.presentationMode === mode) return;
+        this.presentationMode = mode;
+    }
+
+    getPresentationMode(): 'terminal' | 'chat' {
+        return this.presentationMode;
     }
 
     onEvent(event: string, data?: any): void {

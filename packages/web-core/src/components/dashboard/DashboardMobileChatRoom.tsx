@@ -1,9 +1,9 @@
 import type { DaemonData } from '../../types'
-import { IconChevronLeft, IconMonitor, IconScroll } from '../Icons'
+import { IconChevronLeft, IconMonitor, IconScroll, IconChat, IconTerminal } from '../Icons'
 import ChatPane from './ChatPane'
 import CliTerminalPane from './CliTerminalPane'
 import ConversationMetaChips from './ConversationMetaChips'
-import type { ActiveConversation } from './types'
+import type { ActiveConversation, CliConversationViewMode } from './types'
 import { isCliConv } from './types'
 import { useRef } from 'react'
 import type { CliTerminalHandle } from '../CliTerminal'
@@ -21,6 +21,8 @@ interface DashboardMobileChatRoomProps {
     onOpenMachine: (conversation: ActiveConversation) => void
     onOpenHistory: (conversation: ActiveConversation) => void
     onOpenRemote: (conversation: ActiveConversation) => void
+    cliViewMode: CliConversationViewMode | null
+    onSetCliViewMode: (mode: CliConversationViewMode) => void
     handleSendChat: (message: string, images?: string[]) => Promise<void>
     handleFocusAgent: () => Promise<void>
 }
@@ -38,11 +40,14 @@ export default function DashboardMobileChatRoom({
     onOpenMachine,
     onOpenHistory,
     onOpenRemote,
+    cliViewMode,
+    onSetCliViewMode,
     handleSendChat,
     handleFocusAgent,
 }: DashboardMobileChatRoomProps) {
     const terminalRef = useRef<CliTerminalHandle | null>(null)
     const isCli = isCliConv(selectedConversation) && !isAcp
+    const isCliTerminal = isCli && cliViewMode === 'terminal'
 
     return (
         <>
@@ -70,6 +75,16 @@ export default function DashboardMobileChatRoom({
                     </div>
                 </div>
                 <div className="dashboard-mobile-chat-toolbar">
+                    {isCli && (
+                        <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => onSetCliViewMode(isCliTerminal ? 'chat' : 'terminal')}
+                            type="button"
+                            title={isCliTerminal ? 'Switch to parsed chat view' : 'Switch to terminal view'}
+                        >
+                            {isCliTerminal ? <IconChat size={14} /> : <IconTerminal size={14} />}
+                        </button>
+                    )}
                     <button className="btn btn-secondary btn-sm" onClick={() => onOpenHistory(selectedConversation)} type="button">
                         <IconScroll size={14} />
                     </button>
@@ -81,7 +96,7 @@ export default function DashboardMobileChatRoom({
                 </div>
             </div>
             <div className="dashboard-mobile-chat-thread">
-                {isCli ? (
+                {isCliTerminal ? (
                     <CliTerminalPane
                         activeConv={selectedConversation}
                         terminalRef={terminalRef}

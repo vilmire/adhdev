@@ -140,11 +140,23 @@ export class IdeProviderInstance implements ProviderInstance {
         } else if (event === 'cdp_disconnected') {
             this.cachedChat = null;
             this.currentStatus = 'idle';
+            for (const ext of this.extensions.values()) {
+                ext.onEvent('stream_reset');
+            }
         } else if (event === 'stream_update') {
  // Forward to Extension
             const extType = data?.extensionType;
             if (extType && this.extensions.has(extType)) {
                 this.extensions.get(extType)!.onEvent('stream_update', data);
+            }
+        } else if (event === 'stream_reset') {
+            const extType = data?.extensionType;
+            if (extType && this.extensions.has(extType)) {
+                this.extensions.get(extType)!.onEvent('stream_reset');
+            }
+        } else if (event === 'stream_reset_all') {
+            for (const ext of this.extensions.values()) {
+                ext.onEvent('stream_reset');
             }
         }
     }

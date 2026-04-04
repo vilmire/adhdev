@@ -10,7 +10,7 @@ import { useDashboardConversationCommands } from '../../hooks/useDashboardConver
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace'
 import { usePaneGroupDropZone } from '../../hooks/usePaneGroupDropZone'
 import { usePaneGroupTabs } from '../../hooks/usePaneGroupTabs'
-import { isCliConv, isAcpConv } from './types'
+import { getCliConversationViewMode, isAcpConv } from './types'
 import type { ActiveConversation } from './types'
 import type { DaemonData } from '../../types'
 import type { CliTerminalHandle } from '../CliTerminal'
@@ -124,7 +124,9 @@ export default function PaneGroup({
         onClearPreviewOrder: clearPreviewOrder,
     })
 
-    const isCli = activeConv && isCliConv(activeConv) && !isAcpConv(activeConv)
+    const isCliTerminal = activeConv
+        && !isAcpConv(activeConv)
+        && getCliConversationViewMode(activeConv) === 'terminal'
     const activeIdeEntry = useMemo(
         () => activeConv ? ides.find(ide => ide.id === activeConv.ideId) : undefined,
         [ides, activeConv],
@@ -211,7 +213,7 @@ export default function PaneGroup({
                     <PaneGroupContent
                         activeConv={activeConv}
                         clearToken={clearedTabs[activeConv.tabKey] || 0}
-                        isCli={!!isCli}
+                        isCliTerminal={!!isCliTerminal}
                         ideEntry={activeIdeEntry}
                         screenshotUrl={activeScreenshotUrl}
                         clearScreenshot={clearActiveScreenshot}

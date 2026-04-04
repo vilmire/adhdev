@@ -130,6 +130,14 @@ export interface SessionEntry {
     surfaceHidden?: boolean;
 }
 
+export interface AvailableProviderLaunchMode {
+    id: string;
+    name: string;
+    description?: string;
+    outputFormat?: 'terminal' | 'stream-json';
+    default?: boolean;
+}
+
 /** Available provider information */
 export interface AvailableProviderInfo {
     type: string;
@@ -137,6 +145,7 @@ export interface AvailableProviderInfo {
     category: 'ide' | 'extension' | 'cli' | 'acp';
     displayName: string;
     icon: string;
+    launchModes?: AvailableProviderLaunchMode[];
 }
 
 /** ACP config option (model/mode/thought_level selection) */
@@ -225,6 +234,8 @@ export interface RecentLaunchEntry {
     kind: 'ide' | 'cli' | 'acp';
     title?: string;
     workspace?: string | null;
+    launchMode?: string;
+    mode?: 'terminal' | 'chat';
     currentModel?: string;
     lastLaunchedAt: number;
 }

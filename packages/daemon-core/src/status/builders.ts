@@ -167,6 +167,12 @@ const PTY_SESSION_CAPABILITIES: SessionCapability[] = [
     'resize_terminal',
 ];
 
+const CLI_CHAT_SESSION_CAPABILITIES: SessionCapability[] = [
+    'read_chat',
+    'send_message',
+    'resolve_action',
+];
+
 const ACP_SESSION_CAPABILITIES: SessionCapability[] = [
     'read_chat',
     'send_message',
@@ -269,7 +275,7 @@ function buildCliSession(state: CliProviderState): SessionEntry {
         mode: state.mode,
         resume: state.resume,
         activeChat,
-        capabilities: PTY_SESSION_CAPABILITIES,
+        capabilities: state.mode === 'terminal' ? PTY_SESSION_CAPABILITIES : CLI_CHAT_SESSION_CAPABILITIES,
         controlValues: state.controlValues,
         providerControls: buildFallbackControls(
             state.providerControls

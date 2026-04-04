@@ -167,7 +167,12 @@ export class AgentStreamPoller {
                 } catch { }
             }
 
-            if (!resolvedActiveSessionId || !parentSessionId) continue;
+            if (!resolvedActiveSessionId || !parentSessionId) {
+                if (parentSessionId) {
+                    this.deps.onStreamsUpdated?.(ideType, []);
+                }
+                continue;
+            }
 
             try {
                 await agentStreamManager.syncActiveSession(cdp, parentSessionId);

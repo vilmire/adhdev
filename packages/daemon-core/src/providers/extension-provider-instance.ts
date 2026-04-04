@@ -111,6 +111,8 @@ export class ExtensionProviderInstance implements ProviderInstance {
                 this.detectTransition(newStatus, data);
                 this.currentStatus = newStatus;
             }
+        } else if (event === 'stream_reset') {
+            this.resetStreamState();
         } else if (event === 'extension_connected') {
             this.ideType = data?.ideType || '';
  // Maintain instanceId UUID — do not overwrite
@@ -207,5 +209,30 @@ export class ExtensionProviderInstance implements ProviderInstance {
             ? data.title.trim()
             : this.chatTitle;
         return title || this.agentName || this.provider.name;
+    }
+
+    private resetStreamState(): void {
+        if (this.currentStatus !== 'idle') {
+            this.detectTransition('idle', {
+                title: this.chatTitle,
+                agentName: this.agentName,
+                extensionId: this.extensionId,
+                messages: this.messages,
+            });
+        }
+        this.agentStreams = [];
+        this.messages = [];
+        this.activeModal = null;
+        this.currentModel = '';
+        this.currentMode = '';
+        this.controlValues = {};
+        this.currentStatus = 'idle';
+        this.chatId = null;
+        this.chatTitle = null;
+        this.agentName = '';
+        this.extensionId = '';
+        this.lastAgentStatus = 'idle';
+        this.generatingStartedAt = 0;
+        this.monitor.reset();
     }
 }

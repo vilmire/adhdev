@@ -7,6 +7,14 @@ import type { CommandResult, CommandHelpers } from './handler.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import { LOG } from '../logging/logger.js';
 
+function getCliPresentationMode(h: CommandHelpers, targetSessionId?: string): 'terminal' | 'chat' | null {
+    if (!targetSessionId) return null;
+    const instance = h.ctx.instanceManager?.getInstance(targetSessionId) as any;
+    if (instance?.category !== 'cli') return null;
+    const mode = instance.getPresentationMode?.();
+    return mode === 'chat' || mode === 'terminal' ? mode : null;
+}
+
 export async function handleFocusSession(h: CommandHelpers, args: any): Promise<CommandResult> {
     if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
     const sessionId = args?.targetSessionId || h.currentSession?.sessionId;
@@ -20,6 +28,9 @@ export async function handleFocusSession(h: CommandHelpers, args: any): Promise<
 export function handlePtyInput(h: CommandHelpers, args: any): CommandResult {
     const { cliType, data, targetSessionId } = args || {};
     if (!data) return { success: false, error: 'data required' };
+    if (getCliPresentationMode(h, targetSessionId) === 'chat') {
+        return { success: false, error: 'CLI session is in chat mode', code: 'CLI_VIEW_MODE_NOT_TERMINAL' };
+    }
     const adapter = h.getCliAdapter(targetSessionId || cliType);
     if (!adapter || typeof adapter.writeRaw !== 'function') {
         return { success: false, error: `CLI adapter not found: ${targetSessionId || cliType || 'unknown'}` };
@@ -31,6 +42,9 @@ export function handlePtyInput(h: CommandHelpers, args: any): CommandResult {
 export function handlePtyResize(h: CommandHelpers, args: any): CommandResult {
     const { cliType, cols, rows, force, targetSessionId } = args || {};
     if (!cols || !rows) return { success: false, error: 'cols and rows required' };
+    if (getCliPresentationMode(h, targetSessionId) === 'chat') {
+        return { success: false, error: 'CLI session is in chat mode', code: 'CLI_VIEW_MODE_NOT_TERMINAL' };
+    }
     const adapter = h.getCliAdapter(targetSessionId || cliType);
     if (!adapter || typeof adapter.resize !== 'function') {
         return { success: false, error: `CLI adapter not found: ${targetSessionId || cliType || 'unknown'}` };

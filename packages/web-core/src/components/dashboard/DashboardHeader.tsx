@@ -6,9 +6,9 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ActiveConversation } from './types';
-import { isCliConv, isAcpConv } from './types';
-import { IconBell, IconChat, IconScroll, IconMonitor } from '../Icons';
+import type { ActiveConversation, CliConversationViewMode } from './types';
+import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
+import { IconBell, IconChat, IconScroll, IconMonitor, IconTerminal } from '../Icons';
 import { useDaemons } from '../../compat';
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared';
 
@@ -23,6 +23,8 @@ export interface DashboardHeaderProps {
     onOpenRemote?: () => void;
     onStopCli?: () => void;
     onFitCli?: () => void;
+    activeCliViewMode?: CliConversationViewMode | null;
+    onToggleCliViewMode?: () => void;
     onOpenConversation?: (conversation: ActiveConversation) => void;
 }
 
@@ -36,12 +38,16 @@ export default function DashboardHeader({
     onOpenRemote,
     onStopCli,
     onFitCli,
+    activeCliViewMode,
+    onToggleCliViewMode,
     onOpenConversation,
 }: DashboardHeaderProps) {
     const daemonCtx = useDaemons() as any;
     const p2pStates: Record<string, string> = daemonCtx.p2pStates || {};
     const ides = daemonCtx.ides || [];
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
+    const effectiveCliViewMode = activeCliViewMode || (activeConv ? (isCliTerminalConv(activeConv) ? 'terminal' : 'chat') : null);
+    const isCliTerminalActive = !!activeConv && isCliActive && effectiveCliViewMode === 'terminal';
     const [inboxOpen, setInboxOpen] = useState(false);
     const inboxRef = useRef<HTMLDivElement | null>(null);
 
@@ -190,13 +196,24 @@ export default function DashboardHeader({
                 </div>
                 {isCliActive && onStopCli && (
                     <>
-                        <button
-                            onClick={onFitCli}
-                            className="btn btn-secondary btn-sm"
-                            title="Fit terminal to current view"
-                        >
-                            Fit
-                        </button>
+                        {onToggleCliViewMode && (
+                            <button
+                                onClick={onToggleCliViewMode}
+                                className="btn btn-secondary btn-sm"
+                                title={isCliTerminalActive ? 'Switch to parsed chat view' : 'Switch to terminal view'}
+                            >
+                                {isCliTerminalActive ? <IconChat size={16} /> : <IconTerminal size={16} />}
+                            </button>
+                        )}
+                        {isCliTerminalActive && (
+                            <button
+                                onClick={onFitCli}
+                                className="btn btn-secondary btn-sm"
+                                title="Fit terminal to current view"
+                            >
+                                Fit
+                            </button>
+                        )}
                         <button
                             onClick={onStopCli}
                             className="btn btn-secondary btn-sm text-red-400 border-red-500/25 hover:bg-red-500/10"
@@ -207,7 +224,7 @@ export default function DashboardHeader({
                     </>
                 )}
 
-                {activeConv && !isCliActive && !isAcpConv(activeConv) && (
+                {activeConv && !isCliTerminalActive && !isAcpConv(activeConv) && (
                     <button
                         onClick={() => onOpenHistory(activeConv)}
                         className="btn btn-secondary btn-sm"

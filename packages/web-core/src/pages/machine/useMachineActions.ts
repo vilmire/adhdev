@@ -13,6 +13,7 @@ export interface LaunchPickState {
     cliType: string
     argsStr?: string
     model?: string
+    launchMode?: string
 }
 
 interface UseMachineActionsOpts {
@@ -67,20 +68,20 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
 
     const runLaunchCliCore = useCallback(async (opts: {
         cliType: string; dir?: string; workspaceId?: string
-        useDefaultWorkspace?: boolean; useHome?: boolean; argsStr?: string; model?: string
+        useDefaultWorkspace?: boolean; useHome?: boolean; argsStr?: string; model?: string; launchMode?: string
     }) => {
         if (!machineId) return { success: false as const }
-        const { cliType, dir, workspaceId, useDefaultWorkspace, useHome, argsStr, model } = opts
+        const { cliType, dir, workspaceId, useDefaultWorkspace, useHome, argsStr, model, launchMode } = opts
         if (!cliType) {
             addLog('warn', 'Select a CLI or ACP provider first', true)
             return { success: false as const }
         }
         const cliArgs = argsStr ? argsStr.split(/\s+/).filter(Boolean) : undefined
         const dirHint = dir?.trim() || (workspaceId ? `(saved id)` : useDefaultWorkspace ? '(default workspace)' : useHome ? '(home)' : '')
-        addLog('info', `Launching ${cliType}${dirHint ? ` in ${dirHint}` : ''}${model ? ` (model: ${model})` : ''}...`)
+        addLog('info', `Launching ${cliType}${launchMode ? ` [${launchMode}]` : ''}${dirHint ? ` in ${dirHint}` : ''}${model ? ` (model: ${model})` : ''}...`)
         setLaunchingAgentType(cliType)
         try {
-            const body: Record<string, unknown> = { cliType, cliArgs, initialModel: model || undefined }
+            const body: Record<string, unknown> = { cliType, cliArgs, initialModel: model || undefined, launchMode: launchMode || undefined }
             if (dir?.trim()) body.dir = dir.trim()
             else if (workspaceId) body.workspaceId = workspaceId
             else if (useDefaultWorkspace) body.useDefaultWorkspace = true
@@ -94,7 +95,7 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
                 return { success: true as const, sessionId: payload?.sessionId as string | undefined }
             } else {
                 addLog('error', `Failed: ${res?.error || payload?.error}`, true)
-                if (res?.code === 'WORKSPACE_LAUNCH_CONTEXT_REQUIRED') setLaunchPick({ cliType, argsStr, model })
+                if (res?.code === 'WORKSPACE_LAUNCH_CONTEXT_REQUIRED') setLaunchPick({ cliType, argsStr, model, launchMode })
                 return { success: false as const, sessionId: payload?.sessionId as string | undefined }
             }
         } catch (e: any) {
@@ -105,17 +106,17 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         }
     }, [machineId, addLog, sendDaemonCommand])
 
-    const handleLaunchCli = useCallback(async (cliType: string, dir: string, argsStr?: string, model?: string) => {
+    const handleLaunchCli = useCallback(async (cliType: string, dir: string, argsStr?: string, model?: string, launchMode?: string) => {
         if (!machineId) return { success: false as const }
         if (!cliType) {
             addLog('warn', 'Select a provider', true)
             return { success: false as const }
         }
         if (!dir.trim()) {
-            setLaunchPick({ cliType, argsStr, model })
+            setLaunchPick({ cliType, argsStr, model, launchMode })
             return { success: false as const }
         }
-        return runLaunchCliCore({ cliType, dir, argsStr, model })
+        return runLaunchCliCore({ cliType, dir, argsStr, model, launchMode })
     }, [machineId, addLog, runLaunchCliCore])
 
     const handleStopCli = useCallback(async (cliType: string, dir: string, entryId?: string) => {

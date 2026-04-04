@@ -4,6 +4,8 @@
 
 import type { SessionTransport } from '@adhdev/daemon-core';
 
+export type CliConversationViewMode = 'terminal' | 'chat';
+
 export interface ActiveConversation {
     ideId: string;
     sessionId?: string;
@@ -36,6 +38,28 @@ export interface ActiveConversation {
 /** CLI detection: PTY transport */
 export const isCliConv = (conv: { transport?: string }) =>
     conv.transport === 'pty';
+
+export const getCliConversationViewMode = (
+    conv: { transport?: string; mode?: 'terminal' | 'chat' },
+    override?: CliConversationViewMode,
+): CliConversationViewMode => {
+    if (!isCliConv(conv)) return 'chat';
+    return override || conv.mode || 'terminal';
+};
+
+/** CLI chat mode detection: PTY transport rendered as chat */
+export const isCliChatConv = (
+    conv: { transport?: string; mode?: 'terminal' | 'chat' },
+    override?: CliConversationViewMode,
+) =>
+    isCliConv(conv) && getCliConversationViewMode(conv, override) === 'chat';
+
+/** CLI terminal detection: PTY transport rendered as terminal */
+export const isCliTerminalConv = (
+    conv: { transport?: string; mode?: 'terminal' | 'chat' },
+    override?: CliConversationViewMode,
+) =>
+    isCliConv(conv) && getCliConversationViewMode(conv, override) === 'terminal';
 
 /** ACP detection: ACP transport */
 export const isAcpConv = (conv: { transport?: string }) =>

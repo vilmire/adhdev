@@ -1,13 +1,13 @@
 
 /**
- * ChatPane — Non-CLI chat view: message list, model/mode bar, and input area.
+ * ChatPane — Chat view for IDE, ACP, and CLI chat-mode sessions.
  */
 import { useRef, useState, useCallback, useMemo } from 'react';
 import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import ControlsBar from './ControlsBar';
 import ChatInputBar from './ChatInputBar';
 import ConversationMetaChips from './ConversationMetaChips';
-import { isCliConv, isAcpConv } from './types';
+import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
 import type { ActiveConversation } from './types';
 import type { DaemonData } from '../../types';
 import { useTransport } from '../../context/TransportContext';
@@ -319,7 +319,7 @@ export default function ChatPane({
             />
 
             {/* Controls Bar (dynamic or legacy fallback) */}
-            {!isCliConv(activeConv) && (() => {
+            {!isCliTerminalConv(activeConv) && (() => {
                 const isNativeConversation = activeConv.streamSource !== 'agent-stream'
                 const modelBarAgentType = isNativeConversation
                     ? activeConv.ideType

@@ -75,6 +75,7 @@ export default function AgentTab({
 
     // ─── Launch Form State ──────────────────────────
     const [selectedType, setSelectedType] = useState('')
+    const [selectedLaunchMode, setSelectedLaunchMode] = useState('')
     const [launchArgs, setLaunchArgs] = useState('')
     const [launchModel, setLaunchModel] = useState('')
     // Workspace selection: workspace-id | '__custom__' | '' (home)
@@ -86,6 +87,7 @@ export default function AgentTab({
     const visiblePendingLaunches = pendingLaunchTypes
         .filter(type => !managedEntries.some(entry => entry.type === type && normalizeManagedStatus(entry.status) !== 'stopped'))
     const pendingTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+    const selectedProvider = categoryProviders.find(provider => provider.type === selectedType)
 
     // Default provider selection
     useEffect(() => {
@@ -93,6 +95,20 @@ export default function AgentTab({
             setSelectedType(categoryProviders[0].type)
         }
     }, [selectedType, categoryProviders.length])
+
+    useEffect(() => {
+        if (category !== 'cli') {
+            if (selectedLaunchMode) setSelectedLaunchMode('')
+            return
+        }
+        const launchModes = selectedProvider?.launchModes || []
+        if (launchModes.length === 0) {
+            if (selectedLaunchMode) setSelectedLaunchMode('')
+            return
+        }
+        if (selectedLaunchMode && launchModes.some(mode => mode.id === selectedLaunchMode)) return
+        setSelectedLaunchMode(launchModes.find(mode => mode.default)?.id || launchModes[0]?.id || '')
+    }, [category, selectedLaunchMode, selectedProvider])
 
     // Auto-select default workspace when machine data loads
     useEffect(() => {
@@ -193,6 +209,7 @@ export default function AgentTab({
                 resolvedWorkspacePath,
                 launchArgs || undefined,
                 isAcp ? launchModel || undefined : undefined,
+                category === 'cli' ? selectedLaunchMode || undefined : undefined,
             )
             if (launched.success) {
                 markPendingLaunch(selectedType)
@@ -357,6 +374,17 @@ export default function AgentTab({
                                 className="machine-input min-w-[120px]"
                             />
                         )}
+                        {category === 'cli' && (selectedProvider?.launchModes?.length || 0) > 0 && (
+                            <select
+                                value={selectedLaunchMode}
+                                onChange={e => setSelectedLaunchMode(e.target.value)}
+                                className="machine-input min-w-[140px]"
+                            >
+                                {(selectedProvider?.launchModes || []).map(mode => (
+                                    <option key={mode.id} value={mode.id}>{mode.name}</option>
+                                ))}
+                            </select>
+                        )}
                         <input
                             type="text"
                             placeholder="Args (optional)"
@@ -430,6 +458,11 @@ export default function AgentTab({
                                             </div>
                                             <div className="text-[11px] text-text-muted flex gap-2">
                                                 <span>{(entry as any).workspace || '—'}</span>
+                                                {cli?.launchMode && (
+                                                    <span className={cli.mode === 'chat' ? 'text-cyan-400' : 'text-text-muted'}>
+                                                        {cli.mode === 'chat' ? '💬' : '⌨'} {cli.launchMode}
+                                                    </span>
+                                                )}
                                                 {acp?.currentModel && <span className="text-cyan-500">🤖 {acp.currentModel}</span>}
                                                 {acp?.currentPlan && <span style={{ color: 'var(--status-warning)' }}>📋 {acp.currentPlan}</span>}
                                             </div>
@@ -543,7 +576,7 @@ export default function AgentTab({
                                                             if (launched) markPendingLaunch(entry.type)
                                                             return
                                                         }
-                                                        const launched = await handleLaunchCli(entry.type, (entry as any).workspace)
+                                                        const launched = await handleLaunchCli(entry.type, (entry as any).workspace, undefined, undefined, cli?.launchMode)
                                                         if (launched.success) {
                                                             markPendingLaunch(entry.type)
                                                             if (launched.sessionId) openSessionInDashboard(launched.sessionId)

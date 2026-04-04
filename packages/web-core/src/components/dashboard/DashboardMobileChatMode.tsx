@@ -3,14 +3,15 @@ import type { Dispatch, SetStateAction } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
-import { isAcpConv } from './types'
+import { getCliConversationViewMode, isAcpConv, isCliConv } from './types'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 import DashboardMobileChatRoom from './DashboardMobileChatRoom'
 import DashboardMobileChatInbox from './DashboardMobileChatInbox'
 import DashboardMobileMachineScreen from './DashboardMobileMachineScreen'
+import { compareConversationRecency, getConversationActivityAt, getConversationTimestamp } from './conversation-sort'
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared'
-import { getMachineDisplayName, isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
+import { compareMachineEntries, getDaemonEntryActivityAt, getMachineDisplayName, isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
 import { normalizeTextContent } from '../../utils/text'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
 
@@ -35,17 +36,6 @@ interface DashboardMobileChatModeProps {
 
 function normalizePreviewText(content: unknown) {
     return normalizeTextContent(content)
-}
-
-function getConversationTimestamp(conversation: ActiveConversation) {
-    const lastMessage = [...conversation.messages].reverse().find((message: any) => !(message as any)?._localId) as any
-        || conversation.messages[conversation.messages.length - 1] as any
-    const ts = lastMessage?.timestamp || lastMessage?.receivedAt || 0
-    return typeof ts === 'number' ? ts : Date.parse(String(ts)) || 0
-}
-
-function getConversationActivityAt(conversation: ActiveConversation, lastUpdated = 0) {
-    return getConversationTimestamp(conversation) || lastUpdated || 0
 }
 
 function getConversationPreview(conversation: ActiveConversation) {
@@ -109,8 +99,14 @@ export default function DashboardMobileChatMode({
         () => selectedConversation ? ides.find(ide => ide.id === selectedConversation.ideId) : undefined,
         [ides, selectedConversation],
     )
+    const selectedCliViewMode = useMemo(() => {
+        if (!selectedConversation || isAcpConv(selectedConversation) || !isCliConv(selectedConversation)) return null
+        return getCliConversationViewMode(selectedConversation)
+    }, [selectedConversation])
     const machineEntries = useMemo(
-        () => ides.filter((entry: any) => entry.type === 'adhdev-daemon' || entry.daemonMode),
+        () => ides
+            .filter((entry: any) => entry.type === 'adhdev-daemon' || entry.daemonMode)
+            .sort(compareMachineEntries),
         [ides],
     )
     const selectedMachineEntry = useMemo(
@@ -236,7 +232,11 @@ export default function DashboardMobileChatMode({
             isWorking,
             inboxBucket,
         }
-    }).sort((a, b) => b.timestamp - a.timestamp), [liveSessionInboxState, mobileInboxConversations, screen, selectedConversation])
+    }).sort((a, b) => {
+        const timestampDiff = b.timestamp - a.timestamp
+        if (timestampDiff !== 0) return timestampDiff
+        return compareConversationRecency(a.conversation, b.conversation)
+    }), [liveSessionInboxState, mobileInboxConversations, screen, selectedConversation])
 
     useEffect(() => {
         const taskCompleteItems = items.filter(item => item.inboxBucket === 'task_complete' || item.unread)
@@ -298,6 +298,8 @@ export default function DashboardMobileChatMode({
                     providerType: launch.providerType,
                     subtitle: launch.currentModel || launch.workspace || undefined,
                     workspace: launch.workspace,
+                    launchMode: launch.launchMode,
+                    mode: launch.mode,
                     currentModel: launch.currentModel,
                 }))
             }
@@ -320,6 +322,8 @@ export default function DashboardMobileChatMode({
                             ? ((entry as any).currentModel || (entry as any).workspace || undefined)
                             : ((entry as any).workspace || undefined),
                         workspace: (entry as any).workspace || undefined,
+                        launchMode: (entry as any).launchMode,
+                        mode: (entry as any).mode,
                         currentModel: (entry as any).currentModel,
                         timestamp: entry.activeChat?.messages?.at?.(-1)?.timestamp || 0,
                     }
@@ -332,7 +336,19 @@ export default function DashboardMobileChatMode({
     const selectedMachineVersion = selectedMachineEntry?.version || (selectedMachineEntry as any)?.daemonVersion || null
     const selectedMachineNeedsUpgrade = !!selectedMachineEntry && !!selectedMachineVersion && !!appVersion && selectedMachineVersion !== appVersion
     const selectedMachineProviders = useMemo(
-        () => ((selectedMachineEntry as any)?.availableProviders || []) as Array<{ type: string; displayName?: string; icon?: string; category?: string }>,
+        () => ((selectedMachineEntry as any)?.availableProviders || []) as Array<{
+            type: string
+            displayName?: string
+            icon?: string
+            category?: string
+            launchModes?: Array<{
+                id: string
+                name: string
+                description?: string
+                outputFormat?: 'terminal' | 'stream-json'
+                default?: boolean
+            }>
+        }>,
         [selectedMachineEntry],
     )
     const selectedMachineCliProviders = useMemo(
@@ -342,6 +358,7 @@ export default function DashboardMobileChatMode({
                 type: provider.type,
                 displayName: provider.displayName || provider.type,
                 icon: provider.icon,
+                launchModes: provider.launchModes,
             })),
         [selectedMachineProviders],
     )
@@ -352,6 +369,7 @@ export default function DashboardMobileChatMode({
                 type: provider.type,
                 displayName: provider.displayName || provider.type,
                 icon: provider.icon,
+                launchModes: provider.launchModes,
             })),
         [selectedMachineProviders],
     )
@@ -391,8 +409,14 @@ export default function DashboardMobileChatMode({
                     : 'No active conversations yet. Open the machine to launch an IDE, CLI, or ACP session.',
             }
         }).sort((a, b) => {
-            const aTs = a.latestConversation ? getConversationTimestamp(a.latestConversation) : 0
-            const bTs = b.latestConversation ? getConversationTimestamp(b.latestConversation) : 0
+            const aTs = Math.max(
+                a.latestConversation ? getConversationTimestamp(a.latestConversation) : 0,
+                getDaemonEntryActivityAt(machineEntries.find((entry) => entry.id === a.id) as any),
+            )
+            const bTs = Math.max(
+                b.latestConversation ? getConversationTimestamp(b.latestConversation) : 0,
+                getDaemonEntryActivityAt(machineEntries.find((entry) => entry.id === b.id) as any),
+            )
             if (bTs !== aTs) return bTs - aTs
             return a.label.localeCompare(b.label)
         })
@@ -511,14 +535,15 @@ export default function DashboardMobileChatMode({
         machineId: string,
         kind: 'cli' | 'acp',
         providerType: string,
-        opts?: { workspaceId?: string | null; workspacePath?: string | null },
+        opts?: { workspaceId?: string | null; workspacePath?: string | null; launchMode?: string | null },
     ) => {
         try {
             setMachineActionState('loading')
-            setMachineActionMessage(`Launching ${providerType}…`)
+            setMachineActionMessage(`Launching ${providerType}${opts?.launchMode ? ` · ${opts.launchMode}` : ''}…`)
             const payload: Record<string, unknown> = { cliType: providerType }
             if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
             else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
+            if (opts?.launchMode) payload.launchMode = opts.launchMode
             const res: any = await sendDaemonCommand(machineId, 'launch_cli', payload)
             const result = res?.result || res
             const launchedSessionId = result?.sessionId || result?.id
@@ -547,6 +572,7 @@ export default function DashboardMobileChatMode({
         if ((session.kind === 'cli' || session.kind === 'acp') && session.providerType) {
             await handleLaunchWorkspaceProvider(selectedMachineEntry.id, session.kind, session.providerType, {
                 workspacePath: session.workspace || null,
+                launchMode: session.launchMode || null,
             })
             return
         }
@@ -568,6 +594,19 @@ export default function DashboardMobileChatMode({
                     onOpenMachine={handleOpenConversationMachine}
                     onOpenHistory={onOpenHistory}
                     onOpenRemote={onOpenRemote}
+                    cliViewMode={selectedCliViewMode}
+                    onSetCliViewMode={async mode => {
+                        if (!selectedConversation) return
+                        try {
+                            await sendDaemonCommand(selectedConversation.daemonId || selectedConversation.ideId, 'set_cli_view_mode', {
+                                targetSessionId: selectedConversation.sessionId,
+                                cliType: selectedConversation.ideType || selectedConversation.agentType,
+                                mode,
+                            })
+                        } catch (error) {
+                            console.error('Failed to switch CLI view mode:', error)
+                        }
+                    }}
                     handleSendChat={cmds.handleSendChat}
                     handleFocusAgent={cmds.handleFocusAgent}
                 />

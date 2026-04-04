@@ -140,6 +140,18 @@ class StandaloneServer {
     return client;
   }
 
+  private getCliPresentationMode(sessionId: string): 'terminal' | 'chat' | null {
+    if (!sessionId || !this.components) return null;
+    const instance = this.components.instanceManager.getInstance(sessionId) as any;
+    if (instance?.category !== 'cli') return null;
+    const mode = instance.getPresentationMode?.();
+    return mode === 'chat' || mode === 'terminal' ? mode : null;
+  }
+
+  private isTerminalCliSession(sessionId: string): boolean {
+    return this.getCliPresentationMode(sessionId) === 'terminal';
+  }
+
   async start(options: StandaloneOptions = {}): Promise<void> {
     const port = options.port || DEFAULT_PORT;
     const host = options.host || '127.0.0.1';
@@ -155,7 +167,7 @@ class StandaloneServer {
         getServerConn: () => null,
         getP2p: () => ({
           broadcastPtyOutput: (key: string, data: string) => {
-            if (this.clients.size === 0) return;
+            if (this.clients.size === 0 || !this.isTerminalCliSession(key)) return;
             const msg = JSON.stringify({ type: 'pty_output', sessionId: key, data });
             for (const client of this.clients) {
               if (client.readyState === 1) { // OPEN
@@ -410,6 +422,11 @@ class StandaloneServer {
       }
 
       if (action === 'snapshot' && method === 'GET') {
+        if (!this.isTerminalCliSession(sessionId)) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'CLI session is not in terminal mode', code: 'CLI_VIEW_MODE_NOT_TERMINAL' }));
+          return;
+        }
         void (async () => {
           const client = await this.createSessionHostClient();
           try {
@@ -549,6 +566,12 @@ class StandaloneServer {
     res: import('http').ServerResponse,
     sessionId: string,
   ): Promise<void> {
+    if (!this.isTerminalCliSession(sessionId)) {
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'CLI session is not in terminal mode', code: 'CLI_VIEW_MODE_NOT_TERMINAL' }));
+      return;
+    }
+
     const client = await this.createSessionHostClient();
 
     res.writeHead(200, {
@@ -569,6 +592,7 @@ class StandaloneServer {
 
     const writeEvent = (event: SessionHostEvent) => {
       if (event.sessionId !== sessionId) return;
+      if (!this.isTerminalCliSession(sessionId)) return;
       res.write(`event: ${event.type}\n`);
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     };
@@ -660,7 +684,7 @@ class StandaloneServer {
       const states = this.components.instanceManager.collectAllStates();
       for (const state of states as any[]) {
         const sessionId = typeof state?.instanceId === 'string' ? state.instanceId : '';
-        if (!sessionId || state?.category !== 'cli') continue;
+        if (!sessionId || state?.category !== 'cli' || state?.mode !== 'terminal') continue;
 
         const snapshot = await client.request<{ seq: number; text: string; truncated: boolean }>({
           type: 'get_snapshot',

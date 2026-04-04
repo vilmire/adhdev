@@ -17,6 +17,8 @@ export interface RecentActivityEntry {
     providerType: string;
     providerName: string;
     workspace?: string | null;
+    launchMode?: string;
+    mode?: 'terminal' | 'chat';
     currentModel?: string;
     title?: string;
     lastUsedAt: number;
@@ -33,8 +35,8 @@ function normalizeWorkspace(workspace?: string | null) {
     }
 }
 
-export function buildRecentActivityKey(entry: Pick<RecentActivityEntry, 'kind' | 'providerType' | 'workspace'>) {
-    return `${entry.kind}:${entry.providerType}:${normalizeWorkspace(entry.workspace)}`;
+export function buildRecentActivityKey(entry: Pick<RecentActivityEntry, 'kind' | 'providerType' | 'workspace' | 'launchMode'>) {
+    return `${entry.kind}:${entry.providerType}:${normalizeWorkspace(entry.workspace)}:${entry.launchMode || ''}`;
 }
 
 export function appendRecentActivity(
