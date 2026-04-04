@@ -113,6 +113,26 @@ export class DaemonStatusReporter {
         return new Date().toISOString().slice(11, 23); // HH:mm:ss.SSS
     }
 
+    private summarizeLargePayloadSessions(payload: Record<string, any>): string {
+        const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+        return sessions
+            .map((session: any) => ({
+                id: String(session?.id || ''),
+                providerType: String(session?.providerType || ''),
+                bytes: (() => {
+                    try {
+                        return JSON.stringify(session).length;
+                    } catch {
+                        return 0;
+                    }
+                })(),
+            }))
+            .sort((a, b) => b.bytes - a.bytes)
+            .slice(0, 3)
+            .map((session) => `${session.providerType || 'unknown'}:${session.id}=${session.bytes}b`)
+            .join(', ');
+    }
+
     async sendUnifiedStatusReport(opts?: { p2pOnly?: boolean }): Promise<void> {
         const { serverConn, p2p } = this.deps;
         if (!serverConn?.isConnected()) return;
@@ -179,10 +199,17 @@ export class DaemonStatusReporter {
             connectedExtensions: [],
         };
 
- // ═══ P2P transmit ═══
+// ═══ P2P transmit ═══
+        const payloadBytes = JSON.stringify(payload).length;
         const p2pSent = this.sendP2PPayload(payload);
         if (p2pSent) {
-            LOG.debug('P2P', `sent (${JSON.stringify(payload).length} bytes)`);
+            LOG.debug('P2P', `sent (${payloadBytes} bytes)`);
+            if (payloadBytes > 256 * 1024) {
+                LOG.warn(
+                    'P2P',
+                    `large status payload (${payloadBytes} bytes) top sessions: ${this.summarizeLargePayloadSessions(payload) || 'n/a'}`,
+                );
+            }
         }
 
  // ═══ Server transmit (minimal routing meta only) ═══
