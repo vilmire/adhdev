@@ -16,7 +16,7 @@ For a deeper walkthrough, see the provider guide on [docs.adhf.dev](https://docs
 
 ## 🛠️ Contributing to ADHDev Core
 
-If you want to contribute to the core ADHDev engine (the daemon, the web dashboard, or the DevConsole), you are in the right place!
+If you want to contribute to the core ADHDev engine (the daemon, the web dashboard, or the DevConsole), you are in the right place.
 
 ### Development Setup
 
@@ -25,9 +25,11 @@ git clone https://github.com/vilmire/adhdev.git
 cd adhdev
 npm install
 
-# Build packages (order matters — dependencies first)
+# Canonical full build (encodes the current package order)
+npm run build
+
+# Common focused builds while iterating
 npm run build -w packages/daemon-core
-npm run build -w packages/web-core
 npm run build -w packages/web-standalone
 npm run build -w packages/daemon-standalone
 
@@ -40,13 +42,20 @@ npm run dev
 
 ### 📁 Project Structure
 
-```
+```text
 packages/
-├── daemon-core/        # Core engine — CDP, providers, commands, lifecycle
-├── daemon-standalone/  # Self-hosted HTTP/WS server (localhost:3847)
-├── web-core/           # Shared React components, pages, CSS design system
-├── web-standalone/     # Standalone React dashboard (Vite + React)
-└── web-devconsole/     # DevConsole — provider debugging tools
+├── daemon-core/           # Core engine — CDP, providers, commands, lifecycle
+├── daemon-standalone/     # Self-hosted HTTP/WS server (localhost:3847)
+├── session-host-core/     # Session registry + transport protocol
+├── session-host-daemon/   # Long-lived session runtime (adhdev-sessiond)
+├── terminal-mux-core/     # Terminal mux runtime
+├── terminal-mux-control/  # Terminal mux control/storage helpers
+├── terminal-mux-cli/      # adhmux client
+├── terminal-render-web/   # Web terminal renderer
+├── ghostty-vt-node/       # Ghostty VT bindings
+├── web-core/              # Shared React components, pages, CSS design system
+├── web-standalone/        # Standalone React dashboard (Vite + React)
+└── web-devconsole/        # DevConsole — provider debugging tools
 ```
 
 #### Key Source Files
@@ -62,14 +71,17 @@ packages/
 
 ### 🏗️ Build Order
 
-Packages must be built in dependency order:
+Use the root `npm run build` whenever possible. It already encodes the current dependency order, including the session-host and terminal-mux packages.
 
-```
-1. daemon-core       (no internal dependencies)
-2. web-core          (no internal dependencies)
-3. web-standalone    (depends on web-core)
-4. daemon-standalone (depends on daemon-core)
-5. web-devconsole    (depends on daemon-core)
+If you need to build selectively, keep the dependency chain in mind:
+
+```text
+1. session-host-core / ghostty-vt-node
+2. daemon-core / terminal-mux-core / terminal-mux-control
+3. terminal-mux-cli / session-host-daemon / terminal-render-web
+4. web-core
+5. web-standalone / web-devconsole
+6. daemon-standalone
 ```
 
 ### 🧪 Testing
@@ -77,6 +89,7 @@ Packages must be built in dependency order:
 ```bash
 # Type-check (no emit)
 npx tsc --noEmit -p packages/daemon-core/tsconfig.json
+npx tsc --noEmit -p packages/session-host-daemon/tsconfig.json
 npx tsc --noEmit -p packages/daemon-standalone/tsconfig.json
 
 # Run standalone daemon

@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: ADHDev Standalone API
   description: REST API for the ADHDev standalone daemon — manage IDEs, CLIs, and AI agents.
-  version: 0.6.53
+  version: 0.7.41
   license:
     name: AGPL-3.0
     url: https://www.gnu.org/licenses/agpl-3.0.html
@@ -159,7 +159,7 @@ components:
       properties:
         id:
           type: string
-          example: "ide:cursor_12345"
+          example: "standalone:ide:cursor_12345"
         instanceId:
           type: string
         type:
@@ -198,7 +198,7 @@ components:
       properties:
         id:
           type: string
-          example: "cli:gemini-cli"
+          example: "standalone:cli:gemini-cli"
         cliId:
           type: string
         type:
@@ -303,7 +303,7 @@ components:
           example: { "message": "Hello!" }
         target:
           type: string
-          example: "ide:cursor_12345"
+          example: "standalone:ide:cursor_12345"
 
     CommandResult:
       type: object

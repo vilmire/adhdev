@@ -19,8 +19,8 @@ Run it on your machine — no cloud account required.
 │  │ + AI Ext │CDP │ localhost:3847 │  │ HTTP │  Screenshots,    │
 │  └──────────┘    └────────────────┘  │  /WS │  Remote Control  │
 │                                      │      │                  │
-│  CLI Agents  ◄─PTY─►  Daemon         │      │                  │
-│  ACP Agents  ◄─stdio─► Daemon        │      └──────────────────┘
+│  CLI Agents  ◄─PTY─►  Daemon        │      │                  │
+│  ACP Agents  ◄─stdio─► Daemon       │      └──────────────────┘
 └──────────────────────────────────────┘
        Everything runs locally — no cloud required
 ```
@@ -29,8 +29,8 @@ Run it on your machine — no cloud account required.
 - **See IDE screenshots** in real-time via Chrome DevTools Protocol
 - **Remote desktop** — click, type, scroll in your IDE from the browser
 - **Manage CLI agents** — interactive terminal view with xterm.js
-- **Multi-IDE support** — manage 9 different IDEs simultaneously
-- **Provider system** — extensible via `provider.json` & `scripts.js` files (no TypeScript changes needed)
+- **Multi-IDE support** — manage multiple IDEs simultaneously
+- **Provider system** — extensible via `provider.js` files (no TypeScript changes needed)
 
 ## 🚀 Quick Start
 
@@ -39,14 +39,14 @@ Run it on your machine — no cloud account required.
 curl -fsSL https://adhf.dev/install | sh
 
 # Or install via npm directly
-npm install -g @adhdev/daemon-standalone
+npm install -g adhdev
 
 # One-liner — starts dashboard at http://localhost:3847
-adhdev-standalone
+adhdev standalone
 
 # With options
-adhdev-standalone --port 8080 --host  # LAN access
-adhdev-standalone --token mysecret     # Token auth
+adhdev standalone --port 8080 --host   # LAN access
+adhdev standalone --token mysecret     # Token auth
 ```
 
 That's it! Open `http://localhost:3847` and your connected IDEs will appear automatically.
@@ -65,11 +65,13 @@ That's it! Open `http://localhost:3847` and your connected IDEs will appear auto
 
 | Package | Description |
 |---------|-------------|
-| `packages/daemon-core` | Core engine — CDP, IDE detection, providers, CLI/ACP adapters, command handler, lifecycle |
+| `packages/daemon-core` | Shared engine — CDP, IDE detection, provider loader, command routing, CLI/ACP adapters |
 | `packages/daemon-standalone` | Self-hosted local server — HTTP REST + WebSocket + bundled dashboard |
-| `packages/web-core` | Shared UI — Dashboard, Chat, System views, CSS design system |
-| `packages/web-standalone` | Self-hosted React dashboard — localhost-first, no auth |
-| `packages/web-devconsole` | DevConsole — provider debugging and testing tools |
+| `packages/web-core`, `packages/web-standalone`, `packages/web-devconsole` | Shared UI, standalone dashboard, and provider debugging UI |
+| `packages/session-host-core`, `packages/session-host-daemon` | Local session registry and long-lived session runtime (`adhdev-sessiond`) |
+| `packages/terminal-mux-core`, `packages/terminal-mux-control`, `packages/terminal-mux-cli` | Terminal mux stack (`adhmux`) for live local sessions |
+| `packages/terminal-render-web` | React terminal rendering package for the dashboard |
+| `packages/ghostty-vt-node` | Ghostty virtual terminal bindings used by the mux stack |
 
 > 💡 **Cloud version** with remote access and team features available at [adhf.dev](https://adhf.dev)
 
@@ -79,18 +81,18 @@ That's it! Open `http://localhost:3847` and your connected IDEs will appear auto
 We are actively building out providers. Here is the current capability tracking:
 
 - 🟢 **Antigravity** — Stable (CDP)
-- 🟢 **Cursor** — Stable (CDP, including Composer)
+- 🟢 **Cursor** — Stable (CDP)
 - 🟢 **Windsurf** — Stable (CDP)
 - 🟢 **Kiro** — Stable (webview CDP)
 - 🟡 **PearAI** — Beta (webview CDP)
 - 🟡 **Trae** — Beta (webview CDP)
-- 🟢 **VS Code / VSCodium** — Stable (CDP)
+- 🟡 **VS Code / VSCodium** — Infrastructure ready (WIP)
 
 ### AI Extensions (via Agent Stream CDP scraping)
 - 🟢 **Cline** — Independent Stream
 - 🟢 **Roo Code (3.x, 4.x)** — Independent Stream
 - 🟢 **Codex Extension** — Independent Stream
-
+- 🟢 **Cursor Composer** — Native agent mode integration
 
 ### Standalone CLI Agents (via Daemon CLI Adapters)
 All CLI agents support interactive Terminal mode. Chat mode (UI abstraction) availability is listed below:
@@ -124,17 +126,25 @@ npm run dev
 # Individual services
 npm run dev:daemon    # daemon-standalone only
 npm run dev:web       # web-standalone only (Vite dev server)
+npm run dev -w packages/web-devconsole
 ```
 
 ### Project Structure
 
 ```
 packages/
-├── daemon-core/        # Core engine (CDP, providers, CLI/ACP adapters, lifecycle)
-├── daemon-standalone/  # HTTP/WS server (localhost:3847)
-├── web-core/           # Shared React components, pages, CSS design system
-├── web-standalone/     # Standalone React dashboard (Vite)
-└── web-devconsole/     # DevConsole — provider debugging tools
+├── daemon-core/           # Core engine (CDP, providers, CLI/ACP adapters, lifecycle)
+├── daemon-standalone/     # HTTP/WS server (localhost:3847)
+├── session-host-core/     # Session registry + transport protocol
+├── session-host-daemon/   # Long-lived session runtime (adhdev-sessiond)
+├── terminal-mux-core/     # Terminal mux runtime
+├── terminal-mux-control/  # Control/storage/socket helpers
+├── terminal-mux-cli/      # adhmux CLI
+├── terminal-render-web/   # React terminal renderer
+├── ghostty-vt-node/       # Ghostty VT bindings
+├── web-core/              # Shared React components, pages, CSS design system
+├── web-standalone/        # Standalone React dashboard (Vite)
+└── web-devconsole/        # DevConsole — provider debugging tools
 ```
 
 ## 🔗 Local API
@@ -148,17 +158,17 @@ curl http://localhost:3847/api/v1/status
 # Send a chat message to an IDE agent
 curl -X POST http://localhost:3847/api/v1/command \
   -H 'Content-Type: application/json' \
-  -d '{"type": "send_chat", "payload": {"message": "Fix the login bug"}, "target": "ide:cursor_12345"}'
+  -d '{"type": "send_chat", "payload": {"message": "Fix the login bug"}, "target": "standalone:ide:cursor_12345"}'
 
 # Read current chat
 curl -X POST http://localhost:3847/api/v1/command \
   -H 'Content-Type: application/json' \
-  -d '{"type": "read_chat", "target": "ide:cursor_12345"}'
+  -d '{"type": "read_chat", "target": "standalone:ide:cursor_12345"}'
 
 # Take a screenshot
 curl -X POST http://localhost:3847/api/v1/command \
   -H 'Content-Type: application/json' \
-  -d '{"type": "screenshot", "target": "ide:cursor_12345"}'
+  -d '{"type": "screenshot", "target": "standalone:ide:cursor_12345"}'
 
 # List connected IDEs
 curl http://localhost:3847/api/v1/ides
@@ -167,7 +177,7 @@ curl http://localhost:3847/api/v1/ides
 curl http://localhost:3847/api/v1/clis
 ```
 
-Full API spec: [docs/openapi.yml](docs/openapi.yml) (OpenAPI 3.0)
+Full API spec: [openapi.yml](openapi.yml) (OpenAPI 3.0)
 
 ## 🧩 Web Dashboard Features
 
@@ -180,29 +190,12 @@ Full API spec: [docs/openapi.yml](docs/openapi.yml) (OpenAPI 3.0)
 | Mobile UI | Responsive design — works on phones and tablets |
 | Provider Settings | Per-provider configurable settings with runtime hot-reload |
 
-## 🔌 Provider Development & DevConsole
+## 🔌 Adding New IDE/Agent Providers
 
 Providers are dynamically loaded from the [vilmire/adhdev-providers](https://github.com/vilmire/adhdev-providers) repository.
-Your local daemon automatically downloads the latest providers on startup.
+Your local daemon downloads the latest upstream set into `~/.adhdev/providers/.upstream/` and lets user overrides in `~/.adhdev/providers/<category>/<type>/` win.
 
-### 🛠️ Using the DevConsole to Fix Providers
-
-If an IDE updates its UI and ADHDev's chat integration breaks, you can easily fix the provider scripts live using the built-in **DevConsole**:
-
-1. Stop your background daemon and run it in dev mode:
-   ```bash
-   adhdev-standalone --dev
-   ```
-2. Open **http://127.0.0.1:19280** in your browser to access the DevConsole UI.
-3. The DevConsole allows you to:
-   - **Inspect CDP Sessions:** View running IDEs and attach directly to their DOM.
-   - **Test Scripts Real-time:** Edit Javascript functions (like `sendMessage` or `readChat`) inside the browser and execute them instantly in the target IDE without reloading.
-   - **Inspect Errors:** Validate DOM selector changes seamlessly through the interactive tools.
-
-### Adding Custom Local Providers
-
-Providers are loaded dynamically. The legacy builtin directory has been deprecated in favor of a dynamic workspace model. 
-If you want to create a custom provider locally or test your fixes before submitting a PR to the providers repository, place your edited files in `~/.adhdev/providers/<category>/<type>/`. Local user providers will always overwrite upstream auto-updated ones, allowing for rapid reloading and local testing without rebuilding the daemon.
+If you want to create a custom provider locally, use `~/.adhdev/providers/<category>/<type>/`:
 
 ```text
 ~/.adhdev/providers/ide/my-ide/
@@ -220,16 +213,18 @@ If you want to create a custom provider locally or test your fixes before submit
 - [x] CLI Agent Adapters (Gemini CLI, Claude Code, Codex CLI — PTY-based)
 - [x] ACP 35 agents (Agent Client Protocol — MCP stdio)
 - [x] Interactive Terminal View (xterm.js — full TUI rendering)
-- [x] Provider architecture (4-category provider.json & scripts.js system)
+- [x] Provider architecture (4-category provider.js system)
 - [x] Model/Mode selection (CDP-based switching for all IDEs)
 - [x] Mobile responsive UI
 - [x] Provider Settings System (per-provider configurable settings)
+- [ ] MCP server integration
+- [ ] JetBrains plugin
 
 ## 📚 Documentation
 
 🌐 **[docs.adhf.dev](https://docs.adhf.dev)** — User guides, feature docs, troubleshooting
 
-- [docs/openapi.yml](docs/openapi.yml) — Standalone REST API specification (OpenAPI 3.0)
+- [openapi.yml](openapi.yml) — Standalone REST API specification (OpenAPI 3.0)
 - [CONTRIBUTING.md](CONTRIBUTING.md) — How to contribute to ADHDev core
 - **Provider Development**: See [vilmire/adhdev-providers](https://github.com/vilmire/adhdev-providers) for the provider contribution guide.
 
@@ -240,7 +235,7 @@ Need remote access, team collaboration, or API integration?
 | Feature | OSS (this repo) | Cloud |
 |---------|:--:|:--:|
 | IDE/CLI agent chat & control | ✅ | ✅ |
-| 9 IDE + 35 ACP support | ✅ | ✅ |
+| IDE + 35 ACP support | ✅ | ✅ |
 | Remote access (outside LAN) | ❌ | ✅ |
 | Multi-machine management | ❌ | ✅ |
 | **Session Sharing** (live link) | ❌ | ✅ |
