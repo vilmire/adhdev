@@ -1,7 +1,7 @@
 /**
  * ADHDev Launcher — Configuration
- * 
- * Manages launcher config, server connection tokens, and user preferences.
+ *
+ * Manages launcher config, machine auth, and user preferences.
  */
 
 import { homedir } from 'os';
@@ -112,6 +112,68 @@ const DEFAULT_CONFIG: ADHDevConfig = {
 
 const MACHINE_ID_PREFIX = 'mach_';
 
+function isPlainObject(value: unknown): value is Record<string, any> {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function asStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is string => typeof item === 'string');
+}
+
+function asNullableString(value: unknown): string | null {
+    return typeof value === 'string' ? value : null;
+}
+
+function asOptionalString(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function asBoolean(value: unknown, fallback: boolean): boolean {
+    return typeof value === 'boolean' ? value : fallback;
+}
+
+function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: string | null } {
+    const parsed = isPlainObject(raw) ? raw : {};
+    const legacySessionReads = isPlainObject(parsed.recentSessionReads) ? parsed.recentSessionReads : {};
+    const sessionReads = isPlainObject(parsed.sessionReads) ? parsed.sessionReads : {};
+    const mergedSessionReads = Object.fromEntries(
+        Object.entries({ ...legacySessionReads, ...sessionReads })
+            .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+    );
+    const sessionReadMarkers = Object.fromEntries(
+        Object.entries(isPlainObject(parsed.sessionReadMarkers) ? parsed.sessionReadMarkers : {})
+            .filter(([, value]) => typeof value === 'string')
+    );
+
+    return {
+        serverUrl: typeof parsed.serverUrl === 'string' && parsed.serverUrl.trim()
+            ? parsed.serverUrl
+            : DEFAULT_CONFIG.serverUrl,
+        selectedIde: asNullableString(parsed.selectedIde),
+        configuredIdes: asStringArray(parsed.configuredIdes),
+        installedExtensions: asStringArray(parsed.installedExtensions),
+        userEmail: asNullableString(parsed.userEmail),
+        userName: asNullableString(parsed.userName),
+        setupCompleted: asBoolean(parsed.setupCompleted, DEFAULT_CONFIG.setupCompleted),
+        setupDate: asNullableString(parsed.setupDate),
+        enabledIdes: asStringArray(parsed.enabledIdes),
+        workspaces: Array.isArray(parsed.workspaces) ? parsed.workspaces as WorkspaceEntry[] : [],
+        defaultWorkspaceId: asNullableString(parsed.defaultWorkspaceId) ?? asNullableString(parsed.activeWorkspaceId),
+        recentActivity: Array.isArray(parsed.recentActivity) ? parsed.recentActivity as RecentActivityEntry[] : [],
+        sessionReads: mergedSessionReads,
+        sessionReadMarkers,
+        machineNickname: asNullableString(parsed.machineNickname),
+        machineId: asOptionalString(parsed.machineId),
+        machineSecret: parsed.machineSecret === null ? null : asOptionalString(parsed.machineSecret),
+        registeredMachineId: asOptionalString(parsed.registeredMachineId),
+        providerSettings: isPlainObject(parsed.providerSettings) ? parsed.providerSettings : {},
+        ideSettings: isPlainObject(parsed.ideSettings) ? parsed.ideSettings : {},
+        disableUpstream: asBoolean(parsed.disableUpstream, DEFAULT_CONFIG.disableUpstream ?? false),
+        providerDir: asOptionalString(parsed.providerDir),
+    };
+}
+
 export function generateMachineId(): string {
     return `${MACHINE_ID_PREFIX}${randomUUID().replace(/-/g, '')}`;
 }
@@ -176,14 +238,10 @@ export function loadConfig(): ADHDevConfig {
     try {
         const raw = readFileSync(configPath, 'utf-8');
         const parsed = JSON.parse(raw);
-        const merged = { ...DEFAULT_CONFIG, ...parsed } as ADHDevConfig & { activeWorkspaceId?: string | null };
-        if (merged.defaultWorkspaceId == null && merged.activeWorkspaceId != null) {
-            (merged as ADHDevConfig).defaultWorkspaceId = merged.activeWorkspaceId;
-        }
-        delete (merged as any).activeWorkspaceId;
-        const ensured = ensureMachineId(merged);
+        const normalizedInput = normalizeConfig(parsed);
+        const ensured = ensureMachineId(normalizedInput);
         const normalized = ensured.config as ADHDevConfig & { activeWorkspaceId?: string | null };
-        if (ensured.changed) {
+        if (ensured.changed || JSON.stringify(parsed) !== JSON.stringify(normalized)) {
             try {
                 saveConfig(normalized);
             } catch { /* ignore */ }
@@ -201,12 +259,13 @@ export function loadConfig(): ADHDevConfig {
 export function saveConfig(config: ADHDevConfig): void {
     const configPath = getConfigPath();
     const dir = getConfigDir();
+    const normalized = normalizeConfig(config);
 
     if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
 
-    writeFileSync(configPath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    writeFileSync(configPath, JSON.stringify(normalized, null, 2), { encoding: 'utf-8', mode: 0o600 });
     try { chmodSync(configPath, 0o600); } catch { /* Windows etc. not supported */ }
 }
 
