@@ -150,12 +150,15 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
     const handleUpgrade = async () => {
         if (!sendDaemonCommand) return
         setUpgradeState('upgrading')
-        setUpgradeMsg('Installing latest version...')
+        setUpgradeMsg('Starting upgrade...')
         try {
             const result = await sendDaemonCommand(ide.id, 'daemon_upgrade', {})
-            if (result?.result?.upgraded || result?.result?.success) {
+            if (result?.result?.alreadyLatest) {
                 setUpgradeState('done')
-                setUpgradeMsg(`Upgraded to v${(result.result as any).version || 'latest'}. Daemon is restarting...`)
+                setUpgradeMsg(`Already on v${(result.result as any).version || 'latest'}.`)
+            } else if (result?.result?.upgraded || result?.result?.success) {
+                setUpgradeState('done')
+                setUpgradeMsg(`Upgrade to v${(result.result as any).version || 'latest'} started. Daemon is restarting...`)
             } else {
                 setUpgradeState('error')
                 setUpgradeMsg((result?.result as any)?.error || 'Upgrade failed')

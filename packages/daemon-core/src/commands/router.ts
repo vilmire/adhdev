@@ -26,6 +26,7 @@ import { logCommand } from '../logging/command-log.js';
 import { getRecentLogs, LOG_PATH } from '../logging/logger.js';
 import { buildSessionEntries } from '../status/builders.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
+import { spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
 import * as fs from 'fs';
 
 // ─── Types ───
@@ -315,36 +316,41 @@ export class DaemonCommandRouter {
                     // Check latest version
                     const latest = execSync(`npm view ${pkgName} version`, { encoding: 'utf-8', timeout: 10000 }).trim();
                     LOG.info('Upgrade', `Latest ${pkgName}: v${latest}`);
+                    let currentInstalled: string | null = null;
+                    try {
+                        const currentJson = execSync(`npm ls -g ${pkgName} --depth=0 --json`, {
+                            encoding: 'utf-8',
+                            timeout: 10000,
+                            stdio: ['pipe', 'pipe', 'pipe'],
+                        }).trim();
+                        const parsed = JSON.parse(currentJson);
+                        currentInstalled = parsed?.dependencies?.[pkgName]?.version || null;
+                    } catch {
+                        // ignore ls failures; upgrade can still proceed
+                    }
 
-                    // Install latest (--force ensures native addons are rebuilt cleanly)
-                    execSync(`npm install -g ${pkgName}@latest --force`, {
-                        encoding: 'utf-8',
-                        timeout: 120000,
-                        stdio: ['pipe', 'pipe', 'pipe'],
+                    if (currentInstalled === latest) {
+                        LOG.info('Upgrade', `Already on latest version v${latest}; skipping install`);
+                        return { success: true, upgraded: false, alreadyLatest: true, version: latest };
+                    }
+
+                    spawnDetachedDaemonUpgradeHelper({
+                        packageName: pkgName,
+                        targetVersion: latest,
+                        parentPid: process.pid,
+                        restartArgv: process.argv.slice(1),
+                        cwd: process.cwd(),
+                        sessionHostAppName: process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev',
                     });
-                    LOG.info('Upgrade', `✅ Upgraded to v${latest}`);
+                    LOG.info('Upgrade', `Scheduled detached upgrade to v${latest}`);
 
-                    // Schedule restart after response is sent
+                    // Exit after the command response has been sent so the helper can replace the package cleanly.
                     setTimeout(() => {
-                        LOG.info('Upgrade', 'Restarting daemon with new version...');
-                        // Remove PID file so the new process doesn't see 'already running'
-                        try {
-                            const path = require('path');
-                            const fs = require('fs');
-                            const pidFile = path.join(process.env.HOME || process.env.USERPROFILE || '', '.adhdev', 'daemon.pid');
-                            if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
-                        } catch { /* ignore */ }
-                        const { spawn } = require('child_process');
-                        const child = spawn(process.execPath, process.argv.slice(1), {
-                            detached: true,
-                            stdio: 'ignore',
-                            env: { ...process.env },
-                        });
-                        child.unref();
+                        LOG.info('Upgrade', 'Exiting daemon so detached upgrader can continue...');
                         process.exit(0);
                     }, 3000);
 
-                    return { success: true, upgraded: true, version: latest };
+                    return { success: true, upgraded: true, version: latest, restarting: true };
                 } catch (e: any) {
                     LOG.error('Upgrade', `Failed: ${e.message}`);
                     return { success: false, error: e.message };

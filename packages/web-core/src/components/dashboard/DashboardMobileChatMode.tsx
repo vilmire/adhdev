@@ -492,11 +492,16 @@ export default function DashboardMobileChatMode({
     const handleMachineUpgrade = useCallback(async (machineId: string) => {
         try {
             setMachineActionState('loading')
-            setMachineActionMessage('Installing latest daemon…')
+            setMachineActionMessage('Starting daemon upgrade…')
             const res: any = await sendDaemonCommand(machineId, 'daemon_upgrade', {})
+            if (res?.result?.alreadyLatest) {
+                setMachineActionState('done')
+                setMachineActionMessage(`Already on v${res?.result?.version || 'latest'}.`)
+                return
+            }
             if (res?.result?.upgraded || res?.result?.success) {
                 setMachineActionState('done')
-                setMachineActionMessage(`Upgrading to v${res?.result?.version || 'latest'} and restarting…`)
+                setMachineActionMessage(`Upgrade to v${res?.result?.version || 'latest'} started. Daemon is restarting…`)
                 return
             }
             setMachineActionState('error')

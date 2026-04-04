@@ -27,6 +27,7 @@ import {
   buildStatusSnapshot,
   forwardAgentStreamsToIdeInstance,
   SessionHostPtyTransportFactory,
+  maybeRunDaemonUpgradeHelperFromEnv,
   type DaemonComponents,
   type HostedCliRuntimeDescriptor,
   type StatusResponse,
@@ -826,6 +827,11 @@ class StandaloneServer {
 // ─── CLI ───
 
 async function main(): Promise<void> {
+  const helperMode = await maybeRunDaemonUpgradeHelperFromEnv();
+  if (helperMode) {
+    return;
+  }
+
   const args = process.argv.slice(2);
   const primaryCommand = args[0] || '';
   if (primaryCommand === 'attach') {
