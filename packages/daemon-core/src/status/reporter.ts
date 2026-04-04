@@ -242,6 +242,8 @@ export class DaemonStatusReporter {
             })),
             p2p: payload.p2p,
             timestamp: now,
+            detectedIdes: payload.detectedIdes,
+            availableProviders: payload.availableProviders,
         };
         serverConn.sendMessage('status_report', wsPayload);
         LOG.debug('Server', `sent status_report (${JSON.stringify(wsPayload).length} bytes)`);

@@ -335,6 +335,8 @@ export function expandCompactDaemons(
                 version: (d as any).version,
                 serverVersion: (d as any).serverVersion,
             }),
+            ...((d as any).detectedIdes && { detectedIdes: (d as any).detectedIdes }),
+            ...((d as any).availableProviders && { availableProviders: (d as any).availableProviders }),
         } as any)
 
         for (const ide of topLevelIdeSessions) {
