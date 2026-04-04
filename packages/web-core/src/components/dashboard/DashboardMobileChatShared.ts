@@ -18,7 +18,8 @@ export interface MobileMachineCard {
     subtitle: string
     unread: number
     total: number
-    latestConversation: ActiveConversation
+    latestConversation: ActiveConversation | null
+    preview: string
 }
 
 export interface MobileMachineActionState {

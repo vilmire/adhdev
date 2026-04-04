@@ -10,7 +10,7 @@ import DashboardMobileChatInbox from './DashboardMobileChatInbox'
 import DashboardMobileMachineScreen from './DashboardMobileMachineScreen'
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared'
-import { isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
+import { getMachineDisplayName, isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
 import { normalizeTextContent } from '../../utils/text'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
 
@@ -357,35 +357,46 @@ export default function DashboardMobileChatMode({
     )
 
     const machineCards = useMemo<MobileMachineCard[]>(() => {
-        const grouped = new Map<string, MobileMachineCard>()
+        const groupedItems = new Map<string, MobileConversationListItem[]>()
 
         for (const item of items) {
             const key = item.conversation.daemonId || item.conversation.ideId
-            const existing = grouped.get(key)
-            if (!existing) {
-                grouped.set(key, {
-                    id: key,
-                    label: item.conversation.machineName || item.conversation.displaySecondary || 'Machine',
-                    subtitle: item.conversation.connectionState === 'connected'
-                        ? 'Connected'
-                        : item.conversation.connectionState || 'Unknown',
-                    unread: item.unread ? 1 : 0,
-                    total: 1,
-                    latestConversation: item.conversation,
-                })
-                continue
-            }
-            existing.total += 1
-            if (item.unread) existing.unread += 1
-            if (getConversationTimestamp(item.conversation) > getConversationTimestamp(existing.latestConversation)) {
-                existing.latestConversation = item.conversation
-            }
+            const bucket = groupedItems.get(key)
+            if (bucket) bucket.push(item)
+            else groupedItems.set(key, [item])
         }
 
-        return Array.from(grouped.values()).sort((a, b) => (
-            getConversationTimestamp(b.latestConversation) - getConversationTimestamp(a.latestConversation)
-        ))
-    }, [items])
+        return machineEntries.map((machineEntry) => {
+            const machineItems = groupedItems.get(machineEntry.id) || []
+            const latestItem = [...machineItems].sort((a, b) => b.timestamp - a.timestamp)[0] || null
+            const latestConversation = latestItem?.conversation || null
+            const unread = machineItems.filter(item => item.unread || item.requiresAction).length
+            const statusLabel = machineEntry.status === 'online'
+                ? 'Connected'
+                : machineEntry.status || 'Unknown'
+            const subtitleParts = [
+                machineEntry.platform || 'machine',
+                statusLabel,
+            ].filter(Boolean)
+
+            return {
+                id: machineEntry.id,
+                label: getMachineDisplayName(machineEntry, { fallbackId: machineEntry.id }),
+                subtitle: subtitleParts.join(' · '),
+                unread,
+                total: machineItems.length,
+                latestConversation,
+                preview: latestConversation
+                    ? `${latestConversation.displayPrimary} · ${getConversationPreview(latestConversation)}`
+                    : 'No active conversations yet. Open the machine to launch an IDE, CLI, or ACP session.',
+            }
+        }).sort((a, b) => {
+            const aTs = a.latestConversation ? getConversationTimestamp(a.latestConversation) : 0
+            const bTs = b.latestConversation ? getConversationTimestamp(b.latestConversation) : 0
+            if (bTs !== aTs) return bTs - aTs
+            return a.label.localeCompare(b.label)
+        })
+    }, [items, machineEntries])
 
     const handleOpenConversation = useCallback((conversation: ActiveConversation) => {
         setSelectedTabKey(conversation.tabKey)
@@ -588,7 +599,6 @@ export default function DashboardMobileChatMode({
                     completedItems={completedItems}
                     machineCards={machineCards}
                     getAvatarText={getAvatarText}
-                    getConversationPreview={getConversationPreview}
                     onOpenConversation={handleOpenConversation}
                     onOpenMachine={handleOpenMachine}
                     onOpenSettings={() => navigate('/settings')}

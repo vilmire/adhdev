@@ -10,7 +10,6 @@ interface DashboardMobileChatInboxProps {
     completedItems: MobileConversationListItem[]
     machineCards: MobileMachineCard[]
     getAvatarText: (primary: string) => string
-    getConversationPreview: (conversation: ActiveConversation) => string
     onOpenConversation: (conversation: ActiveConversation) => void
     onOpenMachine: (machineId: string) => void
     onOpenSettings: () => void
@@ -25,7 +24,6 @@ export default function DashboardMobileChatInbox({
     completedItems,
     machineCards,
     getAvatarText,
-    getConversationPreview,
     onOpenConversation,
     onOpenMachine,
     onOpenSettings,
@@ -88,16 +86,21 @@ export default function DashboardMobileChatInbox({
                                     <div className="dashboard-mobile-chat-card-top">
                                         <span className="dashboard-mobile-chat-card-title">{machine.label}</span>
                                         <span className="dashboard-mobile-chat-card-time">
-                                            {machine.unread > 0 ? `${machine.unread} new` : `${machine.total} chats`}
+                                            {machine.unread > 0 ? `${machine.unread} new` : machine.total > 0 ? `${machine.total} chats` : 'Idle'}
                                         </span>
                                     </div>
                                     <div className="dashboard-mobile-chat-card-subtitle">{machine.subtitle}</div>
                                     <div className="dashboard-mobile-chat-card-preview">
-                                        {machine.latestConversation.displayPrimary} · {getConversationPreview(machine.latestConversation)}
+                                        {machine.preview}
                                     </div>
                                 </div>
                             </button>
                         ))}
+                        {machineCards.length === 0 && (
+                            <div className="dashboard-mobile-chat-empty">
+                                No connected machines yet.
+                            </div>
+                        )}
                     </section>
                 )}
 
