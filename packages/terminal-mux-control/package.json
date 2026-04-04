@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/terminal-mux-control",
-  "version": "0.7.44",
+  "version": "0.7.45",
   "description": "Shared control, storage, and socket helpers for ADHDev terminal mux clients",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
