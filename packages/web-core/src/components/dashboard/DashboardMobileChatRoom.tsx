@@ -90,13 +90,30 @@ export default function DashboardMobileChatRoom({
                 </div>
             </div>
             <div className="dashboard-mobile-chat-thread">
-                {isCliTerminal ? (
-                    <CliTerminalPane
-                        activeConv={selectedConversation}
-                        terminalRef={terminalRef}
-                        handleSendChat={handleSendChat}
-                        isSendingChat={isSendingChat}
-                    />
+                {isCli ? (
+                    <>
+                        <div style={{ display: isCliTerminal ? 'flex' : 'none', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
+                            <CliTerminalPane
+                                activeConv={selectedConversation}
+                                terminalRef={terminalRef}
+                                handleSendChat={handleSendChat}
+                                isSendingChat={isSendingChat}
+                            />
+                        </div>
+                        <div style={{ display: isCliTerminal ? 'none' : 'flex', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
+                            <ChatPane
+                                activeConv={selectedConversation}
+                                ideEntry={selectedIdeEntry}
+                                showMetaChips={false}
+                                handleSendChat={handleSendChat}
+                                isSendingChat={isSendingChat}
+                                handleFocusAgent={handleFocusAgent}
+                                isFocusingAgent={isFocusingAgent}
+                                actionLogs={actionLogs}
+                                userName={userName}
+                            />
+                        </div>
+                    </>
                 ) : (
                     <ChatPane
                         key={selectedConversation.tabKey}

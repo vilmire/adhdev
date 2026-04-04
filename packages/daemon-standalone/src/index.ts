@@ -153,6 +153,11 @@ class StandaloneServer {
     return this.getCliPresentationMode(sessionId) === 'terminal';
   }
 
+  private isCliSession(sessionId: string): boolean {
+    const mode = this.getCliPresentationMode(sessionId);
+    return mode === 'chat' || mode === 'terminal';
+  }
+
   async start(options: StandaloneOptions = {}): Promise<void> {
     const port = options.port || DEFAULT_PORT;
     const host = options.host || '127.0.0.1';
@@ -168,7 +173,7 @@ class StandaloneServer {
         getServerConn: () => null,
         getP2p: () => ({
           broadcastPtyOutput: (key: string, data: string) => {
-            if (this.clients.size === 0 || !this.isTerminalCliSession(key)) return;
+            if (this.clients.size === 0 || !this.isCliSession(key)) return;
             const msg = JSON.stringify({ type: 'pty_output', sessionId: key, data });
             for (const client of this.clients) {
               if (client.readyState === 1) { // OPEN
@@ -423,9 +428,9 @@ class StandaloneServer {
       }
 
       if (action === 'snapshot' && method === 'GET') {
-        if (!this.isTerminalCliSession(sessionId)) {
+        if (!this.isCliSession(sessionId)) {
           res.writeHead(409, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'CLI session is not in terminal mode', code: 'CLI_VIEW_MODE_NOT_TERMINAL' }));
+          res.end(JSON.stringify({ error: 'CLI session runtime unavailable', code: 'CLI_RUNTIME_UNAVAILABLE' }));
           return;
         }
         void (async () => {
@@ -567,9 +572,9 @@ class StandaloneServer {
     res: import('http').ServerResponse,
     sessionId: string,
   ): Promise<void> {
-    if (!this.isTerminalCliSession(sessionId)) {
+    if (!this.isCliSession(sessionId)) {
       res.writeHead(409, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'CLI session is not in terminal mode', code: 'CLI_VIEW_MODE_NOT_TERMINAL' }));
+      res.end(JSON.stringify({ error: 'CLI session runtime unavailable', code: 'CLI_RUNTIME_UNAVAILABLE' }));
       return;
     }
 
@@ -593,7 +598,7 @@ class StandaloneServer {
 
     const writeEvent = (event: SessionHostEvent) => {
       if (event.sessionId !== sessionId) return;
-      if (!this.isTerminalCliSession(sessionId)) return;
+      if (!this.isCliSession(sessionId)) return;
       res.write(`event: ${event.type}\n`);
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     };
@@ -685,7 +690,7 @@ class StandaloneServer {
       const states = this.components.instanceManager.collectAllStates();
       for (const state of states as any[]) {
         const sessionId = typeof state?.instanceId === 'string' ? state.instanceId : '';
-        if (!sessionId || state?.category !== 'cli' || state?.mode !== 'terminal') continue;
+        if (!sessionId || state?.category !== 'cli') continue;
 
         const snapshot = await client.request<{ seq: number; text: string; truncated: boolean }>({
           type: 'get_snapshot',

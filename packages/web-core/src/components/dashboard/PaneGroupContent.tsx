@@ -71,14 +71,30 @@ const PaneGroupContent = memo(function PaneGroupContent({
                 ) : null}
             </div>
 
-            {isCliTerminal ? (
-                <CliTerminalPane
-                    activeConv={activeConv}
-                    clearToken={clearToken}
-                    terminalRef={terminalRef}
-                    handleSendChat={handleSendChat}
-                    isSendingChat={isSendingChat}
-                />
+            {activeConv.transport === 'pty' ? (
+                <>
+                    <div style={{ display: isCliTerminal ? 'flex' : 'none', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
+                        <CliTerminalPane
+                            activeConv={activeConv}
+                            clearToken={clearToken}
+                            terminalRef={terminalRef}
+                            handleSendChat={handleSendChat}
+                            isSendingChat={isSendingChat}
+                        />
+                    </div>
+                    <div style={{ display: isCliTerminal ? 'none' : 'flex', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
+                        <ChatPane
+                            activeConv={activeConv}
+                            ideEntry={ideEntry}
+                            handleSendChat={handleSendChat}
+                            isSendingChat={isSendingChat}
+                            handleFocusAgent={handleFocusAgent}
+                            isFocusingAgent={isFocusingAgent}
+                            actionLogs={actionLogs}
+                            userName={userName}
+                        />
+                    </div>
+                </>
             ) : (
                 <ChatPane
                     activeConv={activeConv}

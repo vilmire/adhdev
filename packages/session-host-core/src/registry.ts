@@ -61,8 +61,8 @@ export class SessionHostRegistry {
     };
 
     record.meta = {
-      sessionHostCols: payload.cols || 100,
-      sessionHostRows: payload.rows || 30,
+      sessionHostCols: payload.cols || 80,
+      sessionHostRows: payload.rows || 24,
       ...record.meta,
     };
 

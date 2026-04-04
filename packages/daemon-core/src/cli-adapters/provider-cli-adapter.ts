@@ -276,7 +276,7 @@ function shSingleQuote(arg: string): string {
     return `'${arg.replace(/'/g, `'\\''`)}'`;
 }
 
-function estimatePromptDisplayLines(text: string, cols = 100): number {
+function estimatePromptDisplayLines(text: string, cols = 80): number {
     const normalized = String(text || '').replace(/\r/g, '');
     if (!normalized) return 1;
     return normalized
@@ -620,8 +620,8 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         const ptyOpts = {
-            cols: 100,
-            rows: 30,
+            cols: 80,
+            rows: 24,
             cwd: this.workingDir,
             env: buildCliSpawnEnv(process.env, spawnConfig.env),
         };
@@ -684,7 +684,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.spawnAt = Date.now();
         this.startupParseGate = true;
         this.startupBuffer = '';
-        this.terminalScreen.reset(30, 100);
+        this.terminalScreen.reset(24, 80);
         this.pendingTerminalQueryTail = '';
         this.currentTurnScope = null;
         this.ready = false;

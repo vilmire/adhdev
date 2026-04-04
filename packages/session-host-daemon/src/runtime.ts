@@ -89,8 +89,8 @@ export class PtySessionRuntime {
   constructor(options: PtyRuntimeOptions) {
     this.sessionId = options.sessionId;
     this.payload = options.payload;
-    this.cols = options.payload.cols || 100;
-    this.rows = options.payload.rows || 30;
+    this.cols = options.payload.cols || 80;
+    this.rows = options.payload.rows || 24;
     this.onDataCallback = options.onData;
     this.onExitCallback = options.onExit;
   }

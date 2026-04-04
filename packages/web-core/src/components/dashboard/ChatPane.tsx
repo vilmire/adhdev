@@ -295,7 +295,7 @@ export default function ChatPane({
     }, [activeConv.messages.length, activeConv.connectionState, activeConv.status, handleFocusAgent, isFocusingAgent, isLoadingMore, panelLabel]);
 
     return (
-        <div className="flex-1 min-h-0 flex flex-col">
+        <div className="flex-1 min-h-0 w-full flex flex-col">
             {showMetaChips && (
                 <ConversationMetaChips conversation={activeConv} className="chat-pane-meta-row" />
             )}
