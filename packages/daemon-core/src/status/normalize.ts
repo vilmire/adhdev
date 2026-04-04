@@ -26,7 +26,6 @@ const STATUS_ACTIVE_CHAT_MESSAGE_LIMIT = 60;
 const STATUS_ACTIVE_CHAT_TOTAL_BYTES_LIMIT = 96 * 1024;
 const STATUS_ACTIVE_CHAT_STRING_LIMIT = 4 * 1024;
 const STATUS_ACTIVE_CHAT_FALLBACK_STRING_LIMIT = 1024;
-const STATUS_TERMINAL_HISTORY_LIMIT = 8 * 1024;
 const STATUS_INPUT_CONTENT_LIMIT = 2 * 1024;
 const STATUS_MODAL_MESSAGE_LIMIT = 2 * 1024;
 const STATUS_MODAL_BUTTON_LIMIT = 120;
@@ -139,9 +138,6 @@ export function normalizeActiveChatData<T extends ActiveChatData | null | undefi
                 truncateString(String(button || ''), STATUS_MODAL_BUTTON_LIMIT)
             ),
         } : activeChat.activeModal,
-        terminalHistory: activeChat.terminalHistory
-            ? truncateStringTail(activeChat.terminalHistory, STATUS_TERMINAL_HISTORY_LIMIT)
-            : activeChat.terminalHistory,
         inputContent: activeChat.inputContent
             ? truncateString(activeChat.inputContent, STATUS_INPUT_CONTENT_LIMIT)
             : activeChat.inputContent,

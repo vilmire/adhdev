@@ -7,6 +7,37 @@ import {
 } from '@adhdev/daemon-core';
 const SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev';
 
+function buildSessionHostEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(baseEnv)) {
+    if (typeof value !== 'string') continue;
+    env[key] = value;
+  }
+
+  for (const key of Object.keys(env)) {
+    if (
+      key === 'INIT_CWD'
+      || key === 'NO_COLOR'
+      || key === 'FORCE_COLOR'
+      || key === 'npm_command'
+      || key === 'npm_execpath'
+      || key === 'npm_node_execpath'
+      || key.startsWith('npm_')
+      || key.startsWith('npm_config_')
+      || key.startsWith('npm_package_')
+      || key.startsWith('npm_lifecycle_')
+      || key.startsWith('PNPM_')
+      || key.startsWith('YARN_')
+      || key.startsWith('BUN_')
+    ) {
+      delete env[key];
+    }
+  }
+
+  env.ADHDEV_SESSION_HOST_NAME = SESSION_HOST_APP_NAME;
+  return env;
+}
+
 function resolveSessionHostEntry(): string {
   const localCandidates = [
     path.resolve(__dirname, '../vendor/session-host-daemon/index.js'),
@@ -24,10 +55,7 @@ async function runSessionHostCli(args: string[]): Promise<number> {
   const entry = resolveSessionHostEntry();
   const child = spawn(process.execPath, [entry, ...args], {
     stdio: 'inherit',
-    env: {
-      ...process.env,
-      ADHDEV_SESSION_HOST_NAME: SESSION_HOST_APP_NAME,
-    },
+    env: buildSessionHostEnv(process.env),
   });
   return await new Promise<number>((resolve, reject) => {
     child.on('error', reject);
@@ -44,10 +72,7 @@ export async function ensureSessionHostReady(): Promise<SessionHostEndpoint> {
         detached: true,
         stdio: 'ignore',
         windowsHide: true,
-        env: {
-          ...process.env,
-          ADHDEV_SESSION_HOST_NAME: SESSION_HOST_APP_NAME,
-        },
+        env: buildSessionHostEnv(process.env),
       });
       child.unref();
     },

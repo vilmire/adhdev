@@ -2,6 +2,7 @@ import React, { useState, useCallback, useMemo } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useDaemons } from '../compat'
+import { confirmTerminalFit } from '../utils/cliViewMode'
 import { useTransport } from '../context/TransportContext'
 import type { DaemonData } from '../types'
 import { isCliConv, isCliTerminalConv, isAcpConv, getCliConversationViewMode } from '../components/dashboard/types'
@@ -270,15 +271,15 @@ export default function Dashboard() {
         return getCliConversationViewMode(activeConv)
     }, [activeConv])
 
-    const toggleActiveCliViewMode = useCallback(async () => {
+    const setActiveCliViewMode = useCallback(async (mode: 'chat' | 'terminal') => {
         if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return
         const currentMode = getCliConversationViewMode(activeConv)
-        const nextMode = currentMode === 'chat' ? 'terminal' : 'chat'
+        if (currentMode === mode) return
         try {
             await sendDaemonCommand(activeConv.daemonId || activeConv.ideId, 'set_cli_view_mode', {
                 targetSessionId: activeConv.sessionId,
                 cliType: activeConv.ideType || activeConv.agentType,
-                mode: nextMode,
+                mode,
             })
         } catch (error) {
             console.error('Failed to switch CLI view mode:', error)
@@ -287,6 +288,7 @@ export default function Dashboard() {
 
     const handleActiveCliFit = useCallback(() => {
         if (!activeConv || !isCliTerminalConv(activeConv) || isAcpConv(activeConv) || !activeConv.sessionId) return
+        if (!confirmTerminalFit()) return
         window.dispatchEvent(new CustomEvent('adhdev:fit-cli-terminal', {
             detail: { sessionId: activeConv.sessionId },
         }))
@@ -344,7 +346,7 @@ export default function Dashboard() {
                 onFitCli={handleActiveCliFit}
                 onStopCli={handleActiveCliStop}
                 activeCliViewMode={activeCliViewMode}
-                onToggleActiveCliViewMode={toggleActiveCliViewMode}
+                onSetActiveCliViewMode={setActiveCliViewMode}
                 mobileChatConversations={mobileChatConversations}
                 ides={ides}
                 actionLogs={actionLogs}

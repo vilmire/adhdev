@@ -8,6 +8,7 @@ type GhosttyVtTerminal = {
     write(data: string | Uint8Array): void;
     resize(cols: number, rows: number): void;
     formatPlainText(options?: { trim?: boolean }): string;
+    getCursorPosition(): { col: number; row: number };
     dispose(): void;
 };
 
@@ -121,6 +122,10 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
 
     getText(): string {
         return this.terminal.formatPlainText({ trim: true }) || '';
+    }
+
+    getCursorPosition(): { col: number; row: number } {
+        return this.terminal.getCursorPosition();
     }
 
     dispose(): void {

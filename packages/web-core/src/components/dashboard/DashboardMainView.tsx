@@ -19,7 +19,7 @@ interface DashboardMainViewProps {
     onFitCli: () => void
     onStopCli: () => void
     activeCliViewMode: CliConversationViewMode | null
-    onToggleActiveCliViewMode: () => void
+    onSetActiveCliViewMode: (mode: CliConversationViewMode) => void
     mobileChatConversations: ActiveConversation[]
     ides: DaemonData[]
     actionLogs: { ideId: string; text: string; timestamp: number }[]
@@ -72,7 +72,7 @@ export default function DashboardMainView({
     onFitCli,
     onStopCli,
     activeCliViewMode,
-    onToggleActiveCliViewMode,
+    onSetActiveCliViewMode,
     mobileChatConversations,
     ides,
     actionLogs,
@@ -130,7 +130,7 @@ export default function DashboardMainView({
                     onFitCli={onFitCli}
                     onStopCli={onStopCli}
                     activeCliViewMode={activeCliViewMode}
-                    onToggleCliViewMode={onToggleActiveCliViewMode}
+                    onSetCliViewMode={onSetActiveCliViewMode}
                 />
             )}
 

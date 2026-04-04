@@ -27,12 +27,10 @@ interface HistoryMessage {
 }
 
 export class ChatHistoryWriter {
- /** Last seen message count per agent (deduplication) */
+/** Last seen message count per agent (deduplication) */
     private lastSeenCounts = new Map<string, number>();
- /** Last seen message hash per agent (deduplication) */
+/** Last seen message hash per agent (deduplication) */
     private lastSeenHashes = new Map<string, Set<string>>();
- /** Last seen append-only terminal transcript per agent */
-    private lastSeenTerminal = new Map<string, string>();
     private rotated = false;
 
  /**
@@ -109,60 +107,10 @@ export class ChatHistoryWriter {
         }
     }
 
-    appendTerminalHistory(
-        agentType: string,
-        terminalHistory: string,
-        sessionTitle?: string,
-        instanceId?: string,
-    ): void {
-        const next = String(terminalHistory || '');
-        if (!next.trim()) return;
-
-        try {
-            const dedupKey = instanceId ? `${agentType}:${instanceId}:terminal` : `${agentType}:terminal`;
-            const prev = this.lastSeenTerminal.get(dedupKey) || '';
-            if (prev === next) return;
-
-            let delta = '';
-            if (!prev) {
-                delta = next;
-            } else if (next.startsWith(prev)) {
-                delta = next.slice(prev.length);
-            } else if (prev.includes(next)) {
-                this.lastSeenTerminal.set(dedupKey, next);
-                return;
-            } else {
-                delta = `\n\n[terminal snapshot reset ${new Date().toISOString()} | ${sessionTitle || agentType}]\n${next}`;
-            }
-
-            if (!delta) {
-                this.lastSeenTerminal.set(dedupKey, next);
-                return;
-            }
-
-            const dir = path.join(HISTORY_DIR, this.sanitize(agentType));
-            fs.mkdirSync(dir, { recursive: true });
-
-            const date = new Date().toISOString().slice(0, 10);
-            const filePrefix = instanceId ? `${this.sanitize(instanceId)}_` : '';
-            const filePath = path.join(dir, `${filePrefix}${date}.terminal.log`);
-            fs.appendFileSync(filePath, delta, 'utf-8');
-            this.lastSeenTerminal.set(dedupKey, next);
-
-            if (!this.rotated) {
-                this.rotated = true;
-                this.rotateOldFiles().catch(() => {});
-            }
-        } catch {
-            // Ignore terminal history save failures
-        }
-    }
-
- /** Called when agent session is explicitly changed */
+/** Called when agent session is explicitly changed */
     onSessionChange(agentType: string): void {
         this.lastSeenHashes.delete(agentType);
         this.lastSeenCounts.delete(agentType);
-        this.lastSeenTerminal.delete(`${agentType}:terminal`);
     }
 
  /** Delete history files older than 30 days */

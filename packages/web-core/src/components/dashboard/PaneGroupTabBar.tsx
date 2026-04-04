@@ -8,6 +8,7 @@ interface PaneGroupTabBarProps {
     activeTabId: string | null
     groupIndex: number
     numGroups: number
+    unreadTabKeys: Set<string>
     draggingTabRef: MutableRefObject<string | null>
     onFocus: () => void
     onSelectTab: (tabKey: string) => void
@@ -27,6 +28,7 @@ interface PaneGroupTabBarItemProps {
     conv: ActiveConversation
     isActive: boolean
     isDraggedTab: boolean
+    isTaskCompleteUnread: boolean
     shortcut?: string
     conversationKeys: string[]
     draggingTabRef: MutableRefObject<string | null>
@@ -48,6 +50,7 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
     conv,
     isActive,
     isDraggedTab,
+    isTaskCompleteUnread,
     shortcut,
     conversationKeys,
     draggingTabRef,
@@ -160,6 +163,7 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
                 opacity: isDraggedTab ? 0.4 : undefined,
             }}
         >
+            {isTaskCompleteUnread && <span className="adhdev-dockview-tab-unread-dot" aria-hidden="true" />}
             <div className="adhdev-dockview-tab-status">
                 {conv.status === 'generating' ? (
                     <div className="tab-spinner" />
@@ -204,6 +208,7 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
     prev.conv === next.conv
     && prev.isActive === next.isActive
     && prev.isDraggedTab === next.isDraggedTab
+    && prev.isTaskCompleteUnread === next.isTaskCompleteUnread
     && prev.shortcut === next.shortcut
     && prev.conversationKeys === next.conversationKeys
 ));
@@ -213,6 +218,7 @@ export default function PaneGroupTabBar({
     activeTabId,
     groupIndex,
     numGroups,
+    unreadTabKeys,
     draggingTabRef,
     onFocus,
     onSelectTab,
@@ -297,6 +303,7 @@ export default function PaneGroupTabBar({
                             conv={conv}
                             isActive={activeTabId === conv.tabKey}
                             isDraggedTab={draggingTabRef.current === conv.tabKey}
+                            isTaskCompleteUnread={unreadTabKeys.has(conv.tabKey)}
                             shortcut={tabShortcuts[conv.tabKey]}
                             conversationKeys={conversationKeys}
                             draggingTabRef={draggingTabRef}

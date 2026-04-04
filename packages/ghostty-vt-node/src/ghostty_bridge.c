@@ -88,6 +88,64 @@ int adhdev_ghostty_terminal_format_plain_text(
     return GHOSTTY_SUCCESS;
 }
 
+int adhdev_ghostty_terminal_format_vt(
+    AdhdevGhosttyTerminal* terminal,
+    char** out_text,
+    size_t* out_len) {
+    if (!terminal || !terminal->handle || !out_text || !out_len) return GHOSTTY_INVALID_VALUE;
+
+    GhosttyFormatterTerminalOptions options = GHOSTTY_INIT_SIZED(GhosttyFormatterTerminalOptions);
+    options.emit = GHOSTTY_FORMATTER_FORMAT_VT;
+    options.unwrap = false;
+    options.trim = false;
+    options.extra.palette = true;
+    options.extra.modes = true;
+    options.extra.scrolling_region = true;
+    options.extra.tabstops = true;
+    options.extra.keyboard = true;
+    options.extra.screen.cursor = true;
+    options.extra.screen.style = true;
+    options.extra.screen.hyperlink = true;
+    options.extra.screen.protection = true;
+    options.extra.screen.kitty_keyboard = true;
+    options.extra.screen.charsets = true;
+
+    GhosttyFormatter formatter = NULL;
+    GhosttyResult result = ghostty_formatter_terminal_new(NULL, &formatter, terminal->handle, options);
+    if (result != GHOSTTY_SUCCESS) return result;
+
+    uint8_t* text = NULL;
+    size_t text_len = 0;
+    result = ghostty_formatter_format_alloc(formatter, NULL, &text, &text_len);
+    ghostty_formatter_free(formatter);
+    if (result != GHOSTTY_SUCCESS) return result;
+
+    *out_text = (char*)text;
+    *out_len = text_len;
+    return GHOSTTY_SUCCESS;
+}
+
+int adhdev_ghostty_terminal_cursor_position(
+    AdhdevGhosttyTerminal* terminal,
+    uint16_t* out_col,
+    uint16_t* out_row) {
+    if (!terminal || !terminal->handle || !out_col || !out_row) return GHOSTTY_INVALID_VALUE;
+
+    GhosttyResult result = ghostty_terminal_get(
+        terminal->handle,
+        GHOSTTY_TERMINAL_DATA_CURSOR_X,
+        out_col);
+    if (result != GHOSTTY_SUCCESS) return result;
+
+    result = ghostty_terminal_get(
+        terminal->handle,
+        GHOSTTY_TERMINAL_DATA_CURSOR_Y,
+        out_row);
+    if (result != GHOSTTY_SUCCESS) return result;
+
+    return GHOSTTY_SUCCESS;
+}
+
 void adhdev_ghostty_terminal_free_text(char* text, size_t len) {
     if (!text) return;
     ghostty_free(NULL, (uint8_t*)text, len);

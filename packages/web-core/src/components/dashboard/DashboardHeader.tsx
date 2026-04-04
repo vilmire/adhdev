@@ -8,9 +8,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActiveConversation, CliConversationViewMode } from './types';
 import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
-import { IconBell, IconChat, IconScroll, IconMonitor, IconTerminal } from '../Icons';
+import { IconBell, IconChat, IconScroll, IconMonitor, IconFit, IconX } from '../Icons';
 import { useDaemons } from '../../compat';
-import { buildLiveSessionInboxStateMap, getConversationLiveInboxState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared';
+import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared';
+import CliViewModeToggle from './CliViewModeToggle';
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -24,7 +25,7 @@ export interface DashboardHeaderProps {
     onStopCli?: () => void;
     onFitCli?: () => void;
     activeCliViewMode?: CliConversationViewMode | null;
-    onToggleCliViewMode?: () => void;
+    onSetCliViewMode?: (mode: CliConversationViewMode) => void;
     onOpenConversation?: (conversation: ActiveConversation) => void;
 }
 
@@ -39,7 +40,7 @@ export default function DashboardHeader({
     onStopCli,
     onFitCli,
     activeCliViewMode,
-    onToggleCliViewMode,
+    onSetCliViewMode,
     onOpenConversation,
 }: DashboardHeaderProps) {
     const daemonCtx = useDaemons() as any;
@@ -78,14 +79,16 @@ export default function DashboardHeader({
         [conversations, liveSessionInboxState],
     );
     const inboxAttention = useMemo(
-        () => desktopInboxConversations.filter(conversation => getConversationLiveInboxState(conversation, liveSessionInboxState).inboxBucket === 'needs_attention'),
+        () => desktopInboxConversations.filter(conversation => getConversationInboxSurfaceState(conversation, liveSessionInboxState).requiresAction),
         [desktopInboxConversations, liveSessionInboxState],
     );
     const inboxUnread = useMemo(
         () => desktopInboxConversations.filter(conversation => {
-            const liveState = getConversationLiveInboxState(conversation, liveSessionInboxState);
             const isOpenConversation = activeConv?.tabKey === conversation.tabKey;
-            return liveState.inboxBucket === 'task_complete' && liveState.unread && !isOpenConversation;
+            return getConversationInboxSurfaceState(conversation, liveSessionInboxState, {
+                hideOpenTaskCompleteUnread: true,
+                isOpenConversation,
+            }).unread;
         }),
         [activeConv, desktopInboxConversations, liveSessionInboxState],
     );
@@ -196,14 +199,8 @@ export default function DashboardHeader({
                 </div>
                 {isCliActive && onStopCli && (
                     <>
-                        {onToggleCliViewMode && (
-                            <button
-                                onClick={onToggleCliViewMode}
-                                className="btn btn-secondary btn-sm"
-                                title={isCliTerminalActive ? 'Switch to parsed chat view' : 'Switch to terminal view'}
-                            >
-                                {isCliTerminalActive ? <IconChat size={16} /> : <IconTerminal size={16} />}
-                            </button>
+                        {onSetCliViewMode && effectiveCliViewMode && (
+                            <CliViewModeToggle mode={effectiveCliViewMode} onChange={onSetCliViewMode} />
                         )}
                         {isCliTerminalActive && (
                             <button
@@ -211,7 +208,7 @@ export default function DashboardHeader({
                                 className="btn btn-secondary btn-sm"
                                 title="Fit terminal to current view"
                             >
-                                Fit
+                                <IconFit size={16} />
                             </button>
                         )}
                         <button
@@ -219,7 +216,7 @@ export default function DashboardHeader({
                             className="btn btn-secondary btn-sm text-red-400 border-red-500/25 hover:bg-red-500/10"
                             title="Stop CLI process"
                         >
-                            Stop
+                            <IconX size={16} />
                         </button>
                     </>
                 )}

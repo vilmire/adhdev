@@ -67,6 +67,14 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
                     pendingClearRef.current = true;
                 }
             },
+            reset: () => {
+                if (innerRef.current && 'reset' in innerRef.current && typeof (innerRef.current as any).reset === 'function') {
+                    (innerRef.current as any).reset();
+                } else {
+                    pendingWritesRef.current = [];
+                    pendingClearRef.current = true;
+                }
+            },
             fit: () => {
                 if (innerRef.current) innerRef.current.fit();
                 else pendingFitRef.current = true;
@@ -81,7 +89,6 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
             if (!LoadedTerminal) return;
             const frame = requestAnimationFrame(() => {
                 flushPending();
-                innerRef.current?.fit();
             });
             return () => cancelAnimationFrame(frame);
         }, [LoadedTerminal]);

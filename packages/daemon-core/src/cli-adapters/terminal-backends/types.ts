@@ -13,5 +13,6 @@ export interface TerminalViewportBackend {
     resize(rows: number, cols: number): void;
     write(data: string): void;
     getText(): string;
+    getCursorPosition(): { col: number; row: number };
     dispose(): void;
 }

@@ -5,10 +5,12 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import '@xterm/xterm/css/xterm.css';
 
 export interface TerminalRendererHandle {
   write: (data: string) => void;
   clear: () => void;
+  reset: () => void;
   fit: () => void;
   bumpResize: () => void;
 }
@@ -22,11 +24,15 @@ export interface GhosttyTerminalViewProps {
   style?: React.CSSProperties;
 }
 
+const DEFAULT_TERMINAL_COLS = 100;
+const DEFAULT_TERMINAL_ROWS = 30;
+
 type TerminalLike = {
   cols: number;
   rows: number;
   write: (data: string) => void;
   clear: () => void;
+  reset?: () => void;
   open: (host: HTMLElement) => void;
   dispose: () => void;
   onData: (listener: (data: string) => void) => { dispose: () => void };
@@ -140,6 +146,10 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         if (terminalRef.current) terminalRef.current.clear();
         else pendingWritesRef.current = [];
       },
+      reset: () => {
+        if (terminalRef.current?.reset) terminalRef.current.reset();
+        else pendingWritesRef.current = [];
+      },
       fit: () => {
         fitAndReport(true);
       },
@@ -150,7 +160,6 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
 
     useEffect(() => {
       let cancelled = false;
-      let observer: ResizeObserver | null = null;
       let disposable: { dispose: () => void } | null = null;
       let termForCleanup: TerminalLike | null = null;
 
@@ -160,6 +169,8 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         if (cancelled || !containerRef.current) return;
 
         const term = new runtime.Terminal({
+          cols: DEFAULT_TERMINAL_COLS,
+          rows: DEFAULT_TERMINAL_ROWS,
           cursorBlink: true,
           cursorStyle: 'bar',
           fontSize,
@@ -196,7 +207,6 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
 
         requestAnimationFrame(() => {
           try {
-            fitAndReport(true);
             setReady(true);
             term.focus?.();
             for (const chunk of pendingWritesRef.current) term.write(chunk);
@@ -204,17 +214,8 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           } catch {}
         });
 
-        const ResizeObserverCtor = globalThis.ResizeObserver;
-        observer = ResizeObserverCtor && containerRef.current
-          ? new ResizeObserverCtor(() => {
-              requestAnimationFrame(() => fitAndReport(false));
-            })
-          : null;
-        observer?.observe(containerRef.current);
-
         if (cancelled) {
           disposable.dispose();
-          observer?.disconnect();
           term.dispose();
         }
       }
@@ -226,7 +227,6 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
       return () => {
         cancelled = true;
         lastReportedSizeRef.current = null;
-        observer?.disconnect();
         disposable?.dispose();
         termForCleanup?.dispose();
         terminalRef.current = null;

@@ -10,6 +10,7 @@ import { useDashboardConversationCommands } from '../../hooks/useDashboardConver
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace'
 import { usePaneGroupDropZone } from '../../hooks/usePaneGroupDropZone'
 import { usePaneGroupTabs } from '../../hooks/usePaneGroupTabs'
+import { buildLiveSessionInboxStateMap, isConversationTaskCompleteUnread } from './DashboardMobileChatShared'
 import { getCliConversationViewMode, isAcpConv } from './types'
 import type { ActiveConversation } from './types'
 import type { DaemonData } from '../../types'
@@ -143,6 +144,18 @@ export default function PaneGroup({
         if (!activeConv) return []
         return actionLogs.filter(log => log.ideId === activeConv.tabKey)
     }, [actionLogs, activeConv])
+    const liveSessionInboxState = useMemo(
+        () => buildLiveSessionInboxStateMap(ides),
+        [ides],
+    )
+    const unreadTabKeys = useMemo(
+        () => new Set(
+            sortedConversations
+                .filter(conversation => isConversationTaskCompleteUnread(conversation, liveSessionInboxState))
+                .map(conversation => conversation.tabKey),
+        ),
+        [liveSessionInboxState, sortedConversations],
+    )
     useDevRenderTrace('PaneGroup', {
         groupIndex,
         conversationCount: conversations.length,
@@ -175,6 +188,7 @@ export default function PaneGroup({
                 activeTabId={activeTabId}
                 groupIndex={groupIndex}
                 numGroups={numGroups}
+                unreadTabKeys={unreadTabKeys}
                 draggingTabRef={draggingTabRef}
                 onFocus={onFocus}
                 onSelectTab={selectTab}

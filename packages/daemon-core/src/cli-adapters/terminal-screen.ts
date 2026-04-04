@@ -106,6 +106,10 @@ export class TerminalScreen {
         return this.terminal.getText();
     }
 
+    getCursorPosition(): { col: number; row: number } {
+        return this.terminal.getCursorPosition();
+    }
+
     dispose(): void {
         this.terminal.dispose();
     }

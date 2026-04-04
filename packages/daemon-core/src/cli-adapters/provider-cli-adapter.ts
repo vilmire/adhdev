@@ -64,7 +64,6 @@ export interface CliSessionStatus {
     messages: CliChatMessage[];
     workingDir: string;
     activeModal: { message: string; buttons: string[] } | null;
-    terminalHistory?: string;
 }
 
 /**
@@ -90,7 +89,6 @@ export interface CliScriptInput {
     rawBuffer: string;       // Raw PTY output (with ANSI)
     recentBuffer: string;    // Recent 1000 chars (ANSI-stripped)
     screenText: string;      // Current visible screen snapshot
-    terminalHistory?: string; // Rolling append-only terminal transcript
     messages: CliChatMessage[];  // Previously parsed messages
     partialResponse: string; // Current partial response being generated
 }
@@ -100,7 +98,6 @@ interface TurnParseScope {
     startedAt: number;
     bufferStart: number;
     rawBufferStart: number;
-    terminalHistoryStart: number;
 }
 
 export interface CliProviderModule {
@@ -171,6 +168,51 @@ function stripTerminalNoise(str: string): string {
 
 function sanitizeTerminalText(str: string): string {
     return stripTerminalNoise(stripAnsi(str));
+}
+
+function buildCliSpawnEnv(baseEnv: NodeJS.ProcessEnv, overrides?: Record<string, string>): Record<string, string> {
+    const env: Record<string, string> = {};
+    const source = { ...baseEnv, ...(overrides || {}) } as NodeJS.ProcessEnv;
+
+    for (const [key, value] of Object.entries(source)) {
+        if (typeof value !== 'string') continue;
+        env[key] = value;
+    }
+
+    for (const key of Object.keys(env)) {
+        if (
+            key === 'INIT_CWD'
+            || key === 'NO_COLOR'
+            || key === 'FORCE_COLOR'
+            || key === 'npm_command'
+            || key === 'npm_execpath'
+            || key === 'npm_node_execpath'
+            || key.startsWith('npm_')
+            || key.startsWith('npm_config_')
+            || key.startsWith('npm_package_')
+            || key.startsWith('npm_lifecycle_')
+            || key.startsWith('PNPM_')
+            || key.startsWith('YARN_')
+            || key.startsWith('BUN_')
+        ) {
+            delete env[key];
+        }
+    }
+
+    return env;
+}
+
+function computeTerminalQueryTail(buffer: string): string {
+    const prefixes = ['\x1b[6n', '\x1b[?6n'];
+    const maxLength = prefixes.reduce((n, value) => Math.max(n, value.length), 0) - 1;
+    const start = Math.max(0, buffer.length - maxLength);
+    for (let i = start; i < buffer.length; i++) {
+        const suffix = buffer.slice(i);
+        if (prefixes.some((pattern) => suffix.length < pattern.length && pattern.startsWith(suffix))) {
+            return suffix;
+        }
+    }
+    return '';
 }
 
 function findBinary(name: string): string {
@@ -284,44 +326,6 @@ function promptLikelyVisible(screenText: string, promptSnippet: string): boolean
     return matched >= required;
 }
 
-function splitHistoryLines(text: string): string[] {
-    return String(text || '')
-        .split('\n')
-        .map(line => line.replace(/\s+$/, ''));
-}
-
-function normalizeHistoryLine(line: string): string {
-    return String(line || '').replace(/\s+/g, ' ').trim();
-}
-
-function mergeTerminalHistory(existing: string, snapshot: string): string {
-    const next = String(snapshot || '').trim();
-    if (!next) return existing;
-    const prev = String(existing || '').trim();
-    if (!prev) return next;
-    if (prev === next || prev.endsWith(next)) return prev;
-
-    const prevLines = splitHistoryLines(prev);
-    const nextLines = splitHistoryLines(next);
-    const prevNorm = prevLines.map(normalizeHistoryLine);
-    const nextNorm = nextLines.map(normalizeHistoryLine);
-
-    const maxOverlap = Math.min(prevLines.length, nextLines.length);
-    for (let overlap = maxOverlap; overlap >= 1; overlap -= 1) {
-        const prevTail = prevNorm.slice(prevNorm.length - overlap);
-        const nextHead = nextNorm.slice(0, overlap);
-        if (prevTail.every((line, index) => line === nextHead[index])) {
-            return [...prevLines, ...nextLines.slice(overlap)].join('\n').trim();
-        }
-    }
-
-    const compactPrev = prevNorm.join('\n');
-    const compactNext = nextNorm.join('\n');
-    if (compactPrev.includes(compactNext)) return prev;
-
-    return `${prev}\n${next}`.trim();
-}
-
 /**
  * Normalize provider.json for auto-implement approval detection.
  * Kept for backward compat with dev-server auto-impl pipeline only.
@@ -390,6 +394,7 @@ export class ProviderCliAdapter implements CliAdapter {
     private pendingOutputParseTimer: NodeJS.Timeout | null = null;
     private ptyOutputBuffer = '';
     private ptyOutputFlushTimer: NodeJS.Timeout | null = null;
+    private pendingTerminalQueryTail = '';
 
  // Server log forwarding
     private serverConn: any = null;
@@ -428,9 +433,7 @@ export class ProviderCliAdapter implements CliAdapter {
     /** Full accumulated raw PTY output (with ANSI) */
     private accumulatedRawBuffer: string = '';
     /** Current visible terminal screen snapshot */
-    private terminalScreen = new TerminalScreen(40, 120);
-    /** Rolling append-only terminal transcript built from screen snapshots */
-    private terminalHistory: string = '';
+    private terminalScreen = new TerminalScreen(30, 100);
     /** Max accumulated buffer size (last 50KB) */
     private static readonly MAX_ACCUMULATED_BUFFER = 50000;
     private currentTurnScope: TurnParseScope | null = null;
@@ -461,23 +464,17 @@ export class ProviderCliAdapter implements CliAdapter {
 
     private buildParseInput(baseMessages: CliChatMessage[], partialResponse: string, scope?: TurnParseScope | null): CliScriptInput {
         const buffer = scope
-            ? (this.sliceFromOffset(this.terminalHistory, scope.terminalHistoryStart)
-                || this.sliceFromOffset(this.accumulatedBuffer, scope.bufferStart)
-                || this.accumulatedBuffer)
+            ? (this.sliceFromOffset(this.accumulatedBuffer, scope.bufferStart) || this.accumulatedBuffer)
             : this.accumulatedBuffer;
         const rawBuffer = scope
             ? (this.sliceFromOffset(this.accumulatedRawBuffer, scope.rawBufferStart) || this.accumulatedRawBuffer)
             : this.accumulatedRawBuffer;
-        const terminalHistory = scope
-            ? (this.sliceFromOffset(this.terminalHistory, scope.terminalHistoryStart) || this.terminalHistory)
-            : this.terminalHistory;
 
         return {
             buffer,
             rawBuffer,
             recentBuffer: buffer.slice(-1000) || this.recentOutputBuffer,
             screenText: this.terminalScreen.getText(),
-            terminalHistory,
             messages: [...baseMessages],
             partialResponse,
         };
@@ -623,13 +620,10 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         const ptyOpts = {
-            cols: 120,
-            rows: 40,
+            cols: 100,
+            rows: 30,
             cwd: this.workingDir,
-            env: {
-                ...process.env,
-                ...spawnConfig.env,
-            } as Record<string, string>,
+            env: buildCliSpawnEnv(process.env, spawnConfig.env),
         };
 
         try {
@@ -650,9 +644,8 @@ export class ProviderCliAdapter implements CliAdapter {
         this.ptyProcess.onData((data: string) => {
             if (Date.now() < this.resizeSuppressUntil) return;
 
-            if (data.includes('\x1b[6n') || data.includes('\x1b[?6n')) {
-                // Some TUIs probe cursor position during startup; reply quickly even when batching parsing.
-                this.ptyProcess?.write('\x1b[1;1R');
+            if (!this.ptyProcess?.terminalQueriesHandled) {
+                this.respondToTerminalQueries(data);
             }
 
             this.pendingOutputParseBuffer += data;
@@ -691,8 +684,8 @@ export class ProviderCliAdapter implements CliAdapter {
         this.spawnAt = Date.now();
         this.startupParseGate = true;
         this.startupBuffer = '';
-        this.terminalScreen.reset(40, 120);
-        this.terminalHistory = '';
+        this.terminalScreen.reset(30, 100);
+        this.pendingTerminalQueryTail = '';
         this.currentTurnScope = null;
         this.ready = false;
         await this.ptyProcess.ready;
@@ -704,7 +697,6 @@ export class ProviderCliAdapter implements CliAdapter {
 
     private handleOutput(rawData: string): void {
         this.terminalScreen.write(rawData);
-        this.terminalHistory = mergeTerminalHistory(this.terminalHistory, this.terminalScreen.getText());
         const cleanData = sanitizeTerminalText(rawData);
 
         if (this.isWaitingForResponse && cleanData) {
@@ -1013,7 +1005,6 @@ export class ProviderCliAdapter implements CliAdapter {
             messages: [...this.committedMessages],
             workingDir: this.workingDir,
             activeModal: this.activeModal,
-            terminalHistory: this.terminalHistory,
         };
     }
 
@@ -1032,7 +1023,6 @@ export class ProviderCliAdapter implements CliAdapter {
                 id: parsed.id || 'cli_session',
                 status: parsed.status || this.currentStatus,
                 title: parsed.title || this.cliName,
-                terminalHistory: this.terminalHistory,
                 messages: parsed.messages,
                 activeModal: parsed.activeModal ?? this.activeModal,
             };
@@ -1043,7 +1033,6 @@ export class ProviderCliAdapter implements CliAdapter {
             id: 'cli_session',
             status: this.currentStatus,
             title: this.cliName,
-            terminalHistory: this.terminalHistory,
             messages: messages.slice(-50).map((message, index) => ({
                 id: `msg_${index}`,
                 role: message.role,
@@ -1114,9 +1103,8 @@ export class ProviderCliAdapter implements CliAdapter {
             startedAt: Date.now(),
             bufferStart: this.accumulatedBuffer.length,
             rawBufferStart: this.accumulatedRawBuffer.length,
-            terminalHistoryStart: this.terminalHistory.length,
         };
-        LOG.info('CLI', `[${this.cliType}] sendMessage turn scope buffer=${this.currentTurnScope.bufferStart} raw=${this.currentTurnScope.rawBufferStart} terminal=${this.currentTurnScope.terminalHistoryStart} prompt=${JSON.stringify(text).slice(0, 120)}`);
+        LOG.info('CLI', `[${this.cliType}] sendMessage turn scope buffer=${this.currentTurnScope.bufferStart} raw=${this.currentTurnScope.rawBufferStart} prompt=${JSON.stringify(text).slice(0, 120)}`);
         this.submitRetryUsed = false;
         this.submitRetryPromptSnippet = extractPromptRetrySnippet(text);
         const normalizedPromptSnippet = normalizePromptText(this.submitRetryPromptSnippet);
@@ -1304,6 +1292,7 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
         if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
         this.pendingOutputParseBuffer = '';
+        this.pendingTerminalQueryTail = '';
         if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
         this.ptyOutputBuffer = '';
         if (this.ptyProcess) {
@@ -1326,6 +1315,7 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
         if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
         this.pendingOutputParseBuffer = '';
+        this.pendingTerminalQueryTail = '';
         if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
         this.ptyOutputBuffer = '';
         if (this.ptyProcess) {
@@ -1349,12 +1339,12 @@ export class ProviderCliAdapter implements CliAdapter {
         this.syncMessageViews();
         this.accumulatedBuffer = '';
         this.accumulatedRawBuffer = '';
-        this.terminalHistory = '';
         this.currentTurnScope = null;
         this.submitRetryUsed = false;
         this.submitRetryPromptSnippet = '';
         if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
         this.pendingOutputParseBuffer = '';
+        this.pendingTerminalQueryTail = '';
         if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
         this.ptyOutputBuffer = '';
         this.terminalScreen.reset();
@@ -1413,7 +1403,6 @@ export class ProviderCliAdapter implements CliAdapter {
             structuredMessages: this.structuredMessages.slice(-20),
             messageCount: this.committedMessages.length,
             screenText: sanitizeTerminalText(this.terminalScreen.getText()).slice(-4000),
-            terminalHistory: this.terminalHistory.slice(-8000),
             currentTurnScope: this.currentTurnScope,
             startupBuffer: this.startupBuffer.slice(-4000),
             recentOutputBuffer: this.recentOutputBuffer.slice(-500),
@@ -1440,5 +1429,25 @@ export class ProviderCliAdapter implements CliAdapter {
             pendingOutputParseScheduled: !!this.pendingOutputParseTimer,
             ptyAlive: !!this.ptyProcess,
         };
+    }
+
+    private respondToTerminalQueries(data: string): void {
+        if (!this.ptyProcess || !data) return;
+
+        const combined = this.pendingTerminalQueryTail + data;
+        const regex = /\x1b\[(\?)?6n/g;
+        let match: RegExpExecArray | null;
+
+        while ((match = regex.exec(combined)) !== null) {
+            const cursor = this.terminalScreen.getCursorPosition();
+            const row = Math.max(1, (cursor.row | 0) + 1);
+            const col = Math.max(1, (cursor.col | 0) + 1);
+            const response = match[1]
+                ? `\x1b[?${row};${col}R`
+                : `\x1b[${row};${col}R`;
+            this.ptyProcess.write(response);
+        }
+
+        this.pendingTerminalQueryTail = computeTerminalQueryTail(combined);
     }
 }

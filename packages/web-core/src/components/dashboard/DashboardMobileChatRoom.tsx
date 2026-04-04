@@ -1,5 +1,5 @@
 import type { DaemonData } from '../../types'
-import { IconChevronLeft, IconMonitor, IconScroll, IconChat, IconTerminal } from '../Icons'
+import { IconChevronLeft, IconMonitor, IconScroll } from '../Icons'
 import ChatPane from './ChatPane'
 import CliTerminalPane from './CliTerminalPane'
 import ConversationMetaChips from './ConversationMetaChips'
@@ -7,6 +7,7 @@ import type { ActiveConversation, CliConversationViewMode } from './types'
 import { isCliConv } from './types'
 import { useRef } from 'react'
 import type { CliTerminalHandle } from '../CliTerminal'
+import CliViewModeToggle from './CliViewModeToggle'
 
 interface DashboardMobileChatRoomProps {
     selectedConversation: ActiveConversation
@@ -75,15 +76,8 @@ export default function DashboardMobileChatRoom({
                     </div>
                 </div>
                 <div className="dashboard-mobile-chat-toolbar">
-                    {isCli && (
-                        <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => onSetCliViewMode(isCliTerminal ? 'chat' : 'terminal')}
-                            type="button"
-                            title={isCliTerminal ? 'Switch to parsed chat view' : 'Switch to terminal view'}
-                        >
-                            {isCliTerminal ? <IconChat size={14} /> : <IconTerminal size={14} />}
-                        </button>
+                    {isCli && cliViewMode && (
+                        <CliViewModeToggle mode={cliViewMode} onChange={onSetCliViewMode} compact />
                     )}
                     <button className="btn btn-secondary btn-sm" onClick={() => onOpenHistory(selectedConversation)} type="button">
                         <IconScroll size={14} />

@@ -147,8 +147,8 @@ async function attachRuntime(target: string, readOnly = false, takeover = false)
       type: 'resize_session',
       payload: {
         sessionId: runtimeId,
-        cols: process.stdout.columns || 120,
-        rows: process.stdout.rows || 40,
+        cols: process.stdout.columns || 100,
+        rows: process.stdout.rows || 30,
       },
     }).catch(() => ({ success: false }));
   };

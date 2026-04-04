@@ -42,7 +42,6 @@ export interface ActiveChatData {
     status: string;
     messages: ChatMessage[];
     activeModal: { message: string; buttons: string[] } | null;
-    terminalHistory?: string;
     inputContent?: string;
 }
 

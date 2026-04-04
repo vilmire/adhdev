@@ -462,6 +462,21 @@
         color: var(--text-muted);
     }
 
+    .adhdev-dockview-tab-unread-dot {
+        position: absolute;
+        top: 5px;
+        right: 7px;
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: var(--accent-primary);
+        box-shadow:
+            0 0 0 2px var(--surface-primary),
+            0 0 12px color-mix(in srgb, var(--accent-primary) 32%, transparent);
+        pointer-events: none;
+        z-index: 3;
+    }
+
     .adhdev-dockview-tab-copy {
         min-width: 0;
         display: flex;

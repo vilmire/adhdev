@@ -119,6 +119,49 @@ Napi::Value FormatPlainText(const Napi::CallbackInfo& info) {
   return Napi::String::New(env, output);
 }
 
+Napi::Value FormatVT(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  TerminalBindingState* state = GetState(info);
+  if (!EnsureOpen(env, state)) return env.Null();
+
+  char* text = nullptr;
+  size_t text_len = 0;
+  const int result = adhdev_ghostty_terminal_format_vt(
+      state->terminal,
+      &text,
+      &text_len);
+  if (result != ADHDEV_GHOSTTY_SUCCESS) {
+    ThrowGhosttyError(env, "adhdev_ghostty_terminal_format_vt", result);
+    return env.Null();
+  }
+
+  std::string output(text, text_len);
+  adhdev_ghostty_terminal_free_text(text, text_len);
+  return Napi::String::New(env, output);
+}
+
+Napi::Value GetCursorPosition(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  TerminalBindingState* state = GetState(info);
+  if (!EnsureOpen(env, state)) return env.Null();
+
+  uint16_t col = 0;
+  uint16_t row = 0;
+  const int result = adhdev_ghostty_terminal_cursor_position(
+      state->terminal,
+      &col,
+      &row);
+  if (result != ADHDEV_GHOSTTY_SUCCESS) {
+    ThrowGhosttyError(env, "adhdev_ghostty_terminal_cursor_position", result);
+    return env.Null();
+  }
+
+  Napi::Object output = Napi::Object::New(env);
+  output.Set("col", Napi::Number::New(env, col));
+  output.Set("row", Napi::Number::New(env, row));
+  return output;
+}
+
 Napi::Value Dispose(const Napi::CallbackInfo& info) {
   TerminalBindingState* state = GetState(info);
   if (state && state->terminal) {
@@ -156,6 +199,8 @@ Napi::Value CreateTerminal(const Napi::CallbackInfo& info) {
   object.Set("write", Napi::Function::New(env, Write, "write", state));
   object.Set("resize", Napi::Function::New(env, Resize, "resize", state));
   object.Set("formatPlainText", Napi::Function::New(env, FormatPlainText, "formatPlainText", state));
+  object.Set("formatVT", Napi::Function::New(env, FormatVT, "formatVT", state));
+  object.Set("getCursorPosition", Napi::Function::New(env, GetCursorPosition, "getCursorPosition", state));
   object.Set("dispose", Napi::Function::New(env, Dispose, "dispose", state));
   return object;
 }

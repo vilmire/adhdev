@@ -12,6 +12,8 @@ export interface GhosttyTerminalHandle {
   write(data: string | Uint8Array): void;
   resize(cols: number, rows: number): void;
   formatPlainText(options?: GhosttyPlainTextFormatOptions): string;
+  formatVT(): string;
+  getCursorPosition(): { col: number; row: number };
   dispose(): void;
 }
 

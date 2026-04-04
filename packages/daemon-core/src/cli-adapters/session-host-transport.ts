@@ -28,6 +28,7 @@ interface SessionHostRuntimeOptions extends SessionHostPtyTransportFactoryOption
 
 class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     readonly ready: Promise<void>;
+    readonly terminalQueriesHandled = true;
 
     private readonly client: SessionHostClient;
     private readonly dataCallbacks = new Set<(data: string) => void>();

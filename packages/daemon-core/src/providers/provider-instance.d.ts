@@ -37,7 +37,6 @@ export interface ActiveChatData {
         message: string;
         buttons: string[];
     } | null;
-    terminalHistory?: string;
     inputContent?: string;
 }
 /** Standardized error reasons across all provider categories */

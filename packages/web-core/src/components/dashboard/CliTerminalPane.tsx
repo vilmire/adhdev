@@ -36,14 +36,14 @@ export default function CliTerminalPane({
         seededSnapshotSeqRef.current = 0;
         liveOutputStartedRef.current = false;
         setRuntimeReady(false);
-        terminalRef.current?.clear();
+        (terminalRef.current as any)?.reset?.();
     };
 
     const clearRuntimeView = () => {
         seededSnapshotSeqRef.current = 0;
         liveOutputStartedRef.current = false;
         setRuntimeReady(true);
-        terminalRef.current?.clear();
+        (terminalRef.current as any)?.reset?.();
     };
 
     const seedTerminal = (text: string, seq = 0) => {
@@ -51,7 +51,7 @@ export default function CliTerminalPane({
         if (seq === 0 && liveOutputStartedRef.current) return;
         seededSnapshotSeqRef.current = seq;
         setRuntimeReady(true);
-        terminalRef.current?.clear();
+        (terminalRef.current as any)?.reset?.();
         if (text) terminalRef.current?.write(text);
     };
 
@@ -125,14 +125,6 @@ export default function CliTerminalPane({
         return () => {
             window.removeEventListener('adhdev:fit-cli-terminal', handleFit as EventListener);
         };
-    }, [runtimeReady, sessionId, terminalRef]);
-
-    useEffect(() => {
-        if (!runtimeReady) return;
-        const frame = requestAnimationFrame(() => {
-            terminalRef.current?.fit();
-        });
-        return () => cancelAnimationFrame(frame);
     }, [runtimeReady, sessionId, terminalRef]);
 
     return (

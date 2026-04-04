@@ -34,6 +34,7 @@
   "author": "vilmire",
   "license": "AGPL-3.0-or-later",
   "dependencies": {
+    "@adhdev/ghostty-vt-node": "*",
     "@adhdev/session-host-core": "*",
     "node-pty": "^1.1.0"
   },

@@ -8,6 +8,24 @@ const packageDir = path.resolve(scriptDir, '..');
 const outputDir = path.join(packageDir, 'build', 'Release');
 const outputFile = path.join(outputDir, 'ghostty_vt_node.node');
 const triplet = `${process.platform}-${process.arch}-node${process.versions.modules}`;
+const sourceInputs = [
+  path.join(packageDir, 'CMakeLists.txt'),
+  path.join(packageDir, 'src', 'addon.cc'),
+  path.join(packageDir, 'src', 'ghostty_bridge.c'),
+  path.join(packageDir, 'src', 'ghostty_bridge.h'),
+];
+
+function safeMtime(filePath) {
+  try {
+    return fs.statSync(filePath).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function latestSourceMtime() {
+  return sourceInputs.reduce((latest, filePath) => Math.max(latest, safeMtime(filePath)), 0);
+}
 
 function candidatePrebuiltPaths() {
   const candidates = [];
@@ -20,9 +38,10 @@ function candidatePrebuiltPaths() {
   return candidates;
 }
 
-function installPrebuiltIfPresent() {
+function installPrebuiltIfPresent(minMtime = 0) {
   for (const candidate of candidatePrebuiltPaths()) {
     if (!fs.existsSync(candidate)) continue;
+    if (safeMtime(candidate) < minMtime) continue;
     fs.mkdirSync(outputDir, { recursive: true });
     fs.copyFileSync(candidate, outputFile);
     console.log(`[ghostty-vt-node] using prebuilt native binding from ${candidate}`);
@@ -31,12 +50,20 @@ function installPrebuiltIfPresent() {
   return false;
 }
 
-if (!installPrebuiltIfPresent() && process.env.ADHDEV_SKIP_GHOSTTY_VT_BUILD === '1') {
+const sourceMtime = latestSourceMtime();
+const outputMtime = safeMtime(outputFile);
+
+if (outputMtime >= sourceMtime && outputMtime > 0) {
+  console.log(`[ghostty-vt-node] keeping existing local build at ${outputFile}`);
+  process.exit(0);
+}
+
+if (!installPrebuiltIfPresent(sourceMtime) && process.env.ADHDEV_SKIP_GHOSTTY_VT_BUILD === '1') {
   console.log(`[ghostty-vt-node] skipping native build for ${triplet} (ADHDEV_SKIP_GHOSTTY_VT_BUILD=1)`);
   process.exit(0);
 }
 
-if (installPrebuiltIfPresent()) {
+if (installPrebuiltIfPresent(sourceMtime)) {
   process.exit(0);
 }
 

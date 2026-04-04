@@ -7,6 +7,8 @@ type XtermBufferLine = {
 type XtermBuffer = {
     length: number;
     viewportY: number;
+    cursorX?: number;
+    cursorY?: number;
     getLine(index: number): XtermBufferLine | undefined;
 };
 
@@ -70,6 +72,14 @@ export class XtermTerminalBackend implements TerminalViewportBackend {
         while (first < last && !lines[first]?.trim()) first++;
         while (last > first && !lines[last - 1]?.trim()) last--;
         return lines.slice(first, last).join('\n');
+    }
+
+    getCursorPosition(): { col: number; row: number } {
+        const buffer = this.terminal.buffer.active;
+        return {
+            col: Math.max(0, buffer.cursorX || 0),
+            row: Math.max(0, buffer.cursorY || 0),
+        };
     }
 
     dispose(): void {

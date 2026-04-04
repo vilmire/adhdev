@@ -37,6 +37,7 @@ export interface PtyRuntimeMetadata {
 export interface PtyRuntimeTransport {
   readonly pid: number;
   readonly ready: Promise<void>;
+  readonly terminalQueriesHandled?: boolean;
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(): void;
@@ -53,6 +54,7 @@ export interface PtyTransportFactory {
 
 class NodePtyRuntimeTransport implements PtyRuntimeTransport {
   readonly ready = Promise.resolve();
+  readonly terminalQueriesHandled = false;
 
   constructor(private readonly handle: any) {}
 

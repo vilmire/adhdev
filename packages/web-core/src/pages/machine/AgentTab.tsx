@@ -15,10 +15,11 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { formatIdeType, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
-import { IconChat, IconMonitor, IconSearch } from '../../components/Icons'
+import { IconChat, IconMonitor, IconSearch, IconEye, IconEyeOff, IconPlay, IconRefresh, IconX } from '../../components/Icons'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, ProviderInfo } from './types'
 import type { useMachineActions } from './useMachineActions'
 import { describeMuxOwner } from '../../utils/mux-ui'
+import CliViewModeToggle from '../../components/dashboard/CliViewModeToggle'
 
 type AgentCategory = 'ide' | 'cli' | 'acp'
 
@@ -208,6 +209,31 @@ export default function AgentTab({
             handleStopCli(entry.type, (entry as CliSessionEntry).workspace, entry.id)
         }
     }
+
+    const setCliViewMode = useCallback(async (
+        entry: CliSessionEntry,
+        mode: 'chat' | 'terminal',
+        openInDashboard = false,
+    ) => {
+        if (entry.mode === mode) {
+            if (openInDashboard && entry.sessionId) openSessionInDashboard(entry.sessionId)
+            return
+        }
+        if (!sendDaemonCommand || !entry.sessionId) {
+            if (openInDashboard && entry.sessionId) openSessionInDashboard(entry.sessionId)
+            return
+        }
+        try {
+            await sendDaemonCommand(machineId, 'set_cli_view_mode', {
+                targetSessionId: entry.sessionId,
+                cliType: entry.type,
+                mode,
+            })
+            if (openInDashboard) openSessionInDashboard(entry.sessionId)
+        } catch (error) {
+            console.error('Failed to switch CLI view mode:', error)
+        }
+    }, [machineId, openSessionInDashboard, sendDaemonCommand])
 
     // ─── Workspace Selector (shared across all categories) ───
     const workspaceSelector = (
@@ -432,6 +458,11 @@ export default function AgentTab({
                                                 <span>{(entry as any).workspace || '—'}</span>
                                                 {acp?.currentModel && <span className="text-cyan-500">🤖 {acp.currentModel}</span>}
                                                 {acp?.currentPlan && <span style={{ color: 'var(--status-warning)' }}>📋 {acp.currentPlan}</span>}
+                                                {cli?.mode && (
+                                                    <span className={cli.mode === 'chat' ? 'text-violet-400' : 'text-text-secondary'}>
+                                                        {cli.mode === 'chat' ? 'Chat view' : 'Terminal view'}
+                                                    </span>
+                                                )}
                                             </div>
                                             {cli && (cli.runtimeKey || cli.runtimeWriteOwner) && (
                                                 <div className="text-[10px] text-text-muted flex gap-2 mt-0.5 flex-wrap">
@@ -465,16 +496,16 @@ export default function AgentTab({
                                     </div>
                                     <div className="flex items-center gap-1.5">
                                         {onToggleDashboardVisibility && (
-                                            <button
-                                                onClick={() => onToggleDashboardVisibility(entry.id)}
-                                                className={`machine-btn ${
-                                                    isHidden
-                                                        ? 'text-zinc-300 border-zinc-500/30'
-                                                        : 'text-violet-400 border-violet-500/30'
+                                                <button
+                                                    onClick={() => onToggleDashboardVisibility(entry.id)}
+                                                    className={`machine-btn ${
+                                                        isHidden
+                                                            ? 'text-zinc-300 border-zinc-500/30'
+                                                            : 'text-violet-400 border-violet-500/30'
                                                 }`}
                                                 title={isHidden ? 'Show on Dashboard' : 'Hide from Dashboard'}
                                             >
-                                                {isHidden ? 'Show' : 'Hide'}
+                                                {isHidden ? <IconEye size={14} /> : <IconEyeOff size={14} />}
                                             </button>
                                         )}
                                         <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${
@@ -499,10 +530,13 @@ export default function AgentTab({
                                                         })
                                                     }}
                                                     className="machine-btn flex items-center gap-1"
+                                                    title="Open remote control"
                                                 >
-                                                    <IconMonitor size={13} /> Control
+                                                    <IconMonitor size={13} />
                                                 </button>
-                                                <button onClick={() => handleRestartIde(entry as IdeSessionEntry)} className="machine-btn" style={{ color: 'var(--status-warning)', borderColor: 'color-mix(in srgb, var(--status-warning) 30%, transparent)' }}>↻</button>
+                                                <button onClick={() => handleRestartIde(entry as IdeSessionEntry)} className="machine-btn" style={{ color: 'var(--status-warning)', borderColor: 'color-mix(in srgb, var(--status-warning) 30%, transparent)' }} title="Restart">
+                                                    <IconRefresh size={14} />
+                                                </button>
                                             </>
                                         )}
                                         {/* ACP: Chat */}
@@ -518,17 +552,26 @@ export default function AgentTab({
                                             ><IconChat size={14} /></button>
                                         )}
                                         {cli && normalizedStatus !== 'stopped' && (
-                                            <button
-                                                onClick={() => {
-                                                    const targetSessionId = (entry as CliSessionEntry).sessionId
-                                                    if (targetSessionId) openSessionInDashboard(targetSessionId)
-                                                }}
-                                                className="machine-btn flex items-center gap-1"
-                                                title="Open terminal in dashboard"
-                                                disabled={!(entry as CliSessionEntry).sessionId}
-                                            >
-                                                <IconMonitor size={13} /> Open
-                                            </button>
+                                            <>
+                                                {cli.mode && (
+                                                    <CliViewModeToggle
+                                                        mode={cli.mode}
+                                                        onChange={(mode) => void setCliViewMode(cli, mode, false)}
+                                                        compact
+                                                    />
+                                                )}
+                                                <button
+                                                    onClick={() => {
+                                                        const targetSessionId = (entry as CliSessionEntry).sessionId
+                                                        if (targetSessionId) openSessionInDashboard(targetSessionId)
+                                                    }}
+                                                    className="machine-btn flex items-center gap-1"
+                                                    title="Open current view in dashboard"
+                                                    disabled={!(entry as CliSessionEntry).sessionId}
+                                                >
+                                                    {cli.mode === 'chat' ? <IconChat size={14} /> : <IconMonitor size={13} />}
+                                                </button>
+                                            </>
                                         )}
                                         {/* All: Stop / Restart */}
                                         {normalizedStatus === 'stopped' ? (
@@ -552,11 +595,14 @@ export default function AgentTab({
                                                 }}
                                                 disabled={pendingLaunchTypes.includes(entry.type)}
                                                 className="machine-btn text-green-500 border-green-500/30"
+                                                title="Restart"
                                             >
-                                                {pendingLaunchTypes.includes(entry.type) ? '⏳' : '▶'}
+                                                {pendingLaunchTypes.includes(entry.type) ? '⏳' : <IconPlay size={14} />}
                                             </button>
                                         ) : (
-                                            <button onClick={() => handleStop(entry)} className="machine-btn text-red-500 border-red-500/30">■</button>
+                                            <button onClick={() => handleStop(entry)} className="machine-btn text-red-500 border-red-500/30" title="Stop">
+                                                <IconX size={14} />
+                                            </button>
                                         )}
                                     </div>
                                 </div>

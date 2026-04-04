@@ -12,9 +12,9 @@ function loadBinding() {
     const candidates = [
         explicitPrebuiltDir ? path.join(explicitPrebuiltDir, triplet, 'ghostty_vt_node.node') : null,
         explicitPrebuiltDir ? path.join(explicitPrebuiltDir, 'ghostty_vt_node.node') : null,
-        path.join(__dirname, 'prebuilt', triplet, 'ghostty_vt_node.node'),
         path.join(__dirname, 'build', 'Release', 'ghostty_vt_node.node'),
         path.join(__dirname, 'build', 'Debug', 'ghostty_vt_node.node'),
+        path.join(__dirname, 'prebuilt', triplet, 'ghostty_vt_node.node'),
     ].filter(Boolean);
 
     const errors = [];

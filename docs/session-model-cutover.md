@@ -90,7 +90,6 @@ type SessionEntry = {
   messages: ChatMessage[];
   activeModal: ModalInfo | null;
   inputContent: string;
-  terminalHistory?: string;
   model?: string;
   mode?: string;
   autoApprove?: string;
@@ -129,7 +128,6 @@ CLI는 PTY를 쓰더라도 세션 모델에 넣는 데 문제 없다. 핵심은 
 - `transport = 'pty'`
 - `kind = 'agent'`
 - `parentId = null`
-- `terminalHistory` 유지
 - `messages`는 parse 가능하면 채움, 없으면 빈 배열이어도 됨
 
 중요한 점:
@@ -224,7 +222,6 @@ type SessionRuntimeHandle = {
   listSessions?(): Promise<ListSessionsResult>;
   switchSession?(id: string): Promise<void>;
   resolveAction?(action: 'approve' | 'reject'): Promise<void>;
-  getTerminalState?(): { terminalHistory: string };
   writeRaw?(data: string): Promise<void>;
   resize?(cols: number, rows: number): Promise<void>;
 };

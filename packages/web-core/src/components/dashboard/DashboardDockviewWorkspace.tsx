@@ -31,6 +31,7 @@ import {
     readDashboardDockviewStoredLayout,
     writeDashboardDockviewStoredLayout,
 } from '../../utils/dashboardLayoutStorage'
+import { buildLiveSessionInboxStateMap, isConversationTaskCompleteUnread, type LiveSessionInboxState } from './DashboardMobileChatShared'
 import { getCliConversationViewMode, isAcpConv } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
@@ -64,6 +65,7 @@ interface DashboardDockviewContextValue {
     handleLaunchIde?: (ideType: string) => void
     ides: DaemonData[]
     isStandalone: boolean
+    liveSessionInboxState: Map<string, LiveSessionInboxState>
     screenshotMap: Record<string, string>
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
@@ -420,12 +422,14 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
     const isConnecting = conversation.connectionState === 'connecting' || conversation.connectionState === 'new'
     const isGenerating = conversation.status === 'generating'
     const isWaiting = conversation.status === 'waiting_approval'
+    const isTaskCompleteUnread = isConversationTaskCompleteUnread(conversation, ctx.liveSessionInboxState)
 
     return (
         <div
             className={`adhdev-dockview-tab${isActive ? ' is-active' : ''}${isGroupActive ? ' is-group-active' : ''}${isReconnecting ? ' is-reconnecting' : ''}`}
             title={conversation.displayPrimary}
         >
+            {isTaskCompleteUnread && <span className="adhdev-dockview-tab-unread-dot" aria-hidden="true" />}
             <div className="adhdev-dockview-tab-status" aria-hidden="true">
                 {isGenerating ? (
                     <div className="tab-spinner" />
@@ -501,6 +505,10 @@ export default function DashboardDockviewWorkspace({
         () => new Map(visibleConversations.map(conversation => [conversation.tabKey, conversation])),
         [visibleConversations],
     )
+    const liveSessionInboxState = useMemo(
+        () => buildLiveSessionInboxStateMap(ides),
+        [ides],
+    )
     const contextValue = useMemo<DashboardDockviewContextValue>(() => ({
         actionLogs,
         clearedTabs,
@@ -509,6 +517,7 @@ export default function DashboardDockviewWorkspace({
         handleLaunchIde,
         ides,
         isStandalone,
+        liveSessionInboxState,
         screenshotMap,
         sendDaemonCommand,
         setActionLogs,
@@ -524,6 +533,7 @@ export default function DashboardDockviewWorkspace({
         handleLaunchIde,
         ides,
         isStandalone,
+        liveSessionInboxState,
         screenshotMap,
         sendDaemonCommand,
         setActionLogs,

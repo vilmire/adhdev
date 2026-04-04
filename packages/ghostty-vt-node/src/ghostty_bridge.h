@@ -35,6 +35,16 @@ int adhdev_ghostty_terminal_format_plain_text(
     char** out_text,
     size_t* out_len);
 
+int adhdev_ghostty_terminal_format_vt(
+    AdhdevGhosttyTerminal* terminal,
+    char** out_text,
+    size_t* out_len);
+
+int adhdev_ghostty_terminal_cursor_position(
+    AdhdevGhosttyTerminal* terminal,
+    uint16_t* out_col,
+    uint16_t* out_row);
+
 void adhdev_ghostty_terminal_free_text(char* text, size_t len);
 void adhdev_ghostty_terminal_destroy(AdhdevGhosttyTerminal* terminal);
 const char* adhdev_ghostty_result_message(int result);

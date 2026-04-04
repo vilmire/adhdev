@@ -10,7 +10,7 @@ import DashboardMobileChatInbox from './DashboardMobileChatInbox'
 import DashboardMobileMachineScreen from './DashboardMobileMachineScreen'
 import { compareConversationRecency, getConversationActivityAt, getConversationTimestamp } from './conversation-sort'
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
-import { buildLiveSessionInboxStateMap, getConversationLiveInboxState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared'
+import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, getConversationLiveInboxState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared'
 import { compareMachineEntries, getDaemonEntryActivityAt, getMachineDisplayName, isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
 import { normalizeTextContent } from '../../utils/text'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
@@ -207,30 +207,19 @@ export default function DashboardMobileChatMode({
         const liveState = getConversationLiveInboxState(conversation, liveSessionInboxState)
         const timestamp = getConversationActivityAt(conversation, liveState.lastUpdated)
         const preview = getConversationPreview(conversation)
-        const daemonBucket = liveState.inboxBucket || 'idle'
-        const isWorking = daemonBucket === 'working'
-        const requiresAction = daemonBucket === 'needs_attention'
         const isOpenConversation = screen === 'chat' && selectedConversation?.tabKey === conversation.tabKey
-        const unread = (
-            daemonBucket === 'task_complete'
-            && !isOpenConversation
-            && liveState.unread
-        )
-        const inboxBucket: MobileConversationListItem['inboxBucket'] = requiresAction
-            ? 'needs_attention'
-            : isWorking
-                ? 'working'
-                : unread
-                    ? 'task_complete'
-                    : 'idle'
+        const surfaceState = getConversationInboxSurfaceState(conversation, liveSessionInboxState, {
+            hideOpenTaskCompleteUnread: true,
+            isOpenConversation,
+        })
         return {
             conversation,
             timestamp,
             preview,
-            unread,
-            requiresAction,
-            isWorking,
-            inboxBucket,
+            unread: surfaceState.unread,
+            requiresAction: surfaceState.requiresAction,
+            isWorking: surfaceState.isWorking,
+            inboxBucket: surfaceState.inboxBucket,
         }
     }).sort((a, b) => {
         const timestampDiff = b.timestamp - a.timestamp
@@ -582,6 +571,7 @@ export default function DashboardMobileChatMode({
                     cliViewMode={selectedCliViewMode}
                     onSetCliViewMode={async mode => {
                         if (!selectedConversation) return
+                        if (selectedCliViewMode === mode) return
                         try {
                             await sendDaemonCommand(selectedConversation.daemonId || selectedConversation.ideId, 'set_cli_view_mode', {
                                 targetSessionId: selectedConversation.sessionId,

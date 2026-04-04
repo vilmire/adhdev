@@ -44,7 +44,7 @@ export class CliProviderInstance implements ProviderInstance {
     ) {
         this.type = provider.type;
         this.instanceId = instanceId || crypto.randomUUID();
-        this.presentationMode = 'terminal';
+        this.presentationMode = 'chat';
         this.adapter = new ProviderCliAdapter(provider as any as CliProviderModule, workingDir, cliArgs, transportFactory);
         this.monitor = new StatusMonitor();
         this.historyWriter = new ChatHistoryWriter();
@@ -92,15 +92,6 @@ export class CliProviderInstance implements ProviderInstance {
 
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
 
-        if (adapterStatus.terminalHistory?.trim()) {
-            this.historyWriter.appendTerminalHistory(
-                this.type,
-                adapterStatus.terminalHistory,
-                `${this.provider.name} · ${dirName}`,
-                this.instanceId,
-            );
-        }
-
         return {
             type: this.type,
             name: this.provider.name,
@@ -113,7 +104,6 @@ export class CliProviderInstance implements ProviderInstance {
                 status: parsedStatus?.status || adapterStatus.status,
                 messages: Array.isArray(parsedStatus?.messages) ? parsedStatus.messages : [],
                 activeModal: parsedStatus?.activeModal ?? adapterStatus.activeModal,
-                terminalHistory: adapterStatus.terminalHistory,
                 inputContent: '',
             },
             workspace: this.workingDir,

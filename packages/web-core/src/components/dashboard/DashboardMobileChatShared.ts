@@ -36,6 +36,13 @@ export interface LiveSessionInboxState {
     surfaceHidden: boolean
 }
 
+export interface ConversationInboxSurfaceState {
+    unread: boolean
+    requiresAction: boolean
+    isWorking: boolean
+    inboxBucket: RecentSessionBucket
+}
+
 function normalizeInboxState(source: {
     unread?: boolean
     lastSeenAt?: number
@@ -99,6 +106,41 @@ export function getConversationLiveInboxState(
         inboxBucket: 'idle',
         surfaceHidden: false,
     }
+}
+
+export function getConversationInboxSurfaceState(
+    conversation: ActiveConversation,
+    stateBySessionId: Map<string, LiveSessionInboxState>,
+    options?: { hideOpenTaskCompleteUnread?: boolean; isOpenConversation?: boolean },
+): ConversationInboxSurfaceState {
+    const liveState = getConversationLiveInboxState(conversation, stateBySessionId)
+    const requiresAction = liveState.inboxBucket === 'needs_attention'
+    const isWorking = liveState.inboxBucket === 'working'
+    const unread = (
+        liveState.inboxBucket === 'task_complete'
+        && liveState.unread
+        && !(options?.hideOpenTaskCompleteUnread && options?.isOpenConversation)
+    )
+
+    return {
+        unread,
+        requiresAction,
+        isWorking,
+        inboxBucket: requiresAction
+            ? 'needs_attention'
+            : isWorking
+                ? 'working'
+                : unread
+                    ? 'task_complete'
+                    : 'idle',
+    }
+}
+
+export function isConversationTaskCompleteUnread(
+    conversation: ActiveConversation,
+    stateBySessionId: Map<string, LiveSessionInboxState>,
+) {
+    return getConversationInboxSurfaceState(conversation, stateBySessionId).unread
 }
 
 export function isHiddenNativeIdeParentConversation(

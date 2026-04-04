@@ -158,7 +158,7 @@ export class SessionHostServer extends EventEmitter {
           return { success: true, result: record };
         }
         case 'get_snapshot':
-          return { success: true, result: this.registry.getSnapshot(request.payload.sessionId, request.payload.sinceSeq) };
+          return { success: true, result: this.getSnapshot(request.payload.sessionId, request.payload.sinceSeq) };
         case 'clear_session_buffer': {
           const record = this.registry.clearBuffer(request.payload.sessionId);
           this.persistNow(record.sessionId);
@@ -264,8 +264,27 @@ export class SessionHostServer extends EventEmitter {
   private persistNow(sessionId: string): void {
     const record = this.registry.getSession(sessionId);
     if (!record) return;
-    const snapshot = this.registry.getSnapshot(sessionId);
+    const snapshot = this.getSnapshot(sessionId);
     this.storage.save(record, snapshot);
+  }
+
+  private getSnapshot(sessionId: string, sinceSeq?: number) {
+    const snapshot = this.registry.getSnapshot(sessionId, sinceSeq);
+    if (typeof sinceSeq === 'number') {
+      return snapshot;
+    }
+
+    const runtime = this.runtimes.get(sessionId);
+    const runtimeText = runtime?.getSnapshotText?.() || '';
+    if (!runtimeText) {
+      return snapshot;
+    }
+
+    return {
+      ...snapshot,
+      text: runtimeText,
+      truncated: false,
+    };
   }
 
   flushAllPersistence(): void {
@@ -346,8 +365,8 @@ export class SessionHostServer extends EventEmitter {
       category: record.category,
       workspace: record.workspace,
       launchCommand: record.launchCommand,
-      cols: typeof record.meta?.sessionHostCols === 'number' ? (record.meta.sessionHostCols as number) : 120,
-      rows: typeof record.meta?.sessionHostRows === 'number' ? (record.meta.sessionHostRows as number) : 40,
+      cols: typeof record.meta?.sessionHostCols === 'number' ? (record.meta.sessionHostCols as number) : 100,
+      rows: typeof record.meta?.sessionHostRows === 'number' ? (record.meta.sessionHostRows as number) : 30,
       meta: record.meta,
     };
   }
