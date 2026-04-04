@@ -17,10 +17,7 @@ export declare function validateWorkspacePath(absPath: string): {
 };
 /** Default workspace label from path */
 export declare function defaultWorkspaceLabel(absPath: string): string;
-/**
- * Ensure config.workspaces exists; seed from recentCliWorkspaces once (same paths).
- */
-export declare function migrateWorkspacesFromRecent(config: ADHDevConfig): ADHDevConfig;
+
 export declare function getDefaultWorkspacePath(config: ADHDevConfig): string | null;
 export declare function getWorkspaceState(config: ADHDevConfig): {
     workspaces: WorkspaceEntry[];

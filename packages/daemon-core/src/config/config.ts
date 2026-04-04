@@ -16,8 +16,6 @@ export type { RecentActivityEntry } from './recent-activity.js';
 export interface ADHDevConfig {
  // Server connection
     serverUrl: string;
-    apiToken: string | null;
-    connectionToken: string | null;
 
  // Selected IDE (primary)
     selectedIde: string | null;
@@ -28,16 +26,6 @@ export interface ADHDevConfig {
  // Installed extensions
     installedExtensions: string[];
 
- // User preferences
-    autoConnect: boolean;
-    /**
-     * @deprecated Not read at runtime. Notification preferences are now managed by:
-     * - Web UI layer: useNotificationPrefs (localStorage)
-     * - Daemon layer: per-provider settings (approvalAlert, longGeneratingAlert)
-     * Kept for backward config compat — will be removed in v0.7+.
-     */
-    notifications: boolean;
-
  // Auth
     userEmail: string | null;
     userName: string | null;
@@ -45,9 +33,6 @@ export interface ADHDevConfig {
  // Setup state
     setupCompleted: boolean;
     setupDate: string | null;
-
- // Configured CLI agents
-    configuredCLIs: string[];
 
  // Daemon: which IDEs to connect (empty = all)
     enabledIdes: string[];
@@ -70,20 +55,15 @@ export interface ADHDevConfig {
     /**
      * Stable local machine ID (prefix: `mach_`) — generated locally on first run.
      * Used as daemon instance key (`daemon_<machineId>`) and in status reports.
-     * NOT the same as the server-side D1 `machines.id` — see `registeredMachineId`.
      */
     machineId?: string;
 
- // Machine secret for server auth (replaces connectionToken)
+ // Machine secret for server auth
     machineSecret?: string | null;
 
     /**
      * Server-side D1 `machines.id` — the row ID assigned when daemon registers via
-     * `POST /cli/complete`. Corresponds to `machineId` in server DO context
-     * (`DaemonConnection.machineId`, `StatusContext.machineId`).
-     *
-     * Naming differs from server-side `machineId` to avoid confusion with the local
-     * `config.machineId` (mach_ prefix) which is a different value.
+     * `POST /cli/complete`. Used as fallback for machine lookup on re-auth.
      *
      * @deprecated Legacy bridge field — will be removed after 2026-04-06.
      * Modern auth flow uses `machineSecret` (adm_) to identify machines.
@@ -108,18 +88,13 @@ export interface ADHDevConfig {
 
 const DEFAULT_CONFIG: ADHDevConfig = {
     serverUrl: 'https://api.adhf.dev',
-    apiToken: null,
-    connectionToken: null,
     selectedIde: null,
     configuredIdes: [],
     installedExtensions: [],
-    autoConnect: true,
-    notifications: true,
     userEmail: null,
     userName: null,
     setupCompleted: false,
     setupDate: null,
-    configuredCLIs: [],
     enabledIdes: [],
     workspaces: [],
     defaultWorkspaceId: null,
@@ -275,16 +250,4 @@ export function isSetupComplete(): boolean {
  */
 export function resetConfig(): void {
     saveConfig({ ...DEFAULT_CONFIG });
-}
-
-/**
- * Generate a connection token for server authentication
- */
-export function generateConnectionToken(): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let token = 'db_';
-    for (let i = 0; i < 32; i++) {
-        token += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return token;
 }
