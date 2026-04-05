@@ -3,7 +3,53 @@ import * as path from 'path';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import type { CreateSessionPayload } from '@adhdev/session-host-core';
-import { createTerminal, type GhosttyTerminalHandle } from '@adhdev/ghostty-vt-node';
+
+type TerminalMirrorHandle = {
+  write(data: string | Uint8Array): void;
+  resize(cols: number, rows: number): void;
+  formatVT(): string;
+  getCursorPosition(): { col: number; row: number };
+  dispose(): void;
+};
+
+type GhosttyTerminalHandle = {
+  write(data: string | Uint8Array): void;
+  resize(cols: number, rows: number): void;
+  formatVT(): string;
+  getCursorPosition(): { col: number; row: number };
+  dispose(): void;
+};
+
+type GhosttyBinding = {
+  createTerminal(options: { cols: number; rows: number; scrollback: number }): GhosttyTerminalHandle;
+};
+
+type XtermBufferLine = {
+  translateToString(trimRight?: boolean): string;
+};
+
+type XtermBuffer = {
+  length: number;
+  viewportY: number;
+  cursorX?: number;
+  cursorY?: number;
+  getLine(index: number): XtermBufferLine | undefined;
+};
+
+type XtermTerminal = {
+  buffer: { active: XtermBuffer };
+  write(data: string, callback?: () => void): void;
+  resize(cols: number, rows: number): void;
+  dispose(): void;
+};
+
+type XtermCtor = new (options: { cols: number; rows: number; scrollback: number }) => XtermTerminal;
+
+let terminalMirrorFactory:
+  | ((options: { cols: number; rows: number; scrollback: number }) => TerminalMirrorHandle)
+  | null
+  | undefined;
+let terminalMirrorWarning: string | null = null;
 
 if (os.platform() !== 'win32') {
   try {
@@ -74,6 +120,98 @@ function computeTerminalQueryTail(buffer: string): string {
   return '';
 }
 
+function formatXtermViewport(terminal: XtermTerminal, rows: number): string {
+  const buffer = terminal.buffer.active;
+  const start = Math.max(0, buffer.viewportY || 0);
+  const end = Math.max(start, Math.min(buffer.length || 0, start + Math.max(1, rows | 0)));
+  const lines: string[] = [];
+
+  for (let i = start; i < end; i++) {
+    const line = buffer.getLine(i);
+    lines.push(line ? line.translateToString(true) : '');
+  }
+
+  let first = 0;
+  let last = lines.length;
+  while (first < last && !lines[first]?.trim()) first++;
+  while (last > first && !lines[last - 1]?.trim()) last--;
+  return lines.slice(first, last).join('\n');
+}
+
+function createXtermMirror(options: { cols: number; rows: number; scrollback: number }): TerminalMirrorHandle {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const mod = require('@xterm/xterm');
+  const Terminal = (mod.Terminal || mod.default?.Terminal || mod.default) as XtermCtor | undefined;
+  if (!Terminal) {
+    throw new Error('@xterm/xterm Terminal export not found');
+  }
+
+  let currentRows = Math.max(1, options.rows | 0);
+  const terminal = new Terminal({
+    cols: Math.max(1, options.cols | 0),
+    rows: currentRows,
+    scrollback: Math.max(0, options.scrollback | 0),
+  });
+
+  return {
+    write(data: string | Uint8Array): void {
+      if (!data) return;
+      terminal.write(typeof data === 'string' ? data : Buffer.from(data).toString('utf8'));
+    },
+    resize(cols: number, rows: number): void {
+      currentRows = Math.max(1, rows | 0);
+      terminal.resize(Math.max(1, cols | 0), currentRows);
+    },
+    formatVT(): string {
+      return formatXtermViewport(terminal, currentRows);
+    },
+    getCursorPosition(): { col: number; row: number } {
+      const buffer = terminal.buffer.active;
+      return {
+        col: Math.max(0, buffer.cursorX || 0),
+        row: Math.max(0, buffer.cursorY || 0),
+      };
+    },
+    dispose(): void {
+      terminal.dispose();
+    },
+  };
+}
+
+function normalizeGhosttyBinding(mod: any): GhosttyBinding | null {
+  if (mod?.default?.createTerminal) return mod.default as GhosttyBinding;
+  if (mod?.createTerminal) return mod as GhosttyBinding;
+  return null;
+}
+
+function getTerminalMirrorFactory(): (options: { cols: number; rows: number; scrollback: number }) => TerminalMirrorHandle {
+  if (terminalMirrorFactory) return terminalMirrorFactory;
+  if (terminalMirrorFactory === null) {
+    throw new Error(terminalMirrorWarning || 'No terminal mirror backend available');
+  }
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const ghosttyMod = require('@adhdev/ghostty-vt-node');
+    const binding = normalizeGhosttyBinding(ghosttyMod);
+    if (!binding) {
+      throw new Error('@adhdev/ghostty-vt-node does not export createTerminal()');
+    }
+    terminalMirrorFactory = (options) => binding.createTerminal(options);
+    return terminalMirrorFactory;
+  } catch (ghosttyError: any) {
+    try {
+      terminalMirrorFactory = createXtermMirror;
+      terminalMirrorWarning = `Ghostty VT unavailable; falling back to xterm mirror (${ghosttyError?.message || String(ghosttyError)})`;
+      return terminalMirrorFactory;
+    } catch (xtermError: any) {
+      terminalMirrorFactory = null;
+      terminalMirrorWarning = `No terminal mirror backend available (ghostty: ${ghosttyError?.message || String(ghosttyError)}; xterm: ${xtermError?.message || String(xtermError)})`;
+      throw new Error(terminalMirrorWarning);
+    }
+  }
+}
+
 export class PtySessionRuntime {
   readonly sessionId: string;
   readonly payload: CreateSessionPayload;
@@ -81,7 +219,7 @@ export class PtySessionRuntime {
   readonly rows: number;
 
   private ptyProcess: IPty | null = null;
-  private screenMirror: GhosttyTerminalHandle | null = null;
+  private screenMirror: TerminalMirrorHandle | null = null;
   private pendingQueryScanTail = '';
   private onDataCallback: (data: string) => void;
   private onExitCallback: (exitCode: number | null) => void;
@@ -110,7 +248,7 @@ export class PtySessionRuntime {
       cwd,
       env,
     });
-    this.screenMirror = createTerminal({
+    this.screenMirror = getTerminalMirrorFactory()({
       cols: this.cols,
       rows: this.rows,
       scrollback: 32768,

@@ -36,6 +36,7 @@
   "dependencies": {
     "@adhdev/ghostty-vt-node": "*",
     "@adhdev/session-host-core": "*",
+    "@xterm/xterm": "^6.0.0",
     "node-pty": "^1.1.0"
   },
   "devDependencies": {
