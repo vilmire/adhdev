@@ -6,6 +6,7 @@ import DashboardHeader from './DashboardHeader'
 import DashboardMobileChatMode from './DashboardMobileChatMode'
 import DashboardPaneWorkspace from './DashboardPaneWorkspace'
 import DashboardDockviewWorkspace from './DashboardDockviewWorkspace'
+import type { DashboardMobileSection } from './DashboardMobileBottomNav'
 
 interface DashboardMainViewProps {
     showMobileChatMode: boolean
@@ -32,6 +33,8 @@ interface DashboardMainViewProps {
     onRequestedMobileTabConsumed: () => void
     requestedMachineId: string | null
     onRequestedMachineConsumed: () => void
+    requestedMobileSection: DashboardMobileSection | null
+    onRequestedMobileSectionConsumed: () => void
     containerRef: React.RefObject<HTMLDivElement>
     isSplitMode: boolean
     numGroups: number
@@ -88,6 +91,8 @@ export default function DashboardMainView({
     onRequestedMobileTabConsumed,
     requestedMachineId,
     onRequestedMachineConsumed,
+    requestedMobileSection,
+    onRequestedMobileSectionConsumed,
     containerRef,
     isSplitMode,
     numGroups,
@@ -173,6 +178,8 @@ export default function DashboardMainView({
                     onRequestedActiveTabConsumed={onRequestedMobileTabConsumed}
                     requestedMachineId={requestedMachineId}
                     onRequestedMachineConsumed={onRequestedMachineConsumed}
+                    requestedMobileSection={requestedMobileSection}
+                    onRequestedMobileSectionConsumed={onRequestedMobileSectionConsumed}
                     onOpenHistory={onOpenHistory}
                     onOpenRemote={onOpenRemote}
                     wsStatus={wsStatus}

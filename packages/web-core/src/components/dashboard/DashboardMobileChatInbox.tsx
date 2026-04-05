@@ -2,9 +2,10 @@ import { IconBell, IconSettings } from '../Icons'
 import InstallCommand from '../InstallCommand'
 import { formatRelativeTime, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
+import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 
 interface DashboardMobileChatInboxProps {
-    section: 'machines' | 'chats' | 'settings'
+    section: DashboardMobileSection
     attentionItems: MobileConversationListItem[]
     unreadItems: MobileConversationListItem[]
     workingItems: MobileConversationListItem[]
@@ -17,7 +18,7 @@ interface DashboardMobileChatInboxProps {
     onShowAllHidden: () => void
     onOpenMachine: (machineId: string) => void
     onOpenSettings: () => void
-    onSectionChange: (section: 'machines' | 'chats' | 'settings') => void
+    onSectionChange: (section: DashboardMobileSection) => void
     wsStatus?: string
     isConnected?: boolean
     isStandalone?: boolean
@@ -459,22 +460,7 @@ export default function DashboardMobileChatInbox({
                 )}
             </div>
 
-            <div className="dashboard-mobile-chat-nav">
-                {([
-                    ['machines', 'Machines'],
-                    ['chats', 'Chats'],
-                    ['settings', 'Settings'],
-                ] as const).map(([key, label]) => (
-                    <button
-                        key={key}
-                        className={`dashboard-mobile-chat-nav-tab${section === key ? ' is-active' : ''}`}
-                        onClick={() => onSectionChange(key)}
-                        type="button"
-                    >
-                        {label}
-                    </button>
-                ))}
-            </div>
+            <DashboardMobileBottomNav section={section} onSectionChange={onSectionChange} />
         </>
     )
 }

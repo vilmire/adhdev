@@ -8,6 +8,7 @@ import { useDashboardConversationCommands } from '../../hooks/useDashboardConver
 import DashboardMobileChatRoom from './DashboardMobileChatRoom'
 import DashboardMobileChatInbox from './DashboardMobileChatInbox'
 import DashboardMobileMachineScreen from './DashboardMobileMachineScreen'
+import type { DashboardMobileSection } from './DashboardMobileBottomNav'
 import { compareConversationRecency, getConversationActivityAt, getConversationSortTimestamp, getConversationTimestamp } from './conversation-sort'
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
 import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, getConversationLiveInboxState } from './DashboardMobileChatShared'
@@ -31,6 +32,8 @@ interface DashboardMobileChatModeProps {
     onRequestedActiveTabConsumed?: () => void
     requestedMachineId?: string | null
     onRequestedMachineConsumed?: () => void
+    requestedMobileSection?: DashboardMobileSection | null
+    onRequestedMobileSectionConsumed?: () => void
     onOpenHistory: (conversation?: ActiveConversation) => void
     onOpenRemote: (conversation: ActiveConversation) => void
     wsStatus?: string
@@ -83,6 +86,8 @@ export default function DashboardMobileChatMode({
     onRequestedActiveTabConsumed,
     requestedMachineId,
     onRequestedMachineConsumed,
+    requestedMobileSection,
+    onRequestedMobileSectionConsumed,
     onOpenHistory,
     onOpenRemote,
     wsStatus,
@@ -92,7 +97,7 @@ export default function DashboardMobileChatMode({
 }: DashboardMobileChatModeProps) {
     const [selectedTabKey, setSelectedTabKey] = useState<string | null>(() => conversations[0]?.tabKey || null)
     const [screen, setScreen] = useState<'inbox' | 'chat' | 'machine'>(() => (conversations[0] ? 'chat' : 'inbox'))
-    const [section, setSection] = useState<'machines' | 'chats' | 'settings'>('chats')
+    const [section, setSection] = useState<DashboardMobileSection>('chats')
     const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null)
     const [machineBackTarget, setMachineBackTarget] = useState<'inbox' | 'chat'>('inbox')
     const [machineActionState, setMachineActionState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
@@ -207,6 +212,13 @@ export default function DashboardMobileChatMode({
         setScreen('machine')
         onRequestedMachineConsumed?.()
     }, [machineEntries, onRequestedMachineConsumed, requestedMachineId])
+
+    useEffect(() => {
+        if (!requestedMobileSection) return
+        setSection(requestedMobileSection)
+        setScreen('inbox')
+        onRequestedMobileSectionConsumed?.()
+    }, [onRequestedMobileSectionConsumed, requestedMobileSection])
 
     const items = useMemo<MobileConversationListItem[]>(() => conversations.map(conversation => {
         const timestamp = getConversationSortTimestamp(conversation)
@@ -608,7 +620,13 @@ export default function DashboardMobileChatMode({
                     selectedMachineNeedsUpgrade={selectedMachineNeedsUpgrade}
                     appVersion={appVersion}
                     machineAction={{ state: machineActionState, message: machineActionMessage }}
+                    section={section}
+                    showBottomNav={machineBackTarget === 'inbox'}
                     onBack={handleBackFromMachine}
+                    onSectionChange={(nextSection) => {
+                        setSection(nextSection)
+                        setScreen('inbox')
+                    }}
                     onOpenConversation={handleOpenConversation}
                     onOpenRecent={handleOpenRecent}
                     onOpenMachineDetails={() => navigate(`/machines/${selectedMachineEntry.id}`)}

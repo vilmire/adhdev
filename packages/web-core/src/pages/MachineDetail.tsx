@@ -47,9 +47,20 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const allIdes: DaemonData[] = daemonCtx.ides || []
     const initialLoaded: boolean = daemonCtx.initialLoaded ?? true
     const machineEntry = allIdes.find(i => i.id === machineId && (i as any).daemonMode)
+    const isStandalone = allIdes.some(entry => entry.type === 'adhdev-daemon')
     const [activeTab, setActiveTab] = useState<TabId>('workspace')
     const [workspaceCategoryHint, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
     const logsEndRef = useRef<HTMLDivElement>(null)
+
+    const handleBack = () => {
+        if (isStandalone) {
+            navigate('/dashboard', {
+                state: { mobileSection: 'machines' as const },
+            })
+            return
+        }
+        navigate('/machines')
+    }
 
     // ─── Actions hook ────────────────────────────────
     const actions = useMachineActions({
@@ -158,7 +169,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             <div className="p-10 text-center text-text-muted">
                 <h2 className="text-text-primary">Machine not found</h2>
                 <p className="mt-3">The machine may be offline or not yet connected.</p>
-                <button onClick={() => navigate('/machines')} className="machine-btn-back">← Back to Burrows</button>
+                <button onClick={handleBack} className="machine-btn-back">← Back</button>
             </div>
         )
     }
@@ -276,7 +287,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             <div className="dashboard-header machine-detail-header !flex-col !items-stretch">
                 <div className="flex items-center justify-between w-full">
                     <div className="machine-detail-header-row flex items-center gap-2 md:gap-3.5 w-full min-w-0">
-                        <button onClick={() => navigate('/machines')} className="machine-btn-back flex shrink-0">
+                        <button onClick={handleBack} className="machine-btn-back flex shrink-0">
                             ←
                         </button>
                         <div className="machine-detail-title-wrap min-w-0">

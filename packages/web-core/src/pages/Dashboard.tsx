@@ -25,6 +25,7 @@ import DashboardOverlays from '../components/dashboard/DashboardOverlays'
 import type { SavedSessionHistoryEntry } from '../components/dashboard/HistoryModal'
 import DashboardVersionBanner from '../components/dashboard/DashboardVersionBanner'
 import type { Toast } from '../components/dashboard/ToastContainer'
+import type { DashboardMobileSection } from '../components/dashboard/DashboardMobileBottomNav'
 import { getMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
 import { getConversationTimestamp } from '../components/dashboard/conversation-sort'
@@ -37,6 +38,7 @@ export default function Dashboard() {
     const urlActiveTab = searchParams.get('activeTab')
     const requestedRemoteTabTarget = (location.state as { openRemoteForTabKey?: string } | null)?.openRemoteForTabKey || null
     const requestedMachineId = (location.state as { openMachineId?: string } | null)?.openMachineId || null
+    const requestedMobileSection = (location.state as { mobileSection?: DashboardMobileSection } | null)?.mobileSection || null
 
     const daemonCtx = useDaemons() as any
     const { updateIdeChats, screenshotMap, setScreenshotMap } = daemonCtx
@@ -465,6 +467,10 @@ export default function Dashboard() {
                 onRequestedMobileTabConsumed={consumeRequestedActiveTab}
                 requestedMachineId={requestedMachineId}
                 onRequestedMachineConsumed={() => {
+                    navigate(location.pathname + location.search, { replace: true, state: null })
+                }}
+                requestedMobileSection={requestedMobileSection}
+                onRequestedMobileSectionConsumed={() => {
                     navigate(location.pathname + location.search, { replace: true, state: null })
                 }}
                 containerRef={containerRef}

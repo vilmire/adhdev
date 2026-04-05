@@ -5,6 +5,7 @@ import type { ActiveConversation } from './types'
 import type { MachineRecentLaunch, WorkspaceLaunchKind } from '../../pages/machine/types'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getMachineDisplayName } from '../../utils/daemon-utils'
+import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 
 interface LaunchProviderInfo {
     type: string
@@ -21,7 +22,10 @@ interface DashboardMobileMachineScreenProps {
     selectedMachineNeedsUpgrade: boolean
     appVersion: string | null
     machineAction: MobileMachineActionState
+    section: DashboardMobileSection
+    showBottomNav: boolean
     onBack: () => void
+    onSectionChange: (section: DashboardMobileSection) => void
     onOpenConversation: (conversation: ActiveConversation) => void
     onOpenRecent: (launch: MachineRecentLaunch) => void
     onOpenMachineDetails: () => void
@@ -40,7 +44,10 @@ export default function DashboardMobileMachineScreen({
     selectedMachineNeedsUpgrade,
     appVersion,
     machineAction,
+    section,
+    showBottomNav,
     onBack,
+    onSectionChange,
     onOpenConversation,
     onOpenRecent,
     onOpenMachineDetails,
@@ -363,6 +370,9 @@ export default function DashboardMobileMachineScreen({
                     </div>
                 </section>
             </div>
+            {showBottomNav && (
+                <DashboardMobileBottomNav section={section} onSectionChange={onSectionChange} />
+            )}
         </>
     )
 }
