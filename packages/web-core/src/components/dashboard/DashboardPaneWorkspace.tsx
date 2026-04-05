@@ -12,8 +12,6 @@ interface DashboardPaneWorkspaceProps {
     clearedTabs: Record<string, number>
     ides: DaemonData[]
     actionLogs: { ideId: string; text: string; timestamp: number }[]
-    screenshotMap: Record<string, string>
-    setScreenshotMap: (m: Record<string, string>) => void
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     setLocalUserMessages: React.Dispatch<React.SetStateAction<Record<string, any[]>>>
     setActionLogs: React.Dispatch<React.SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
@@ -43,8 +41,6 @@ export default function DashboardPaneWorkspace({
     clearedTabs,
     ides,
     actionLogs,
-    screenshotMap,
-    setScreenshotMap,
     sendDaemonCommand,
     setLocalUserMessages,
     setActionLogs,
@@ -95,8 +91,6 @@ export default function DashboardPaneWorkspace({
                             clearedTabs={clearedTabs}
                             ides={ides}
                             actionLogs={actionLogs}
-                            screenshotMap={screenshotMap}
-                            setScreenshotMap={setScreenshotMap}
                             sendDaemonCommand={sendDaemonCommand}
                             setLocalUserMessages={setLocalUserMessages}
                             setActionLogs={setActionLogs}

@@ -496,6 +496,14 @@ export interface ResolvedProvider extends ProviderModule {
   _resolvedVersion?: string;
  /** Warning when detected version is not in compatibility matrix */
   _versionWarning?: string;
+ /** On-disk provider directory selected by ProviderLoader */
+  _resolvedProviderDir?: string;
+ /** Script directory selected by compatibility/default resolution */
+  _resolvedScriptDir?: string;
+ /** scripts.js path or fallback script directory used to build runtime scripts */
+  _resolvedScriptsPath?: string;
+ /** Why this script selection was chosen */
+  _resolvedScriptsSource?: string;
 }
 
 // ─── Provider Settings ─────────────────────────────────

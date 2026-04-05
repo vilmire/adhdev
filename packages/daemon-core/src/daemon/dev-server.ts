@@ -29,7 +29,7 @@ import { generateTemplate as genScaffoldTemplate, generateFiles as genScaffoldFi
 import { VersionArchive, detectAllVersions } from '../providers/version-archive.js';
 import { LOG } from '../logging/logger.js';
 import { handleCdpEvaluate, handleCdpClick, handleCdpDomQuery, handleScreenshot, handleScriptsRun, handleTypeAndSend, handleTypeAndSendAt, handleScriptHints, handleCdpTargets, handleDomInspect, handleDomChildren, handleDomAnalyze, handleFindCommon, handleFindByText, handleDomContext } from './dev-cdp-handlers.js';
-import { handleCliStatus, handleCliLaunch, handleCliSend, handleCliStop, handleCliDebug, handleCliResolve, handleCliRaw, handleCliSSE } from './dev-cli-debug.js';
+import { handleCliStatus, handleCliLaunch, handleCliSend, handleCliStop, handleCliDebug, handleCliTrace, handleCliExercise, handleCliFixtureCapture, handleCliFixtureList, handleCliFixtureReplay, handleCliResolve, handleCliRaw, handleCliSSE } from './dev-cli-debug.js';
 import { handleAutoImplement, handleAutoImplCancel, handleAutoImplSSE } from './dev-auto-implement.js';
 
 export const DEV_SERVER_PORT = 19280;
@@ -102,11 +102,16 @@ export class DevServer implements DevServerContext {
     { method: 'GET',  pattern: '/api/cli/status',           handler: (q, s) => this.handleCliStatus(q, s) },
     { method: 'POST', pattern: '/api/cli/launch',           handler: (q, s) => this.handleCliLaunch(q, s) },
     { method: 'POST', pattern: '/api/cli/send',             handler: (q, s) => this.handleCliSend(q, s) },
+    { method: 'POST', pattern: '/api/cli/exercise',         handler: (q, s) => this.handleCliExercise(q, s) },
+    { method: 'POST', pattern: '/api/cli/fixture/capture',  handler: (q, s) => this.handleCliFixtureCapture(q, s) },
+    { method: 'POST', pattern: '/api/cli/fixture/replay',   handler: (q, s) => this.handleCliFixtureReplay(q, s) },
     { method: 'POST', pattern: '/api/cli/resolve',           handler: (q, s) => this.handleCliResolve(q, s) },
     { method: 'POST', pattern: '/api/cli/raw',               handler: (q, s) => this.handleCliRaw(q, s) },
     { method: 'POST', pattern: '/api/cli/stop',              handler: (q, s) => this.handleCliStop(q, s) },
     { method: 'GET',  pattern: '/api/cli/events',            handler: (q, s) => this.handleCliSSE(q, s) },
     { method: 'GET',  pattern: /^\/api\/cli\/debug\/([^/]+)$/, handler: (q, s, p) => this.handleCliDebug(p![0], q, s) },
+    { method: 'GET',  pattern: /^\/api\/cli\/trace\/([^/]+)$/, handler: (q, s, p) => this.handleCliTrace(p![0], q, s) },
+    { method: 'GET',  pattern: /^\/api\/cli\/fixtures\/([^/]+)$/, handler: (q, s, p) => this.handleCliFixtureList(p![0], q, s) },
     // Dynamic routes (provider :type param)
     { method: 'POST', pattern: /^\/api\/providers\/([^/]+)\/script$/,                handler: (q, s, p) => this.handleRunScript(p![0], q, s) },
     { method: 'GET',  pattern: /^\/api\/providers\/([^/]+)\/files$/,                 handler: (q, s, p) => this.handleListFiles(p![0], q, s) },
@@ -1472,6 +1477,7 @@ export class DevServer implements DevServerContext {
     lines.push('### 2. Inspect parsed + raw adapter state');
     lines.push('```bash');
     lines.push(`curl -sS http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/debug/${type}`);
+    lines.push(`curl -sS http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/trace/${type}`);
     lines.push(`curl -sS http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/status`);
     lines.push('```');
     lines.push('');
@@ -1618,6 +1624,19 @@ export class DevServer implements DevServerContext {
     return handleCliSend(this, req, res);
   }
 
+  /** POST /api/cli/exercise — launch/send/approve/wait helper for provider-fix loops */
+  private async handleCliExercise(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    return handleCliExercise(this, req, res);
+  }
+
+  private async handleCliFixtureCapture(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    return handleCliFixtureCapture(this, req, res);
+  }
+
+  private async handleCliFixtureReplay(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    return handleCliFixtureReplay(this, req, res);
+  }
+
   /** POST /api/cli/stop — stop a running CLI { type } */
   private async handleCliStop(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     return handleCliStop(this, req, res);
@@ -1638,6 +1657,15 @@ export class DevServer implements DevServerContext {
   /** GET /api/cli/debug/:type — full internal debug state of a CLI adapter */
   private async handleCliDebug(type: string, _req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     return handleCliDebug(this, type, _req, res);
+  }
+
+  /** GET /api/cli/trace/:type — recent CLI trace timeline plus current debug snapshot */
+  private async handleCliTrace(type: string, _req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    return handleCliTrace(this, type, _req, res);
+  }
+
+  private async handleCliFixtureList(type: string, _req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    return handleCliFixtureList(this, type, _req, res);
   }
 
   /** POST /api/cli/resolve — resolve an approval modal { type, buttonIndex } */

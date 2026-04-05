@@ -87,7 +87,7 @@ export default function OverviewTab({
                         onChange={e => setNewWorkspacePath(e.target.value)}
                         onKeyDown={e => e.key === 'Enter' && void (async () => { if (await handleWorkspaceAdd(newWorkspacePath)) setNewWorkspacePath('') })()}
                     />
-                    <button type="button" className="machine-btn text-xs px-3 py-1.5" disabled={workspaceBusy} onClick={async () => { if (await handleWorkspaceAdd(newWorkspacePath)) setNewWorkspacePath('') }}>
+                    <button type="button" className="btn bg-[#ffffff0a] hover:bg-[#ffffff14] text-text-muted hover:text-text-primary px-3 py-1.5 rounded transition-colors text-xs" disabled={workspaceBusy} onClick={async () => { if (await handleWorkspaceAdd(newWorkspacePath)) setNewWorkspacePath('') }}>
                         Add
                     </button>
                 </div>

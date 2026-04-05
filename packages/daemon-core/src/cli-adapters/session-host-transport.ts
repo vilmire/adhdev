@@ -11,6 +11,7 @@ import type { PtyRuntimeMetadata, PtyRuntimeTransport, PtySpawnOptions, PtyTrans
 interface SessionHostPtyTransportFactoryOptions {
     endpoint?: SessionHostEndpoint;
     appName?: string;
+    ensureReady?: () => Promise<void>;
     clientId: string;
     runtimeId: string;
     providerType: string;
@@ -191,7 +192,18 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     }
 
     private async boot(): Promise<void> {
-        await this.client.connect();
+        if (typeof this.options.ensureReady === 'function') {
+            await this.options.ensureReady();
+        }
+        try {
+            await this.client.connect();
+        } catch (error) {
+            if (typeof this.options.ensureReady !== 'function') {
+                throw error;
+            }
+            await this.options.ensureReady();
+            await this.client.connect();
+        }
         this.unsubscribe = this.client.onEvent((event: SessionHostEvent) => this.handleEvent(event));
 
         let record: SessionHostRecord | null = null;

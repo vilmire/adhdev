@@ -135,21 +135,21 @@ export default function DashboardMobileMachineScreen({
 
     return (
         <>
-            <div className="dashboard-mobile-chat-header">
-                <div className="dashboard-mobile-chat-header-row">
+            <div className="flex items-center justify-between gap-3 px-4 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-3 border-b border-border-subtle/70 bg-bg-primary backdrop-blur-md">
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <button
-                        className="dashboard-mobile-chat-back"
+                        className="w-[34px] h-[34px] rounded-full border border-border-default bg-surface-primary/70 text-text-secondary shrink-0 inline-flex items-center justify-center hover:bg-surface-primary transition-colors"
                         onClick={onBack}
                         type="button"
                         aria-label="Back"
                     >
                         <IconChevronLeft size={18} />
                     </button>
-                    <div className="dashboard-mobile-chat-title-block">
-                        <div className="dashboard-mobile-chat-title">
+                    <div className="min-w-0 flex flex-col gap-0.5">
+                        <div className="flex items-center gap-2 text-[17px] font-extrabold tracking-tight text-text-primary truncate">
                             {getMachineDisplayName(selectedMachineEntry, { fallbackId: selectedMachineEntry.id })}
                         </div>
-                        <div className="dashboard-mobile-chat-subtitle">
+                        <div className="min-w-0 flex items-center flex-wrap gap-1.5 text-xs text-text-secondary truncate">
                             {(selectedMachineEntry.platform || 'machine')}
                             {selectedMachineEntry.version ? ` · v${selectedMachineEntry.version}` : ''}
                         </div>
@@ -157,30 +157,30 @@ export default function DashboardMobileMachineScreen({
                 </div>
             </div>
 
-            <div className="dashboard-mobile-chat-inbox">
+            <div className="flex-1 min-h-0 overflow-y-auto py-2 flex flex-col gap-2 -webkit-overflow-scrolling-touch">
                 {hasRecentItems && (
-                    <section className="dashboard-mobile-chat-section">
-                        <div className="dashboard-mobile-chat-section-title">Recent</div>
-                        <div className="dashboard-mobile-machine-command-grid">
+                    <section className="flex flex-col gap-0">
+                        <div className="text-[11px] font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Recent</div>
+                        <div className="grid grid-cols-1 gap-2.5 px-4">
                             {visibleRecentCards.map(card => (
                                 <button
                                     key={card.key}
-                                    className={`dashboard-mobile-machine-command-card${card.unread ? ' is-primary' : ''}`}
+                                    className={`flex flex-col gap-1 w-full text-left p-[14px] rounded-2xl border ${card.unread ? 'border-accent-primary/25 bg-accent-primary/5' : 'border-border-default/80 bg-surface-primary/90'} text-text-primary`}
                                     type="button"
                                     onClick={card.onClick}
                                 >
-                                    <span className="dashboard-mobile-machine-command-label">{card.primary}</span>
-                                    <span className="dashboard-mobile-machine-command-meta">
+                                    <span className="text-sm font-bold text-text-primary">{card.primary}</span>
+                                    <span className="text-xs leading-relaxed text-text-secondary">
                                         {card.secondary}
                                     </span>
                                 </button>
                             ))}
                         </div>
                         {recentCards.length > 5 && (
-                            <div className="dashboard-mobile-machine-more-row">
+                            <div className="flex justify-center px-4 pt-2">
                                 <button
                                     type="button"
-                                    className="dashboard-mobile-machine-more-btn"
+                                    className="min-h-[34px] px-3.5 rounded-full border border-border-default/80 bg-surface-primary/90 text-text-secondary text-xs font-bold"
                                     onClick={() => setShowAllRecent(current => !current)}
                                 >
                                     {showAllRecent ? 'Show fewer' : `Show ${recentCards.length - 5} more`}
@@ -191,12 +191,12 @@ export default function DashboardMobileMachineScreen({
                 )}
 
                 {(hasIdeOptions || cliProviders.length > 0 || acpProviders.length > 0) && (
-                    <section className="dashboard-mobile-chat-section">
-                        <div className="dashboard-mobile-chat-section-title">Start</div>
-                        <div className="dashboard-mobile-machine-command-grid">
-                            <div className="dashboard-mobile-machine-workspace-card">
-                                <div className="dashboard-mobile-machine-command-label">Workspace</div>
-                                <div className="dashboard-mobile-machine-command-meta">
+                    <section className="flex flex-col gap-0">
+                        <div className="text-[11px] font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Start</div>
+                        <div className="grid grid-cols-1 gap-2.5 px-4">
+                            <div className="flex flex-col gap-2.5 w-full p-3.5 rounded-2xl border border-border-default/80 bg-surface-primary/90">
+                                <div className="text-sm font-bold text-text-primary">Workspace</div>
+                                <div className="text-xs leading-relaxed text-text-secondary">
                                     Pick a saved workspace or enter a path before choosing IDE, CLI, or ACP.
                                 </div>
                                 <select
@@ -205,7 +205,7 @@ export default function DashboardMobileMachineScreen({
                                         setWorkspaceChoice(event.target.value)
                                         if (event.target.value !== '__custom__') setCustomWorkspacePath('')
                                     }}
-                                    className="dashboard-mobile-machine-workspace-select"
+                                    className="w-full rounded-xl border border-border-default/90 bg-bg-primary/90 text-text-primary px-3 py-3 text-sm"
                                 >
                                     {workspaceRows.length > 0 ? (
                                         <>
@@ -228,11 +228,11 @@ export default function DashboardMobileMachineScreen({
                                             value={customWorkspacePath}
                                             onChange={(event) => setCustomWorkspacePath(event.target.value)}
                                             placeholder="/absolute/path"
-                                            className="dashboard-mobile-machine-workspace-input"
+                                            className="w-full rounded-xl border border-border-default/90 bg-bg-primary/90 text-text-primary px-3 py-3 text-sm"
                                         />
                                         <button
                                             type="button"
-                                            className="dashboard-mobile-machine-workspace-save"
+                                            className="inline-flex items-center justify-center min-h-[40px] rounded-xl border border-accent-primary/30 bg-accent-primary/10 text-text-primary text-[13px] font-bold"
                                             onClick={() => {
                                                 if (!resolvedWorkspacePath) return
                                                 onAddWorkspace(resolvedWorkspacePath)
@@ -243,14 +243,14 @@ export default function DashboardMobileMachineScreen({
                                     </>
                                 )}
                                 {resolvedWorkspacePath && (
-                                    <div className="dashboard-mobile-machine-workspace-preview">{resolvedWorkspacePath}</div>
+                                    <div className="text-[11px] leading-relaxed text-text-muted break-all">{resolvedWorkspacePath}</div>
                                 )}
                             </div>
                         </div>
-                        <div className="dashboard-mobile-machine-openwith">
+                        <div className="grid grid-cols-3 gap-2 px-4">
                             {hasIdeOptions && (
                                 <button
-                                    className={`dashboard-mobile-machine-openwith-btn${activeLauncherKind === 'ide' ? ' is-active' : ''}`}
+                                    className={`min-h-[40px] rounded-full border text-xs font-bold ${activeLauncherKind === 'ide' ? 'border-accent-primary/30 bg-accent-primary/10 text-text-primary' : 'border-border-default/80 bg-surface-primary/90 text-text-secondary'}`}
                                     type="button"
                                     onClick={() => setActiveLauncherKind('ide')}
                                 >
@@ -259,7 +259,7 @@ export default function DashboardMobileMachineScreen({
                             )}
                             {cliProviders.length > 0 && (
                                 <button
-                                    className={`dashboard-mobile-machine-openwith-btn${activeLauncherKind === 'cli' ? ' is-active' : ''}`}
+                                    className={`min-h-[40px] rounded-full border text-xs font-bold ${activeLauncherKind === 'cli' ? 'border-accent-primary/30 bg-accent-primary/10 text-text-primary' : 'border-border-default/80 bg-surface-primary/90 text-text-secondary'}`}
                                     type="button"
                                     onClick={() => setActiveLauncherKind('cli')}
                                 >
@@ -268,7 +268,7 @@ export default function DashboardMobileMachineScreen({
                             )}
                             {acpProviders.length > 0 && (
                                 <button
-                                    className={`dashboard-mobile-machine-openwith-btn${activeLauncherKind === 'acp' ? ' is-active' : ''}`}
+                                    className={`min-h-[40px] rounded-full border text-xs font-bold ${activeLauncherKind === 'acp' ? 'border-accent-primary/30 bg-accent-primary/10 text-text-primary' : 'border-border-default/80 bg-surface-primary/90 text-text-secondary'}`}
                                     type="button"
                                     onClick={() => setActiveLauncherKind('acp')}
                                 >
@@ -277,27 +277,27 @@ export default function DashboardMobileMachineScreen({
                             )}
                         </div>
                         {activeLauncherKind && (
-                            <div className="dashboard-mobile-machine-provider-picker">
-                                <div className="dashboard-mobile-machine-provider-title">
+                            <div className="flex flex-col gap-2.5 px-4 pt-3">
+                                <div className="text-xs font-bold text-text-secondary">
                                     {activeLauncherKind === 'ide'
                                         ? 'Choose an IDE'
                                         : activeLauncherKind === 'cli'
                                             ? 'Choose a CLI provider'
                                             : 'Choose an ACP provider'}
                                 </div>
-                                <div className="dashboard-mobile-machine-provider-grid">
+                                <div className="grid grid-cols-1 gap-2">
                                     {activeLauncherKind === 'ide'
                                         ? (selectedMachineEntry.detectedIdes || []).slice(0, 6).map(ide => (
                                             <button
                                                 key={ide.type}
                                                 type="button"
-                                                className="dashboard-mobile-machine-provider-btn"
+                                                className="flex flex-col items-start gap-1 w-full text-left p-3 rounded-2xl border border-border-default/80 bg-surface-primary/90 text-text-primary"
                                                 onClick={() => onLaunchDetectedIde(ide.type, {
                                                     workspacePath: resolvedWorkspacePath || null,
                                                 })}
                                             >
-                                                <span className="dashboard-mobile-machine-provider-name">{ide.name}</span>
-                                                <span className="dashboard-mobile-machine-provider-meta">
+                                                <span className="text-[13px] font-bold text-text-primary">{ide.name}</span>
+                                                <span className="text-[11px] leading-relaxed text-text-muted break-all">
                                                     {resolvedWorkspacePath || 'Use selected workspace'}
                                                 </span>
                                             </button>
@@ -306,16 +306,16 @@ export default function DashboardMobileMachineScreen({
                                             <button
                                                 key={provider.type}
                                                 type="button"
-                                                className="dashboard-mobile-machine-provider-btn"
+                                                className="flex flex-col items-start gap-1 w-full text-left p-3 rounded-2xl border border-border-default/80 bg-surface-primary/90 text-text-primary"
                                                 onClick={() => onLaunchWorkspaceProvider(activeLauncherKind, provider.type, {
                                                     workspaceId: workspaceChoice !== '__custom__' ? workspaceChoice : null,
                                                     workspacePath: resolvedWorkspacePath || null,
                                                 })}
                                             >
-                                                <span className="dashboard-mobile-machine-provider-name">
+                                                <span className="text-[13px] font-bold text-text-primary">
                                                     {provider.icon ? `${provider.icon} ` : ''}{provider.displayName}
                                                 </span>
-                                                <span className="dashboard-mobile-machine-provider-meta">
+                                                <span className="text-[11px] leading-relaxed text-text-muted break-all">
                                                     {resolvedWorkspacePath || 'Use selected workspace'}
                                                 </span>
                                             </button>
@@ -324,13 +324,13 @@ export default function DashboardMobileMachineScreen({
                             </div>
                         )}
                         {machineAction.message && (
-                            <div className={`dashboard-mobile-machine-action-note is-${machineAction.state}`}>
+                            <div className={`mx-4 mt-2.5 p-3 rounded-xl text-xs leading-relaxed ${machineAction.state === 'error' ? 'text-status-error bg-status-error/10' : 'text-text-secondary bg-surface-primary/90'}`}>
                                 {machineAction.message}
                                 {canCreateMissingWorkspace && (
-                                    <div className="dashboard-mobile-machine-action-cta-row">
+                                    <div className="mt-2">
                                         <button
                                             type="button"
-                                            className="dashboard-mobile-machine-action-cta"
+                                            className="inline-flex items-center justify-center min-h-[34px] px-4 rounded-lg bg-surface-primary text-text-primary font-bold text-xs"
                                             onClick={() => onAddWorkspace(resolvedWorkspacePath, { createIfMissing: true })}
                                         >
                                             Create folder
@@ -342,28 +342,28 @@ export default function DashboardMobileMachineScreen({
                     </section>
                 )}
 
-                <section className="dashboard-mobile-chat-section">
-                    <div className="dashboard-mobile-chat-section-title">Inspect</div>
-                    <div className="dashboard-mobile-machine-command-grid">
+                <section className="flex flex-col gap-0">
+                    <div className="text-[11px] font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Inspect</div>
+                    <div className="grid grid-cols-1 gap-2.5 px-4">
                         {selectedMachineNeedsUpgrade && (
                             <button
-                                className="dashboard-mobile-machine-command-card is-primary"
+                                className="flex flex-col gap-1 w-full text-left p-[14px] rounded-2xl border border-accent-primary/25 bg-accent-primary/5 text-text-primary"
                                 type="button"
                                 onClick={onMachineUpgrade}
                             >
-                                <span className="dashboard-mobile-machine-command-label">Update to v{appVersion}</span>
-                                <span className="dashboard-mobile-machine-command-meta">
+                                <span className="text-sm font-bold text-text-primary">Update to v{appVersion}</span>
+                                <span className="text-xs leading-relaxed text-text-secondary">
                                     Restart this machine with the latest daemon
                                 </span>
                             </button>
                         )}
                         <button
-                            className="dashboard-mobile-machine-command-card"
+                            className="flex flex-col gap-1 w-full text-left p-[14px] rounded-2xl border border-border-default/80 bg-surface-primary/90 text-text-primary"
                             type="button"
                             onClick={onOpenMachineDetails}
                         >
-                            <span className="dashboard-mobile-machine-command-label">Machine details</span>
-                            <span className="dashboard-mobile-machine-command-meta">
+                            <span className="text-sm font-bold text-text-primary">Machine details</span>
+                            <span className="text-xs leading-relaxed text-text-secondary">
                                 Sessions, providers, system info, and logs
                             </span>
                         </button>

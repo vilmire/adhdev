@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRe
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace'
 import { useTabShortcuts } from '../../hooks/useTabShortcuts'
 import type { ActiveConversation } from './types'
+import { getConversationViewStates } from './DashboardMobileChatShared'
 
 interface PaneGroupTabBarProps {
     conversations: ActiveConversation[]
@@ -70,9 +71,10 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
     longPressTimer,
     isGroupActive,
 }: PaneGroupTabBarItemProps) {
-    const tabClass = conv.status === 'generating' ? 'agent-tab-generating'
-        : conv.status === 'waiting_approval' ? 'agent-tab-waiting' : ''
-    const isReconnecting = conv.connectionState === 'failed' || conv.connectionState === 'closed'
+    const viewStates = getConversationViewStates(conv)
+    const tabClass = viewStates.isGenerating ? 'agent-tab-generating'
+        : viewStates.isWaiting ? 'agent-tab-waiting' : ''
+    const isReconnecting = viewStates.isReconnecting
 
     const handleDragStart = useCallback((e: React.DragEvent<HTMLDivElement>) => {
         draggingTabRef.current = conv.tabKey
@@ -169,13 +171,13 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
         >
             {isTaskCompleteUnread && <span className="adhdev-dockview-tab-unread-dot" aria-hidden="true" />}
             <div className="adhdev-dockview-tab-status">
-                {conv.status === 'generating' ? (
+                {viewStates.isGenerating ? (
                     <div className="tab-spinner" />
-                ) : conv.status === 'waiting_approval' ? (
+                ) : viewStates.isWaiting ? (
                     <span className="adhdev-dockview-tab-status-text is-waiting">▲</span>
                 ) : isReconnecting ? (
                     <span className="adhdev-dockview-tab-reconnecting">○</span>
-                ) : conv.connectionState === 'connecting' || conv.connectionState === 'new' ? (
+                ) : viewStates.isConnecting ? (
                     <div className="tab-connecting-spinner" />
                 ) : conv.connectionState === 'connected' ? (
                     <span className="adhdev-dockview-tab-status-text is-connected">●</span>
@@ -188,7 +190,7 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
                 <span className="adhdev-dockview-tab-meta">
                     {isReconnecting ? (
                         <span className="adhdev-dockview-tab-reconnecting">Reconnecting…</span>
-                    ) : (conv.connectionState === 'connecting' || conv.connectionState === 'new') ? (
+                    ) : viewStates.isConnecting ? (
                         <span className="adhdev-dockview-tab-connecting">Connecting<span className="connecting-dots"></span></span>
                     ) : (
                         <>

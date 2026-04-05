@@ -1,7 +1,6 @@
 import type { DaemonData } from '../../types'
-import { IconChevronLeft, IconMonitor, IconScroll } from '../Icons'
-import ChatPane from './ChatPane'
-import CliTerminalPane from './CliTerminalPane'
+import { IconChevronLeft, IconMonitor, IconScroll, IconX } from '../Icons'
+import PaneGroupContent from './PaneGroupContent'
 import ConversationMetaChips from './ConversationMetaChips'
 import type { ActiveConversation, CliConversationViewMode } from './types'
 import { isCliConv } from './types'
@@ -22,10 +21,14 @@ interface DashboardMobileChatRoomProps {
     onOpenMachine: (conversation: ActiveConversation) => void
     onOpenHistory: (conversation: ActiveConversation) => void
     onOpenRemote: (conversation: ActiveConversation) => void
+    onHideConversation?: (conversation: ActiveConversation) => void
+    onStopCli?: () => void
     cliViewMode: CliConversationViewMode | null
     onSetCliViewMode: (mode: CliConversationViewMode) => void
     handleSendChat: (message: string, images?: string[]) => Promise<void>
     handleFocusAgent: () => Promise<void>
+    handleModalButton: (button: string) => void
+    handleRelaunch: () => void
 }
 
 export default function DashboardMobileChatRoom({
@@ -41,10 +44,14 @@ export default function DashboardMobileChatRoom({
     onOpenMachine,
     onOpenHistory,
     onOpenRemote,
+    onHideConversation,
+    onStopCli,
     cliViewMode,
     onSetCliViewMode,
     handleSendChat,
     handleFocusAgent,
+    handleModalButton,
+    handleRelaunch,
 }: DashboardMobileChatRoomProps) {
     const terminalRef = useRef<CliTerminalHandle | null>(null)
     const isCli = isCliConv(selectedConversation) && !isAcp
@@ -52,21 +59,21 @@ export default function DashboardMobileChatRoom({
 
     return (
         <>
-            <div className="dashboard-mobile-chat-header">
-                <div className="dashboard-mobile-chat-header-row">
+            <div className="flex items-center justify-between gap-3 px-4 pt-[calc(14px+env(safe-area-inset-top,0px))] pb-2.5 border-b border-border-subtle/70 bg-bg-primary backdrop-blur-md">
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <button
-                        className="dashboard-mobile-chat-back"
+                        className="w-[34px] h-[34px] rounded-full border border-border-default bg-surface-primary/70 text-text-secondary shrink-0 inline-flex items-center justify-center hover:bg-surface-primary transition-colors"
                         onClick={onBack}
                         type="button"
                         aria-label="Back"
                     >
                         <IconChevronLeft size={18} />
                     </button>
-                    <div className="dashboard-mobile-chat-title-block">
-                        <div className="dashboard-mobile-chat-title">
+                    <div className="min-w-0 flex flex-col gap-0.5">
+                        <div className="flex items-center gap-2 text-[17px] font-extrabold tracking-tight text-text-primary truncate">
                             {selectedConversation.displayPrimary || selectedConversation.agentName}
                         </div>
-                        <div className="dashboard-mobile-chat-subtitle">
+                        <div className="min-w-0 flex items-center flex-wrap gap-1.5 text-xs text-text-secondary">
                             <ConversationMetaChips
                                 conversation={selectedConversation}
                                 onOpenNativeConversation={() => onOpenNativeConversation(selectedConversation)}
@@ -75,9 +82,22 @@ export default function DashboardMobileChatRoom({
                         </div>
                     </div>
                 </div>
-                <div className="dashboard-mobile-chat-toolbar">
+                <div className="flex items-center gap-2 shrink-0">
                     {isCli && cliViewMode && (
                         <CliViewModeToggle mode={cliViewMode} onChange={onSetCliViewMode} compact />
+                    )}
+                    {isCli && onStopCli && (
+                        <button
+                            onClick={onStopCli}
+                            className="btn btn-secondary btn-sm"
+                            title="Stop CLI process"
+                            style={{
+                                color: 'var(--status-error, #ef4444)',
+                                borderColor: 'color-mix(in srgb, var(--status-error, #ef4444) 25%, transparent)',
+                            }}
+                        >
+                            <IconX size={14} />
+                        </button>
                     )}
                     <button className="btn btn-secondary btn-sm" onClick={() => onOpenHistory(selectedConversation)} type="button">
                         <IconScroll size={14} />
@@ -87,50 +107,29 @@ export default function DashboardMobileChatRoom({
                             <IconMonitor size={14} />
                         </button>
                     )}
+                    {onHideConversation && (
+                        <button className="btn btn-secondary btn-sm" onClick={() => onHideConversation(selectedConversation)} type="button" title="Close chat">
+                            <IconX size={14} />
+                        </button>
+                    )}
                 </div>
             </div>
-            <div className="dashboard-mobile-chat-thread">
-                {isCli ? (
-                    <>
-                        <div style={{ display: isCliTerminal ? 'flex' : 'none', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
-                            <CliTerminalPane
-                                activeConv={selectedConversation}
-                                terminalRef={terminalRef}
-                                handleSendChat={handleSendChat}
-                                isSendingChat={isSendingChat}
-                                isVisible={isCliTerminal}
-                            />
-                        </div>
-                        {!isCliTerminal && (
-                            <div style={{ display: 'flex', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
-                                <ChatPane
-                                    activeConv={selectedConversation}
-                                    ideEntry={selectedIdeEntry}
-                                    showMetaChips={false}
-                                    handleSendChat={handleSendChat}
-                                    isSendingChat={isSendingChat}
-                                    handleFocusAgent={handleFocusAgent}
-                                    isFocusingAgent={isFocusingAgent}
-                                    actionLogs={actionLogs}
-                                    userName={userName}
-                                />
-                            </div>
-                        )}
-                    </>
-                ) : (
-                    <ChatPane
-                        key={selectedConversation.tabKey}
-                        activeConv={selectedConversation}
-                        ideEntry={selectedIdeEntry}
-                        showMetaChips={false}
-                        handleSendChat={handleSendChat}
-                        isSendingChat={isSendingChat}
-                        handleFocusAgent={handleFocusAgent}
-                        isFocusingAgent={isFocusingAgent}
-                        actionLogs={actionLogs}
-                        userName={userName}
-                    />
-                )}
+            <div className="flex-1 min-h-0 flex flex-col bg-bg-primary relative">
+                <PaneGroupContent
+                    activeConv={selectedConversation}
+                    clearToken={0}
+                    isCliTerminal={isCliTerminal}
+                    ideEntry={selectedIdeEntry}
+                    terminalRef={terminalRef}
+                    handleModalButton={handleModalButton}
+                    handleRelaunch={handleRelaunch}
+                    handleSendChat={handleSendChat}
+                    isSendingChat={isSendingChat}
+                    handleFocusAgent={handleFocusAgent}
+                    isFocusingAgent={isFocusingAgent}
+                    actionLogs={actionLogs}
+                    userName={userName}
+                />
             </div>
         </>
     )

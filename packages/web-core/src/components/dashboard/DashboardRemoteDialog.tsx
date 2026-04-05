@@ -122,47 +122,62 @@ export default function DashboardRemoteDialog({
     }, [])
 
     return (
-        <div className="dashboard-remote-dialog-overlay" onClick={onClose}>
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center p-0 md:p-3 bg-[#030617]/[0.56] backdrop-blur-md" onClick={onClose}>
             <div
-                className="dashboard-remote-dialog is-fullscreen"
+                className="w-full h-screen md:h-[calc(100vh-24px)] md:w-[calc(100vw-24px)] flex flex-col overflow-hidden md:rounded-[14px] md:border border-border-default bg-surface-primary shadow-[0_24px_80px_rgba(2,6,23,0.32)]"
                 role="dialog"
                 aria-modal="true"
                 onClick={stopPropagation}
             >
-                <div className="dashboard-remote-dialog-header">
-                    <div className="dashboard-remote-dialog-title-block">
-                        <div className="dashboard-remote-dialog-title">
-                            <IconMonitor size={16} />
-                            <span>{effectiveConv.displayPrimary || effectiveConv.agentName || 'Remote'}</span>
+                <div className="flex items-center justify-between gap-3 px-4 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-4 border-b border-border-subtle bg-bg-primary shrink-0 overflow-visible">
+                    <div className="flex-1 min-w-0 flex flex-col justify-center">
+                        <div className="flex items-center gap-2.5 min-w-0 font-extrabold text-[18px] md:text-xl tracking-tight text-text-primary">
+                            <span className="w-7 h-7 flex items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary shrink-0">
+                                <IconMonitor size={16} />
+                            </span>
+                            <span className="truncate">{effectiveConv.displayPrimary || effectiveConv.agentName || 'Remote'}</span>
                         </div>
                     </div>
-                    <div className="dashboard-remote-dialog-actions">
-                        {(['split', 'remote'] as const).map(mode => (
-                            <button
-                                key={mode}
-                                className={`btn btn-secondary btn-sm dashboard-remote-dialog-mode${viewMode === mode ? ' is-active' : ''}`}
-                                onClick={() => setViewMode(mode)}
-                                title={mode === 'split' ? 'Split view' : 'Remote only'}
-                            >
-                                {mode === 'split' ? '⊞' : <IconMonitor size={14} />}
-                            </button>
-                        ))}
+                    <div className="flex items-center gap-2 shrink-0">
+                        {(['split', 'remote'] as const).map(mode => {
+                            const isActive = viewMode === mode
+                            return (
+                                <button
+                                    key={mode}
+                                    className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
+                                        isActive 
+                                            ? 'bg-accent-primary text-white shadow-glow' 
+                                            : 'bg-bg-secondary border border-border-subtle text-text-secondary hover:bg-bg-glass hover:text-text-primary'
+                                    }`}
+                                    onClick={() => setViewMode(mode)}
+                                    title={mode === 'split' ? 'Split view' : 'Remote only'}
+                                >
+                                    {mode === 'split' ? <span className="font-bold text-lg leading-none mb-0.5">⊞</span> : <IconMonitor size={15} />}
+                                </button>
+                            )
+                        })}
+                        <div className="w-[1px] h-5 bg-border-subtle mx-1" />
                         <button
-                            className="btn btn-secondary btn-sm"
+                            className="btn btn-secondary btn-sm h-8 px-3 rounded-lg"
                             onClick={() => onOpenHistory(effectiveConv)}
                             title="Chat History"
                         >
-                            <IconScroll size={14} />
+                            <IconScroll size={14} className="mr-1.5" /> History
                         </button>
-                        <button className="btn btn-primary btn-sm" onClick={onClose}>
+                        <button className="btn btn-primary btn-sm h-8 px-4 rounded-lg font-bold" onClick={onClose}>
                             Close
                         </button>
                     </div>
                 </div>
 
-                <div className={`dashboard-remote-dialog-body view-${viewMode}`}>
+                <div className={`flex-1 min-h-0 grid bg-bg-primary ${
+                    viewMode === 'split' ? 'grid-cols-1 grid-rows-[1fr_minmax(320px,42vh)] md:grid-cols-[minmax(360px,0.92fr)_minmax(420px,1.08fr)] md:grid-rows-1' :
+                    'grid-cols-1 grid-rows-1'
+                }`}>
                     {viewMode !== 'remote' && (
-                        <div className="dashboard-remote-dialog-chat">
+                        <div className={`flex flex-col min-w-0 min-h-0 bg-bg-primary ${
+                            viewMode === 'split' ? 'order-2 md:order-1 border-b md:border-b-0 md:border-r border-border-subtle' : ''
+                        }`}>
                             <IDEChatTabs
                                 hasExtensions={hasExtensions}
                                 ideName={ideDisplayName || 'IDE'}
@@ -185,7 +200,7 @@ export default function DashboardRemoteDialog({
                         </div>
                     )}
 
-                    <div className="dashboard-remote-dialog-remote">
+                    <div className={`flex flex-col min-w-0 min-h-0 bg-black ${viewMode === 'split' ? 'order-1 md:order-2' : ''}`}>
                         <RemoteView
                             addLog={() => {}}
                             connState={(effectiveConv.connectionState || 'new') as any}

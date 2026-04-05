@@ -41,8 +41,6 @@ interface DashboardMainViewProps {
     groupSizes: number[]
     groupedConvs: ActiveConversation[][]
     clearedTabs: Record<string, number>
-    screenshotMap: Record<string, string>
-    setScreenshotMap: React.Dispatch<React.SetStateAction<Record<string, string>>>
     focusedGroup: number
     setFocusedGroup: React.Dispatch<React.SetStateAction<number>>
     moveTabToGroup: (tabKey: string, nextGroupIndex: number) => void
@@ -59,8 +57,8 @@ interface DashboardMainViewProps {
     visibleConversations: ActiveConversation[]
     requestedDesktopTabKey: string | null
     onRequestedDesktopTabConsumed: () => void
+    onOpenAccount?: () => void
     onDesktopActiveTabChange: React.Dispatch<React.SetStateAction<string | null>>
-    onOpenDesktopConversation: (conversation: ActiveConversation) => void
     onHideConversation: (conversation: ActiveConversation) => void
     onShowHiddenConversation: (conversation: ActiveConversation) => void
     onShowAllHiddenConversations: () => void
@@ -99,8 +97,6 @@ export default function DashboardMainView({
     groupSizes,
     groupedConvs,
     clearedTabs,
-    screenshotMap,
-    setScreenshotMap,
     focusedGroup,
     setFocusedGroup,
     moveTabToGroup,
@@ -117,8 +113,8 @@ export default function DashboardMainView({
     visibleConversations,
     requestedDesktopTabKey,
     onRequestedDesktopTabConsumed,
+    onOpenAccount,
     onDesktopActiveTabChange,
-    onOpenDesktopConversation,
     onHideConversation,
     onShowHiddenConversation,
     onShowAllHiddenConversations,
@@ -149,7 +145,7 @@ export default function DashboardMainView({
                     conversations={visibleConversations}
                     hiddenConversations={hiddenConversations}
                     onOpenHistory={onOpenHistory}
-                    onOpenConversation={onOpenDesktopConversation}
+                    onOpenConversation={onShowHiddenConversation}
                     onHideConversation={onHideConversation}
                     onShowConversation={onShowHiddenConversation}
                     onShowAllHidden={onShowAllHiddenConversations}
@@ -180,8 +176,10 @@ export default function DashboardMainView({
                     onRequestedMachineConsumed={onRequestedMachineConsumed}
                     requestedMobileSection={requestedMobileSection}
                     onRequestedMobileSectionConsumed={onRequestedMobileSectionConsumed}
+                    onOpenAccount={onOpenAccount}
                     onOpenHistory={onOpenHistory}
                     onOpenRemote={onOpenRemote}
+                    onStopCli={onStopCli}
                     wsStatus={wsStatus}
                     isConnected={isConnected}
                     onShowHiddenConversation={onShowHiddenConversation}
@@ -197,8 +195,6 @@ export default function DashboardMainView({
                     clearedTabs={clearedTabs}
                     ides={ides}
                     actionLogs={actionLogs}
-                    screenshotMap={screenshotMap}
-                    setScreenshotMap={setScreenshotMap}
                     sendDaemonCommand={sendDaemonCommand}
                     setLocalUserMessages={setLocalUserMessages}
                     setActionLogs={setActionLogs}
@@ -224,8 +220,6 @@ export default function DashboardMainView({
                     clearedTabs={clearedTabs}
                     ides={ides}
                     actionLogs={actionLogs}
-                    screenshotMap={screenshotMap}
-                    setScreenshotMap={setScreenshotMap}
                     sendDaemonCommand={sendDaemonCommand}
                     setLocalUserMessages={setLocalUserMessages}
                     setActionLogs={setActionLogs}

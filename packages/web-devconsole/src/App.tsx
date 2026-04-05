@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Editor from '@monaco-editor/react'
-import { api, type ProviderInfo, type CdpTarget } from './api'
+import { api, type ProviderInfo, type CdpTarget, type CliTraceResponse, type CliExerciseResponse, type CliFixtureInfo, type CliFixtureReplayResponse } from './api'
 
 type Category = 'ide' | 'extension' | 'cli' | 'acp'
 type OutputType = 'log' | 'result' | 'error' | 'warn'
@@ -36,6 +36,11 @@ function waitFor(sel, timeout) {
 `
 
 function ts() { return new Date().toTimeString().split(' ')[0].substring(0, 8) }
+
+function relativeTs(timestamp: number | undefined): string {
+  if (!timestamp) return ''
+  return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
 
 // Determine if a category uses CDP tools
 function isCdpCategory(cat: string | undefined): boolean {
@@ -112,7 +117,19 @@ export default function App() {
   const [scriptHints, setScriptHints] = useState<Record<string, { template: Record<string, any>; description: string }>>({})
 
   // Right panel tab for ACP/CLI
-  const [acpRightTab, setAcpRightTab] = useState<'config' | 'settings' | 'chat' | 'validate'>('config')
+  const [acpRightTab, setAcpRightTab] = useState<'config' | 'settings' | 'chat' | 'trace' | 'validate'>('config')
+  const [cliTraceState, setCliTraceState] = useState<CliTraceResponse | null>(null)
+  const [cliTraceSelectedId, setCliTraceSelectedId] = useState<number | null>(null)
+  const [cliTraceLoading, setCliTraceLoading] = useState(false)
+  const [cliRawInput, setCliRawInput] = useState('')
+  const [cliExercisePrompt, setCliExercisePrompt] = useState('Create a file at tmp/adhdev_provider_fix_test.py that prints the current working directory and the squares of 1 through 5, then run python3 tmp/adhdev_provider_fix_test.py and tell me the exact output.')
+  const [cliExerciseRunning, setCliExerciseRunning] = useState(false)
+  const [cliExerciseResult, setCliExerciseResult] = useState<CliExerciseResponse | null>(null)
+  const [cliFixtures, setCliFixtures] = useState<CliFixtureInfo[]>([])
+  const [cliFixtureName, setCliFixtureName] = useState('provider-fix')
+  const [cliSelectedFixture, setCliSelectedFixture] = useState('')
+  const [cliFixtureBusy, setCliFixtureBusy] = useState(false)
+  const [cliFixtureReplayResult, setCliFixtureReplayResult] = useState<CliFixtureReplayResponse | null>(null)
 
   // Auto-Implement State
   const [showAutoImplDialog, setShowAutoImplDialog] = useState(false)
@@ -131,6 +148,15 @@ export default function App() {
   const selectedProvider = providers.find(p => p.type === provider)
   const providerCategory = selectedProvider?.category
   const isCdp = isCdpCategory(providerCategory)
+  const isCli = providerCategory === 'cli'
+  const acpTabs: Array<'config' | 'settings' | 'chat' | 'trace' | 'validate'> = isCli
+    ? ['config', 'settings', 'chat', 'trace', 'validate']
+    : ['config', 'settings', 'chat', 'validate']
+  const cliTraceEntries = cliTraceState?.trace?.entries || []
+  const selectedTraceEntry = cliTraceEntries.find(entry => entry.id === cliTraceSelectedId) || cliTraceEntries[cliTraceEntries.length - 1] || null
+  const cliDebug = cliTraceState?.debug || null
+  const cliActiveModal = cliTraceState?.trace?.activeModal || cliDebug?.activeModal || null
+  const cliRunning = Boolean(cliTraceState?.instanceId)
 
   // ─── Init ───
   useEffect(() => {
@@ -165,12 +191,35 @@ export default function App() {
     setSettingsPreview(null)
     setAcpChatHistory([])
     setAcpRightTab('config')
+    setCliTraceState(null)
+    setCliTraceSelectedId(null)
+    setCliRawInput('')
+    setCliExerciseResult(null)
+    setCliFixtures([])
+    setCliFixtureName('provider-fix')
+    setCliSelectedFixture('')
+    setCliFixtureReplayResult(null)
     setScriptHints({})
     // Load script hints for CDP providers
     if (provider && isCdpCategory(providers.find(p => p.type === provider)?.category)) {
       api.scriptHints(provider).then(r => setScriptHints(r.hints || {})).catch(() => setScriptHints({}))
     }
   }, [provider])
+
+  const refreshCliFixtures = useCallback(async () => {
+    if (!provider || !isCli) {
+      setCliFixtures([])
+      return
+    }
+    try {
+      const result = await api.cliFixtures(provider)
+      const fixtures = result.fixtures || []
+      setCliFixtures(fixtures)
+      setCliSelectedFixture(prev => prev && fixtures.some(f => f.name === prev) ? prev : (fixtures[0]?.name || ''))
+    } catch {
+      setCliFixtures([])
+    }
+  }, [provider, isCli])
 
   // #6 Auto-validate when editing provider.json
   useEffect(() => {
@@ -190,6 +239,44 @@ export default function App() {
     }, 800)
     return () => { if (validationTimer.current) clearTimeout(validationTimer.current) }
   }, [editorCode, activeFile, provider])
+
+  const refreshCliTrace = useCallback(async (showSpinner = false) => {
+    if (!provider || !isCli) {
+      setCliTraceState(null)
+      setCliTraceSelectedId(null)
+      return
+    }
+    if (showSpinner) setCliTraceLoading(true)
+    try {
+      const trace = await api.cliTrace(provider, 160) as any
+      if (trace?.error || !trace?.trace) {
+        setCliTraceState(null)
+        setCliTraceSelectedId(null)
+        return
+      }
+      setCliTraceState(trace)
+      setCliTraceSelectedId(prev => {
+        const entries = trace.trace?.entries || []
+        if (prev && entries.some((entry: { id: number }) => entry.id === prev)) return prev
+        return entries.length > 0 ? entries[entries.length - 1].id : null
+      })
+    } catch {
+      setCliTraceState(null)
+      setCliTraceSelectedId(null)
+    } finally {
+      if (showSpinner) setCliTraceLoading(false)
+    }
+  }, [provider, isCli])
+
+  useEffect(() => {
+    if (!provider || !isCli) return
+    refreshCliTrace(true)
+    refreshCliFixtures()
+    const interval = setInterval(() => {
+      refreshCliTrace(false)
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [provider, isCli, refreshCliTrace, refreshCliFixtures])
 
   async function refresh() {
     try {
@@ -211,6 +298,157 @@ export default function App() {
       setCdpConnected(hasCdp)
       setProviderCount(data.providers?.length || 0)
     } catch { /* ignore */ }
+  }
+
+  async function launchCliDebugSession() {
+    if (!provider || !isCli) return
+    try {
+      setCliTraceLoading(true)
+      const result = await api.cliLaunch(provider) as any
+      if (result?.error || !result?.launched) {
+        appendOutput(`❌ CLI launch failed: ${result?.error || 'unknown error'}`, 'error')
+        return
+      }
+      appendOutput(`🚀 CLI launched: ${result.type}`, 'log')
+      await refreshCliTrace(false)
+    } catch (e: any) {
+      appendOutput(`❌ CLI launch failed: ${e.message}`, 'error')
+    } finally {
+      setCliTraceLoading(false)
+    }
+  }
+
+  async function stopCliDebugSession() {
+    if (!provider || !isCli) return
+    try {
+      const result = await api.cliStop(provider, cliTraceState?.instanceId) as any
+      if (result?.error || !result?.stopped) {
+        appendOutput(`❌ CLI stop failed: ${result?.error || 'unknown error'}`, 'error')
+        return
+      }
+      appendOutput(`🛑 CLI stopped: ${provider}`, 'log')
+      await refreshCliTrace(false)
+    } catch (e: any) {
+      appendOutput(`❌ CLI stop failed: ${e.message}`, 'error')
+    }
+  }
+
+  async function sendCliRaw(keys: string, label?: string) {
+    if (!provider || !isCli || !keys) return
+    try {
+      const result = await api.cliRaw(provider, keys, cliTraceState?.instanceId) as any
+      if (result?.error || !result?.sent) {
+        appendOutput(`❌ Raw key failed: ${result?.error || 'unknown error'}`, 'error')
+        return
+      }
+      appendOutput(`⌨️ Raw key sent${label ? `: ${label}` : ''}`, 'log')
+      setCliRawInput('')
+      await refreshCliTrace(false)
+    } catch (e: any) {
+      appendOutput(`❌ Raw key failed: ${e.message}`, 'error')
+    }
+  }
+
+  async function resolveCliApproval(buttonIndex: number) {
+    if (!provider || !isCli) return
+    try {
+      const result = await api.cliResolve(provider, buttonIndex, cliTraceState?.instanceId) as any
+      if (result?.error || !result?.resolved) {
+        appendOutput(`❌ Approval resolve failed: ${result?.error || 'unknown error'}`, 'error')
+        return
+      }
+      appendOutput(`✅ Approval resolved: button ${buttonIndex}`, 'log')
+      await refreshCliTrace(false)
+    } catch (e: any) {
+      appendOutput(`❌ Approval resolve failed: ${e.message}`, 'error')
+    }
+  }
+
+  async function runCliExercise() {
+    if (!provider || !isCli || !cliExercisePrompt.trim()) return
+    try {
+      setCliExerciseRunning(true)
+      const result = await api.cliExercise(provider, {
+        text: cliExercisePrompt.trim(),
+        freshSession: true,
+        autoLaunch: true,
+        autoResolveApprovals: true,
+        approvalButtonIndex: 0,
+        timeoutMs: 45000,
+        traceLimit: 200,
+      }) as CliExerciseResponse
+      if ((result as any)?.error || !result?.exercised) {
+        appendOutput(`❌ CLI exercise failed: ${(result as any)?.error || 'unknown error'}`, 'error')
+        return
+      }
+      setCliExerciseResult(result)
+      setCliFixtureReplayResult(null)
+      appendOutput(`🧪 CLI exercise ${result.timedOut ? 'timed out' : 'completed'} in ${result.elapsedMs}ms`, result.timedOut ? 'warn' : 'result')
+      await refreshCliTrace(false)
+    } catch (e: any) {
+      appendOutput(`❌ CLI exercise failed: ${e.message}`, 'error')
+    } finally {
+      setCliExerciseRunning(false)
+    }
+  }
+
+  async function captureCliFixture() {
+    if (!provider || !isCli || !cliExercisePrompt.trim()) return
+    try {
+      setCliFixtureBusy(true)
+      const result = await api.cliFixtureCapture(provider, {
+        name: cliFixtureName.trim() || 'provider-fix',
+        request: {
+          text: cliExercisePrompt.trim(),
+          freshSession: true,
+          autoLaunch: true,
+          autoResolveApprovals: true,
+          approvalButtonIndex: 0,
+          timeoutMs: 45000,
+          traceLimit: 200,
+        },
+        assertions: {
+          requireNotTimedOut: true,
+        },
+      })
+      if ((result as any)?.error || !result?.saved) {
+        appendOutput(`❌ Fixture capture failed: ${(result as any)?.error || 'unknown error'}`, 'error')
+        return
+      }
+      appendOutput(`💾 Fixture saved: ${result.name}`, result.verification?.pass ? 'result' : 'warn')
+      if (result.verification?.failures?.length) {
+        appendOutput(result.verification.failures.join('\n'), 'warn')
+      }
+      await refreshCliFixtures()
+      setCliSelectedFixture(result.name)
+      await refreshCliTrace(false)
+    } catch (e: any) {
+      appendOutput(`❌ Fixture capture failed: ${e.message}`, 'error')
+    } finally {
+      setCliFixtureBusy(false)
+    }
+  }
+
+  async function replayCliFixture() {
+    if (!provider || !isCli || !cliSelectedFixture) return
+    try {
+      setCliFixtureBusy(true)
+      const result = await api.cliFixtureReplay(provider, cliSelectedFixture)
+      if ((result as any)?.error || !result?.replayed) {
+        appendOutput(`❌ Fixture replay failed: ${(result as any)?.error || 'unknown error'}`, 'error')
+        return
+      }
+      setCliFixtureReplayResult(result)
+      appendOutput(`🔁 Fixture replay ${result.pass ? 'PASS' : 'FAIL'}: ${cliSelectedFixture}`, result.pass ? 'result' : 'warn')
+      if (result.failures?.length) {
+        appendOutput(result.failures.join('\n'), 'warn')
+      }
+      await refreshCliTrace(false)
+    } catch (e: any) {
+      appendOutput(`❌ Fixture replay failed: ${e.message}`, 'error')
+    } finally {
+      setCliFixtureBusy(false)
+    }
   }
 
   // ─── Output ───
@@ -496,7 +734,7 @@ return children.map((el, i) => ({
           for (let i = 0; i < 60; i++) {
             await new Promise(r => setTimeout(r, 1000))
             try {
-              const dbg = await fetch(`/api/cli/debug/${provider}`).then(r => r.json())
+              const dbg = await api.cliDebug(provider)
               if (dbg.debug?.status === 'idle' && dbg.debug?.messageCount > 0) {
                 const lastMsg = dbg.debug.messages?.[dbg.debug.messages.length - 1]
                 if (lastMsg?.role === 'assistant') {
@@ -509,6 +747,7 @@ return children.map((el, i) => ({
           const elapsed = Date.now() - start
           setAcpChatHistory(prev => [...prev, { role: 'assistant', text: response, elapsed }])
           appendOutput(`💬 [${elapsed}ms] ${response.substring(0, 200)}`, 'result')
+          refreshCliTrace(false).catch(() => {})
         }
       } else {
         // ACP provider: use existing acpChat endpoint
@@ -1403,13 +1642,21 @@ return children.map((el, i) => ({
 
                   {/* Tabs */}
                   <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)', marginBottom: 6 }}>
-                    {(['config', 'settings', 'chat', 'validate'] as const).map(tab => (
+                    {acpTabs.map(tab => (
                       <button key={tab} onClick={() => setAcpRightTab(tab)} style={{
                         padding: '4px 10px', fontSize: 10, fontWeight: 600, cursor: 'pointer',
                         background: 'none', border: 'none', borderBottom: acpRightTab === tab ? '2px solid var(--accent)' : '2px solid transparent',
                         color: acpRightTab === tab ? 'var(--accent)' : 'var(--text-dim)',
                       }}>
-                        {tab === 'config' ? '📋 Config' : tab === 'settings' ? '⚙️ Settings' : tab === 'chat' ? '💬 Chat' : '🔍 Validate'}
+                        {tab === 'config'
+                          ? '📋 Config'
+                          : tab === 'settings'
+                            ? '⚙️ Settings'
+                            : tab === 'chat'
+                              ? '💬 Chat'
+                              : tab === 'trace'
+                                ? '🧪 Trace'
+                                : '🔍 Validate'}
                       </button>
                     ))}
                   </div>
@@ -1545,6 +1792,206 @@ return children.map((el, i) => ({
                         {acpChatHistory.length > 0 && (
                           <button onClick={() => setAcpChatHistory([])} style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--text-dim)', borderRadius: 4, padding: '4px 6px', fontSize: 9, cursor: 'pointer' }}>Clear</button>
                         )}
+                      </div>
+                    </div>
+                  )}
+
+                  {acpRightTab === 'trace' && selectedProvider.category === 'cli' && (
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, overflow: 'hidden', padding: 4 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <button onClick={launchCliDebugSession} disabled={cliTraceLoading || cliRunning} style={{ padding: '4px 8px', fontSize: 10, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: cliRunning ? 'not-allowed' : 'pointer', opacity: cliRunning ? 0.4 : 1 }}>
+                          ▶ Launch
+                        </button>
+                        <button onClick={stopCliDebugSession} disabled={!cliRunning} style={{ padding: '4px 8px', fontSize: 10, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: cliRunning ? 'pointer' : 'not-allowed', opacity: cliRunning ? 1 : 0.4 }}>
+                          ■ Stop
+                        </button>
+                        <button onClick={() => refreshCliTrace(true)} disabled={!provider} style={{ padding: '4px 8px', fontSize: 10, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: 'pointer' }}>
+                          ⟳ Refresh
+                        </button>
+                        <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>
+                          {cliTraceState?.trace
+                            ? `${cliTraceState.trace.status} · ${cliTraceState.trace.entryCount} frames`
+                            : 'No active CLI trace'}
+                        </div>
+                        {cliTraceLoading && <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>Loading…</div>}
+                      </div>
+
+                      <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                          <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-dim)' }}>Exercise Repro</div>
+                          {cliExerciseResult && (
+                            <div style={{ fontSize: 10, color: cliExerciseResult.timedOut ? '#f59e0b' : 'var(--text-dim)' }}>
+                              {cliExerciseResult.timedOut ? 'timed out' : 'settled'} · {cliExerciseResult.elapsedMs}ms · {cliExerciseResult.statusesSeen.join(' → ')}
+                            </div>
+                          )}
+                        </div>
+                        <textarea
+                          value={cliExercisePrompt}
+                          onChange={e => setCliExercisePrompt(e.target.value)}
+                          placeholder="Prompt for autonomous launch/send/approval/wait exercise"
+                          rows={3}
+                          style={{ width: '100%', resize: 'vertical', background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: 8, borderRadius: 4, fontSize: 11, lineHeight: 1.4, fontFamily: 'inherit' }}
+                        />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <button onClick={runCliExercise} disabled={cliExerciseRunning || !cliExercisePrompt.trim() || !provider} style={{ padding: '4px 10px', fontSize: 10, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--accent)', color: '#000', cursor: cliExerciseRunning || !cliExercisePrompt.trim() || !provider ? 'not-allowed' : 'pointer', opacity: cliExerciseRunning || !cliExercisePrompt.trim() || !provider ? 0.4 : 1 }}>
+                            {cliExerciseRunning ? 'Running…' : 'Run Exercise'}
+                          </button>
+                          <input
+                            value={cliFixtureName}
+                            onChange={e => setCliFixtureName(e.target.value)}
+                            placeholder="fixture name"
+                            style={{ width: 120, background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '4px 6px', borderRadius: 4, fontSize: 10, fontFamily: 'inherit' }}
+                          />
+                          <button onClick={captureCliFixture} disabled={cliFixtureBusy || !cliExercisePrompt.trim() || !provider} style={{ padding: '4px 10px', fontSize: 10, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: cliFixtureBusy || !cliExercisePrompt.trim() || !provider ? 'not-allowed' : 'pointer', opacity: cliFixtureBusy || !cliExercisePrompt.trim() || !provider ? 0.4 : 1 }}>
+                            {cliFixtureBusy ? 'Working…' : 'Capture Fixture'}
+                          </button>
+                          <select
+                            value={cliSelectedFixture}
+                            onChange={e => setCliSelectedFixture(e.target.value)}
+                            style={{ minWidth: 150, background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '4px 6px', borderRadius: 4, fontSize: 10 }}
+                          >
+                            <option value="">Select fixture…</option>
+                            {cliFixtures.map(fixture => (
+                              <option key={fixture.name} value={fixture.name}>{fixture.name}</option>
+                            ))}
+                          </select>
+                          <button onClick={replayCliFixture} disabled={cliFixtureBusy || !cliSelectedFixture} style={{ padding: '4px 10px', fontSize: 10, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: cliFixtureBusy || !cliSelectedFixture ? 'not-allowed' : 'pointer', opacity: cliFixtureBusy || !cliSelectedFixture ? 0.4 : 1 }}>
+                            Replay Fixture
+                          </button>
+                          {cliExerciseResult && (
+                            <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>
+                              approvals={cliExerciseResult.approvalsResolved.length} · instance={cliExerciseResult.instanceId}
+                            </div>
+                          )}
+                          {cliFixtureReplayResult && (
+                            <div style={{ fontSize: 10, color: cliFixtureReplayResult.pass ? 'var(--accent-green)' : '#f59e0b' }}>
+                              fixture {cliFixtureReplayResult.pass ? 'PASS' : 'FAIL'}
+                              {cliFixtureReplayResult.failures?.length ? ` · ${cliFixtureReplayResult.failures.length} issue(s)` : ''}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 6, minHeight: 0, flex: 1 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minHeight: 0 }}>
+                          <div style={{ border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                            <div style={{ padding: '6px 8px', borderBottom: '1px solid var(--border)', fontSize: 10, fontWeight: 600, color: 'var(--text-dim)' }}>
+                              Live Screen
+                            </div>
+                            <pre style={{ flex: 1, margin: 0, padding: 10, overflow: 'auto', fontSize: 11, lineHeight: 1.35, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', whiteSpace: 'pre-wrap', background: 'rgba(255,255,255,0.02)' }}>
+                              {cliTraceState?.trace?.screenText || '(no screen yet)'}
+                            </pre>
+                          </div>
+
+                          <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
+                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 6 }}>Interactive Controls</div>
+                            <div style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
+                              <button onClick={() => sendCliRaw('\r', 'Enter')} disabled={!cliRunning} style={{ padding: '4px 8px', fontSize: 10, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: cliRunning ? 'pointer' : 'not-allowed', opacity: cliRunning ? 1 : 0.4 }}>Enter</button>
+                              <button onClick={() => sendCliRaw('\x1b', 'Esc')} disabled={!cliRunning} style={{ padding: '4px 8px', fontSize: 10, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: cliRunning ? 'pointer' : 'not-allowed', opacity: cliRunning ? 1 : 0.4 }}>Esc</button>
+                              <button onClick={() => sendCliRaw('\x03', 'Ctrl+C')} disabled={!cliRunning} style={{ padding: '4px 8px', fontSize: 10, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: cliRunning ? 'pointer' : 'not-allowed', opacity: cliRunning ? 1 : 0.4 }}>Ctrl+C</button>
+                              <button onClick={() => sendCliRaw('\x1B[A', 'Up')} disabled={!cliRunning} style={{ padding: '4px 8px', fontSize: 10, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: cliRunning ? 'pointer' : 'not-allowed', opacity: cliRunning ? 1 : 0.4 }}>Up</button>
+                              <button onClick={() => sendCliRaw('\x1B[B', 'Down')} disabled={!cliRunning} style={{ padding: '4px 8px', fontSize: 10, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text)', cursor: cliRunning ? 'pointer' : 'not-allowed', opacity: cliRunning ? 1 : 0.4 }}>Down</button>
+                            </div>
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <input
+                                value={cliRawInput}
+                                onChange={e => setCliRawInput(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendCliRaw(cliRawInput, 'custom raw')}
+                                placeholder="Raw keys"
+                                disabled={!cliRunning}
+                                style={{ flex: 1, background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text)', padding: '5px 8px', borderRadius: 4, fontSize: 11, fontFamily: 'inherit' }}
+                              />
+                              <button onClick={() => sendCliRaw(cliRawInput, 'custom raw')} disabled={!cliRunning || !cliRawInput} style={{ padding: '4px 10px', fontSize: 10, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--accent)', color: '#000', cursor: cliRunning && cliRawInput ? 'pointer' : 'not-allowed', opacity: cliRunning && cliRawInput ? 1 : 0.4 }}>
+                                Send Raw
+                              </button>
+                            </div>
+                            {cliActiveModal && (
+                              <div style={{ marginTop: 8, padding: 8, borderRadius: 6, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)' }}>
+                                <div style={{ fontSize: 10, fontWeight: 600, color: '#f59e0b', marginBottom: 4 }}>Approval</div>
+                                <div style={{ fontSize: 11, whiteSpace: 'pre-wrap', marginBottom: 6 }}>{cliActiveModal.message}</div>
+                                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                  {cliActiveModal.buttons.map((button: string, index: number) => (
+                                    <button key={`${button}-${index}`} onClick={() => resolveCliApproval(index)} style={{ padding: '4px 8px', fontSize: 10, borderRadius: 4, border: '1px solid rgba(245,158,11,0.3)', background: 'rgba(245,158,11,0.12)', color: '#f59e0b', cursor: 'pointer' }}>
+                                      {index}. {button}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateRows: '0.95fr 1.05fr', gap: 6, minHeight: 0 }}>
+                          <div style={{ border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                            <div style={{ padding: '6px 8px', borderBottom: '1px solid var(--border)', fontSize: 10, fontWeight: 600, color: 'var(--text-dim)' }}>
+                              Trace Timeline
+                            </div>
+                            <div style={{ flex: 1, overflow: 'auto' }}>
+                              {cliTraceEntries.length === 0 && (
+                                <div style={{ padding: 12, fontSize: 11, color: 'var(--text-dim)' }}>Launch the CLI to start collecting PTY frames.</div>
+                              )}
+                              {cliTraceEntries.map(entry => (
+                                <button key={entry.id} onClick={() => setCliTraceSelectedId(entry.id)} style={{
+                                  display: 'block',
+                                  width: '100%',
+                                  textAlign: 'left',
+                                  padding: '7px 8px',
+                                  border: 'none',
+                                  borderBottom: '1px solid var(--border)',
+                                  background: selectedTraceEntry?.id === entry.id ? 'rgba(99,102,241,0.12)' : 'transparent',
+                                  color: 'var(--text)',
+                                  cursor: 'pointer',
+                                }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10, marginBottom: 2 }}>
+                                    <span style={{ color: 'var(--accent)' }}>#{entry.id} {entry.type}</span>
+                                    <span style={{ color: 'var(--text-dim)' }}>{relativeTs(entry.at)}</span>
+                                  </div>
+                                  <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>
+                                    {entry.status}
+                                    {entry.payload?.detectStatus ? ` · detect=${entry.payload.detectStatus}` : ''}
+                                    {entry.payload?.parsedStatus ? ` · parsed=${entry.payload.parsedStatus}` : ''}
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div style={{ border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                            <div style={{ padding: '6px 8px', borderBottom: '1px solid var(--border)', fontSize: 10, fontWeight: 600, color: 'var(--text-dim)' }}>
+                              Parser Inspector
+                            </div>
+                            <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
+                              {selectedTraceEntry ? (
+                                <>
+                                  <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 6 }}>
+                                    {selectedTraceEntry.type} · {selectedTraceEntry.status} · {relativeTs(selectedTraceEntry.at)}
+                                  </div>
+                                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 10, lineHeight: 1.45, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                                    {JSON.stringify(selectedTraceEntry.payload, null, 2)}
+                                  </pre>
+                                  {cliDebug && (
+                                    <div style={{ marginTop: 10 }}>
+                                      <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 4 }}>Current Adapter Snapshot</div>
+                                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 10, lineHeight: 1.45, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                                        {JSON.stringify({
+                                          status: cliDebug.status,
+                                          ready: cliDebug.ready,
+                                          messageCount: cliDebug.messageCount,
+                                          currentTurnScope: cliDebug.currentTurnScope,
+                                          responseBuffer: cliDebug.responseBuffer,
+                                          recentOutputBuffer: cliDebug.recentOutputBuffer,
+                                          screenText: cliDebug.screenText,
+                                        }, null, 2)}
+                                      </pre>
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>Select a trace frame to inspect detectStatus, approval parsing, and transcript summaries.</div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   )}

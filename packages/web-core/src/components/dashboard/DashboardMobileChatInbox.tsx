@@ -1,4 +1,4 @@
-import { IconBell, IconSettings } from '../Icons'
+import { IconBell, IconSettings, IconUser, IconMonitor, IconChat } from '../Icons'
 import InstallCommand from '../InstallCommand'
 import { formatRelativeTime, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
@@ -18,6 +18,7 @@ interface DashboardMobileChatInboxProps {
     onShowAllHidden: () => void
     onOpenMachine: (machineId: string) => void
     onOpenSettings: () => void
+    onOpenAccount?: () => void
     onSectionChange: (section: DashboardMobileSection) => void
     wsStatus?: string
     isConnected?: boolean
@@ -31,51 +32,90 @@ function MobileEmptyHero({ icon, title, subtitle, children }: {
     children?: React.ReactNode
 }) {
     return (
-        <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 8,
-            padding: '48px 24px 32px',
-            textAlign: 'center',
-        }}>
-            <div style={{ marginBottom: 8 }}>{icon}</div>
-            <div style={{
-                fontSize: 18,
-                fontWeight: 700,
-                letterSpacing: '-0.02em',
-                color: 'var(--text-primary)',
-            }}>{title}</div>
-            <div style={{
-                fontSize: 13,
-                lineHeight: 1.5,
-                color: 'var(--text-secondary)',
-                maxWidth: 320,
-            }}>{subtitle}</div>
+        <div className="flex flex-col items-center justify-center gap-2 pt-12 pb-8 px-6 text-center">
+            <div className="mb-2">{icon}</div>
+            <div className="text-lg font-bold tracking-tight text-text-primary">
+                {title}
+            </div>
+            <div className="text-[13px] leading-relaxed text-text-secondary max-w-[320px]">
+                {subtitle}
+            </div>
             {children}
         </div>
     )
 }
 
+function DashboardMobileChatItem({
+    item,
+    type,
+    getAvatarText,
+    onOpenConversation,
+}: {
+    item: MobileConversationListItem
+    type: 'needs_attention' | 'task_complete' | 'working' | 'earlier'
+    getAvatarText: (primary: string) => string
+    onOpenConversation: (c: ActiveConversation) => void
+}) {
+    const isUnread = type === 'needs_attention' || type === 'task_complete'
+    const isWorking = type === 'working'
+    const isEarlier = type === 'earlier'
+    
+    return (
+        <button
+            key={item.conversation.tabKey}
+            className={`flex items-start gap-3.5 p-3.5 w-full bg-bg-secondary/40 border border-[#ffffff0a] rounded-xl text-left relative overflow-hidden transition-all active:scale-[0.98] ${
+                isUnread ? 'bg-bg-secondary shadow-glow border-[#ffffff14]' : 
+                isEarlier ? 'opacity-70 saturate-50' : ''
+            }`}
+            onClick={() => onOpenConversation(item.conversation)}
+            type="button"
+        >
+            <span className={`w-10 h-10 rounded-[10px] flex items-center justify-center text-sm font-bold shrink-0 ${
+                isUnread ? 'bg-accent-primary text-white shadow-glow' :
+                isWorking ? 'bg-bg-primary border border-accent-primary text-text-primary' :
+                'bg-bg-primary border border-[#ffffff1a] text-text-secondary'
+            }`}>
+                {getAvatarText(item.conversation.displayPrimary)}
+            </span>
+            <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                <div className="flex items-center justify-between gap-2">
+                    <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{item.conversation.displayPrimary}</span>
+                    <span className="text-[11px] font-medium text-text-muted shrink-0">{formatRelativeTime(item.timestamp)}</span>
+                </div>
+                <div className="text-[12px] font-medium text-text-secondary truncate flex items-center">
+                    {item.conversation.displaySecondary}
+                    {item.conversation.machineName && (
+                        <>
+                            <span className="mx-1 opacity-50">·</span>
+                            <span className="flex items-center gap-1 opacity-80"><IconMonitor size={11} /> {item.conversation.machineName}</span>
+                        </>
+                    )}
+                    {type === 'needs_attention' && (
+                        <>
+                            <span className="mx-1 opacity-50">·</span>
+                            <span className="text-orange-400">Action needed</span>
+                        </>
+                    )}
+                </div>
+                <div className="text-[13px] text-text-muted truncate mt-0.5 opacity-90">{item.preview}</div>
+            </div>
+            {isUnread && <span className="absolute top-4 right-4 w-2 h-2 rounded-full bg-accent-primary shadow-glow" />}
+            {isWorking && <span className="absolute top-3.5 right-3 px-1.5 py-0.5 rounded-[4px] bg-accent-primary/20 text-accent-primary text-[10px] font-extrabold uppercase tracking-wide">Live</span>}
+        </button>
+    )
+}
+
 function MobileSpinner({ size = 32, label }: { size?: number; label?: string }) {
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-            <div style={{
-                width: size,
-                height: size,
-                borderRadius: '50%',
-                border: '2.5px solid color-mix(in srgb, var(--accent-primary) 18%, transparent)',
-                borderTopColor: 'var(--accent-primary-light)',
-                animation: 'spin 0.9s linear infinite',
-            }} />
+        <div className="flex flex-col items-center gap-2.5">
+            <div 
+                className="rounded-full animate-spin border-[2.5px] border-accent-primary/20 border-t-accent-primary-light"
+                style={{ width: size, height: size }}
+            />
             {label && (
-                <div style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: 'var(--accent-primary-light)',
-                    letterSpacing: '-0.01em',
-                }}>{label}</div>
+                <div className="text-xs font-semibold text-accent-primary-light tracking-tight">
+                    {label}
+                </div>
             )}
         </div>
     )
@@ -95,6 +135,7 @@ export default function DashboardMobileChatInbox({
     onShowAllHidden,
     onOpenMachine,
     onOpenSettings,
+    onOpenAccount,
     onSectionChange,
     wsStatus = 'connected',
     isStandalone = false,
@@ -104,47 +145,53 @@ export default function DashboardMobileChatInbox({
     const hasAnyConversation = attentionItems.length > 0 || unreadItems.length > 0 || workingItems.length > 0 || completedItems.length > 0
     const inboxTitle = section === 'machines'
         ? 'Machines'
-        : section === 'settings'
-        ? 'Settings'
         : 'Chats'
 
     return (
-        <>
-            <div className="dashboard-mobile-chat-inbox-header">
-                <div className="dashboard-mobile-chat-inbox-title">
-                    <div className="dashboard-mobile-chat-app-title">
-                        <span>{inboxTitle}</span>
-                    </div>
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-bg-primary">
+            <div className="flex items-center justify-between px-5 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-4 shrink-0 bg-bg-primary z-10">
+                <div className="text-2xl font-black tracking-tight text-text-primary px-1">
+                    {inboxTitle}
                 </div>
-                {section === 'chats' && (attentionItems.length > 0 || unreadItems.length > 0) && (
-                    <div className="dashboard-mobile-chat-header-pill">
-                        <IconBell size={13} />
-                        <span>{attentionItems.length + unreadItems.length}</span>
-                    </div>
-                )}
+                <div className="flex items-center gap-3">
+                    {section === 'chats' && (attentionItems.length > 0 || unreadItems.length > 0) && (
+                        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-accent-primary/20 text-accent-primary text-[11px] font-bold">
+                            <IconBell size={13} />
+                            <span>{attentionItems.length + unreadItems.length}</span>
+                        </div>
+                    )}
+                    <button onClick={onOpenSettings} className="w-8 h-8 flex items-center justify-center rounded-full bg-[#ffffff0a] text-text-secondary hover:text-text-primary hover:bg-[#ffffff14] transition-colors">
+                        <IconSettings size={18} />
+                    </button>
+                    {onOpenAccount && (
+                        <button onClick={onOpenAccount} className="w-8 h-8 flex items-center justify-center rounded-full bg-[#ffffff0a] text-text-secondary hover:text-text-primary hover:bg-[#ffffff14] transition-colors">
+                            <IconUser size={18} />
+                        </button>
+                    )}
+                </div>
             </div>
 
-            <div className="dashboard-mobile-chat-inbox">
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-[calc(12px+env(safe-area-inset-bottom,0px))] flex flex-col gap-3 -webkit-overflow-scrolling-touch">
                 {section === 'chats' && attentionItems.length > 0 && (
-                    <section className="dashboard-mobile-chat-section">
-                        <div className="dashboard-mobile-chat-alert-panel">
-                            <span className="dashboard-mobile-chat-alert-title">Needs attention</span>
-                            <span className="dashboard-mobile-chat-alert-meta">{attentionItems.length} action needed</span>
+                    <section className="flex flex-col gap-0">
+                        <div className="mx-2 mb-2 p-3 rounded-2xl bg-accent-primary/10 text-text-secondary flex items-center justify-between gap-2.5 text-xs">
+                            <span className="font-bold text-text-primary">Needs attention</span>
+                            <span className="font-bold text-accent-primary">{attentionItems.length} action needed</span>
                         </div>
                     </section>
                 )}
 
                 {section === 'chats' && unreadItems.length > 0 && (
-                    <section className="dashboard-mobile-chat-section">
-                        <div className="dashboard-mobile-chat-alert-panel">
-                            <span className="dashboard-mobile-chat-alert-title">Task complete</span>
-                            <span className="dashboard-mobile-chat-alert-meta">{unreadItems.length} unread</span>
+                    <section className="flex flex-col gap-0">
+                        <div className="mx-2 mb-2 p-3 rounded-2xl bg-accent-primary/10 text-text-secondary flex items-center justify-between gap-2.5 text-xs">
+                            <span className="font-bold text-text-primary">Task complete</span>
+                            <span className="font-bold text-accent-primary">{unreadItems.length} unread</span>
                         </div>
                     </section>
                 )}
 
                 {section === 'machines' && (
-                    <section className="dashboard-mobile-chat-section">
+                    <section className="flex flex-col gap-2">
                         {isDisconnected ? (
                             <MobileEmptyHero
                                 icon={<MobileSpinner label="Reconnecting…" />}
@@ -163,12 +210,8 @@ export default function DashboardMobileChatInbox({
                                     <img
                                         src="/otter-logo.png"
                                         alt="ADHDev"
-                                        style={{
-                                            width: 48,
-                                            height: 48,
-                                            objectFit: 'contain',
-                                            animation: 'bounce 3s infinite',
-                                        }}
+                                        className="w-12 h-12 object-contain animate-bounce"
+                                        style={{ animationDuration: '3s' }}
                                     />
                                 }
                                 title={isStandalone ? 'Waiting for your IDE' : 'Connect your first machine'}
@@ -179,7 +222,7 @@ export default function DashboardMobileChatInbox({
                                 }
                             >
                                 {!isStandalone && (
-                                    <div style={{ width: '100%', maxWidth: 360, marginTop: 16 }}>
+                                    <div className="w-full max-w-[360px] mt-4">
                                         <InstallCommand />
                                     </div>
                                 )}
@@ -188,27 +231,27 @@ export default function DashboardMobileChatInbox({
                             machineCards.map(machine => (
                                 <button
                                     key={machine.id}
-                                    className="dashboard-mobile-chat-card"
+                                    className="flex items-start gap-3.5 p-3.5 w-full bg-bg-secondary/40 border border-[#ffffff0a] rounded-xl text-left transition-all active:scale-[0.98]"
                                     onClick={() => onOpenMachine(machine.id)}
                                     type="button"
                                 >
-                                    <span className="dashboard-mobile-chat-avatar machine">
+                                    <span className="w-10 h-10 rounded-[10px] flex items-center justify-center text-sm font-bold shrink-0 bg-bg-secondary border border-[#ffffff14] text-text-primary shadow-[0_2px_8px_rgba(0,0,0,0.2)]">
                                         {getAvatarText(machine.label)}
                                     </span>
-                                    <div className="dashboard-mobile-chat-card-main">
-                                        <div className="dashboard-mobile-chat-card-top">
-                                            <span className="dashboard-mobile-chat-card-title">{machine.label}</span>
-                                            <span className="dashboard-mobile-chat-card-time">
-                                                {machine.unread > 0 ? `${machine.unread} new` : machine.total > 0 ? `${machine.total} chats` : 'Idle'}
+                                    <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{machine.label}</span>
+                                            <span className="text-[11px] font-medium text-text-muted shrink-0">
+                                                {machine.unread > 0 ? <span className="text-accent-primary">{machine.unread} new</span> : machine.total > 0 ? `${machine.total} chats` : 'Idle'}
                                             </span>
                                         </div>
-                                        <div className="dashboard-mobile-chat-card-subtitle">{machine.subtitle}</div>
+                                        <div className="text-[12px] font-medium text-text-secondary truncate">{machine.subtitle}</div>
                                         {machine.total > 0 ? (
-                                            <div className="dashboard-mobile-chat-card-preview">
+                                            <div className="text-[13px] text-text-muted mt-0.5">
                                                 {machine.total} chat{machine.total !== 1 ? 's' : ''}{machine.unread > 0 ? ` · ${machine.unread} unread` : ''}
                                             </div>
                                         ) : (
-                                            <div className="dashboard-mobile-chat-card-preview">
+                                            <div className="text-[13px] text-text-muted mt-0.5 italic opacity-70">
                                                 No active chats
                                             </div>
                                         )}
@@ -220,131 +263,63 @@ export default function DashboardMobileChatInbox({
                 )}
 
                 {section === 'chats' && attentionItems.length > 0 && (
-                    <section className="dashboard-mobile-chat-section">
-                        <div className="dashboard-mobile-chat-section-title">Needs attention</div>
+                    <section className="flex flex-col gap-2">
+                        <div className="text-[12px] font-bold uppercase tracking-wider text-text-secondary px-1 mb-1">Needs attention</div>
                         {attentionItems.map(item => (
-                            <button
+                            <DashboardMobileChatItem
                                 key={item.conversation.tabKey}
-                                className="dashboard-mobile-chat-card is-unread"
-                                onClick={() => onOpenConversation(item.conversation)}
-                                type="button"
-                            >
-                                <span className="dashboard-mobile-chat-avatar unread">
-                                    {getAvatarText(item.conversation.displayPrimary)}
-                                </span>
-                                <div className="dashboard-mobile-chat-card-main">
-                                    <div className="dashboard-mobile-chat-card-top">
-                                        <span className="dashboard-mobile-chat-card-title">{item.conversation.displayPrimary}</span>
-                                        <span className="dashboard-mobile-chat-card-time">{formatRelativeTime(item.timestamp)}</span>
-                                    </div>
-                                    <div className="dashboard-mobile-chat-card-subtitle">
-                                        {item.conversation.displaySecondary}
-                                        {item.conversation.machineName && (
-                                            <> · 🖥 {item.conversation.machineName}</>
-                                        )}
-                                        {' · Action needed'}
-                                    </div>
-                                    <div className="dashboard-mobile-chat-card-preview">{item.preview}</div>
-                                </div>
-                                <span className="dashboard-mobile-chat-unread-dot" />
-                            </button>
+                                item={item}
+                                type="needs_attention"
+                                getAvatarText={getAvatarText}
+                                onOpenConversation={onOpenConversation}
+                            />
                         ))}
                     </section>
                 )}
 
                 {section === 'chats' && unreadItems.length > 0 && (
-                    <section className="dashboard-mobile-chat-section">
-                        <div className="dashboard-mobile-chat-section-title">Task complete</div>
+                    <section className="flex flex-col gap-2">
+                        <div className="text-[12px] font-bold uppercase tracking-wider text-text-secondary px-1 mb-1 mt-2">Task complete</div>
                         {unreadItems.map(item => (
-                            <button
+                            <DashboardMobileChatItem
                                 key={item.conversation.tabKey}
-                                className="dashboard-mobile-chat-card is-unread"
-                                onClick={() => onOpenConversation(item.conversation)}
-                                type="button"
-                            >
-                                <span className="dashboard-mobile-chat-avatar unread">
-                                    {getAvatarText(item.conversation.displayPrimary)}
-                                </span>
-                                <div className="dashboard-mobile-chat-card-main">
-                                    <div className="dashboard-mobile-chat-card-top">
-                                        <span className="dashboard-mobile-chat-card-title">{item.conversation.displayPrimary}</span>
-                                        <span className="dashboard-mobile-chat-card-time">{formatRelativeTime(item.timestamp)}</span>
-                                    </div>
-                                    <div className="dashboard-mobile-chat-card-subtitle">
-                                        {item.conversation.displaySecondary}
-                                        {item.conversation.machineName && (
-                                            <> · 🖥 {item.conversation.machineName}</>
-                                        )}
-                                    </div>
-                                    <div className="dashboard-mobile-chat-card-preview">{item.preview}</div>
-                                </div>
-                                <span className="dashboard-mobile-chat-unread-dot" />
-                            </button>
+                                item={item}
+                                type="task_complete"
+                                getAvatarText={getAvatarText}
+                                onOpenConversation={onOpenConversation}
+                            />
                         ))}
                     </section>
                 )}
 
                 {section === 'chats' && workingItems.length > 0 && (
-                    <section className="dashboard-mobile-chat-section">
-                        <div className="dashboard-mobile-chat-section-title">Working now</div>
+                    <section className="flex flex-col gap-2">
+                        <div className="text-[12px] font-bold uppercase tracking-wider text-text-secondary px-1 mb-1 mt-2">Working now</div>
                         {workingItems.map(item => (
-                            <button
+                            <DashboardMobileChatItem
                                 key={item.conversation.tabKey}
-                                className="dashboard-mobile-chat-card"
-                                onClick={() => onOpenConversation(item.conversation)}
-                                type="button"
-                            >
-                                <span className="dashboard-mobile-chat-avatar working">
-                                    {getAvatarText(item.conversation.displayPrimary)}
-                                </span>
-                                <div className="dashboard-mobile-chat-card-main">
-                                    <div className="dashboard-mobile-chat-card-top">
-                                        <span className="dashboard-mobile-chat-card-title">{item.conversation.displayPrimary}</span>
-                                        <span className="dashboard-mobile-chat-card-time">{formatRelativeTime(item.timestamp)}</span>
-                                    </div>
-                                    <div className="dashboard-mobile-chat-card-subtitle">
-                                        {item.conversation.displaySecondary}
-                                        {item.conversation.machineName && (
-                                            <> · 🖥 {item.conversation.machineName}</>
-                                        )}
-                                    </div>
-                                    <div className="dashboard-mobile-chat-card-preview">{item.preview}</div>
-                                </div>
-                                <span className="dashboard-mobile-chat-status-badge">Live</span>
-                            </button>
+                                item={item}
+                                type="working"
+                                getAvatarText={getAvatarText}
+                                onOpenConversation={onOpenConversation}
+                            />
                         ))}
                     </section>
                 )}
 
                 {section === 'chats' && (
-                    <section className="dashboard-mobile-chat-section">
+                    <section className="flex flex-col gap-2">
                         {completedItems.length > 0 && (
-                            <div className="dashboard-mobile-chat-section-title">Earlier</div>
+                            <div className="text-[12px] font-bold uppercase tracking-wider text-text-secondary px-1 mb-1 mt-2">Earlier</div>
                         )}
                         {completedItems.length > 0 ? completedItems.map(item => (
-                            <button
+                            <DashboardMobileChatItem
                                 key={item.conversation.tabKey}
-                                className="dashboard-mobile-chat-card is-muted"
-                                onClick={() => onOpenConversation(item.conversation)}
-                                type="button"
-                            >
-                                <span className="dashboard-mobile-chat-avatar">
-                                    {getAvatarText(item.conversation.displayPrimary)}
-                                </span>
-                                <div className="dashboard-mobile-chat-card-main">
-                                    <div className="dashboard-mobile-chat-card-top">
-                                        <span className="dashboard-mobile-chat-card-title">{item.conversation.displayPrimary}</span>
-                                        <span className="dashboard-mobile-chat-card-time">{formatRelativeTime(item.timestamp)}</span>
-                                    </div>
-                                    <div className="dashboard-mobile-chat-card-subtitle">
-                                        {item.conversation.displaySecondary}
-                                        {item.conversation.machineName && (
-                                            <> · 🖥 {item.conversation.machineName}</>
-                                        )}
-                                    </div>
-                                    <div className="dashboard-mobile-chat-card-preview">{item.preview}</div>
-                                </div>
-                            </button>
+                                item={item}
+                                type="earlier"
+                                getAvatarText={getAvatarText}
+                                onOpenConversation={onOpenConversation}
+                            />
                         )) : !hasAnyConversation ? (
                             isDisconnected ? (
                                 <MobileEmptyHero
@@ -358,7 +333,7 @@ export default function DashboardMobileChatInbox({
                                         <img
                                             src="/otter-logo.png"
                                             alt="ADHDev"
-                                            style={{ width: 40, height: 40, objectFit: 'contain', opacity: 0.7 }}
+                                            className="w-10 h-10 object-contain opacity-70"
                                         />
                                     }
                                     title="No machines connected"
@@ -367,24 +342,16 @@ export default function DashboardMobileChatInbox({
                             ) : (
                                 <MobileEmptyHero
                                     icon={
-                                        <div style={{
-                                            width: 44,
-                                            height: 44,
-                                            borderRadius: 14,
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            background: 'color-mix(in srgb, var(--accent-primary) 10%, transparent)',
-                                            color: 'var(--accent-primary-light)',
-                                            fontSize: 20,
-                                        }}>💬</div>
+                                        <div className="w-11 h-11 rounded-xl flex items-center justify-center bg-accent-primary/10 text-accent-primary-light">
+                                            <IconChat size={20} />
+                                        </div>
                                     }
                                     title="No conversations yet"
                                     subtitle="Your machines are connected. Open an IDE or launch a CLI agent to start your first conversation."
                                 />
                             )
                         ) : (
-                            <div className="dashboard-mobile-chat-empty">
+                            <div className="py-8 text-center text-sm font-medium text-text-muted">
                                 All caught up.
                             </div>
                         )}
@@ -392,12 +359,12 @@ export default function DashboardMobileChatInbox({
                 )}
 
                 {section === 'chats' && hiddenConversations.length > 0 && (
-                    <section className="dashboard-mobile-chat-section">
-                        <div className="dashboard-mobile-chat-section-title dashboard-mobile-chat-section-title-row">
+                    <section className="flex flex-col gap-2">
+                        <div className="flex items-center justify-between text-[12px] font-bold uppercase tracking-wider text-text-secondary px-1 mb-1 mt-4">
                             <span>Hidden</span>
                             <button
                                 type="button"
-                                className="dashboard-mobile-chat-inline-action"
+                                className="text-accent-primary normal-case font-semibold hover:underline"
                                 onClick={onShowAllHidden}
                             >
                                 Restore all
@@ -406,25 +373,28 @@ export default function DashboardMobileChatInbox({
                         {hiddenConversations.map(conversation => (
                             <button
                                 key={conversation.tabKey}
-                                className="dashboard-mobile-chat-card is-muted"
+                                className="flex items-start gap-3.5 p-3.5 w-full bg-bg-secondary/20 border border-[#ffffff05] rounded-xl text-left transition-all active:scale-[0.98] opacity-50 saturate-0"
                                 onClick={() => onShowConversation(conversation)}
                                 type="button"
                             >
-                                <span className="dashboard-mobile-chat-avatar">
+                                <span className="w-10 h-10 rounded-[10px] flex items-center justify-center text-sm font-bold shrink-0 bg-bg-primary border border-[#ffffff1a] text-text-secondary">
                                     {getAvatarText(conversation.displayPrimary)}
                                 </span>
-                                <div className="dashboard-mobile-chat-card-main">
-                                    <div className="dashboard-mobile-chat-card-top">
-                                        <span className="dashboard-mobile-chat-card-title">{conversation.displayPrimary}</span>
-                                        <span className="dashboard-mobile-chat-card-time">Hidden</span>
+                                <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{conversation.displayPrimary}</span>
+                                        <span className="text-[11px] font-medium text-text-muted shrink-0">Hidden</span>
                                     </div>
-                                    <div className="dashboard-mobile-chat-card-subtitle">
+                                    <div className="text-[12px] font-medium text-text-secondary truncate flex items-center">
                                         {conversation.displaySecondary}
                                         {conversation.machineName && (
-                                            <> · 🖥 {conversation.machineName}</>
+                                            <>
+                                                <span className="mx-1 opacity-50">·</span>
+                                                <span className="flex items-center gap-1 opacity-80"><IconMonitor size={11} /> {conversation.machineName}</span>
+                                            </>
                                         )}
                                     </div>
-                                    <div className="dashboard-mobile-chat-card-preview">
+                                    <div className="text-[13px] text-text-muted truncate mt-0.5 opacity-90">
                                         Tap to restore and open
                                     </div>
                                 </div>
@@ -432,35 +402,9 @@ export default function DashboardMobileChatInbox({
                         ))}
                     </section>
                 )}
-
-                {section === 'settings' && (
-                    <section className="dashboard-mobile-chat-section">
-                        <button
-                            className="dashboard-mobile-chat-card"
-                            onClick={onOpenSettings}
-                            type="button"
-                        >
-                            <span className="dashboard-mobile-chat-avatar settings">
-                                <IconSettings size={16} />
-                            </span>
-                            <div className="dashboard-mobile-chat-card-main">
-                                <div className="dashboard-mobile-chat-card-top">
-                                    <span className="dashboard-mobile-chat-card-title">Appearance & chat settings</span>
-                                </div>
-                                <div className="dashboard-mobile-chat-card-subtitle">Theme, accent, chat visuals</div>
-                                <div className="dashboard-mobile-chat-card-preview">
-                                    Open the full settings page for theme, notifications, and provider preferences.
-                                </div>
-                            </div>
-                        </button>
-                        <div className="dashboard-mobile-chat-settings-note">
-                            Notifications panel: unread and action-needed conversations are surfaced in the Chats section. Mobile workspace mode can be enabled from Settings.
-                        </div>
-                    </section>
-                )}
             </div>
 
             <DashboardMobileBottomNav section={section} onSectionChange={onSectionChange} />
-        </>
+        </div>
     )
 }

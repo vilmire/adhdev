@@ -18,6 +18,7 @@ import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
+import type { ChatMessage } from '../types.js';
 
 let CachedDatabaseSync: (new (path: string, options?: { readOnly?: boolean }) => {
     prepare(sql: string): { get(...params: Array<string | number>): unknown };
@@ -54,6 +55,7 @@ export class CliProviderInstance implements ProviderInstance {
     private generatingDebouncePending: { chatTitle: string; timestamp: number } | null = null;
     private lastApprovalEventAt = 0;
     private historyWriter: ChatHistoryWriter;
+    private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     readonly instanceId: string;
 
     private presentationMode: 'terminal' | 'chat';
@@ -170,6 +172,7 @@ export class CliProviderInstance implements ProviderInstance {
         }
         const runtime = this.adapter.getRuntimeMetadata();
         const parsedMessages = Array.isArray(parsedStatus?.messages) ? parsedStatus.messages : [];
+        const mergedMessages = this.mergeConversationMessages(parsedMessages);
 
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
 
@@ -202,7 +205,7 @@ export class CliProviderInstance implements ProviderInstance {
                 id: `${this.type}_${this.workingDir}`,
                 title: parsedStatus?.title || dirName,
                 status: parsedStatus?.status || adapterStatus.status,
-                messages: parsedMessages,
+                messages: mergedMessages,
                 activeModal: parsedStatus?.activeModal ?? adapterStatus.activeModal,
                 inputContent: '',
             },
@@ -308,6 +311,11 @@ export class CliProviderInstance implements ProviderInstance {
                 const approvalCooldown = 5000;
                 if (this.lastStatus !== 'waiting_approval' && (!this.lastApprovalEventAt || now - this.lastApprovalEventAt > approvalCooldown)) {
                     this.lastApprovalEventAt = now;
+                    this.appendRuntimeSystemMessage(
+                        this.formatApprovalRequestMessage(modal?.message, modal?.buttons),
+                        `approval_request:${now}`,
+                        now,
+                    );
                     this.pushEvent({
                         event: 'agent:waiting_approval', chatTitle, timestamp: now,
                         modalMessage: modal?.message,
@@ -376,10 +384,80 @@ export class CliProviderInstance implements ProviderInstance {
     get cliType(): string { return this.type; }
     get cliName(): string { return this.provider.name; }
 
+    recordApprovalSelection(buttonText: string): void {
+        const cleanButton = String(buttonText || '').trim();
+        if (!cleanButton) return;
+        const now = Date.now();
+        this.appendRuntimeSystemMessage(
+            `Approval selected: ${cleanButton}`,
+            `approval_selection:${now}:${cleanButton}`,
+            now,
+        );
+    }
+
     private formatMarkerTimestamp(timestamp: number): string {
         const date = new Date(timestamp);
         const pad = (value: number) => String(value).padStart(2, '0');
         return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    }
+
+    private appendRuntimeSystemMessage(content: string, dedupKey: string, receivedAt = Date.now()): void {
+        const normalizedContent = String(content || '').trim();
+        if (!normalizedContent) return;
+        if (this.runtimeMessages.some((entry) => entry.key === dedupKey)) return;
+
+        this.runtimeMessages.push({
+            key: dedupKey,
+            message: {
+                role: 'system',
+                senderName: 'System',
+                content: normalizedContent,
+                receivedAt,
+                timestamp: receivedAt,
+            },
+        });
+        if (this.runtimeMessages.length > 50) {
+            this.runtimeMessages = this.runtimeMessages.slice(-50);
+        }
+
+        this.historyWriter.appendNewMessages(
+            this.type,
+            [{
+                role: 'system',
+                senderName: 'System',
+                content: normalizedContent,
+                receivedAt,
+                historyDedupKey: dedupKey,
+            }],
+            this.adapter.getScriptParsedStatus?.()?.title || this.workingDir.split('/').filter(Boolean).pop() || 'session',
+            this.instanceId,
+            this.providerSessionId,
+        );
+    }
+
+    private mergeConversationMessages(parsedMessages: any[]): ChatMessage[] {
+        if (this.runtimeMessages.length === 0) return parsedMessages;
+
+        return [...parsedMessages, ...this.runtimeMessages.map((entry) => entry.message)]
+            .map((message, index) => ({ message, index }))
+            .sort((a, b) => {
+                const aTime = a.message.receivedAt || a.message.timestamp || 0;
+                const bTime = b.message.receivedAt || b.message.timestamp || 0;
+                if (aTime !== bTime) return aTime - bTime;
+                return a.index - b.index;
+            })
+            .map((entry) => entry.message);
+    }
+
+    private formatApprovalRequestMessage(modalMessage?: string, buttons?: string[]): string {
+        const lines = ['Approval requested'];
+        const cleanMessage = String(modalMessage || '').trim();
+        if (cleanMessage) lines.push(cleanMessage);
+        const labels = (buttons || []).map((button) => String(button || '').trim()).filter(Boolean);
+        if (labels.length > 0) {
+            lines.push(labels.map((label) => `[${label}]`).join(' '));
+        }
+        return lines.join('\n');
     }
 
     private promoteProviderSessionId(sessionId: string): void {

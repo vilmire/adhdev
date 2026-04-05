@@ -5,6 +5,7 @@
  */
 import { useState, useEffect } from 'react';
 import type { ActiveConversation } from './types';
+import { getConversationViewStates } from './DashboardMobileChatShared';
 import { IconWarning } from '../Icons';
 
 interface Props {
@@ -18,9 +19,10 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
     // Reset pending on modal status change (approval complete or new approval)
     useEffect(() => {
         setPendingButton(null);
-    }, [activeConv.modalMessage, activeConv.status]);
+    }, [activeConv.modalMessage, activeConv.status, activeConv.connectionState]);
 
-    if (activeConv.status !== 'waiting_approval' || !activeConv.modalButtons) return null;
+    const viewStates = getConversationViewStates(activeConv);
+    if (!viewStates.isWaiting || !activeConv.modalButtons) return null;
 
     const handleClick = (btnText: string) => {
         if (pendingButton) return; // Already processing

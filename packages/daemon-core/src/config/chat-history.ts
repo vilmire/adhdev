@@ -22,6 +22,7 @@ interface HistoryMessage {
     role: 'user' | 'assistant' | 'system';
     content: string;
     kind?: string;
+    senderName?: string;
     agent: string;        // e.g. 'antigravity', 'cursor', 'gemini-cli'
     instanceId?: string;  // IDE instance UUID (distinguishes windows of the same agent type)
     historySessionId?: string; // Persistent provider-side conversation/session key
@@ -54,7 +55,7 @@ export class ChatHistoryWriter {
  */
     appendNewMessages(
         agentType: string,
-        messages: Array<{ role: string; content: string; receivedAt?: number; kind?: string; historyDedupKey?: string }>,
+        messages: Array<{ role: string; content: string; receivedAt?: number; kind?: string; senderName?: string; historyDedupKey?: string }>,
         sessionTitle?: string,
         instanceId?: string,
         historySessionId?: string,
@@ -83,6 +84,7 @@ export class ChatHistoryWriter {
                     role: msg.role as 'user' | 'assistant' | 'system',
                     content: msg.content || '',
                     kind: typeof msg.kind === 'string' ? msg.kind : undefined,
+                    senderName: typeof msg.senderName === 'string' ? msg.senderName : undefined,
                     agent: agentType,
                     instanceId,
                     historySessionId: effectiveHistoryKey,
@@ -131,6 +133,7 @@ export class ChatHistoryWriter {
             historySessionId?: string;
             dedupKey?: string;
             receivedAt?: number;
+            senderName?: string;
         } = {},
     ): void {
         this.appendNewMessages(
@@ -140,6 +143,7 @@ export class ChatHistoryWriter {
                 kind: 'system',
                 content,
                 receivedAt: options.receivedAt,
+                senderName: options.senderName,
                 historyDedupKey: options.dedupKey,
             }],
             options.sessionTitle,

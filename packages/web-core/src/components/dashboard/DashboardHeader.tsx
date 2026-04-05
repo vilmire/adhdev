@@ -30,6 +30,28 @@ export interface DashboardHeaderProps {
     hiddenConversations?: ActiveConversation[];
     onShowConversation?: (conversation: ActiveConversation) => void;
     onShowAllHidden?: () => void;
+    onClearDevHistory?: () => void;
+}
+
+function DashboardHeaderInboxItem({
+    conversation,
+    isAttention,
+    onClick,
+}: {
+    conversation: ActiveConversation;
+    isAttention?: boolean;
+    onClick: () => void;
+}) {
+    return (
+        <button
+            type="button"
+            className={`dashboard-header-inbox-item ${isAttention ? 'is-attention' : ''}`.trim()}
+            onClick={onClick}
+        >
+            <span className="dashboard-header-inbox-item-title">{conversation.displayPrimary}</span>
+            <span className="dashboard-header-inbox-item-meta">{conversation.displaySecondary}</span>
+        </button>
+    );
 }
 
 export default function DashboardHeader({
@@ -314,18 +336,15 @@ export default function DashboardHeader({
                                 <div className="dashboard-header-inbox-section">
                                     <div className="dashboard-header-inbox-section-title">Needs attention</div>
                                     {inboxAttention.map(conversation => (
-                                        <button
+                                        <DashboardHeaderInboxItem
                                             key={conversation.tabKey}
-                                            type="button"
-                                            className="dashboard-header-inbox-item is-attention"
+                                            conversation={conversation}
+                                            isAttention={true}
                                             onClick={() => {
                                                 onOpenConversation?.(conversation);
                                                 setInboxOpen(false);
                                             }}
-                                        >
-                                            <span className="dashboard-header-inbox-item-title">{conversation.displayPrimary}</span>
-                                            <span className="dashboard-header-inbox-item-meta">{conversation.displaySecondary}</span>
-                                        </button>
+                                        />
                                     ))}
                                 </div>
                             )}
@@ -333,18 +352,14 @@ export default function DashboardHeader({
                                 <div className="dashboard-header-inbox-section">
                                     <div className="dashboard-header-inbox-section-title">Task complete</div>
                                     {inboxUnread.map(conversation => (
-                                        <button
+                                        <DashboardHeaderInboxItem
                                             key={conversation.tabKey}
-                                            type="button"
-                                            className="dashboard-header-inbox-item"
+                                            conversation={conversation}
                                             onClick={() => {
                                                 onOpenConversation?.(conversation);
                                                 setInboxOpen(false);
                                             }}
-                                        >
-                                            <span className="dashboard-header-inbox-item-title">{conversation.displayPrimary}</span>
-                                            <span className="dashboard-header-inbox-item-meta">{conversation.displaySecondary}</span>
-                                        </button>
+                                        />
                                     ))}
                                 </div>
                             )}

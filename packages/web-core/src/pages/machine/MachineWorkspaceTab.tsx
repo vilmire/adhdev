@@ -59,30 +59,39 @@ export default function MachineWorkspaceTab({
     }), [ideSessions.length, cliSessions.length, acpSessions.length])
 
     return (
-        <div className="machine-workspace-tab">
-            <div className="machine-workspace-tab-header">
-                <div className="machine-workspace-tab-title">Workspace launcher</div>
-                <div className="machine-workspace-tab-subtitle">
+        <div className="flex flex-col flex-1 min-w-0 h-full">
+            <div className="flex flex-col gap-1 pb-4 border-b border-[#ffffff0a] mb-4">
+                <div className="text-lg font-semibold text-text-primary">Workspace Launcher</div>
+                <div className="text-sm text-text-secondary">
                     Choose a workspace context first, then pick how you want to open it.
                 </div>
             </div>
 
-            <div className="machine-workspace-section-tabs">
-                {WORKSPACE_SECTIONS.map(section => (
-                    <button
-                        key={section.id}
-                        type="button"
-                        className={`machine-workspace-section-tab${activeCategory === section.id ? ' active' : ''}`}
-                        onClick={() => setActiveCategory(section.id)}
-                    >
-                        <span>{section.label}</span>
-                        <span className="machine-workspace-section-count">{counts[section.id]}</span>
-                    </button>
-                ))}
-            </div>
-
-            <div className="machine-workspace-section-helper">
-                {WORKSPACE_SECTIONS.find(section => section.id === activeCategory)?.helper}
+            <div className="flex flex-col sm:flex-row items-baseline gap-4 mb-4">
+                <div className="flex bg-bg-surface p-1 rounded-lg border border-[#ffffff0a] w-fit">
+                    {WORKSPACE_SECTIONS.map(section => (
+                        <button
+                            key={section.id}
+                            type="button"
+                            className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                                activeCategory === section.id
+                                    ? 'bg-[#ffffff10] text-text-primary shadow-sm'
+                                    : 'text-text-secondary hover:text-text-primary hover:bg-[#ffffff05]'
+                            }`}
+                            onClick={() => setActiveCategory(section.id)}
+                        >
+                            <span>{section.label}</span>
+                            <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+                                activeCategory === section.id ? 'bg-accent-primary/20 text-accent-primary' : 'bg-[#ffffff10] text-text-muted'
+                            }`}>
+                                {counts[section.id]}
+                            </span>
+                        </button>
+                    ))}
+                </div>
+                <div className="text-xs text-text-muted italic">
+                    {WORKSPACE_SECTIONS.find(section => section.id === activeCategory)?.helper}
+                </div>
             </div>
 
             {activeCategory === 'ide' && (

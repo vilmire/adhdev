@@ -284,17 +284,17 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     return (
         <div className="flex flex-col h-full">
             {/* ═══ Header ═══ */}
-            <div className="dashboard-header machine-detail-header !flex-col !items-stretch">
+            <div className="flex flex-col w-full bg-bg-surface px-4 md:px-8 pt-6 pb-0 shrink-0 border-b border-[#ffffff0a]">
                 <div className="flex items-center justify-between w-full">
-                    <div className="machine-detail-header-row flex items-center gap-2 md:gap-3.5 w-full min-w-0">
-                        <button onClick={handleBack} className="machine-btn-back flex shrink-0">
+                    <div className="flex items-center gap-3 w-full min-w-0">
+                        <button onClick={handleBack} className="flex items-center justify-center w-8 h-8 rounded-full bg-[#ffffff0a] hover:bg-[#ffffff14] text-text-muted hover:text-text-primary transition-colors shrink-0">
                             ←
                         </button>
-                        <div className="machine-detail-title-wrap min-w-0">
-                            <div className="flex items-center gap-2">
+                        <div className="flex flex-col min-w-0">
+                            <div className="flex items-center gap-3">
                                 {!actions.editingNickname ? (
                                     <h1
-                                        className="header-title cursor-pointer truncate"
+                                        className="text-xl md:text-2xl font-bold text-text-primary cursor-pointer truncate hover:text-accent-primary transition-colors"
                                         onClick={() => { actions.setEditingNickname(true); actions.setNicknameInput(machine.machineNickname || '') }}
                                         title="Click to set nickname"
                                     >
@@ -310,22 +310,22 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                             placeholder="Machine nickname..."
                                             className="px-2.5 py-1 rounded-md border border-violet-500/30 bg-bg-secondary text-text-primary text-sm font-semibold w-[140px] md:w-[200px]"
                                         />
-                                        <button onClick={actions.handleSaveNickname} className="machine-btn text-green-500 border-green-500/30 shrink-0">✓</button>
-                                        <button onClick={() => actions.setEditingNickname(false)} className="machine-btn shrink-0">✕</button>
+                                        <button onClick={actions.handleSaveNickname} className="flex items-center justify-center px-3 py-1 rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 text-sm font-medium transition-colors">Save</button>
+                                        <button onClick={() => actions.setEditingNickname(false)} className="flex items-center justify-center px-3 py-1 rounded bg-[#ffffff0a] text-text-muted hover:bg-[#ffffff14] hover:text-text-primary text-sm font-medium transition-colors">Cancel</button>
                                     </div>
                                 )}
-                                <span className="status-dot-md online shrink-0" />
+                                <span className="w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)] shrink-0" />
                             </div>
-                            <div className="header-subtitle machine-detail-subtitle mt-1 flex-wrap gap-1 md:gap-2 items-center display-none-mobile">
-                                <span>{machine.platform} · {machine.arch}</span>
+                            <div className="flex flex-wrap gap-x-3 gap-y-1 items-center mt-1.5 text-xs text-text-secondary opacity-80">
+                                <span className="font-mono bg-[#ffffff08] px-1.5 py-0.5 rounded">{machine.platform} · {machine.arch}</span>
                                 <span>{machine.cpus} cores</span>
                                 {(machineEntry as any)?.version && <span>v{(machineEntry as any).version}</span>}
                                 {machine.p2p.available && (
                                     <span>P2P {machine.p2p.state === 'connected' ? 'connected' : machine.p2p.state}</span>
                                 )}
-                                {machine.cdpConnected && <span>CDP ready</span>}
+                                {machine.cdpConnected && <span className="text-green-400 px-1.5 py-0.5 bg-green-400/10 rounded">CDP ready</span>}
                                 {machine.machineNickname && (
-                                    <span className="text-text-muted opacity-80 shrink-0">{machine.hostname}</span>
+                                    <span className="text-text-muted opacity-60 shrink-0">{machine.hostname}</span>
                                 )}
                             </div>
                         </div>
@@ -333,29 +333,38 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                 </div>
 
                 {/* Tabs */}
-                <div className="machine-tabs w-full overflow-x-auto overflow-y-hidden pb-1 -mb-1 mt-2">
+                {/* Tabs */}
+                <div className="flex overflow-x-auto overflow-y-hidden mt-4 gap-6 px-1 border-b border-[#ffffff0a]">
                     {TABS.map(tab => (
                         <button
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id)}
-                            className={`machine-tab shrink-0${activeTab === tab.id ? ' active' : ''}`}
+                            className={`pb-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 px-1 whitespace-nowrap ${
+                                activeTab === tab.id
+                                    ? 'border-accent-primary text-accent-primary'
+                                    : 'border-transparent text-text-secondary hover:text-text-primary'
+                            }`}
                         >
                             {tab.label}
                             {tab.count !== undefined && (
-                                <span className="tab-count">{tab.count}</span>
+                                <span className={`px-1.5 py-0.5 rounded-full text-[10px] ml-1 ${
+                                    activeTab === tab.id ? 'bg-accent-primary/20 text-accent-primary' : 'bg-[#ffffff10] text-text-muted'
+                                }`}>
+                                    {tab.count}
+                                </span>
                             )}
                         </button>
-                        ))}
-                    </div>
+                    ))}
+                </div>
 
             </div>
 
             {/* ═══ Content ═══ */}
-            <div className="page-content">
-                <div className="machine-page-shell">
-                    <div className="machine-tab-panel">
+            <div className="flex-1 min-h-0 overflow-y-auto px-4 md:px-8 py-6">
+                <div className="max-w-7xl mx-auto h-full">
+                    <div className="h-full">
                         {activeTab === 'workspace' && (
-                            <div className="machine-workspace-panel">
+                            <div className="flex flex-col md:flex-row gap-6 md:gap-10 h-full">
                                 <MachineCommandCenter
                                     machineEntry={machineEntry as DaemonData}
                                     providers={providers}

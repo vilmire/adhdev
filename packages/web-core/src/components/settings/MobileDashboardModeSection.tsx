@@ -24,26 +24,26 @@ export function setMobileDashboardMode(mode: MobileDashboardMode) {
 }
 
 export function MobileDashboardModeSection() {
-    const [workspaceEnabled, setWorkspaceEnabled] = useState(false)
+    const [chatModeEnabled, setChatModeEnabled] = useState(true)
 
     useEffect(() => {
-        setWorkspaceEnabled(getMobileDashboardMode() === 'workspace')
+        setChatModeEnabled(getMobileDashboardMode() === 'chat')
     }, [])
 
     return (
         <ToggleRow
-            label={<span className="flex items-center gap-1.5"><IconChat size={15} /> Mobile dashboard layout</span>}
-            description={workspaceEnabled
-                ? 'Use the full workspace layout on phones and tablets.'
-                : 'Use the chat-first mobile inbox by default. This keeps mobile closer to a messaging app.'}
-            checked={workspaceEnabled}
+            label={<span className="flex items-center gap-1.5"><IconChat size={15} /> Mobile Inbox (Chat Mode)</span>}
+            description={chatModeEnabled
+                ? 'Use the chat-first mobile inbox layout. This keeps mobile closer to a messaging app.'
+                : 'Use the full workspace layout on phones and tablets.'}
+            checked={chatModeEnabled}
             onChange={(checked) => {
-                setWorkspaceEnabled(checked)
-                setMobileDashboardMode(checked ? 'workspace' : 'chat')
+                setChatModeEnabled(checked)
+                setMobileDashboardMode(checked ? 'chat' : 'workspace')
             }}
             extra={
                 <span className="text-[11px] text-text-muted">
-                    {workspaceEnabled ? 'Workspace' : 'Chat mode'}
+                    {chatModeEnabled ? 'Chat mode' : 'Workspace'}
                 </span>
             }
         />

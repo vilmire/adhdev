@@ -40,6 +40,10 @@ export interface ConversationInboxSurfaceState {
     unread: boolean
     requiresAction: boolean
     isWorking: boolean
+    isReconnecting: boolean
+    isConnecting: boolean
+    isGenerating: boolean
+    isWaiting: boolean
     inboxBucket: RecentSessionBucket
 }
 
@@ -57,6 +61,14 @@ function normalizeInboxState(source: {
         inboxBucket: source.inboxBucket || 'idle',
         surfaceHidden: !!source.surfaceHidden,
     }
+}
+
+export function getConversationViewStates(conversation: { status?: string, connectionState?: string }) {
+    const isReconnecting = conversation.connectionState === 'failed' || conversation.connectionState === 'closed'
+    const isConnecting = conversation.connectionState === 'connecting' || conversation.connectionState === 'new'
+    const isGenerating = conversation.status === 'generating'
+    const isWaiting = conversation.status === 'waiting_approval'
+    return { isReconnecting, isConnecting, isGenerating, isWaiting }
 }
 
 export function buildLiveSessionInboxStateMap(ides: DaemonData[]) {
@@ -114,8 +126,15 @@ export function getConversationInboxSurfaceState(
     options?: { hideOpenTaskCompleteUnread?: boolean; isOpenConversation?: boolean },
 ): ConversationInboxSurfaceState {
     const liveState = getConversationLiveInboxState(conversation, stateBySessionId)
-    const requiresAction = liveState.inboxBucket === 'needs_attention'
-    const isWorking = liveState.inboxBucket === 'working'
+    const viewStates = getConversationViewStates(conversation)
+    
+    const isReconnecting = viewStates.isReconnecting
+    const isConnecting = viewStates.isConnecting
+    const isGenerating = viewStates.isGenerating
+    const isWaiting = viewStates.isWaiting
+
+    const requiresAction = liveState.inboxBucket === 'needs_attention' || conversation.status === 'needs_attention' || conversation.status === 'waiting_for_user_input' || isWaiting
+    const isWorking = liveState.inboxBucket === 'working' || isGenerating
     const unread = (
         liveState.inboxBucket === 'task_complete'
         && liveState.unread
@@ -126,6 +145,10 @@ export function getConversationInboxSurfaceState(
         unread,
         requiresAction,
         isWorking,
+        isReconnecting,
+        isConnecting,
+        isGenerating,
+        isWaiting,
         inboxBucket: requiresAction
             ? 'needs_attention'
             : isWorking

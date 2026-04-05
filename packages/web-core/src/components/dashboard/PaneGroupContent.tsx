@@ -1,4 +1,4 @@
-import { memo, useCallback } from 'react'
+import { memo } from 'react'
 import type { RefObject } from 'react'
 import type { ActiveConversation } from './types'
 import type { DaemonData } from '../../types'
@@ -6,7 +6,6 @@ import type { CliTerminalHandle } from '../CliTerminal'
 import ApprovalBanner from './ApprovalBanner'
 import CliTerminalPane from './CliTerminalPane'
 import ChatPane from './ChatPane'
-import ScreenshotViewer from '../ScreenshotViewer'
 import { IconWarning } from '../Icons'
 
 interface PaneGroupContentProps {
@@ -14,8 +13,6 @@ interface PaneGroupContentProps {
     clearToken: number
     isCliTerminal: boolean
     ideEntry?: DaemonData
-    screenshotUrl?: string
-    clearScreenshot: () => void
     terminalRef: RefObject<CliTerminalHandle | null>
     handleModalButton: (button: string) => void
     handleRelaunch: () => void
@@ -32,8 +29,6 @@ const PaneGroupContent = memo(function PaneGroupContent({
     clearToken,
     isCliTerminal,
     ideEntry,
-    screenshotUrl,
-    clearScreenshot,
     terminalRef,
     handleModalButton,
     handleRelaunch,
@@ -44,23 +39,11 @@ const PaneGroupContent = memo(function PaneGroupContent({
     actionLogs,
     userName,
 }: PaneGroupContentProps) {
-    const handleDismissScreenshot = useCallback(() => {
-        clearScreenshot()
-    }, [clearScreenshot])
-
     return (
         <>
             <ApprovalBanner activeConv={activeConv} onModalButton={handleModalButton} />
 
-            {activeConv.transport !== 'pty' && activeConv.transport !== 'acp' && screenshotUrl ? (
-                <div className="desktop-only px-3 pt-1 pb-2">
-                    <ScreenshotViewer
-                        screenshotUrl={screenshotUrl}
-                        mode="preview"
-                        onDismiss={handleDismissScreenshot}
-                    />
-                </div>
-            ) : (activeConv.transport !== 'pty' && activeConv.transport !== 'acp' && activeConv.cdpConnected === false) ? (
+            {(activeConv.transport !== 'pty' && activeConv.transport !== 'acp' && activeConv.cdpConnected === false) ? (
                 <div className="desktop-only px-3 pt-1 pb-2">
                     <div className="flex items-center gap-2.5 px-3.5 py-2 bg-yellow-500/[0.08] border border-yellow-500/20 rounded-lg text-xs text-text-secondary">
                         <span className="text-sm"><IconWarning size={14} /></span>
@@ -118,7 +101,6 @@ const PaneGroupContent = memo(function PaneGroupContent({
     prev.activeConv === next.activeConv
     && prev.isCliTerminal === next.isCliTerminal
     && prev.ideEntry === next.ideEntry
-    && prev.screenshotUrl === next.screenshotUrl
     && prev.terminalRef === next.terminalRef
     && prev.handleModalButton === next.handleModalButton
     && prev.handleRelaunch === next.handleRelaunch

@@ -174,8 +174,8 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                                             onClick={() => toggleScript(s)}
                                             className="px-2.5 py-1.5 rounded-md border text-[11px] font-medium text-left transition-all"
                                             style={{
-                                                borderColor: selectedScripts.includes(s) ? 'rgba(139,92,246,0.4)' : 'var(--border-subtle)',
-                                                background: selectedScripts.includes(s) ? 'rgba(139,92,246,0.08)' : 'transparent',
+                                                borderColor: selectedScripts.includes(s) ? 'color-mix(in srgb, var(--accent-primary) 40%, transparent)' : 'var(--border-subtle)',
+                                                background: selectedScripts.includes(s) ? 'color-mix(in srgb, var(--accent-primary) 8%, transparent)' : 'transparent',
                                                 color: selectedScripts.includes(s) ? '#a78bfa' : 'var(--text-secondary)',
                                             }}
                                         >
@@ -243,8 +243,8 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
                                     disabled={selectedScripts.length === 0}
                                     className="machine-btn"
                                     style={{
-                                        background: selectedScripts.length > 0 ? 'rgba(139,92,246,0.15)' : undefined,
-                                        borderColor: selectedScripts.length > 0 ? 'rgba(139,92,246,0.4)' : undefined,
+                                        background: selectedScripts.length > 0 ? 'color-mix(in srgb, var(--accent-primary) 15%, transparent)' : undefined,
+                                        borderColor: selectedScripts.length > 0 ? 'color-mix(in srgb, var(--accent-primary) 40%, transparent)' : undefined,
                                         color: selectedScripts.length > 0 ? '#a78bfa' : undefined,
                                         opacity: selectedScripts.length === 0 ? 0.4 : 1,
                                     }}

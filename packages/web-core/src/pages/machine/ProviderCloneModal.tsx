@@ -95,8 +95,8 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                                             onClick={() => setBaseType(p.type)}
                                             className="px-2.5 py-2 rounded-lg border text-center transition-all"
                                             style={{
-                                                borderColor: baseType === p.type ? 'rgba(139,92,246,0.4)' : 'var(--border-subtle)',
-                                                background: baseType === p.type ? 'rgba(139,92,246,0.08)' : 'transparent',
+                                                borderColor: baseType === p.type ? 'color-mix(in srgb, var(--accent-primary) 40%, transparent)' : 'var(--border-subtle)',
+                                                background: baseType === p.type ? 'color-mix(in srgb, var(--accent-primary) 8%, transparent)' : 'transparent',
                                             }}
                                         >
                                             <div className="text-lg">{p.icon}</div>

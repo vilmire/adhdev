@@ -1,4 +1,6 @@
-import { spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import {
   ensureSessionHostReady as ensureSharedSessionHostReady,
@@ -6,6 +8,7 @@ import {
   type SessionHostEndpoint,
 } from '@adhdev/daemon-core';
 const SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev';
+const SESSION_HOST_START_TIMEOUT_MS = 15_000;
 
 function buildSessionHostEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
@@ -44,11 +47,65 @@ function resolveSessionHostEntry(): string {
     path.resolve(__dirname, '../../vendor/session-host-daemon/index.js'),
   ];
   for (const candidate of localCandidates) {
-    if (require('fs').existsSync(candidate)) {
+    if (fs.existsSync(candidate)) {
       return candidate;
     }
   }
   return require.resolve('@adhdev/session-host-daemon');
+}
+
+function getSessionHostPidFile(): string {
+  return path.join(os.homedir(), '.adhdev', `${SESSION_HOST_APP_NAME}-session-host.pid`);
+}
+
+function killPid(pid: number): boolean {
+  try {
+    if (process.platform === 'win32') {
+      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    } else {
+      process.kill(pid, 'SIGTERM');
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function stopSessionHost(): boolean {
+  let stopped = false;
+  const pidFile = getSessionHostPidFile();
+  try {
+    if (fs.existsSync(pidFile)) {
+      const pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+      if (Number.isFinite(pid)) {
+        stopped = killPid(pid) || stopped;
+      }
+    }
+  } catch {
+    // noop
+  } finally {
+    try {
+      fs.unlinkSync(pidFile);
+    } catch {
+      // noop
+    }
+  }
+
+  if (process.platform !== 'win32') {
+    try {
+      const raw = execFileSync('pgrep', ['-f', 'session-host-daemon'], { encoding: 'utf8' }).trim();
+      for (const line of raw.split('\n')) {
+        const pid = Number.parseInt(line.trim(), 10);
+        if (Number.isFinite(pid)) {
+          stopped = killPid(pid) || stopped;
+        }
+      }
+    } catch {
+      // noop
+    }
+  }
+
+  return stopped;
 }
 
 async function runSessionHostCli(args: string[]): Promise<number> {
@@ -64,19 +121,35 @@ async function runSessionHostCli(args: string[]): Promise<number> {
 }
 
 export async function ensureSessionHostReady(): Promise<SessionHostEndpoint> {
-  return ensureSharedSessionHostReady({
-    appName: SESSION_HOST_APP_NAME,
-    spawnHost: () => {
-      const entry = resolveSessionHostEntry();
-      const child = spawn(process.execPath, [entry], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-        env: buildSessionHostEnv(process.env),
-      });
-      child.unref();
-    },
-  });
+  const spawnHost = () => {
+    const entry = resolveSessionHostEntry();
+    const child = spawn(process.execPath, [entry], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: buildSessionHostEnv(process.env),
+    });
+    child.unref();
+  };
+
+  try {
+    return await ensureSharedSessionHostReady({
+      appName: SESSION_HOST_APP_NAME,
+      spawnHost,
+      timeoutMs: SESSION_HOST_START_TIMEOUT_MS,
+    });
+  } catch (error) {
+    stopSessionHost();
+    return ensureSharedSessionHostReady({
+      appName: SESSION_HOST_APP_NAME,
+      spawnHost,
+      timeoutMs: SESSION_HOST_START_TIMEOUT_MS,
+    }).catch((retryError) => {
+      const initialMessage = error instanceof Error ? error.message : String(error);
+      const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+      throw new Error(`Session host failed to start after retry (${initialMessage}; retry: ${retryMessage})`);
+    });
+  }
 }
 
 export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint) {

@@ -55,6 +55,11 @@ export function parseCliContent(content: string): {
     textContent: string;
     hasTools: boolean;
 } {
+    const normalizeCliLine = (value: string) => value
+        .replace(/^\d+;/, '')
+        .replace(/\u0007/g, '')
+        .trim()
+
     // Pre-process carriage returns: PTY \r overwrites — prioritize ⏺ response content
     const processedContent = content.split('\n').map(line => {
         if (!line.includes('\r')) return line;
@@ -78,7 +83,7 @@ export function parseCliContent(content: string): {
     let skipUntilEmpty = false;
 
     for (const line of lines) {
-        const trimmed = line.trim();
+        const trimmed = normalizeCliLine(line);
         if (trimmed === '') { skipUntilEmpty = false; textLines.push(''); continue; }
 
         // TUI artifact filtering
@@ -90,6 +95,8 @@ export function parseCliContent(content: string): {
         if (/esc\s+to\s+interrupt|shift\+tab\s+to\s+cycle|accept\s+edits\s+on/i.test(trimmed)) continue;
         if (/Brewing[…\.]{0,3}\s*\d*$/i.test(trimmed) || /^[✢✳✶✻⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◆◇✦\s]+$/.test(trimmed)) continue;
         if (/^Auto-updating/i.test(trimmed)) continue;
+        if (/^✳\s*Debug (?:Claude Code|Codex) CLI/i.test(trimmed)) continue;
+        if (/^(?:─|═|╭|╰|│|├|╮|╯|┌|┐|└|┘|┬|┴|┼)+$/.test(trimmed)) continue;
 
         // ⏺ / ● / · — tool call or action summary
         if (/^[⏺●·⏵]/.test(line)) {
@@ -104,12 +111,24 @@ export function parseCliContent(content: string): {
             continue;
         }
 
+        if (/^(?:Bash|Read|Write|Edit|MultiEdit|Task|Glob|Grep|LS|NotebookEdit|Exact output)(?:\(|:)/.test(trimmed)) {
+            const toolName = trimmed.match(/^([A-Za-z][A-Za-z0-9_ ]+)/)?.[1]?.trim() || 'Tool';
+            toolCounts[toolName] = (toolCounts[toolName] || 0) + 1;
+            skipUntilEmpty = true;
+            continue;
+        }
+        if (/^Read\s+\d+\s+files?(?:\s+\(.*\))?$/i.test(trimmed)) {
+            toolCounts.Read = (toolCounts.Read || 0) + 1;
+            skipUntilEmpty = true;
+            continue;
+        }
+
         if (/^[\s]*[╭╰│├╮╯]/.test(line) || /^[╭╰│├╮╯─]+/.test(trimmed)) continue;
         if (/^\s+[⊙✓✗○◎▸►✦]/.test(line)) continue;
         if (skipUntilEmpty && /^\s{2,}/.test(line)) continue;
 
         skipUntilEmpty = false;
-        const cleaned = line.replace(/^❯\s+/, '');
+        const cleaned = trimmed.replace(/^❯\s+/, '');
         textLines.push(cleaned);
     }
 
@@ -276,7 +295,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 <div className={`chat-bubble ${isUser ? 'chat-bubble-user' : 'chat-bubble-assistant'}`}>
                     <div className={`chat-bubble-header ${displayContent ? 'mb-1.5' : 'mb-0'}`}>
                         <span className="chat-sender">
-                            {isUser ? (userName || 'You') : agentName}
+                            {isUser ? (userName || 'You') : (message.senderName || agentName)}
                         </span>
                         {receivedAt != null && (
                             <span className="chat-time">{formatTime(receivedAt)}</span>

@@ -196,11 +196,15 @@ class StandaloneServer {
         onStatusChange: () => this.scheduleBroadcastStatus(),
         removeAgentTracking: () => {},
         createPtyTransportFactory: ({ runtimeId, providerType, workspace, cliArgs, providerSessionId, attachExisting }) => (
-          new SessionHostPtyTransportFactory({
-            endpoint: sessionHostEndpoint,
-            clientId: `daemon-${process.pid}`,
-            runtimeId,
-            providerType,
+                        new SessionHostPtyTransportFactory({
+                            endpoint: sessionHostEndpoint,
+                            ensureReady: async () => {
+                                const activeEndpoint = await this.ensureActiveSessionHostEndpoint();
+                                this.sessionHostEndpoint = activeEndpoint;
+                            },
+                            clientId: `daemon-${process.pid}`,
+                            runtimeId,
+                            providerType,
             workspace,
             attachExisting,
             meta: {

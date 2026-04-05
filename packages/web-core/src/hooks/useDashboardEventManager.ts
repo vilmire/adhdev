@@ -58,6 +58,10 @@ export function useDashboardEventManager({
         })
 
         const unsubSysMsg = eventManager.onSystemMessage((targetKey: string, msg: SystemMessage) => {
+            const matchedConv = resolveConversationByTarget(targetKey)
+            if (matchedConv?.transport === 'pty' && msg._localId?.startsWith('sys_approval_')) {
+                return
+            }
             setLocalUserMessages(prev => ({
                 ...prev,
                 [targetKey]: [...(prev[targetKey] || []), msg],

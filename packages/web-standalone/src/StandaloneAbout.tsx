@@ -97,7 +97,7 @@ export default function StandaloneAbout() {
                     {SELFHOST_FEATURES.map(feature => (
                         <div key={feature.title} className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-4 transition-colors hover:border-border-default">
                             <div className="flex items-center gap-2 text-sm font-semibold text-text-primary mb-2">
-                                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/10 text-accent-light">
+                                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-bg-secondary text-text-secondary border border-border-subtle">
                                     {feature.icon}
                                 </span>
                                 {feature.title}
@@ -132,9 +132,9 @@ export default function StandaloneAbout() {
             <Section title="Cloud-only extras" description="Capabilities that need the hosted control plane or team infrastructure.">
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {CLOUD_EXTRAS.map(feature => (
-                        <div key={feature.title} className="rounded-xl border border-violet-500/20 bg-violet-500/[0.04] px-4 py-4">
+                        <div key={feature.title} className="rounded-xl border border-accent-primary/20 bg-accent-primary/5 px-4 py-4">
                             <div className="flex items-center gap-2 text-sm font-semibold text-text-primary mb-2">
-                                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/10 text-violet-400">
+                                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary">
                                     {feature.icon}
                                 </span>
                                 {feature.title}
@@ -152,7 +152,7 @@ export default function StandaloneAbout() {
                             <tr className="bg-bg-secondary">
                                 <th className="text-left px-4 py-3 font-semibold text-text-muted text-[11px] uppercase tracking-wider">Feature</th>
                                 <th className="text-center px-4 py-3 font-semibold text-text-muted text-[11px] uppercase tracking-wider w-[110px]">Selfhost</th>
-                                <th className="text-center px-4 py-3 font-semibold text-violet-400 text-[11px] uppercase tracking-wider w-[110px]">Cloud</th>
+                                <th className="text-center px-4 py-3 font-semibold text-accent-primary text-[11px] uppercase tracking-wider w-[110px]">Cloud</th>
                             </tr>
                         </thead>
                         <tbody>

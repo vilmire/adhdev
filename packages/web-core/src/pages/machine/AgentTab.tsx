@@ -84,12 +84,7 @@ export default function AgentTab({
         .filter(type => !managedEntries.some(entry => entry.type === type && normalizeManagedStatus(entry.status) !== 'stopped'))
     const pendingTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
-    // Default provider selection
-    useEffect(() => {
-        if (!selectedType && categoryProviders.length > 0) {
-            setSelectedType(categoryProviders[0].type)
-        }
-    }, [selectedType, categoryProviders.length])
+    // Auto-selection of providers removed to enforce 2-step setup
 
     // Auto-select default workspace when machine data loads
     useEffect(() => {
@@ -238,7 +233,7 @@ export default function AgentTab({
             <select
                 value={selectedWorkspace}
                 onChange={e => { setSelectedWorkspace(e.target.value); if (e.target.value !== '__custom__') setCustomPath('') }}
-                className="machine-input min-w-[200px] flex-1"
+                className="px-3 py-1.5 rounded-md min-w-[200px] flex-1 text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors"
             >
                 {(machine.workspaces || []).length > 0 ? (
                     <>
@@ -264,7 +259,7 @@ export default function AgentTab({
                     placeholder="Enter absolute path…"
                     value={customPath}
                     onChange={e => setCustomPath(e.target.value)}
-                    className="machine-input flex-1 min-w-[200px]"
+                    className="px-3 py-1.5 rounded-md flex-1 min-w-[200px] text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors"
                     autoFocus
                 />
             )}
@@ -291,108 +286,148 @@ export default function AgentTab({
     return (
         <div>
             {/* ═══ Launch Form ═══ */}
-            <div className={`px-5 py-4 rounded-xl mb-5 bg-bg-secondary border ${config.accent}`}>
-                <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-2.5">
-                    Launch {config.label}
+            <div className={`px-5 py-5 rounded-xl mb-6 bg-bg-secondary border ${config.accent} relative overflow-hidden`}>
+                <div className="absolute top-0 left-0 w-full height-[1px] bg-gradient-to-r from-transparent via-[#ffffff20] to-transparent" />
+                <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-accent-primary/60" />
+                    Select {config.label} to Launch
                 </div>
 
-                {/* Workspace selector (all categories) */}
-                {workspaceSelector}
-
-                {isIde ? (
-                    /* IDE: Detected IDEs as launch buttons */
-                    <>
-                        <div className="flex flex-wrap gap-2">
-                            {launchableIdes.map(d => {
-                                const matchingEntry = managedEntries.find(m => (m.type || '').toLowerCase() === (d.type || '').toLowerCase() && normalizeManagedStatus(m.status) !== 'stopped')
-                                const isRunning = d.running || !!matchingEntry
-                                const isReady = !!matchingEntry && (matchingEntry as IdeSessionEntry).cdpConnected
-                                const isPending = pendingLaunchTypes.includes(d.type || d.id || '')
-                                return (
-                                    <button
-                                        key={d.type}
-                                        onClick={() => {
-                                            if (isReady && matchingEntry) {
-                                                const targetSessionId = (matchingEntry as IdeSessionEntry).sessionId
-                                                if (targetSessionId) {
-                                                    navigate(`/dashboard?activeTab=${encodeURIComponent(targetSessionId)}`, {
-                                                        state: { openRemoteForTabKey: targetSessionId },
-                                                    })
-                                                } else {
-                                                    navigate('/dashboard', {
-                                                        state: { openRemoteForTabKey: matchingEntry.id },
-                                                    })
-                                                }
-                                                return
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                    {isIde ? (
+                        launchableIdes.length > 0 ? launchableIdes.map(d => {
+                            const matchingEntry = managedEntries.find(m => (m.type || '').toLowerCase() === (d.type || '').toLowerCase() && normalizeManagedStatus(m.status) !== 'stopped')
+                            const isRunning = d.running || !!matchingEntry
+                            const isReady = !!matchingEntry && (matchingEntry as IdeSessionEntry).cdpConnected
+                            const isPending = pendingLaunchTypes.includes(d.type || d.id || '')
+                            const isSelected = selectedType === (d.type || '')
+                            
+                            return (
+                                <button
+                                    key={d.type}
+                                    onClick={() => {
+                                        if (isReady && matchingEntry) {
+                                            const targetSessionId = (matchingEntry as IdeSessionEntry).sessionId
+                                            if (targetSessionId) {
+                                                navigate(`/dashboard?activeTab=${encodeURIComponent(targetSessionId)}`, { state: { openRemoteForTabKey: targetSessionId } })
+                                            } else {
+                                                navigate('/dashboard', { state: { openRemoteForTabKey: matchingEntry.id } })
                                             }
-                                            if (isPending) return
-                                            void (async () => {
-                                                const launched = await handleLaunchIde(d.type || d.id || '', resolvedWorkspacePath ? { workspace: resolvedWorkspacePath } : undefined)
-                                                if (launched) markPendingLaunch(d.type || d.id || '')
-                                            })()
-                                        }}
-                                        disabled={!!launchingIde || isPending}
-                                        className={`machine-btn-primary flex items-center gap-1.5 ${isRunning ? '!border-green-500/30' : ''}`}
-                                        style={{ opacity: (launchingIde && launchingIde !== d.type) ? 0.4 : 1 }}
-                                    >
-                                        <span>{getIcon(d.type)}</span>
-                                        {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_4px_rgba(34,197,94,0.4)]" />}
-                                        {isPending
-                                            ? `⏳ Waiting for ${d.name || formatIdeType(d.type)}...`
-                                            : isReady
-                                                ? `Open ${d.name || formatIdeType(d.type)}`
-                                                : launchingIde === d.type
-                                                    ? '⏳ Launching...'
-                                                    : `▶ ${d.name || formatIdeType(d.type)}`}
-                                        {isRunning && isReady && <span className="text-[9px] text-green-400 font-normal">running</span>}
-                                    </button>
-                                )
-                            })}
-                            {launchableIdes.length === 0 && (
-                                <div className="text-xs text-text-muted italic">
-                                    No IDEs detected.
-                                    <button onClick={handleDetectIdes} className="machine-btn ml-2 flex items-center gap-1"><IconSearch size={12} /> Scan</button>
-                                </div>
-                            )}
+                                            return
+                                        }
+                                        if (isPending) return
+                                        setSelectedType(prev => prev === (d.type || '') ? '' : (d.type || ''))
+                                    }}
+                                    disabled={!!launchingIde || isPending}
+                                    className={`flex flex-col items-center justify-center p-3.5 gap-2 rounded-xl border transition-all cursor-pointer group ${
+                                        isReady ? 'bg-green-500/10 border-green-500/20 hover:bg-green-500/20' : 
+                                        isSelected ? 'bg-accent-primary/10 border-accent-primary scale-[1.02] shadow-glow' : 'bg-bg-primary border-[#ffffff1a] hover:bg-[#ffffff0c] hover:border-[#ffffff30]'
+                                    }`}
+                                    style={{ opacity: (launchingIde && launchingIde !== d.type) ? 0.4 : 1 }}
+                                >
+                                    <div className="relative">
+                                        <span className="text-2xl drop-shadow-sm transition-transform group-hover:scale-110 block">{getIcon(d.type)}</span>
+                                        {isRunning && <span className={`absolute -top-1 -right-1 w-2 h-2 rounded-full ${isReady ? 'bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.6)]' : 'bg-orange-500 shadow-[0_0_6px_rgba(249,115,22,0.6)] animate-pulse'}`} />}
+                                    </div>
+                                    <div className="flex flex-col items-center">
+                                        <span className="text-xs font-semibold text-text-primary text-center">
+                                            {d.name || formatIdeType(d.type)}
+                                        </span>
+                                        <span className={`text-[9px] mt-0.5 uppercase tracking-wider font-medium ${isReady ? 'text-green-400' : isPending ? 'text-orange-400' : isSelected ? 'text-accent-primary' : 'text-text-muted'}`}>
+                                            {isReady ? 'Open Session' : isPending ? 'Starting...' : isSelected ? 'Configure' : 'Select'}
+                                        </span>
+                                    </div>
+                                </button>
+                            )
+                        }) : (
+                            <div className="col-span-full py-6 flex flex-col items-center justify-center bg-bg-primary/50 border border-dashed border-[#ffffff1a] rounded-xl text-xs text-text-muted italic gap-2">
+                                No IDEs detected.
+                                <button onClick={handleDetectIdes} className="btn bg-[#ffffff0a] hover:bg-[#ffffff14] text-text-muted hover:text-text-primary px-3 py-1.5 rounded-lg flex items-center gap-1.5"><IconSearch size={14} /> Scan System</button>
+                            </div>
+                        )
+                    ) : (
+                        categoryProviders.length > 0 ? categoryProviders.map((p: any) => {
+                            const isSelected = selectedType === p.type
+                            const isPending = pendingLaunchTypes.includes(p.type)
+                            const matchingEntry = managedEntries.find(m => m.type === p.type && normalizeManagedStatus(m.status) !== 'stopped')
+                            const isRunning = !!matchingEntry
+                            
+                            return (
+                                <button
+                                    key={p.type}
+                                    onClick={() => setSelectedType(prev => prev === p.type ? '' : p.type)}
+                                    className={`flex flex-col items-center justify-center p-3.5 gap-2 rounded-xl border transition-all cursor-pointer group ${
+                                        isSelected ? 'bg-accent-primary/10 border-accent-primary scale-[1.02] shadow-glow' : 'bg-bg-primary border-[#ffffff1a] hover:bg-[#ffffff0c] hover:border-[#ffffff30]'
+                                    }`}
+                                >
+                                    <div className="relative">
+                                        <span className="text-2xl drop-shadow-sm transition-transform group-hover:scale-110 block">{p.icon}</span>
+                                        {isRunning && <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.6)]" />}
+                                    </div>
+                                    <div className="flex flex-col items-center">
+                                        <span className="text-xs font-semibold text-text-primary text-center">
+                                            {p.displayName}
+                                        </span>
+                                        <span className={`text-[9px] mt-0.5 uppercase tracking-wider font-medium ${isPending ? 'text-orange-400' : isSelected ? 'text-accent-primary' : 'text-text-muted'}`}>
+                                            {isPending ? 'Starting...' : isSelected ? 'Configure' : 'Select'}
+                                        </span>
+                                    </div>
+                                </button>
+                            )
+                        }) : (
+                            <div className="col-span-full py-6 text-center bg-bg-primary/50 border border-dashed border-[#ffffff1a] rounded-xl text-xs text-text-muted">
+                                No {category.toUpperCase()} providers available
+                            </div>
+                        )
+                    )}
+                </div>
+
+                {/* Configuration Panel (2-step setup) */}
+                {selectedType && (isIde ? launchableIdes.find(d => d.type === selectedType) : categoryProviders.find(p => p.type === selectedType)) && (
+                    <div className="mt-5 pt-5 border-t border-[#ffffff1a] flex flex-col gap-4 animate-in slide-in-from-top-2 fade-in duration-200">
+                        <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider flex items-center justify-between">
+                            <span>Launch Settings</span>
+                            <span className="text-accent-primary font-bold">{isIde ? formatIdeType(selectedType) : providerLabelMap.get(selectedType) || selectedType}</span>
                         </div>
-                    </>
-                ) : (
-                    /* CLI / ACP: Provider selector + args */
-                    <div className="flex gap-2 items-center flex-wrap">
-                        <select
-                            value={selectedType}
-                            onChange={e => setSelectedType(e.target.value)}
-                            className="machine-input"
-                        >
-                            {categoryProviders.length > 0 ? categoryProviders.map((p: any) => (
-                                <option key={p.type} value={p.type}>{p.icon} {p.displayName}</option>
-                            )) : (
-                                <option value="" disabled>No {category.toUpperCase()} providers available</option>
-                            )}
-                        </select>
-                        {isAcp && (
-                            <input
-                                type="text"
-                                placeholder="Model (default)"
-                                value={launchModel}
-                                onChange={e => setLaunchModel(e.target.value)}
-                                className="machine-input min-w-[120px]"
-                            />
+                        
+                        {workspaceSelector}
+                        
+                        {!isIde && (
+                            <div className="flex flex-col sm:flex-row gap-3">
+                                {isAcp && (
+                                    <div className="flex flex-col gap-1.5 flex-1">
+                                        <span className="text-[10px] font-semibold text-text-secondary uppercase">Target Model</span>
+                                        <input
+                                            type="text"
+                                            placeholder="Leave empty for default"
+                                            value={launchModel}
+                                            onChange={e => setLaunchModel(e.target.value)}
+                                            className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors w-full"
+                                        />
+                                    </div>
+                                )}
+                                <div className="flex flex-col gap-1.5 flex-1">
+                                    <span className="text-[10px] font-semibold text-text-secondary uppercase">Startup Arguments</span>
+                                    <input
+                                        type="text"
+                                        placeholder="Optional flags..."
+                                        value={launchArgs}
+                                        onChange={e => setLaunchArgs(e.target.value)}
+                                        className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors w-full"
+                                    />
+                                </div>
+                            </div>
                         )}
-                        <input
-                            type="text"
-                            placeholder="Args (optional)"
-                            value={launchArgs}
-                            onChange={e => setLaunchArgs(e.target.value)}
-                            className="machine-input min-w-[120px]"
-                        />
-                        <button
-                            onClick={handleLaunch}
-                            disabled={!!launchingAgentType}
-                            className="machine-btn-primary"
-                        >
-                            {launchingAgentType === selectedType ? '⏳ Launching...' : '▶ Launch'}
-                        </button>
+                        
+                        <div className="flex justify-end mt-2">
+                            <button
+                                onClick={handleLaunch}
+                                disabled={!!launchingAgentType || !!launchingIde || pendingLaunchTypes.includes(selectedType)}
+                                className="btn btn-primary h-9 px-6 font-bold transition-all flex items-center gap-2 hover:shadow-glow hover:-translate-y-px"
+                            >
+                                {launchingAgentType === selectedType || launchingIde === selectedType ? '⏳ Launching...' : '▶ Launch'}
+                            </button>
+                        </div>
                     </div>
                 )}
             </div>
@@ -467,7 +502,7 @@ export default function AgentTab({
                                                             <span className="font-mono text-text-secondary">adhdev attach {cli.runtimeKey}</span>
                                                             <button
                                                                 type="button"
-                                                                className="machine-btn text-[9px] px-1.5 py-px"
+                                                                className="flex items-center justify-center px-1.5 py-0.5 rounded text-[9px] bg-[#ffffff0a] hover:bg-[#ffffff14] border border-[#ffffff0a] text-text-muted hover:text-text-primary transition-colors cursor-pointer"
                                                                 onClick={() => {
                                                                     void navigator.clipboard?.writeText(`adhdev attach ${cli.runtimeKey}`)
                                                                     setCopiedRuntimeKey(cli.runtimeKey || null)
@@ -511,12 +546,12 @@ export default function AgentTab({
                                                             state: { openRemoteForTabKey: entry.id },
                                                         })
                                                     }}
-                                                    className="machine-btn flex items-center gap-1"
+                                                    className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-[#ffffff14] text-text-primary transition-colors cursor-pointer"
                                                     title="Open remote control"
                                                 >
                                                     <IconMonitor size={13} />
                                                 </button>
-                                                <button onClick={() => handleRestartIde(entry as IdeSessionEntry)} className="machine-btn" style={{ color: 'var(--status-warning)', borderColor: 'color-mix(in srgb, var(--status-warning) 30%, transparent)' }} title="Restart">
+                                                <button onClick={() => handleRestartIde(entry as IdeSessionEntry)} className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-orange-500/20 text-orange-400 transition-colors cursor-pointer" title="Restart">
                                                     <IconRefresh size={14} />
                                                 </button>
                                             </>
@@ -528,7 +563,7 @@ export default function AgentTab({
                                                     const targetSessionId = (entry as AcpSessionEntry).sessionId
                                                     if (targetSessionId) openSessionInDashboard(targetSessionId)
                                                 }}
-                                                className="machine-btn"
+                                                className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-[#ffffff14] disabled:opacity-50 disabled:cursor-not-allowed text-text-primary transition-colors cursor-pointer"
                                                 title="View chat"
                                                 disabled={!(entry as AcpSessionEntry).sessionId}
                                             ><IconChat size={14} /></button>
@@ -547,7 +582,7 @@ export default function AgentTab({
                                                         const targetSessionId = (entry as CliSessionEntry).sessionId
                                                         if (targetSessionId) openSessionInDashboard(targetSessionId)
                                                     }}
-                                                    className="machine-btn flex items-center gap-1"
+                                                    className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-[#ffffff14] disabled:opacity-50 disabled:cursor-not-allowed text-text-primary transition-colors cursor-pointer"
                                                     title="Open current view in dashboard"
                                                     disabled={!(entry as CliSessionEntry).sessionId}
                                                 >
@@ -576,13 +611,13 @@ export default function AgentTab({
                                                     })()
                                                 }}
                                                 disabled={pendingLaunchTypes.includes(entry.type)}
-                                                className="machine-btn text-green-500 border-green-500/30"
+                                                className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-green-500/20 text-green-400 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                                                 title="Restart"
                                             >
                                                 {pendingLaunchTypes.includes(entry.type) ? '⏳' : <IconPlay size={14} />}
                                             </button>
                                         ) : (
-                                            <button onClick={() => handleStop(entry)} className="machine-btn text-red-500 border-red-500/30" title="Stop">
+                                            <button onClick={() => handleStop(entry)} className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer" title="Stop">
                                                 <IconX size={14} />
                                             </button>
                                         )}
@@ -632,12 +667,12 @@ export default function AgentTab({
                                                     }}
                                                     className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors duration-150 cursor-pointer ${
                                                         ext.enabled
-                                                            ? 'bg-violet-500/[0.08] border-violet-500/20 text-violet-400'
+                                                            ? 'bg-accent-primary/10 border-accent-primary/20 text-accent-primary-light'
                                                             : 'bg-bg-glass border-border-subtle text-text-muted'
                                                     }`}
                                                 >
                                                     <span className={`w-1.5 h-1.5 rounded-full ${
-                                                        ext.enabled ? 'bg-violet-400 shadow-[0_0_4px_rgba(139,92,246,0.4)]' : 'bg-zinc-600'
+                                                        ext.enabled ? 'bg-accent-primary shadow-glow' : 'bg-zinc-600'
                                                     }`} />
                                                     {ext.name}
                                                     <span className="text-[9px] font-normal">{ext.enabled ? 'ON' : 'OFF'}</span>

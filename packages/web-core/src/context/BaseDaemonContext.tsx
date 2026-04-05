@@ -27,8 +27,6 @@ export interface Toast {
 export interface BaseDaemonContextValue {
     ides: DaemonData[]
     updateIdeChats: (ideId: string, chats: DaemonData['chats']) => void
-    screenshotMap: Record<string, string>
-    setScreenshotMap: React.Dispatch<React.SetStateAction<Record<string, string>>>
     initialLoaded: boolean
     toasts: Toast[]
     setToasts: React.Dispatch<React.SetStateAction<Toast[]>>
@@ -64,8 +62,6 @@ export interface BaseDaemonActions {
 const BaseDaemonCtx = createContext<BaseDaemonContextValue>({
     ides: [],
     updateIdeChats: () => {},
-    screenshotMap: {},
-    setScreenshotMap: () => {},
     initialLoaded: false,
     toasts: [],
     setToasts: () => {},
@@ -422,7 +418,6 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
     connectionOverrides?: ConnectionOverrides
 }) {
     const [ides, setIdes] = useState<DaemonData[]>([])
-    const [screenshotMap, setScreenshotMap] = useState<Record<string, string>>({})
     const [initialLoaded, setInitialLoaded] = useState(false)
     const [toasts, setToasts] = useState<Toast[]>([])
     const [userName, setUserName] = useState<string | undefined>(undefined)
@@ -463,7 +458,6 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
     const co = connectionOverrides
     const contextValue = useMemo<BaseDaemonContextValue>(() => ({
         ides, updateIdeChats,
-        screenshotMap, setScreenshotMap,
         initialLoaded,
         toasts, setToasts,
         // Connection state — overrides from platform or defaults for standalone
@@ -482,7 +476,6 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
     }), [
         ides,
         updateIdeChats,
-        screenshotMap,
         initialLoaded,
         toasts,
         co?.wsStatus,

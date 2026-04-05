@@ -425,6 +425,7 @@ export class ProviderLoader {
   resolve(type: string, context?: { os?: string; version?: string }): ResolvedProvider | undefined {
     const base = this.providers.get(type);
     if (!base) return undefined;
+    const providerDir = this.findProviderDirInternal(type) || undefined;
 
     const currentOs = context?.os || process.platform;
     const currentVersion = context?.version ??
@@ -440,6 +441,9 @@ export class ProviderLoader {
  // Restore script functions (lost during JSON.parse)
     if (base.scripts) {
       resolved.scripts = { ...base.scripts };
+    }
+    if (providerDir) {
+      resolved._resolvedProviderDir = providerDir;
     }
 
  // 1. Apply OS override
@@ -468,6 +472,14 @@ export class ProviderLoader {
             if (loaded) {
               resolved.scripts = loaded;
               this.log(`  [compatibility] ${type} v${currentVersion} → ${entry.scriptDir}`);
+              resolved._resolvedScriptDir = entry.scriptDir;
+              resolved._resolvedScriptsSource = `compatibility:${entry.ideVersion}`;
+              if (providerDir) {
+                const fullDir = path.join(providerDir, entry.scriptDir);
+                resolved._resolvedScriptsPath = fs.existsSync(path.join(fullDir, 'scripts.js'))
+                  ? path.join(fullDir, 'scripts.js')
+                  : fullDir;
+              }
               matched = true;
             }
             break; // first match wins
@@ -480,6 +492,14 @@ export class ProviderLoader {
           if (loaded) {
             resolved.scripts = loaded;
             this.log(`  [compatibility] ${type} v${currentVersion} → default: ${(base as any).defaultScriptDir}`);
+            resolved._resolvedScriptDir = (base as any).defaultScriptDir;
+            resolved._resolvedScriptsSource = 'defaultScriptDir:version_miss';
+            if (providerDir) {
+              const fullDir = path.join(providerDir, (base as any).defaultScriptDir);
+              resolved._resolvedScriptsPath = fs.existsSync(path.join(fullDir, 'scripts.js'))
+                ? path.join(fullDir, 'scripts.js')
+                : fullDir;
+            }
           }
           resolved._versionWarning = `Version ${currentVersion} not in compatibility matrix. Using default scripts.`;
         }
@@ -495,6 +515,14 @@ export class ProviderLoader {
             if (loaded) {
               resolved.scripts = loaded;
               this.log(`  [version override] ${type} ${range} → ${dirOverride}`);
+              resolved._resolvedScriptDir = dirOverride;
+              resolved._resolvedScriptsSource = `versions:${range}`;
+              if (providerDir) {
+                const fullDir = path.join(providerDir, dirOverride);
+                resolved._resolvedScriptsPath = fs.existsSync(path.join(fullDir, 'scripts.js'))
+                  ? path.join(fullDir, 'scripts.js')
+                  : fullDir;
+              }
             }
           } else if (override.scripts) {
             resolved.scripts = { ...resolved.scripts, ...override.scripts };
@@ -507,6 +535,14 @@ export class ProviderLoader {
       if (loaded) {
         resolved.scripts = loaded;
         this.log(`  [compatibility] ${type} no version detected → default: ${(base as any).defaultScriptDir}`);
+        resolved._resolvedScriptDir = (base as any).defaultScriptDir;
+        resolved._resolvedScriptsSource = 'defaultScriptDir:no_version';
+        if (providerDir) {
+          const fullDir = path.join(providerDir, (base as any).defaultScriptDir);
+          resolved._resolvedScriptsPath = fs.existsSync(path.join(fullDir, 'scripts.js'))
+            ? path.join(fullDir, 'scripts.js')
+            : fullDir;
+        }
       }
     }
 
@@ -583,6 +619,9 @@ export class ProviderLoader {
         });
 
         const handleChange = (filePath: string) => {
+          if (/[\/\\]fixtures[\/\\]/.test(filePath)) {
+            return;
+          }
           if (filePath.endsWith('.js') || filePath.endsWith('.json')) {
             this.log(`File changed: ${path.basename(filePath)}, reloading...`);
             this.reload();

@@ -33,6 +33,101 @@ export interface DevStatus {
   uptime: number
 }
 
+export interface CliTraceEntry {
+  id: number
+  at: number
+  type: string
+  status: string
+  isWaitingForResponse: boolean
+  activeModal: { message: string; buttons: string[] } | null
+  payload: Record<string, any>
+}
+
+export interface CliTraceResponse {
+  instanceId: string
+  providerState: {
+    type: string
+    name: string
+    status: string
+    mode?: string
+  }
+  debug: Record<string, any> | null
+  trace: {
+    sessionId: string
+    entryCount: number
+    entries: CliTraceEntry[]
+    screenText: string
+    recentOutputBuffer: string
+    responseBuffer: string
+    status: string
+    activeModal: { message: string; buttons: string[] } | null
+    currentTurnScope: {
+      prompt: string
+      startedAt: number
+      bufferStart: number
+      rawBufferStart: number
+    } | null
+    messages: { role: string; content: string; timestamp?: number }[]
+  } | null
+  message?: string
+}
+
+export interface CliExerciseResponse {
+  exercised: boolean
+  instanceId: string
+  providerState: {
+    type: string
+    name: string
+    status: string
+    mode?: string
+  }
+  initialDebug: Record<string, any> | null
+  initialTrace: CliTraceResponse['trace'] | null
+  debug: Record<string, any> | null
+  trace: CliTraceResponse['trace'] | null
+  statusesSeen: string[]
+  approvalsResolved: { at: number; buttonIndex: number; label: string | null }[]
+  elapsedMs: number
+  timedOut: boolean
+  error?: string
+}
+
+export interface CliFixtureInfo {
+  name: string
+  path: string
+  createdAt: string | null
+  notes: string | null
+  requestText: string
+  assertions: {
+    mustContainAny?: string[]
+    mustNotContainAny?: string[]
+    statusesSeen?: string[]
+    requireNotTimedOut?: boolean
+  }
+}
+
+export interface CliFixtureCaptureResponse {
+  saved: boolean
+  name: string
+  path: string
+  fixture: Record<string, any>
+  verification: {
+    pass: boolean
+    failures: string[]
+  }
+  error?: string
+}
+
+export interface CliFixtureReplayResponse {
+  replayed: boolean
+  pass: boolean
+  failures: string[]
+  fixture: Record<string, any>
+  result: CliExerciseResponse
+  assertions: Record<string, any>
+  error?: string
+}
+
 export interface DomQueryResult {
   total: number
   results: {
@@ -147,6 +242,60 @@ export const api = {
 
   cliSend: (type: string, text: string) =>
     request<{ sent: boolean; type: string; instanceId?: string; error?: string }>('/api/cli/send', 'POST', { type, text }),
+
+  cliLaunch: (type: string, workingDir?: string, args?: string[]) =>
+    request<{ launched: boolean; type: string; workspace: string; error?: string }>('/api/cli/launch', 'POST', { type, workingDir, args }),
+
+  cliStop: (type: string, instanceId?: string) =>
+    request<{ stopped: boolean; type: string; instanceId?: string; error?: string }>('/api/cli/stop', 'POST', { type, instanceId }),
+
+  cliResolve: (type: string, buttonIndex: number, instanceId?: string) =>
+    request<{ resolved: boolean; type: string; instanceId?: string; buttonIndex: number; error?: string }>('/api/cli/resolve', 'POST', { type, buttonIndex, instanceId }),
+
+  cliRaw: (type: string, keys: string, instanceId?: string) =>
+    request<{ sent: boolean; type: string; instanceId?: string; keysLength: number; error?: string }>('/api/cli/raw', 'POST', { type, keys, instanceId }),
+
+  cliDebug: (type: string) =>
+    request<{ instanceId: string; providerState: Record<string, any>; debug: Record<string, any> | null; error?: string }>(`/api/cli/debug/${encodeURIComponent(type)}`),
+
+  cliTrace: (type: string, limit = 120) =>
+    request<CliTraceResponse>(`/api/cli/trace/${encodeURIComponent(type)}?limit=${limit}`),
+
+  cliExercise: (type: string, opts: {
+    text: string
+    instanceId?: string
+    workingDir?: string
+    args?: string[]
+    autoLaunch?: boolean
+    freshSession?: boolean
+    autoResolveApprovals?: boolean
+    approvalButtonIndex?: number
+    timeoutMs?: number
+    readyTimeoutMs?: number
+    idleSettledMs?: number
+    traceLimit?: number
+    stopWhenDone?: boolean
+  }) =>
+    request<CliExerciseResponse>('/api/cli/exercise', 'POST', { type, ...opts }),
+
+  cliFixtures: (type: string) =>
+    request<{ fixtures: CliFixtureInfo[]; count: number }>(`/api/cli/fixtures/${encodeURIComponent(type)}`),
+
+  cliFixtureCapture: (type: string, opts: {
+    name?: string
+    request: Record<string, any>
+    assertions?: {
+      mustContainAny?: string[]
+      mustNotContainAny?: string[]
+      statusesSeen?: string[]
+      requireNotTimedOut?: boolean
+    }
+    notes?: string
+  }) =>
+    request<CliFixtureCaptureResponse>('/api/cli/fixture/capture', 'POST', { type, ...opts }),
+
+  cliFixtureReplay: (type: string, name: string, assertions?: Record<string, any>) =>
+    request<CliFixtureReplayResponse>('/api/cli/fixture/replay', 'POST', { type, name, assertions }),
 
   scriptHints: (type: string) =>
     request<{ hints: Record<string, { template: Record<string, any>; description: string }> }>(`/providers/${type}/script-hints`),

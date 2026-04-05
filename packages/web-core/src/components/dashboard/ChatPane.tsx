@@ -2,11 +2,12 @@
 /**
  * ChatPane — Chat view for IDE, ACP, and CLI chat-mode sessions.
  */
-import { useRef, useState, useCallback, useMemo } from 'react';
+import React, { useRef, useState, useCallback, useMemo } from 'react';
 import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import ControlsBar from './ControlsBar';
 import ChatInputBar from './ChatInputBar';
 import ConversationMetaChips from './ConversationMetaChips';
+import { getConversationViewStates } from './DashboardMobileChatShared';
 import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
 import type { ActiveConversation } from './types';
 import type { DaemonData } from '../../types';
@@ -89,6 +90,8 @@ export default function ChatPane({
         actionLogCount: actionLogs.length,
         isSendingChat,
     });
+
+    const viewStates = React.useMemo(() => getConversationViewStates(activeConv), [activeConv.status, activeConv.connectionState]);
 
     // Per-tab history cache — survives tab switches
     interface TabHistoryState {
@@ -260,6 +263,9 @@ export default function ChatPane({
                 </div>
             );
         }
+        if (viewStates.isGenerating || activeConv.status === 'streaming') {
+            setIsLoadingMore(false);
+        }
         if (activeConv.status === 'not_monitored') {
             return (
                 <div className="text-center mt-16 flex flex-col items-center gap-3">
@@ -293,7 +299,7 @@ export default function ChatPane({
             );
         }
         return undefined;
-    }, [activeConv.messages.length, activeConv.connectionState, activeConv.status, handleFocusAgent, isFocusingAgent, isLoadingMore, panelLabel]);
+    }, [activeConv.messages.length, activeConv.connectionState, activeConv.status, handleFocusAgent, isFocusingAgent, isLoadingMore, panelLabel, viewStates.isGenerating]);
 
     return (
         <div className="flex-1 min-h-0 w-full flex flex-col">
@@ -308,7 +314,7 @@ export default function ChatPane({
                 agentName={activeConv.agentName || activeConv.displayPrimary || 'Agent'}
                 userName={userName}
                 isCliMode={isCliConv(activeConv) || isAcpConv(activeConv)}
-                isWorking={activeConv.status === 'generating'}
+                isWorking={viewStates.isGenerating}
                 contextKey={activeConv.tabKey}
                 receivedAtMap={receivedAtMap}
                 onLoadMore={handleLoadMore}

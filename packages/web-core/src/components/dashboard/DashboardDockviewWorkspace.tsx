@@ -31,7 +31,7 @@ import {
     readDashboardDockviewStoredLayout,
     writeDashboardDockviewStoredLayout,
 } from '../../utils/dashboardLayoutStorage'
-import { buildLiveSessionInboxStateMap, isConversationTaskCompleteUnread, type LiveSessionInboxState } from './DashboardMobileChatShared'
+import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, type LiveSessionInboxState } from './DashboardMobileChatShared'
 import { getCliConversationViewMode, isAcpConv } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
@@ -41,8 +41,6 @@ interface DashboardDockviewWorkspaceProps {
     clearedTabs: Record<string, number>
     ides: DaemonData[]
     actionLogs: { ideId: string; text: string; timestamp: number }[]
-    screenshotMap: Record<string, string>
-    setScreenshotMap: (m: Record<string, string>) => void
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
     setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
@@ -66,11 +64,9 @@ interface DashboardDockviewContextValue {
     ides: DaemonData[]
     isStandalone: boolean
     liveSessionInboxState: Map<string, LiveSessionInboxState>
-    screenshotMap: Record<string, string>
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
-    setScreenshotMap: (m: Record<string, string>) => void
     toggleHiddenTab: (tabKey: string) => void
     userName?: string
 }
@@ -261,14 +257,6 @@ function DashboardDockviewPanel({ params }: IDockviewPanelProps<DashboardDockvie
         () => activeConv ? ctx.ides.find(ide => ide.id === activeConv.ideId) : undefined,
         [ctx.ides, activeConv],
     )
-    const activeScreenshotUrl = activeConv ? ctx.screenshotMap[activeConv.ideId] : undefined
-    const clearActiveScreenshot = useCallback(() => {
-        if (!activeConv) return
-        if (!(activeConv.ideId in ctx.screenshotMap)) return
-        const next = { ...ctx.screenshotMap }
-        delete next[activeConv.ideId]
-        ctx.setScreenshotMap(next)
-    }, [activeConv, ctx])
     const activeActionLogs = useMemo(() => {
         if (!activeConv) return []
         return ctx.actionLogs.filter(log => log.ideId === activeConv.tabKey)
@@ -298,8 +286,6 @@ function DashboardDockviewPanel({ params }: IDockviewPanelProps<DashboardDockvie
                 clearToken={ctx.clearedTabs[activeConv.tabKey] || 0}
                 isCliTerminal={isCliTerminal}
                 ideEntry={activeIdeEntry}
-                screenshotUrl={activeScreenshotUrl}
-                clearScreenshot={clearActiveScreenshot}
                 terminalRef={terminalRef}
                 handleModalButton={cmds.handleModalButton}
                 handleRelaunch={cmds.handleRelaunch}
@@ -422,13 +408,16 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
 
     const isActive = props.api.group.activePanel?.id === props.api.id
     const isGroupActive = props.api.isGroupActive
-    const isReconnecting = conversation.connectionState === 'failed' || conversation.connectionState === 'closed'
-    const isConnecting = conversation.connectionState === 'connecting' || conversation.connectionState === 'new'
-    const isGenerating = conversation.status === 'generating'
-    const isWaiting = conversation.status === 'waiting_approval'
-    const isTaskCompleteUnread = isConversationTaskCompleteUnread(conversation, ctx.liveSessionInboxState, {
+
+    const surfaceState = getConversationInboxSurfaceState(conversation, ctx.liveSessionInboxState, {
         isOpenConversation: isActive,
     })
+    
+    const isReconnecting = surfaceState.isReconnecting
+    const isConnecting = surfaceState.isConnecting
+    const isGenerating = surfaceState.isGenerating
+    const isWaiting = surfaceState.isWaiting
+    const isTaskCompleteUnread = surfaceState.unread
 
     return (
         <div
@@ -481,8 +470,6 @@ export default function DashboardDockviewWorkspace({
     clearedTabs,
     ides,
     actionLogs,
-    screenshotMap,
-    setScreenshotMap,
     sendDaemonCommand,
     setLocalUserMessages,
     setActionLogs,
@@ -525,11 +512,9 @@ export default function DashboardDockviewWorkspace({
         ides,
         isStandalone,
         liveSessionInboxState,
-        screenshotMap,
         sendDaemonCommand,
         setActionLogs,
         setLocalUserMessages,
-        setScreenshotMap,
         toggleHiddenTab,
         userName,
     }), [
@@ -541,11 +526,9 @@ export default function DashboardDockviewWorkspace({
         ides,
         isStandalone,
         liveSessionInboxState,
-        screenshotMap,
         sendDaemonCommand,
         setActionLogs,
         setLocalUserMessages,
-        setScreenshotMap,
         toggleHiddenTab,
         userName,
     ])

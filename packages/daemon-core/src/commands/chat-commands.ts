@@ -23,6 +23,13 @@ function getTargetedCliAdapter(h: CommandHelpers, args: any, providerType?: stri
     return h.getCliAdapter(args?.targetSessionId || providerType || h.currentSession?.providerType || h.currentManagerKey);
 }
 
+function getTargetInstance(h: CommandHelpers, args: any) {
+    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+    const sessionId = targetSessionId || h.currentSession?.sessionId || '';
+    if (!sessionId) return null;
+    return h.ctx.instanceManager?.getInstance(sessionId) as any;
+}
+
 function getTargetTransport(h: CommandHelpers, provider?: any): SessionTransport | null {
     if (h.currentSession?.transport) return h.currentSession.transport;
     switch (provider?.category) {
@@ -781,6 +788,7 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
             (adapter as any).writeRaw?.(keys);
         }
         LOG.info('Command', `[resolveAction] CLI PTY → buttonIndex=${buttonIndex} "${buttons[buttonIndex] ?? '?'}"`);
+        getTargetInstance(h, args)?.recordApprovalSelection?.(buttons[buttonIndex] ?? button);
         return { success: true, buttonIndex, button: buttons[buttonIndex] ?? button };
     }
 

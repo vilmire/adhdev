@@ -13,6 +13,48 @@ import type * as http from 'http';
 import type { DevServerContext, ProviderCategory } from './dev-server-types.js';
 import { DEV_SERVER_PORT } from './dev-server.js';
 import { LOG } from '../logging/logger.js';
+import { runCliAutoImplVerification } from './dev-cli-debug.js';
+
+type CliExerciseVerification = {
+  request?: Record<string, any>;
+  mustContainAny?: string[];
+  mustNotContainAny?: string[];
+  mustMatchAny?: string[];
+  mustNotMatchAny?: string[];
+  lastAssistantMustContainAny?: string[];
+  lastAssistantMustNotContainAny?: string[];
+  lastAssistantMustMatchAny?: string[];
+  lastAssistantMustNotMatchAny?: string[];
+  inspectFields?: string[];
+  description?: string;
+  fixtureName?: string;
+  fixtureNames?: string[];
+};
+
+function getAutoImplPid(ctx: DevServerContext): number | null {
+  const proc: any = ctx.autoImplProcess;
+  return proc && typeof proc.pid === 'number' && proc.pid > 0 ? proc.pid : null;
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: any) {
+    return error?.code === 'EPERM';
+  }
+}
+
+function clearStaleAutoImplState(ctx: DevServerContext, reason: string): void {
+  if (!ctx.autoImplStatus.running && !ctx.autoImplProcess) return;
+
+  const pid = getAutoImplPid(ctx);
+  if (pid && isPidAlive(pid)) return;
+
+  ctx.log(`Clearing stale auto-implement state: ${reason}${pid ? ` (pid ${pid})` : ''}`);
+  ctx.autoImplProcess = null;
+  ctx.autoImplStatus.running = false;
+}
 
 export function getDefaultAutoImplReference(ctx: DevServerContext, category: string, type: string): string {
   if (category === 'cli') {
@@ -118,12 +160,21 @@ export function loadAutoImplReferenceScripts(ctx: DevServerContext, referenceTyp
 
 export async function handleAutoImplement(ctx: DevServerContext, type: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const body = await ctx.readBody(req);
-  const { agent = 'claude-cli', functions, reference, model, comment, providerDir: requestedProviderDir } = body;
+  const {
+    agent = 'claude-cli',
+    functions,
+    reference,
+    model,
+    comment,
+    providerDir: requestedProviderDir,
+    verification,
+  } = body;
   if (!functions || !Array.isArray(functions) || functions.length === 0) {
     ctx.json(res, 400, { error: 'functions[] is required (e.g. ["readChat", "sendMessage"])' });
     return;
   }
 
+  clearStaleAutoImplState(ctx, 'new auto-implement request');
   if (ctx.autoImplStatus.running) {
     ctx.json(res, 409, { error: 'Auto-implement already in progress', type: ctx.autoImplStatus.type });
     return;
@@ -141,7 +192,57 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
   }
   const providerDir = writableProvider.dir;
 
+  ctx.autoImplStatus = { running: false, type, progress: [] };
+
+  if (provider.category === 'cli' && verification && (verification.fixtureName || (verification.fixtureNames && verification.fixtureNames.length > 0))) {
+    sendAutoImplSSE(ctx, {
+      event: 'progress',
+      data: {
+        function: '_preflight',
+        status: 'verifying',
+        message: 'Running preflight verification before spawning agent...',
+      }
+    });
+    try {
+      const preflight = await runCliAutoImplVerification(ctx, type, verification);
+      sendAutoImplSSE(ctx, { event: 'verification', data: preflight });
+      if (preflight.pass) {
+        sendAutoImplSSE(ctx, {
+          event: 'complete',
+          data: {
+            success: true,
+            exitCode: 0,
+            functions,
+            message: `✅ No-op: exact ${preflight.mode} already passes`,
+            verification: preflight,
+            skipped: true,
+          },
+        });
+        ctx.json(res, 200, {
+          started: false,
+          skipped: true,
+          type,
+          functions,
+          providerDir,
+          verification: preflight,
+          message: 'Preflight verification already passes. No auto-implement run needed.',
+        });
+        return;
+      }
+    } catch (error: any) {
+      sendAutoImplSSE(ctx, {
+        event: 'progress',
+        data: {
+          function: '_preflight',
+          status: 'verify_failed',
+          message: `Preflight verification errored, continuing to agent run: ${error?.message || error}`,
+        }
+      });
+    }
+  }
+
   try {
+    ctx.autoImplStatus = { running: true, type, progress: ctx.autoImplStatus.progress };
     // 1. Collect DOM context
     // 1. Skip heavy DOM pre-parsing (Agent will use cURL to explore via CDP!)
     const resolvedReference = resolveAutoImplReference(ctx, provider.category, reference, type);
@@ -170,7 +271,7 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
     const referenceScripts = loadAutoImplReferenceScripts(ctx, resolvedReference);
 
     // 3. Build the prompt
-    const prompt = buildAutoImplPrompt(ctx, type, provider, providerDir, functions, domContext, referenceScripts, comment, resolvedReference);
+    const prompt = buildAutoImplPrompt(ctx, type, provider, providerDir, functions, domContext, referenceScripts, comment, resolvedReference, verification);
 
     // 4. Write prompt to temp file (avoids shell escaping issues with special chars)
     const tmpDir = path.join(os.tmpdir(), 'adhdev-autoimpl');
@@ -193,7 +294,8 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
     // ─── ACP Agent: use ACP SDK (JSON-RPC protocol) ───
     if (agentCategory === 'acp') {
       sendAutoImplSSE(ctx, { event: 'progress', data: { function: '_init', status: 'spawning', message: `Spawning ACP agent: ${spawn.command} ${(spawn.args || []).join(' ')}` } });
-      ctx.autoImplStatus = { running: true, type, progress: [] };
+      ctx.autoImplStatus.running = true;
+      ctx.autoImplStatus.type = type;
 
       // Dynamic import ACP SDK
       const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } = await import('@agentclientprotocol/sdk');
@@ -366,7 +468,8 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
 
     sendAutoImplSSE(ctx, { event: 'progress', data: { function: '_init', status: 'spawning', message: `Spawning agent: ${shellCmd.substring(0, 200)}... (prompt: ${prompt.length} chars)` } });
 
-    ctx.autoImplStatus = { running: true, type, progress: [] };
+    ctx.autoImplStatus.running = true;
+    ctx.autoImplStatus.type = type;
     const spawnedAt = Date.now();
 
     let child: any;
@@ -412,6 +515,7 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
     let approvalKeys: Record<number, string> = { 0: 'y\r' };
     let approvalBuffer = '';
     let lastApprovalTime = 0;
+    let completionSignalSeen = false;
     
     try {
       const { normalizeCliProviderForRuntime } = await import('../cli-adapters/provider-cli-adapter.js');
@@ -435,6 +539,7 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
       // Force exit on completion signal (check cleanData directly to avoid stale buffer echo matches)
       const elapsed = Date.now() - spawnedAt;
       if (elapsed > 15000 && cleanData.includes('_PIPELINE_COMPLETE_SIGNAL_')) {
+        completionSignalSeen = true;
         ctx.log(`Agent finished task after ${Math.round(elapsed/1000)}s. Terminating interactive CLI session to unblock pipeline.`);
         sendAutoImplSSE(ctx, { event: 'output', data: { chunk: `\n[🤖 ADHDev Pipeline] Completion token detected. Proceeding...\n`, stream: 'stdout' } });
         approvalBuffer = '';
@@ -461,6 +566,57 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
       }
     };
 
+    const finalizeCliAutoImpl = async (code: number | null) => {
+      ctx.autoImplProcess = null;
+      let success = completionSignalSeen || code === 0;
+      let message = success
+        ? (completionSignalSeen && code !== 0 ? '✅ Auto-implement complete (completion signal)' : '✅ Auto-implement complete')
+        : `❌ Agent exited (code: ${code})`;
+      let verificationSummary: any = null;
+
+      try { ctx.providerLoader.reload(); } catch { /* ignore */ }
+
+      if (provider.category === 'cli' && verification) {
+        sendAutoImplSSE(ctx, {
+          event: 'progress',
+          data: {
+            function: '_verify',
+            status: 'running',
+            message: 'Running exact post-patch verification...',
+          },
+        });
+        try {
+          verificationSummary = await runCliAutoImplVerification(ctx, type, verification);
+          sendAutoImplSSE(ctx, { event: 'verification', data: verificationSummary });
+          success = verificationSummary.pass;
+          message = verificationSummary.pass
+            ? `✅ Auto-implement complete (${verificationSummary.mode})`
+            : `❌ Post-patch verification failed (${verificationSummary.mode}): ${verificationSummary.failures.join('; ') || 'unknown failure'}`;
+        } catch (error: any) {
+          success = false;
+          message = `❌ Post-patch verification error: ${error?.message || error}`;
+          sendAutoImplSSE(ctx, {
+            event: 'verification',
+            data: { pass: false, error: error?.message || String(error) },
+          });
+        }
+      }
+
+      ctx.autoImplStatus.running = false;
+      sendAutoImplSSE(ctx, {
+        event: 'complete',
+        data: {
+          success,
+          exitCode: code,
+          functions,
+          message,
+          verification: verificationSummary,
+        },
+      });
+      try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
+      ctx.log(`Auto-implement ${success ? 'completed' : 'failed'}: ${type} (exit: ${code})${verificationSummary ? ` verify=${verificationSummary.pass ? 'pass' : 'fail'}` : ''}`);
+    };
+
     if (isPty) {
       child.onData((data: string) => {
         stdout += data;
@@ -472,15 +628,7 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
         sendAutoImplSSE(ctx, { event: 'output', data: { chunk: data, stream: 'stdout' } });
       });
       child.onExit(({ exitCode: code }: { exitCode: number }) => {
-        ctx.autoImplProcess = null;
-        ctx.autoImplStatus.running = false;
-        const success = code === 0;
-        sendAutoImplSSE(ctx, {
-          event: 'complete',
-          data: { success, exitCode: code, functions, message: success ? '✅ Auto-implement complete' : `❌ Agent exited (code: ${code})` },
-        });
-        try { ctx.providerLoader.reload(); } catch { /* ignore */ }
-        try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
+        void finalizeCliAutoImpl(code);
       });
     } else {
       child.stdout?.on('data', (d: Buffer) => {
@@ -497,21 +645,7 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
         sendAutoImplSSE(ctx, { event: 'output', data: { chunk, stream: 'stderr' } });
       });
       child.on('exit', (code: number) => {
-        ctx.autoImplProcess = null;
-        ctx.autoImplStatus.running = false;
-        const success = code === 0;
-        sendAutoImplSSE(ctx, {
-          event: 'complete',
-          data: {
-            success,
-            exitCode: code,
-            functions,
-            message: success ? '✅ Auto-implement complete' : `❌ Agent exited (code: ${code})`,
-          },
-        });
-        try { ctx.providerLoader.reload(); } catch { /* ignore */ }
-        try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
-        ctx.log(`Auto-implement ${success ? 'completed' : 'failed'}: ${type} (exit: ${code})`);
+        void finalizeCliAutoImpl(code);
       });
     }
     ctx.json(res, 202, {
@@ -538,9 +672,10 @@ export function buildAutoImplPrompt(ctx: DevServerContext,
   referenceScripts: Record<string, string>,
   userComment?: string,
   referenceType?: string | null,
+  verification?: CliExerciseVerification,
 ): string {
   if (provider.category === 'cli') {
-    return buildCliAutoImplPrompt(ctx, type, provider, providerDir, functions, referenceScripts, userComment, referenceType);
+    return buildCliAutoImplPrompt(ctx, type, provider, providerDir, functions, referenceScripts, userComment, referenceType, verification);
   }
 
   const lines: string[] = [];
@@ -833,8 +968,74 @@ export function buildCliAutoImplPrompt(ctx: DevServerContext,
   referenceScripts: Record<string, string>,
   userComment?: string,
   referenceType?: string | null,
+  verification?: CliExerciseVerification,
 ): string {
   const lines: string[] = [];
+  const defaultExercisePayload = {
+    type,
+    workingDir: providerDir,
+    freshSession: true,
+    autoLaunch: true,
+    autoResolveApprovals: true,
+    approvalButtonIndex: 0,
+    timeoutMs: 45000,
+    traceLimit: 200,
+    text: 'Create a file at tmp/adhdev_provider_fix_test.py that prints the current working directory and the squares of 1 through 5, then run python3 tmp/adhdev_provider_fix_test.py and tell me the exact output.',
+  };
+  const exercisePayload = {
+    ...defaultExercisePayload,
+    ...(verification?.request || {}),
+    type,
+    workingDir: providerDir,
+  };
+  const exerciseJson = JSON.stringify(exercisePayload).replace(/\\/g, '\\\\').replace(/'/g, `'\\''`);
+  const verificationInspectFields = verification?.inspectFields?.length
+    ? verification.inspectFields
+    : [
+        'debug.messages',
+        'trace.entries[].payload.parsedLastAssistant',
+        'trace.entries[].payload.lastAssistant',
+      ];
+  const verificationMustContainAny = verification?.mustContainAny || [];
+  const verificationMustNotContainAny = verification?.mustNotContainAny || [];
+  const verificationMustMatchAny = verification?.mustMatchAny || [];
+  const verificationMustNotMatchAny = verification?.mustNotMatchAny || [];
+  const verificationLastAssistantMustContainAny = verification?.lastAssistantMustContainAny || [];
+  const verificationLastAssistantMustNotContainAny = verification?.lastAssistantMustNotContainAny || [];
+  const verificationLastAssistantMustMatchAny = verification?.lastAssistantMustMatchAny || [];
+  const verificationLastAssistantMustNotMatchAny = verification?.lastAssistantMustNotMatchAny || [];
+  const quotedMustContain = verificationMustContainAny.map((value) => JSON.stringify(value)).join(', ');
+  const quotedMustNotContain = verificationMustNotContainAny.map((value) => JSON.stringify(value)).join(', ');
+  const quotedMustMatch = verificationMustMatchAny.map((value) => JSON.stringify(value)).join(', ');
+  const quotedMustNotMatch = verificationMustNotMatchAny.map((value) => JSON.stringify(value)).join(', ');
+  const quotedLastAssistantMustContain = verificationLastAssistantMustContainAny.map((value) => JSON.stringify(value)).join(', ');
+  const quotedLastAssistantMustNotContain = verificationLastAssistantMustNotContainAny.map((value) => JSON.stringify(value)).join(', ');
+  const quotedLastAssistantMustMatch = verificationLastAssistantMustMatchAny.map((value) => JSON.stringify(value)).join(', ');
+  const quotedLastAssistantMustNotMatch = verificationLastAssistantMustNotMatchAny.map((value) => JSON.stringify(value)).join(', ');
+  const fixtureName = verification?.fixtureName || `${type}-provider-fix`;
+  const fixtureNames = Array.isArray(verification?.fixtureNames)
+    ? verification!.fixtureNames.map((value) => String(value || '').trim()).filter(Boolean)
+    : [];
+  const fixtureCaptureJson = JSON.stringify({
+    type,
+    name: fixtureName,
+    request: exercisePayload,
+    assertions: {
+      mustContainAny: verificationMustContainAny,
+      mustNotContainAny: verificationMustNotContainAny,
+      mustMatchAny: verificationMustMatchAny,
+      mustNotMatchAny: verificationMustNotMatchAny,
+      lastAssistantMustContainAny: verificationLastAssistantMustContainAny,
+      lastAssistantMustNotContainAny: verificationLastAssistantMustNotContainAny,
+      lastAssistantMustMatchAny: verificationLastAssistantMustMatchAny,
+      lastAssistantMustNotMatchAny: verificationLastAssistantMustNotMatchAny,
+      requireNotTimedOut: true,
+    },
+  }).replace(/\\/g, '\\\\').replace(/'/g, `'\\''`);
+  const fixtureReplayJson = JSON.stringify({
+    type,
+    name: fixtureName,
+  }).replace(/\\/g, '\\\\').replace(/'/g, `'\\''`);
 
   lines.push('You are implementing PTY parsing scripts for a CLI provider.');
   lines.push('Be concise. Do NOT explain your reasoning. Edit files directly and verify with the local DevServer.');
@@ -934,7 +1135,7 @@ export function buildCliAutoImplPrompt(ctx: DevServerContext,
   };
 
   const providerGuide = loadGuide('PROVIDER_GUIDE.md');
-  if (providerGuide) {
+  if (providerGuide && provider.category !== 'cli') {
     lines.push('## Documentation: PROVIDER_GUIDE.md');
     lines.push('```markdown');
     lines.push(providerGuide);
@@ -978,6 +1179,11 @@ export function buildCliAutoImplPrompt(ctx: DevServerContext,
   lines.push('13. After the first successful live repro, stop broad diagnosis. Edit the scripts, reload, and verify. Do not burn tokens on repeated re-inspection without code changes.');
   lines.push('14. If the visible current screen is clean and sufficient, do NOT fall back to complex buffer heuristics. Simpler current-screen parsing is preferred.');
   lines.push('15. Before changing parser logic, verify whether `provider.json` submit/approval behavior (`sendDelayMs`, `approvalKeys`, submit strategy) is the simpler and more correct fix.');
+  lines.push('16. Do NOT patch transcript bugs by piling up one-off literal string exceptions (`includes("foo")`, `=== "bar"`, ad hoc allowlists/denylists) for every observed variant. Model the UI as PATTERN FAMILIES using reusable regex classifiers and normalization first.');
+  lines.push('17. If you find yourself adding a second or third near-duplicate literal check for spinner words, tool headers, approval prompts, footer chrome, or OSC residue, STOP and replace them with a broader regex or helper classifier.');
+  lines.push('18. Prefer a small number of named classifiers such as "status line", "tool header", "tool detail", "footer chrome", "approval cue", "prompt line", and "OSC residue" over a long chain of unrelated string checks.');
+  lines.push('19. Literal string checks are allowed only for stable proper nouns or exact product chrome that cannot be expressed safely as a broader pattern. Everything else should generalize.');
+  lines.push('20. When a bug comes from noisy PTY text, first normalize and classify the line family; do NOT just append another special-case substring to the parser.');
   lines.push('');
 
   lines.push('## Task');
@@ -987,18 +1193,134 @@ export function buildCliAutoImplPrompt(ctx: DevServerContext,
   lines.push('## Verification API');
   lines.push('Use the DevServer CLI debug endpoints, not DOM/CDP routes.');
   lines.push('');
-  lines.push('### 1. Launch the target CLI');
+  lines.push('### 1. Preferred: run a full autonomous repro');
+  lines.push('Use the exercise endpoint first. It launches a fresh CLI session, sends the repro prompt, auto-resolves approvals, waits for the session to settle, and returns the final debug + trace payload in one response.');
+  lines.push('```bash');
+  lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/exercise \\`);
+  lines.push('  -H "Content-Type: application/json" \\');
+  lines.push(`  -d '${exerciseJson}'`);
+  lines.push('```');
+  lines.push('');
+  if (verification?.description) {
+    lines.push('Verification intent:');
+    lines.push(verification.description);
+    lines.push('');
+  }
+  lines.push('Read the JSON response carefully. It already includes:');
+  lines.push('1. `instanceId`');
+  lines.push('2. `statusesSeen` and `approvalsResolved`');
+  lines.push('3. `debug` for the final settled state');
+  lines.push('4. `trace.entries` for the repro turn');
+  lines.push('');
+  lines.push('Save the response to a temp file and inspect the exact parsed transcript fields before editing:');
+  lines.push('```bash');
+  lines.push(`EXERCISE_JSON=$(mktemp)`);
+  lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/exercise \\`);
+  lines.push('  -H "Content-Type: application/json" \\');
+  lines.push(`  -d '${exerciseJson}' > "$EXERCISE_JSON"`);
+  lines.push(`jq '{timedOut,statusesSeen,approvalsResolved,inspect:{${verificationInspectFields.map((field, index) => `f${index + 1}: .${field}`).join(', ')}}}' "$EXERCISE_JSON"`);
+  lines.push('```');
+  lines.push('');
+  if (
+    verificationMustContainAny.length > 0
+    || verificationMustNotContainAny.length > 0
+    || verificationMustMatchAny.length > 0
+    || verificationMustNotMatchAny.length > 0
+    || verificationLastAssistantMustContainAny.length > 0
+    || verificationLastAssistantMustNotContainAny.length > 0
+    || verificationLastAssistantMustMatchAny.length > 0
+    || verificationLastAssistantMustNotMatchAny.length > 0
+  ) {
+    lines.push('The exact repro below is mandatory. Do NOT declare success unless these transcript assertions pass on the exercise JSON from the PATCHED provider.');
+    lines.push('```bash');
+    if (verificationMustContainAny.length > 0) {
+      lines.push(`node -e 'const fs=require(\"fs\");const text=fs.readFileSync(process.argv[1],\"utf8\");const required=[${quotedMustContain}];const missing=required.filter(v=>!text.includes(v));if(missing.length){console.error(\"Missing required substrings:\\n\"+missing.join(\"\\n\"));process.exit(1);}' "$EXERCISE_JSON"`);
+    }
+    if (verificationMustNotContainAny.length > 0) {
+      lines.push(`node -e 'const fs=require(\"fs\");const text=fs.readFileSync(process.argv[1],\"utf8\");const banned=[${quotedMustNotContain}];const hits=banned.filter(v=>text.includes(v));if(hits.length){console.error(\"Found banned substrings:\\n\"+hits.join(\"\\n\"));process.exit(1);}' "$EXERCISE_JSON"`);
+    }
+    if (verificationMustMatchAny.length > 0) {
+      lines.push(`node -e 'const fs=require(\"fs\");const text=fs.readFileSync(process.argv[1],\"utf8\");const required=[${quotedMustMatch}].map(v=>new RegExp(v,\"m\"));const missing=required.filter(v=>!v.test(text)).map(v=>String(v));if(missing.length){console.error(\"Missing required regex matches:\\n\"+missing.join(\"\\n\"));process.exit(1);}' "$EXERCISE_JSON"`);
+    }
+    if (verificationMustNotMatchAny.length > 0) {
+      lines.push(`node -e 'const fs=require(\"fs\");const text=fs.readFileSync(process.argv[1],\"utf8\");const banned=[${quotedMustNotMatch}].map(v=>new RegExp(v,\"m\"));const hits=banned.filter(v=>v.test(text)).map(v=>String(v));if(hits.length){console.error(\"Found banned regex matches:\\n\"+hits.join(\"\\n\"));process.exit(1);}' "$EXERCISE_JSON"`);
+    }
+    if (verificationLastAssistantMustContainAny.length > 0) {
+      lines.push(`node -e 'const fs=require(\"fs\");const payload=JSON.parse(fs.readFileSync(process.argv[1],\"utf8\"));const text=String(payload.lastAssistant||\"\");const required=[${quotedLastAssistantMustContain}];const missing=required.filter(v=>!text.includes(v));if(missing.length){console.error(\"Missing required lastAssistant substrings:\\n\"+missing.join(\"\\n\"));process.exit(1);}' "$EXERCISE_JSON"`);
+    }
+    if (verificationLastAssistantMustNotContainAny.length > 0) {
+      lines.push(`node -e 'const fs=require(\"fs\");const payload=JSON.parse(fs.readFileSync(process.argv[1],\"utf8\"));const text=String(payload.lastAssistant||\"\");const banned=[${quotedLastAssistantMustNotContain}];const hits=banned.filter(v=>text.includes(v));if(hits.length){console.error(\"Found banned lastAssistant substrings:\\n\"+hits.join(\"\\n\"));process.exit(1);}' "$EXERCISE_JSON"`);
+    }
+    if (verificationLastAssistantMustMatchAny.length > 0) {
+      lines.push(`node -e 'const fs=require(\"fs\");const payload=JSON.parse(fs.readFileSync(process.argv[1],\"utf8\"));const text=String(payload.lastAssistant||\"\");const required=[${quotedLastAssistantMustMatch}].map(v=>new RegExp(v,\"m\"));const missing=required.filter(v=>!v.test(text)).map(v=>String(v));if(missing.length){console.error(\"Missing required lastAssistant regex matches:\\n\"+missing.join(\"\\n\"));process.exit(1);}' "$EXERCISE_JSON"`);
+    }
+    if (verificationLastAssistantMustNotMatchAny.length > 0) {
+      lines.push(`node -e 'const fs=require(\"fs\");const payload=JSON.parse(fs.readFileSync(process.argv[1],\"utf8\"));const text=String(payload.lastAssistant||\"\");const banned=[${quotedLastAssistantMustNotMatch}].map(v=>new RegExp(v,\"m\"));const hits=banned.filter(v=>v.test(text)).map(v=>String(v));if(hits.length){console.error(\"Found banned lastAssistant regex matches:\\n\"+hits.join(\"\\n\"));process.exit(1);}' "$EXERCISE_JSON"`);
+    }
+    lines.push('```');
+    lines.push('');
+  }
+  lines.push('If you need a manual follow-up repro after patching, use the SAME endpoint again with the SAME prompt and compare the new trace to the previous one.');
+  lines.push('');
+  lines.push('### 1b. Persist or replay the exact repro as a reusable fixture');
+  if (fixtureNames.length > 0) {
+    lines.push(`Replay this exact fixture suite before editing, and replay the SAME suite again after patching. Do not declare success unless EVERY fixture passes: ${fixtureNames.map((name) => `\`${name}\``).join(', ')}.`);
+    for (const name of fixtureNames) {
+      const replayJson = JSON.stringify({ type, name }).replace(/\\/g, '\\\\').replace(/'/g, `'\\''`);
+      lines.push('```bash');
+      lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/fixture/replay \\`);
+      lines.push('  -H "Content-Type: application/json" \\');
+      lines.push(`  -d '${replayJson}'`);
+      lines.push('```');
+      lines.push('');
+    }
+    lines.push('Do not create new fixtures unless one of the listed fixtures is missing or stale.');
+  } else if (verification?.fixtureName) {
+    lines.push(`Replay the EXISTING saved fixture \`${fixtureName}\` before editing, and replay the SAME fixture again after patching. Do not declare success unless that exact fixture passes.`);
+    lines.push('```bash');
+    lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/fixture/replay \\`);
+    lines.push('  -H "Content-Type: application/json" \\');
+    lines.push(`  -d '${fixtureReplayJson}'`);
+    lines.push('```');
+    lines.push('');
+    lines.push('Only if the named fixture is missing or outdated should you recapture it. Prefer replaying the existing failing fixture over creating a new one.');
+    lines.push('```bash');
+    lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/fixture/capture \\`);
+    lines.push('  -H "Content-Type: application/json" \\');
+    lines.push(`  -d '${fixtureCaptureJson}'`);
+    lines.push('```');
+  } else {
+    lines.push('Capture the exact exercise once before editing. After patching, replay THIS fixture and do not declare success unless replay passes.');
+    lines.push('```bash');
+    lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/fixture/capture \\`);
+    lines.push('  -H "Content-Type: application/json" \\');
+    lines.push(`  -d '${fixtureCaptureJson}'`);
+    lines.push('');
+    lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/fixture/replay \\`);
+    lines.push('  -H "Content-Type: application/json" \\');
+    lines.push(`  -d '${fixtureReplayJson}'`);
+    lines.push('```');
+  }
+  lines.push('');
+  lines.push('The capture endpoint saves the exact request, initial result, and transcript assertions into the provider directory. The replay endpoint reruns the SAME exercise against your patched scripts and returns pass/fail.');
+  lines.push('');
+  lines.push('### 2. Inspect parsed + raw adapter state');
   lines.push('```bash');
   lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/launch \\`);
   lines.push('  -H "Content-Type: application/json" \\');
   lines.push(`  -d '{"type":"${type}","workingDir":"${providerDir.replace(/\\/g, '\\\\')}"}'`);
-  lines.push('```');
-  lines.push('');
-  lines.push('### 2. Inspect parsed + raw adapter state');
-  lines.push('```bash');
   lines.push(`curl -sS http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/debug/${type}`);
+  lines.push(`curl -sS http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/trace/${type}`);
   lines.push(`curl -sS http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/status`);
   lines.push('```');
+  lines.push('');
+  lines.push('The CLI trace endpoint is the primary debugging source. Read it BEFORE editing any parser code.');
+  lines.push('Use the trace timeline to find the latest `settled` or `commit_transcript` frame for the repro turn and inspect these fields first:');
+  lines.push('1. `payload.screenText`');
+  lines.push('2. `payload.detectStatus` and `payload.parsedStatus`');
+  lines.push('3. `payload.parsedLastAssistant`');
+  lines.push('4. `payload.approval` / `payload.parsedActiveModal`');
+  lines.push('5. `payload.rawPreview` only when control-sequence residue matters');
   lines.push('');
   lines.push('The debug payload should be read in this priority order:');
   lines.push('1. `screenText` / current visible state');
@@ -1006,16 +1328,19 @@ export function buildCliAutoImplPrompt(ctx: DevServerContext,
   lines.push('3. `rawBuffer` only for style/control-sequence cues');
   lines.push('4. `buffer` only when the current screen is insufficient');
   lines.push('');
-  lines.push('Extract the current `instanceId` from the launch or status response and keep using it below.');
+  lines.push('If the bug is transcript corruption, quote the exact bad `parsedLastAssistant` or bad committed assistant message from the trace and patch against that concrete failure.');
+  lines.push('Do NOT guess based only on the final chat bubble or a truncated UI preview.');
   lines.push('');
-  lines.push('### 3. Send a realistic approval-triggering prompt');
+  lines.push('Extract the current `instanceId` from the exercise, launch, or status response and keep using it below.');
+  lines.push('');
+  lines.push('### 3. Manual fallback only: send a realistic approval-triggering prompt');
   lines.push('```bash');
   lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/send \\`);
   lines.push('  -H "Content-Type: application/json" \\');
   lines.push(`  -d '{"type":"${type}","instanceId":"<INSTANCE_ID>","text":"Create a file at tmp/adhdev_provider_fix_test.py that prints the current working directory and the squares of 1 through 5, then run python3 tmp/adhdev_provider_fix_test.py and tell me the exact output."}'`);
   lines.push('```');
   lines.push('');
-  lines.push('### 4. If approval appears, resolve it until the CLI reaches idle');
+  lines.push('### 4. Manual fallback only: if approval appears, resolve it until the CLI reaches idle');
   lines.push('```bash');
   lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/resolve \\`);
   lines.push('  -H "Content-Type: application/json" \\');
@@ -1025,10 +1350,14 @@ export function buildCliAutoImplPrompt(ctx: DevServerContext,
   lines.push(`  -d '{"type":"${type}","instanceId":"<INSTANCE_ID>","keys":"1"}'`);
   lines.push('```');
   lines.push('');
-  lines.push('Use `resolve` when the parsed modal buttons are correct. Use `raw` when the CLI expects a literal keystroke like `1`, `y`, or Enter. Repeat until idle.');
+  lines.push('Use `resolve` when the parsed modal buttons are correct. Use `raw` when the CLI expects a literal keystroke like `1`, `y`, or Enter. Repeat until idle. Prefer the exercise endpoint instead of doing this by hand.');
   lines.push('');
   lines.push('### Patch Discipline');
   lines.push('Once the repro is confirmed, immediately edit the target files. Avoid loops where you keep re-reading long files or re-running the same debug commands without changing code.');
+  lines.push('For CLI transcript bugs, reproduce once with the exercise endpoint, inspect the returned trace once, patch immediately, then re-run the SAME exercise and compare the new `commit_transcript` frame.');
+  lines.push('If the patched run still fails the exact required/banned substring checks above, the task is NOT complete even if the CLI exits normally.');
+  lines.push('When you patch, write down the pattern family you are fixing: e.g. spinner/status, tool block, approval modal, footer chrome, OSC/control residue, prompt echo, or long-output continuation. Patch that family once instead of adding case-by-case literals.');
+  lines.push('Bad fix pattern: add another `includes("Drizzling")` or `includes("Show more (")` check. Good fix pattern: broaden the regex/helper that recognizes spinner words, collapsed tool overflow lines, or footer chrome as a family.');
   lines.push('');
   lines.push('### 5. Verify the side effects outside the CLI');
   lines.push('```bash');
@@ -1054,6 +1383,8 @@ export function buildCliAutoImplPrompt(ctx: DevServerContext,
   lines.push('7. Re-run the debug endpoints after edits. Do NOT finish until the parsed result looks correct.');
   lines.push('8. Confirm the parser still works after a redraw or scroll change without duplicating transcript history.');
   lines.push('9. Confirm the implementation prefers current-screen signals over stale history when both are present.');
+  lines.push('10. For transcript-cleanliness bugs, confirm the latest `commit_transcript` trace frame no longer contains tool headers, approval prompts, OSC residue like `0;`, or footer chrome unless they are truly user-facing answer content.');
+  lines.push('11. Confirm the implementation uses generalized pattern classifiers or regexes for noisy UI families instead of accumulating one-off literal string exceptions for each observed sample.');
   lines.push('');
 
   if (userComment) {
@@ -1064,12 +1395,13 @@ export function buildCliAutoImplPrompt(ctx: DevServerContext,
     lines.push('');
   }
 
-  lines.push('Start NOW. Launch the CLI, inspect PTY state, edit the scripts, and verify via the CLI debug endpoints.');
+  lines.push('Start NOW. Launch the CLI, inspect the trace and PTY state, edit the scripts, and verify via the CLI debug + trace endpoints.');
 
   return lines.join('\n');
 }
 
 export function handleAutoImplSSE(ctx: DevServerContext, type: string, req: http.IncomingMessage, res: http.ServerResponse): void {
+  clearStaleAutoImplState(ctx, 'SSE connection opened');
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -1090,6 +1422,7 @@ export function handleAutoImplSSE(ctx: DevServerContext, type: string, req: http
 }
 
 export function handleAutoImplCancel(ctx: DevServerContext, _type: string, _req: http.IncomingMessage, res: http.ServerResponse): void {
+  clearStaleAutoImplState(ctx, 'cancel request');
   if (ctx.autoImplProcess) {
     ctx.autoImplProcess.kill('SIGTERM');
     setTimeout(() => { if (ctx.autoImplProcess) ctx.autoImplProcess.kill('SIGKILL'); }, 3000);

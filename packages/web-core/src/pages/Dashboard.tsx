@@ -41,8 +41,8 @@ export default function Dashboard() {
     const requestedMobileSection = (location.state as { mobileSection?: DashboardMobileSection } | null)?.mobileSection || null
 
     const daemonCtx = useDaemons() as any
-    const { updateIdeChats, screenshotMap, setScreenshotMap } = daemonCtx
     const ides: DaemonData[] = daemonCtx.ides || []
+    const { updateIdeChats } = daemonCtx
     const [showOnboarding, setShowOnboarding] = useState(() => {
         try { return !localStorage.getItem('adhdev_onboarding_v1') } catch { return false }
     })
@@ -79,6 +79,7 @@ export default function Dashboard() {
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
     const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
     const [desktopActiveTabKey, setDesktopActiveTabKey] = useState<string | null>(null)
+    const savedHistoryRefreshKeyRef = useRef<string | null>(null)
     useDevRenderTrace('Dashboard', {
         ideCount: ides.length,
         toastCount: toasts.length,
@@ -215,6 +216,12 @@ export default function Dashboard() {
 
     const historyTargetConv = (remoteDialogActiveConv || remoteDialogConv) || activeConv
     const isSavedSessionHistoryTarget = !!historyTargetConv && isCliConv(historyTargetConv) && !isAcpConv(historyTargetConv)
+    const savedHistoryRefreshKey = useMemo(() => {
+        if (!historyTargetConv || !isSavedSessionHistoryTarget) return null
+        const routeTarget = historyTargetConv.daemonId || historyTargetConv.ideId || ''
+        const providerType = historyTargetConv.agentType || historyTargetConv.ideType || ''
+        return `${routeTarget}:${providerType}`
+    }, [historyTargetConv, isSavedSessionHistoryTarget])
     const mobileChatConversations = useMemo(
         () => visibleConversations,
         [visibleConversations],
@@ -292,14 +299,21 @@ export default function Dashboard() {
     }, [historyTargetConv, isSavedHistoryLoading, isSavedSessionHistoryTarget, sendDaemonCommand])
 
     useEffect(() => {
-        if (!historyModalOpen) return
+        if (!historyModalOpen) {
+            savedHistoryRefreshKeyRef.current = null
+            return
+        }
         if (!isSavedSessionHistoryTarget) {
+            savedHistoryRefreshKeyRef.current = null
             setSavedHistorySessions([])
             setIsSavedHistoryLoading(false)
             return
         }
+        if (!savedHistoryRefreshKey || isSavedHistoryLoading) return
+        if (savedHistoryRefreshKeyRef.current === savedHistoryRefreshKey) return
+        savedHistoryRefreshKeyRef.current = savedHistoryRefreshKey
         void handleRefreshSavedHistory()
-    }, [handleRefreshSavedHistory, historyModalOpen, isSavedSessionHistoryTarget])
+    }, [handleRefreshSavedHistory, historyModalOpen, isSavedHistoryLoading, isSavedSessionHistoryTarget, savedHistoryRefreshKey])
 
     const handleResumeSavedHistorySession = useCallback(async (session: SavedSessionHistoryEntry) => {
         if (!historyTargetConv || !isSavedSessionHistoryTarget) return
@@ -479,8 +493,6 @@ export default function Dashboard() {
                 groupSizes={groupSizes}
                 groupedConvs={groupedConvs}
                 clearedTabs={clearedTabs}
-                screenshotMap={screenshotMap}
-                setScreenshotMap={setScreenshotMap}
                 focusedGroup={focusedGroup}
                 setFocusedGroup={setFocusedGroup}
                 moveTabToGroup={moveTabToGroup}
@@ -498,8 +510,8 @@ export default function Dashboard() {
                 hiddenConversations={hiddenConversations}
                 requestedDesktopTabKey={requestedDesktopTabKey}
                 onRequestedDesktopTabConsumed={consumeRequestedActiveTab}
+                onOpenAccount={!isStandalone ? () => navigate('/account') : undefined}
                 onDesktopActiveTabChange={setDesktopActiveTabKey}
-                onOpenDesktopConversation={handleOpenDesktopConversation}
                 onHideConversation={handleHideConversation}
                 onShowHiddenConversation={handleShowHiddenConversation}
                 onShowAllHiddenConversations={showAllHiddenTabs}
@@ -556,6 +568,7 @@ export default function Dashboard() {
                         const matchedConv = resolveConversationByTarget(toast.targetKey)
                         if (matchedConv) {
                             setFocusedGroup(normalizedGroupAssignments.get(matchedConv.tabKey) ?? 0)
+                            handleShowHiddenConversation(matchedConv)
                         }
                     }
                 }}

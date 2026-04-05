@@ -9,7 +9,7 @@ import DashboardMobileChatRoom from './DashboardMobileChatRoom'
 import DashboardMobileChatInbox from './DashboardMobileChatInbox'
 import DashboardMobileMachineScreen from './DashboardMobileMachineScreen'
 import type { DashboardMobileSection } from './DashboardMobileBottomNav'
-import { compareConversationRecency, getConversationActivityAt, getConversationSortTimestamp, getConversationTimestamp } from './conversation-sort'
+import { compareConversationRecency, getConversationActivityAt, getConversationTimestamp } from './conversation-sort'
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
 import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, getConversationLiveInboxState } from './DashboardMobileChatShared'
 import { compareMachineEntries, getDaemonEntryActivityAt, getMachineDisplayName, isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
@@ -34,12 +34,15 @@ interface DashboardMobileChatModeProps {
     onRequestedMachineConsumed?: () => void
     requestedMobileSection?: DashboardMobileSection | null
     onRequestedMobileSectionConsumed?: () => void
+    onOpenAccount?: () => void
     onOpenHistory: (conversation?: ActiveConversation) => void
     onOpenRemote: (conversation: ActiveConversation) => void
+    onStopCli?: () => void
     wsStatus?: string
     isConnected?: boolean
     onShowHiddenConversation: (conversation: ActiveConversation) => void
     onShowAllHiddenConversations: () => void
+    onHideConversation?: (conversation: ActiveConversation) => void
 }
 
 function normalizePreviewText(content: unknown) {
@@ -88,12 +91,15 @@ export default function DashboardMobileChatMode({
     onRequestedMachineConsumed,
     requestedMobileSection,
     onRequestedMobileSectionConsumed,
+    onOpenAccount,
     onOpenHistory,
     onOpenRemote,
+    onStopCli,
     wsStatus,
     isConnected,
     onShowHiddenConversation,
     onShowAllHiddenConversations,
+    onHideConversation,
 }: DashboardMobileChatModeProps) {
     const [selectedTabKey, setSelectedTabKey] = useState<string | null>(() => conversations[0]?.tabKey || null)
     const [screen, setScreen] = useState<'inbox' | 'chat' | 'machine'>(() => (conversations[0] ? 'chat' : 'inbox'))
@@ -221,13 +227,14 @@ export default function DashboardMobileChatMode({
     }, [onRequestedMobileSectionConsumed, requestedMobileSection])
 
     const items = useMemo<MobileConversationListItem[]>(() => conversations.map(conversation => {
-        const timestamp = getConversationSortTimestamp(conversation)
-        const preview = getConversationPreview(conversation)
         const isOpenConversation = screen === 'chat' && selectedConversation?.tabKey === conversation.tabKey
         const surfaceState = getConversationInboxSurfaceState(conversation, liveSessionInboxState, {
             hideOpenTaskCompleteUnread: true,
             isOpenConversation,
         })
+        const liveState = getConversationLiveInboxState(conversation, liveSessionInboxState)
+        const timestamp = getConversationActivityAt(conversation, liveState?.lastUpdated || 0)
+        const preview = getConversationPreview(conversation)
         return {
             conversation,
             timestamp,
@@ -398,17 +405,18 @@ export default function DashboardMobileChatMode({
                 unread,
                 total: machineItems.length,
                 latestConversation,
+                latestTimestamp: latestItem?.timestamp || 0,
                 preview: latestConversation
                     ? `${latestConversation.displayPrimary} · ${getConversationPreview(latestConversation)}`
                     : 'No active conversations yet. Open the machine to launch an IDE, CLI, or ACP session.',
             }
         }).sort((a, b) => {
             const aTs = Math.max(
-                a.latestConversation ? getConversationSortTimestamp(a.latestConversation) : 0,
+                a.latestTimestamp,
                 getDaemonEntryActivityAt(machineEntries.find((entry) => entry.id === a.id) as any),
             )
             const bTs = Math.max(
-                b.latestConversation ? getConversationSortTimestamp(b.latestConversation) : 0,
+                b.latestTimestamp,
                 getDaemonEntryActivityAt(machineEntries.find((entry) => entry.id === b.id) as any),
             )
             if (bTs !== aTs) return bTs - aTs
@@ -588,11 +596,15 @@ export default function DashboardMobileChatMode({
                     userName={userName}
                     isSendingChat={cmds.isSendingChat}
                     isFocusingAgent={cmds.isFocusingAgent}
+                    handleModalButton={cmds.handleModalButton}
+                    handleRelaunch={cmds.handleRelaunch}
                     onBack={handleBackFromConversation}
                     onOpenNativeConversation={handleOpenNativeConversation}
                     onOpenMachine={handleOpenConversationMachine}
+                    onHideConversation={onHideConversation}
                     onOpenHistory={onOpenHistory}
                     onOpenRemote={onOpenRemote}
+                    onStopCli={onStopCli}
                     cliViewMode={selectedCliViewMode}
                     onSetCliViewMode={async mode => {
                         if (!selectedConversation) return
@@ -650,6 +662,7 @@ export default function DashboardMobileChatMode({
                     onShowAllHidden={onShowAllHiddenConversations}
                     onOpenMachine={handleOpenMachine}
                     onOpenSettings={() => navigate('/settings')}
+                    onOpenAccount={onOpenAccount}
                     onSectionChange={setSection}
                     wsStatus={wsStatus}
                     isConnected={isConnected}

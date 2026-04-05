@@ -27,8 +27,6 @@ export interface PaneGroupProps {
     ides: DaemonData[];
     /** Shared state refs */
     actionLogs: { ideId: string; text: string; timestamp: number }[];
-    screenshotMap: Record<string, string>;
-    setScreenshotMap: (m: Record<string, string>) => void;
     /** Dashboard-level state setters */
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>;
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>;
@@ -67,7 +65,6 @@ export default function PaneGroup({
     conversations, ides,
     clearedTabs,
     actionLogs,
-    screenshotMap, setScreenshotMap,
     sendDaemonCommand, setLocalUserMessages, setActionLogs,
     isStandalone, userName,
     groupIndex, onFocus,
@@ -135,14 +132,6 @@ export default function PaneGroup({
         () => activeConv ? ides.find(ide => ide.id === activeConv.ideId) : undefined,
         [ides, activeConv],
     )
-    const activeScreenshotUrl = activeConv ? screenshotMap[activeConv.ideId] : undefined
-    const clearActiveScreenshot = useCallback(() => {
-        if (!activeConv) return
-        if (!(activeConv.ideId in screenshotMap)) return
-        const next = { ...screenshotMap }
-        delete next[activeConv.ideId]
-        setScreenshotMap(next)
-    }, [activeConv, screenshotMap, setScreenshotMap])
     const activeActionLogs = useMemo(() => {
         if (!activeConv) return []
         return actionLogs.filter(log => log.ideId === activeConv.tabKey)
@@ -235,8 +224,6 @@ export default function PaneGroup({
                         clearToken={clearedTabs[activeConv.tabKey] || 0}
                         isCliTerminal={!!isCliTerminal}
                         ideEntry={activeIdeEntry}
-                        screenshotUrl={activeScreenshotUrl}
-                        clearScreenshot={clearActiveScreenshot}
                         terminalRef={terminalRef}
                         handleModalButton={cmds.handleModalButton}
                         handleRelaunch={cmds.handleRelaunch}
