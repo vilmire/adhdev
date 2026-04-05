@@ -21,9 +21,20 @@ interface HistoryMessage {
     receivedAt: number;   // epoch ms
     role: 'user' | 'assistant' | 'system';
     content: string;
+    kind?: string;
     agent: string;        // e.g. 'antigravity', 'cursor', 'gemini-cli'
     instanceId?: string;  // IDE instance UUID (distinguishes windows of the same agent type)
+    historySessionId?: string; // Persistent provider-side conversation/session key
     sessionTitle?: string;
+}
+
+export interface SavedHistorySessionSummary {
+    historySessionId: string;
+    sessionTitle?: string;
+    messageCount: number;
+    firstMessageAt: number;
+    lastMessageAt: number;
+    preview?: string;
 }
 
 export class ChatHistoryWriter {
@@ -43,15 +54,17 @@ export class ChatHistoryWriter {
  */
     appendNewMessages(
         agentType: string,
-        messages: Array<{ role: string; content: string; receivedAt?: number }>,
+        messages: Array<{ role: string; content: string; receivedAt?: number; kind?: string; historyDedupKey?: string }>,
         sessionTitle?: string,
         instanceId?: string,
+        historySessionId?: string,
     ): void {
         if (!messages || messages.length === 0) return;
 
         try {
- // dedup key: agentType + instanceId
-            const dedupKey = instanceId ? `${agentType}:${instanceId}` : agentType;
+ // dedup key: agentType + persistent history key (fallback: runtime instanceId)
+            const effectiveHistoryKey = historySessionId || instanceId;
+            const dedupKey = effectiveHistoryKey ? `${agentType}:${effectiveHistoryKey}` : agentType;
             let seenHashes = this.lastSeenHashes.get(dedupKey);
             if (!seenHashes) {
                 seenHashes = new Set<string>();
@@ -61,7 +74,7 @@ export class ChatHistoryWriter {
  // Filter new messages
             const newMessages: HistoryMessage[] = [];
             for (const msg of messages) {
-                const hash = `${msg.role}:${(msg.content || '').slice(0, 50)}`;
+                const hash = msg.historyDedupKey || `${msg.kind || 'standard'}:${msg.role}:${(msg.content || '').slice(0, 50)}`;
                 if (seenHashes.has(hash)) continue;
                 seenHashes.add(hash);
                 newMessages.push({
@@ -69,20 +82,22 @@ export class ChatHistoryWriter {
                     receivedAt: msg.receivedAt || Date.now(),
                     role: msg.role as 'user' | 'assistant' | 'system',
                     content: msg.content || '',
+                    kind: typeof msg.kind === 'string' ? msg.kind : undefined,
                     agent: agentType,
                     instanceId,
+                    historySessionId: effectiveHistoryKey,
                     sessionTitle,
                 });
             }
 
             if (newMessages.length === 0) return;
 
- // Append to file — separate file if instanceId exists
+ // Append to file — keyed by persistent history session when available
             const dir = path.join(HISTORY_DIR, this.sanitize(agentType));
             fs.mkdirSync(dir, { recursive: true });
 
             const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-            const filePrefix = instanceId ? `${this.sanitize(instanceId)}_` : '';
+            const filePrefix = effectiveHistoryKey ? `${this.sanitize(effectiveHistoryKey)}_` : '';
             const filePath = path.join(dir, `${filePrefix}${date}.jsonl`);
             const lines = newMessages.map(m => JSON.stringify(m)).join('\n') + '\n';
             fs.appendFileSync(filePath, lines, 'utf-8');
@@ -92,7 +107,7 @@ export class ChatHistoryWriter {
             if (messages.length < prevCount * 0.5 && prevCount > 3) {
                 seenHashes.clear();
                 for (const msg of messages) {
-                    seenHashes.add(`${msg.role}:${(msg.content || '').slice(0, 50)}`);
+                    seenHashes.add(msg.historyDedupKey || `${msg.kind || 'standard'}:${msg.role}:${(msg.content || '').slice(0, 50)}`);
                 }
             }
             this.lastSeenCounts.set(dedupKey, messages.length);
@@ -104,6 +119,101 @@ export class ChatHistoryWriter {
             }
         } catch {
  // Ignore history save failures (must not affect main functionality)
+        }
+    }
+
+    appendSystemMarker(
+        agentType: string,
+        content: string,
+        options: {
+            sessionTitle?: string;
+            instanceId?: string;
+            historySessionId?: string;
+            dedupKey?: string;
+            receivedAt?: number;
+        } = {},
+    ): void {
+        this.appendNewMessages(
+            agentType,
+            [{
+                role: 'system',
+                kind: 'system',
+                content,
+                receivedAt: options.receivedAt,
+                historyDedupKey: options.dedupKey,
+            }],
+            options.sessionTitle,
+            options.instanceId,
+            options.historySessionId,
+        );
+    }
+
+    promoteHistorySession(
+        agentType: string,
+        previousHistorySessionId: string,
+        nextHistorySessionId: string,
+    ): void {
+        const fromId = String(previousHistorySessionId || '').trim();
+        const toId = String(nextHistorySessionId || '').trim();
+        if (!fromId || !toId || fromId === toId) return;
+
+        try {
+            const fromDedupKey = `${agentType}:${fromId}`;
+            const toDedupKey = `${agentType}:${toId}`;
+            const fromHashes = this.lastSeenHashes.get(fromDedupKey);
+            if (fromHashes?.size) {
+                const nextHashes = this.lastSeenHashes.get(toDedupKey) || new Set<string>();
+                for (const hash of fromHashes) nextHashes.add(hash);
+                this.lastSeenHashes.set(toDedupKey, nextHashes);
+                this.lastSeenHashes.delete(fromDedupKey);
+            }
+            const fromCount = this.lastSeenCounts.get(fromDedupKey);
+            if (typeof fromCount === 'number') {
+                this.lastSeenCounts.set(toDedupKey, Math.max(fromCount, this.lastSeenCounts.get(toDedupKey) || 0));
+                this.lastSeenCounts.delete(fromDedupKey);
+            }
+
+            const dir = path.join(HISTORY_DIR, this.sanitize(agentType));
+            if (!fs.existsSync(dir)) return;
+
+            const fromPrefix = `${this.sanitize(fromId)}_`;
+            const toPrefix = `${this.sanitize(toId)}_`;
+            const files = fs.readdirSync(dir).filter((file) => file.startsWith(fromPrefix) && file.endsWith('.jsonl'));
+
+            for (const file of files) {
+                const sourcePath = path.join(dir, file);
+                const targetPath = path.join(dir, `${toPrefix}${file.slice(fromPrefix.length)}`);
+                const sourceLines = fs.readFileSync(sourcePath, 'utf-8').split('\n').filter(Boolean);
+                const rewritten = sourceLines
+                    .map((line) => {
+                        try {
+                            const parsed = JSON.parse(line) as HistoryMessage;
+                            if (parsed.historySessionId !== fromId) return null;
+                            return JSON.stringify({
+                                ...parsed,
+                                historySessionId: toId,
+                            });
+                        } catch {
+                            return null;
+                        }
+                    })
+                    .filter((line): line is string => !!line);
+                if (rewritten.length === 0) {
+                    fs.unlinkSync(sourcePath);
+                    continue;
+                }
+
+                const existing = fs.existsSync(targetPath)
+                    ? new Set(fs.readFileSync(targetPath, 'utf-8').split('\n').filter(Boolean))
+                    : new Set<string>();
+                const nextLines = rewritten.filter((line) => !existing.has(line));
+                if (nextLines.length > 0) {
+                    fs.appendFileSync(targetPath, `${nextLines.join('\n')}\n`, 'utf-8');
+                }
+                fs.unlinkSync(sourcePath);
+            }
+        } catch {
+            // Ignore promotion failure; future messages will still write to the new session key.
         }
     }
 
@@ -157,15 +267,15 @@ export function readChatHistory(
     agentType: string,
     offset: number = 0,
     limit: number = 30,
-    instanceId?: string,
+    historySessionId?: string,
 ): { messages: HistoryMessage[]; hasMore: boolean } {
     try {
         const sanitized = agentType.replace(/[^a-zA-Z0-9_-]/g, '_');
         const dir = path.join(HISTORY_DIR, sanitized);
         if (!fs.existsSync(dir)) return { messages: [], hasMore: false };
 
- // JSONL file list — filter by instanceId prefix if specified
-        const sanitizedInstance = instanceId?.replace(/[^a-zA-Z0-9_-]/g, '_');
+ // JSONL file list — filter by persistent history key when specified
+        const sanitizedInstance = historySessionId?.replace(/[^a-zA-Z0-9_-]/g, '_');
         const files = fs.readdirSync(dir)
             .filter(f => {
                 if (!f.endsWith('.jsonl')) return false;
@@ -208,5 +318,78 @@ export function readChatHistory(
         return { messages: sliced, hasMore };
     } catch {
         return { messages: [], hasMore: false };
+    }
+}
+
+export function listSavedHistorySessions(
+    agentType: string,
+    options: { offset?: number; limit?: number } = {},
+): { sessions: SavedHistorySessionSummary[]; hasMore: boolean } {
+    try {
+        const sanitized = agentType.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const dir = path.join(HISTORY_DIR, sanitized);
+        if (!fs.existsSync(dir)) return { sessions: [], hasMore: false };
+
+        const groupedFiles = new Map<string, string[]>();
+        const filePattern = /^([A-Za-z0-9_-]+)_\d{4}-\d{2}-\d{2}\.jsonl$/;
+        for (const file of fs.readdirSync(dir)) {
+            if (!file.endsWith('.jsonl')) continue;
+            const match = file.match(filePattern);
+            if (!match?.[1]) continue;
+            const historySessionId = match[1];
+            const files = groupedFiles.get(historySessionId) || [];
+            files.push(file);
+            groupedFiles.set(historySessionId, files);
+        }
+
+        const summaries: SavedHistorySessionSummary[] = [];
+        for (const [historySessionId, files] of groupedFiles.entries()) {
+            let messageCount = 0;
+            let firstMessageAt = 0;
+            let lastMessageAt = 0;
+            let sessionTitle = '';
+            let preview = '';
+
+            for (const file of files.sort()) {
+                const filePath = path.join(dir, file);
+                const content = fs.readFileSync(filePath, 'utf-8');
+                const lines = content.split('\n').filter(Boolean);
+                for (const line of lines) {
+                    let parsed: HistoryMessage | null = null;
+                    try {
+                        parsed = JSON.parse(line) as HistoryMessage;
+                    } catch {
+                        parsed = null;
+                    }
+                    if (!parsed || parsed.historySessionId !== historySessionId) continue;
+                    messageCount += 1;
+                    if (!firstMessageAt || parsed.receivedAt < firstMessageAt) firstMessageAt = parsed.receivedAt;
+                    if (!lastMessageAt || parsed.receivedAt > lastMessageAt) lastMessageAt = parsed.receivedAt;
+                    if (parsed.sessionTitle) sessionTitle = parsed.sessionTitle;
+                    if (parsed.role !== 'system' && parsed.content.trim()) preview = parsed.content.trim();
+                }
+            }
+
+            if (messageCount === 0 || !lastMessageAt) continue;
+            summaries.push({
+                historySessionId,
+                sessionTitle: sessionTitle || undefined,
+                messageCount,
+                firstMessageAt,
+                lastMessageAt,
+                preview: preview || undefined,
+            });
+        }
+
+        summaries.sort((a, b) => b.lastMessageAt - a.lastMessageAt);
+        const offset = Math.max(0, options.offset || 0);
+        const limit = Math.max(1, options.limit || 30);
+        const sliced = summaries.slice(offset, offset + limit);
+        return {
+            sessions: sliced,
+            hasMore: summaries.length > offset + limit,
+        };
+    } catch {
+        return { sessions: [], hasMore: false };
     }
 }

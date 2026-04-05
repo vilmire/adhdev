@@ -41,6 +41,7 @@ export interface SessionEntry {
     parentId: string | null;
     providerType: string;
     providerName: string;
+    providerSessionId?: string;
     kind: SessionKind;
     transport: SessionTransport;
     status: 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
@@ -152,6 +153,7 @@ export interface RecentLaunchEntry {
     providerType: string;
     providerName: string;
     kind: 'ide' | 'cli' | 'acp';
+    providerSessionId?: string;
     title?: string;
     workspace?: string | null;
     currentModel?: string;

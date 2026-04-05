@@ -52,14 +52,16 @@ const PaneGroupContent = memo(function PaneGroupContent({
         <>
             <ApprovalBanner activeConv={activeConv} onModalButton={handleModalButton} />
 
-            <div className="desktop-only px-3 pt-1 pb-2">
-                {activeConv.transport !== 'pty' && activeConv.transport !== 'acp' && screenshotUrl ? (
+            {activeConv.transport !== 'pty' && activeConv.transport !== 'acp' && screenshotUrl ? (
+                <div className="desktop-only px-3 pt-1 pb-2">
                     <ScreenshotViewer
                         screenshotUrl={screenshotUrl}
                         mode="preview"
                         onDismiss={handleDismissScreenshot}
                     />
-                ) : (activeConv.transport !== 'pty' && activeConv.transport !== 'acp' && activeConv.cdpConnected === false) ? (
+                </div>
+            ) : (activeConv.transport !== 'pty' && activeConv.transport !== 'acp' && activeConv.cdpConnected === false) ? (
+                <div className="desktop-only px-3 pt-1 pb-2">
                     <div className="flex items-center gap-2.5 px-3.5 py-2 bg-yellow-500/[0.08] border border-yellow-500/20 rounded-lg text-xs text-text-secondary">
                         <span className="text-sm"><IconWarning size={14} /></span>
                         <span className="flex-1">CDP not connected — chat history & screenshots unavailable.</span>
@@ -68,8 +70,8 @@ const PaneGroupContent = memo(function PaneGroupContent({
                             onClick={handleRelaunch}
                         >Relaunch with CDP</button>
                     </div>
-                ) : null}
-            </div>
+                </div>
+            ) : null}
 
             {activeConv.transport === 'pty' ? (
                 <>
@@ -80,20 +82,23 @@ const PaneGroupContent = memo(function PaneGroupContent({
                             terminalRef={terminalRef}
                             handleSendChat={handleSendChat}
                             isSendingChat={isSendingChat}
+                            isVisible={isCliTerminal}
                         />
                     </div>
-                    <div style={{ display: isCliTerminal ? 'none' : 'flex', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
-                        <ChatPane
-                            activeConv={activeConv}
-                            ideEntry={ideEntry}
-                            handleSendChat={handleSendChat}
-                            isSendingChat={isSendingChat}
-                            handleFocusAgent={handleFocusAgent}
-                            isFocusingAgent={isFocusingAgent}
-                            actionLogs={actionLogs}
-                            userName={userName}
-                        />
-                    </div>
+                    {!isCliTerminal && (
+                        <div style={{ display: 'flex', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
+                            <ChatPane
+                                activeConv={activeConv}
+                                ideEntry={ideEntry}
+                                handleSendChat={handleSendChat}
+                                isSendingChat={isSendingChat}
+                                handleFocusAgent={handleFocusAgent}
+                                isFocusingAgent={isFocusingAgent}
+                                actionLogs={actionLogs}
+                                userName={userName}
+                            />
+                        </div>
+                    )}
                 </>
             ) : (
                 <ChatPane

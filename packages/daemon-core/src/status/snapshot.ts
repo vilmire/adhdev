@@ -183,6 +183,7 @@ function buildRecentLaunches(
             providerType: item.providerType,
             providerName: item.providerName,
             kind: item.kind,
+            providerSessionId: item.providerSessionId,
             title: item.title || item.providerName,
             workspace: item.workspace,
             currentModel: item.currentModel,

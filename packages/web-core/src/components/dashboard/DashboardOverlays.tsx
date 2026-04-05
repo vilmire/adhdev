@@ -5,7 +5,7 @@ import OnboardingModal from '../OnboardingModal'
 import DashboardRemoteDialog from './DashboardRemoteDialog'
 import type { ActiveConversation } from './types'
 import { isAcpConv, isCliConv } from './types'
-import HistoryModal from './HistoryModal'
+import HistoryModal, { type SavedSessionHistoryEntry } from './HistoryModal'
 import CliStopDialog from './CliStopDialog'
 import ToastContainer, { type Toast } from './ToastContainer'
 
@@ -15,10 +15,14 @@ interface DashboardOverlaysProps {
     ides: DaemonData[]
     isHistoryCreatingChat: boolean
     isHistoryRefreshingHistory: boolean
+    savedHistorySessions: SavedSessionHistoryEntry[]
+    isSavedHistoryLoading: boolean
+    isResumingSavedHistorySessionId: string | null
     onCloseHistory: () => void
     onNewHistoryChat: () => void
     onSwitchHistorySession: (ideId: string, sessionId: string) => void
     onRefreshHistory: () => void
+    onResumeSavedHistorySession: (session: SavedSessionHistoryEntry) => void
     remoteDialogConv: ActiveConversation | null
     remoteDialogIdeEntry?: DaemonData
     connectionStates: Record<string, any>
@@ -50,10 +54,14 @@ export default function DashboardOverlays({
     ides,
     isHistoryCreatingChat,
     isHistoryRefreshingHistory,
+    savedHistorySessions,
+    isSavedHistoryLoading,
+    isResumingSavedHistorySessionId,
     onCloseHistory,
     onNewHistoryChat,
     onSwitchHistorySession,
     onRefreshHistory,
+    onResumeSavedHistorySession,
     remoteDialogConv,
     remoteDialogIdeEntry,
     connectionStates,
@@ -86,10 +94,14 @@ export default function DashboardOverlays({
                     ides={ides}
                     isCreatingChat={isHistoryCreatingChat}
                     isRefreshingHistory={isHistoryRefreshingHistory}
+                    savedSessions={savedHistorySessions}
+                    isSavedSessionsLoading={isSavedHistoryLoading}
+                    isResumingSavedSessionId={isResumingSavedHistorySessionId}
                     onClose={onCloseHistory}
                     onNewChat={onNewHistoryChat}
                     onSwitchSession={onSwitchHistorySession}
                     onRefreshHistory={onRefreshHistory}
+                    onResumeSavedSession={onResumeSavedHistorySession}
                 />
             )}
 

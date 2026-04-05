@@ -98,6 +98,7 @@ export function buildIdeConversations(
     const streams: {
         sessionId?: string;
         instanceId?: string;
+        providerSessionId?: string;
         agentType: string;
         agentName: string;
         status: string;
@@ -113,6 +114,7 @@ export function buildIdeConversations(
         ? ide.childSessions.map(child => ({
             sessionId: child.id,
             instanceId: child.id,
+            providerSessionId: (child as any).providerSessionId,
             agentType: child.providerType,
             agentName: child.providerName,
             status: child.status,
@@ -166,6 +168,7 @@ export function buildIdeConversations(
         results.push({
             ideId: ide.id,
             sessionId: nativeSessionId,
+            providerSessionId: (ide as any).providerSessionId,
             nativeSessionId,
             transport: ide.transport,
             daemonId: ide.daemonId || undefined,
@@ -231,6 +234,7 @@ export function buildIdeConversations(
         results.push({
             ideId: ide.id,
             sessionId: (stream as any).sessionId || (stream as any).instanceId,
+            providerSessionId: (stream as any).providerSessionId,
             nativeSessionId: (ide as any).sessionId || ide.instanceId,
             transport: (stream as any).transport || 'cdp-webview',
             daemonId: ide.daemonId || undefined,
@@ -259,6 +263,7 @@ export function buildIdeConversations(
         results.push({
             ideId: ide.id,
             sessionId: (ide as any).sessionId || ide.instanceId,
+            providerSessionId: (ide as any).providerSessionId,
             nativeSessionId: (ide as any).sessionId || ide.instanceId,
             transport: ide.transport,
             daemonId: ide.daemonId || undefined,

@@ -162,6 +162,7 @@ export default function ChatPane({
                 offset: currentState.offset,
                 limit: 30,
                 targetSessionId: activeConv.sessionId,
+                historySessionId: activeConv.providerSessionId || activeConv.sessionId,
             });
 
             const result = (raw as any)?.result ?? raw;

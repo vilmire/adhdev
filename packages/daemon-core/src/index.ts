@@ -66,6 +66,8 @@ export { loadConfig, saveConfig, resetConfig, isSetupComplete, markSetupComplete
 export { getWorkspaceState } from './config/workspaces.js';
 export { appendRecentActivity, getRecentActivity } from './config/recent-activity.js';
 export type { RecentActivityEntry } from './config/recent-activity.js';
+export { getSavedProviderSessions, upsertSavedProviderSession } from './config/saved-sessions.js';
+export type { SavedProviderSessionEntry } from './config/saved-sessions.js';
 
 // ── Detection ──
 export { detectIDEs } from './detection/ide-detector.js';

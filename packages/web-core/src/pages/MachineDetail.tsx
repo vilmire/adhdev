@@ -16,7 +16,6 @@ import { useState, useRef, useEffect } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
-import { useHiddenTabs } from '../hooks/useHiddenTabs'
 import type { DaemonData } from '../types'
 import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel } from '../utils/daemon-utils'
 import { IconBarChart, IconMonitor, IconSettings, IconClipboard } from '../components/Icons'
@@ -47,7 +46,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const daemonCtx = useDaemons() as any
     const allIdes: DaemonData[] = daemonCtx.ides || []
     const initialLoaded: boolean = daemonCtx.initialLoaded ?? true
-    const { isHidden, toggleTab } = useHiddenTabs()
     const machineEntry = allIdes.find(i => i.id === machineId && (i as any).daemonMode)
     const [activeTab, setActiveTab] = useState<TabId>('workspace')
     const [workspaceCategoryHint, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
@@ -133,6 +131,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             status: i.status,
             workspace: (i as any).workspace || '',
             activeChat: (i as any).activeChat || null,
+            providerSessionId: (i as any).providerSessionId,
             mode: (i as any).mode,
             daemonId: machineId!,
         }))
@@ -144,6 +143,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             status: i.status,
             workspace: (i as any).workspace || '',
             activeChat: (i as any).activeChat || null,
+            providerSessionId: (i as any).providerSessionId,
             currentModel: (i as any).currentModel,
             currentPlan: (i as any).currentPlan,
             daemonId: machineId!,
@@ -200,6 +200,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             label: session.activeChat?.title || session.cliName,
             kind: 'cli' as const,
             providerType: session.type,
+            providerSessionId: session.providerSessionId,
             subtitle: session.workspace || undefined,
             workspace: session.workspace || undefined,
             timestamp: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
@@ -209,6 +210,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             label: session.activeChat?.title || session.acpName,
             kind: 'acp' as const,
             providerType: session.type,
+            providerSessionId: session.providerSessionId,
             subtitle: session.currentModel || session.workspace || undefined,
             workspace: session.workspace || undefined,
             currentModel: session.currentModel,
@@ -223,6 +225,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             label: launch.title || launch.providerName || launch.providerType,
             kind: launch.kind,
             providerType: launch.providerType,
+            providerSessionId: launch.providerSessionId,
             subtitle: launch.currentModel || launch.workspace || undefined,
             workspace: launch.workspace,
             currentModel: launch.currentModel,
@@ -242,6 +245,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                 cliType: session.providerType,
                 dir: session.workspace || '',
                 model: session.kind === 'acp' ? session.currentModel : undefined,
+                resumeSessionId: session.providerSessionId,
             })
             return
         }
@@ -368,8 +372,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 initialCategory={workspaceCategoryHint}
                                 initialWorkspaceId={requestedWorkspaceId}
                                 initialWorkspacePath={requestedWorkspacePath}
-                                isDashboardHidden={isHidden}
-                                onToggleDashboardVisibility={toggleTab}
                                 sendDaemonCommand={sendDaemonCommand}
                                 />
                             </div>
@@ -390,8 +392,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 cliSessions={cliSessions}
                                 acpSessions={acpSessions}
                                 actions={actions}
-                                isDashboardHidden={isHidden}
-                                onToggleDashboardVisibility={toggleTab}
                             />
                         )}
 

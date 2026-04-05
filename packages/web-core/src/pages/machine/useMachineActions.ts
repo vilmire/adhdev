@@ -67,10 +67,10 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
 
     const runLaunchCliCore = useCallback(async (opts: {
         cliType: string; dir?: string; workspaceId?: string
-        useDefaultWorkspace?: boolean; useHome?: boolean; argsStr?: string; model?: string
+        useDefaultWorkspace?: boolean; useHome?: boolean; argsStr?: string; model?: string; resumeSessionId?: string
     }) => {
         if (!machineId) return { success: false as const }
-        const { cliType, dir, workspaceId, useDefaultWorkspace, useHome, argsStr, model } = opts
+        const { cliType, dir, workspaceId, useDefaultWorkspace, useHome, argsStr, model, resumeSessionId } = opts
         if (!cliType) {
             addLog('warn', 'Select a CLI or ACP provider first', true)
             return { success: false as const }
@@ -85,6 +85,7 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
             else if (workspaceId) body.workspaceId = workspaceId
             else if (useDefaultWorkspace) body.useDefaultWorkspace = true
             else if (useHome) body.useHome = true
+            if (resumeSessionId) body.resumeSessionId = resumeSessionId
             const res: any = await sendDaemonCommand(machineId, 'launch_cli', body)
             const payload = res?.result || res
             if (res?.success) {

@@ -98,21 +98,24 @@ export default function DashboardMobileChatRoom({
                                 terminalRef={terminalRef}
                                 handleSendChat={handleSendChat}
                                 isSendingChat={isSendingChat}
+                                isVisible={isCliTerminal}
                             />
                         </div>
-                        <div style={{ display: isCliTerminal ? 'none' : 'flex', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
-                            <ChatPane
-                                activeConv={selectedConversation}
-                                ideEntry={selectedIdeEntry}
-                                showMetaChips={false}
-                                handleSendChat={handleSendChat}
-                                isSendingChat={isSendingChat}
-                                handleFocusAgent={handleFocusAgent}
-                                isFocusingAgent={isFocusingAgent}
-                                actionLogs={actionLogs}
-                                userName={userName}
-                            />
-                        </div>
+                        {!isCliTerminal && (
+                            <div style={{ display: 'flex', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
+                                <ChatPane
+                                    activeConv={selectedConversation}
+                                    ideEntry={selectedIdeEntry}
+                                    showMetaChips={false}
+                                    handleSendChat={handleSendChat}
+                                    isSendingChat={isSendingChat}
+                                    handleFocusAgent={handleFocusAgent}
+                                    isFocusingAgent={isFocusingAgent}
+                                    actionLogs={actionLogs}
+                                    userName={userName}
+                                />
+                            </div>
+                        )}
                     </>
                 ) : (
                     <ChatPane

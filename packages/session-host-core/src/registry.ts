@@ -206,6 +206,18 @@ export class SessionHostRegistry {
     return this.cloneRecord(state.record);
   }
 
+  updateSessionMeta(sessionId: string, meta: Record<string, unknown>, replace = false): SessionHostRecord {
+    const state = this.requireSession(sessionId);
+    state.record.meta = replace
+      ? { ...meta }
+      : {
+          ...(state.record.meta || {}),
+          ...meta,
+        };
+    state.record.lastActivityAt = Date.now();
+    return this.cloneRecord(state.record);
+  }
+
   markStarted(sessionId: string, pid?: number): SessionHostRecord {
     const state = this.requireSession(sessionId);
     state.record.lifecycle = 'running';

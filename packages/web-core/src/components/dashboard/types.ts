@@ -9,6 +9,7 @@ export type CliConversationViewMode = 'terminal' | 'chat';
 export interface ActiveConversation {
     ideId: string;
     sessionId?: string;
+    providerSessionId?: string;
     nativeSessionId?: string;
     transport?: SessionTransport;
     /** Daemon DO ID — actual server connection ID for command routing */

@@ -22,6 +22,7 @@ interface PaneGroupTabBarProps {
     onMoveTab?: (tabKey: string, direction: 'left' | 'right' | 'split-left' | 'split-right') => void
     onReceiveTab?: (tabKey: string) => void
     onHideTab?: (tabKey: string) => void
+    isGroupActive?: boolean
 }
 
 interface PaneGroupTabBarItemProps {
@@ -44,6 +45,7 @@ interface PaneGroupTabBarItemProps {
     onReceiveTab?: (tabKey: string) => void
     onOpenContextMenu: (x: number, y: number, tabKey: string) => void
     longPressTimer: MutableRefObject<ReturnType<typeof setTimeout> | null>
+    isGroupActive?: boolean
 }
 
 const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
@@ -66,6 +68,7 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
     onReceiveTab,
     onOpenContextMenu,
     longPressTimer,
+    isGroupActive,
 }: PaneGroupTabBarItemProps) {
     const tabClass = conv.status === 'generating' ? 'agent-tab-generating'
         : conv.status === 'waiting_approval' ? 'agent-tab-waiting' : ''
@@ -141,6 +144,7 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
         'adhdev-dockview-tab',
         tabClass,
         isActive && 'is-active',
+        isGroupActive && 'is-group-active',
         isReconnecting && 'is-reconnecting',
     ].filter(Boolean).join(' ')
 
@@ -211,6 +215,7 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
     && prev.isTaskCompleteUnread === next.isTaskCompleteUnread
     && prev.shortcut === next.shortcut
     && prev.conversationKeys === next.conversationKeys
+    && prev.isGroupActive === next.isGroupActive
 ));
 
 export default function PaneGroupTabBar({
@@ -232,6 +237,7 @@ export default function PaneGroupTabBar({
     onMoveTab,
     onReceiveTab,
     onHideTab,
+    isGroupActive,
 }: PaneGroupTabBarProps) {
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabKey: string } | null>(null)
     const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -319,6 +325,7 @@ export default function PaneGroupTabBar({
                             onReceiveTab={onReceiveTab}
                             onOpenContextMenu={openContextMenu}
                             longPressTimer={longPressTimer}
+                            isGroupActive={isGroupActive}
                         />
                     ))}
                     {conversations.length === 0 && (

@@ -15,12 +15,14 @@ export interface CliTerminalPaneProps {
     terminalRef: React.RefObject<CliTerminalHandle | null>;
     handleSendChat: (message: string) => void;
     isSendingChat?: boolean;
+    isVisible?: boolean;
 }
 
 export default function CliTerminalPane({
     activeConv, clearToken = 0, terminalRef,
     handleSendChat,
     isSendingChat = false,
+    isVisible = true,
 }: CliTerminalPaneProps) {
     const chatInputRef = useRef<HTMLInputElement>(null);
     const { sendCommand, sendData } = useTransport();
@@ -28,6 +30,10 @@ export default function CliTerminalPane({
     const [runtimeReady, setRuntimeReady] = useState(false);
     const seededSnapshotSeqRef = useRef(0);
     const liveOutputStartedRef = useRef(false);
+    const pendingLiveOutputRef = useRef('');
+    const pendingHiddenSnapshotRef = useRef<{ text: string; seq: number; cols?: number; rows?: number } | null>(null);
+    const pendingHiddenClearRef = useRef(false);
+    const flushFrameRef = useRef<number | null>(null);
 
     const tabKey = activeConv.tabKey;
     const sessionId = activeConv.sessionId || '';
@@ -35,6 +41,13 @@ export default function CliTerminalPane({
     const resetRuntimeView = () => {
         seededSnapshotSeqRef.current = 0;
         liveOutputStartedRef.current = false;
+        pendingLiveOutputRef.current = '';
+        pendingHiddenSnapshotRef.current = null;
+        pendingHiddenClearRef.current = false;
+        if (flushFrameRef.current !== null) {
+            cancelAnimationFrame(flushFrameRef.current);
+            flushFrameRef.current = null;
+        }
         setRuntimeReady(false);
         (terminalRef.current as any)?.reset?.();
     };
@@ -42,15 +55,42 @@ export default function CliTerminalPane({
     const clearRuntimeView = () => {
         seededSnapshotSeqRef.current = 0;
         liveOutputStartedRef.current = false;
+        pendingLiveOutputRef.current = '';
+        pendingHiddenSnapshotRef.current = null;
+        pendingHiddenClearRef.current = false;
+        if (flushFrameRef.current !== null) {
+            cancelAnimationFrame(flushFrameRef.current);
+            flushFrameRef.current = null;
+        }
         setRuntimeReady(true);
         (terminalRef.current as any)?.reset?.();
     };
 
-    const seedTerminal = (text: string, seq = 0) => {
+    const flushPendingLiveOutput = () => {
+        flushFrameRef.current = null;
+        if (!isVisible) return;
+        const chunk = pendingLiveOutputRef.current;
+        if (!chunk) return;
+        pendingLiveOutputRef.current = '';
+        terminalRef.current?.write(chunk);
+    };
+
+    const enqueueTerminalWrite = (data: string) => {
+        if (!data) return;
+        pendingLiveOutputRef.current += data;
+        if (!isVisible) return;
+        if (flushFrameRef.current !== null) return;
+        flushFrameRef.current = requestAnimationFrame(flushPendingLiveOutput);
+    };
+
+    const seedTerminal = (text: string, seq = 0, cols?: number, rows?: number) => {
         if (seq > 0 && seededSnapshotSeqRef.current >= seq) return;
         if (seq === 0 && liveOutputStartedRef.current) return;
         seededSnapshotSeqRef.current = seq;
         setRuntimeReady(true);
+        if (typeof cols === 'number' && typeof rows === 'number' && cols > 0 && rows > 0) {
+            (terminalRef.current as any)?.resize?.(cols, rows);
+        }
         (terminalRef.current as any)?.reset?.();
         if (text) terminalRef.current?.write(text);
     };
@@ -64,7 +104,16 @@ export default function CliTerminalPane({
         const unsubRuntime = connectionManager.onRuntimeEvent?.(sessionId, (event: any) => {
             if (!event || event.sessionId !== sessionId) return;
             if (event.type === 'runtime_snapshot') {
-                seedTerminal(event.text || '', event.seq || 0);
+                if (!isVisible) {
+                    pendingHiddenSnapshotRef.current = {
+                        text: event.text || '',
+                        seq: event.seq || 0,
+                        cols: (event as any).cols,
+                        rows: (event as any).rows,
+                    };
+                    return;
+                }
+                seedTerminal(event.text || '', event.seq || 0, (event as any).cols, (event as any).rows);
                 return;
             }
             if (event.type === 'session_output') {
@@ -72,11 +121,17 @@ export default function CliTerminalPane({
                 if (typeof event.seq === 'number') {
                     seededSnapshotSeqRef.current = Math.max(seededSnapshotSeqRef.current, event.seq);
                 }
-                setRuntimeReady(true);
-                if (typeof event.data === 'string') terminalRef.current?.write(event.data);
+                if (!runtimeReady) setRuntimeReady(true);
+                if (typeof event.data === 'string') enqueueTerminalWrite(event.data);
                 return;
             }
             if (event.type === 'session_cleared') {
+                if (!isVisible) {
+                    pendingHiddenClearRef.current = true;
+                    pendingLiveOutputRef.current = '';
+                    pendingHiddenSnapshotRef.current = null;
+                    return;
+                }
                 clearRuntimeView();
             }
         }) || (() => {});
@@ -84,7 +139,7 @@ export default function CliTerminalPane({
         return () => {
             unsubRuntime();
         };
-    }, [daemonRouteId, sessionId, terminalRef]);
+    }, [daemonRouteId, sessionId, terminalRef, isVisible, runtimeReady]);
 
     useEffect(() => {
         if (!sessionId) return;
@@ -115,6 +170,37 @@ export default function CliTerminalPane({
     }, [activeConv.tabKey]);
 
     useEffect(() => {
+        if (!isVisible) {
+            chatInputRef.current?.blur();
+            return;
+        }
+
+        if (pendingHiddenClearRef.current) {
+            pendingHiddenClearRef.current = false;
+            clearRuntimeView();
+        }
+
+        const pendingSnapshot = pendingHiddenSnapshotRef.current;
+        if (pendingSnapshot) {
+            pendingHiddenSnapshotRef.current = null;
+            seedTerminal(pendingSnapshot.text, pendingSnapshot.seq, pendingSnapshot.cols, pendingSnapshot.rows);
+        }
+
+        if (pendingLiveOutputRef.current && flushFrameRef.current === null) {
+            flushFrameRef.current = requestAnimationFrame(flushPendingLiveOutput);
+        }
+    }, [isVisible]);
+
+    useEffect(() => {
+        return () => {
+            if (flushFrameRef.current !== null) {
+                cancelAnimationFrame(flushFrameRef.current);
+                flushFrameRef.current = null;
+            }
+        };
+    }, []);
+
+    useEffect(() => {
         const handleFit = (event: Event) => {
             const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
             if (detail?.sessionId && detail.sessionId !== sessionId) return;
@@ -132,9 +218,8 @@ export default function CliTerminalPane({
             {/* Terminal */}
             <div className="flex-1 min-h-0 p-2 bg-[#0f1117]">
                 <CliTerminal
-                    key={activeConv.tabKey}
                     ref={terminalRef as any}
-                    readOnly={!runtimeReady}
+                    readOnly={!runtimeReady || !isVisible}
                     onInput={(data) => {
                         if (!runtimeReady) return;
                         if (!sendData?.(daemonRouteId, { type: 'pty_input', targetSessionId: sessionId, data })) {
@@ -164,6 +249,7 @@ export default function CliTerminalPane({
                             type="text"
                             placeholder={`Send message to ${activeConv.displayPrimary}...`}
                             value={draftInput}
+                            disabled={!runtimeReady || !isVisible || isSendingChat}
                             onChange={e => setDraftInput(e.target.value)}
                             onPaste={e => {
                                 const pasted = e.clipboardData.getData('text');
@@ -193,7 +279,7 @@ export default function CliTerminalPane({
                             setDraftInput('');
                             handleSendChat(message);
                         }}
-                        disabled={!runtimeReady || !draftInput.trim() || isSendingChat}
+                        disabled={!runtimeReady || !isVisible || !draftInput.trim() || isSendingChat}
                         className={`w-9 h-9 rounded-full flex items-center justify-center border-none shrink-0 transition-all duration-300 ${
                             draftInput.trim() && !isSendingChat ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
                         }`}

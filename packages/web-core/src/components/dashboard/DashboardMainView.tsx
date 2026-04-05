@@ -16,11 +16,11 @@ interface DashboardMainViewProps {
     isConnected: boolean
     onOpenHistory: (conversation?: ActiveConversation) => void
     onOpenRemote: (conversation: ActiveConversation) => void
-    onFitCli: () => void
     onStopCli: () => void
     activeCliViewMode: CliConversationViewMode | null
     onSetActiveCliViewMode: (mode: CliConversationViewMode) => void
     mobileChatConversations: ActiveConversation[]
+    hiddenConversations: ActiveConversation[]
     ides: DaemonData[]
     actionLogs: { ideId: string; text: string; timestamp: number }[]
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
@@ -58,6 +58,9 @@ interface DashboardMainViewProps {
     onRequestedDesktopTabConsumed: () => void
     onDesktopActiveTabChange: React.Dispatch<React.SetStateAction<string | null>>
     onOpenDesktopConversation: (conversation: ActiveConversation) => void
+    onHideConversation: (conversation: ActiveConversation) => void
+    onShowHiddenConversation: (conversation: ActiveConversation) => void
+    onShowAllHiddenConversations: () => void
 }
 
 export default function DashboardMainView({
@@ -69,11 +72,11 @@ export default function DashboardMainView({
     isConnected,
     onOpenHistory,
     onOpenRemote,
-    onFitCli,
     onStopCli,
     activeCliViewMode,
     onSetActiveCliViewMode,
     mobileChatConversations,
+    hiddenConversations,
     ides,
     actionLogs,
     sendDaemonCommand,
@@ -111,7 +114,25 @@ export default function DashboardMainView({
     onRequestedDesktopTabConsumed,
     onDesktopActiveTabChange,
     onOpenDesktopConversation,
+    onHideConversation,
+    onShowHiddenConversation,
+    onShowAllHiddenConversations,
 }: DashboardMainViewProps) {
+    React.useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
+            const isClose = isMac ? (e.metaKey && e.key.toLowerCase() === 'w') : (e.ctrlKey && e.key.toLowerCase() === 'w')
+            if (isClose) {
+                e.preventDefault()
+                if (activeConv && onHideConversation) {
+                    onHideConversation(activeConv)
+                }
+            }
+        }
+        window.addEventListener('keydown', handleKeyDown)
+        return () => window.removeEventListener('keydown', handleKeyDown)
+    }, [activeConv, onHideConversation])
+
     return (
         <>
             {!showMobileChatMode && (
@@ -121,13 +142,16 @@ export default function DashboardMainView({
                     wsStatus={wsStatus}
                     isConnected={isConnected}
                     conversations={visibleConversations}
+                    hiddenConversations={hiddenConversations}
                     onOpenHistory={onOpenHistory}
                     onOpenConversation={onOpenDesktopConversation}
+                    onHideConversation={onHideConversation}
+                    onShowConversation={onShowHiddenConversation}
+                    onShowAllHidden={onShowAllHiddenConversations}
                     onOpenRemote={() => {
                         if (!activeConv || isCliConv(activeConv) || isAcpConv(activeConv)) return
                         onOpenRemote(activeConv)
                     }}
-                    onFitCli={onFitCli}
                     onStopCli={onStopCli}
                     activeCliViewMode={activeCliViewMode}
                     onSetCliViewMode={onSetActiveCliViewMode}
@@ -137,6 +161,7 @@ export default function DashboardMainView({
             {showMobileChatMode ? (
                 <DashboardMobileChatMode
                     conversations={mobileChatConversations}
+                    hiddenConversations={hiddenConversations}
                     ides={ides}
                     actionLogs={actionLogs}
                     sendDaemonCommand={sendDaemonCommand}
@@ -150,6 +175,10 @@ export default function DashboardMainView({
                     onRequestedMachineConsumed={onRequestedMachineConsumed}
                     onOpenHistory={onOpenHistory}
                     onOpenRemote={onOpenRemote}
+                    wsStatus={wsStatus}
+                    isConnected={isConnected}
+                    onShowHiddenConversation={onShowHiddenConversation}
+                    onShowAllHiddenConversations={onShowAllHiddenConversations}
                 />
             ) : isMobile ? (
                 <DashboardPaneWorkspace

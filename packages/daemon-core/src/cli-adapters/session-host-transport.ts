@@ -171,6 +171,25 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         });
     }
 
+    updateMeta(meta: Record<string, unknown>, replace = false): void {
+        this.enqueue(async () => {
+            const response = await this.client.request<SessionHostRecord>({
+                type: 'update_session_meta',
+                payload: {
+                    sessionId: this.options.runtimeId,
+                    meta,
+                    replace,
+                },
+            });
+            if (!response?.success) {
+                throw new Error(response.error || `Failed to update runtime meta ${this.options.runtimeId}`);
+            }
+            if (response.result) {
+                this.updateMetadata(response.result);
+            }
+        });
+    }
+
     private async boot(): Promise<void> {
         await this.client.connect();
         this.unsubscribe = this.client.onEvent((event: SessionHostEvent) => this.handleEvent(event));

@@ -8,9 +8,9 @@ import { useDashboardConversationCommands } from '../../hooks/useDashboardConver
 import DashboardMobileChatRoom from './DashboardMobileChatRoom'
 import DashboardMobileChatInbox from './DashboardMobileChatInbox'
 import DashboardMobileMachineScreen from './DashboardMobileMachineScreen'
-import { compareConversationRecency, getConversationActivityAt, getConversationTimestamp } from './conversation-sort'
+import { compareConversationRecency, getConversationActivityAt, getConversationSortTimestamp, getConversationTimestamp } from './conversation-sort'
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
-import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, getConversationLiveInboxState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared'
+import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, getConversationLiveInboxState } from './DashboardMobileChatShared'
 import { compareMachineEntries, getDaemonEntryActivityAt, getMachineDisplayName, isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
 import { normalizeTextContent } from '../../utils/text'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
@@ -19,6 +19,7 @@ declare const __APP_VERSION__: string
 
 interface DashboardMobileChatModeProps {
     conversations: ActiveConversation[]
+    hiddenConversations: ActiveConversation[]
     ides: DaemonData[]
     actionLogs: { ideId: string; text: string; timestamp: number }[]
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
@@ -32,6 +33,10 @@ interface DashboardMobileChatModeProps {
     onRequestedMachineConsumed?: () => void
     onOpenHistory: (conversation?: ActiveConversation) => void
     onOpenRemote: (conversation: ActiveConversation) => void
+    wsStatus?: string
+    isConnected?: boolean
+    onShowHiddenConversation: (conversation: ActiveConversation) => void
+    onShowAllHiddenConversations: () => void
 }
 
 function normalizePreviewText(content: unknown) {
@@ -66,6 +71,7 @@ function logMobileReadDebug(event: string, payload: Record<string, unknown>) {
 
 export default function DashboardMobileChatMode({
     conversations,
+    hiddenConversations,
     ides,
     actionLogs,
     sendDaemonCommand,
@@ -79,6 +85,10 @@ export default function DashboardMobileChatMode({
     onRequestedMachineConsumed,
     onOpenHistory,
     onOpenRemote,
+    wsStatus,
+    isConnected,
+    onShowHiddenConversation,
+    onShowAllHiddenConversations,
 }: DashboardMobileChatModeProps) {
     const [selectedTabKey, setSelectedTabKey] = useState<string | null>(() => conversations[0]?.tabKey || null)
     const [screen, setScreen] = useState<'inbox' | 'chat' | 'machine'>(() => (conversations[0] ? 'chat' : 'inbox'))
@@ -117,11 +127,6 @@ export default function DashboardMobileChatMode({
         () => buildLiveSessionInboxStateMap(ides),
         [ides],
     )
-    const mobileInboxConversations = useMemo(
-        () => conversations.filter(conversation => !isHiddenNativeIdeParentConversation(conversation, conversations, liveSessionInboxState)),
-        [conversations, liveSessionInboxState],
-    )
-
     const cmds = useDashboardConversationCommands({
         sendDaemonCommand,
         activeConv: selectedConversation || undefined,
@@ -203,9 +208,8 @@ export default function DashboardMobileChatMode({
         onRequestedMachineConsumed?.()
     }, [machineEntries, onRequestedMachineConsumed, requestedMachineId])
 
-    const items = useMemo<MobileConversationListItem[]>(() => mobileInboxConversations.map(conversation => {
-        const liveState = getConversationLiveInboxState(conversation, liveSessionInboxState)
-        const timestamp = getConversationActivityAt(conversation, liveState.lastUpdated)
+    const items = useMemo<MobileConversationListItem[]>(() => conversations.map(conversation => {
+        const timestamp = getConversationSortTimestamp(conversation)
         const preview = getConversationPreview(conversation)
         const isOpenConversation = screen === 'chat' && selectedConversation?.tabKey === conversation.tabKey
         const surfaceState = getConversationInboxSurfaceState(conversation, liveSessionInboxState, {
@@ -225,7 +229,7 @@ export default function DashboardMobileChatMode({
         const timestampDiff = b.timestamp - a.timestamp
         if (timestampDiff !== 0) return timestampDiff
         return compareConversationRecency(a.conversation, b.conversation)
-    }), [liveSessionInboxState, mobileInboxConversations, screen, selectedConversation])
+    }), [conversations, liveSessionInboxState, screen, selectedConversation])
 
     useEffect(() => {
         const taskCompleteItems = items.filter(item => item.inboxBucket === 'task_complete' || item.unread)
@@ -285,6 +289,7 @@ export default function DashboardMobileChatMode({
                     label: launch.title || launch.providerName || launch.providerType,
                     kind: launch.kind,
                     providerType: launch.providerType,
+                    providerSessionId: launch.providerSessionId,
                     subtitle: launch.currentModel || launch.workspace || undefined,
                     workspace: launch.workspace,
                     currentModel: launch.currentModel,
@@ -305,6 +310,7 @@ export default function DashboardMobileChatMode({
                                     : entry.type),
                         kind,
                         providerType: entry.type,
+                        providerSessionId: (entry as any).providerSessionId,
                         subtitle: isAcpEntry(entry)
                             ? ((entry as any).currentModel || (entry as any).workspace || undefined)
                             : ((entry as any).workspace || undefined),
@@ -386,11 +392,11 @@ export default function DashboardMobileChatMode({
             }
         }).sort((a, b) => {
             const aTs = Math.max(
-                a.latestConversation ? getConversationTimestamp(a.latestConversation) : 0,
+                a.latestConversation ? getConversationSortTimestamp(a.latestConversation) : 0,
                 getDaemonEntryActivityAt(machineEntries.find((entry) => entry.id === a.id) as any),
             )
             const bTs = Math.max(
-                b.latestConversation ? getConversationTimestamp(b.latestConversation) : 0,
+                b.latestConversation ? getConversationSortTimestamp(b.latestConversation) : 0,
                 getDaemonEntryActivityAt(machineEntries.find((entry) => entry.id === b.id) as any),
             )
             if (bTs !== aTs) return bTs - aTs
@@ -405,7 +411,7 @@ export default function DashboardMobileChatMode({
     }, [markConversationRead])
 
     const handleOpenNativeConversation = useCallback((conversation: ActiveConversation) => {
-        const nativeConversation = mobileInboxConversations.find(candidate => (
+        const nativeConversation = conversations.find(candidate => (
             candidate.ideId === conversation.ideId
             && candidate.streamSource === 'native'
         ))
@@ -413,7 +419,7 @@ export default function DashboardMobileChatMode({
         setSelectedTabKey(nativeConversation.tabKey)
         setScreen('chat')
         markConversationRead(nativeConversation)
-    }, [markConversationRead, mobileInboxConversations])
+    }, [conversations, markConversationRead])
 
     const handleBackFromConversation = useCallback(() => {
         markConversationRead(selectedConversation)
@@ -516,7 +522,7 @@ export default function DashboardMobileChatMode({
         machineId: string,
         kind: 'cli' | 'acp',
         providerType: string,
-        opts?: { workspaceId?: string | null; workspacePath?: string | null },
+        opts?: { workspaceId?: string | null; workspacePath?: string | null; resumeSessionId?: string | null },
     ) => {
         try {
             setMachineActionState('loading')
@@ -524,6 +530,7 @@ export default function DashboardMobileChatMode({
             const payload: Record<string, unknown> = { cliType: providerType }
             if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
             else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
+            if (opts?.resumeSessionId) payload.resumeSessionId = opts.resumeSessionId
             const res: any = await sendDaemonCommand(machineId, 'launch_cli', payload)
             const result = res?.result || res
             const launchedSessionId = result?.sessionId || result?.id
@@ -552,6 +559,7 @@ export default function DashboardMobileChatMode({
         if ((session.kind === 'cli' || session.kind === 'acp') && session.providerType) {
             await handleLaunchWorkspaceProvider(selectedMachineEntry.id, session.kind, session.providerType, {
                 workspacePath: session.workspace || null,
+                resumeSessionId: session.providerSessionId || null,
             })
             return
         }
@@ -616,12 +624,18 @@ export default function DashboardMobileChatMode({
                     unreadItems={unreadItems}
                     workingItems={workingItems}
                     completedItems={completedItems}
+                    hiddenConversations={hiddenConversations}
                     machineCards={machineCards}
                     getAvatarText={getAvatarText}
                     onOpenConversation={handleOpenConversation}
+                    onShowConversation={onShowHiddenConversation}
+                    onShowAllHidden={onShowAllHiddenConversations}
                     onOpenMachine={handleOpenMachine}
                     onOpenSettings={() => navigate('/settings')}
                     onSectionChange={setSection}
+                    wsStatus={wsStatus}
+                    isConnected={isConnected}
+                    isStandalone={isStandalone}
                 />
             )}
         </div>

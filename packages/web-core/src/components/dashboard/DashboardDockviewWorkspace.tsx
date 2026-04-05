@@ -382,6 +382,7 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
             <div
                 className={`adhdev-dockview-tab${isActive ? ' is-active' : ''}${isGroupActive ? ' is-group-active' : ''}`}
                 title={props.api.title || 'Remote'}
+                data-tab-key={remoteConversation?.tabKey || ''}
             >
                 <div className="adhdev-dockview-tab-status" aria-hidden="true">
                     <span className="adhdev-dockview-tab-status-text is-connected">◫</span>
@@ -408,7 +409,10 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
 
     if (!conversation) {
         return (
-            <div className="adhdev-dockview-tab adhdev-dockview-tab-empty">
+            <div
+                className="adhdev-dockview-tab adhdev-dockview-tab-empty"
+                data-tab-key={props.params.tabKey || ''}
+            >
                 <div className="adhdev-dockview-tab-copy">
                     <div className="adhdev-dockview-tab-primary">{props.api.title || props.params.tabKey}</div>
                 </div>
@@ -422,12 +426,15 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
     const isConnecting = conversation.connectionState === 'connecting' || conversation.connectionState === 'new'
     const isGenerating = conversation.status === 'generating'
     const isWaiting = conversation.status === 'waiting_approval'
-    const isTaskCompleteUnread = isConversationTaskCompleteUnread(conversation, ctx.liveSessionInboxState)
+    const isTaskCompleteUnread = isConversationTaskCompleteUnread(conversation, ctx.liveSessionInboxState, {
+        isOpenConversation: isActive,
+    })
 
     return (
         <div
             className={`adhdev-dockview-tab${isActive ? ' is-active' : ''}${isGroupActive ? ' is-group-active' : ''}${isReconnecting ? ' is-reconnecting' : ''}`}
             title={conversation.displayPrimary}
+            data-tab-key={props.params.tabKey}
         >
             {isTaskCompleteUnread && <span className="adhdev-dockview-tab-unread-dot" aria-hidden="true" />}
             <div className="adhdev-dockview-tab-status" aria-hidden="true">
@@ -728,6 +735,22 @@ export default function DashboardDockviewWorkspace({
                 window.clearTimeout(overlayCleanupTimeoutRef.current)
             }
         }
+    }, [])
+
+    useEffect(() => {
+        const handleDragStart = (e: DragEvent) => {
+            const target = e.target as HTMLElement
+            if (!target) return
+            const tabNode = target.querySelector('[data-tab-key]') || target.closest('[data-tab-key]')
+            if (tabNode) {
+                const tabKey = tabNode.getAttribute('data-tab-key')
+                if (tabKey && e.dataTransfer) {
+                    e.dataTransfer.setData('text/tab-key', tabKey)
+                }
+            }
+        }
+        window.addEventListener('dragstart', handleDragStart)
+        return () => window.removeEventListener('dragstart', handleDragStart)
     }, [])
 
     const dockviewTheme = theme === 'light' ? themeLight : themeDark

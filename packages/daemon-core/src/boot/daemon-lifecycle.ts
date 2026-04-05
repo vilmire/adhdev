@@ -128,23 +128,27 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     providerLoader.loadAll();
     providerLoader.registerToDetector();
 
-    // 2.5 Provider version detection & archive (non-blocking — don't delay startup)
+    // 2.5 Provider version detection & archive
+    // Run after startup work continues. The detector still performs expensive
+    // version probing, so invoking it directly here would block daemon init.
     const versionArchive = new VersionArchive();
     providerLoader.setVersionArchive(versionArchive);
-    detectAllVersions(providerLoader, versionArchive)
-      .then((versionResults) => {
-        const installedProviders = versionResults.filter(v => v.installed);
-        const withVersion = installedProviders.filter(v => v.version);
-        LOG.info('Init', `Provider versions: ${installedProviders.length} installed, ${withVersion.length} versioned`);
-        for (const v of withVersion) {
-          LOG.info('Init', `  ${v.type} (${v.category}): v${v.version}${v.warning ? ' ⚠ ' + v.warning : ''}`);
-        }
-        const noVersion = installedProviders.filter(v => !v.version);
-        if (noVersion.length > 0) {
-          LOG.warn('Init', `  ${noVersion.length} installed but version unknown: ${noVersion.map(v => v.type).join(', ')}`);
-        }
-      })
-      .catch(() => {});
+    setTimeout(() => {
+        void detectAllVersions(providerLoader, versionArchive)
+            .then((versionResults) => {
+                const installedProviders = versionResults.filter(v => v.installed);
+                const withVersion = installedProviders.filter(v => v.version);
+                LOG.info('Init', `Provider versions: ${installedProviders.length} installed, ${withVersion.length} versioned`);
+                for (const v of withVersion) {
+                    LOG.info('Init', `  ${v.type} (${v.category}): v${v.version}${v.warning ? ' ⚠ ' + v.warning : ''}`);
+                }
+                const noVersion = installedProviders.filter(v => !v.version);
+                if (noVersion.length > 0) {
+                    LOG.warn('Init', `  ${noVersion.length} installed but version unknown: ${noVersion.map(v => v.type).join(', ')}`);
+                }
+            })
+            .catch(() => {});
+    }, 0);
 
     // 3. Shared state
     const instanceManager = new ProviderInstanceManager();

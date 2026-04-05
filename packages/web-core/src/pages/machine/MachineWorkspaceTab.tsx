@@ -23,8 +23,6 @@ interface MachineWorkspaceTabProps {
     initialCategory?: WorkspaceLaunchKind
     initialWorkspaceId?: string | null
     initialWorkspacePath?: string | null
-    isDashboardHidden?: (tabKey: string) => boolean
-    onToggleDashboardVisibility?: (tabKey: string) => void
     sendDaemonCommand?: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
 }
 
@@ -46,8 +44,6 @@ export default function MachineWorkspaceTab({
     initialCategory = 'ide',
     initialWorkspaceId,
     initialWorkspacePath,
-    isDashboardHidden,
-    onToggleDashboardVisibility,
     sendDaemonCommand,
 }: MachineWorkspaceTabProps) {
     const [activeCategory, setActiveCategory] = useState<WorkspaceLaunchKind>(initialCategory)
@@ -98,8 +94,6 @@ export default function MachineWorkspaceTab({
                     managedEntries={ideSessions}
                     getIcon={getIcon}
                     actions={actions}
-                    isDashboardHidden={isDashboardHidden}
-                    onToggleDashboardVisibility={onToggleDashboardVisibility}
                     sendDaemonCommand={sendDaemonCommand}
                     initialWorkspaceId={initialWorkspaceId}
                     initialWorkspacePath={initialWorkspacePath}
@@ -115,8 +109,6 @@ export default function MachineWorkspaceTab({
                     managedEntries={cliSessions}
                     getIcon={getIcon}
                     actions={actions}
-                    isDashboardHidden={isDashboardHidden}
-                    onToggleDashboardVisibility={onToggleDashboardVisibility}
                     initialWorkspaceId={initialWorkspaceId}
                     initialWorkspacePath={initialWorkspacePath}
                 />
@@ -131,8 +123,6 @@ export default function MachineWorkspaceTab({
                     managedEntries={acpSessions}
                     getIcon={getIcon}
                     actions={actions}
-                    isDashboardHidden={isDashboardHidden}
-                    onToggleDashboardVisibility={onToggleDashboardVisibility}
                     initialWorkspaceId={initialWorkspaceId}
                     initialWorkspacePath={initialWorkspacePath}
                 />

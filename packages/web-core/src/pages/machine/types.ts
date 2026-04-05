@@ -16,6 +16,7 @@ export interface IdeSessionEntry {
 export interface CliSessionEntry {
     id: string; sessionId?: string; type: string; cliName: string; status: string
     workspace: string; activeChat: any; daemonId: string
+    providerSessionId?: string
     mode?: 'terminal' | 'chat'
     runtimeKey?: string; runtimeDisplayName?: string; runtimeWorkspaceLabel?: string
     runtimeWriteOwner?: RuntimeWriteOwner | null
@@ -24,6 +25,7 @@ export interface CliSessionEntry {
 export interface AcpSessionEntry {
     id: string; sessionId?: string; type: string; acpName: string; status: string
     workspace: string; activeChat: any; daemonId: string
+    providerSessionId?: string
     currentModel?: string; currentPlan?: string
 }
 
@@ -59,6 +61,7 @@ export interface MachineRecentLaunch {
     label: string
     kind: 'ide' | 'cli' | 'acp'
     providerType?: string
+    providerSessionId?: string
     subtitle?: string
     workspace?: string | null
     currentModel?: string

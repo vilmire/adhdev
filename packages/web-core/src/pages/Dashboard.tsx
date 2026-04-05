@@ -1,11 +1,10 @@
-import React, { useState, useCallback, useMemo } from 'react'
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useDaemons } from '../compat'
-import { confirmTerminalFit } from '../utils/cliViewMode'
 import { useTransport } from '../context/TransportContext'
 import type { DaemonData } from '../types'
-import { isCliConv, isCliTerminalConv, isAcpConv, getCliConversationViewMode } from '../components/dashboard/types'
+import { isCliConv, isAcpConv, getCliConversationViewMode } from '../components/dashboard/types'
 import { useHiddenTabs } from '../hooks/useHiddenTabs'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
@@ -23,9 +22,12 @@ import ConnectionBanner from '../components/dashboard/ConnectionBanner'
 import TerminalBackendBanner from '../components/dashboard/TerminalBackendBanner'
 import DashboardMainView from '../components/dashboard/DashboardMainView'
 import DashboardOverlays from '../components/dashboard/DashboardOverlays'
+import type { SavedSessionHistoryEntry } from '../components/dashboard/HistoryModal'
 import DashboardVersionBanner from '../components/dashboard/DashboardVersionBanner'
 import type { Toast } from '../components/dashboard/ToastContainer'
 import { getMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
+import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
+import { getConversationTimestamp } from '../components/dashboard/conversation-sort'
 
 export default function Dashboard() {
     const { sendCommand: sendDaemonCommand } = useTransport()
@@ -67,6 +69,9 @@ export default function Dashboard() {
 
     const [historyModalOpen, setHistoryModalOpen] = useState(false)
     const [cliStopDialogOpen, setCliStopDialogOpen] = useState(false)
+    const [savedHistorySessions, setSavedHistorySessions] = useState<SavedSessionHistoryEntry[]>([])
+    const [isSavedHistoryLoading, setIsSavedHistoryLoading] = useState(false)
+    const [resumingSavedHistorySessionId, setResumingSavedHistorySessionId] = useState<string | null>(null)
     const [mobileViewMode] = useState<'chat' | 'workspace'>(() => getMobileDashboardMode())
     const [actionLogs, setActionLogs] = useState<{ ideId: string; text: string; timestamp: number }[]>([])
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
@@ -87,7 +92,13 @@ export default function Dashboard() {
     const isStandalone = !!daemonEntry
     const terminalBackend = (daemonEntry as any)?.terminalBackend || null
     // ─── Hidden Tabs ───
-    const { hiddenTabs, toggleTab: toggleHiddenTab } = useHiddenTabs();
+    const {
+        hiddenTabs,
+        hideTab: hideDashboardTab,
+        toggleTab: toggleHiddenTab,
+        showTab: showHiddenTab,
+        showAllTabs: showAllHiddenTabs,
+    } = useHiddenTabs();
     const {
         chatIdes,
         conversations,
@@ -102,6 +113,11 @@ export default function Dashboard() {
         clearedTabs,
         hiddenTabs,
     })
+    const liveSessionInboxState = useMemo(
+        () => buildLiveSessionInboxStateMap(ides),
+        [ides],
+    )
+    const lastDesktopAutoReadKeyRef = useRef<string | null>(null)
 
     const {
         containerRef,
@@ -143,6 +159,29 @@ export default function Dashboard() {
         return groupedConvs[focusedGroup]?.[0] || groupedConvs[0]?.[0]
     }, [desktopActiveTabKey, isMobile, groupActiveTabIds, focusedGroup, conversations, groupedConvs, visibleConversations])
 
+    useEffect(() => {
+        if (isMobile) {
+            lastDesktopAutoReadKeyRef.current = null
+            return
+        }
+        if (!activeConv?.sessionId) {
+            lastDesktopAutoReadKeyRef.current = null
+            return
+        }
+
+        const autoReadKey = `${activeConv.tabKey}:${activeConv.sessionId}`
+        if (lastDesktopAutoReadKeyRef.current === autoReadKey) return
+        lastDesktopAutoReadKeyRef.current = autoReadKey
+
+        const liveState = getConversationLiveInboxState(activeConv, liveSessionInboxState)
+        const readAt = Math.max(Date.now(), getConversationTimestamp(activeConv), liveState.lastUpdated || 0)
+
+        void sendDaemonCommand(activeConv.daemonId || activeConv.ideId, 'mark_session_seen', {
+            sessionId: activeConv.sessionId,
+            seenAt: readAt,
+        }).catch(() => {})
+    }, [activeConv, isMobile, liveSessionInboxState, sendDaemonCommand])
+
     const {
         requestedDesktopTabKey,
         requestedMobileTabKey,
@@ -173,11 +212,16 @@ export default function Dashboard() {
     })
 
     const historyTargetConv = (remoteDialogActiveConv || remoteDialogConv) || activeConv
+    const isSavedSessionHistoryTarget = !!historyTargetConv && isCliConv(historyTargetConv) && !isAcpConv(historyTargetConv)
     const mobileChatConversations = useMemo(
         () => visibleConversations,
         [visibleConversations],
     )
     const showMobileChatMode = isMobile && mobileViewMode === 'chat'
+    const hiddenConversations = useMemo(
+        () => conversations.filter(conversation => hiddenTabs.has(conversation.tabKey)),
+        [conversations, hiddenTabs],
+    )
 
     useDashboardConversationMeta({
         visibleConversations,
@@ -222,6 +266,68 @@ export default function Dashboard() {
         setLocalUserMessages,
         setClearedTabs,
     })
+
+    const handleRefreshSavedHistory = useCallback(async () => {
+        if (!historyTargetConv || !isSavedSessionHistoryTarget || isSavedHistoryLoading) return
+        setIsSavedHistoryLoading(true)
+        try {
+            const routeTarget = historyTargetConv.daemonId || historyTargetConv.ideId
+            const providerType = historyTargetConv.agentType || historyTargetConv.ideType
+            const raw: any = await sendDaemonCommand(routeTarget, 'list_saved_sessions', {
+                agentType: providerType,
+                providerType,
+                kind: 'cli',
+                limit: 50,
+            })
+            const result = raw?.result ?? raw
+            setSavedHistorySessions(Array.isArray(result?.sessions) ? result.sessions : [])
+        } catch (error) {
+            console.error('Refresh saved sessions failed', error)
+            setSavedHistorySessions([])
+        } finally {
+            setIsSavedHistoryLoading(false)
+        }
+    }, [historyTargetConv, isSavedHistoryLoading, isSavedSessionHistoryTarget, sendDaemonCommand])
+
+    useEffect(() => {
+        if (!historyModalOpen) return
+        if (!isSavedSessionHistoryTarget) {
+            setSavedHistorySessions([])
+            setIsSavedHistoryLoading(false)
+            return
+        }
+        void handleRefreshSavedHistory()
+    }, [handleRefreshSavedHistory, historyModalOpen, isSavedSessionHistoryTarget])
+
+    const handleResumeSavedHistorySession = useCallback(async (session: SavedSessionHistoryEntry) => {
+        if (!historyTargetConv || !isSavedSessionHistoryTarget) return
+        if (!session.providerSessionId || !session.workspace) return
+        const routeTarget = historyTargetConv.daemonId || historyTargetConv.ideId
+        const cliType = historyTargetConv.agentType || historyTargetConv.ideType
+        try {
+            setResumingSavedHistorySessionId(session.providerSessionId)
+            const raw: any = await sendDaemonCommand(routeTarget, 'launch_cli', {
+                cliType,
+                dir: session.workspace,
+                resumeSessionId: session.providerSessionId,
+                initialModel: session.currentModel,
+            })
+            const result = raw?.result ?? raw
+            const nextSessionId = typeof result?.sessionId === 'string' ? result.sessionId : typeof result?.id === 'string' ? result.id : ''
+            if (nextSessionId) {
+                setSearchParams(prev => {
+                    const next = new URLSearchParams(prev)
+                    next.set('activeTab', nextSessionId)
+                    return next
+                }, { replace: true })
+            }
+            setHistoryModalOpen(false)
+        } catch (error) {
+            console.error('Resume saved session failed', error)
+        } finally {
+            setResumingSavedHistorySessionId(null)
+        }
+    }, [historyTargetConv, isSavedSessionHistoryTarget, sendDaemonCommand, setSearchParams])
 
     useDashboardPageEffects({
         urlActiveTab: isMobile && !showMobileChatMode ? urlActiveTab : null,
@@ -286,14 +392,6 @@ export default function Dashboard() {
         }
     }, [activeConv, sendDaemonCommand])
 
-    const handleActiveCliFit = useCallback(() => {
-        if (!activeConv || !isCliTerminalConv(activeConv) || isAcpConv(activeConv) || !activeConv.sessionId) return
-        if (!confirmTerminalFit()) return
-        window.dispatchEvent(new CustomEvent('adhdev:fit-cli-terminal', {
-            detail: { sessionId: activeConv.sessionId },
-        }))
-    }, [activeConv])
-
     const {
         versionMismatchDaemons,
         appVersion,
@@ -315,6 +413,15 @@ export default function Dashboard() {
             return next
         }, { replace: true })
     }, [setSearchParams])
+
+    const handleShowHiddenConversation = useCallback((conversation: import('../components/dashboard/types').ActiveConversation) => {
+        showHiddenTab(conversation.tabKey)
+        handleOpenDesktopConversation(conversation)
+    }, [handleOpenDesktopConversation, showHiddenTab])
+
+    const handleHideConversation = useCallback((conversation: import('../components/dashboard/types').ActiveConversation) => {
+        hideDashboardTab(conversation.tabKey)
+    }, [hideDashboardTab])
 
     return (
         <div className="page-dashboard flex-1 min-h-0 bg-bg-primary text-text-primary flex flex-col overflow-hidden">
@@ -343,7 +450,6 @@ export default function Dashboard() {
                     setHistoryModalOpen(true)
                 }}
                 onOpenRemote={openRemoteDialog}
-                onFitCli={handleActiveCliFit}
                 onStopCli={handleActiveCliStop}
                 activeCliViewMode={activeCliViewMode}
                 onSetActiveCliViewMode={setActiveCliViewMode}
@@ -383,10 +489,14 @@ export default function Dashboard() {
                 setGroupTabOrders={setGroupTabOrders}
                 toggleHiddenTab={toggleHiddenTab}
                 visibleConversations={visibleConversations}
+                hiddenConversations={hiddenConversations}
                 requestedDesktopTabKey={requestedDesktopTabKey}
                 onRequestedDesktopTabConsumed={consumeRequestedActiveTab}
                 onDesktopActiveTabChange={setDesktopActiveTabKey}
                 onOpenDesktopConversation={handleOpenDesktopConversation}
+                onHideConversation={handleHideConversation}
+                onShowHiddenConversation={handleShowHiddenConversation}
+                onShowAllHiddenConversations={showAllHiddenTabs}
             />
 
             <style>{`
@@ -397,11 +507,15 @@ export default function Dashboard() {
                 historyTargetConv={historyTargetConv}
                 ides={ides}
                 isHistoryCreatingChat={isHistoryCreatingChat}
-                isHistoryRefreshingHistory={isHistoryRefreshingHistory}
+                isHistoryRefreshingHistory={isSavedSessionHistoryTarget ? false : isHistoryRefreshingHistory}
+                savedHistorySessions={savedHistorySessions}
+                isSavedHistoryLoading={isSavedHistoryLoading}
+                isResumingSavedHistorySessionId={resumingSavedHistorySessionId}
                 onCloseHistory={() => setHistoryModalOpen(false)}
                 onNewHistoryChat={handleHistoryNewChat}
                 onSwitchHistorySession={handleHistorySwitchSession}
-                onRefreshHistory={handleHistoryRefresh}
+                onRefreshHistory={isSavedSessionHistoryTarget ? handleRefreshSavedHistory : handleHistoryRefresh}
+                onResumeSavedHistorySession={handleResumeSavedHistorySession}
                 remoteDialogConv={remoteDialogConv}
                 remoteDialogIdeEntry={remoteDialogIdeEntry}
                 connectionStates={connectionStates}

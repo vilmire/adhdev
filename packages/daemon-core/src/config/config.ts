@@ -10,8 +10,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'f
 import { randomUUID } from 'crypto';
 import type { WorkspaceEntry } from './workspaces.js';
 import type { RecentActivityEntry } from './recent-activity.js';
+import type { SavedProviderSessionEntry } from './saved-sessions.js';
 export type { WorkspaceEntry } from './workspaces.js';
 export type { RecentActivityEntry } from './recent-activity.js';
+export type { SavedProviderSessionEntry } from './saved-sessions.js';
 
 export interface ADHDevConfig {
  // Server connection
@@ -44,6 +46,8 @@ export interface ADHDevConfig {
 
     /** Unified recent activity across IDE / CLI / ACP launch flows */
     recentActivity?: RecentActivityEntry[];
+    /** Persistent resume-capable provider sessions keyed by providerSessionId */
+    savedProviderSessions?: SavedProviderSessionEntry[];
     /** Last seen timestamps for live sessions, keyed by sessionId */
     sessionReads?: Record<string, number>;
     /** Last seen completion marker for live sessions, keyed by sessionId */
@@ -99,6 +103,7 @@ const DEFAULT_CONFIG: ADHDevConfig = {
     workspaces: [],
     defaultWorkspaceId: null,
     recentActivity: [],
+    savedProviderSessions: [],
     sessionReads: {},
     sessionReadMarkers: {},
     machineNickname: null,
@@ -161,6 +166,7 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
         workspaces: Array.isArray(parsed.workspaces) ? parsed.workspaces as WorkspaceEntry[] : [],
         defaultWorkspaceId: asNullableString(parsed.defaultWorkspaceId) ?? asNullableString(parsed.activeWorkspaceId),
         recentActivity: Array.isArray(parsed.recentActivity) ? parsed.recentActivity as RecentActivityEntry[] : [],
+        savedProviderSessions: Array.isArray(parsed.savedProviderSessions) ? parsed.savedProviderSessions as SavedProviderSessionEntry[] : [],
         sessionReads: mergedSessionReads,
         sessionReadMarkers,
         machineNickname: asNullableString(parsed.machineNickname),

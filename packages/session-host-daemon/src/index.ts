@@ -147,8 +147,8 @@ async function attachRuntime(target: string, readOnly = false, takeover = false)
       type: 'resize_session',
       payload: {
         sessionId: runtimeId,
-        cols: process.stdout.columns || 100,
-        rows: process.stdout.rows || 30,
+        cols: process.stdout.columns || 80,
+        rows: process.stdout.rows || 24,
       },
     }).catch(() => ({ success: false }));
   };
@@ -266,7 +266,7 @@ async function attachRuntime(target: string, readOnly = false, takeover = false)
       }
     }
 
-    const snapshotResponse = await client.request<{ seq: number; text: string; truncated: boolean }>({
+    const snapshotResponse = await client.request<{ seq: number; text: string; truncated: boolean; cols?: number; rows?: number }>({
       type: 'get_snapshot',
       payload: { sessionId: runtimeId },
     });

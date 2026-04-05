@@ -259,6 +259,7 @@ function buildCliSession(state: CliProviderState): SessionEntry {
         parentId: null,
         providerType: state.type,
         providerName: state.name,
+        providerSessionId: state.providerSessionId,
         kind: 'agent',
         transport: 'pty',
         status: normalizeManagedStatus(activeChat?.status || state.status, {

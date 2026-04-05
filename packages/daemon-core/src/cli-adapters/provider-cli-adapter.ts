@@ -433,7 +433,7 @@ export class ProviderCliAdapter implements CliAdapter {
     /** Full accumulated raw PTY output (with ANSI) */
     private accumulatedRawBuffer: string = '';
     /** Current visible terminal screen snapshot */
-    private terminalScreen = new TerminalScreen(30, 100);
+    private terminalScreen = new TerminalScreen(24, 80);
     /** Max accumulated buffer size (last 50KB) */
     private static readonly MAX_ACCUMULATED_BUFFER = 50000;
     private currentTurnScope: TurnParseScope | null = null;
@@ -1025,6 +1025,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 title: parsed.title || this.cliName,
                 messages: parsed.messages,
                 activeModal: parsed.activeModal ?? this.activeModal,
+                providerSessionId: typeof parsed.providerSessionId === 'string' ? parsed.providerSessionId : undefined,
             };
         }
 
@@ -1220,6 +1221,11 @@ export class ProviderCliAdapter implements CliAdapter {
     getRuntimeMetadata(): PtyRuntimeMetadata | null {
         if (!this.ptyProcess || typeof this.ptyProcess.getMetadata !== 'function') return null;
         return this.ptyProcess.getMetadata();
+    }
+
+    updateRuntimeMeta(meta: Record<string, unknown>, replace = false): void {
+        if (!this.ptyProcess || typeof this.ptyProcess.updateMeta !== 'function') return;
+        this.ptyProcess.updateMeta(meta, replace);
     }
 
     cancel(): void { this.shutdown(); }

@@ -221,10 +221,14 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                         return
                     }
 
-                    if (msg.type === 'pty_output') {
+                    if (msg.type === 'session_output') {
                         const sessionId = msg.sessionId || msg.cliId || msg.cliType
                         if (sessionId) {
-                            standaloneConnectionManager.emitPtyOutput(sessionId, msg.data)
+                            standaloneConnectionManager.emitSessionOutput(
+                                sessionId,
+                                typeof msg.data === 'string' ? msg.data : '',
+                                typeof msg.seq === 'number' ? msg.seq : undefined,
+                            )
                         }
                         return
                     }

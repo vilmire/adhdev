@@ -59,6 +59,8 @@ export interface PaneGroupProps {
     onTabOrderChange?: (order: string[]) => void;
     /** Hide tab from dashboard */
     onHideTab?: (tabKey: string) => void;
+    /** Whether this group is the focused/active group (split mode) */
+    isFocused?: boolean;
 }
 
 export default function PaneGroup({
@@ -77,6 +79,7 @@ export default function PaneGroup({
     initialTabOrder,
     onTabOrderChange,
     onHideTab,
+    isFocused,
 }: PaneGroupProps) {
     const { sendCommand } = useTransport()
     const terminalRef = useRef<CliTerminalHandle>(null)
@@ -151,10 +154,12 @@ export default function PaneGroup({
     const unreadTabKeys = useMemo(
         () => new Set(
             sortedConversations
-                .filter(conversation => isConversationTaskCompleteUnread(conversation, liveSessionInboxState))
+                .filter(conversation => isConversationTaskCompleteUnread(conversation, liveSessionInboxState, {
+                    isOpenConversation: conversation.tabKey === activeTabId,
+                }))
                 .map(conversation => conversation.tabKey),
         ),
-        [liveSessionInboxState, sortedConversations],
+        [activeTabId, liveSessionInboxState, sortedConversations],
     )
     useDevRenderTrace('PaneGroup', {
         groupIndex,
@@ -202,6 +207,7 @@ export default function PaneGroup({
                 onMoveTab={onMoveTab}
                 onReceiveTab={onReceiveTab}
                 onHideTab={onHideTab}
+                isGroupActive={isFocused ?? false}
             />
 
             {/* ── Content Area ────────────────────── */}

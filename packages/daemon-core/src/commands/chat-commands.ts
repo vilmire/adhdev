@@ -59,6 +59,19 @@ function buildRecentSendKey(h: CommandHelpers, args: any, provider: any, text: s
     return `${transport}:${target}:${text.trim()}`;
 }
 
+function getHistorySessionId(h: CommandHelpers, args: any): string | undefined {
+    const explicit = typeof args?.historySessionId === 'string' ? args.historySessionId.trim() : '';
+    if (explicit) return explicit;
+
+    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+    if (!targetSessionId) return undefined;
+
+    const instance = h.ctx.instanceManager?.getInstance(targetSessionId) as any;
+    const state = instance?.getState?.();
+    const providerSessionId = typeof state?.providerSessionId === 'string' ? state.providerSessionId.trim() : '';
+    return providerSessionId || targetSessionId;
+}
+
 function isRecentDuplicateSend(key: string): boolean {
     const now = Date.now();
     for (const [candidate, ts] of recentSendByTarget.entries()) {
@@ -72,11 +85,11 @@ function isRecentDuplicateSend(key: string): boolean {
 
 export async function handleChatHistory(h: CommandHelpers, args: any): Promise<CommandResult> {
     const { agentType, offset, limit } = args;
-    const instanceId = args?.targetSessionId;
+    const historySessionId = getHistorySessionId(h, args);
     try {
         const provider = h.getProvider(agentType);
         const agentStr = provider?.type || agentType || getCurrentProviderType(h);
-        const result = readChatHistory(agentStr, offset || 0, limit || 30, instanceId);
+        const result = readChatHistory(agentStr, offset || 0, limit || 30, historySessionId);
         return { success: true, ...result, agent: agentStr };
     } catch (e: any) {
         return { success: false, error: e.message };
@@ -86,6 +99,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
 export async function handleReadChat(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
     const transport = getTargetTransport(h, provider);
+    const historySessionId = getHistorySessionId(h, args);
 
     const _log = (msg: string) => LOG.debug('Command', `[read_chat] ${msg}`);
 
@@ -120,7 +134,8 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         provider?.type || 'unknown_extension',
                         parsed.messages || [],
                         parsed.title,
-                        args?.targetSessionId
+                        args?.targetSessionId,
+                        historySessionId,
                     );
                     return { success: true, ...parsed };
                 }
@@ -142,7 +157,8 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                         stream.agentType,
                         stream.messages || [],
                         undefined,
-                        args?.targetSessionId
+                        args?.targetSessionId,
+                        historySessionId,
                     );
                     return { success: true, messages: stream.messages || [], status: stream.status, agentType: stream.agentType };
                 }
@@ -169,11 +185,12 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
                 if (parsed && typeof parsed === 'object') {
                     _log(`Webview OK: ${parsed.messages?.length || 0} msgs`);
-                    h.historyWriter.appendNewMessages(
+                h.historyWriter.appendNewMessages(
                     provider?.type || getCurrentProviderType(h, 'unknown_webview'),
                     parsed.messages || [],
                     parsed.title,
-                    args?.targetSessionId
+                    args?.targetSessionId,
+                    historySessionId,
                 );
                     return { success: true, ...parsed };
                 }
@@ -197,7 +214,8 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     provider?.type || getCurrentProviderType(h, 'unknown_ide'),
                     parsed.messages || [],
                     parsed.title,
-                    args?.targetSessionId
+                    args?.targetSessionId,
+                    historySessionId,
                 );
                 return { success: true, ...parsed };
             }
@@ -216,13 +234,15 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
     const provider = h.getProvider(args?.agentType);
     const transport = getTargetTransport(h, provider);
     const dedupeKey = buildRecentSendKey(h, args, provider, text);
+    const historySessionId = getHistorySessionId(h, args);
 
     const _logSendSuccess = (method: string, targetAgent?: string) => {
         h.historyWriter.appendNewMessages(
             targetAgent || provider?.type || getCurrentProviderType(h, 'unknown_agent'),
             [{ role: 'user', content: text, receivedAt: Date.now() }],
             undefined, // title
-            args?.targetSessionId
+            args?.targetSessionId,
+            historySessionId,
         );
         return { success: true, sent: true, method, targetAgent };
     };

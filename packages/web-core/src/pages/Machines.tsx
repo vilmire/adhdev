@@ -10,13 +10,11 @@ import ProgressBar from '../components/ProgressBar'
 import ConnectionBadge from '../components/ConnectionBadge'
 import InstallCommand from '../components/InstallCommand'
 import { IconServer, IconMonitor } from '../components/Icons'
-import { useHiddenTabs } from '../hooks/useHiddenTabs'
 
 // ─── Compact Agent Row (replaces full IdeCard/CliCard) ──────────
-function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive, onClick, isHidden, onToggleVisibility }: {
+function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive, onClick }: {
     icon: string; name: string; status: string; statusTone?: 'active' | 'waiting' | 'idle' | 'offline'; workspace?: string
     isActive: boolean; onClick: () => void
-    isHidden?: boolean; onToggleVisibility?: () => void
 }) {
     const statusDotColor = statusTone === 'active'
         ? '#f97316'
@@ -29,24 +27,9 @@ function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive
     return (
         <div
             className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg transition-all ${
-                isHidden ? 'opacity-40' : ''
-            } ${
                 isActive ? 'bg-orange-500/[0.04] border border-orange-500/10' : 'bg-bg-glass border border-border-subtle'
             }`}
         >
-            {onToggleVisibility && (
-                <button
-                    onClick={(e) => { e.stopPropagation(); onToggleVisibility(); }}
-                    className={`shrink-0 w-5 h-5 rounded flex items-center justify-center text-[10px] transition-all ${
-                        isHidden
-                            ? 'bg-zinc-500/10 text-zinc-400 hover:bg-zinc-500/20'
-                            : 'bg-violet-500/10 text-violet-400 hover:bg-violet-500/20'
-                    }`}
-                    title={isHidden ? 'Show on Dashboard' : 'Hide from Dashboard'}
-                >
-                    {isHidden ? '👁‍🗨' : '👁'}
-                </button>
-            )}
             <div
                 onClick={(e) => { e.stopPropagation(); onClick() }}
                 className="flex-1 flex items-center gap-2 cursor-pointer min-w-0"
@@ -84,7 +67,6 @@ export default function MachinesPage() {
     const getIcon = (type: string) => providerIcons[type] || ''
     const machines = groupByMachine(daemons, providerLabels)
     const onlineCount = machines.filter(m => m.daemonIde.status === 'online').length
-    const { isHidden, toggleTab } = useHiddenTabs()
     const openDashboardSession = (sessionId?: string | null, fallbackMachineId?: string | null) => {
         if (sessionId) {
             navigate(`/dashboard?activeTab=${encodeURIComponent(sessionId)}`)
@@ -335,8 +317,6 @@ export default function MachinesPage() {
                                                                 statusTone={statusTone}
                                                                 workspace={getWorkspaceDisplayLabel(ide.workspace)}
                                                                 isActive={active}
-                                                                isHidden={isHidden(ide.id)}
-                                                                onToggleVisibility={() => toggleTab(ide.id)}
                                                                 onClick={() => openDashboardSession(ide.sessionId, machine.machineId)}
                                                             />
                                                             {/* Extension sub-rows */}
@@ -387,8 +367,6 @@ export default function MachinesPage() {
                                                             statusTone={statusTone}
                                                             workspace={getWorkspaceDisplayLabel(cli.workspace)}
                                                             isActive={!!active}
-                                                            isHidden={isHidden(cli.id)}
-                                                            onToggleVisibility={() => toggleTab(cli.id)}
                                                             onClick={() => openDashboardSession(cli.sessionId, machine.machineId)}
                                                         />
                                                     )
@@ -418,8 +396,6 @@ export default function MachinesPage() {
                                                             statusTone={statusTone}
                                                             workspace={getWorkspaceDisplayLabel(acp.workspace)}
                                                             isActive={!!active}
-                                                            isHidden={isHidden(acp.id)}
-                                                            onToggleVisibility={() => toggleTab(acp.id)}
                                                             onClick={() => openDashboardSession(acp.sessionId, machine.machineId)}
                                                         />
                                                     )

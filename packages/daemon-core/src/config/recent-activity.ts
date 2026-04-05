@@ -3,7 +3,7 @@
  *
  * Unlike live session state, this is launch oriented:
  * - one normalized row shape for IDE / CLI / ACP
- * - deduped by kind + providerType + workspace
+ * - deduped by provider session when available, else by kind + providerType + workspace
  * - used only for quick-launch shortcuts
  */
 
@@ -16,6 +16,7 @@ export interface RecentActivityEntry {
     kind: 'ide' | 'cli' | 'acp';
     providerType: string;
     providerName: string;
+    providerSessionId?: string;
     workspace?: string | null;
     currentModel?: string;
     title?: string;
@@ -37,6 +38,16 @@ export function buildRecentActivityKey(entry: Pick<RecentActivityEntry, 'kind' |
     return `${entry.kind}:${entry.providerType}:${normalizeWorkspace(entry.workspace)}`;
 }
 
+export function buildRecentActivityKeyForEntry(
+    entry: Pick<RecentActivityEntry, 'kind' | 'providerType' | 'workspace' | 'providerSessionId'>,
+) {
+    const providerSessionId = typeof entry.providerSessionId === 'string' ? entry.providerSessionId.trim() : '';
+    if (providerSessionId) {
+        return `${entry.kind}:${entry.providerType}:session:${providerSessionId}`;
+    }
+    return buildRecentActivityKey(entry);
+}
+
 export function appendRecentActivity(
     config: ADHDevConfig,
     entry: Omit<RecentActivityEntry, 'id' | 'lastUsedAt'> & { lastUsedAt?: number },
@@ -44,7 +55,7 @@ export function appendRecentActivity(
     const nextEntry: RecentActivityEntry = {
         ...entry,
         workspace: entry.workspace ? normalizeWorkspace(entry.workspace) : undefined,
-        id: buildRecentActivityKey(entry),
+        id: buildRecentActivityKeyForEntry(entry),
         lastUsedAt: entry.lastUsedAt || Date.now(),
     };
 

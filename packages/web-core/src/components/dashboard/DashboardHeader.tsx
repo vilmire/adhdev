@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActiveConversation, CliConversationViewMode } from './types';
 import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
-import { IconBell, IconChat, IconScroll, IconMonitor, IconFit, IconX } from '../Icons';
+import { IconBell, IconChat, IconScroll, IconMonitor, IconEyeOff, IconX } from '../Icons';
 import { useDaemons } from '../../compat';
 import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared';
 import CliViewModeToggle from './CliViewModeToggle';
@@ -23,10 +23,13 @@ export interface DashboardHeaderProps {
     onOpenHistory: (conversation?: ActiveConversation) => void;
     onOpenRemote?: () => void;
     onStopCli?: () => void;
-    onFitCli?: () => void;
     activeCliViewMode?: CliConversationViewMode | null;
     onSetCliViewMode?: (mode: CliConversationViewMode) => void;
     onOpenConversation?: (conversation: ActiveConversation) => void;
+    onHideConversation?: (conversation: ActiveConversation) => void;
+    hiddenConversations?: ActiveConversation[];
+    onShowConversation?: (conversation: ActiveConversation) => void;
+    onShowAllHidden?: () => void;
 }
 
 export default function DashboardHeader({
@@ -38,19 +41,24 @@ export default function DashboardHeader({
     onOpenHistory,
     onOpenRemote,
     onStopCli,
-    onFitCli,
     activeCliViewMode,
     onSetCliViewMode,
     onOpenConversation,
+    onHideConversation,
+    hiddenConversations = [],
+    onShowConversation,
+    onShowAllHidden,
 }: DashboardHeaderProps) {
     const daemonCtx = useDaemons() as any;
     const p2pStates: Record<string, string> = daemonCtx.p2pStates || {};
     const ides = daemonCtx.ides || [];
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
     const effectiveCliViewMode = activeCliViewMode || (activeConv ? (isCliTerminalConv(activeConv) ? 'terminal' : 'chat') : null);
-    const isCliTerminalActive = !!activeConv && isCliActive && effectiveCliViewMode === 'terminal';
     const [inboxOpen, setInboxOpen] = useState(false);
+    const [hiddenOpen, setHiddenOpen] = useState(false);
+    const [isHiddenDropTarget, setIsHiddenDropTarget] = useState(false);
     const inboxRef = useRef<HTMLDivElement | null>(null);
+    const hiddenRef = useRef<HTMLDivElement | null>(null);
 
     const dotColor = isConnected ? '#22c55e' : wsStatus === 'connected' ? '#eab308' : '#ef4444';
     const dotGlow = isConnected ? '0 0 4px #22c55e80' : wsStatus === 'connected' ? '0 0 4px #eab30880' : '0 0 4px #ef444480';
@@ -103,6 +111,22 @@ export default function DashboardHeader({
         return () => document.removeEventListener('mousedown', onPointerDown);
     }, [inboxOpen]);
 
+    useEffect(() => {
+        if (!hiddenOpen) return;
+        const onPointerDown = (event: MouseEvent) => {
+            if (!hiddenRef.current?.contains(event.target as Node)) setHiddenOpen(false);
+        };
+        document.addEventListener('mousedown', onPointerDown);
+        return () => document.removeEventListener('mousedown', onPointerDown);
+    }, [hiddenOpen]);
+
+    const handleHideDrop = (tabKey: string | null | undefined) => {
+        if (!tabKey) return
+        const conversation = conversations.find(item => item.tabKey === tabKey)
+        if (!conversation) return
+        onHideConversation?.(conversation)
+    }
+
     return (
         <div className="dashboard-header">
             <div className="flex items-center gap-3">
@@ -141,7 +165,140 @@ export default function DashboardHeader({
                 </div>
             </div>
             <div className="flex gap-2 items-center">
+                {activeConv && (isCliActive || !isAcpConv(activeConv)) && (
+                    <div className="dashboard-header-actions-group">
+                        <span
+                            className="dashboard-header-action-target"
+                            title={activeConv.displaySecondary || activeConv.displayPrimary}
+                        >
+                            {activeConv.displayPrimary}
+                        </span>
+
+                        {isCliActive && onStopCli && (
+                            <>
+                                {onSetCliViewMode && effectiveCliViewMode && (
+                                    <CliViewModeToggle mode={effectiveCliViewMode} onChange={onSetCliViewMode} compact />
+                                )}
+                                <button
+                                    onClick={onStopCli}
+                                    className="btn btn-secondary btn-sm"
+                                    title="Stop CLI process"
+                                    style={{
+                                        color: 'var(--status-error, #ef4444)',
+                                        borderColor: 'color-mix(in srgb, var(--status-error, #ef4444) 25%, transparent)',
+                                    }}
+                                >
+                                    <IconX size={14} />
+                                </button>
+                            </>
+                        )}
+
+                        {!isAcpConv(activeConv) && (
+                            <button
+                                onClick={() => onOpenHistory(activeConv)}
+                                className="btn btn-secondary btn-sm"
+                                title="Chat History"
+                            >
+                                <IconScroll size={14} />
+                            </button>
+                        )}
+                        {!isCliActive && !isAcpConv(activeConv) && (
+                            <button
+                                onClick={onOpenRemote}
+                                className="btn btn-secondary btn-sm"
+                                title="Remote Control"
+                            >
+                                <IconMonitor size={14} />
+                            </button>
+                        )}
+                    </div>
+                )}
                 <div className="dashboard-header-inbox" ref={inboxRef}>
+                    <div
+                        className={`dashboard-header-hidden${isHiddenDropTarget ? ' is-drop-target' : ''}`}
+                        ref={hiddenRef}
+                        onDragEnter={event => {
+                            if (!event.dataTransfer.types.includes('text/tab-key')) return
+                            event.preventDefault()
+                            setIsHiddenDropTarget(true)
+                        }}
+                        onDragOver={event => {
+                            if (!event.dataTransfer.types.includes('text/tab-key')) return
+                            event.preventDefault()
+                            event.dataTransfer.dropEffect = 'move'
+                            setIsHiddenDropTarget(true)
+                        }}
+                        onDragLeave={event => {
+                            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                                setIsHiddenDropTarget(false)
+                            }
+                        }}
+                        onDrop={event => {
+                            const tabKey = event.dataTransfer.getData('text/tab-key')
+                            event.preventDefault()
+                            setIsHiddenDropTarget(false)
+                            handleHideDrop(tabKey)
+                        }}
+                    >
+                        <button
+                            type="button"
+                            onClick={() => setHiddenOpen(open => !open)}
+                            className="btn btn-secondary btn-sm dashboard-header-hidden-button"
+                            title="Hidden tabs. Drag a tab here to hide it."
+                        >
+                            <IconEyeOff size={16} />
+                            {hiddenConversations.length > 0 && <span className="dashboard-header-hidden-badge">{hiddenConversations.length}</span>}
+                        </button>
+                        {hiddenOpen && (
+                            <div className="dashboard-header-hidden-popover">
+                                <div className="dashboard-header-hidden-topbar">
+                                    <div className="dashboard-header-inbox-section-title mb-0">Hidden tabs</div>
+                                    {hiddenConversations.length > 0 && onShowAllHidden && (
+                                        <button
+                                            type="button"
+                                            className="dashboard-header-hidden-restore-all"
+                                            onClick={() => {
+                                                onShowAllHidden();
+                                                setHiddenOpen(false);
+                                            }}
+                                        >
+                                            Restore all
+                                        </button>
+                                    )}
+                                </div>
+                                {activeConv && onHideConversation && (
+                                    <button
+                                        type="button"
+                                        className="dashboard-header-hidden-current"
+                                        onClick={() => onHideConversation(activeConv)}
+                                    >
+                                        <span className="dashboard-header-hidden-current-label">Hide current tab</span>
+                                        <span className="dashboard-header-hidden-current-title">{activeConv.displayPrimary}</span>
+                                    </button>
+                                )}
+                                {hiddenConversations.length > 0 ? (
+                                    <div className="dashboard-header-hidden-list">
+                                        {hiddenConversations.map(conversation => (
+                                            <button
+                                                key={conversation.tabKey}
+                                                type="button"
+                                                className="dashboard-header-inbox-item"
+                                                onClick={() => {
+                                                    onShowConversation?.(conversation);
+                                                    setHiddenOpen(false);
+                                                }}
+                                            >
+                                                <span className="dashboard-header-inbox-item-title">{conversation.displayPrimary}</span>
+                                                <span className="dashboard-header-inbox-item-meta">{conversation.displaySecondary}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="dashboard-header-inbox-empty">No hidden tabs.</div>
+                                )}
+                            </div>
+                        )}
+                    </div>
                     <button
                         type="button"
                         onClick={() => setInboxOpen(open => !open)}
@@ -197,48 +354,6 @@ export default function DashboardHeader({
                         </div>
                     )}
                 </div>
-                {isCliActive && onStopCli && (
-                    <>
-                        {onSetCliViewMode && effectiveCliViewMode && (
-                            <CliViewModeToggle mode={effectiveCliViewMode} onChange={onSetCliViewMode} />
-                        )}
-                        {isCliTerminalActive && (
-                            <button
-                                onClick={onFitCli}
-                                className="btn btn-secondary btn-sm"
-                                title="Fit terminal to current view"
-                            >
-                                <IconFit size={16} />
-                            </button>
-                        )}
-                        <button
-                            onClick={onStopCli}
-                            className="btn btn-secondary btn-sm text-red-400 border-red-500/25 hover:bg-red-500/10"
-                            title="Stop CLI process"
-                        >
-                            <IconX size={16} />
-                        </button>
-                    </>
-                )}
-
-                {activeConv && !isCliTerminalActive && !isAcpConv(activeConv) && (
-                    <button
-                        onClick={() => onOpenHistory(activeConv)}
-                        className="btn btn-secondary btn-sm"
-                        title="Chat History"
-                    >
-                        <IconScroll size={16} />
-                    </button>
-                )}
-                {activeConv && !isCliActive && !isAcpConv(activeConv) && (
-                    <button
-                        onClick={onOpenRemote}
-                        className="btn btn-secondary btn-sm"
-                        title="Remote Control"
-                    >
-                        <IconMonitor size={16} />
-                    </button>
-                )}
             </div>
         </div>
     );

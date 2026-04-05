@@ -9,6 +9,7 @@ export type {
   ResumeSessionPayload,
   ResizeSessionPayload,
   SendInputPayload,
+  UpdateSessionMetaPayload,
   SessionAttachedClient,
   SessionBufferSnapshot,
   SessionClientType,

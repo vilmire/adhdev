@@ -9,18 +9,16 @@ export interface StandaloneConnectionAdapter {
     stopScreenshots(ideType?: string): void
 }
 
-type PtyOutputCallback = (sessionId: string, data: string, meta?: { scrollback?: boolean }) => void
 type ScreenshotCallback = (sourceDaemonId: string, blob: Blob) => void
 type StatusCallback = (sourceDaemonId: string, payload: any) => void
 type RuntimeEvent =
-    | { type: 'runtime_snapshot'; sessionId: string; seq: number; text: string; truncated?: boolean }
+    | { type: 'runtime_snapshot'; sessionId: string; seq: number; text: string; truncated?: boolean; cols?: number; rows?: number }
     | { type: 'session_output'; sessionId: string; seq?: number; data: string }
     | { type: 'session_cleared'; sessionId: string }
 
 class StandaloneConnectionManager {
     private adapters = new Map<string, StandaloneConnectionAdapter>()
     private states = new Map<string, string>()
-    private ptyCallbacks = new Set<PtyOutputCallback>()
     private runtimeListeners = new Map<string, Set<(event: RuntimeEvent) => void>>()
     private screenshotCallbacks = new Map<string, ScreenshotCallback>()
     private statusCallbacks = new Set<StatusCallback>()
@@ -83,30 +81,6 @@ class StandaloneConnectionManager {
         this.statusCallbacks.forEach((callback) => callback(daemonId, payload))
     }
 
-    onPtyOutput(callback: PtyOutputCallback): () => void {
-        this.ptyCallbacks.add(callback)
-        return () => { this.ptyCallbacks.delete(callback) }
-    }
-
-    emitPtyOutput(sessionId: string, data: string, meta?: { scrollback?: boolean }): void {
-        if (meta?.scrollback) {
-            this.emitRuntimeEvent(sessionId, {
-                type: 'runtime_snapshot',
-                sessionId,
-                seq: 0,
-                text: typeof data === 'string' ? data : '',
-                truncated: false,
-            })
-        } else if (typeof data === 'string' && data) {
-            this.emitRuntimeEvent(sessionId, {
-                type: 'session_output',
-                sessionId,
-                data,
-            })
-        }
-        this.ptyCallbacks.forEach((callback) => callback(sessionId, data, meta))
-    }
-
     emitRuntimeSnapshot(sessionId: string, text: string, seq = 0, truncated = false): void {
         this.emitRuntimeEvent(sessionId, {
             type: 'runtime_snapshot',
@@ -114,6 +88,16 @@ class StandaloneConnectionManager {
             seq,
             text,
             truncated,
+        })
+    }
+
+    emitSessionOutput(sessionId: string, data: string, seq?: number): void {
+        if (!sessionId || typeof data !== 'string' || !data) return
+        this.emitRuntimeEvent(sessionId, {
+            type: 'session_output',
+            sessionId,
+            ...(typeof seq === 'number' ? { seq } : {}),
+            data,
         })
     }
 
@@ -133,13 +117,15 @@ class StandaloneConnectionManager {
         if (!sessionId) return
         const res = await fetch(`/api/v1/runtime/${encodeURIComponent(sessionId)}/snapshot`)
         if (!res.ok) return
-        const snapshot = await res.json() as { seq?: number; text?: string; truncated?: boolean }
+        const snapshot = await res.json() as { seq?: number; text?: string; truncated?: boolean; cols?: number; rows?: number }
         this.emitRuntimeEvent(sessionId, {
             type: 'runtime_snapshot',
             sessionId,
             seq: typeof snapshot.seq === 'number' ? snapshot.seq : 0,
             text: typeof snapshot.text === 'string' ? snapshot.text : '',
             truncated: !!snapshot.truncated,
+            cols: typeof snapshot.cols === 'number' ? snapshot.cols : undefined,
+            rows: typeof snapshot.rows === 'number' ? snapshot.rows : undefined,
         })
     }
 

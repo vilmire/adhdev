@@ -89,6 +89,7 @@ export function statusPayloadToEntries(
         entries.push({
             id: `${daemonId}:ide:${session.id}`,
             sessionId: session.id,
+            providerSessionId: session.providerSessionId,
             parentSessionId: session.parentId,
             sessionKind: session.kind,
             transport: session.transport,
@@ -129,6 +130,7 @@ export function statusPayloadToEntries(
         entries.push({
             id: `${daemonId}:cli:${session.id}`,
             sessionId: session.id,
+            providerSessionId: session.providerSessionId,
             parentSessionId: session.parentId,
             sessionKind: session.kind,
             transport: session.transport,
@@ -166,6 +168,7 @@ export function statusPayloadToEntries(
         entries.push({
             id: `${daemonId}:acp:${session.id}`,
             sessionId: session.id,
+            providerSessionId: session.providerSessionId,
             parentSessionId: session.parentId,
             sessionKind: session.kind,
             transport: session.transport,

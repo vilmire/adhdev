@@ -165,6 +165,15 @@ export class SessionHostServer extends EventEmitter {
           this.emitEvent({ type: 'session_cleared', sessionId: record.sessionId });
           return { success: true, result: record };
         }
+        case 'update_session_meta': {
+          const record = this.registry.updateSessionMeta(
+            request.payload.sessionId,
+            request.payload.meta || {},
+            request.payload.replace === true,
+          );
+          this.persistNow(record.sessionId);
+          return { success: true, result: record };
+        }
         case 'send_input': {
           const client = this.getAttachedClient(request.payload.sessionId, request.payload.clientId);
           if (client?.readOnly) {
@@ -220,6 +229,8 @@ export class SessionHostServer extends EventEmitter {
           const resumed = this.startRuntime(existing, this.buildPayloadFromRecord(existing), 'session_resumed');
           return { success: true, result: resumed };
         }
+        default:
+          return { success: false, error: `Unsupported session host request: ${(request as { type?: string })?.type || 'unknown'}` };
       }
     } catch (error: any) {
       return { success: false, error: error?.message || String(error) };
@@ -270,20 +281,31 @@ export class SessionHostServer extends EventEmitter {
 
   private getSnapshot(sessionId: string, sinceSeq?: number) {
     const snapshot = this.registry.getSnapshot(sessionId, sinceSeq);
+    const record = this.registry.getSession(sessionId);
     if (typeof sinceSeq === 'number') {
-      return snapshot;
+      return {
+        ...snapshot,
+        cols: typeof record?.meta?.sessionHostCols === 'number' ? (record.meta.sessionHostCols as number) : 80,
+        rows: typeof record?.meta?.sessionHostRows === 'number' ? (record.meta.sessionHostRows as number) : 24,
+      };
     }
 
     const runtime = this.runtimes.get(sessionId);
     const runtimeText = runtime?.getSnapshotText?.() || '';
     if (!runtimeText) {
-      return snapshot;
+      return {
+        ...snapshot,
+        cols: typeof record?.meta?.sessionHostCols === 'number' ? (record.meta.sessionHostCols as number) : 80,
+        rows: typeof record?.meta?.sessionHostRows === 'number' ? (record.meta.sessionHostRows as number) : 24,
+      };
     }
 
     return {
       ...snapshot,
       text: runtimeText,
       truncated: false,
+      cols: typeof record?.meta?.sessionHostCols === 'number' ? (record.meta.sessionHostCols as number) : 80,
+      rows: typeof record?.meta?.sessionHostRows === 'number' ? (record.meta.sessionHostRows as number) : 24,
     };
   }
 
@@ -365,8 +387,8 @@ export class SessionHostServer extends EventEmitter {
       category: record.category,
       workspace: record.workspace,
       launchCommand: record.launchCommand,
-      cols: typeof record.meta?.sessionHostCols === 'number' ? (record.meta.sessionHostCols as number) : 100,
-      rows: typeof record.meta?.sessionHostRows === 'number' ? (record.meta.sessionHostRows as number) : 30,
+      cols: typeof record.meta?.sessionHostCols === 'number' ? (record.meta.sessionHostCols as number) : 80,
+      rows: typeof record.meta?.sessionHostRows === 'number' ? (record.meta.sessionHostRows as number) : 24,
       meta: record.meta,
     };
   }

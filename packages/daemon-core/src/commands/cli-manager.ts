@@ -14,10 +14,12 @@ import { detectCLI } from '../detection/cli-detector.js';
 import { loadConfig, saveConfig } from '../config/config.js';
 import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.js';
 import { appendRecentActivity } from '../config/recent-activity.js';
+import { upsertSavedProviderSession } from '../config/saved-sessions.js';
 import { CliProviderInstance } from '../providers/cli-provider-instance.js';
 import { AcpProviderInstance } from '../providers/acp-provider-instance.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
+import type { ProviderModule, ProviderResumeCapability } from '../providers/contracts.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { SessionRegistry } from '../sessions/registry.js';
@@ -29,7 +31,7 @@ export interface CliManagerDeps {
  /** Server connection — injected into adapter */
     getServerConn(): any | null;
  /** P2P — PTY output transmit */
-    getP2p(): { broadcastPtyOutput(key: string, data: string): void } | null;
+    getP2p(): { broadcastSessionOutput(key: string, data: string): void } | null;
  /** StatusReporter callback */
     onStatusChange(): void;
     removeAgentTracking(key: string): void;
@@ -47,6 +49,7 @@ export interface CliTransportFactoryParams {
     providerType: string;
     workspace: string;
     cliArgs?: string[];
+    providerSessionId?: string;
     attachExisting?: boolean;
 }
 
@@ -60,6 +63,7 @@ export interface HostedCliRuntimeDescriptor {
     cliType: string;
     workspace: string;
     cliArgs?: string[];
+    providerSessionId?: string;
 }
 
 const chalkApi: any = (chalk as any)?.yellow
@@ -69,6 +73,148 @@ const chalkApi: any = (chalk as any)?.yellow
 function colorize(color: 'red' | 'green' | 'yellow' | 'cyan', text: string): string {
     const fn = chalkApi?.[color];
     return typeof fn === 'function' ? fn(text) : text;
+}
+
+type CliLaunchMode = 'new' | 'resume' | 'manual';
+
+type CliSessionBinding = {
+    cliArgs?: string[];
+    providerSessionId?: string;
+    launchMode: CliLaunchMode;
+};
+
+function isUuid(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function readArgValue(args: string[], flags: string[]): string | undefined {
+    for (let index = 0; index < args.length; index += 1) {
+        const arg = args[index];
+        for (const flag of flags) {
+            if (arg === flag) {
+                const next = args[index + 1];
+                if (next && !next.startsWith('-')) return next;
+            }
+            const prefix = `${flag}=`;
+            if (arg.startsWith(prefix)) return arg.slice(prefix.length);
+        }
+    }
+    return undefined;
+}
+
+function hasArg(args: string[], flags: string[]): boolean {
+    return args.some((arg) => flags.some((flag) => arg === flag || arg.startsWith(`${flag}=`)));
+}
+
+function expandResumeArgs(template: string[] | undefined, sessionId: string): string[] | undefined {
+    if (!Array.isArray(template) || template.length === 0) return undefined;
+    return template.map((part) => part === '{{id}}' ? sessionId : part);
+}
+
+function readCodexResumeSessionId(args: string[]): string | undefined {
+    const resumeIndex = args.findIndex((arg) => arg === 'resume' || arg === 'fork');
+    if (resumeIndex < 0) return undefined;
+    const candidate = args[resumeIndex + 1];
+    if (!candidate || candidate.startsWith('-')) return undefined;
+    return candidate;
+}
+
+function detectExplicitProviderSessionId(
+    normalizedType: string,
+    args: string[],
+): { providerSessionId?: string; launchMode: CliLaunchMode } {
+    const explicitResumeId = readArgValue(args, ['--resume', '-r']);
+    if (explicitResumeId) {
+        return { providerSessionId: explicitResumeId, launchMode: 'resume' };
+    }
+
+    const explicitSessionFlagId = readArgValue(args, ['--session']);
+    if (explicitSessionFlagId) {
+        return {
+            providerSessionId: explicitSessionFlagId,
+            launchMode: 'resume',
+        };
+    }
+
+    const explicitSessionId = readArgValue(args, ['--session-id']);
+    if (explicitSessionId) {
+        if (normalizedType === 'goose-cli' && !hasArg(args, ['--resume', '-r'])) {
+            return { launchMode: 'manual' };
+        }
+        const isResume = normalizedType === 'goose-cli'
+            ? hasArg(args, ['--resume', '-r'])
+            : (hasArg(args, ['--continue']) || hasArg(args, ['--resume', '-r']));
+        return {
+            providerSessionId: explicitSessionId,
+            launchMode: isResume ? 'resume' : 'new',
+        };
+    }
+
+    if (normalizedType === 'codex-cli') {
+        const codexSessionId = readCodexResumeSessionId(args);
+        if (codexSessionId) {
+            return { providerSessionId: codexSessionId, launchMode: 'resume' };
+        }
+    }
+
+    return { launchMode: 'manual' };
+}
+
+export function supportsExplicitSessionResume(resume?: ProviderResumeCapability): boolean {
+    return !!(resume?.supported && Array.isArray(resume.resumeSessionArgs) && resume.resumeSessionArgs.length > 0);
+}
+
+function supportsExplicitSessionStart(resume?: ProviderResumeCapability): boolean {
+    return !!(resume?.supported && Array.isArray(resume.newSessionArgs) && resume.newSessionArgs.length > 0);
+}
+
+function resolveCliSessionBinding(
+    provider: ProviderModule | undefined,
+    normalizedType: string,
+    cliArgs?: string[],
+    requestedResumeSessionId?: string,
+): CliSessionBinding {
+    const baseArgs = Array.isArray(cliArgs) ? [...cliArgs] : undefined;
+    const resume = provider?.resume;
+    if (!resume?.supported) {
+        return { cliArgs: baseArgs, launchMode: 'manual' };
+    }
+
+    const explicit = detectExplicitProviderSessionId(normalizedType, baseArgs || []);
+    if (explicit.providerSessionId) {
+        return {
+            cliArgs: baseArgs,
+            providerSessionId: explicit.providerSessionId,
+            launchMode: explicit.launchMode,
+        };
+    }
+
+    if (requestedResumeSessionId) {
+        if (resume.sessionIdFormat === 'uuid' && !isUuid(requestedResumeSessionId)) {
+            throw new Error(`Invalid ${provider?.displayName || provider?.name || normalizedType} session ID: ${requestedResumeSessionId}`);
+        }
+        const resumeSessionArgs = expandResumeArgs(resume.resumeSessionArgs, requestedResumeSessionId);
+        if (!resumeSessionArgs) {
+            return { cliArgs: baseArgs, launchMode: 'manual' };
+        }
+        return {
+            cliArgs: [...(baseArgs || []), ...resumeSessionArgs],
+            providerSessionId: requestedResumeSessionId,
+            launchMode: 'resume',
+        };
+    }
+
+    if (!supportsExplicitSessionStart(resume)) {
+        return { cliArgs: baseArgs, launchMode: 'manual' };
+    }
+
+    const providerSessionId = crypto.randomUUID();
+    const newSessionArgs = expandResumeArgs(resume.newSessionArgs, providerSessionId);
+    return {
+        cliArgs: [...(baseArgs || []), ...(newSessionArgs || [])],
+        providerSessionId,
+        launchMode: 'new',
+    };
 }
 
 // ─── DaemonCliManager ────────────────────────────
@@ -107,13 +253,26 @@ export class DaemonCliManager {
         kind: 'ide' | 'cli' | 'acp';
         providerType: string;
         providerName: string;
+        providerSessionId?: string;
         workspace?: string;
         currentModel?: string;
         sessionId?: string;
         title?: string;
     }): void {
         try {
-            saveConfig(appendRecentActivity(loadConfig(), entry));
+            let nextConfig = appendRecentActivity(loadConfig(), entry);
+            if (entry.providerSessionId && (entry.kind === 'cli' || entry.kind === 'acp')) {
+                nextConfig = upsertSavedProviderSession(nextConfig, {
+                    kind: entry.kind,
+                    providerType: entry.providerType,
+                    providerName: entry.providerName,
+                    providerSessionId: entry.providerSessionId,
+                    workspace: entry.workspace,
+                    currentModel: entry.currentModel,
+                    title: entry.title,
+                });
+            }
+            saveConfig(nextConfig);
         } catch (e) {
             console.error(colorize('red', `  ✗ Failed to save recent activity: ${e}`));
         }
@@ -124,6 +283,7 @@ export class DaemonCliManager {
         providerType: string,
         workspace: string,
         cliArgs?: string[],
+        providerSessionId?: string,
         attachExisting = false,
     ): PtyTransportFactory | undefined {
         return this.deps.createPtyTransportFactory?.({
@@ -131,6 +291,7 @@ export class DaemonCliManager {
             providerType,
             workspace,
             cliArgs,
+            providerSessionId,
             attachExisting,
         }) || undefined;
     }
@@ -140,6 +301,7 @@ export class DaemonCliManager {
         workingDir: string,
         cliArgs: string[] | undefined,
         runtimeId: string,
+        providerSessionId?: string,
         attachExisting = false,
     ): CliAdapter {
  // cliType normalize (Resolve alias)
@@ -150,7 +312,14 @@ export class DaemonCliManager {
         if (provider && provider.category === 'cli' && provider.patterns && provider.spawn) {
             console.log(colorize('cyan', `  📦 Using provider: ${provider.name} (${provider.type})`));
             const resolvedProvider = this.providerLoader.resolve(normalizedType) || provider;
-            const transportFactory = this.getTransportFactory(runtimeId, normalizedType, workingDir, cliArgs, attachExisting);
+            const transportFactory = this.getTransportFactory(
+                runtimeId,
+                normalizedType,
+                workingDir,
+                cliArgs,
+                providerSessionId,
+                attachExisting,
+            );
             return new ProviderCliAdapter(resolvedProvider as any, workingDir, cliArgs, transportFactory);
         }
 
@@ -191,18 +360,37 @@ export class DaemonCliManager {
         provider: any,
         settings: Record<string, any>,
         attachExisting = false,
+        options?: {
+            providerSessionId?: string;
+            launchMode?: CliLaunchMode;
+            onProviderSessionResolved?: (info: {
+                instanceId: string;
+                providerType: string;
+                providerName: string;
+                workspace: string;
+                providerSessionId: string;
+                previousProviderSessionId?: string;
+            }) => void;
+        },
     ): Promise<void> {
         const instanceManager = this.deps.getInstanceManager();
         const sessionRegistry = this.deps.getSessionRegistry?.() || null;
         if (!instanceManager) throw new Error('InstanceManager not available');
-        const transportFactory = this.getTransportFactory(key, normalizedType, resolvedDir, cliArgs, attachExisting);
-        const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key, transportFactory);
+        const transportFactory = this.getTransportFactory(
+            key,
+            normalizedType,
+            resolvedDir,
+            cliArgs,
+            options?.providerSessionId,
+            attachExisting,
+        );
+        const cliInstance = new CliProviderInstance(provider, resolvedDir, cliArgs, key, transportFactory, options);
         try {
             await instanceManager.addInstance(key, cliInstance, {
                 serverConn: this.deps.getServerConn(),
                 settings,
                 onPtyData: (data: string) => {
-                    this.deps.getP2p()?.broadcastPtyOutput(cliInstance.instanceId, data);
+                    this.deps.getP2p()?.broadcastSessionOutput(cliInstance.instanceId, data);
                 },
             });
             sessionRegistry?.register({
@@ -225,7 +413,13 @@ export class DaemonCliManager {
 
  // ─── Session start/management ──────────────────────────────
 
-    async startSession(cliType: string, workingDir: string, cliArgs?: string[], initialModel?: string): Promise<void> {
+    async startSession(
+        cliType: string,
+        workingDir: string,
+        cliArgs?: string[],
+        initialModel?: string,
+        options?: { resumeSessionId?: string },
+    ): Promise<{ runtimeSessionId: string; providerSessionId?: string }> {
         const trimmed = (workingDir || '').trim();
         if (!trimmed) throw new Error('working directory required');
         const resolvedDir = trimmed.startsWith('~')
@@ -319,7 +513,7 @@ export class DaemonCliManager {
                 title: provider.displayName || provider.name || normalizedType,
             });
             this.deps.onStatusChange();
-            return;
+            return { runtimeSessionId: sessionId };
         }
 
  // ─── CLI category handling (existing) ───
@@ -331,8 +525,9 @@ export class DaemonCliManager {
             console.log(colorize('cyan', `  📦 Using provider: ${provider.name} (${provider.type})`));
         }
 
- // ─── Resolve launch options → extra args ───
-        const resolvedCliArgs = cliArgs;
+ // ─── Resolve launch options → provider session binding ───
+        const sessionBinding = resolveCliSessionBinding(provider, normalizedType, cliArgs, options?.resumeSessionId);
+        const resolvedCliArgs = sessionBinding.cliArgs;
 
  // If InstanceManager exists, manage as CliProviderInstance unified
         const instanceManager = this.deps.getInstanceManager();
@@ -347,11 +542,32 @@ export class DaemonCliManager {
                 resolvedProvider,
                 {},
                 false,
+                {
+                    providerSessionId: sessionBinding.providerSessionId,
+                    launchMode: sessionBinding.launchMode,
+                    onProviderSessionResolved: ({ providerSessionId, providerName, providerType, workspace }) => {
+                        this.persistRecentActivity({
+                            kind: 'cli',
+                            providerType,
+                            providerName,
+                            providerSessionId,
+                            workspace,
+                            title: providerName,
+                        });
+                    },
+                },
             );
             console.log(colorize('green', `  ✓ CLI started: ${cliInfo.displayName} v${cliInfo.version || 'unknown'} in ${resolvedDir}`));
         } else {
  // Fallback: InstanceManager without directly adapter manage
-            const adapter = this.createAdapter(cliType, resolvedDir, resolvedCliArgs, key, false);
+            const adapter = this.createAdapter(
+                cliType,
+                resolvedDir,
+                resolvedCliArgs,
+                key,
+                sessionBinding.providerSessionId,
+                false,
+            );
             try {
                 await adapter.spawn();
             } catch (spawnErr: any) {
@@ -380,7 +596,7 @@ export class DaemonCliManager {
 
             if (typeof adapter.setOnPtyData === 'function') {
                 adapter.setOnPtyData((data: string) => {
-                    this.deps.getP2p()?.broadcastPtyOutput(key, data);
+                    this.deps.getP2p()?.broadcastSessionOutput(key, data);
                 });
             }
 
@@ -392,6 +608,7 @@ export class DaemonCliManager {
             kind: 'cli',
             providerType: normalizedType,
             providerName: provider?.displayName || provider?.name || normalizedType,
+            providerSessionId: sessionBinding.providerSessionId,
             workspace: resolvedDir,
             currentModel: initialModel,
             sessionId: key,
@@ -399,6 +616,10 @@ export class DaemonCliManager {
         });
 
         this.deps.onStatusChange();
+        return {
+            runtimeSessionId: key,
+            providerSessionId: sessionBinding.providerSessionId,
+        };
     }
 
     async stopSession(key: string): Promise<void> {
@@ -464,6 +685,12 @@ export class DaemonCliManager {
             if (!providerMeta || providerMeta.category !== 'cli') continue;
 
             const resolvedProvider = this.providerLoader.resolve(normalizedType) || providerMeta;
+            const sessionBinding = resolveCliSessionBinding(
+                resolvedProvider,
+                normalizedType,
+                record.cliArgs,
+                record.providerSessionId,
+            );
             try {
                 await this.registerCliInstance(
                     record.runtimeId,
@@ -474,6 +701,10 @@ export class DaemonCliManager {
                     resolvedProvider,
                     {},
                     true,
+                    {
+                        providerSessionId: sessionBinding.providerSessionId,
+                        launchMode: 'manual',
+                    },
                 );
                 restored += 1;
                 LOG.info('CLI', `♻ Restored hosted runtime: ${record.runtimeKey || record.runtimeId} (${record.displayName || record.workspace})`);
@@ -562,17 +793,23 @@ export class DaemonCliManager {
                 const launchSource = resolved.source;
                 if (!cliType) throw new Error('cliType required');
 
-                await this.startSession(cliType, dir, args?.cliArgs, args?.initialModel);
+                const started = await this.startSession(
+                    cliType,
+                    dir,
+                    args?.cliArgs,
+                    args?.initialModel,
+                    { resumeSessionId: args?.resumeSessionId },
+                );
 
- // On startSession success, new UUID key exists in adapters (last added item)
-                let newKey: string | null = null;
-                for (const [k, adapter] of this.adapters) {
-                    if (adapter.cliType === cliType && adapter.workingDir === dir) {
-                        newKey = k; // Last match = just added item
-                    }
-                }
-
-                return { success: true, cliType, dir, id: newKey, launchSource };
+                return {
+                    success: true,
+                    cliType,
+                    dir,
+                    id: started.runtimeSessionId,
+                    sessionId: started.runtimeSessionId,
+                    providerSessionId: started.providerSessionId,
+                    launchSource,
+                };
             }
             case 'stop_cli': {
                 const cliType = args?.cliType;

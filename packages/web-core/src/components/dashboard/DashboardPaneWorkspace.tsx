@@ -50,6 +50,7 @@ export default function DashboardPaneWorkspace({
     setActionLogs,
     isStandalone,
     userName,
+    focusedGroup,
     setFocusedGroup,
     moveTabToGroup,
     splitTabRelative,
@@ -102,6 +103,7 @@ export default function DashboardPaneWorkspace({
                             isStandalone={isStandalone}
                             userName={userName}
                             groupIndex={groupIndex}
+                            isFocused={isSplitMode && focusedGroup === groupIndex}
                             onFocus={() => setFocusedGroup(groupIndex)}
                             isSplitMode={isSplitMode}
                             numGroups={numGroups}

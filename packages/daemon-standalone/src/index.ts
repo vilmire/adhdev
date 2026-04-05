@@ -87,6 +87,17 @@ interface WsMessage {
   data?: Record<string, any>;
 }
 
+const SESSION_TARGET_COMMANDS = new Set([
+  'send_chat',
+  'read_chat',
+  'chat_history',
+  'resolve_action',
+  'set_cli_view_mode',
+  'stop_cli',
+  'restart_session',
+  'agent_command',
+]);
+
 
 // ─── Standalone Server ───
 
@@ -172,9 +183,9 @@ class StandaloneServer {
       cliManagerDeps: {
         getServerConn: () => null,
         getP2p: () => ({
-          broadcastPtyOutput: (key: string, data: string) => {
+          broadcastSessionOutput: (key: string, data: string) => {
             if (this.clients.size === 0 || !this.isCliSession(key)) return;
-            const msg = JSON.stringify({ type: 'pty_output', sessionId: key, data });
+            const msg = JSON.stringify({ type: 'session_output', sessionId: key, data });
             for (const client of this.clients) {
               if (client.readyState === 1) { // OPEN
                 client.send(msg);
@@ -184,7 +195,7 @@ class StandaloneServer {
         }),
         onStatusChange: () => this.scheduleBroadcastStatus(),
         removeAgentTracking: () => {},
-        createPtyTransportFactory: ({ runtimeId, providerType, workspace, cliArgs, attachExisting }) => (
+        createPtyTransportFactory: ({ runtimeId, providerType, workspace, cliArgs, providerSessionId, attachExisting }) => (
           new SessionHostPtyTransportFactory({
             endpoint: sessionHostEndpoint,
             clientId: `daemon-${process.pid}`,
@@ -194,6 +205,7 @@ class StandaloneServer {
             attachExisting,
             meta: {
               cliArgs: cliArgs || [],
+              providerSessionId,
               managedBy: 'adhdev-standalone',
             },
           })
@@ -436,7 +448,7 @@ class StandaloneServer {
         void (async () => {
           const client = await this.createSessionHostClient();
           try {
-            const snapshot = await client.request<{ seq: number; text: string; truncated: boolean }>({
+            const snapshot = await client.request<{ seq: number; text: string; truncated: boolean; cols?: number; rows?: number }>({
               type: 'get_snapshot',
               payload: { sessionId },
             });
@@ -469,7 +481,8 @@ class StandaloneServer {
       req.on('data', (chunk) => { body += chunk; });
       req.on('end', async () => {
         try {
-          const { type, payload } = JSON.parse(body);
+          const parsed = JSON.parse(body || '{}');
+          const { type, payload } = this.normalizeCommandEnvelope(parsed);
           const result = await this.executeCommand(type, payload || {});
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(result));
@@ -587,7 +600,7 @@ class StandaloneServer {
       'X-Accel-Buffering': 'no',
     });
 
-    const snapshot = await client.request<{ seq: number; text: string; truncated: boolean }>({
+    const snapshot = await client.request<{ seq: number; text: string; truncated: boolean; cols?: number; rows?: number }>({
       type: 'get_snapshot',
       payload: { sessionId },
     });
@@ -642,8 +655,14 @@ class StandaloneServer {
     ws.on('message', async (raw) => {
       try {
         const msg: WsMessage = JSON.parse(raw.toString());
-        if (msg.type === 'command' && msg.data) {
-          const { type, payload } = msg.data;
+        if (msg.type === 'command') {
+          const envelope = msg.data && typeof msg.data === 'object'
+            ? {
+                ...msg.data,
+                ...((msg as any).commandType ? { commandType: (msg as any).commandType } : {}),
+              }
+            : (msg as any);
+          const { type, payload } = this.normalizeCommandEnvelope(envelope);
           const requestId = msg.requestId;
           const result = await this.executeCommand(type, payload || {});
           ws.send(JSON.stringify({ type: 'command_result', requestId, data: result }));
@@ -692,7 +711,7 @@ class StandaloneServer {
         const sessionId = typeof state?.instanceId === 'string' ? state.instanceId : '';
         if (!sessionId || state?.category !== 'cli') continue;
 
-        const snapshot = await client.request<{ seq: number; text: string; truncated: boolean }>({
+        const snapshot = await client.request<{ seq: number; text: string; truncated: boolean; cols?: number; rows?: number }>({
           type: 'get_snapshot',
           payload: { sessionId },
         });
@@ -733,9 +752,58 @@ class StandaloneServer {
     };
   }
 
+  private normalizeCommandEnvelope(input: Record<string, any> | null | undefined): { type: string; payload: Record<string, any> } {
+    const body = input && typeof input === 'object' ? input : {};
+    const type = typeof body.type === 'string' && body.type.trim()
+      ? body.type.trim()
+      : typeof body.commandType === 'string' && body.commandType.trim()
+        ? body.commandType.trim()
+        : typeof body.command === 'string' && body.command.trim()
+          ? body.command.trim()
+          : '';
+
+    const payloadSource =
+      body.payload && typeof body.payload === 'object'
+        ? body.payload
+        : body.args && typeof body.args === 'object'
+          ? body.args
+          : body.data && typeof body.data === 'object'
+            ? body.data
+          : null;
+
+    const payload = payloadSource
+      ? { ...payloadSource }
+      : Object.fromEntries(
+          Object.entries(body).filter(([key]) => (
+            key !== 'type'
+            && key !== 'commandType'
+            && key !== 'command'
+            && key !== 'payload'
+            && key !== 'args'
+            && key !== 'requestId'
+            && key !== 'id'
+          )),
+        );
+
+    if (
+      type
+      && SESSION_TARGET_COMMANDS.has(type)
+      && typeof payload.targetSessionId !== 'string'
+      && typeof payload.sessionId === 'string'
+      && payload.sessionId.trim()
+    ) {
+      payload.targetSessionId = payload.sessionId.trim();
+    }
+
+    return { type, payload };
+  }
+
   private async executeCommand(type: string, args: any): Promise<any> {
     if (!this.components) {
       return { success: false, error: 'Components not initialized' };
+    }
+    if (typeof type !== 'string' || !type.trim()) {
+      return { success: false, error: 'command type required' };
     }
     const result = await this.components.router.execute(type, args, 'standalone');
     if (type.startsWith('workspace_')) this.scheduleBroadcastStatus();

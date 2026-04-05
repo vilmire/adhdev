@@ -94,6 +94,7 @@ export interface SessionEntry {
     parentId: string | null;
     providerType: string;
     providerName: string;
+    providerSessionId?: string;
     kind: SessionKind;
     transport: SessionTransport;
     status: SessionStatus;
@@ -221,6 +222,7 @@ export interface RecentLaunchEntry {
     providerType: string;
     providerName: string;
     kind: 'ide' | 'cli' | 'acp';
+    providerSessionId?: string;
     title?: string;
     workspace?: string | null;
     currentModel?: string;

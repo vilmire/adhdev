@@ -59,6 +59,16 @@ export function useHiddenTabs() {
         });
     }, []);
 
+    /** Show all hidden tabs */
+    const showAllTabs = useCallback(() => {
+        setHiddenTabs(prev => {
+            if (prev.size === 0) return prev;
+            const next = new Set<string>();
+            saveHidden(next);
+            return next;
+        });
+    }, []);
+
     /** Hide all tabs belonging to a specific daemon */
     const hideAllForDaemon = useCallback((_daemonId: string, tabKeys: string[]) => {
         setHiddenTabs(prev => {
@@ -81,5 +91,5 @@ export function useHiddenTabs() {
 
     const isHidden = useCallback((tabKey: string) => hiddenTabs.has(tabKey), [hiddenTabs]);
 
-    return { hiddenTabs, toggleTab, hideTab, showTab, hideAllForDaemon, showAllForDaemon, isHidden };
+    return { hiddenTabs, toggleTab, hideTab, showTab, showAllTabs, hideAllForDaemon, showAllForDaemon, isHidden };
 }

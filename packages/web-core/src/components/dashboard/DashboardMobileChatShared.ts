@@ -139,8 +139,12 @@ export function getConversationInboxSurfaceState(
 export function isConversationTaskCompleteUnread(
     conversation: ActiveConversation,
     stateBySessionId: Map<string, LiveSessionInboxState>,
+    options?: { isOpenConversation?: boolean },
 ) {
-    return getConversationInboxSurfaceState(conversation, stateBySessionId).unread
+    return getConversationInboxSurfaceState(conversation, stateBySessionId, {
+        hideOpenTaskCompleteUnread: true,
+        isOpenConversation: options?.isOpenConversation,
+    }).unread
 }
 
 export function isHiddenNativeIdeParentConversation(

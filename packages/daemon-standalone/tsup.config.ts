@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
@@ -12,5 +13,11 @@ export default defineConfig({
   noExternal: [/^@adhdev\//],
   banner: {
     js: '#!/usr/bin/env node',
+  },
+  esbuildOptions(options) {
+    options.alias = {
+      ...(options.alias || {}),
+      '@adhdev/daemon-core': path.resolve(__dirname, '../daemon-core/dist/index.js'),
+    };
   },
 });

@@ -308,7 +308,6 @@ export function getDaemonEntryActivityAt(entry: DaemonData): number {
     return Math.max(
         getRecentLaunchActivityAt(entry),
         getActiveChatActivityAt(entry.activeChat),
-        entry.lastUpdated || 0,
     )
 }
 

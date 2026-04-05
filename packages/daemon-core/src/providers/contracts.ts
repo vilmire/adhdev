@@ -399,6 +399,9 @@ export interface ProviderResumeCapability {
   stopCommand?: string;
   shutdownGraceMs?: number;
   resumeArgs?: string[];
+  resumeSessionArgs?: string[];
+  newSessionArgs?: string[];
+  sessionIdFormat?: 'uuid' | 'string';
 }
 
 // ─── ACP Auth Types ─────────────────────────────────

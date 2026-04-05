@@ -46,6 +46,7 @@ export interface RecentLaunchEntry {
     providerType: string;
     providerName: string;
     kind: 'ide' | 'cli' | 'acp';
+    providerSessionId?: string;
     title?: string;
     workspace?: string | null;
     currentModel?: string;
@@ -75,6 +76,7 @@ export interface WebAiAgentInfo {
 export interface BaseDaemonData {
     id: string;
     sessionId?: string;
+    providerSessionId?: string;
     parentSessionId?: string | null;
     type: string;
     /** Provider type alias used for IDE sessions */

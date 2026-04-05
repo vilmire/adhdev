@@ -5,8 +5,10 @@
  */
 import type { WorkspaceEntry } from './workspaces.js';
 import type { RecentActivityEntry } from './recent-activity.js';
+import type { SavedProviderSessionEntry } from './saved-sessions.js';
 export type { WorkspaceEntry } from './workspaces.js';
 export type { RecentActivityEntry } from './recent-activity.js';
+export type { SavedProviderSessionEntry } from './saved-sessions.js';
 export interface ADHDevConfig {
     serverUrl: string;
     selectedIde: string | null;
@@ -23,6 +25,8 @@ export interface ADHDevConfig {
     defaultWorkspaceId?: string | null;
     /** Unified recent activity across IDE / CLI / ACP launch flows */
     recentActivity?: RecentActivityEntry[];
+    /** Persistent resume-capable provider sessions keyed by providerSessionId */
+    savedProviderSessions?: SavedProviderSessionEntry[];
     /** Last seen timestamps for live sessions, keyed by sessionId */
     sessionReads?: Record<string, number>;
     /** Last seen completion marker for live sessions, keyed by sessionId */

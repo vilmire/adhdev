@@ -15,7 +15,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { formatIdeType, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
-import { IconChat, IconMonitor, IconSearch, IconEye, IconEyeOff, IconPlay, IconRefresh, IconX } from '../../components/Icons'
+import { IconChat, IconMonitor, IconSearch, IconPlay, IconRefresh, IconX } from '../../components/Icons'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, ProviderInfo } from './types'
 import type { useMachineActions } from './useMachineActions'
 import { describeMuxOwner } from '../../utils/mux-ui'
@@ -34,8 +34,6 @@ interface AgentTabProps {
     managedEntries: AgentEntry[]
     getIcon: (type: string) => string
     actions: ReturnType<typeof useMachineActions>
-    isDashboardHidden?: (tabKey: string) => boolean
-    onToggleDashboardVisibility?: (tabKey: string) => void
     /** Required for IDE extension toggles */
     sendDaemonCommand?: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     initialWorkspaceId?: string | null
@@ -51,8 +49,6 @@ const CATEGORY_CONFIG = {
 
 export default function AgentTab({
     category, machine, machineId, providers, managedEntries, getIcon, actions, sendDaemonCommand,
-    isDashboardHidden,
-    onToggleDashboardVisibility,
     initialWorkspaceId,
     initialWorkspacePath,
 }: AgentTabProps) {
@@ -442,7 +438,6 @@ export default function AgentTab({
                         const acp = isAcp ? (entry as AcpSessionEntry) : null
                         const cli = !isIde && !isAcp ? (entry as CliSessionEntry) : null
                         const normalizedStatus = normalizeManagedStatus(entry.status)
-                        const isHidden = isDashboardHidden?.(entry.id) ?? false
 
                         return (
                             <div key={entry.id} className="px-4.5 py-3.5 rounded-xl bg-bg-secondary border border-border-subtle">
@@ -495,19 +490,6 @@ export default function AgentTab({
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-1.5">
-                                        {onToggleDashboardVisibility && (
-                                                <button
-                                                    onClick={() => onToggleDashboardVisibility(entry.id)}
-                                                    className={`machine-btn ${
-                                                        isHidden
-                                                            ? 'text-zinc-300 border-zinc-500/30'
-                                                            : 'text-violet-400 border-violet-500/30'
-                                                }`}
-                                                title={isHidden ? 'Show on Dashboard' : 'Hide from Dashboard'}
-                                            >
-                                                {isHidden ? <IconEye size={14} /> : <IconEyeOff size={14} />}
-                                            </button>
-                                        )}
                                         <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${
                                             normalizedStatus === 'stopped' ? 'bg-red-500/[0.08] text-red-500'
                                                 : normalizedStatus === 'generating' ? 'bg-orange-500/[0.08] text-orange-400'

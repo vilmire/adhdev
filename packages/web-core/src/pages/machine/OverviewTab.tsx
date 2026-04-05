@@ -15,15 +15,11 @@ interface OverviewTabProps {
     cliSessions: CliSessionEntry[]
     acpSessions: AcpSessionEntry[]
     actions: ReturnType<typeof useMachineActions>
-    isDashboardHidden?: (tabKey: string) => boolean
-    onToggleDashboardVisibility?: (tabKey: string) => void
 }
 
 export default function OverviewTab({
     machine, ideSessions, cliSessions, acpSessions,
     actions,
-    isDashboardHidden,
-    onToggleDashboardVisibility,
 }: OverviewTabProps) {
     const {
         workspaceBusy,
@@ -37,12 +33,6 @@ export default function OverviewTab({
         ? Math.min(100, Math.max(0, Math.round(((machine.totalMem - memAvail) / machine.totalMem) * 100)))
         : 0
     const loadAvg1m = machine.loadavg[0] || 0
-    const hiddenEntries = [
-        ...ideSessions.map(entry => ({ id: entry.id, label: `IDE · ${entry.type}`, workspace: entry.workspace || '' })),
-        ...cliSessions.map(entry => ({ id: entry.id, label: `CLI · ${entry.cliName}`, workspace: entry.workspace || '' })),
-        ...acpSessions.map(entry => ({ id: entry.id, label: `ACP · ${entry.acpName}`, workspace: entry.workspace || '' })),
-    ].filter(entry => isDashboardHidden?.(entry.id))
-
     return (
         <div>
             {/* System Stats */}
@@ -121,34 +111,6 @@ export default function OverviewTab({
                 )}
             </div>
 
-            {hiddenEntries.length > 0 && onToggleDashboardVisibility && (
-                <div className="px-5 py-4 rounded-xl mb-5 bg-bg-secondary border border-border-subtle">
-                    <div className="text-[11px] text-text-muted font-semibold uppercase tracking-wider mb-3">
-                        Hidden From Dashboard
-                    </div>
-                    <div className="flex flex-col gap-2">
-                        {hiddenEntries.map((entry) => (
-                            <div key={entry.id} className="flex items-center gap-2 rounded-lg border border-border-subtle bg-bg-primary px-3 py-2">
-                                <div className="min-w-0 flex-1">
-                                    <div className="text-[12px] font-medium text-text-primary truncate">{entry.label}</div>
-                                    {entry.workspace && (
-                                        <div className="text-[10px] text-text-muted font-mono truncate" title={entry.workspace}>
-                                            {entry.workspace}
-                                        </div>
-                                    )}
-                                </div>
-                                <button
-                                    type="button"
-                                    className="machine-btn text-[11px] px-2.5 py-1 text-zinc-300 border-zinc-500/30"
-                                    onClick={() => onToggleDashboardVisibility(entry.id)}
-                                >
-                                    Show
-                                </button>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
         </div>
     )
 }

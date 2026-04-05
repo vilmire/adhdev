@@ -13,12 +13,15 @@ import { DaemonCdpManager } from '../cdp/manager.js';
 import { registerExtensionProviders } from '../cdp/setup.js';
 import { DaemonCommandHandler } from './handler.js';
 import { DaemonCliManager } from './cli-manager.js';
+import { supportsExplicitSessionResume } from './cli-manager.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { launchWithCdp, killIdeProcess, isIdeRunning } from '../launch.js';
 import { loadConfig, saveConfig, updateConfig } from '../config/config.js';
 import { resolveIdeLaunchWorkspace } from '../config/workspaces.js';
-import { appendRecentActivity, markSessionSeen } from '../config/recent-activity.js';
+import { appendRecentActivity, getRecentActivity, markSessionSeen } from '../config/recent-activity.js';
+import { getSavedProviderSessions } from '../config/saved-sessions.js';
+import { listSavedHistorySessions } from '../config/chat-history.js';
 import { detectIDEs } from '../detection/ide-detector.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
@@ -153,6 +156,54 @@ export class DaemonCommandRouter {
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }
+            }
+
+            case 'list_saved_sessions': {
+                const providerType = typeof args?.providerType === 'string'
+                    ? args.providerType.trim()
+                    : typeof args?.agentType === 'string'
+                        ? args.agentType.trim()
+                        : '';
+                const kind = args?.kind === 'acp' ? 'acp' : 'cli';
+                if (!providerType) {
+                    return { success: false, error: 'providerType required' };
+                }
+
+                const offset = Math.max(0, Number(args?.offset) || 0);
+                const limit = Math.max(1, Math.min(100, Number(args?.limit) || 30));
+                const { sessions: historySessions, hasMore } = listSavedHistorySessions(providerType, { offset, limit });
+                const config = loadConfig();
+                const savedSessions = getSavedProviderSessions(config, { providerType, kind });
+                const recentSessions = getRecentActivity(config, 200)
+                    .filter(entry => entry.providerType === providerType && entry.kind === kind && entry.providerSessionId);
+                const savedSessionById = new Map(savedSessions.map(entry => [entry.providerSessionId, entry]));
+                const recentSessionById = new Map(recentSessions.map(entry => [entry.providerSessionId!, entry]));
+                const providerMeta = this.deps.providerLoader.getMeta(providerType);
+                const canResumeById = supportsExplicitSessionResume(providerMeta?.resume);
+
+                return {
+                    success: true,
+                    sessions: historySessions.map(session => {
+                        const saved = savedSessionById.get(session.historySessionId);
+                        const recent = recentSessionById.get(session.historySessionId);
+                        return {
+                            id: session.historySessionId,
+                            providerSessionId: session.historySessionId,
+                            providerType,
+                            providerName: saved?.providerName || recent?.providerName || providerType,
+                            kind: saved?.kind || recent?.kind || kind,
+                            title: saved?.title || recent?.title || session.sessionTitle || session.preview || providerType,
+                            workspace: saved?.workspace || recent?.workspace,
+                            currentModel: saved?.currentModel || recent?.currentModel,
+                            preview: session.preview,
+                            messageCount: session.messageCount,
+                            firstMessageAt: session.firstMessageAt,
+                            lastMessageAt: session.lastMessageAt,
+                            canResume: !!(saved?.workspace || recent?.workspace) && canResumeById,
+                        };
+                    }),
+                    hasMore,
+                };
             }
 
             // ─── restart_session: IDE / CLI / ACP unified ───

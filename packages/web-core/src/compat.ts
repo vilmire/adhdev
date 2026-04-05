@@ -36,15 +36,11 @@ class DashboardWSStub {
 
 export let dashboardWS: any = new DashboardWSStub()
 
-type PtyOutputCallback = (sessionId: string, data: string, meta?: { scrollback?: boolean }) => void
-
 /**
  * ConnectionManager stub — abstract connection interface.
  * Host app injects the real implementation.
  */
 class ConnectionManagerStub {
-    private ptyCallbacks = new Set<PtyOutputCallback>()
-
     sendPtyInput(_daemonId: string, _sessionId: string, _data: string) { return false }
     sendPtyResize(_daemonId: string, _sessionId: string, _cols: number, _rows: number) { return false }
     retryConnection(_daemonId: string) {}
@@ -57,15 +53,6 @@ class ConnectionManagerStub {
     /** Screenshot callback */
     onScreenshot(_key: string, _callback: (sourceDaemonId: string, blob: Blob) => void): () => void {
         return () => {}
-    }
-
-    onPtyOutput(callback: PtyOutputCallback): () => void {
-        this.ptyCallbacks.add(callback)
-        return () => { this.ptyCallbacks.delete(callback) }
-    }
-
-    emitPtyOutput(sessionId: string, data: string, meta?: { scrollback?: boolean }) {
-        this.ptyCallbacks.forEach(cb => cb(sessionId, data, meta))
     }
 
     onRuntimeEvent(

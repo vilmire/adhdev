@@ -1427,22 +1427,32 @@ export class DevServer implements DevServerContext {
     lines.push('| `detectStatus` | `{ tail, screenText, rawBuffer }` | `idle`, `generating`, `waiting_approval`, or `error` |');
     lines.push('| `parseApproval` | `{ buffer, rawBuffer, tail }` | `{ message, buttons }` or `null` |');
     lines.push('');
+    lines.push('## Primary Source of Truth');
+    lines.push('The runtime now provides a reliable current-screen snapshot. Treat `screenText` as the primary source of truth for the LIVE visible UI.');
+    lines.push('That means:');
+    lines.push('- Use `screenText` first for prompt detection, approval UI, status, and visible assistant content.');
+    lines.push('- Use `rawBuffer` only as supporting evidence when ANSI/style/cursor cues matter.');
+    lines.push('- Use `buffer` only when the visible screen does not contain enough text to recover the latest assistant answer.');
+    lines.push('- Do NOT build the parser around stale transcript noise if the current screen already gives the answer.');
+    lines.push('');
 
     lines.push('## Rules');
     lines.push('0. **🚫 SCOPE CONSTRAINT**: You may ONLY edit files marked ✏️ EDIT above. ALL other files are READ-ONLY. Do NOT modify, rewrite, refactor, or "improve" any file not explicitly marked as editable — even if you notice bugs or improvements. No exceptions.');
     lines.push('1. These scripts run in Node.js CommonJS, not in the browser. Do NOT use DOM APIs.');
-    lines.push('2. Prefer `screenText` for current visible UI state. That is the PTY equivalent of parsing the current IDE DOM.');
+    lines.push('2. Prefer `screenText` for current visible UI state. It is now the PTY equivalent of a trustworthy live DOM snapshot.');
     lines.push('3. Use `messages` as prior transcript state so redraws do not duplicate old turns on every parse.');
     lines.push('4. Use `partialResponse` for the actively streaming assistant text when status is `generating`.');
-    lines.push('5. `detectStatus` must stay lightweight and tail-based. Do not scan the entire history there.');
-    lines.push('6. `parseApproval` should understand the live approval area and return clean button labels.');
-    lines.push('7. Use `rawBuffer` only when ANSI/control-sequence artifacts matter. Do not depend on raw escape noise unless necessary.');
+    lines.push('5. `detectStatus` must stay lightweight and current-screen-oriented. Prefer the active bottom-of-screen region over stale history.');
+    lines.push('6. `parseApproval` should understand the live approval area and return clean button labels from the CURRENT visible modal.');
+    lines.push('7. Use `rawBuffer` only when ANSI/control-sequence artifacts or style cues matter. Do not depend on raw escape noise unless necessary.');
     lines.push('8. Keep exports compatible with the existing `scripts.js` router (`module.exports = function ...`).');
     lines.push('9. Do NOT modify ANY file not explicitly marked ✏️ EDIT above. No exceptions — no "tiny supporting changes" to other files.');
     lines.push('10. When the verification API returns `instanceId`, keep using that exact instance for follow-up `send`, `resolve`, `raw`, and `stop` calls. Do not assume type-only routing is safe if multiple sessions exist.');
     lines.push('11. Do NOT repeatedly dump the same target files. Read the target scripts once, reproduce the bug, then move directly to patching.');
     lines.push('12. If the user instructions include concrete screen text, raw PTY snippets, or a specific repro, treat that as the primary acceptance criteria.');
     lines.push('13. After the first successful live repro, stop broad diagnosis. Edit the scripts, reload, and verify. Do not burn tokens on repeated re-inspection without code changes.');
+    lines.push('14. If the visible current screen is clean and sufficient, do NOT fall back to complex buffer heuristics. Simpler current-screen parsing is preferred.');
+    lines.push('15. Before changing parser logic, verify whether `provider.json` submit/approval behavior (`sendDelayMs`, `approvalKeys`, submit strategy) is the simpler and more correct fix.');
     lines.push('');
 
     lines.push('## Task');
@@ -1464,6 +1474,12 @@ export class DevServer implements DevServerContext {
     lines.push(`curl -sS http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/debug/${type}`);
     lines.push(`curl -sS http://127.0.0.1:${DEV_SERVER_PORT}/api/cli/status`);
     lines.push('```');
+    lines.push('');
+    lines.push('The debug payload should be read in this priority order:');
+    lines.push('1. `screenText` / current visible state');
+    lines.push('2. parsed `status`, `messages`, `activeModal`');
+    lines.push('3. `rawBuffer` only for style/control-sequence cues');
+    lines.push('4. `buffer` only when the current screen is insufficient');
     lines.push('');
     lines.push('Extract the current `instanceId` from the launch or status response and keep using it below.');
     lines.push('');
@@ -1511,6 +1527,8 @@ export class DevServer implements DevServerContext {
     lines.push('5. Confirm the Python file was actually created and executed, not just described in chat text.');
     lines.push('6. Confirm the final assistant transcript includes the exact Python output, including the working directory line and the five square numbers.');
     lines.push('7. Re-run the debug endpoints after edits. Do NOT finish until the parsed result looks correct.');
+    lines.push('8. Confirm the parser still works after a redraw or scroll change without duplicating transcript history.');
+    lines.push('9. Confirm the implementation prefers current-screen signals over stale history when both are present.');
     lines.push('');
 
     if (userComment) {

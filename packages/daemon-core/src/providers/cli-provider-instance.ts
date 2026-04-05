@@ -5,8 +5,11 @@
  * collectCliData() + status transition logic from daemon-status.ts moved here.
  */
 
+import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
+import { createRequire } from 'node:module';
 import type { ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
@@ -15,6 +18,26 @@ import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
+
+let CachedDatabaseSync: (new (path: string, options?: { readOnly?: boolean }) => {
+    prepare(sql: string): { get(...params: Array<string | number>): unknown };
+    close(): void;
+}) | null = null;
+
+function getDatabaseSync() {
+    if (CachedDatabaseSync) return CachedDatabaseSync;
+    const requireFn = typeof require === 'function'
+        ? require
+        : createRequire(path.join(process.cwd(), '__adhdev_sqlite_loader__.js'));
+    const sqliteModule = requireFn(`node:${'sqlite'}`) as {
+        DatabaseSync: typeof CachedDatabaseSync;
+    };
+    CachedDatabaseSync = sqliteModule.DatabaseSync;
+    if (!CachedDatabaseSync) {
+        throw new Error('node:sqlite DatabaseSync unavailable');
+    }
+    return CachedDatabaseSync;
+}
 
 export class CliProviderInstance implements ProviderInstance {
     readonly type: string;
@@ -34,6 +57,17 @@ export class CliProviderInstance implements ProviderInstance {
     readonly instanceId: string;
 
     private presentationMode: 'terminal' | 'chat';
+    private providerSessionId?: string;
+    private launchMode: 'new' | 'resume' | 'manual';
+    private readonly startedAt = Date.now();
+    private onProviderSessionResolved?: (info: {
+        instanceId: string;
+        providerType: string;
+        providerName: string;
+        workspace: string;
+        providerSessionId: string;
+        previousProviderSessionId?: string;
+    }) => void;
 
     constructor(
         private provider: ProviderModule,
@@ -41,10 +75,25 @@ export class CliProviderInstance implements ProviderInstance {
         private cliArgs: string[] = [],
         instanceId?: string,
         transportFactory?: PtyTransportFactory,
+        options?: {
+            providerSessionId?: string;
+            launchMode?: 'new' | 'resume' | 'manual';
+            onProviderSessionResolved?: (info: {
+                instanceId: string;
+                providerType: string;
+                providerName: string;
+                workspace: string;
+                providerSessionId: string;
+                previousProviderSessionId?: string;
+            }) => void;
+        },
     ) {
         this.type = provider.type;
         this.instanceId = instanceId || crypto.randomUUID();
         this.presentationMode = 'chat';
+        this.providerSessionId = options?.providerSessionId;
+        this.launchMode = options?.launchMode || 'new';
+        this.onProviderSessionResolved = options?.onProviderSessionResolved;
         this.adapter = new ProviderCliAdapter(provider as any as CliProviderModule, workingDir, cliArgs, transportFactory);
         this.monitor = new StatusMonitor();
         this.historyWriter = new ChatHistoryWriter();
@@ -78,19 +127,70 @@ export class CliProviderInstance implements ProviderInstance {
 
  // PTY spawn
         await this.adapter.spawn();
+        if (this.providerSessionId && this.launchMode === 'resume') {
+            const resumedAt = Date.now();
+            this.historyWriter.appendSystemMarker(
+                this.type,
+                `Resumed saved session at ${this.formatMarkerTimestamp(resumedAt)}`,
+                {
+                    instanceId: this.instanceId,
+                    historySessionId: this.providerSessionId,
+                    dedupKey: `resume:${this.providerSessionId}:${resumedAt}`,
+                    receivedAt: resumedAt,
+                },
+            );
+        }
     }
 
     async onTick(): Promise<void> {
- // CLI is event-based so tick is unnecessary
- // Health check etc here if needed
+        if (this.providerSessionId) return;
+
+        let probedSessionId: string | null = null;
+        if (this.type === 'opencode-cli') {
+            probedSessionId = this.probeOpenCodeSessionId();
+        } else if (this.type === 'codex-cli') {
+            probedSessionId = this.probeCodexSessionId();
+        } else if (this.type === 'goose-cli') {
+            probedSessionId = this.probeGooseSessionId();
+        }
+
+        if (probedSessionId) {
+            this.promoteProviderSessionId(probedSessionId);
+        }
     }
 
     getState(): ProviderState {
         const adapterStatus = this.adapter.getStatus();
         const parsedStatus = this.adapter.getScriptParsedStatus?.() || null;
+        const parsedProviderSessionId = typeof parsedStatus?.providerSessionId === 'string'
+            ? parsedStatus.providerSessionId.trim()
+            : '';
+        if (parsedProviderSessionId) {
+            this.promoteProviderSessionId(parsedProviderSessionId);
+        }
         const runtime = this.adapter.getRuntimeMetadata();
+        const parsedMessages = Array.isArray(parsedStatus?.messages) ? parsedStatus.messages : [];
 
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
+
+        if (parsedMessages.length > 0) {
+            let messagesToSave = parsedMessages;
+            if ((parsedStatus?.status === 'generating' || parsedStatus?.status === 'long_generating')) {
+                const lastIdx = messagesToSave.length - 1;
+                if (lastIdx >= 0 && messagesToSave[lastIdx]?.role === 'assistant') {
+                    messagesToSave = messagesToSave.slice(0, lastIdx);
+                }
+            }
+            if (messagesToSave.length > 0) {
+                this.historyWriter.appendNewMessages(
+                    this.type,
+                    messagesToSave,
+                    parsedStatus?.title || dirName,
+                    this.instanceId,
+                    this.providerSessionId,
+                );
+            }
+        }
 
         return {
             type: this.type,
@@ -100,14 +200,15 @@ export class CliProviderInstance implements ProviderInstance {
             mode: this.presentationMode,
             activeChat: {
                 id: `${this.type}_${this.workingDir}`,
-                title: parsedStatus?.title || `${this.provider.name} · ${dirName}`,
+                title: parsedStatus?.title || dirName,
                 status: parsedStatus?.status || adapterStatus.status,
-                messages: Array.isArray(parsedStatus?.messages) ? parsedStatus.messages : [],
+                messages: parsedMessages,
                 activeModal: parsedStatus?.activeModal ?? adapterStatus.activeModal,
                 inputContent: '',
             },
             workspace: this.workingDir,
             instanceId: this.instanceId,
+            providerSessionId: this.providerSessionId,
             lastUpdated: Date.now(),
             settings: this.settings,
             pendingEvents: this.flushEvents(),
@@ -274,4 +375,104 @@ export class CliProviderInstance implements ProviderInstance {
 
     get cliType(): string { return this.type; }
     get cliName(): string { return this.provider.name; }
+
+    private formatMarkerTimestamp(timestamp: number): string {
+        const date = new Date(timestamp);
+        const pad = (value: number) => String(value).padStart(2, '0');
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    }
+
+    private promoteProviderSessionId(sessionId: string): void {
+        const nextSessionId = String(sessionId || '').trim();
+        if (!nextSessionId || nextSessionId === this.providerSessionId) return;
+
+        const previousHistorySessionId = this.providerSessionId || this.instanceId;
+        const previousProviderSessionId = this.providerSessionId;
+        this.providerSessionId = nextSessionId;
+        this.historyWriter.promoteHistorySession(this.type, previousHistorySessionId, nextSessionId);
+        this.adapter.updateRuntimeMeta({ providerSessionId: nextSessionId });
+        this.onProviderSessionResolved?.({
+            instanceId: this.instanceId,
+            providerType: this.type,
+            providerName: this.provider.name,
+            workspace: this.workingDir,
+            providerSessionId: nextSessionId,
+            previousProviderSessionId,
+        });
+        LOG.info('CLI', `[${this.type}] discovered provider session id: ${nextSessionId}`);
+    }
+
+    private probeOpenCodeSessionId(): string | null {
+        const dbPath = path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db');
+        if (!fs.existsSync(dbPath)) return null;
+        const minCreatedAt = Math.max(0, this.startedAt - 60_000);
+        const directories = this.getProbeDirectories();
+        const query = `select id from session where directory in (${this.buildSqlPlaceholderList(directories.length)}) and time_created >= ? and time_archived is null order by time_updated desc limit 1;`;
+        return this.querySqliteText(dbPath, query, [...directories, minCreatedAt]);
+    }
+
+    private probeCodexSessionId(): string | null {
+        const dbPath = path.join(os.homedir(), '.codex', 'state_5.sqlite');
+        if (!fs.existsSync(dbPath)) return null;
+        const minCreatedAt = Math.max(0, Math.floor((this.startedAt - 60_000) / 1000));
+        const directories = this.getProbeDirectories();
+        const query = `select id from threads where cwd in (${this.buildSqlPlaceholderList(directories.length)}) and created_at >= ? and archived = 0 order by created_at desc limit 1;`;
+        return this.querySqliteText(dbPath, query, [...directories, minCreatedAt]);
+    }
+
+    private probeGooseSessionId(): string | null {
+        const dbPath = path.join(os.homedir(), '.local', 'share', 'goose', 'sessions', 'sessions.db');
+        if (!fs.existsSync(dbPath)) return null;
+        const minCreatedAtIso = new Date(Math.max(0, this.startedAt - 60_000)).toISOString().slice(0, 19).replace('T', ' ');
+        const directories = this.getProbeDirectories();
+        const query = `select id from sessions where working_dir in (${this.buildSqlPlaceholderList(directories.length)}) and created_at >= ? order by updated_at desc limit 1;`;
+        try {
+            return this.querySqliteText(dbPath, query, [...directories, minCreatedAtIso]);
+        } catch {
+            return null;
+        }
+    }
+
+    private getProbeDirectories(): string[] {
+        const dirs = new Set<string>();
+        const addDir = (value: string | null | undefined) => {
+            const normalized = typeof value === 'string' ? value.trim() : '';
+            if (normalized) dirs.add(normalized);
+        };
+
+        addDir(this.workingDir);
+        try {
+            addDir(fs.realpathSync.native(this.workingDir));
+        } catch {
+            // noop
+        }
+
+        return Array.from(dirs);
+    }
+
+    private buildSqlPlaceholderList(count: number): string {
+        return Array.from({ length: count }, () => '?').join(', ');
+    }
+
+    private querySqliteText(dbPath: string, query: string, params: Array<string | number>): string | null {
+        let db: {
+            prepare(sql: string): { get(...values: Array<string | number>): unknown };
+            close(): void;
+        } | null = null;
+        try {
+            const DatabaseSync = getDatabaseSync();
+            db = new DatabaseSync(dbPath, { readOnly: true });
+            const row = db.prepare(query).get(...params) as { id?: unknown } | undefined;
+            const sessionId = typeof row?.id === 'string' ? row.id.trim() : '';
+            return sessionId || null;
+        } catch {
+            return null;
+        } finally {
+            try {
+                db?.close();
+            } catch {
+                // noop
+            }
+        }
+    }
 }

@@ -43,6 +43,7 @@ export interface PtyRuntimeTransport {
   kill(): void;
   clearBuffer?(): void;
   detach?(): void;
+  updateMeta?(meta: Record<string, unknown>, replace?: boolean): void;
   getMetadata?(): PtyRuntimeMetadata | null;
   onData(callback: (data: string) => void): void;
   onExit(callback: (info: { exitCode: number }) => void): void;

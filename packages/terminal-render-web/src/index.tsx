@@ -11,6 +11,7 @@ export interface TerminalRendererHandle {
   write: (data: string) => void;
   clear: () => void;
   reset: () => void;
+  resize: (cols: number, rows: number) => void;
   fit: () => void;
   bumpResize: () => void;
 }
@@ -24,8 +25,8 @@ export interface GhosttyTerminalViewProps {
   style?: React.CSSProperties;
 }
 
-const DEFAULT_TERMINAL_COLS = 100;
-const DEFAULT_TERMINAL_ROWS = 30;
+const DEFAULT_TERMINAL_COLS = 80;
+const DEFAULT_TERMINAL_ROWS = 24;
 
 type TerminalLike = {
   cols: number;
@@ -33,10 +34,12 @@ type TerminalLike = {
   write: (data: string) => void;
   clear: () => void;
   reset?: () => void;
+  resize?: (cols: number, rows: number) => void;
   open: (host: HTMLElement) => void;
   dispose: () => void;
   onData: (listener: (data: string) => void) => { dispose: () => void };
   focus?: () => void;
+  blur?: () => void;
 };
 
 type FitAddonLike = {
@@ -135,6 +138,16 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
 
     useEffect(() => {
       readOnlyRef.current = readOnly;
+      if (!readOnly) return;
+      try {
+        terminalRef.current?.blur?.();
+      } catch {}
+      try {
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement && containerRef.current?.contains(activeElement)) {
+          activeElement.blur();
+        }
+      } catch {}
     }, [readOnly]);
 
     useImperativeHandle(ref, () => ({
@@ -149,6 +162,12 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
       reset: () => {
         if (terminalRef.current?.reset) terminalRef.current.reset();
         else pendingWritesRef.current = [];
+      },
+      resize: (cols: number, rows: number) => {
+        if (terminalRef.current?.resize) {
+          terminalRef.current.resize(cols, rows);
+          lastReportedSizeRef.current = { cols, rows };
+        }
       },
       fit: () => {
         fitAndReport(true);
@@ -208,7 +227,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         requestAnimationFrame(() => {
           try {
             setReady(true);
-            term.focus?.();
+            if (!readOnlyRef.current) term.focus?.();
             for (const chunk of pendingWritesRef.current) term.write(chunk);
             pendingWritesRef.current = [];
           } catch {}

@@ -32,6 +32,8 @@ export interface SessionBufferSnapshot {
   seq: number;
   text: string;
   truncated: boolean;
+  cols?: number;
+  rows?: number;
 }
 
 export interface SessionBufferState {
@@ -128,6 +130,12 @@ export interface ClearSessionBufferPayload {
   sessionId: string;
 }
 
+export interface UpdateSessionMetaPayload {
+  sessionId: string;
+  meta: Record<string, unknown>;
+  replace?: boolean;
+}
+
 export type SessionHostRequest =
   | { type: 'create_session'; payload: CreateSessionPayload }
   | { type: 'attach_session'; payload: AttachSessionPayload }
@@ -140,6 +148,7 @@ export type SessionHostRequest =
   | { type: 'release_write'; payload: ReleaseWritePayload }
   | { type: 'get_snapshot'; payload: GetSnapshotPayload }
   | { type: 'clear_session_buffer'; payload: ClearSessionBufferPayload }
+  | { type: 'update_session_meta'; payload: UpdateSessionMetaPayload }
   | { type: 'list_sessions'; payload?: {} };
 
 export interface SessionHostResponse<T = unknown> {

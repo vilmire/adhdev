@@ -76,6 +76,7 @@ interface ProviderStateBase {
     errorReason?: ProviderErrorReason;
  /** meta */
     instanceId: string;
+    providerSessionId?: string;
     lastUpdated: number;
     settings: Record<string, any>;
  /** Event queue (cleared after daemon collects) */

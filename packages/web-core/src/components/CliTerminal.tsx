@@ -75,6 +75,11 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
                     pendingClearRef.current = true;
                 }
             },
+            resize: (cols: number, rows: number) => {
+                if (innerRef.current && 'resize' in innerRef.current && typeof (innerRef.current as any).resize === 'function') {
+                    (innerRef.current as any).resize(cols, rows);
+                }
+            },
             fit: () => {
                 if (innerRef.current) innerRef.current.fit();
                 else pendingFitRef.current = true;
