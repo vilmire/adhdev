@@ -29,6 +29,7 @@ import type { DashboardMobileSection } from '../components/dashboard/DashboardMo
 import { getMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
 import { getConversationTimestamp } from '../components/dashboard/conversation-sort'
+import { getMachineDisplayName } from '../utils/daemon-utils'
 
 export default function Dashboard() {
     const { sendCommand: sendDaemonCommand } = useTransport()
@@ -94,6 +95,10 @@ export default function Dashboard() {
     const detectedIdes: { type: string; name: string; running: boolean; id?: string }[] = (daemonEntry as any)?.detectedIdes || []
     const isStandalone = !!daemonEntry
     const terminalBackend = (daemonEntry as any)?.terminalBackend || null
+    const terminalBackendMachineLabel = daemonEntry
+        ? getMachineDisplayName(daemonEntry as any, { fallbackId: daemonEntry.id })
+        : null
+    const terminalBackendMachineKey = daemonEntry?.id || null
     // ─── Hidden Tabs ───
     const {
         hiddenTabs,
@@ -443,7 +448,12 @@ export default function Dashboard() {
         <div className="page-dashboard flex-1 min-h-0 bg-bg-primary text-text-primary flex flex-col overflow-hidden">
 
             <ConnectionBanner wsStatus={wsStatus} showReconnected={showReconnected} />
-            <TerminalBackendBanner terminalBackend={terminalBackend} isStandalone={isStandalone} />
+            <TerminalBackendBanner
+                terminalBackend={terminalBackend}
+                isStandalone={isStandalone}
+                machineLabel={terminalBackendMachineLabel}
+                machineKey={terminalBackendMachineKey}
+            />
 
             {!versionBannerDismissed && (
                 <DashboardVersionBanner

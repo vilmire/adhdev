@@ -121,6 +121,15 @@ export class AgentStreamPoller {
                                     cdpManagerKey: ideType,
                                     instanceKey: `ide:${ideType}`,
                                 });
+                                const activeSessionId = agentStreamManager.getActiveSessionId(parentSessionId);
+                                if (!activeSessionId || enabledExtTypes.size === 1) {
+                                    await agentStreamManager.setActiveSession(
+                                        cdp,
+                                        parentSessionId,
+                                        extInstance.getInstanceId(),
+                                    );
+                                    LOG.info('AgentStream', `Auto-activated enabled extension: ${extType} (${ideType})`);
+                                }
                             }
                             LOG.info('AgentStream', `Extension added: ${extType} (enabled for ${ideType})`);
                         }
