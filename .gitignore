@@ -53,3 +53,4 @@ codex_*
 debug_*
 ide_dom.json
 .aider*
+.adhdev-dev-pids.json
