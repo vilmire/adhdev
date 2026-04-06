@@ -46,7 +46,7 @@ function InboxListSection({
     className?: string
 }) {
     return (
-        <div className={`overflow-hidden rounded-[24px] border border-border-subtle/80 bg-bg-secondary/40 shadow-[0_10px_30px_rgba(0,0,0,0.05)] ${className}`}>
+        <div className={`w-full min-w-0 self-stretch overflow-hidden rounded-[24px] border border-border-subtle/80 bg-bg-secondary/40 shadow-[0_10px_30px_rgba(0,0,0,0.05)] ${className}`}>
             {children}
         </div>
     )
@@ -59,7 +59,7 @@ function MobileEmptyHero({ icon, title, subtitle, children }: {
     children?: React.ReactNode
 }) {
     return (
-        <div className="flex flex-col items-center justify-center gap-2 pt-12 pb-8 px-6 text-center">
+        <div className="flex w-full min-w-0 flex-col items-center justify-center gap-2 px-6 pt-12 pb-8 text-center">
             <div className="mb-2 rounded-2xl border border-accent-primary/10 bg-[color:color-mix(in_oklab,var(--bg-secondary)_90%,var(--accent-primary)_10%)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.08)]">{icon}</div>
             <div className="text-lg font-bold tracking-tight text-text-primary">
                 {title}
@@ -182,8 +182,8 @@ export default function DashboardMobileChatInbox({
         : 'Chats'
 
     return (
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-bg-primary">
-            <div className="px-5 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-4 shrink-0 bg-bg-primary z-10">
+        <div className="flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-primary">
+            <div className="z-10 shrink-0 bg-bg-primary px-5 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-4">
                 <div className="flex items-center justify-between gap-3">
                     <div className="text-2xl font-black tracking-tight text-text-primary px-1">
                         {inboxTitle}
@@ -202,9 +202,9 @@ export default function DashboardMobileChatInbox({
                 </div>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 pb-[calc(12px+env(safe-area-inset-bottom,0px))] flex flex-col gap-3 -webkit-overflow-scrolling-touch">
+            <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden px-3 pb-[calc(12px+env(safe-area-inset-bottom,0px))] [-webkit-overflow-scrolling:touch]">
                 {section === 'machines' && (
-                    <section className="flex flex-col gap-2">
+                    <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
                         {isDisconnected ? (
                             <MobileEmptyHero
                                 icon={<MobileSpinner label="Reconnecting…" />}
@@ -278,7 +278,7 @@ export default function DashboardMobileChatInbox({
                 )}
 
                 {section === 'chats' && attentionItems.length > 0 && (
-                    <section className="flex flex-col gap-2">
+                    <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
                         <InboxSectionHeader title="Needs attention" className="mb-0" />
                         <InboxListSection>
                             {attentionItems.map((item, index) => (
@@ -296,7 +296,7 @@ export default function DashboardMobileChatInbox({
                 )}
 
                 {section === 'chats' && unreadItems.length > 0 && (
-                    <section className="flex flex-col gap-2">
+                    <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
                         <InboxSectionHeader title="Task complete" className="mb-0 mt-2" />
                         <InboxListSection>
                             {unreadItems.map((item, index) => (
@@ -314,7 +314,7 @@ export default function DashboardMobileChatInbox({
                 )}
 
                 {section === 'chats' && workingItems.length > 0 && (
-                    <section className="flex flex-col gap-2">
+                    <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
                         <InboxSectionHeader title="Working now" className="mb-0 mt-2" />
                         <InboxListSection>
                             {workingItems.map((item, index) => (
@@ -332,7 +332,7 @@ export default function DashboardMobileChatInbox({
                 )}
 
                 {section === 'chats' && (
-                    <section className="flex flex-col gap-2">
+                    <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
                         {completedItems.length > 0 && (
                             <InboxSectionHeader title="Earlier" className="mb-0 mt-2 border-border-subtle/80 bg-bg-secondary/35" />
                         )}
@@ -388,7 +388,7 @@ export default function DashboardMobileChatInbox({
                 )}
 
                 {section === 'chats' && hiddenConversations.length > 0 && (
-                    <section className="flex flex-col gap-2">
+                    <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
                         <div className="mx-1 mt-4 mb-1 flex items-center justify-between gap-2 px-1 py-1 text-[12px] font-bold uppercase tracking-wider text-text-secondary">
                             <span>Hidden</span>
                             <button

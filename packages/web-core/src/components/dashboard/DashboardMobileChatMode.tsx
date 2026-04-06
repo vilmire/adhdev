@@ -701,7 +701,7 @@ export default function DashboardMobileChatMode({
     }, [handleLaunchDetectedIde, handleLaunchWorkspaceProvider, selectedMachineEntry])
 
     return (
-        <div className="dashboard-mobile-chat">
+        <div className="dashboard-mobile-chat w-full min-w-0">
             {screen === 'chat' && selectedConversation ? (
                 <DashboardMobileChatRoom
                     selectedConversation={selectedConversation}

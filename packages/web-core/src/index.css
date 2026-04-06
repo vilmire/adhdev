@@ -2811,7 +2811,7 @@
             min-height: 0;
         }
 
-        .dashboard-header {
+        .page-dashboard .dashboard-header {
             padding: 6px 12px 6px 56px;
             min-height: 40px;
         }
@@ -2860,8 +2860,8 @@
         }
 
         /* Touch targets: compact for header */
-        .dashboard-header button,
-        .dashboard-header a {
+        .page-dashboard .dashboard-header button,
+        .page-dashboard .dashboard-header a {
             min-width: 32px;
             min-height: 32px;
             display: flex;
@@ -2872,7 +2872,7 @@
 
     /* Small phones (iPhone SE) */
     @media (max-width: 375px) {
-        .dashboard-header {
+        .page-dashboard .dashboard-header {
             padding: 8px 8px 8px 52px;
         }
 
