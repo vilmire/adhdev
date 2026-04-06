@@ -215,6 +215,42 @@ function resolveSafePath(requestedPath: string): string {
     return resolved;
 }
 
+function listDirectoryEntriesSafe(dirPath: string): Array<{ name: string; type: 'directory' | 'file'; size?: number }> {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    const files: Array<{ name: string; type: 'directory' | 'file'; size?: number }> = [];
+
+    for (const entry of entries) {
+        const entryPath = path.join(dirPath, entry.name);
+        try {
+            if (entry.isDirectory()) {
+                files.push({ name: entry.name, type: 'directory' });
+                continue;
+            }
+            if (entry.isFile()) {
+                let size: number | undefined;
+                try {
+                    size = fs.statSync(entryPath).size;
+                } catch {
+                    size = undefined;
+                }
+                files.push({ name: entry.name, type: 'file', size });
+                continue;
+            }
+
+            const stat = fs.statSync(entryPath);
+            files.push({
+                name: entry.name,
+                type: stat.isDirectory() ? 'directory' : 'file',
+                size: stat.isFile() ? stat.size : undefined,
+            });
+        } catch {
+            // Skip inaccessible entries such as protected Windows root files.
+        }
+    }
+
+    return files;
+}
+
 export async function handleFileRead(h: CommandHelpers, args: any): Promise<CommandResult> {
     try {
         const filePath = resolveSafePath(args?.path);
@@ -239,12 +275,7 @@ export async function handleFileWrite(h: CommandHelpers, args: any): Promise<Com
 export async function handleFileList(h: CommandHelpers, args: any): Promise<CommandResult> {
     try {
         const dirPath = resolveSafePath(args?.path || '.');
-        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-        const files = entries.map(e => ({
-            name: e.name,
-            type: e.isDirectory() ? 'directory' : 'file',
-            size: e.isFile() ? fs.statSync(path.join(dirPath, e.name)).size : undefined,
-        }));
+        const files = listDirectoryEntriesSafe(dirPath);
         return { success: true, files, path: dirPath };
     } catch (e: any) {
         return { success: false, error: e.message };
@@ -252,5 +283,13 @@ export async function handleFileList(h: CommandHelpers, args: any): Promise<Comm
 }
 
 export async function handleFileListBrowse(h: CommandHelpers, args: any): Promise<CommandResult> {
-    return handleFileList(h, args);
+    try {
+        const dirPath = resolveSafePath(args?.path || '.');
+        const files = listDirectoryEntriesSafe(dirPath)
+            .filter(entry => entry.type === 'directory')
+            .sort((a, b) => a.name.localeCompare(b.name));
+        return { success: true, files, path: dirPath };
+    } catch (e: any) {
+        return { success: false, error: e.message };
+    }
 }
