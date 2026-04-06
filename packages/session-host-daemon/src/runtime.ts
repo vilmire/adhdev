@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as pty from 'node-pty';
@@ -238,8 +239,19 @@ export class PtySessionRuntime {
 
     const command = this.payload.launchCommand.command;
     const args = this.payload.launchCommand.args || [];
-    const cwd = this.payload.workspace || process.cwd();
     const env = buildRuntimeEnv(process.env, this.payload.launchCommand.env);
+
+    // Validate workspace directory — an invalid cwd causes a native crash on Windows
+    // (node-pty error code 267: ERROR_DIRECTORY) that bypasses JS try/catch
+    let cwd = this.payload.workspace || process.cwd();
+    if (cwd) {
+      try {
+        const stat = fs.statSync(cwd);
+        if (!stat.isDirectory()) cwd = os.homedir();
+      } catch {
+        cwd = os.homedir();
+      }
+    }
 
     this.ptyProcess = pty.spawn(command, args, {
       name: os.platform() === 'win32' ? 'xterm-color' : 'xterm-256color',
