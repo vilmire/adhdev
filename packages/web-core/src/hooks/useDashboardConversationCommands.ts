@@ -107,14 +107,6 @@ export function useDashboardConversationCommands({
     const handleModalButton = useCallback(async (buttonText: string) => {
         if (!activeConv) return
 
-        if (activeConv.transport !== 'pty') {
-            setActionLogs(prev => [...prev, {
-                ideId: activeConv.tabKey,
-                text: `🖱️ **${buttonText}** clicked`,
-                timestamp: Date.now(),
-            }])
-        }
-
         try {
             const buttons = activeConv.modalButtons || []
             const buttonIndex = buttons.indexOf(buttonText)

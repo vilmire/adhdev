@@ -59,7 +59,16 @@ export function useDashboardEventManager({
 
         const unsubSysMsg = eventManager.onSystemMessage((targetKey: string, msg: SystemMessage) => {
             const matchedConv = resolveConversationByTarget(targetKey)
-            if (matchedConv?.transport === 'pty' && msg._localId?.startsWith('sys_approval_')) {
+            const isApprovalSystemMessage = msg._localId?.startsWith('sys_approval_')
+            const hasLiveApprovalUi = !!(
+                matchedConv
+                && (
+                    matchedConv.status === 'waiting_approval'
+                    || matchedConv.modalButtons?.length
+                    || matchedConv.modalMessage
+                )
+            )
+            if (isApprovalSystemMessage && hasLiveApprovalUi) {
                 return
             }
             setLocalUserMessages(prev => ({
