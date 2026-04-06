@@ -180,9 +180,31 @@ function createXtermMirror(options: { cols: number; rows: number; scrollback: nu
 }
 
 function normalizeGhosttyBinding(mod: any): GhosttyBinding | null {
-  if (mod?.default?.createTerminal) return mod.default as GhosttyBinding;
-  if (mod?.createTerminal) return mod as GhosttyBinding;
-  return null;
+  const raw = mod?.default?.createTerminal ? mod.default : mod?.createTerminal ? mod : null;
+  if (!raw) return null;
+
+  // Wrap the native handle to fill in any missing methods (pre-built binaries may lack
+  // formatVT / getCursorPosition if built before those methods were added to the Rust side).
+  return {
+    createTerminal(options: { cols: number; rows: number; scrollback: number }): GhosttyTerminalHandle {
+      const handle = raw.createTerminal(options) as any;
+      return {
+        write(data: string | Uint8Array): void { handle.write(data); },
+        resize(cols: number, rows: number): void { handle.resize(cols, rows); },
+        formatVT(): string {
+          if (typeof handle.formatVT === 'function') return handle.formatVT();
+          // Fallback: formatPlainText is always available in the shipped bindings
+          if (typeof handle.formatPlainText === 'function') return handle.formatPlainText({ trim: false }) as string;
+          return '';
+        },
+        getCursorPosition(): { col: number; row: number } {
+          if (typeof handle.getCursorPosition === 'function') return handle.getCursorPosition() as { col: number; row: number };
+          return { col: 0, row: 0 };
+        },
+        dispose(): void { handle.dispose(); },
+      };
+    },
+  };
 }
 
 function getTerminalMirrorFactory(): (options: { cols: number; rows: number; scrollback: number }) => TerminalMirrorHandle {
