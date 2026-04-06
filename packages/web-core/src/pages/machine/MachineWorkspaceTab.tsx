@@ -118,6 +118,7 @@ export default function MachineWorkspaceTab({
                     managedEntries={cliSessions}
                     getIcon={getIcon}
                     actions={actions}
+                    sendDaemonCommand={sendDaemonCommand}
                     initialWorkspaceId={initialWorkspaceId}
                     initialWorkspacePath={initialWorkspacePath}
                 />
@@ -132,6 +133,7 @@ export default function MachineWorkspaceTab({
                     managedEntries={acpSessions}
                     getIcon={getIcon}
                     actions={actions}
+                    sendDaemonCommand={sendDaemonCommand}
                     initialWorkspaceId={initialWorkspaceId}
                     initialWorkspacePath={initialWorkspacePath}
                 />

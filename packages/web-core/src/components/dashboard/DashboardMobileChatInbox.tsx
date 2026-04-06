@@ -80,7 +80,7 @@ function DashboardMobileChatItem({
             <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                 <div className="flex items-center justify-between gap-2">
                     <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{item.conversation.displayPrimary}</span>
-                    <span className="text-[11px] font-medium text-text-muted shrink-0">{formatRelativeTime(item.timestamp)}</span>
+                    {!isWorking && <span className="text-[11px] font-medium text-text-muted shrink-0">{formatRelativeTime(item.timestamp)}</span>}
                 </div>
                 <div className="text-[12px] font-medium text-text-secondary truncate flex items-center">
                     {item.conversation.displaySecondary}

@@ -645,6 +645,31 @@ export default function DashboardMobileChatMode({
                     onMachineUpgrade={() => handleMachineUpgrade(selectedMachineEntry.id)}
                     onLaunchDetectedIde={(ideType, opts) => handleLaunchDetectedIde(selectedMachineEntry.id, ideType, opts)}
                     onAddWorkspace={(path, opts) => handleAddWorkspace(selectedMachineEntry.id, path, opts)}
+                    onBrowseDirectory={async (path) => {
+                        const res: any = await sendDaemonCommand(selectedMachineEntry.id, 'file_list_browse', { path })
+                        if (!res?.success) {
+                            throw new Error(res?.error || 'Could not browse folder')
+                        }
+                        const currentPath = typeof res?.path === 'string' ? res.path : path
+                        const separator = currentPath.includes('\\') ? '\\' : '/'
+                        const joinPath = (base: string, name: string) => {
+                            if (/^[A-Za-z]:\\?$/.test(base)) {
+                                return `${base.replace(/\\?$/, '\\')}${name}`
+                            }
+                            if (base === '/' || base === '\\') return `${separator}${name}`
+                            return `${base.replace(/[\\/]+$/, '')}${separator}${name}`
+                        }
+                        const directories = Array.isArray(res?.files)
+                            ? res.files
+                                .filter((entry: any) => entry?.type === 'directory' && typeof entry?.name === 'string')
+                                .map((entry: any) => ({
+                                    name: entry.name as string,
+                                    path: joinPath(currentPath, entry.name as string),
+                                }))
+                                .sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name))
+                            : []
+                        return { path: currentPath, directories }
+                    }}
                     onLaunchWorkspaceProvider={(kind, providerType, opts) => handleLaunchWorkspaceProvider(selectedMachineEntry.id, kind, providerType, opts)}
                 />
             ) : (

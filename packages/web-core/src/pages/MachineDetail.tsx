@@ -12,7 +12,7 @@
  * Shared hook: useMachineActions (launch/stop/restart/workspace handlers)
  * Shared types: ./machine/types.ts
  */
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
@@ -32,6 +32,9 @@ import LogsTab from './machine/LogsTab'
 import LaunchPickModal from './machine/LaunchPickModal'
 import MachineCommandCenter from './machine/MachineCommandCenter'
 import MachineWorkspaceTab from './machine/MachineWorkspaceTab'
+import LaunchConfirmDialog from '../components/machine/LaunchConfirmDialog'
+import { buildLaunchWorkspaceOptions } from '../components/machine/launchWorkspaceOptions'
+import type { LaunchWorkspaceOption } from './machine/types'
 
 // ─── Component ───────────────────────────────────────
 interface MachineDetailProps {
@@ -50,6 +53,17 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const isStandalone = allIdes.some(entry => entry.type === 'adhdev-daemon')
     const [activeTab, setActiveTab] = useState<TabId>('workspace')
     const [workspaceCategoryHint, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
+    const recentLaunchActionRef = useRef<(() => Promise<void>) | null>(null)
+    const [recentLaunchConfirm, setRecentLaunchConfirm] = useState<{
+        title: string
+        description: string
+        details: Array<{ label: string; value: string }>
+        confirmLabel: string
+        workspaceOptions: LaunchWorkspaceOption[]
+    } | null>(null)
+    const recentLaunchWorkspaceKeyRef = useRef('__home__')
+    const [recentLaunchWorkspaceKey, setRecentLaunchWorkspaceKey] = useState('__home__')
+    const [recentLaunchBusy, setRecentLaunchBusy] = useState(false)
     const logsEndRef = useRef<HTMLDivElement>(null)
 
     const handleBack = () => {
@@ -243,26 +257,62 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         }))
         : fallbackRecentLaunches
 
-    const handleOpenRecent = async (session: MachineRecentLaunch) => {
-        if (session.kind === 'ide' && session.providerType) {
-            await actions.handleLaunchIde(
-                session.providerType,
-                session.workspace ? { workspace: session.workspace } : undefined,
-            )
-            return
-        }
-        if ((session.kind === 'cli' || session.kind === 'acp') && session.providerType) {
-            await actions.runLaunchCliCore({
-                cliType: session.providerType,
-                dir: session.workspace || '',
-                model: session.kind === 'acp' ? session.currentModel : undefined,
-                resumeSessionId: session.providerSessionId,
+    const handleConfirmRecentLaunch = useCallback(() => {
+        if (!recentLaunchActionRef.current) return
+        setRecentLaunchBusy(true)
+        void recentLaunchActionRef.current()
+            .finally(() => {
+                recentLaunchActionRef.current = null
+                setRecentLaunchBusy(false)
+                setRecentLaunchConfirm(null)
             })
-            return
+    }, [])
+
+    const handleOpenRecent = useCallback((session: MachineRecentLaunch) => {
+        const { options, selectedKey } = buildLaunchWorkspaceOptions({
+            machine,
+            currentWorkspacePath: session.workspace,
+        })
+        const openWorkspaceFallback = async () => {
+            setWorkspaceCategoryHint(session.kind)
+            setActiveTab('workspace')
         }
-        setWorkspaceCategoryHint(session.kind)
-        setActiveTab('workspace')
-    }
+        recentLaunchActionRef.current = async () => {
+            const selectedWorkspace = options.find(option => option.key === recentLaunchWorkspaceKeyRef.current)
+            const workspacePath = selectedWorkspace?.workspacePath ?? null
+            const workspaceId = selectedWorkspace?.workspaceId ?? null
+            if (session.kind === 'ide' && session.providerType) {
+                await actions.handleLaunchIde(
+                    session.providerType,
+                    workspacePath ? { workspace: workspacePath } : undefined,
+                )
+                return
+            }
+            if ((session.kind === 'cli' || session.kind === 'acp') && session.providerType) {
+                await actions.runLaunchCliCore({
+                    cliType: session.providerType,
+                    dir: workspaceId ? undefined : (workspacePath || ''),
+                    workspaceId: workspaceId || undefined,
+                    model: session.kind === 'acp' ? session.currentModel : undefined,
+                    resumeSessionId: session.providerSessionId,
+                })
+                return
+            }
+            await openWorkspaceFallback()
+        }
+        recentLaunchWorkspaceKeyRef.current = selectedKey
+        setRecentLaunchWorkspaceKey(selectedKey)
+        setRecentLaunchConfirm({
+            title: `Launch ${session.label}?`,
+            description: 'Recent launches now require one more confirmation before they start.',
+            confirmLabel: 'Launch',
+            workspaceOptions: options,
+            details: [
+                { label: 'Mode', value: session.kind.toUpperCase() },
+                ...(session.providerType ? [{ label: 'Provider', value: session.providerType }] : []),
+            ],
+        })
+    }, [actions, machine])
 
     useEffect(() => {
         setActiveTab(effectiveTab)
@@ -323,7 +373,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 {machine.p2p.available && (
                                     <span>P2P {machine.p2p.state === 'connected' ? 'connected' : machine.p2p.state}</span>
                                 )}
-                                {machine.cdpConnected && <span className="text-green-400 px-1.5 py-0.5 bg-green-400/10 rounded">CDP ready</span>}
                                 {machine.machineNickname && (
                                     <span className="text-text-muted opacity-60 shrink-0">{machine.hostname}</span>
                                 )}
@@ -407,11 +456,13 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
 
                         {activeTab === 'overview' && (
                             <OverviewTab
+                                machineId={machineId!}
                                 machine={machine}
                                 ideSessions={ideSessions}
                                 cliSessions={cliSessions}
                                 acpSessions={acpSessions}
                                 actions={actions}
+                                sendDaemonCommand={sendDaemonCommand}
                             />
                         )}
 
@@ -430,6 +481,26 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                     machine={machine}
                     launchPick={actions.launchPick}
                     actions={actions}
+                />
+            )}
+            {recentLaunchConfirm && (
+                <LaunchConfirmDialog
+                    title={recentLaunchConfirm.title}
+                    description={recentLaunchConfirm.description}
+                    details={recentLaunchConfirm.details}
+                    workspaceOptions={recentLaunchConfirm.workspaceOptions}
+                    selectedWorkspaceKey={recentLaunchWorkspaceKey}
+                    onWorkspaceChange={(key) => {
+                        recentLaunchWorkspaceKeyRef.current = key
+                        setRecentLaunchWorkspaceKey(key)
+                    }}
+                    confirmLabel={recentLaunchConfirm.confirmLabel}
+                    busy={recentLaunchBusy}
+                    onConfirm={handleConfirmRecentLaunch}
+                    onCancel={() => {
+                        recentLaunchActionRef.current = null
+                        setRecentLaunchConfirm(null)
+                    }}
                 />
             )}
 

@@ -73,9 +73,11 @@ export default function DashboardMobileChatRoom({
                         <div className="flex items-center gap-2 text-[17px] font-extrabold tracking-tight text-text-primary truncate">
                             {selectedConversation.displayPrimary || selectedConversation.agentName}
                         </div>
-                        <div className="min-w-0 flex items-center flex-wrap gap-1.5 text-xs text-text-secondary">
+                        <div className="min-w-0 overflow-hidden text-xs text-text-secondary">
                             <ConversationMetaChips
                                 conversation={selectedConversation}
+                                className="is-mobile-header"
+                                interactive={false}
                                 onOpenNativeConversation={() => onOpenNativeConversation(selectedConversation)}
                                 onOpenMachine={() => onOpenMachine(selectedConversation)}
                             />

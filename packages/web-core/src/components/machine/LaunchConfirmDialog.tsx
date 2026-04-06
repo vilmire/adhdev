@@ -1,0 +1,117 @@
+import { IconPlay, IconX } from '../Icons'
+import type { LaunchWorkspaceOption } from '../../pages/machine/types'
+
+interface LaunchConfirmDialogProps {
+    title: string
+    description: string
+    details: Array<{ label: string; value: string }>
+    workspaceOptions?: LaunchWorkspaceOption[]
+    selectedWorkspaceKey?: string
+    onWorkspaceChange?: (key: string) => void
+    confirmLabel?: string
+    busy?: boolean
+    onConfirm: () => void
+    onCancel: () => void
+}
+
+export default function LaunchConfirmDialog({
+    title,
+    description,
+    details,
+    workspaceOptions,
+    selectedWorkspaceKey,
+    onWorkspaceChange,
+    confirmLabel = 'Launch',
+    busy = false,
+    onConfirm,
+    onCancel,
+}: LaunchConfirmDialogProps) {
+    const selectedWorkspace = workspaceOptions?.find(option => option.key === selectedWorkspaceKey)
+
+    return (
+        <div
+            className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-[2px]"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="launch-confirm-title"
+        >
+            <div className="w-full max-w-lg rounded-2xl border border-border-subtle bg-bg-secondary shadow-xl overflow-hidden">
+                <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-border-subtle">
+                    <div className="min-w-0">
+                        <h2 id="launch-confirm-title" className="m-0 text-base font-semibold text-text-primary">
+                            {title}
+                        </h2>
+                        <p className="m-0 mt-1 text-xs leading-relaxed text-text-muted">
+                            {description}
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        className="inline-flex items-center justify-center w-8 h-8 rounded-full border border-border-subtle bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-surface-primary transition-colors shrink-0"
+                        onClick={onCancel}
+                        aria-label="Close launch confirmation"
+                    >
+                        <IconX size={16} />
+                    </button>
+                </div>
+
+                <div className="px-5 py-4 flex flex-col gap-3">
+                    {workspaceOptions && workspaceOptions.length > 0 && onWorkspaceChange && (
+                        <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
+                            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">
+                                Workspace
+                            </div>
+                            <select
+                                value={selectedWorkspaceKey || ''}
+                                onChange={(event) => onWorkspaceChange(event.target.value)}
+                                className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
+                                disabled={busy}
+                            >
+                                {workspaceOptions.map(option => (
+                                    <option key={option.key} value={option.key}>
+                                        {option.label}
+                                    </option>
+                                ))}
+                            </select>
+                            {selectedWorkspace?.description && (
+                                <div className="mt-2 text-[11px] text-text-muted break-all">
+                                    {selectedWorkspace.description}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {details.map((detail) => (
+                        <div key={`${detail.label}:${detail.value}`} className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
+                            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">
+                                {detail.label}
+                            </div>
+                            <div className="text-sm text-text-primary break-all">
+                                {detail.value}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-border-subtle bg-bg-secondary">
+                    <button
+                        type="button"
+                        className="machine-btn text-xs"
+                        onClick={onCancel}
+                        disabled={busy}
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        className="btn btn-primary h-9 px-4 text-sm font-semibold inline-flex items-center gap-2"
+                        onClick={onConfirm}
+                        disabled={busy}
+                    >
+                        <IconPlay size={14} />
+                        {busy ? 'Launching…' : confirmLabel}
+                    </button>
+                </div>
+            </div>
+        </div>
+    )
+}

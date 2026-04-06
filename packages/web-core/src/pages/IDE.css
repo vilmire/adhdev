@@ -215,52 +215,7 @@
     border-right: none;
 }
 
-/* Chat tabs (IDE / Extensions) */
-.ide-chat-tabs {
-    display: flex;
-    border-bottom: 1px solid var(--border-subtle);
-    background: var(--surface-primary);
-    flex-shrink: 0;
-}
 
-.ide-chat-tab {
-    flex: 1;
-    padding: 10px 16px;
-    border: none;
-    border-bottom: 2px solid transparent;
-    background: transparent;
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 700;
-    cursor: pointer;
-    letter-spacing: 0.04em;
-    transition: all 0.15s;
-}
-
-.ide-chat-tab.active {
-    color: var(--text-primary);
-    border-bottom-color: var(--accent-primary);
-    background: var(--dashboard-pane-bg, var(--chat-container-bg, var(--bg-primary)));
-}
-
-.ide-chat-tab.ext.active {
-    border-bottom-color: #22d3ee;
-}
-
-.ide-ext-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 18px;
-    height: 18px;
-    padding: 0 5px;
-    border-radius: 9px;
-    background: rgba(34, 211, 238, 0.15);
-    color: #22d3ee;
-    font-size: 10px;
-    font-weight: 700;
-    margin-left: 6px;
-}
 
 /* Chat header */
 .ide-chat-header {

@@ -1,32 +1,62 @@
 /**
  * OverviewTab — System stats, resources, workspaces.
  */
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { formatUptime, formatBytes, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import ProgressBar from '../../components/ProgressBar'
 import StatCard from '../../components/StatCard'
 import { IconClock, IconMonitor, IconFolder, IconTerminal, IconBot } from '../../components/Icons'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
 import type { useMachineActions } from './useMachineActions'
+import WorkspaceBrowseDialog from '../../components/machine/WorkspaceBrowseDialog'
+import { browseMachineDirectories, type BrowseDirectoryEntry } from '../../components/machine/workspaceBrowse'
 
 interface OverviewTabProps {
+    machineId: string
     machine: MachineData
     ideSessions: IdeSessionEntry[]
     cliSessions: CliSessionEntry[]
     acpSessions: AcpSessionEntry[]
     actions: ReturnType<typeof useMachineActions>
+    sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
 }
 
 export default function OverviewTab({
+    machineId,
     machine, ideSessions, cliSessions, acpSessions,
     actions,
+    sendDaemonCommand,
 }: OverviewTabProps) {
     const {
         workspaceBusy,
         handleWorkspaceAdd, handleWorkspaceRemove, handleWorkspaceSetDefault,
     } = actions
 
-    const [newWorkspacePath, setNewWorkspacePath] = useState('')
+    const [browseDialogOpen, setBrowseDialogOpen] = useState(false)
+    const [browseCurrentPath, setBrowseCurrentPath] = useState('')
+    const [browseDirectories, setBrowseDirectories] = useState<BrowseDirectoryEntry[]>([])
+    const [browseBusy, setBrowseBusy] = useState(false)
+    const [browseError, setBrowseError] = useState('')
+
+    const loadBrowsePath = useCallback(async (path: string) => {
+        setBrowseBusy(true)
+        setBrowseError('')
+        try {
+            const result = await browseMachineDirectories(sendDaemonCommand, machineId, path)
+            setBrowseCurrentPath(result.path)
+            setBrowseDirectories(result.directories)
+        } catch (error) {
+            setBrowseError(error instanceof Error ? error.message : 'Could not load folder')
+        } finally {
+            setBrowseBusy(false)
+        }
+    }, [machineId, sendDaemonCommand])
+
+    const openBrowseDialog = useCallback(() => {
+        setBrowseDialogOpen(true)
+        const initialPath = machine.defaultWorkspacePath || machine.workspaces[0]?.path || '~'
+        void loadBrowsePath(initialPath)
+    }, [loadBrowsePath, machine.defaultWorkspacePath, machine.workspaces])
 
     const memAvail = machine.availableMem ?? machine.freeMem
     const memUsedPct = machine.totalMem > 0
@@ -78,18 +108,18 @@ export default function OverviewTab({
                         </span>
                     )}
                 </div>
-                <div className="flex flex-wrap gap-2 items-end">
-                    <input
-                        className="flex-1 min-w-[200px] text-xs bg-bg-primary border border-border-subtle rounded-lg px-2.5 py-1.5"
-                        placeholder="Add workspace path…"
-                        value={newWorkspacePath}
+                <div className="flex flex-wrap gap-2 items-center">
+                    <button
+                        type="button"
+                        className="btn bg-[#ffffff0a] hover:bg-[#ffffff14] text-text-muted hover:text-text-primary px-3 py-1.5 rounded transition-colors text-xs"
                         disabled={workspaceBusy}
-                        onChange={e => setNewWorkspacePath(e.target.value)}
-                        onKeyDown={e => e.key === 'Enter' && void (async () => { if (await handleWorkspaceAdd(newWorkspacePath)) setNewWorkspacePath('') })()}
-                    />
-                    <button type="button" className="btn bg-[#ffffff0a] hover:bg-[#ffffff14] text-text-muted hover:text-text-primary px-3 py-1.5 rounded transition-colors text-xs" disabled={workspaceBusy} onClick={async () => { if (await handleWorkspaceAdd(newWorkspacePath)) setNewWorkspacePath('') }}>
-                        Add
+                        onClick={openBrowseDialog}
+                    >
+                        Select workspace…
                     </button>
+                    <span className="text-[11px] text-text-muted">
+                        Add workspaces by selecting a folder in the explorer.
+                    </span>
                 </div>
                 {(machine.workspaces || []).length > 0 && (
                     <ul className="mt-3 space-y-1.5 max-h-40 overflow-y-auto">
@@ -110,6 +140,27 @@ export default function OverviewTab({
                     </ul>
                 )}
             </div>
+
+            {browseDialogOpen && (
+                <WorkspaceBrowseDialog
+                    title="Add workspace"
+                    description="Browse the machine like a normal explorer, then add the current folder as a saved workspace."
+                    currentPath={browseCurrentPath}
+                    directories={browseDirectories}
+                    busy={browseBusy}
+                    error={browseError}
+                    confirmLabel="Add workspace"
+                    onClose={() => setBrowseDialogOpen(false)}
+                    onNavigate={(path) => { void loadBrowsePath(path) }}
+                    onConfirm={(path) => {
+                        void (async () => {
+                            if (!path) return
+                            const added = await handleWorkspaceAdd(path)
+                            if (added) setBrowseDialogOpen(false)
+                        })()
+                    }}
+                />
+            )}
 
         </div>
     )

@@ -123,7 +123,11 @@ const CUSTOM_STORAGE_KEY = 'adhdev-chat-theme-custom'
 
 export function getChatTheme(): string {
     if (typeof window === 'undefined') return 'ember'
-    return localStorage.getItem(STORAGE_KEY) || 'ember'
+    try {
+        return localStorage.getItem(STORAGE_KEY) || 'ember'
+    } catch {
+        return 'ember'
+    }
 }
 
 export function getCustomThemeColors(mode: 'dark' | 'light'): CustomThemeColors {
@@ -138,7 +142,11 @@ export function getCustomThemeColors(mode: 'dark' | 'light'): CustomThemeColors 
 }
 
 function saveCustomThemeColors(dark: CustomThemeColors, light: CustomThemeColors) {
-    localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify({ dark, light }))
+    try {
+        localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify({ dark, light }))
+    } catch {
+        // noop
+    }
 }
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -236,7 +244,11 @@ function clearCustomCSSVars() {
 }
 
 export function setChatTheme(themeId: string) {
-    localStorage.setItem(STORAGE_KEY, themeId)
+    try {
+        localStorage.setItem(STORAGE_KEY, themeId)
+    } catch {
+        // noop
+    }
     document.documentElement.setAttribute('data-chat-theme', themeId)
     if (themeId === 'custom') {
         const mode = isDarkMode() ? 'dark' : 'light'
@@ -270,8 +282,8 @@ function isDarkMode(): boolean {
 function ColorRow({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
     return (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', minWidth: 110 }}>{label}</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', flex: '1 1 0', minWidth: 0 }}>{label}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                 <input
                     type="color"
                     value={value}
@@ -286,7 +298,7 @@ function ColorRow({ label, value, onChange }: { label: string; value: string; on
                     value={value}
                     onChange={e => { if (/^#[0-9a-fA-F]{0,6}$/.test(e.target.value)) onChange(e.target.value) }}
                     style={{
-                        width: 72, fontSize: '0.7rem', fontFamily: 'monospace',
+                        width: 68, fontSize: '0.7rem', fontFamily: 'monospace',
                         background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)',
                         borderRadius: 4, padding: '3px 6px', color: 'var(--text-primary)',
                     }}
@@ -338,14 +350,14 @@ function CustomThemeEditor({ dark: isDark, onColorsChange }: { dark: boolean; on
 
     return (
         <div style={{
-            marginTop: 12, padding: '16px 18px',
+            marginTop: 12, padding: '16px 14px',
             background: 'var(--bg-glass)', border: '1px solid var(--border-subtle)',
-            borderRadius: 12,
+            borderRadius: 12, overflow: 'hidden',
         }}>
             <div style={{
                 fontSize: '0.75rem', fontWeight: 700,
                 color: 'var(--text-primary)', marginBottom: 14,
-                display: 'flex', alignItems: 'center', gap: 8,
+                display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' as const,
             }}>
                 🎨 Custom Theme Editor
                 <span style={{
@@ -357,7 +369,7 @@ function CustomThemeEditor({ dark: isDark, onColorsChange }: { dark: boolean; on
                 </span>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {/* Left: App Colors */}
                 <div>
                     <EditorSection title="App Background">
@@ -393,7 +405,7 @@ function CustomThemeEditor({ dark: isDark, onColorsChange }: { dark: boolean; on
                         <ColorRow label="Send button" value={colors.sendButton} onChange={v => update('sendButton', v)} />
                         <ColorRow label="Input border" value={colors.inputBorder} onChange={v => update('inputBorder', v)} />
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', minWidth: 110 }}>Bubble radius</span>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', flex: '1 1 0', minWidth: 0 }}>Bubble radius</span>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
                                 <input
                                     type="range" min={4} max={24} value={colors.bubbleRadius}

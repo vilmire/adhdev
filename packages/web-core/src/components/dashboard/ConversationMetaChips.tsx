@@ -9,6 +9,7 @@ interface ConversationMetaChipsProps {
     className?: string
     onOpenNativeConversation?: () => void
     onOpenMachine?: () => void
+    interactive?: boolean
 }
 
 export default function ConversationMetaChips({
@@ -16,6 +17,7 @@ export default function ConversationMetaChips({
     className = '',
     onOpenNativeConversation,
     onOpenMachine,
+    interactive = true,
 }: ConversationMetaChipsProps) {
     const navigate = useNavigate()
     const machineId = conversation.daemonId || conversation.ideId?.split(':')[0] || conversation.ideId
@@ -53,15 +55,22 @@ export default function ConversationMetaChips({
     return (
         <div className={`conversation-meta-chips ${className}`.trim()}>
             {showIdeChip && (
-                <button
-                    type="button"
-                    className="conversation-meta-chip is-clickable"
-                    onClick={handleOpenNativeConversation}
-                    title={ideChipLabel}
-                >
-                    <IconMonitor size={12} />
-                    <span>{ideChipLabel}</span>
-                </button>
+                interactive ? (
+                    <button
+                        type="button"
+                        className="conversation-meta-chip is-clickable"
+                        onClick={handleOpenNativeConversation}
+                        title={ideChipLabel}
+                    >
+                        <IconMonitor size={12} />
+                        <span>{ideChipLabel}</span>
+                    </button>
+                ) : (
+                    <span className="conversation-meta-chip" title={ideChipLabel}>
+                        <IconMonitor size={12} />
+                        <span>{ideChipLabel}</span>
+                    </span>
+                )
             )}
             {showExtensionChip && (
                 <span className="conversation-meta-chip is-active" title={conversation.agentName}>
@@ -70,15 +79,22 @@ export default function ConversationMetaChips({
                 </span>
             )}
             {conversation.machineName && (
-                <button
-                    type="button"
-                    className="conversation-meta-chip is-clickable"
-                    onClick={handleOpenMachine}
-                    title={conversation.machineName}
-                >
-                    <IconServer size={12} />
-                    <span>{conversation.machineName}</span>
-                </button>
+                interactive ? (
+                    <button
+                        type="button"
+                        className="conversation-meta-chip is-clickable"
+                        onClick={handleOpenMachine}
+                        title={conversation.machineName}
+                    >
+                        <IconServer size={12} />
+                        <span>{conversation.machineName}</span>
+                    </button>
+                ) : (
+                    <span className="conversation-meta-chip" title={conversation.machineName}>
+                        <IconServer size={12} />
+                        <span>{conversation.machineName}</span>
+                    </span>
+                )
             )}
         </div>
     )

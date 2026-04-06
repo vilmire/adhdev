@@ -81,13 +81,13 @@ export default function InstallCommand() {
 
             {/* Command */}
             <div
-                className="flex items-center gap-3 text-accent cursor-pointer group"
+                className="flex items-center gap-3 text-text-primary cursor-pointer group"
                 onClick={copyCommand}
                 title="Click to copy"
             >
                 <span className="text-text-muted select-none">{INSTALL_COMMANDS[shell].prompt}</span>
                 <span className="flex-1 break-all">{INSTALL_COMMANDS[shell].cmd}</span>
-                <span className="text-[9px] font-sans text-text-muted opacity-0 group-hover:opacity-100 transition-opacity shrink-0 select-none">
+                <span className="text-[9px] font-sans text-accent-primary opacity-0 group-hover:opacity-100 transition-opacity shrink-0 select-none">
                     {copied ? '✓' : '📋'}
                 </span>
             </div>

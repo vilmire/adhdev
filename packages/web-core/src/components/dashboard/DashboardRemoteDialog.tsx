@@ -129,42 +129,50 @@ export default function DashboardRemoteDialog({
                 aria-modal="true"
                 onClick={stopPropagation}
             >
-                <div className="flex items-center justify-between gap-3 px-4 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-4 border-b border-border-subtle bg-bg-primary shrink-0 overflow-visible">
-                    <div className="flex-1 min-w-0 flex flex-col justify-center">
-                        <div className="flex items-center gap-2.5 min-w-0 font-extrabold text-[18px] md:text-xl tracking-tight text-text-primary">
-                            <span className="w-7 h-7 flex items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary shrink-0">
-                                <IconMonitor size={16} />
-                            </span>
-                            <span className="truncate">{effectiveConv.displayPrimary || effectiveConv.agentName || 'Remote'}</span>
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between px-4 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-4 border-b border-border-subtle bg-bg-primary shrink-0 overflow-visible">
+                    <div className="flex items-center justify-between gap-3 min-w-0 w-full md:w-auto md:flex-1">
+                        <div className="min-w-0 flex-1 flex flex-col justify-center">
+                            <div className="flex items-center gap-2.5 min-w-0 font-extrabold text-[18px] md:text-xl tracking-tight text-text-primary">
+                                <span className="w-7 h-7 flex items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary shrink-0">
+                                    <IconMonitor size={16} />
+                                </span>
+                                <span className="truncate">{effectiveConv.displayPrimary || effectiveConv.agentName || 'Remote'}</span>
+                            </div>
                         </div>
+                        <button className="btn btn-primary btn-sm h-8 px-4 rounded-lg font-bold md:hidden shrink-0" onClick={onClose}>
+                            Close
+                        </button>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                        {(['split', 'remote'] as const).map(mode => {
-                            const isActive = viewMode === mode
-                            return (
-                                <button
-                                    key={mode}
-                                    className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
-                                        isActive 
-                                            ? 'bg-accent-primary text-white shadow-glow' 
-                                            : 'bg-bg-secondary border border-border-subtle text-text-secondary hover:bg-bg-glass hover:text-text-primary'
-                                    }`}
-                                    onClick={() => setViewMode(mode)}
-                                    title={mode === 'split' ? 'Split view' : 'Remote only'}
-                                >
-                                    {mode === 'split' ? <span className="font-bold text-lg leading-none mb-0.5">⊞</span> : <IconMonitor size={15} />}
-                                </button>
-                            )
-                        })}
-                        <div className="w-[1px] h-5 bg-border-subtle mx-1" />
+                    <div className="flex items-center gap-2 shrink-0 w-full md:w-auto justify-end">
+                        <div className="flex items-center gap-2 mr-auto md:mr-0">
+                            {(['split', 'remote'] as const).map(mode => {
+                                const isActive = viewMode === mode
+                                return (
+                                    <button
+                                        key={mode}
+                                        className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
+                                            isActive 
+                                                ? 'bg-accent-primary text-white shadow-glow' 
+                                                : 'bg-bg-secondary border border-border-subtle text-text-secondary hover:bg-bg-glass hover:text-text-primary'
+                                        }`}
+                                        onClick={() => setViewMode(mode)}
+                                        title={mode === 'split' ? 'Split view' : 'Remote only'}
+                                    >
+                                        {mode === 'split' ? <span className="font-bold text-lg leading-none mb-0.5">⊞</span> : <IconMonitor size={15} />}
+                                    </button>
+                                )
+                            })}
+                        </div>
+                        <div className="hidden md:block w-[1px] h-5 bg-border-subtle mx-1" />
                         <button
-                            className="btn btn-secondary btn-sm h-8 px-3 rounded-lg"
+                            className="btn btn-secondary btn-sm h-8 px-2.5 md:px-3 rounded-lg"
                             onClick={() => onOpenHistory(effectiveConv)}
                             title="Chat History"
                         >
-                            <IconScroll size={14} className="mr-1.5" /> History
+                            <IconScroll size={14} className="md:mr-1.5" />
+                            <span className="hidden md:inline">History</span>
                         </button>
-                        <button className="btn btn-primary btn-sm h-8 px-4 rounded-lg font-bold" onClick={onClose}>
+                        <button className="hidden md:inline-flex btn btn-primary btn-sm h-8 px-4 rounded-lg font-bold" onClick={onClose}>
                             Close
                         </button>
                     </div>

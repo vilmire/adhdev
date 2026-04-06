@@ -20,6 +20,11 @@ import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, Pr
 import type { useMachineActions } from './useMachineActions'
 import { describeMuxOwner } from '../../utils/mux-ui'
 import CliViewModeToggle from '../../components/dashboard/CliViewModeToggle'
+import WorkspaceBrowseDialog from '../../components/machine/WorkspaceBrowseDialog'
+import LaunchConfirmDialog from '../../components/machine/LaunchConfirmDialog'
+import { browseMachineDirectories, type BrowseDirectoryEntry } from '../../components/machine/workspaceBrowse'
+import { buildLaunchWorkspaceOptions } from '../../components/machine/launchWorkspaceOptions'
+import type { LaunchWorkspaceOption } from './types'
 
 type AgentCategory = 'ide' | 'cli' | 'acp'
 
@@ -54,7 +59,7 @@ export default function AgentTab({
 }: AgentTabProps) {
     const navigate = useNavigate()
     const {
-        handleLaunchIde, handleLaunchCli, handleStopCli, handleRestartIde, handleStopIde,
+        handleLaunchIde, handleStopCli, handleRestartIde, handleStopIde,
         handleDetectIdes,
         launchingIde, launchingAgentType,
     } = actions
@@ -80,6 +85,22 @@ export default function AgentTab({
     )
     const [customPath, setCustomPath] = useState(initialWorkspacePath || '')
     const [pendingLaunchTypes, setPendingLaunchTypes] = useState<string[]>([])
+    const [browseDialogOpen, setBrowseDialogOpen] = useState(false)
+    const [browseCurrentPath, setBrowseCurrentPath] = useState('')
+    const [browseDirectories, setBrowseDirectories] = useState<BrowseDirectoryEntry[]>([])
+    const [browseBusy, setBrowseBusy] = useState(false)
+    const [browseError, setBrowseError] = useState('')
+    const launchConfirmActionRef = useRef<(() => Promise<void>) | null>(null)
+    const [launchConfirm, setLaunchConfirm] = useState<{
+        title: string
+        description: string
+        details: Array<{ label: string; value: string }>
+        confirmLabel: string
+        workspaceOptions?: LaunchWorkspaceOption[]
+    } | null>(null)
+    const launchConfirmWorkspaceKeyRef = useRef('__home__')
+    const [launchConfirmWorkspaceKey, setLaunchConfirmWorkspaceKey] = useState('__home__')
+    const [launchConfirmBusy, setLaunchConfirmBusy] = useState(false)
     const visiblePendingLaunches = pendingLaunchTypes
         .filter(type => !managedEntries.some(entry => entry.type === type && normalizeManagedStatus(entry.status) !== 'stopped'))
     const pendingTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -120,6 +141,58 @@ export default function AgentTab({
             delete pendingTimeoutsRef.current[type]
         }
         setPendingLaunchTypes(prev => prev.filter(item => item !== type))
+    }, [])
+
+    const loadBrowsePath = useCallback(async (path: string) => {
+        if (!sendDaemonCommand) return
+        setBrowseBusy(true)
+        setBrowseError('')
+        try {
+            const result = await browseMachineDirectories(sendDaemonCommand, machineId, path)
+            setBrowseCurrentPath(result.path)
+            setCustomPath(result.path)
+            setBrowseDirectories(result.directories)
+        } catch (error) {
+            setBrowseError(error instanceof Error ? error.message : 'Could not load folder')
+        } finally {
+            setBrowseBusy(false)
+        }
+    }, [machineId, sendDaemonCommand])
+
+    const openBrowseDialog = useCallback(() => {
+        if (!sendDaemonCommand) return
+        setSelectedWorkspace('__custom__')
+        setBrowseDialogOpen(true)
+        const initialPath = customPath.trim() || resolvedWorkspacePath || machine.defaultWorkspacePath || machine.workspaces[0]?.path || '~'
+        void loadBrowsePath(initialPath)
+    }, [customPath, loadBrowsePath, machine.defaultWorkspacePath, machine.workspaces, resolvedWorkspacePath, sendDaemonCommand])
+
+    const openLaunchConfirm = useCallback((
+        config: {
+            title: string
+            description: string
+            details: Array<{ label: string; value: string }>
+            confirmLabel: string
+            workspaceOptions?: LaunchWorkspaceOption[]
+            selectedWorkspaceKey?: string
+        },
+        action: () => Promise<void>,
+    ) => {
+        launchConfirmActionRef.current = action
+        launchConfirmWorkspaceKeyRef.current = config.selectedWorkspaceKey || '__home__'
+        setLaunchConfirmWorkspaceKey(config.selectedWorkspaceKey || '__home__')
+        setLaunchConfirm(config)
+    }, [])
+
+    const handleConfirmLaunch = useCallback(() => {
+        if (!launchConfirmActionRef.current) return
+        setLaunchConfirmBusy(true)
+        void launchConfirmActionRef.current()
+            .finally(() => {
+                launchConfirmActionRef.current = null
+                setLaunchConfirmBusy(false)
+                setLaunchConfirm(null)
+            })
     }, [])
 
     const markPendingLaunch = useCallback((type: string) => {
@@ -170,27 +243,88 @@ export default function AgentTab({
 
     const launchableIdes = isIde ? (machine.detectedIdes || []) : []
 
-    const handleLaunch = () => {
-        void (async () => {
-            if (isIde) {
-                const launched = await handleLaunchIde(
-                    selectedType,
-                    resolvedWorkspacePath ? { workspace: resolvedWorkspacePath } : undefined,
-                )
-                if (launched) markPendingLaunch(selectedType)
-                return
-            }
-            const launched = await handleLaunchCli(
-                selectedType,
-                resolvedWorkspacePath,
-                launchArgs || undefined,
-                isAcp ? launchModel || undefined : undefined,
+    const executeLaunch = useCallback(async (opts?: {
+        type?: string
+        workspacePath?: string
+        workspaceId?: string | null
+        useHome?: boolean
+        argsStr?: string
+        model?: string
+    }) => {
+        const launchType = opts?.type || selectedType
+        const workspacePath = opts?.workspacePath ?? resolvedWorkspacePath
+        if (isIde) {
+            const launched = await handleLaunchIde(
+                launchType,
+                workspacePath ? { workspace: workspacePath } : undefined,
             )
-            if (launched.success) {
-                markPendingLaunch(selectedType)
-                if (launched.sessionId) openSessionInDashboard(launched.sessionId)
+            if (launched) markPendingLaunch(launchType)
+            return
+        }
+        const launched = await actions.runLaunchCliCore({
+            cliType: launchType,
+            dir: opts?.workspaceId ? undefined : workspacePath || undefined,
+            workspaceId: opts?.workspaceId || undefined,
+            useHome: opts?.useHome || (!opts?.workspaceId && !workspacePath),
+            argsStr: opts?.argsStr ?? (launchArgs || undefined),
+            model: opts?.model ?? (isAcp ? launchModel || undefined : undefined),
+        })
+        if (launched.success) {
+            markPendingLaunch(launchType)
+            if (launched.sessionId) openSessionInDashboard(launched.sessionId)
+        }
+    }, [
+        actions,
+        handleLaunchIde,
+        isAcp,
+        isIde,
+        launchArgs,
+        launchModel,
+        markPendingLaunch,
+        openSessionInDashboard,
+        resolvedWorkspacePath,
+        selectedType,
+    ])
+
+    const handleLaunch = () => {
+        const providerName = isIde
+            ? formatIdeType(selectedType)
+            : (providerLabelMap.get(selectedType) || selectedType)
+        const { options, selectedKey } = buildLaunchWorkspaceOptions({
+            machine,
+            currentWorkspaceId: selectedWorkspace && selectedWorkspace !== '__custom__' ? selectedWorkspace : null,
+            currentWorkspacePath: resolvedWorkspacePath,
+        })
+        openLaunchConfirm({
+            title: `Launch ${providerName}?`,
+            description: 'Review the provider and target folder before starting this session.',
+            confirmLabel: 'Launch',
+            workspaceOptions: options,
+            selectedWorkspaceKey: selectedKey,
+            details: [
+                { label: 'Mode', value: config.label },
+                { label: 'Provider', value: providerName },
+                ...(!isIde && launchArgs.trim() ? [{ label: 'Arguments', value: launchArgs.trim() }] : []),
+                ...(isAcp && launchModel.trim() ? [{ label: 'Model', value: launchModel.trim() }] : []),
+            ],
+        }, async () => {
+            const selectedOption = options.find(option => option.key === launchConfirmWorkspaceKeyRef.current)
+            if (selectedOption?.workspaceId) {
+                setSelectedWorkspace(selectedOption.workspaceId)
+                setCustomPath('')
+            } else if (selectedOption?.workspacePath) {
+                setSelectedWorkspace('__custom__')
+                setCustomPath(selectedOption.workspacePath)
+            } else {
+                setSelectedWorkspace('')
+                setCustomPath('')
             }
-        })()
+            await executeLaunch({
+                workspaceId: selectedOption?.workspaceId ?? null,
+                workspacePath: selectedOption?.workspacePath ?? '',
+                useHome: !selectedOption?.workspaceId && !selectedOption?.workspacePath,
+            })
+        })
     }
 
     const handleStop = (entry: AgentEntry) => {
@@ -230,45 +364,63 @@ export default function AgentTab({
     const workspaceSelector = (
         <div className="mb-3">
             <div className="flex gap-2 items-center flex-wrap">
-            <select
-                value={selectedWorkspace}
-                onChange={e => { setSelectedWorkspace(e.target.value); if (e.target.value !== '__custom__') setCustomPath('') }}
-                className="px-3 py-1.5 rounded-md min-w-[200px] flex-1 text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors"
-            >
-                {(machine.workspaces || []).length > 0 ? (
-                    <>
-                        <option value="">(no workspace — launch in home)</option>
-                        {(machine.workspaces || []).map(w => (
-                            <option key={w.id} value={w.id}>
-                                {w.id === machine.defaultWorkspaceId ? '⭐ ' : ''}
-                                {getWorkspaceDisplayLabel(w.path, w.label)}
-                            </option>
-                        ))}
-                        <option value="__custom__">✏️ Custom path…</option>
-                    </>
-                ) : (
-                    <>
-                        <option value="">(no workspaces saved — add in Overview tab)</option>
-                        <option value="__custom__">✏️ Custom path…</option>
-                    </>
+                <select
+                    value={selectedWorkspace}
+                    onChange={e => {
+                        const nextValue = e.target.value
+                        setSelectedWorkspace(nextValue)
+                        if (nextValue === '__custom__' && sendDaemonCommand) {
+                            openBrowseDialog()
+                            return
+                        }
+                        if (nextValue !== '__custom__') setCustomPath('')
+                    }}
+                    className="px-3 py-1.5 rounded-md min-w-[200px] flex-1 text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors"
+                >
+                    {(machine.workspaces || []).length > 0 ? (
+                        <>
+                            <option value="">(no workspace — launch in home)</option>
+                            {(machine.workspaces || []).map(w => (
+                                <option key={w.id} value={w.id}>
+                                    {w.id === machine.defaultWorkspaceId ? '⭐ ' : ''}
+                                    {getWorkspaceDisplayLabel(w.path, w.label)}
+                                </option>
+                            ))}
+                            <option value="__custom__">{sendDaemonCommand ? '📁 Select workspace…' : '✏️ Custom path…'}</option>
+                        </>
+                    ) : (
+                        <>
+                            <option value="">(no workspaces saved — add in Overview tab)</option>
+                            <option value="__custom__">{sendDaemonCommand ? '📁 Select workspace…' : '✏️ Custom path…'}</option>
+                        </>
+                    )}
+                </select>
+                {selectedWorkspace === '__custom__' && (
+                    sendDaemonCommand ? (
+                        <button
+                            type="button"
+                            className="px-3 py-1.5 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] hover:border-accent-primary text-text-secondary hover:text-text-primary transition-colors"
+                            onClick={openBrowseDialog}
+                        >
+                            Select workspace…
+                        </button>
+                    ) : (
+                        <input
+                            type="text"
+                            placeholder="Enter absolute path…"
+                            value={customPath}
+                            onChange={e => setCustomPath(e.target.value)}
+                            className="px-3 py-1.5 rounded-md flex-1 min-w-[200px] text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors"
+                            autoFocus
+                        />
+                    )
                 )}
-            </select>
-            {selectedWorkspace === '__custom__' && (
-                <input
-                    type="text"
-                    placeholder="Enter absolute path…"
-                    value={customPath}
-                    onChange={e => setCustomPath(e.target.value)}
-                    className="px-3 py-1.5 rounded-md flex-1 min-w-[200px] text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors"
-                    autoFocus
-                />
-            )}
             </div>
             <div className="mt-1.5 text-[10px] text-text-muted">
                 {selectedWorkspace === '__custom__'
                     ? (resolvedWorkspacePath
                         ? <span className="font-mono truncate block" title={resolvedWorkspacePath}>{resolvedWorkspacePath}</span>
-                        : 'Enter an absolute path to launch there.')
+                        : (sendDaemonCommand ? 'Browse to a folder before launching there.' : 'Enter an absolute path to launch there.'))
                     : resolvedWorkspacePath
                         ? (
                             <>
@@ -551,7 +703,39 @@ export default function AgentTab({
                                                 >
                                                     <IconMonitor size={13} />
                                                 </button>
-                                                <button onClick={() => handleRestartIde(entry as IdeSessionEntry)} className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-orange-500/20 text-orange-400 transition-colors cursor-pointer" title="Restart">
+                                                <button
+                                                    onClick={() => {
+                                                        const restartWorkspace = (entry as IdeSessionEntry).workspace || ''
+                                                        const { options, selectedKey } = buildLaunchWorkspaceOptions({
+                                                            machine,
+                                                            currentWorkspacePath: restartWorkspace,
+                                                        })
+                                                        openLaunchConfirm({
+                                                            title: `Restart ${formatIdeType(entry.type)}?`,
+                                                            description: 'Review or change the target workspace before restarting this IDE.',
+                                                            confirmLabel: 'Restart',
+                                                            workspaceOptions: options,
+                                                            selectedWorkspaceKey: selectedKey,
+                                                            details: [
+                                                                { label: 'Mode', value: 'IDE' },
+                                                                { label: 'Provider', value: formatIdeType(entry.type) },
+                                                            ],
+                                                        }, async () => {
+                                                            const selectedOption = options.find(option => option.key === launchConfirmWorkspaceKeyRef.current)
+                                                            const nextWorkspacePath = selectedOption?.workspacePath ?? ''
+                                                            if (nextWorkspacePath && nextWorkspacePath !== restartWorkspace) {
+                                                                await executeLaunch({
+                                                                    type: entry.type,
+                                                                    workspacePath: nextWorkspacePath,
+                                                                })
+                                                                return
+                                                            }
+                                                            await handleRestartIde(entry as IdeSessionEntry)
+                                                        })
+                                                    }}
+                                                    className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-orange-500/20 text-orange-400 transition-colors cursor-pointer"
+                                                    title="Restart"
+                                                >
                                                     <IconRefresh size={14} />
                                                 </button>
                                             </>
@@ -594,21 +778,34 @@ export default function AgentTab({
                                         {normalizedStatus === 'stopped' ? (
                                             <button
                                                 onClick={() => {
-                                                    void (async () => {
-                                                        if (isIde) {
-                                                            const launched = await handleLaunchIde(
-                                                                entry.type,
-                                                                (entry as any).workspace ? { workspace: (entry as any).workspace } : undefined,
-                                                            )
-                                                            if (launched) markPendingLaunch(entry.type)
-                                                            return
-                                                        }
-                                                        const launched = await handleLaunchCli(entry.type, (entry as any).workspace)
-                                                        if (launched.success) {
-                                                            markPendingLaunch(entry.type)
-                                                            if (launched.sessionId) openSessionInDashboard(launched.sessionId)
-                                                        }
-                                                    })()
+                                                    const workspacePath = (entry as any).workspace || ''
+                                                    const providerName = isIde
+                                                        ? formatIdeType(entry.type)
+                                                        : getName(entry)
+                                                    const { options, selectedKey } = buildLaunchWorkspaceOptions({
+                                                        machine,
+                                                        currentWorkspacePath: workspacePath,
+                                                    })
+                                                    openLaunchConfirm({
+                                                        title: `Launch ${providerName}?`,
+                                                        description: 'Review or change the target workspace before launching this stopped session again.',
+                                                        confirmLabel: 'Launch',
+                                                        workspaceOptions: options,
+                                                        selectedWorkspaceKey: selectedKey,
+                                                        details: [
+                                                            { label: 'Mode', value: config.label },
+                                                            { label: 'Provider', value: providerName },
+                                                        ],
+                                                    }, async () => {
+                                                        const selectedOption = options.find(option => option.key === launchConfirmWorkspaceKeyRef.current)
+                                                        await executeLaunch({
+                                                            type: entry.type,
+                                                            workspaceId: selectedOption?.workspaceId ?? null,
+                                                            workspacePath: selectedOption?.workspacePath ?? '',
+                                                            useHome: !selectedOption?.workspaceId && !selectedOption?.workspacePath,
+                                                            model: acp?.currentModel,
+                                                        })
+                                                    })
                                                 }}
                                                 disabled={pendingLaunchTypes.includes(entry.type)}
                                                 className="flex items-center justify-center w-7 h-7 rounded bg-[#ffffff0a] hover:bg-green-500/20 text-green-400 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
@@ -685,6 +882,44 @@ export default function AgentTab({
                         )
                     })}
                 </div>
+            )}
+            {browseDialogOpen && sendDaemonCommand && (
+                <WorkspaceBrowseDialog
+                    title="Select workspace"
+                    description="Choose a folder in a regular explorer-style dialog, then use it as the launch target."
+                    currentPath={browseCurrentPath}
+                    directories={browseDirectories}
+                    busy={browseBusy}
+                    error={browseError}
+                    confirmLabel="Use this folder"
+                    onClose={() => setBrowseDialogOpen(false)}
+                    onNavigate={(path) => { void loadBrowsePath(path) }}
+                    onConfirm={(path) => {
+                        setCustomPath(path)
+                        setSelectedWorkspace('__custom__')
+                        setBrowseDialogOpen(false)
+                    }}
+                />
+            )}
+            {launchConfirm && (
+                <LaunchConfirmDialog
+                    title={launchConfirm.title}
+                    description={launchConfirm.description}
+                    details={launchConfirm.details}
+                    workspaceOptions={launchConfirm.workspaceOptions}
+                    selectedWorkspaceKey={launchConfirmWorkspaceKey}
+                    onWorkspaceChange={(key) => {
+                        launchConfirmWorkspaceKeyRef.current = key
+                        setLaunchConfirmWorkspaceKey(key)
+                    }}
+                    confirmLabel={launchConfirm.confirmLabel}
+                    busy={launchConfirmBusy}
+                    onConfirm={handleConfirmLaunch}
+                    onCancel={() => {
+                        launchConfirmActionRef.current = null
+                        setLaunchConfirm(null)
+                    }}
+                />
             )}
         </div>
     )

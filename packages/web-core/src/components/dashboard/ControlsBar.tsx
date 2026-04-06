@@ -215,7 +215,7 @@ export default function ControlsBar({
     };
 
     return (
-        <div className="flex items-center gap-1.5 px-3 py-1 flex-wrap text-[10px] border-t border-border-subtle bg-[var(--surface-primary)]">
+        <div className="flex items-center gap-1.5 px-3 py-1 flex-wrap text-[10px] border-t border-border-subtle bg-surface-primary font-[var(--font)]">
             <span className="text-[9px] font-bold tracking-wide opacity-70" style={{ color: accent }}>
                 {displayLabel}
             </span>
@@ -334,8 +334,6 @@ export default function ControlsBar({
         </div>
     );
 }
-
-// ─── Helpers ────────────────────────────────────────────
 
 // ─── Helpers ────────────────────────────────────────────
 

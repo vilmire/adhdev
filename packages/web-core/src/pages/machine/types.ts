@@ -75,6 +75,14 @@ export interface MachineLaunchTarget {
     subtitle: string
 }
 
+export interface LaunchWorkspaceOption {
+    key: string
+    label: string
+    description?: string
+    workspaceId?: string | null
+    workspacePath?: string | null
+}
+
 // ─── Utils ───────────────────────────────────────────
 export { formatRelativeAgo } from '../../utils/time'
 
