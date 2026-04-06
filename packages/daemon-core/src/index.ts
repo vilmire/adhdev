@@ -102,7 +102,15 @@ export type { ManagedStatus } from './status/normalize.js';
 export type { StatusSnapshotOptions, StatusSnapshot } from './status/snapshot.js';
 
 // ── Logger ──
-export { LOG, installGlobalInterceptor, setLogLevel, getLogLevel, getRecentLogs } from './logging/logger.js';
+export {
+    LOG,
+    installGlobalInterceptor,
+    setLogLevel,
+    getLogLevel,
+    getRecentLogs,
+    getDaemonLogDir,
+    getCurrentDaemonLogPath,
+} from './logging/logger.js';
 export type { ScopedLogger, LogLevel, LogEntry } from './logging/logger.js';
 export { logCommand, getRecentCommands } from './logging/command-log.js';
 

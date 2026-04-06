@@ -54,6 +54,14 @@ function getDateStr(): string {
 let currentDate = getDateStr();
 let currentLogFile = path.join(LOG_DIR, `daemon-${currentDate}.log`);
 
+export function getDaemonLogDir(): string {
+    return LOG_DIR;
+}
+
+export function getCurrentDaemonLogPath(date = new Date()): string {
+    return path.join(LOG_DIR, `daemon-${date.toISOString().slice(0, 10)}.log`);
+}
+
 /** date change detect + old file cleanup */
 function checkDateRotation(): void {
     const today = getDateStr();
