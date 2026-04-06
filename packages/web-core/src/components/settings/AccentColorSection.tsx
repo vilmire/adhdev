@@ -58,6 +58,15 @@ export function getAccentColor(): string {
     return localStorage.getItem(STORAGE_KEY) || DEFAULT_COLOR
 }
 
+export function hasCustomAccentColor(): boolean {
+    if (typeof window === 'undefined') return false
+    try {
+        return localStorage.getItem(STORAGE_KEY) != null
+    } catch {
+        return false
+    }
+}
+
 export function applyAccentColor(color: string) {
     const root = document.documentElement
     root.style.setProperty('--accent-primary', color)

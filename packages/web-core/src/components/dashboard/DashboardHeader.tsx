@@ -22,7 +22,7 @@ export interface DashboardHeaderProps {
     conversations: ActiveConversation[];
     onOpenHistory: (conversation?: ActiveConversation) => void;
     onOpenRemote?: () => void;
-    onStopCli?: () => void;
+    onStopCli?: (conversation?: ActiveConversation) => void;
     activeCliViewMode?: CliConversationViewMode | null;
     onSetCliViewMode?: (mode: CliConversationViewMode) => void;
     onOpenConversation?: (conversation: ActiveConversation) => void;
@@ -202,7 +202,7 @@ export default function DashboardHeader({
                                     <CliViewModeToggle mode={effectiveCliViewMode} onChange={onSetCliViewMode} compact />
                                 )}
                                 <button
-                                    onClick={onStopCli}
+                                    onClick={() => onStopCli(activeConv)}
                                     className="btn btn-secondary btn-sm"
                                     title="Stop CLI process"
                                     style={{

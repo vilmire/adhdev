@@ -127,6 +127,7 @@ export default function DashboardOverlays({
             {cliStopDialogOpen && cliStopTargetConv && isCliConv(cliStopTargetConv) && !isAcpConv(cliStopTargetConv) && (
                 <CliStopDialog
                     activeConv={cliStopTargetConv}
+                    canSaveAndStop={!!cliStopTargetConv.resume?.supported}
                     onCancel={onCancelCliStop}
                     onStopNow={onStopCliNow}
                     onSaveAndStop={onSaveCliAndStop}

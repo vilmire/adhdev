@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { IconChevronLeft, IconFolder, IconX } from '../Icons'
 import type { BrowseDirectoryEntry } from './workspaceBrowse'
 import { getParentBrowsePath } from './workspaceBrowse'
@@ -27,7 +28,14 @@ export default function WorkspaceBrowseDialog({
     onNavigate,
     onConfirm,
 }: WorkspaceBrowseDialogProps) {
+    const [pathInput, setPathInput] = useState(currentPath)
+
+    useEffect(() => {
+        setPathInput(currentPath)
+    }, [currentPath])
+
     const parentPath = getParentBrowsePath(currentPath)
+    const trimmedPathInput = pathInput.trim()
 
     return (
         <div
@@ -56,7 +64,7 @@ export default function WorkspaceBrowseDialog({
                     </button>
                 </div>
 
-                <div className="px-5 py-3 border-b border-border-subtle bg-bg-primary/60 flex items-center gap-2">
+                <div className="px-5 py-3 border-b border-border-subtle bg-bg-primary/60 flex items-start gap-2">
                     <button
                         type="button"
                         className="inline-flex items-center gap-1.5 min-h-[34px] px-3 rounded-lg border border-border-subtle bg-bg-secondary text-text-secondary hover:text-text-primary disabled:opacity-40 transition-colors"
@@ -70,8 +78,32 @@ export default function WorkspaceBrowseDialog({
                         Parent
                     </button>
                     <div className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2">
-                        <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-0.5">Current folder</div>
-                        <div className="text-sm text-text-primary break-all">{currentPath || 'Loading…'}</div>
+                        <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">Current folder</div>
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="text"
+                                value={pathInput}
+                                onChange={(event) => setPathInput(event.target.value)}
+                                onKeyDown={(event) => {
+                                    if (event.key !== 'Enter' || !trimmedPathInput || busy) return
+                                    event.preventDefault()
+                                    onNavigate(trimmedPathInput)
+                                }}
+                                placeholder="Type a folder path"
+                                className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-bg-primary px-3 py-2 text-sm text-text-primary"
+                            />
+                            <button
+                                type="button"
+                                className="inline-flex items-center justify-center min-h-[36px] px-3 rounded-lg border border-border-subtle bg-bg-primary text-text-secondary hover:text-text-primary disabled:opacity-40 transition-colors text-xs font-semibold shrink-0"
+                                onClick={() => {
+                                    if (!trimmedPathInput || busy) return
+                                    onNavigate(trimmedPathInput)
+                                }}
+                                disabled={!trimmedPathInput || busy}
+                            >
+                                Go
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -115,8 +147,8 @@ export default function WorkspaceBrowseDialog({
                     <button
                         type="button"
                         className="btn btn-primary h-9 px-4 text-sm font-semibold"
-                        onClick={() => onConfirm(currentPath)}
-                        disabled={!currentPath || busy}
+                        onClick={() => onConfirm(trimmedPathInput || currentPath)}
+                        disabled={(!trimmedPathInput && !currentPath) || busy}
                     >
                         {confirmLabel}
                     </button>

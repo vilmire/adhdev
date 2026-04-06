@@ -8,6 +8,17 @@ export interface BrowseDirectoryResult {
     directories: BrowseDirectoryEntry[]
 }
 
+export function getDefaultBrowseStartPath(
+    platform: string | null | undefined,
+    candidates: Array<string | null | undefined> = [],
+): string {
+    for (const candidate of candidates) {
+        const value = typeof candidate === 'string' ? candidate.trim() : ''
+        if (value) return value
+    }
+    return platform === 'win32' ? 'C:\\' : '~'
+}
+
 export function getParentBrowsePath(currentPath: string): string | null {
     const trimmed = currentPath.replace(/[\\/]+$/, '')
     if (!trimmed) return null

@@ -9,7 +9,7 @@ import { IconClock, IconMonitor, IconFolder, IconTerminal, IconBot } from '../..
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
 import type { useMachineActions } from './useMachineActions'
 import WorkspaceBrowseDialog from '../../components/machine/WorkspaceBrowseDialog'
-import { browseMachineDirectories, type BrowseDirectoryEntry } from '../../components/machine/workspaceBrowse'
+import { browseMachineDirectories, getDefaultBrowseStartPath, type BrowseDirectoryEntry } from '../../components/machine/workspaceBrowse'
 
 interface OverviewTabProps {
     machineId: string
@@ -54,9 +54,12 @@ export default function OverviewTab({
 
     const openBrowseDialog = useCallback(() => {
         setBrowseDialogOpen(true)
-        const initialPath = machine.defaultWorkspacePath || machine.workspaces[0]?.path || '~'
+        const initialPath = getDefaultBrowseStartPath(machine.platform, [
+            machine.defaultWorkspacePath,
+            machine.workspaces[0]?.path,
+        ])
         void loadBrowsePath(initialPath)
-    }, [loadBrowsePath, machine.defaultWorkspacePath, machine.workspaces])
+    }, [loadBrowsePath, machine.defaultWorkspacePath, machine.platform, machine.workspaces])
 
     const memAvail = machine.availableMem ?? machine.freeMem
     const memUsedPct = machine.totalMem > 0

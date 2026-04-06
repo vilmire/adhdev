@@ -6,6 +6,7 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { getReadableAccentTextColor } from '../../utils/color-contrast'
+import { hasCustomAccentColor } from './AccentColorSection'
 
 // ─── Theme Definitions ──────────────────────────
 export interface ChatThemePreset {
@@ -172,6 +173,8 @@ const PRESET_ACCENTS: Record<string, { dark: string; light: string }> = {
 }
 
 function applyPresetAccentCSSVars(themeId: string, mode: 'dark' | 'light') {
+    if (hasCustomAccentColor()) return
+
     const accent = PRESET_ACCENTS[themeId]?.[mode]
     if (!accent) return
 

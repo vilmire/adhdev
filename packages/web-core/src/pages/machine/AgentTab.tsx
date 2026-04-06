@@ -22,7 +22,7 @@ import { describeMuxOwner } from '../../utils/mux-ui'
 import CliViewModeToggle from '../../components/dashboard/CliViewModeToggle'
 import WorkspaceBrowseDialog from '../../components/machine/WorkspaceBrowseDialog'
 import LaunchConfirmDialog from '../../components/machine/LaunchConfirmDialog'
-import { browseMachineDirectories, type BrowseDirectoryEntry } from '../../components/machine/workspaceBrowse'
+import { browseMachineDirectories, getDefaultBrowseStartPath, type BrowseDirectoryEntry } from '../../components/machine/workspaceBrowse'
 import { buildLaunchWorkspaceOptions } from '../../components/machine/launchWorkspaceOptions'
 import type { LaunchWorkspaceOption } from './types'
 
@@ -61,7 +61,7 @@ export default function AgentTab({
     const {
         handleLaunchIde, handleStopCli, handleRestartIde, handleStopIde,
         handleDetectIdes,
-        launchingIde, launchingAgentType,
+        launchingIde, launchingAgentType, addLog,
     } = actions
     const [copiedRuntimeKey, setCopiedRuntimeKey] = useState<string | null>(null)
     const openSessionInDashboard = useCallback((sessionId: string) => {
@@ -143,6 +143,8 @@ export default function AgentTab({
         setPendingLaunchTypes(prev => prev.filter(item => item !== type))
     }, [])
 
+    const announcedPendingLaunchesRef = useRef<Set<string>>(new Set())
+
     const loadBrowsePath = useCallback(async (path: string) => {
         if (!sendDaemonCommand) return
         setBrowseBusy(true)
@@ -163,9 +165,14 @@ export default function AgentTab({
         if (!sendDaemonCommand) return
         setSelectedWorkspace('__custom__')
         setBrowseDialogOpen(true)
-        const initialPath = customPath.trim() || resolvedWorkspacePath || machine.defaultWorkspacePath || machine.workspaces[0]?.path || '~'
+        const initialPath = getDefaultBrowseStartPath(machine.platform, [
+            customPath.trim(),
+            resolvedWorkspacePath,
+            machine.defaultWorkspacePath,
+            machine.workspaces[0]?.path,
+        ])
         void loadBrowsePath(initialPath)
-    }, [customPath, loadBrowsePath, machine.defaultWorkspacePath, machine.workspaces, resolvedWorkspacePath, sendDaemonCommand])
+    }, [customPath, loadBrowsePath, machine.defaultWorkspacePath, machine.platform, machine.workspaces, resolvedWorkspacePath, sendDaemonCommand])
 
     const openLaunchConfirm = useCallback((
         config: {
@@ -209,10 +216,22 @@ export default function AgentTab({
     useEffect(() => {
         for (const entry of managedEntries) {
             if (normalizeManagedStatus(entry.status) !== 'stopped') {
+                if (pendingLaunchTypes.includes(entry.type) && !announcedPendingLaunchesRef.current.has(entry.type)) {
+                    announcedPendingLaunchesRef.current.add(entry.type)
+                    addLog('info', `${providerLabelMap.get(entry.type) || entry.type} launched`, true)
+                }
                 clearPendingLaunch(entry.type)
             }
         }
-    }, [managedEntries, clearPendingLaunch])
+        const activeTypes = new Set(managedEntries
+            .filter(entry => normalizeManagedStatus(entry.status) !== 'stopped')
+            .map(entry => entry.type))
+        announcedPendingLaunchesRef.current.forEach(type => {
+            if (!pendingLaunchTypes.includes(type) && !activeTypes.has(type)) {
+                announcedPendingLaunchesRef.current.delete(type)
+            }
+        })
+    }, [addLog, clearPendingLaunch, managedEntries, pendingLaunchTypes, providerLabelMap])
 
     useEffect(() => () => {
         Object.values(pendingTimeoutsRef.current).forEach(clearTimeout)
@@ -269,9 +288,9 @@ export default function AgentTab({
             argsStr: opts?.argsStr ?? (launchArgs || undefined),
             model: opts?.model ?? (isAcp ? launchModel || undefined : undefined),
         })
-        if (launched.success) {
+        if (launched.success || launched.pending) {
             markPendingLaunch(launchType)
-            if (launched.sessionId) openSessionInDashboard(launched.sessionId)
+            if (launched.success && launched.sessionId) openSessionInDashboard(launched.sessionId)
         }
     }, [
         actions,

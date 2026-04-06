@@ -391,14 +391,7 @@ export default function Dashboard() {
         const targetConv = conversation || activeConv
         if (!targetConv || !isCliConv(targetConv) || isAcpConv(targetConv)) return
         setCliStopTargetConv(targetConv)
-        if (targetConv.resume?.supported) {
-            setCliStopDialogOpen(true)
-            return
-        }
-        const cliType = targetConv.ideType || targetConv.agentType || 'CLI'
-        if (!window.confirm(`Stop ${cliType}?\nThis will terminate the CLI process.`)) return
-        await performActiveCliStop('hard', targetConv)
-        setCliStopTargetConv(null)
+        setCliStopDialogOpen(true)
     }, [activeConv, performActiveCliStop])
 
     const activeCliViewMode = useMemo(() => {

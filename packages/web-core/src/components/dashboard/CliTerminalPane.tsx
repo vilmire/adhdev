@@ -28,6 +28,8 @@ export default function CliTerminalPane({
     const { sendCommand, sendData } = useTransport();
     const [draftInput, setDraftInput] = useState('');
     const [runtimeReady, setRuntimeReady] = useState(false);
+    const [terminalScale, setTerminalScale] = useState(1);
+    const terminalScaleTouchedRef = useRef(false);
     const seededSnapshotSeqRef = useRef(0);
     const liveOutputStartedRef = useRef(false);
     const pendingLiveOutputRef = useRef('');
@@ -38,6 +40,17 @@ export default function CliTerminalPane({
     const tabKey = activeConv.tabKey;
     const sessionId = activeConv.sessionId || '';
     const daemonRouteId = activeConv.daemonId || activeConv.ideId?.split(':')[0] || activeConv.ideId || '';
+    const MIN_TERMINAL_SCALE = 0.6;
+    const MAX_TERMINAL_SCALE = 1.15;
+    const getAutoTerminalScale = () => {
+        if (typeof window === 'undefined') return 1;
+        const width = window.innerWidth || 0;
+        if (width <= 360) return 0.68;
+        if (width <= 390) return 0.74;
+        if (width <= 430) return 0.82;
+        if (width <= 480) return 0.9;
+        return 1;
+    };
     const resetRuntimeView = () => {
         seededSnapshotSeqRef.current = 0;
         liveOutputStartedRef.current = false;
@@ -170,6 +183,16 @@ export default function CliTerminalPane({
     }, [activeConv.tabKey]);
 
     useEffect(() => {
+        const applyAutoScale = () => {
+            if (terminalScaleTouchedRef.current) return;
+            setTerminalScale(getAutoTerminalScale());
+        };
+        applyAutoScale();
+        window.addEventListener('resize', applyAutoScale);
+        return () => window.removeEventListener('resize', applyAutoScale);
+    }, []);
+
+    useEffect(() => {
         if (!isVisible) {
             chatInputRef.current?.blur();
             return;
@@ -216,23 +239,58 @@ export default function CliTerminalPane({
     return (
         <>
             {/* Terminal */}
-            <div className="flex-1 min-h-0 p-2 bg-[#0f1117]">
-                <CliTerminal
-                    ref={terminalRef as any}
-                    readOnly={!runtimeReady || !isVisible}
-                    onInput={(data) => {
-                        if (!runtimeReady) return;
-                        if (!sendData?.(daemonRouteId, { type: 'pty_input', targetSessionId: sessionId, data })) {
-                            sendCommand(daemonRouteId, 'pty_input', { targetSessionId: sessionId, data }).catch(console.error)
-                        }
-                    }}
-                    onResize={(cols, rows) => {
-                        if (!runtimeReady) return;
-                        if (!sendData?.(daemonRouteId, { type: 'pty_resize', targetSessionId: sessionId, cols, rows })) {
-                            sendCommand(daemonRouteId, 'pty_resize', { targetSessionId: sessionId, cols, rows, force: true }).catch(() => { })
-                        }
-                    }}
-                />
+            <div className="flex-1 min-h-0 p-2 bg-[#0f1117] relative">
+                <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5">
+                    <button
+                        type="button"
+                        className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
+                        onClick={() => {
+                            terminalScaleTouchedRef.current = true;
+                            setTerminalScale(scale => Math.max(MIN_TERMINAL_SCALE, Number((scale - 0.1).toFixed(2))));
+                        }}
+                        title="Shrink terminal viewport"
+                    >
+                        -
+                    </button>
+                    <button
+                        type="button"
+                        className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
+                        onClick={() => {
+                            terminalScaleTouchedRef.current = true;
+                            setTerminalScale(scale => Math.min(MAX_TERMINAL_SCALE, Number((scale + 0.1).toFixed(2))));
+                        }}
+                        title="Increase terminal viewport"
+                    >
+                        +
+                    </button>
+                </div>
+                <div className="w-full h-full overflow-auto rounded-lg">
+                    <div
+                        style={{
+                            width: `${100 / terminalScale}%`,
+                            height: `${100 / terminalScale}%`,
+                            transform: `scale(${terminalScale})`,
+                            transformOrigin: 'top left',
+                        }}
+                    >
+                        <CliTerminal
+                            ref={terminalRef as any}
+                            readOnly={!runtimeReady || !isVisible}
+                            onInput={(data) => {
+                                if (!runtimeReady) return;
+                                if (!sendData?.(daemonRouteId, { type: 'pty_input', targetSessionId: sessionId, data })) {
+                                    sendCommand(daemonRouteId, 'pty_input', { targetSessionId: sessionId, data }).catch(console.error)
+                                }
+                            }}
+                            onResize={(cols, rows) => {
+                                if (!runtimeReady) return;
+                                if (!sendData?.(daemonRouteId, { type: 'pty_resize', targetSessionId: sessionId, cols, rows })) {
+                                    sendCommand(daemonRouteId, 'pty_resize', { targetSessionId: sessionId, cols, rows, force: true }).catch(() => { })
+                                }
+                            }}
+                        />
+                    </div>
+                </div>
                 {!runtimeReady && (
                     <div className="absolute inset-x-2 top-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-300 pointer-events-none">
                         Runtime terminal unavailable

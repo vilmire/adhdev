@@ -15,6 +15,20 @@ export interface LaunchPickState {
     model?: string
 }
 
+interface LaunchCliResult {
+    success: false
+    pending?: boolean
+    sessionId?: string | undefined
+}
+
+interface LaunchCliSuccessResult {
+    success: true
+    pending?: false
+    sessionId?: string | undefined
+}
+
+type LaunchCliCoreResult = LaunchCliResult | LaunchCliSuccessResult
+
 interface UseMachineActionsOpts {
     machineId: string | undefined
     registeredMachineId?: string | null
@@ -47,6 +61,13 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
         }
     }, [logsEndRef])
 
+    const isTransientLaunchTimeout = useCallback((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error || '')
+        return message.includes('P2P command timeout')
+            || message.includes('P2P not connected')
+            || message.includes('P2P not available')
+    }, [])
+
     const handleLaunchIde = useCallback(async (ideType: string, opts?: { workspace?: string; useDefaultWorkspace?: boolean }) => {
         if (!machineId || launchingIde) return false
         setLaunchingIde(ideType)
@@ -68,7 +89,7 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
     const runLaunchCliCore = useCallback(async (opts: {
         cliType: string; dir?: string; workspaceId?: string
         useDefaultWorkspace?: boolean; useHome?: boolean; argsStr?: string; model?: string; resumeSessionId?: string
-    }) => {
+    }): Promise<LaunchCliCoreResult> => {
         if (!machineId) return { success: false as const }
         const { cliType, dir, workspaceId, useDefaultWorkspace, useHome, argsStr, model, resumeSessionId } = opts
         if (!cliType) {
@@ -99,12 +120,16 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
                 return { success: false as const, sessionId: payload?.sessionId as string | undefined }
             }
         } catch (e: any) {
+            if (isTransientLaunchTimeout(e)) {
+                addLog('warn', `${cliType} launch requested — waiting for session to appear...`, true)
+                return { success: false as const, pending: true }
+            }
             addLog('error', `Launch error: ${e.message}`, true)
             return { success: false as const }
         } finally {
             setLaunchingAgentType(null)
         }
-    }, [machineId, addLog, sendDaemonCommand])
+    }, [machineId, addLog, isTransientLaunchTimeout, sendDaemonCommand])
 
     const handleLaunchCli = useCallback(async (cliType: string, dir: string, argsStr?: string, model?: string) => {
         if (!machineId) return { success: false as const }

@@ -4,11 +4,12 @@ import { formatRelativeTime, type MobileConversationListItem, type MobileMachine
 import type { ActiveConversation } from './types'
 import type { MachineRecentLaunch, WorkspaceLaunchKind } from '../../pages/machine/types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getMachineDisplayName } from '../../utils/daemon-utils'
+import { getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
 import LaunchConfirmDialog from '../machine/LaunchConfirmDialog'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
+import { getDefaultBrowseStartPath } from '../machine/workspaceBrowse'
 import { buildLaunchWorkspaceOptions } from '../machine/launchWorkspaceOptions'
 import type { LaunchWorkspaceOption } from '../../pages/machine/types'
 
@@ -134,13 +135,14 @@ export default function DashboardMobileMachineScreen({
     const openBrowseDialog = useCallback(() => {
         setWorkspaceChoice('__custom__')
         setBrowseDialogOpen(true)
-        const initialPath = customWorkspacePath.trim()
-            || savedWorkspacePath
-            || workspaceRows.find(workspace => workspace.id === defaultWorkspaceId)?.path
-            || workspaceRows[0]?.path
-            || '~'
+        const initialPath = getDefaultBrowseStartPath(selectedMachineEntry.platform, [
+            customWorkspacePath.trim(),
+            savedWorkspacePath,
+            workspaceRows.find(workspace => workspace.id === defaultWorkspaceId)?.path,
+            workspaceRows[0]?.path,
+        ])
         void loadBrowsePath(initialPath)
-    }, [customWorkspacePath, defaultWorkspaceId, loadBrowsePath, savedWorkspacePath, workspaceRows])
+    }, [customWorkspacePath, defaultWorkspaceId, loadBrowsePath, savedWorkspacePath, selectedMachineEntry.platform, workspaceRows])
 
     const openLaunchConfirm = useCallback((
         config: {
@@ -337,7 +339,7 @@ export default function DashboardMobileMachineScreen({
                                             {workspaceRows.map(workspace => (
                                                 <option key={workspace.id} value={workspace.id}>
                                                     {workspace.id === defaultWorkspaceId ? '⭐ ' : ''}
-                                                    {workspace.label || workspace.path.split('/').filter(Boolean).pop() || workspace.path}
+                                                    {getWorkspaceDisplayLabel(workspace.path, workspace.label) || workspace.path}
                                                 </option>
                                             ))}
                                             <option value="__custom__">Select workspace…</option>

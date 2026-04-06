@@ -44,6 +44,16 @@ interface DashboardMobileChatModeProps {
     onHideConversation?: (conversation: ActiveConversation) => void
 }
 
+interface PendingWorkspaceLaunch {
+    machineId: string
+    kind: 'cli' | 'acp'
+    providerType: string
+    workspaceId?: string | null
+    workspacePath?: string | null
+    resumeSessionId?: string | null
+    startedAt: number
+}
+
 function normalizePreviewText(content: unknown) {
     return normalizeTextContent(content)
 }
@@ -72,6 +82,25 @@ function logMobileReadDebug(event: string, payload: Record<string, unknown>) {
     } catch {
         // noop
     }
+}
+
+function getRouteMachineId(id: string | null | undefined) {
+    if (!id) return ''
+    const value = String(id)
+    return value.includes(':') ? value.split(':')[0] || value : value
+}
+
+function normalizeWorkspacePath(path: string | null | undefined) {
+    return String(path || '')
+        .trim()
+        .replace(/\\/g, '/')
+        .replace(/\/+$/, '')
+        .toLowerCase()
+}
+
+function isP2PLaunchTimeout(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error || '')
+    return message.includes('P2P command timeout')
 }
 
 export default function DashboardMobileChatMode({
@@ -106,6 +135,7 @@ export default function DashboardMobileChatMode({
     const [machineBackTarget, setMachineBackTarget] = useState<'inbox' | 'chat'>('inbox')
     const [machineActionState, setMachineActionState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
     const [machineActionMessage, setMachineActionMessage] = useState('')
+    const [pendingWorkspaceLaunch, setPendingWorkspaceLaunch] = useState<PendingWorkspaceLaunch | null>(null)
     const lastAutoReadKeyRef = useRef<string | null>(null)
     const navigate = useNavigate()
     const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
@@ -439,6 +469,7 @@ export default function DashboardMobileChatMode({
         setSelectedMachineId(machineId)
         setMachineActionState('idle')
         setMachineActionMessage('')
+        setPendingWorkspaceLaunch(null)
         setSection('machines')
         setMachineBackTarget('inbox')
         setScreen('machine')
@@ -450,12 +481,14 @@ export default function DashboardMobileChatMode({
         setSelectedMachineId(machineId)
         setMachineActionState('idle')
         setMachineActionMessage('')
+        setPendingWorkspaceLaunch(null)
         setSection('machines')
         setMachineBackTarget('chat')
         setScreen('machine')
     }, [])
 
     const handleBackFromMachine = useCallback(() => {
+        setPendingWorkspaceLaunch(null)
         setScreen(machineBackTarget)
     }, [machineBackTarget])
 
@@ -533,9 +566,20 @@ export default function DashboardMobileChatMode({
         providerType: string,
         opts?: { workspaceId?: string | null; workspacePath?: string | null; resumeSessionId?: string | null },
     ) => {
+        const startedAt = Date.now()
+        const pendingLaunch: PendingWorkspaceLaunch = {
+            machineId,
+            kind,
+            providerType,
+            workspaceId: opts?.workspaceId || null,
+            workspacePath: opts?.workspacePath || null,
+            resumeSessionId: opts?.resumeSessionId || null,
+            startedAt,
+        }
         try {
             setMachineActionState('loading')
             setMachineActionMessage(`Launching ${providerType}…`)
+            setPendingWorkspaceLaunch(pendingLaunch)
             const payload: Record<string, unknown> = { cliType: providerType }
             if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
             else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
@@ -544,18 +588,100 @@ export default function DashboardMobileChatMode({
             const result = res?.result || res
             const launchedSessionId = result?.sessionId || result?.id
             if (res?.success && launchedSessionId) {
+                setPendingWorkspaceLaunch(null)
                 setMachineActionState('done')
                 setMachineActionMessage(`${providerType} launched`)
                 navigate(`/dashboard?activeTab=${encodeURIComponent(launchedSessionId)}`)
                 return
             }
+            if (res?.success) {
+                setMachineActionState('loading')
+                setMachineActionMessage(`${providerType} launch requested — waiting for session…`)
+                return
+            }
+            setPendingWorkspaceLaunch(null)
             setMachineActionState('error')
             setMachineActionMessage(res?.error || result?.error || `Could not launch ${kind.toUpperCase()} workspace`)
         } catch (error) {
+            if (isP2PLaunchTimeout(error)) {
+                setMachineActionState('loading')
+                setMachineActionMessage(`${providerType} launch requested — waiting for session…`)
+                return
+            }
+            setPendingWorkspaceLaunch(null)
             setMachineActionState('error')
             setMachineActionMessage(error instanceof Error ? error.message : `Could not launch ${kind.toUpperCase()} workspace`)
         }
     }, [navigate, sendDaemonCommand])
+
+    useEffect(() => {
+        if (!pendingWorkspaceLaunch) return
+
+        const normalizedTargetWorkspace = normalizeWorkspacePath(pendingWorkspaceLaunch.workspacePath)
+        const matchingEntry = ides.find((entry: any) => {
+            if (!entry || entry.type === 'adhdev-daemon' || entry.daemonMode) return false
+            const entryMachineId = getRouteMachineId(entry.daemonId || entry.id)
+            if (entryMachineId !== pendingWorkspaceLaunch.machineId) return false
+
+            const entryKind = entry.transport === 'acp'
+                ? 'acp'
+                : entry.transport === 'pty'
+                    ? 'cli'
+                    : null
+            if (entryKind !== pendingWorkspaceLaunch.kind) return false
+
+            const entryProviderType = String(entry.agentType || entry.ideType || entry.type || '')
+            if (entryProviderType !== pendingWorkspaceLaunch.providerType) return false
+
+            const entryProviderSessionId = String(entry.providerSessionId || '')
+            if (pendingWorkspaceLaunch.resumeSessionId && entryProviderSessionId) {
+                return entryProviderSessionId === pendingWorkspaceLaunch.resumeSessionId
+            }
+
+            if (normalizedTargetWorkspace) {
+                const entryWorkspace = normalizeWorkspacePath(entry.workspace || entry.runtimeWorkspaceLabel)
+                if (!entryWorkspace) return false
+                return entryWorkspace === normalizedTargetWorkspace
+            }
+
+            const activityAt = Number(
+                entry.lastUpdated
+                || entry._lastUpdate
+                || entry.timestamp
+                || entry.activeChat?.messages?.at?.(-1)?.timestamp
+                || 0,
+            )
+            return activityAt >= (pendingWorkspaceLaunch.startedAt - 5_000)
+        })
+
+        if (!matchingEntry) return
+
+        const targetSessionId = typeof matchingEntry.sessionId === 'string' && matchingEntry.sessionId
+            ? matchingEntry.sessionId
+            : typeof matchingEntry.instanceId === 'string' && matchingEntry.instanceId
+                ? matchingEntry.instanceId
+                : conversations.find((conversation) => conversation.ideId === matchingEntry.id)?.sessionId
+
+        if (!targetSessionId) return
+
+        setPendingWorkspaceLaunch(null)
+        setMachineActionState('done')
+        setMachineActionMessage(`${pendingWorkspaceLaunch.providerType} launched`)
+        navigate(`/dashboard?activeTab=${encodeURIComponent(targetSessionId)}`)
+    }, [conversations, ides, navigate, pendingWorkspaceLaunch])
+
+    useEffect(() => {
+        if (!pendingWorkspaceLaunch) return
+        const timeout = window.setTimeout(() => {
+            setPendingWorkspaceLaunch((current) => {
+                if (!current || current.startedAt !== pendingWorkspaceLaunch.startedAt) return current
+                setMachineActionState('error')
+                setMachineActionMessage('Launch response timed out. The session may already be running in Dashboard.')
+                return null
+            })
+        }, 45_000)
+        return () => window.clearTimeout(timeout)
+    }, [pendingWorkspaceLaunch])
 
     const handleOpenRecent = useCallback(async (session: MachineRecentLaunch) => {
         if (!selectedMachineEntry) return

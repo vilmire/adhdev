@@ -357,6 +357,12 @@ function normalizeScreenSnapshot(text: string): string {
         .trim();
 }
 
+function normalizeComparableMessageContent(text: string): string {
+    return String(text || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
 /**
  * Normalize provider.json for auto-implement approval detection.
  * Kept for backward compat with dev-server auto-impl pipeline only.
@@ -486,15 +492,60 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     private normalizeParsedMessages(parsedMessages: any[]): CliChatMessage[] {
+        const referenceMessages = [...this.committedMessages];
+        const usedReferenceIndexes = new Set<number>();
+        const now = Date.now();
+
+        const findReferenceTimestamp = (role: 'user' | 'assistant', content: string, parsedIndex: number): number | undefined => {
+            const normalizedContent = normalizeComparableMessageContent(content);
+            if (!normalizedContent) return undefined;
+
+            const sameIndex = referenceMessages[parsedIndex];
+            if (
+                sameIndex
+                && !usedReferenceIndexes.has(parsedIndex)
+                && sameIndex.role === role
+                && normalizeComparableMessageContent(sameIndex.content) === normalizedContent
+                && typeof sameIndex.timestamp === 'number'
+                && Number.isFinite(sameIndex.timestamp)
+            ) {
+                usedReferenceIndexes.add(parsedIndex);
+                return sameIndex.timestamp;
+            }
+
+            for (let i = 0; i < referenceMessages.length; i++) {
+                if (usedReferenceIndexes.has(i)) continue;
+                const candidate = referenceMessages[i];
+                if (!candidate || candidate.role !== role) continue;
+                const candidateContent = normalizeComparableMessageContent(candidate.content);
+                if (!candidateContent) continue;
+                const exactMatch = candidateContent === normalizedContent;
+                const fuzzyMatch = candidateContent.includes(normalizedContent) || normalizedContent.includes(candidateContent);
+                if (!exactMatch && !fuzzyMatch) continue;
+                if (typeof candidate.timestamp === 'number' && Number.isFinite(candidate.timestamp)) {
+                    usedReferenceIndexes.add(i);
+                    return candidate.timestamp;
+                }
+            }
+
+            return undefined;
+        };
+
         return parsedMessages
             .filter((message) => message && (message.role === 'user' || message.role === 'assistant'))
-            .map((message) => ({
-                role: message.role,
-                content: typeof message.content === 'string' ? message.content : String(message.content || ''),
-                timestamp: typeof message.timestamp === 'number' && Number.isFinite(message.timestamp)
+            .map((message, index) => {
+                const role = message.role as 'user' | 'assistant';
+                const content = typeof message.content === 'string' ? message.content : String(message.content || '');
+                const parsedTimestamp = typeof message.timestamp === 'number' && Number.isFinite(message.timestamp)
                     ? message.timestamp
-                    : Date.now(),
-            }));
+                    : undefined;
+                const referenceTimestamp = parsedTimestamp ?? findReferenceTimestamp(role, content, index);
+                return {
+                    role,
+                    content,
+                    timestamp: referenceTimestamp ?? now,
+                };
+            });
     }
 
     private sliceFromOffset(text: string, start: number): string {
