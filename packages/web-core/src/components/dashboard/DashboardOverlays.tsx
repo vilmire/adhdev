@@ -37,7 +37,7 @@ interface DashboardOverlaysProps {
     onRemoteConversationChange: React.Dispatch<React.SetStateAction<ActiveConversation | null>>
     onCloseRemoteDialog: () => void
     cliStopDialogOpen: boolean
-    activeConv?: ActiveConversation
+    cliStopTargetConv?: ActiveConversation | null
     onCancelCliStop: () => void
     onStopCliNow: () => void | Promise<void>
     onSaveCliAndStop: () => void | Promise<void>
@@ -76,7 +76,7 @@ export default function DashboardOverlays({
     onRemoteConversationChange,
     onCloseRemoteDialog,
     cliStopDialogOpen,
-    activeConv,
+    cliStopTargetConv,
     onCancelCliStop,
     onStopCliNow,
     onSaveCliAndStop,
@@ -124,9 +124,9 @@ export default function DashboardOverlays({
                 />
             )}
 
-            {cliStopDialogOpen && activeConv && isCliConv(activeConv) && !isAcpConv(activeConv) && (
+            {cliStopDialogOpen && cliStopTargetConv && isCliConv(cliStopTargetConv) && !isAcpConv(cliStopTargetConv) && (
                 <CliStopDialog
-                    activeConv={activeConv}
+                    activeConv={cliStopTargetConv}
                     onCancel={onCancelCliStop}
                     onStopNow={onStopCliNow}
                     onSaveAndStop={onSaveCliAndStop}

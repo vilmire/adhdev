@@ -36,7 +36,7 @@ interface DashboardMobileChatModeProps {
     onRequestedMobileSectionConsumed?: () => void
     onOpenHistory: (conversation?: ActiveConversation) => void
     onOpenRemote: (conversation: ActiveConversation) => void
-    onStopCli?: () => void
+    onStopCli?: (conversation?: ActiveConversation) => void | Promise<void>
     wsStatus?: string
     isConnected?: boolean
     onShowHiddenConversation: (conversation: ActiveConversation) => void

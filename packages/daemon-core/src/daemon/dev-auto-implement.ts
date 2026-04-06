@@ -516,6 +516,8 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
     let approvalBuffer = '';
     let lastApprovalTime = 0;
     let completionSignalSeen = false;
+    let autoStopTimer: ReturnType<typeof setTimeout> | null = null;
+    let autoStopIssued = false;
     
     try {
       const { normalizeCliProviderForRuntime } = await import('../cli-adapters/provider-cli-adapter.js');
@@ -566,8 +568,40 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
       }
     };
 
+    const clearAutoStopTimer = () => {
+      if (autoStopTimer) {
+        clearTimeout(autoStopTimer);
+        autoStopTimer = null;
+      }
+    };
+
+    const scheduleAutoStopForVerification = () => {
+      if (!verification || command !== 'codex' || completionSignalSeen || autoStopIssued) return;
+      const elapsed = Date.now() - spawnedAt;
+      if (elapsed < 30000) return;
+      clearAutoStopTimer();
+      autoStopTimer = setTimeout(() => {
+        if (!ctx.autoImplProcess || completionSignalSeen || autoStopIssued) return;
+        autoStopIssued = true;
+        ctx.log(`Auto-implement output quiet for 30s after ${Math.round((Date.now() - spawnedAt) / 1000)}s. Interrupting agent and switching to daemon verification.`);
+        sendAutoImplSSE(ctx, {
+          event: 'output',
+          data: {
+            chunk: '\n[🤖 ADHDev Pipeline] Agent output quiet. Interrupting and running daemon verification...\n',
+            stream: 'stdout',
+          },
+        });
+        try {
+          (ctx.autoImplProcess as any).kill('SIGINT');
+        } catch {
+          // ignore
+        }
+      }, 30000);
+    };
+
     const finalizeCliAutoImpl = async (code: number | null) => {
       ctx.autoImplProcess = null;
+      clearAutoStopTimer();
       let success = completionSignalSeen || code === 0;
       let message = success
         ? (completionSignalSeen && code !== 0 ? '✅ Auto-implement complete (completion signal)' : '✅ Auto-implement complete')
@@ -620,12 +654,14 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
     if (isPty) {
       child.onData((data: string) => {
         stdout += data;
+        clearAutoStopTimer();
         if (data.includes('\x1b[6n')) {
           child.write('\x1b[12;1R');
           ctx.log('Terminal CPR request (\\x1b[6n) intercepted in PTY, responding with dummy coordinates [12;1R]');
         }
         checkAutoApproval(data, (s) => child.write(s));
         sendAutoImplSSE(ctx, { event: 'output', data: { chunk: data, stream: 'stdout' } });
+        scheduleAutoStopForVerification();
       });
       child.onExit(({ exitCode: code }: { exitCode: number }) => {
         void finalizeCliAutoImpl(code);
@@ -634,15 +670,19 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
       child.stdout?.on('data', (d: Buffer) => {
         const chunk = d.toString();
         stdout += chunk;
+        clearAutoStopTimer();
         if (chunk.includes('\x1b[6n')) child.stdin?.write('\x1b[1;1R');
         checkAutoApproval(chunk, (s) => child.stdin?.write(s));
         sendAutoImplSSE(ctx, { event: 'output', data: { chunk, stream: 'stdout' } });
+        scheduleAutoStopForVerification();
       });
       child.stderr?.on('data', (d: Buffer) => {
         const chunk = d.toString();
         stderr += chunk;
+        clearAutoStopTimer();
         checkAutoApproval(chunk, (s) => child.stdin?.write(s));
         sendAutoImplSSE(ctx, { event: 'output', data: { chunk, stream: 'stderr' } });
+        scheduleAutoStopForVerification();
       });
       child.on('exit', (code: number) => {
         void finalizeCliAutoImpl(code);

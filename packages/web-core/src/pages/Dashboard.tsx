@@ -72,6 +72,7 @@ export default function Dashboard() {
 
     const [historyModalOpen, setHistoryModalOpen] = useState(false)
     const [cliStopDialogOpen, setCliStopDialogOpen] = useState(false)
+    const [cliStopTargetConv, setCliStopTargetConv] = useState<import('../components/dashboard/types').ActiveConversation | null>(null)
     const [savedHistorySessions, setSavedHistorySessions] = useState<SavedSessionHistoryEntry[]>([])
     const [isSavedHistoryLoading, setIsSavedHistoryLoading] = useState(false)
     const [resumingSavedHistorySessionId, setResumingSavedHistorySessionId] = useState<string | null>(null)
@@ -367,30 +368,37 @@ export default function Dashboard() {
         handleRefreshHistory,
     })
 
-    const performActiveCliStop = useCallback(async (mode: 'hard' | 'save') => {
-        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return
-        const cliType = activeConv.ideType || activeConv.agentType || ''
-        const daemonId = activeConv.ideId || activeConv.daemonId || ''
+    const performActiveCliStop = useCallback(async (
+        mode: 'hard' | 'save',
+        conversation?: import('../components/dashboard/types').ActiveConversation | null,
+    ) => {
+        const targetConv = conversation || cliStopTargetConv || activeConv
+        if (!targetConv || !isCliConv(targetConv) || isAcpConv(targetConv)) return
+        const cliType = targetConv.ideType || targetConv.agentType || ''
+        const daemonId = targetConv.ideId || targetConv.daemonId || ''
         try {
             await sendDaemonCommand(daemonId, 'stop_cli', {
                 cliType,
-                targetSessionId: activeConv.sessionId,
+                targetSessionId: targetConv.sessionId,
                 mode,
             })
         } catch (e: any) {
             console.error('Stop CLI failed:', e)
         }
-    }, [activeConv, sendDaemonCommand])
+    }, [activeConv, cliStopTargetConv, sendDaemonCommand])
 
-    const handleActiveCliStop = useCallback(async () => {
-        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return
-        if (activeConv.resume?.supported) {
+    const handleActiveCliStop = useCallback(async (conversation?: import('../components/dashboard/types').ActiveConversation) => {
+        const targetConv = conversation || activeConv
+        if (!targetConv || !isCliConv(targetConv) || isAcpConv(targetConv)) return
+        setCliStopTargetConv(targetConv)
+        if (targetConv.resume?.supported) {
             setCliStopDialogOpen(true)
             return
         }
-        const cliType = activeConv.ideType || activeConv.agentType || 'CLI'
+        const cliType = targetConv.ideType || targetConv.agentType || 'CLI'
         if (!window.confirm(`Stop ${cliType}?\nThis will terminate the CLI process.`)) return
-        await performActiveCliStop('hard')
+        await performActiveCliStop('hard', targetConv)
+        setCliStopTargetConv(null)
     }, [activeConv, performActiveCliStop])
 
     const activeCliViewMode = useMemo(() => {
@@ -560,15 +568,20 @@ export default function Dashboard() {
                 onRemoteConversationChange={setRemoteDialogActiveConv}
                 onCloseRemoteDialog={closeRemoteDialog}
                 cliStopDialogOpen={cliStopDialogOpen}
-                activeConv={activeConv}
-                onCancelCliStop={() => setCliStopDialogOpen(false)}
+                cliStopTargetConv={cliStopTargetConv}
+                onCancelCliStop={() => {
+                    setCliStopDialogOpen(false)
+                    setCliStopTargetConv(null)
+                }}
                 onStopCliNow={async () => {
                     setCliStopDialogOpen(false)
-                    await performActiveCliStop('hard')
+                    await performActiveCliStop('hard', cliStopTargetConv)
+                    setCliStopTargetConv(null)
                 }}
                 onSaveCliAndStop={async () => {
                     setCliStopDialogOpen(false)
-                    await performActiveCliStop('save')
+                    await performActiveCliStop('save', cliStopTargetConv)
+                    setCliStopTargetConv(null)
                 }}
                 toasts={toasts}
                 onDismissToast={(id) => setToasts(prev => prev.filter(t => t.id !== id))}

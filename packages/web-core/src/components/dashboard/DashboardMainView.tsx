@@ -17,7 +17,7 @@ interface DashboardMainViewProps {
     isConnected: boolean
     onOpenHistory: (conversation?: ActiveConversation) => void
     onOpenRemote: (conversation: ActiveConversation) => void
-    onStopCli: () => void
+    onStopCli: (conversation?: ActiveConversation) => void | Promise<void>
     activeCliViewMode: CliConversationViewMode | null
     onSetActiveCliViewMode: (mode: CliConversationViewMode) => void
     mobileChatConversations: ActiveConversation[]

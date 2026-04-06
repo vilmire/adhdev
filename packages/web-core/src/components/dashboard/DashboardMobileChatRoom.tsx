@@ -22,7 +22,7 @@ interface DashboardMobileChatRoomProps {
     onOpenHistory: (conversation: ActiveConversation) => void
     onOpenRemote: (conversation: ActiveConversation) => void
     onHideConversation?: (conversation: ActiveConversation) => void
-    onStopCli?: () => void
+    onStopCli?: (conversation?: ActiveConversation) => void | Promise<void>
     cliViewMode: CliConversationViewMode | null
     onSetCliViewMode: (mode: CliConversationViewMode) => void
     handleSendChat: (message: string, images?: string[]) => Promise<void>
@@ -90,7 +90,7 @@ export default function DashboardMobileChatRoom({
                     )}
                     {isCli && onStopCli && (
                         <button
-                            onClick={onStopCli}
+                            onClick={() => { void onStopCli(selectedConversation) }}
                             className="btn btn-secondary btn-sm"
                             title="Stop CLI process"
                             style={{

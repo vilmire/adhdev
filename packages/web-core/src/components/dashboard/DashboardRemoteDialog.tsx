@@ -124,12 +124,12 @@ export default function DashboardRemoteDialog({
     return (
         <div className="fixed inset-0 z-[1200] flex items-center justify-center p-0 md:p-3 bg-[#030617]/[0.56] backdrop-blur-md" onClick={onClose}>
             <div
-                className="w-full h-screen md:h-[calc(100vh-24px)] md:w-[calc(100vw-24px)] flex flex-col overflow-hidden md:rounded-[14px] md:border border-border-default bg-surface-primary shadow-[0_24px_80px_rgba(2,6,23,0.32)]"
+                className="w-full h-[100dvh] md:h-[calc(100vh-24px)] md:w-[calc(100vw-24px)] flex flex-col overflow-hidden md:rounded-[14px] md:border border-border-default bg-surface-primary shadow-[0_24px_80px_rgba(2,6,23,0.32)]"
                 role="dialog"
                 aria-modal="true"
                 onClick={stopPropagation}
             >
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between px-4 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-4 border-b border-border-subtle bg-bg-primary shrink-0 overflow-visible">
+                <div className="sticky top-0 z-20 flex flex-col gap-3 md:flex-row md:items-center md:justify-between px-4 pt-[calc(14px+env(safe-area-inset-top,0px))] pb-3 border-b border-border-subtle bg-bg-primary/96 backdrop-blur-md shrink-0 overflow-visible">
                     <div className="flex items-center justify-between gap-3 min-w-0 w-full md:w-auto md:flex-1">
                         <div className="min-w-0 flex-1 flex flex-col justify-center">
                             <div className="flex items-center gap-2.5 min-w-0 font-extrabold text-[18px] md:text-xl tracking-tight text-text-primary">
@@ -143,14 +143,14 @@ export default function DashboardRemoteDialog({
                             Close
                         </button>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0 w-full md:w-auto justify-end">
+                    <div className="flex items-center gap-2 shrink-0 w-full md:w-auto justify-between md:justify-end">
                         <div className="flex items-center gap-2 mr-auto md:mr-0">
                             {(['split', 'remote'] as const).map(mode => {
                                 const isActive = viewMode === mode
                                 return (
                                     <button
                                         key={mode}
-                                        className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
+                                        className={`w-9 h-9 rounded-lg flex items-center justify-center transition-all ${
                                             isActive 
                                                 ? 'bg-accent-primary/12 border border-accent-primary/35 text-accent-primary shadow-glow'
                                                 : 'bg-bg-secondary border border-border-subtle text-text-secondary hover:bg-bg-glass hover:text-text-primary'
