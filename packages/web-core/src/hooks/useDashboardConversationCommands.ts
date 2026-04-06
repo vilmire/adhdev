@@ -20,6 +20,7 @@ export function useDashboardConversationCommands({
     const [isFocusingAgent, setIsFocusingAgent] = useState(false)
     const [isSendingChat, setIsSendingChat] = useState(false)
     const sendInFlightRef = useRef(false)
+    const lastSendRef = useRef<{ tabKey: string; message: string; timestamp: number } | null>(null)
 
     const handleSendChat = useCallback(async (rawMessage: string) => {
         if (!activeConv) return
@@ -28,11 +29,23 @@ export function useDashboardConversationCommands({
         if (!message || sendInFlightRef.current) return
 
         const tabKey = activeConv.tabKey
+        const now = Date.now()
+        const lastSend = lastSendRef.current
+        if (
+            lastSend
+            && lastSend.tabKey === tabKey
+            && lastSend.message === message
+            && (now - lastSend.timestamp) < 2000
+        ) {
+            return
+        }
+
         sendInFlightRef.current = true
         setIsSendingChat(true)
+        lastSendRef.current = { tabKey, message, timestamp: now }
 
-        const localId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-        const userMsg = { role: 'user', content: message, timestamp: Date.now(), _localId: localId }
+        const localId = `${now}-${Math.random().toString(36).slice(2, 8)}`
+        const userMsg = { role: 'user', content: message, timestamp: now, _localId: localId }
         setLocalUserMessages(prev => ({
             ...prev,
             [tabKey]: [...(prev[tabKey] || []), userMsg],
@@ -42,11 +55,19 @@ export function useDashboardConversationCommands({
             const routeTarget = getRouteTarget(activeConv)
             if (!routeTarget) return
 
-            await sendDaemonCommand(routeTarget, 'send_chat', {
+            const res = await sendDaemonCommand(routeTarget, 'send_chat', {
                 message,
                 text: message,
                 ...getProviderArgs(activeConv),
             })
+
+            if (res?.deduplicated || res?.sent === false) {
+                setLocalUserMessages(prev => ({
+                    ...prev,
+                    [tabKey]: (prev[tabKey] || []).filter(entry => entry._localId !== localId),
+                }))
+                return
+            }
 
             setTimeout(() => {
                 const cutoff = Date.now() - 60000

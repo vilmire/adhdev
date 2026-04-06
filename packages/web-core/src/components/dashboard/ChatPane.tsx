@@ -35,23 +35,55 @@ function normalizeMessageContent(content: unknown): string {
     return String(content || '').replace(/\s+/g, ' ').trim();
 }
 
+function getMessageTimestamp(message: any): number {
+    const ts = Number(message?.timestamp || message?.receivedAt || message?.createdAt || 0);
+    return Number.isFinite(ts) ? ts : 0;
+}
+
+function isLikelySameMessage(a: any, b: any): boolean {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (a.id && b.id && String(a.id) === String(b.id)) return true;
+    if (a._localId && b._localId && String(a._localId) === String(b._localId)) return true;
+
+    const roleA = String(a?.role || '').toLowerCase();
+    const roleB = String(b?.role || '').toLowerCase();
+    if (roleA !== roleB) return false;
+
+    const normalizedA = normalizeMessageContent(a?.content);
+    const normalizedB = normalizeMessageContent(b?.content);
+    if (!normalizedA || normalizedA !== normalizedB) return false;
+
+    const tsA = getMessageTimestamp(a);
+    const tsB = getMessageTimestamp(b);
+    if (tsA && tsB) return Math.abs(tsA - tsB) <= 15000;
+
+    return !!a?._localId !== !!b?._localId;
+}
+
+function getMessagePreferenceScore(message: any): number {
+    let score = 0;
+    if (!message?._localId) score += 4;
+    if (message?.id) score += 3;
+    if (message?._turnKey) score += 2;
+    if (getMessageTimestamp(message)) score += 1;
+    return score;
+}
+
+function choosePreferredMessage(existing: any, incoming: any): any {
+    const existingScore = getMessagePreferenceScore(existing);
+    const incomingScore = getMessagePreferenceScore(incoming);
+    if (incomingScore !== existingScore) return incomingScore > existingScore ? incoming : existing;
+    return normalizeMessageContent(incoming?.content).length >= normalizeMessageContent(existing?.content).length ? incoming : existing;
+}
+
 function dedupeOptimisticMessages(messages: any[]) {
     const result: any[] = [];
     for (const message of messages) {
-        const normalized = normalizeMessageContent(message?.content);
-        const role = message?.role;
-        const isLocal = !!message?._localId;
-        const duplicateIndex = result.findIndex(existing => (
-            existing?.role === role
-            && normalizeMessageContent(existing?.content) === normalized
-            && (!!existing?._localId !== isLocal)
-        ));
+        const duplicateIndex = result.findIndex(existing => isLikelySameMessage(existing, message));
 
         if (duplicateIndex >= 0) {
-            if (isLocal) {
-                continue;
-            }
-            result.splice(duplicateIndex, 1, message);
+            result.splice(duplicateIndex, 1, choosePreferredMessage(result[duplicateIndex], message));
             continue;
         }
 

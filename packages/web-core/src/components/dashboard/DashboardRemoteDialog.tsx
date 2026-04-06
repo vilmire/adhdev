@@ -152,7 +152,7 @@ export default function DashboardRemoteDialog({
                                         key={mode}
                                         className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
                                             isActive 
-                                                ? 'bg-accent-primary text-white shadow-glow' 
+                                                ? 'bg-accent-primary/12 border border-accent-primary/35 text-accent-primary shadow-glow'
                                                 : 'bg-bg-secondary border border-border-subtle text-text-secondary hover:bg-bg-glass hover:text-text-primary'
                                         }`}
                                         onClick={() => setViewMode(mode)}

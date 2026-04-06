@@ -23,6 +23,8 @@ export default function ConversationMetaChips({
     const machineId = conversation.daemonId || conversation.ideId?.split(':')[0] || conversation.ideId
     const showIdeChip = conversation.transport === 'cdp-page' || conversation.transport === 'cdp-webview'
     const showExtensionChip = conversation.streamSource === 'agent-stream' && !!conversation.agentName
+    const showProviderChip = !showExtensionChip && (conversation.transport === 'pty' || conversation.transport === 'acp')
+    const providerChipLabel = conversation.agentName || formatIdeType(conversation.agentType || conversation.ideType || '')
     const ideChipLabel = (() => {
         if (conversation.streamSource === 'agent-stream') {
             const parentIdeLabel = conversation.displaySecondary?.split('·')[0]?.trim()
@@ -76,6 +78,12 @@ export default function ConversationMetaChips({
                 <span className="conversation-meta-chip is-active" title={conversation.agentName}>
                     <IconPlug size={12} />
                     <span>{conversation.agentName}</span>
+                </span>
+            )}
+            {showProviderChip && (
+                <span className="conversation-meta-chip is-active" title={providerChipLabel}>
+                    <IconPlug size={12} />
+                    <span>{providerChipLabel}</span>
                 </span>
             )}
             {conversation.machineName && (

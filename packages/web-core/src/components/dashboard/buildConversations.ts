@@ -54,6 +54,32 @@ function normalizeMessageContent(content: unknown): string {
     return normalizeTextContent(content)
 }
 
+function getMessageTimestamp(message: any): number {
+    const ts = Number(message?.timestamp || message?.receivedAt || message?.createdAt || 0)
+    return Number.isFinite(ts) ? ts : 0
+}
+
+function isLikelySameMessage(a: any, b: any): boolean {
+    if (!a || !b) return false
+    if (a === b) return true
+    if (a.id && b.id && String(a.id) === String(b.id)) return true
+    if (a._localId && b._localId && String(a._localId) === String(b._localId)) return true
+
+    const roleA = String(a.role || '').toLowerCase()
+    const roleB = String(b.role || '').toLowerCase()
+    if (roleA !== roleB) return false
+
+    const contentA = normalizeMessageContent(a.content)
+    const contentB = normalizeMessageContent(b.content)
+    if (!contentA || contentA !== contentB) return false
+
+    const tsA = getMessageTimestamp(a)
+    const tsB = getMessageTimestamp(b)
+    if (tsA && tsB) return Math.abs(tsA - tsB) <= 15000
+
+    return !!a._localId !== !!b._localId
+}
+
 function getLocalMessages(
     localUserMessages: Record<string, LocalUserMessage[]>,
     keys: Array<string | undefined>,
@@ -151,18 +177,24 @@ export function buildIdeConversations(
             const matched = chats.find((c: { id: string; title?: string }) => c.id === activeId || (c.id && String(c.id) === String(activeId)));
             if (matched?.title && String(matched.title).trim()) title = String(matched.title).trim();
         }
+        const nativeProviderType = (isCliConv(ide as any) || isAcpConv(ide as any))
+            ? ((ide as any).cliType || (ide as any).acpType || ide.type)
+            : ide.type;
+        const effectiveNativeTitle = (isCliConv(ide as any) || isAcpConv(ide as any))
+            && isGenericAgentTitle(title, agentName, nativeProviderType)
+            ? ''
+            : title;
         const nativeServerMsgs = chat.messages || [];
         const nativeLocalMsgs = getLocalMessages(localUserMessages, [ide.id, nativeSessionId]);
-        const serverContentCounts = new Map<string, number>();
-        nativeServerMsgs.filter((m: any) => m.role === 'user').forEach((m: any) => {
-            const key = normalizeMessageContent(m.content);
-            if (!key) return;
-            serverContentCounts.set(key, (serverContentCounts.get(key) || 0) + 1);
-        });
+        const unmatchedNativeServerUsers = nativeServerMsgs
+            .filter((m: any) => String(m?.role || '').toLowerCase() === 'user')
+            .slice();
         const nativePendingLocal = nativeLocalMsgs.filter(lm => {
-            const key = normalizeMessageContent(lm.content);
-            const count = serverContentCounts.get(key) || 0;
-            if (count > 0) { serverContentCounts.set(key, count - 1); return false; }
+            const matchIndex = unmatchedNativeServerUsers.findIndex(serverMsg => isLikelySameMessage(serverMsg, lm));
+            if (matchIndex >= 0) {
+                unmatchedNativeServerUsers.splice(matchIndex, 1);
+                return false;
+            }
             return true;
         });
         results.push({
@@ -174,17 +206,15 @@ export function buildIdeConversations(
             daemonId: ide.daemonId || undefined,
             mode: isCliConv(ide as any) ? (((ide as any).mode as 'terminal' | 'chat' | undefined) || 'terminal') : 'chat',
             agentName,
-            agentType: (isCliConv(ide as any) || isAcpConv(ide as any))
-                ? ((ide as any).cliType || (ide as any).acpType || ide.type)
-                : ide.type,
+            agentType: nativeProviderType,
             status: agentStatus,
-            title,
+            title: effectiveNativeTitle,
             messages: [...nativeServerMsgs, ...nativePendingLocal],
             resume: (ide as any).resume,
-            ideType: (ide as any).cliType || (ide as any).acpType || ide.type,
+            ideType: nativeProviderType,
             workspaceName,
-            displayPrimary: title
-                || workspaceName
+            displayPrimary: workspaceName
+                || effectiveNativeTitle
                 || (isCliConv(ide as any)
                     ? (((ide as any).mode as 'terminal' | 'chat' | undefined) === 'chat' ? agentName : 'Terminal')
                     : agentName),
@@ -212,16 +242,15 @@ export function buildIdeConversations(
         const effectiveStreamTitle = isGenericAgentTitle(streamTitle, stream.agentName, stream.agentType) ? '' : streamTitle;
         const serverMsgs = stream.messages || [];
         const localMsgs = getLocalMessages(localUserMessages, [streamTabKey, stream.sessionId, stream.instanceId]);
-        const serverContentCounts = new Map<string, number>();
-        serverMsgs.filter((m: any) => m.role === 'user').forEach((m: any) => {
-            const key = normalizeMessageContent(m.content);
-            if (!key) return;
-            serverContentCounts.set(key, (serverContentCounts.get(key) || 0) + 1);
-        });
+        const unmatchedServerUsers = serverMsgs
+            .filter((m: any) => String(m?.role || '').toLowerCase() === 'user')
+            .slice();
         const pendingLocal = localMsgs.filter(lm => {
-            const key = normalizeMessageContent(lm.content);
-            const count = serverContentCounts.get(key) || 0;
-            if (count > 0) { serverContentCounts.set(key, count - 1); return false; }
+            const matchIndex = unmatchedServerUsers.findIndex(serverMsg => isLikelySameMessage(serverMsg, lm));
+            if (matchIndex >= 0) {
+                unmatchedServerUsers.splice(matchIndex, 1);
+                return false;
+            }
             return true;
         });
         const hasMeaningfulStream =

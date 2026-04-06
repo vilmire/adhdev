@@ -103,6 +103,7 @@
 
         --accent-primary: #d97706;
         --accent-primary-light: #f59e0b;
+        --accent-on-primary: #111827;
         --accent-secondary: #fbbf24;
         --accent-gradient: linear-gradient(135deg, #d97706, #f59e0b);
 
@@ -142,6 +143,7 @@
 
         --accent-primary: #d97706;
         --accent-primary-light: #f59e0b;
+        --accent-on-primary: #111827;
         --accent-secondary: #fbbf24;
         --accent-gradient: linear-gradient(135deg, #d97706, #f59e0b);
 
@@ -177,6 +179,7 @@
 
             --accent-primary: #d97706;
             --accent-primary-light: #f59e0b;
+            --accent-on-primary: #111827;
             --accent-secondary: #fbbf24;
             --accent-gradient: linear-gradient(135deg, #d97706, #f59e0b);
 
@@ -2034,7 +2037,7 @@
 
     .btn-primary {
         background: var(--accent-primary);
-        color: white;
+        color: var(--accent-on-primary);
         border: none;
     }
 
@@ -2989,7 +2992,7 @@
 
     .machine-btn-primary {
         background: var(--accent-primary);
-        color: #fff;
+        color: var(--accent-on-primary);
         border: none;
         border-radius: 8px;
         padding: 8px 16px;

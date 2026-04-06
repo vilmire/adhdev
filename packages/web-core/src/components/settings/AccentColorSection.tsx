@@ -4,6 +4,7 @@
  * Persisted in localStorage.
  */
 import { useState, useEffect } from 'react'
+import { getReadableAccentTextColor } from '../../utils/color-contrast'
 
 const STORAGE_KEY = 'adhdev-accent-color'
 
@@ -61,6 +62,7 @@ export function applyAccentColor(color: string) {
     const root = document.documentElement
     root.style.setProperty('--accent-primary', color)
     root.style.setProperty('--accent-primary-light', lighten(color, 15))
+    root.style.setProperty('--accent-on-primary', getReadableAccentTextColor(color))
     root.style.setProperty('--accent-gradient', `linear-gradient(135deg, ${color}, ${lighten(color, 20)})`)
     root.style.setProperty('--border-accent', withAlpha(color, 0.4))
     // Also update active nav glow
@@ -70,7 +72,7 @@ export function applyAccentColor(color: string) {
 
 function clearAccentColor() {
     const root = document.documentElement
-    const vars = ['--accent-primary', '--accent-primary-light', '--accent-gradient', '--border-accent', '--nav-active-bg', '--nav-active-shadow']
+    const vars = ['--accent-primary', '--accent-primary-light', '--accent-on-primary', '--accent-gradient', '--border-accent', '--nav-active-bg', '--nav-active-shadow']
     vars.forEach(v => root.style.removeProperty(v))
 }
 

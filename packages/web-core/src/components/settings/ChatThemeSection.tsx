@@ -5,6 +5,7 @@
  * Custom theme editor allows full app + chat color customization.
  */
 import { useState, useEffect, useCallback } from 'react'
+import { getReadableAccentTextColor } from '../../utils/color-contrast'
 
 // ─── Theme Definitions ──────────────────────────
 export interface ChatThemePreset {
@@ -177,6 +178,7 @@ function applyPresetAccentCSSVars(themeId: string, mode: 'dark' | 'light') {
     const root = document.documentElement
     root.style.setProperty('--accent-primary', accent)
     root.style.setProperty('--accent-primary-light', lightenHex(accent, 24))
+    root.style.setProperty('--accent-on-primary', getReadableAccentTextColor(accent))
     root.style.setProperty('--accent-gradient', `linear-gradient(135deg, ${accent}, ${lightenHex(accent, 18)})`)
     root.style.setProperty('--border-accent', hexToRgba(accent, 0.35))
     root.style.setProperty('--nav-active-bg', hexToRgba(accent, 0.10))
@@ -201,6 +203,7 @@ function applyCustomCSSVars(colors: CustomThemeColors) {
     root.style.setProperty('--border-default', hexToRgba(colors.borderDefault, 0.5))
     root.style.setProperty('--accent-primary', colors.accentColor)
     root.style.setProperty('--accent-primary-light', lightenHex(colors.accentColor, 30))
+    root.style.setProperty('--accent-on-primary', getReadableAccentTextColor(colors.accentColor))
     root.style.setProperty('--accent-gradient', `linear-gradient(135deg, ${colors.accentColor}, ${lightenHex(colors.accentColor, 40)})`)
     root.style.setProperty('--border-accent', hexToRgba(colors.accentColor, 0.35))
     root.style.setProperty('--nav-active-bg', hexToRgba(colors.accentColor, 0.10))
@@ -231,7 +234,7 @@ function clearCustomCSSVars() {
         '--bg-glass', '--bg-glass-hover',
         '--text-primary', '--text-secondary', '--text-muted',
         '--border-subtle', '--border-default',
-        '--accent-primary', '--accent-primary-light', '--accent-gradient',
+        '--accent-primary', '--accent-primary-light', '--accent-on-primary', '--accent-gradient',
         '--border-accent', '--nav-active-bg', '--nav-active-shadow',
         // Chat
         '--chat-user-bg', '--chat-user-color', '--chat-user-radius',

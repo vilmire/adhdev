@@ -17,9 +17,10 @@ export function GeneralThemeSection() {
                     onClick={() => setPreference(opt.id)}
                     className={`px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors flex items-center gap-1.5 ${
                         preference === opt.id 
-                            ? 'bg-accent border-accent text-white' 
+                            ? 'bg-accent border-accent' 
                             : 'bg-bg-glass border-border-subtle hover:bg-bg-secondary text-text-muted hover:text-text-primary'
                     }`}
+                    style={preference === opt.id ? { color: 'var(--accent-on-primary)' } : undefined}
                 >
                     <span>{opt.icon}</span>
                     {opt.label}

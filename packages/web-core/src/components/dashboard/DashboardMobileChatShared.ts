@@ -19,6 +19,8 @@ export interface MobileMachineCard {
     unread: number
     total: number
     latestConversation: ActiveConversation | null
+    latestTimestamp?: number
+    fallbackActivityAt?: number
     preview: string
 }
 

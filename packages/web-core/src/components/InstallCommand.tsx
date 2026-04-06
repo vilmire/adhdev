@@ -42,7 +42,7 @@ export default function InstallCommand() {
                 <button
                     className={`text-[10px] px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
                         platform === 'unix'
-                            ? 'bg-accent/15 text-accent border border-accent/25'
+                            ? 'bg-accent-primary/12 text-accent-primary border border-accent-primary/25'
                             : 'bg-transparent text-text-muted border border-transparent hover:text-text-secondary'
                     }`}
                     onClick={() => setPlatform('unix')}
@@ -52,7 +52,7 @@ export default function InstallCommand() {
                 <button
                     className={`text-[10px] px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
                         platform === 'windows'
-                            ? 'bg-accent/15 text-accent border border-accent/25'
+                            ? 'bg-accent-primary/12 text-accent-primary border border-accent-primary/25'
                             : 'bg-transparent text-text-muted border border-transparent hover:text-text-secondary'
                     }`}
                     onClick={() => setPlatform('windows')}
@@ -66,13 +66,13 @@ export default function InstallCommand() {
                 <div className="flex gap-1 mb-3 font-sans">
                     <button
                         className={`text-[9px] px-2 py-0.5 rounded font-semibold cursor-pointer transition-all ${
-                            winShell === 'powershell' ? 'bg-accent/10 text-accent' : 'text-text-muted hover:text-text-secondary'
+                            winShell === 'powershell' ? 'bg-accent-primary/10 text-accent-primary' : 'text-text-muted hover:text-text-secondary'
                         }`}
                         onClick={() => setWinShell('powershell')}
                     >⚡ PowerShell</button>
                     <button
                         className={`text-[9px] px-2 py-0.5 rounded font-semibold cursor-pointer transition-all ${
-                            winShell === 'cmd' ? 'bg-accent/10 text-accent' : 'text-text-muted hover:text-text-secondary'
+                            winShell === 'cmd' ? 'bg-accent-primary/10 text-accent-primary' : 'text-text-muted hover:text-text-secondary'
                         }`}
                         onClick={() => setWinShell('cmd')}
                     >&gt;_ CMD</button>

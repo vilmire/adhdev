@@ -520,7 +520,6 @@ export default function Dashboard() {
                 hiddenConversations={hiddenConversations}
                 requestedDesktopTabKey={requestedDesktopTabKey}
                 onRequestedDesktopTabConsumed={consumeRequestedActiveTab}
-                onOpenAccount={!isStandalone ? () => navigate('/account') : undefined}
                 onDesktopActiveTabChange={setDesktopActiveTabKey}
                 onHideConversation={handleHideConversation}
                 onShowHiddenConversation={handleShowHiddenConversation}

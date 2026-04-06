@@ -57,7 +57,6 @@ interface DashboardMainViewProps {
     visibleConversations: ActiveConversation[]
     requestedDesktopTabKey: string | null
     onRequestedDesktopTabConsumed: () => void
-    onOpenAccount?: () => void
     onDesktopActiveTabChange: React.Dispatch<React.SetStateAction<string | null>>
     onHideConversation: (conversation: ActiveConversation) => void
     onShowHiddenConversation: (conversation: ActiveConversation) => void
@@ -113,7 +112,6 @@ export default function DashboardMainView({
     visibleConversations,
     requestedDesktopTabKey,
     onRequestedDesktopTabConsumed,
-    onOpenAccount,
     onDesktopActiveTabChange,
     onHideConversation,
     onShowHiddenConversation,
@@ -176,7 +174,6 @@ export default function DashboardMainView({
                     onRequestedMachineConsumed={onRequestedMachineConsumed}
                     requestedMobileSection={requestedMobileSection}
                     onRequestedMobileSectionConsumed={onRequestedMobileSectionConsumed}
-                    onOpenAccount={onOpenAccount}
                     onOpenHistory={onOpenHistory}
                     onOpenRemote={onOpenRemote}
                     onStopCli={onStopCli}

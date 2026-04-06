@@ -59,6 +59,12 @@ export function useRemoteTouchControls({
     const wasPinchingRef = useRef(false)
     const inputModeRef = useRef<InputMode>(inputMode)
     const onActionRef = useRef(onAction)
+    const MOUSE_TAP_MIN_MS = 30
+    const MOUSE_TAP_MAX_MS = 550
+    const MOUSE_TAP_MAX_MOVE = 18
+    const TOUCH_TAP_MIN_MS = 60
+    const TOUCH_TAP_MAX_MS = 400
+    const TOUCH_TAP_MAX_MOVE = 12
 
     const ensureMouseCursor = () => {
         if (cursorPosRef.current) return
@@ -319,33 +325,27 @@ export function useRemoteTouchControls({
                 return
             }
 
-            if (event.touches.length === 0) {
+                if (event.touches.length === 0) {
                 if (wasPinchingRef.current) {
                     wasPinchingRef.current = false
                     isPanningRef.current = false
                     return
                 }
 
-                if (event.changedTouches.length === 1 && !isPanningRef.current) {
+                if (event.changedTouches.length === 1) {
                     const touch = event.changedTouches[0]
                     const now = Date.now()
                     const elapsed = now - (touchStartRef.current?.time || 0)
+                    const totalDx = touchStartRef.current ? (touch.clientX - touchStartRef.current.x) : 0
+                    const totalDy = touchStartRef.current ? (touch.clientY - touchStartRef.current.y) : 0
+                    const totalDist = Math.sqrt(totalDx * totalDx + totalDy * totalDy)
 
-                    if (elapsed < 60 || elapsed > 400) {
-                        isPanningRef.current = false
-                        return
-                    }
-
-                    if (touchStartRef.current) {
-                        const totalDx = touch.clientX - touchStartRef.current.x
-                        const totalDy = touch.clientY - touchStartRef.current.y
-                        if (Math.sqrt(totalDx * totalDx + totalDy * totalDy) > 12) {
+                    if (inputModeRef.current === 'mouse') {
+                        if (elapsed < MOUSE_TAP_MIN_MS || elapsed > MOUSE_TAP_MAX_MS || totalDist > MOUSE_TAP_MAX_MOVE) {
                             isPanningRef.current = false
                             return
                         }
-                    }
 
-                    if (inputModeRef.current === 'mouse') {
                         const pos = cursorPosRef.current || getTouchImgPos(touch)
                         if (pos) {
                             setLastActionStatus(`Click: ${Math.round(pos.nx * 100)}%, ${Math.round(pos.ny * 100)}%`)
@@ -353,6 +353,14 @@ export function useRemoteTouchControls({
                             onActionRef.current('input_click', { ...pos }).catch(() => {})
                         }
                     } else {
+                        if (isPanningRef.current) {
+                            isPanningRef.current = false
+                            return
+                        }
+                        if (elapsed < TOUCH_TAP_MIN_MS || elapsed > TOUCH_TAP_MAX_MS || totalDist > TOUCH_TAP_MAX_MOVE) {
+                            isPanningRef.current = false
+                            return
+                        }
                         const pos = getTouchImgPos(touch)
                         if (!pos) return
                         if (now - lastTapTimeRef.current < 300) {
