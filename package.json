@@ -1,6 +1,6 @@
 {
   "name": "adhdev",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "private": true,
   "description": "Agent Dashboard Hub — Control your IDE's AI agents from anywhere",
   "workspaces": [

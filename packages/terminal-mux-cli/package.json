@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/terminal-mux-cli",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "User-facing terminal mux client for ADHDev runtimes",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
