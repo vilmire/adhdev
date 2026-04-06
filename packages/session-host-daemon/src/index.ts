@@ -380,6 +380,15 @@ async function main(): Promise<void> {
 }
 
 if (require.main === module) {
+  // Prevent native crashes (e.g. node-pty on Windows) from silently killing the server process
+  process.on('uncaughtException', (err) => {
+    console.error(`[session-host] Uncaught exception: ${err?.message}\n${err?.stack || ''}`);
+    // Do not exit — keep the server alive for existing sessions
+  });
+  process.on('unhandledRejection', (reason: any) => {
+    console.error(`[session-host] Unhandled rejection: ${reason?.message || reason}`);
+  });
+
   void main().catch((error) => {
     console.error(error instanceof Error ? error.message : error);
     process.exit(1);

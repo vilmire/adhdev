@@ -749,11 +749,16 @@ export class ProviderCliAdapter implements CliAdapter {
             || isScriptBinary(binaryPath)
             || !looksLikeMachOOrElf(binaryPath)
         );
-        const useShell = isWin ? !!spawnConfig.shell : useShellUnix;
+        // On Windows, .cmd/.bat shims cannot be spawned directly — must go through cmd.exe
+        const isCmdShim = isWin && /\.(cmd|bat)$/i.test(binaryPath);
+        const useShell = isWin ? (!!spawnConfig.shell || isCmdShim) : useShellUnix;
 
         if (useShell) {
             if (!spawnConfig.shell && !isWin) {
                 LOG.info('CLI', `[${this.cliType}] Using login shell (script shim or non-native binary)`);
+            }
+            if (isCmdShim) {
+                LOG.info('CLI', `[${this.cliType}] Using cmd.exe shell for .cmd/.bat shim: ${binaryPath}`);
             }
             shellCmd = isWin ? 'cmd.exe' : (process.env.SHELL || '/bin/zsh');
             if (isWin) {
