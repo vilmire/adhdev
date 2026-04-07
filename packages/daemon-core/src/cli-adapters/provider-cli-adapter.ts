@@ -759,7 +759,10 @@ export class ProviderCliAdapter implements CliAdapter {
         );
         // On Windows, .cmd/.bat shims cannot be spawned directly — must go through cmd.exe
         const isCmdShim = isWin && /\.(cmd|bat)$/i.test(binaryPath);
-        const useShell = isWin ? (!!spawnConfig.shell || isCmdShim) : useShellUnix;
+        const useShellWin = isCmdShim
+            || !path.isAbsolute(binaryPath)
+            || isScriptBinary(binaryPath);
+        const useShell = isWin ? useShellWin : useShellUnix;
 
         if (useShell) {
             if (!spawnConfig.shell && !isWin) {
@@ -767,6 +770,8 @@ export class ProviderCliAdapter implements CliAdapter {
             }
             if (isCmdShim) {
                 LOG.info('CLI', `[${this.cliType}] Using cmd.exe shell for .cmd/.bat shim: ${binaryPath}`);
+            } else if (isWin) {
+                LOG.info('CLI', `[${this.cliType}] Using cmd.exe shell on Windows: ${binaryPath}`);
             }
             shellCmd = isWin ? 'cmd.exe' : (process.env.SHELL || '/bin/zsh');
             if (isWin) {
@@ -780,6 +785,9 @@ export class ProviderCliAdapter implements CliAdapter {
                 shellArgs = ['-l', '-c', fullCmd];
             }
         } else {
+            if (isWin && spawnConfig.shell) {
+                LOG.info('CLI', `[${this.cliType}] Spawning Windows binary directly without cmd.exe: ${binaryPath}`);
+            }
             shellCmd = binaryPath;
             shellArgs = allArgs;
         }

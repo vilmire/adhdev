@@ -179,15 +179,21 @@ export function useMachineActions({ machineId, registeredMachineId, sendDaemonCo
     }, [machineId, addLog, sendDaemonCommand])
 
     const handleWorkspaceAdd = useCallback(async (path: string) => {
-        if (!machineId || !path.trim()) return
+        if (!machineId || !path.trim()) return false
         setWorkspaceBusy(true)
         try {
             const res: any = await sendDaemonCommand(machineId, 'workspace_add', { path: path.trim() })
-            if (res?.success) addLog('info', `Workspace added: ${path.trim()}`)
-            else addLog('error', res?.error || 'workspace_add failed')
-        } catch (e: any) { addLog('error', e.message) }
+            if (res?.success) {
+                addLog('info', `Workspace added: ${path.trim()}`)
+                return true
+            }
+            addLog('error', res?.error || 'workspace_add failed')
+            return false
+        } catch (e: any) {
+            addLog('error', e.message)
+            return false
+        }
         finally { setWorkspaceBusy(false) }
-        return true
     }, [machineId, addLog, sendDaemonCommand])
 
     const handleWorkspaceRemove = useCallback(async (id: string) => {
