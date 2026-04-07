@@ -69,6 +69,7 @@ export interface CliScriptInput {
     screenText: string;      // Current visible screen snapshot
     messages: CliChatMessage[];  // Previously parsed messages
     partialResponse: string; // Current partial response being generated
+    promptText?: string;     // Current turn prompt when available
 }
 
 interface TurnParseScope {
@@ -312,6 +313,45 @@ function normalizeComparableMessageContent(text: string): string {
         .trim();
 }
 
+function trimPromptEchoPrefix(text: string, promptText?: string | null): string {
+    const prompt = normalizeComparableMessageContent(String(promptText || ''));
+    if (!prompt) return String(text || '');
+
+    const lines = String(text || '').split(/\r\n|\n|\r/g);
+    let dropCount = 0;
+    for (let index = 0; index < Math.min(lines.length, 6); index += 1) {
+        const fragment = normalizeComparableMessageContent(lines[index].replace(/^[.…]+\s*/, ''));
+        if (!fragment) {
+            if (dropCount === index) dropCount = index + 1;
+            continue;
+        }
+        const fragmentWordCount = fragment ? fragment.split(/\s+/).filter(Boolean).length : 0;
+        const canBePromptEcho = fragment.length >= 16 || fragmentWordCount >= 4;
+        if (canBePromptEcho && prompt.includes(fragment)) {
+            dropCount = index + 1;
+            continue;
+        }
+        break;
+    }
+
+    return lines.slice(dropCount).join('\n').trim();
+}
+
+function getLastUserPromptText(messages: Array<{ role?: string; content?: string }> | null | undefined): string {
+    const items = Array.isArray(messages) ? messages : [];
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+        const message = items[index];
+        if (message?.role === 'user' && typeof message.content === 'string' && message.content.trim()) {
+            return message.content;
+        }
+    }
+    return '';
+}
+
+function looksLikeConfirmOnlyLabel(label: string): boolean {
+    return /^(?:continue|confirm|ok|yes|trust|proceed|enter)$/i.test(String(label || '').trim());
+}
+
 /**
  * Normalize provider.json for auto-implement approval detection.
  * Kept for backward compat with dev-server auto-impl pipeline only.
@@ -410,6 +450,8 @@ export class ProviderCliAdapter implements CliAdapter {
     private submitRetryUsed = false;
     private submitRetryPromptSnippet = '';
     private idleFinishCandidate: IdleFinishCandidate | null = null;
+    private finishRetryTimer: NodeJS.Timeout | null = null;
+    private finishRetryCount = 0;
 
  // Resize redraw suppression
     private resizeSuppressUntil: number = 0;
@@ -434,6 +476,8 @@ export class ProviderCliAdapter implements CliAdapter {
     private static readonly MAX_TRACE_ENTRIES = 250;
     private readonly providerResolutionMeta: Record<string, any>;
     private static readonly IDLE_FINISH_CONFIRM_MS = 900;
+    private static readonly FINISH_RETRY_DELAY_MS = 300;
+    private static readonly MAX_FINISH_RETRIES = 2;
 
     private syncMessageViews(): void {
         this.messages = [...this.committedMessages];
@@ -519,6 +563,7 @@ export class ProviderCliAdapter implements CliAdapter {
             screenText: this.terminalScreen.getText(),
             messages: [...baseMessages],
             partialResponse,
+            promptText: scope?.prompt || '',
         };
     }
 
@@ -874,6 +919,8 @@ export class ProviderCliAdapter implements CliAdapter {
         this.terminalScreen.reset(24, 80);
         this.pendingTerminalQueryTail = '';
         this.currentTurnScope = null;
+        this.finishRetryCount = 0;
+        if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
         this.ready = false;
         await this.ptyProcess.ready;
         this.recordTrace('ready', {
@@ -929,11 +976,13 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.startupParseGate) {
             this.startupBuffer += cleanData;
             const elapsed = Date.now() - this.spawnAt;
-            const scriptStatus = this.runDetectStatus(this.startupBuffer);
             const screenText = this.terminalScreen.getText() || '';
+            const startupModal = this.getStartupConfirmationModal(screenText);
+            const scriptStatus = startupModal ? 'waiting_approval' : this.runDetectStatus(this.startupBuffer);
             const hasInteractivePrompt = this.looksLikeVisibleIdlePrompt(screenText);
             const startupStableMs = this.lastScreenChangeAt ? (now - this.lastScreenChangeAt) : 0;
             const isReady = ((scriptStatus === 'idle' || scriptStatus === 'waiting_approval') && hasInteractivePrompt && startupStableMs >= 700)
+                || (!!startupModal && startupStableMs >= 700)
                 || elapsed > 8000
                 || this.startupBuffer.length > 12000;
 
@@ -975,7 +1024,9 @@ export class ProviderCliAdapter implements CliAdapter {
         this.approvalExitTimeout = setTimeout(() => {
             if (this.currentStatus !== 'waiting_approval') return;
             const tail = this.recentOutputBuffer;
-            const modal = this.runParseApproval(tail);
+            const screenText = this.terminalScreen.getText() || '';
+            const startupModal = this.getStartupConfirmationModal(screenText);
+            const modal = this.runParseApproval(tail) || startupModal;
             const stillWaiting = this.runDetectStatus(tail) === 'waiting_approval' || !!modal;
             if (stillWaiting) {
                 this.activeModal = modal || this.activeModal || { message: 'Approval required', buttons: ['Allow', 'Deny'] };
@@ -1000,6 +1051,76 @@ export class ProviderCliAdapter implements CliAdapter {
             || /Type your message(?:\s+or\s+@path\/to\/file)?/i.test(text)
             || /workspace\s*\(\/directory\)/i.test(text)
             || /for\s*shortcuts/i.test(text);
+    }
+
+    private looksLikeVisibleAssistantCandidate(screenText: string): boolean {
+        const lines = sanitizeTerminalText(String(screenText || '')).split(/\r\n|\n|\r/g);
+        for (const line of lines) {
+            const trimmed = String(line || '').trim();
+            if (!trimmed) continue;
+            if (/^➜\s+\S+/.test(trimmed)) continue;
+            if (/^Update available!/i.test(trimmed)) continue;
+            if (/Claude Code v\d/i.test(trimmed)) continue;
+            if (/^⏵⏵\s+accept edits on/i.test(trimmed)) continue;
+            if (/^[◐◑◒◓◴◵◶◷◸◹◺◿].*\/effort/i.test(trimmed)) continue;
+            if (/^[✻✶✳✢✽⠂⠐⠒⠓⠦⠴⠶⠷⠿]+$/.test(trimmed)) continue;
+            if (/esc to (cancel|interrupt|stop)/i.test(trimmed)) continue;
+            const assistantMatch = trimmed.match(/^⏺\s+(.+)$/);
+            if (!assistantMatch) continue;
+            const content = assistantMatch[1].trim();
+            if (!content) continue;
+            if (/^(?:Bash|Read|Write|Edit|MultiEdit|Task|Glob|Grep|LS|NotebookEdit)\(/.test(content)) continue;
+            if (/This command requires approval|Do you want to proceed|Allow once|Always allow/i.test(content)) continue;
+            return true;
+        }
+        return false;
+    }
+
+    private shouldRetryFinishResponse(commitResult: { hasAssistant: boolean; assistantContent: string }): boolean {
+        if (!this.currentTurnScope) return false;
+        if (this.currentStatus === 'waiting_approval' || this.activeModal) return false;
+        if (this.finishRetryCount >= ProviderCliAdapter.MAX_FINISH_RETRIES) return false;
+        if (commitResult.hasAssistant && commitResult.assistantContent.trim()) return false;
+
+        const screenText = this.terminalScreen.getText() || '';
+        if (!this.looksLikeVisibleAssistantCandidate(screenText)) return false;
+
+        const now = Date.now();
+        const quietForMs = this.lastNonEmptyOutputAt ? (now - this.lastNonEmptyOutputAt) : Number.MAX_SAFE_INTEGER;
+        const screenStableMs = this.lastScreenChangeAt ? (now - this.lastScreenChangeAt) : 0;
+        return quietForMs < 1200 || screenStableMs < 1200 || !commitResult.hasAssistant;
+    }
+
+    private getStartupConfirmationModal(screenText: string): { message: string; buttons: string[] } | null {
+        const text = sanitizeTerminalText(String(screenText || ''));
+        if (!text.trim()) return null;
+
+        if (this.cliType === 'claude-cli') {
+            const hasTrustPrompt = /Quick safety check/i.test(text)
+                || /Is this a project you trust/i.test(text)
+                || /Do you trust (?:this project|the contents of this directory|the files in this folder)/i.test(text);
+            const hasConfirmFooter = /Press Enter to (?:continue|confirm)/i.test(text)
+                || /Enter to confirm/i.test(text)
+                || /Esc to (?:cancel|exit)/i.test(text);
+            if (hasTrustPrompt || (hasConfirmFooter && /trust/i.test(text))) {
+                return {
+                    message: 'Confirm Claude Code project trust',
+                    buttons: ['Continue'],
+                };
+            }
+        }
+
+        return null;
+    }
+
+    private shouldResolveModalWithEnter(modal: { message: string; buttons: string[] } | null, buttonIndex: number): boolean {
+        if (!modal || buttonIndex !== 0) return false;
+        const buttons = Array.isArray(modal.buttons) ? modal.buttons : [];
+        if (buttons.length !== 1) return false;
+        const buttonLabel = String(buttons[0] || '').trim();
+        const modalText = `${modal.message || ''} ${buttonLabel}`.trim();
+        return looksLikeConfirmOnlyLabel(buttonLabel)
+            || /Quick safety check|project trust|trust (?:this project|the contents of this directory|the files in this folder)|Enter to confirm/i.test(modalText);
     }
 
     private async waitForInteractivePrompt(maxWaitMs = 5000): Promise<void> {
@@ -1060,10 +1181,11 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         const tail = this.settledBuffer;
         const screenText = this.terminalScreen.getText() || '';
-        const modal = this.runParseApproval(tail);
+        const startupModal = this.getStartupConfirmationModal(screenText);
+        const modal = this.runParseApproval(tail) || startupModal;
         const rawScriptStatus = this.runDetectStatus(tail);
         // detectStatus is the sole authority for status. parseApproval only enriches modal info.
-        const scriptStatus = rawScriptStatus;
+        const scriptStatus = startupModal ? 'waiting_approval' : rawScriptStatus;
         const parsedTranscript = this.parseCurrentTranscript(
             this.committedMessages,
             this.responseBuffer,
@@ -1284,24 +1406,43 @@ export class ProviderCliAdapter implements CliAdapter {
         this.recordTrace('finish_response', {
             ...this.buildTraceParseSnapshot(this.currentTurnScope, this.responseBuffer),
         });
-        this.commitCurrentTranscript();
+        const commitResult = this.commitCurrentTranscript();
+        if (this.shouldRetryFinishResponse(commitResult)) {
+            this.finishRetryCount += 1;
+            this.recordTrace('finish_response_retry', {
+                retryCount: this.finishRetryCount,
+                retryDelayMs: ProviderCliAdapter.FINISH_RETRY_DELAY_MS,
+                assistantContent: this.summarizeTraceText(commitResult.assistantContent, 220),
+                ...this.buildTraceParseSnapshot(this.currentTurnScope, this.responseBuffer),
+            });
+            if (this.finishRetryTimer) clearTimeout(this.finishRetryTimer);
+            this.finishRetryTimer = setTimeout(() => {
+                this.finishRetryTimer = null;
+                if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
+                    this.finishResponse();
+                }
+            }, ProviderCliAdapter.FINISH_RETRY_DELAY_MS);
+            return;
+        }
         if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
         if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
         if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
         if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
+        if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
 
         this.responseBuffer = '';
         this.isWaitingForResponse = false;
         this.responseSettleIgnoreUntil = 0;
         this.submitRetryUsed = false;
         this.submitRetryPromptSnippet = '';
+        this.finishRetryCount = 0;
         this.currentTurnScope = null;
         this.activeModal = null;
         this.setStatus('idle', 'response_finished');
         this.onStatusChange?.();
     }
 
-    private commitCurrentTranscript(): void {
+    private commitCurrentTranscript(): { hasAssistant: boolean; assistantContent: string } {
         const parsed = this.parseCurrentTranscript(
             this.committedMessages,
             this.responseBuffer,
@@ -1309,6 +1450,13 @@ export class ProviderCliAdapter implements CliAdapter {
         );
         if (parsed && Array.isArray(parsed.messages)) {
             this.committedMessages = this.normalizeParsedMessages(parsed.messages);
+            const promptForTrim = this.currentTurnScope?.prompt || getLastUserPromptText(this.committedMessages);
+            if (promptForTrim) {
+                const lastAssistantForTrim = [...this.committedMessages].reverse().find((message) => message.role === 'assistant');
+                if (lastAssistantForTrim) {
+                    lastAssistantForTrim.content = trimPromptEchoPrefix(lastAssistantForTrim.content, promptForTrim);
+                }
+            }
             this.syncMessageViews();
             const lastAssistant = [...this.committedMessages].reverse().find((message) => message.role === 'assistant');
             this.recordTrace('commit_transcript', {
@@ -1324,7 +1472,15 @@ export class ProviderCliAdapter implements CliAdapter {
                     `[${this.cliType}] Commit without assistant turn: prompt=${JSON.stringify(this.currentTurnScope.prompt).slice(0, 140)} responseBuffer=${JSON.stringify(this.summarizeTraceText(this.responseBuffer, 220)).slice(0, 260)} providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'} scriptsPath=${this.providerResolutionMeta.scriptsPath || '-'}`
                 );
             }
+            return {
+                hasAssistant: !!lastAssistant,
+                assistantContent: lastAssistant?.content || '',
+            };
         }
+        return {
+            hasAssistant: false,
+            assistantContent: '',
+        };
     }
 
  // ─── Script Execution ──────────────────────────
@@ -1411,7 +1567,15 @@ export class ProviderCliAdapter implements CliAdapter {
         if (!this.cliScripts?.parseOutput) return null;
         try {
             const input = this.buildParseInput(baseMessages, partialResponse, scope);
-            return this.cliScripts.parseOutput(input);
+            const parsed = this.cliScripts.parseOutput(input);
+            const promptForTrim = scope?.prompt || getLastUserPromptText(baseMessages);
+            if (parsed && Array.isArray(parsed.messages) && promptForTrim) {
+                const lastAssistant = [...parsed.messages].reverse().find((message: any) => message?.role === 'assistant' && typeof message.content === 'string');
+                if (lastAssistant) {
+                    lastAssistant.content = trimPromptEchoPrefix(lastAssistant.content, promptForTrim);
+                }
+            }
+            return parsed;
         } catch (e: any) {
             LOG.warn('CLI', `[${this.cliType}] parseOutput error: ${e.message}`);
             return null;
@@ -1456,11 +1620,17 @@ export class ProviderCliAdapter implements CliAdapter {
         if (!this.ready) throw new Error(`${this.cliName} not ready (status: ${this.currentStatus})`);
         if (this.isWaitingForResponse) return;
         await this.waitForInteractivePrompt();
+        const blockingModal = this.activeModal || this.getStartupConfirmationModal(this.terminalScreen.getText() || '');
+        if (blockingModal || this.currentStatus === 'waiting_approval') {
+            throw new Error(`${this.cliName} is awaiting confirmation before it can accept a prompt`);
+        }
 
         this.committedMessages.push({ role: 'user', content: text, timestamp: Date.now() });
         this.syncMessageViews();
         this.isWaitingForResponse = true;
         this.responseBuffer = '';
+        this.finishRetryCount = 0;
+        if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
         this.clearIdleFinishCandidate('send_message');
         this.currentTurnScope = {
             prompt: text,
@@ -1697,6 +1867,7 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.settleTimer) { clearTimeout(this.settleTimer); this.settleTimer = null; }
         if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
         if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
+        if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
         if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
         if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
         if (this.pendingScriptStatusTimer) { clearTimeout(this.pendingScriptStatusTimer); this.pendingScriptStatusTimer = null; }
@@ -1705,6 +1876,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.pendingTerminalQueryTail = '';
         if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
         this.ptyOutputBuffer = '';
+        this.finishRetryCount = 0;
         if (this.ptyProcess) {
             this.ptyProcess.write('\x03');
             setTimeout(() => {
@@ -1724,6 +1896,7 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.settleTimer) { clearTimeout(this.settleTimer); this.settleTimer = null; }
         if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
         if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
+        if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
         if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
         if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
         if (this.pendingScriptStatusTimer) { clearTimeout(this.pendingScriptStatusTimer); this.pendingScriptStatusTimer = null; }
@@ -1732,6 +1905,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.pendingTerminalQueryTail = '';
         if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
         this.ptyOutputBuffer = '';
+        this.finishRetryCount = 0;
         if (this.ptyProcess) {
             try {
                 if (typeof this.ptyProcess.detach === 'function') {
@@ -1762,6 +1936,8 @@ export class ProviderCliAdapter implements CliAdapter {
         this.pendingTerminalQueryTail = '';
         if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
         this.ptyOutputBuffer = '';
+        if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
+        this.finishRetryCount = 0;
         this.terminalScreen.reset();
         this.ptyProcess?.clearBuffer?.();
         this.onStatusChange?.();
@@ -1780,10 +1956,11 @@ export class ProviderCliAdapter implements CliAdapter {
 
     resolveModal(buttonIndex: number): void {
         if (!this.ptyProcess || (this.currentStatus !== 'waiting_approval' && !this.activeModal)) return;
+        const modal = this.activeModal;
         this.clearIdleFinishCandidate('resolve_modal');
         this.recordTrace('resolve_modal', {
             buttonIndex,
-            activeModal: this.activeModal,
+            activeModal: modal,
         });
         this.activeModal = null;
         this.lastApprovalResolvedAt = Date.now();
@@ -1794,7 +1971,9 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         this.setStatus('generating', 'approval_resolved');
         this.onStatusChange?.();
-        if (buttonIndex in this.approvalKeys) {
+        if (this.shouldResolveModalWithEnter(modal, buttonIndex)) {
+            this.ptyProcess.write('\r');
+        } else if (buttonIndex in this.approvalKeys) {
             this.ptyProcess.write(this.approvalKeys[buttonIndex]);
         } else {
             const DOWN = '\x1B[B';

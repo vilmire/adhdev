@@ -383,6 +383,61 @@ export async function runCliExerciseInternal(ctx: DevServerContext, body: CliExe
   let idleSince = 0;
   let sawBusy = false;
 
+  const noteStatus = (status: string) => {
+    if (status !== lastStatus) {
+      statusesSeen.push(status);
+      lastStatus = status;
+    }
+  };
+
+  const resolveActiveModalIfNeeded = (status: string, modal: any): boolean => {
+    if (!autoResolveApprovals || status !== 'waiting_approval' || !modal || !Array.isArray(modal.buttons) || modal.buttons.length === 0) {
+      return false;
+    }
+    const clampedIndex = Math.max(0, Math.min(Number(approvalButtonIndex) || 0, modal.buttons.length - 1));
+    const modalKey = JSON.stringify({
+      message: modal.message || '',
+      buttons: modal.buttons,
+      index: clampedIndex,
+    });
+    if (modalKey === lastModalKey || typeof bundle?.adapter?.resolveModal !== 'function') {
+      return false;
+    }
+    lastModalKey = modalKey;
+    approvalsResolved.push({
+      at: Date.now(),
+      buttonIndex: clampedIndex,
+      label: modal.buttons[clampedIndex] || null,
+    });
+    bundle.adapter.resolveModal(clampedIndex);
+    return true;
+  };
+
+  // Exercise runs are easiest to reason about when startup/trust confirmations are
+  // cleared before we attempt to type the repro prompt into the CLI.
+  const preflightStartedAt = Date.now();
+  while (Date.now() - preflightStartedAt < Math.max(1_000, readyTimeoutMs)) {
+    bundle = getCliTargetBundle(ctx, type, bundle.target.instanceId);
+    if (!bundle) {
+      throw new Error('CLI instance disappeared before exercise send');
+    }
+
+    const debug = typeof bundle.adapter.getDebugState === 'function' ? bundle.adapter.getDebugState() : null;
+    const trace = typeof bundle.adapter.getTraceState === 'function' ? bundle.adapter.getTraceState(traceLimit) : null;
+    const status = String(debug?.status || bundle.target.status || 'unknown');
+    const modal = debug?.activeModal || trace?.activeModal || null;
+    noteStatus(status);
+
+    if (resolveActiveModalIfNeeded(status, modal)) {
+      await sleep(150);
+      continue;
+    }
+
+    const startupParseGate = !!debug?.startupParseGate;
+    if (status === 'idle' && !startupParseGate) break;
+    await sleep(150);
+  }
+
   ctx.instanceManager.sendEvent(bundle.target.instanceId, 'send_message', { text });
 
   while (Date.now() - startAt < Math.max(1_000, timeoutMs)) {
@@ -400,10 +455,7 @@ export async function runCliExerciseInternal(ctx: DevServerContext, body: CliExe
     const sawSubmitWrite = traceEntries.some((entry: any) => entry?.type === 'submit_write');
     const hasTurnStarted = sawSendMessage || sawSubmitWrite || !!debug?.currentTurnScope;
 
-    if (status !== lastStatus) {
-      statusesSeen.push(status);
-      lastStatus = status;
-    }
+    noteStatus(status);
 
     if (status === 'generating' || status === 'waiting_approval') {
       sawBusy = true;
@@ -411,23 +463,8 @@ export async function runCliExerciseInternal(ctx: DevServerContext, body: CliExe
     }
 
     const modal = debug?.activeModal || trace?.activeModal || null;
-    if (autoResolveApprovals && status === 'waiting_approval' && modal && Array.isArray(modal.buttons) && modal.buttons.length > 0) {
-      const clampedIndex = Math.max(0, Math.min(Number(approvalButtonIndex) || 0, modal.buttons.length - 1));
-      const modalKey = JSON.stringify({
-        message: modal.message || '',
-        buttons: modal.buttons,
-        index: clampedIndex,
-      });
-      if (modalKey !== lastModalKey && typeof bundle.adapter.resolveModal === 'function') {
-        lastModalKey = modalKey;
-        approvalsResolved.push({
-          at: Date.now(),
-          buttonIndex: clampedIndex,
-          label: modal.buttons[clampedIndex] || null,
-        });
-        bundle.adapter.resolveModal(clampedIndex);
-        continue;
-      }
+    if (resolveActiveModalIfNeeded(status, modal)) {
+      continue;
     }
 
     const traceCount = Number(trace?.entryCount || 0);

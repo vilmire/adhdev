@@ -27,6 +27,7 @@ type CliExerciseVerification = {
   lastAssistantMustNotMatchAny?: string[];
   inspectFields?: string[];
   description?: string;
+  focusAreas?: string[];
   fixtureName?: string;
   fixtureNames?: string[];
 };
@@ -1225,6 +1226,14 @@ export function buildCliAutoImplPrompt(ctx: DevServerContext,
   lines.push('19. Literal string checks are allowed only for stable proper nouns or exact product chrome that cannot be expressed safely as a broader pattern. Everything else should generalize.');
   lines.push('20. When a bug comes from noisy PTY text, first normalize and classify the line family; do NOT just append another special-case substring to the parser.');
   lines.push('');
+
+  if (verification?.focusAreas?.length) {
+    lines.push('## Provider-Specific Focus Areas');
+    for (const area of verification.focusAreas) {
+      lines.push(`- ${area}`);
+    }
+    lines.push('');
+  }
 
   lines.push('## Task');
   lines.push(`Edit files in \`${providerDir}\` to implement: **${functions.join(', ')}**`);
