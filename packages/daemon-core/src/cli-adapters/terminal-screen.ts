@@ -1,9 +1,11 @@
 /**
  * PTY screen snapshot abstraction.
  *
- * We currently keep xterm as the default parser/model because it is already
- * proven in production, but the surface is now backend-agnostic so we can
- * swap in libghostty-vt once a native Node binding is available.
+ * Terminal viewport backend selection.
+ *
+ * Runtime preference is backend-agnostic:
+ * - prefer ghostty-vt when available (or when explicitly requested)
+ * - fall back to xterm when ghostty-vt is unavailable
  */
 
 import { LOG } from '../logging/logger.js';
@@ -64,6 +66,13 @@ function logTerminalBackendSelection(
     const key = `${preference}:${ghosttyAvailable}:${backendKind}`;
     if (loggedTerminalBackends.has(key)) return;
     loggedTerminalBackends.add(key);
+    if (backendKind === 'xterm' && preference !== 'xterm' && !ghosttyAvailable) {
+        LOG.warn(
+            'Terminal',
+            `[terminal-screen] ghostty-vt unavailable; using xterm fallback (preference=${preference})`,
+        );
+        return;
+    }
     LOG.info(
         'Terminal',
         `[terminal-screen] backend=${backendKind} preference=${preference} ghosttyAvailable=${ghosttyAvailable}`,

@@ -52,8 +52,17 @@ let terminalMirrorFactory:
   | null
   | undefined;
 let terminalMirrorWarning: string | null = null;
+let terminalMirrorBackendLogged = false;
 
 ensureNodePtySpawnHelperPermissions((msg: string) => console.log(`[session-host] ${msg}`));
+
+function logTerminalMirrorBackend(message: string, level: 'info' | 'warn' = 'info'): void {
+  if (terminalMirrorBackendLogged) return;
+  terminalMirrorBackendLogged = true;
+  const prefix = '[session-host]';
+  if (level === 'warn') console.warn(`${prefix} ${message}`);
+  else console.log(`${prefix} ${message}`);
+}
 
 export interface PtyRuntimeOptions {
   sessionId: string;
@@ -178,15 +187,18 @@ function getTerminalMirrorFactory(): (options: { cols: number; rows: number; scr
       throw new Error('@adhdev/ghostty-vt-node does not export createTerminal()');
     }
     terminalMirrorFactory = (options) => binding.createTerminal(options);
+    logTerminalMirrorBackend('terminal mirror backend=ghostty-vt');
     return terminalMirrorFactory;
   } catch (ghosttyError: any) {
     try {
       terminalMirrorFactory = createXtermMirror;
       terminalMirrorWarning = `Ghostty VT unavailable; falling back to xterm mirror (${ghosttyError?.message || String(ghosttyError)})`;
+      logTerminalMirrorBackend(terminalMirrorWarning, 'warn');
       return terminalMirrorFactory;
     } catch (xtermError: any) {
       terminalMirrorFactory = null;
       terminalMirrorWarning = `No terminal mirror backend available (ghostty: ${ghosttyError?.message || String(ghosttyError)}; xterm: ${xtermError?.message || String(xtermError)})`;
+      logTerminalMirrorBackend(terminalMirrorWarning, 'warn');
       throw new Error(terminalMirrorWarning);
     }
   }

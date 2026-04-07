@@ -83,6 +83,53 @@ const TERMINAL_THEME = {
 let terminalRuntimePromise: Promise<RendererRuntime> | null = null;
 let rendererRuntimeLogged = false;
 
+function stripUnsupportedOscPaletteCommands(chunk: string): { output: string; carry: string } {
+  if (!chunk) return { output: '', carry: '' };
+
+  let output = '';
+  let cursor = 0;
+
+  while (cursor < chunk.length) {
+    const oscStart = chunk.indexOf('\x1b]', cursor);
+    if (oscStart < 0) {
+      output += chunk.slice(cursor);
+      break;
+    }
+
+    output += chunk.slice(cursor, oscStart);
+
+    const belIndex = chunk.indexOf('\x07', oscStart + 2);
+    const stIndex = chunk.indexOf('\x1b\\', oscStart + 2);
+    let endIndex = -1;
+    let terminatorLength = 0;
+
+    if (belIndex >= 0 && (stIndex < 0 || belIndex < stIndex)) {
+      endIndex = belIndex;
+      terminatorLength = 1;
+    } else if (stIndex >= 0) {
+      endIndex = stIndex;
+      terminatorLength = 2;
+    }
+
+    if (endIndex < 0) {
+      return {
+        output,
+        carry: chunk.slice(oscStart),
+      };
+    }
+
+    const sequence = chunk.slice(oscStart, endIndex + terminatorLength);
+    const body = chunk.slice(oscStart + 2, endIndex);
+    if (!body.startsWith('4;')) {
+      output += sequence;
+    }
+
+    cursor = endIndex + terminatorLength;
+  }
+
+  return { output, carry: '' };
+}
+
 async function loadRendererRuntime(): Promise<RendererRuntime> {
   if (!terminalRuntimePromise) {
     terminalRuntimePromise = (async () => {
@@ -106,6 +153,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
     const terminalRef = useRef<TerminalLike | null>(null);
     const fitAddonRef = useRef<FitAddonLike | null>(null);
     const pendingWritesRef = useRef<string[]>([]);
+    const pendingOscCarryRef = useRef('');
     const onInputRef = useRef(onInput);
     const onResizeRef = useRef(onResize);
     const readOnlyRef = useRef(readOnly);
@@ -152,8 +200,12 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
 
     useImperativeHandle(ref, () => ({
       write: (data: string) => {
-        if (terminalRef.current) terminalRef.current.write(data);
-        else pendingWritesRef.current.push(data);
+        const normalized = `${pendingOscCarryRef.current}${data}`;
+        const sanitized = stripUnsupportedOscPaletteCommands(normalized);
+        pendingOscCarryRef.current = sanitized.carry;
+        if (!sanitized.output) return;
+        if (terminalRef.current) terminalRef.current.write(sanitized.output);
+        else pendingWritesRef.current.push(sanitized.output);
       },
       clear: () => {
         if (terminalRef.current) terminalRef.current.clear();
@@ -250,6 +302,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         termForCleanup?.dispose();
         terminalRef.current = null;
         fitAddonRef.current = null;
+        pendingOscCarryRef.current = '';
       };
     }, [fontSize]);
 

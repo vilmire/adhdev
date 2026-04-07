@@ -180,10 +180,16 @@ export default function DashboardMobileChatInbox({
     const inboxTitle = section === 'machines'
         ? 'Machines'
         : 'Chats'
+    const headerPaddingClass = isStandalone
+        ? 'px-5 pt-4 pb-4'
+        : 'px-5 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-4'
+    const contentPaddingClass = isStandalone
+        ? 'px-3 pb-3'
+        : 'px-3 pb-[calc(12px+env(safe-area-inset-bottom,0px))]'
 
     return (
         <div className="flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-primary">
-            <div className="z-10 shrink-0 bg-bg-primary px-5 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-4">
+            <div className={`z-10 shrink-0 bg-bg-primary ${headerPaddingClass}`}>
                 <div className="flex items-center justify-between gap-3">
                     <div className="text-2xl font-black tracking-tight text-text-primary px-1">
                         {inboxTitle}
@@ -202,7 +208,7 @@ export default function DashboardMobileChatInbox({
                 </div>
             </div>
 
-            <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden px-3 pb-[calc(12px+env(safe-area-inset-bottom,0px))] [-webkit-overflow-scrolling:touch]">
+            <div className={`flex min-h-0 w-full min-w-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden [-webkit-overflow-scrolling:touch] ${contentPaddingClass}`}>
                 {section === 'machines' && (
                     <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
                         {isDisconnected ? (
