@@ -91,7 +91,8 @@ export { DaemonCommandHandler } from './commands/handler.js';
 export type { CommandResult, CommandContext } from './commands/handler.js';
 export { DaemonCommandRouter } from './commands/router.js';
 export type { CommandRouterDeps, CommandRouterResult } from './commands/router.js';
-export { maybeRunDaemonUpgradeHelperFromEnv } from './commands/upgrade-helper.js';
+export { maybeRunDaemonUpgradeHelperFromEnv, spawnDetachedDaemonUpgradeHelper } from './commands/upgrade-helper.js';
+export type { DaemonUpgradeHelperPayload } from './commands/upgrade-helper.js';
 
 // ── Status ──
 export { DaemonStatusReporter } from './status/reporter.js';
