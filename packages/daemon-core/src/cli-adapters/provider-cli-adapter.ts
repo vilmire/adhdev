@@ -27,26 +27,12 @@ import {
     type PtyRuntimeTransport,
     type PtyTransportFactory,
 } from './pty-transport.js';
+import { sanitizeSpawnEnv, ensureNodePtySpawnHelperPermissions } from './spawn-env.js';
 
 let pty: any;
 try {
     pty = require('node-pty');
-    // node-pty ships spawn-helper without +x on macOS (npm umask issue) — fix it
-    if (os.platform() !== 'win32') {
-        try {
-            const fs = require('fs');
-            const ptyDir = path.resolve(path.dirname(require.resolve('node-pty')), '..');
-            const platformArch = `${os.platform()}-${os.arch()}`;
-            const helper = path.join(ptyDir, 'prebuilds', platformArch, 'spawn-helper');
-            if (fs.existsSync(helper)) {
-                const stat = fs.statSync(helper);
-                if (!(stat.mode & 0o111)) {
-                    fs.chmodSync(helper, stat.mode | 0o755);
-                    LOG.info('CLI', '[node-pty] Fixed spawn-helper permissions');
-                }
-            }
-        } catch { /* best-effort */ }
-    }
+    ensureNodePtySpawnHelperPermissions((msg: string) => LOG.info('CLI', msg));
 } catch {
     LOG.error('CLI', '[ProviderCliAdapter] node-pty not found. Terminal features disabled.');
 }
@@ -195,50 +181,8 @@ function sanitizeTerminalText(str: string): string {
     return stripTerminalNoise(stripAnsi(str));
 }
 
-function applyPreferredTerminalColorEnv(env: Record<string, string>): void {
-    if (env.NO_COLOR) return;
-
-    if (!env.TERM || env.TERM === 'xterm-color') {
-        env.TERM = 'xterm-256color';
-    }
-    if (!env.COLORTERM) env.COLORTERM = 'truecolor';
-
-    if (process.platform === 'win32') {
-        if (!env.FORCE_COLOR) env.FORCE_COLOR = '1';
-        if (!env.CLICOLOR) env.CLICOLOR = '1';
-    }
-}
-
-function buildCliSpawnEnv(baseEnv: NodeJS.ProcessEnv, overrides?: Record<string, string>): Record<string, string> {
-    const env: Record<string, string> = {};
-    const source = { ...baseEnv, ...(overrides || {}) } as NodeJS.ProcessEnv;
-
-    for (const [key, value] of Object.entries(source)) {
-        if (typeof value !== 'string') continue;
-        env[key] = value;
-    }
-
-    for (const key of Object.keys(env)) {
-        if (
-            key === 'INIT_CWD'
-            || key === 'npm_command'
-            || key === 'npm_execpath'
-            || key === 'npm_node_execpath'
-            || key.startsWith('npm_')
-            || key.startsWith('npm_config_')
-            || key.startsWith('npm_package_')
-            || key.startsWith('npm_lifecycle_')
-            || key.startsWith('PNPM_')
-            || key.startsWith('YARN_')
-            || key.startsWith('BUN_')
-        ) {
-            delete env[key];
-        }
-    }
-
-    applyPreferredTerminalColorEnv(env);
-    return env;
-}
+// Re-export sanitizeSpawnEnv under the local alias for backward compat within this file
+const buildCliSpawnEnv = sanitizeSpawnEnv;
 
 function computeTerminalQueryTail(buffer: string): string {
     const prefixes = ['\x1b[6n', '\x1b[?6n'];
@@ -866,6 +810,19 @@ export class ProviderCliAdapter implements CliAdapter {
                 shellArgs = ['-l', '-c', fullCmd];
                 this.ptyProcess = this.transportFactory.spawn(shellCmd, shellArgs, ptyOpts);
             } else {
+                // Windows native error codes are often cryptic — provide helpful hints
+                if (isWin) {
+                    const hint = /error code 267|ERROR_DIRECTORY/i.test(msg)
+                        ? ' (working directory does not exist or is not a directory)'
+                        : /error code 740|elevation/i.test(msg)
+                        ? ' (requires administrator privileges)'
+                        : /error code 2|ENOENT|not found/i.test(msg)
+                        ? ` (executable not found: ${shellCmd})`
+                        : '';
+                    if (hint) {
+                        throw new Error(`Failed to spawn CLI${hint}: ${msg}`);
+                    }
+                }
                 throw err;
             }
         }
@@ -1698,7 +1655,10 @@ export class ProviderCliAdapter implements CliAdapter {
                         : `${stopCommand}${this.sendKey}`;
                     this.ptyProcess.write(payload);
                 };
-                if (wasProcessing) setTimeout(writeCommand, 250);
+                const interruptGraceMs = typeof resume.interruptGraceMs === 'number'
+                    ? Math.max(100, resume.interruptGraceMs)
+                    : 500;
+                if (wasProcessing) setTimeout(writeCommand, interruptGraceMs);
                 else writeCommand();
             } else {
                 this.ptyProcess.write('\x03');
@@ -1737,6 +1697,9 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.settleTimer) { clearTimeout(this.settleTimer); this.settleTimer = null; }
         if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
         if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
+        if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
+        if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
+        if (this.pendingScriptStatusTimer) { clearTimeout(this.pendingScriptStatusTimer); this.pendingScriptStatusTimer = null; }
         if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
         this.pendingOutputParseBuffer = '';
         this.pendingTerminalQueryTail = '';
@@ -1761,6 +1724,9 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.settleTimer) { clearTimeout(this.settleTimer); this.settleTimer = null; }
         if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
         if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
+        if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
+        if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
+        if (this.pendingScriptStatusTimer) { clearTimeout(this.pendingScriptStatusTimer); this.pendingScriptStatusTimer = null; }
         if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
         this.pendingOutputParseBuffer = '';
         this.pendingTerminalQueryTail = '';

@@ -48,3 +48,8 @@ export {
   writeEnvelope,
 } from './ipc.js';
 export type { SessionHostClientOptions, SessionHostEndpoint } from './ipc.js';
+export {
+  sanitizeSpawnEnv,
+  applyTerminalColorEnv,
+  ensureNodePtySpawnHelperPermissions,
+} from './spawn-env.js';

@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import type { CreateSessionPayload } from '@adhdev/session-host-core';
+import { sanitizeSpawnEnv, ensureNodePtySpawnHelperPermissions } from '@adhdev/session-host-core';
 
 type TerminalMirrorHandle = {
   write(data: string | Uint8Array): void;
@@ -52,22 +53,7 @@ let terminalMirrorFactory:
   | undefined;
 let terminalMirrorWarning: string | null = null;
 
-if (os.platform() !== 'win32') {
-  try {
-    const fs = require('fs');
-    const ptyDir = path.resolve(path.dirname(require.resolve('node-pty')), '..');
-    const platformArch = `${os.platform()}-${os.arch()}`;
-    const helper = path.join(ptyDir, 'prebuilds', platformArch, 'spawn-helper');
-    if (fs.existsSync(helper)) {
-      const stat = fs.statSync(helper);
-      if (!(stat.mode & 0o111)) {
-        fs.chmodSync(helper, stat.mode | 0o755);
-      }
-    }
-  } catch {
-    // best-effort: node-pty still works on most installs without this
-  }
-}
+ensureNodePtySpawnHelperPermissions((msg: string) => console.log(`[session-host] ${msg}`));
 
 export interface PtyRuntimeOptions {
   sessionId: string;
@@ -76,44 +62,8 @@ export interface PtyRuntimeOptions {
   onExit: (exitCode: number | null) => void;
 }
 
-function buildRuntimeEnv(baseEnv: NodeJS.ProcessEnv, launchEnv?: Record<string, string>): Record<string, string> {
-  const env: Record<string, string> = {};
-  const source = { ...baseEnv, ...(launchEnv || {}) } as NodeJS.ProcessEnv;
-
-  for (const [key, value] of Object.entries(source)) {
-    if (typeof value !== 'string') continue;
-    env[key] = value;
-  }
-
-  for (const key of Object.keys(env)) {
-    if (
-      key === 'INIT_CWD'
-      || key === 'npm_command'
-      || key === 'npm_execpath'
-      || key === 'npm_node_execpath'
-      || key.startsWith('npm_')
-      || key.startsWith('npm_config_')
-      || key.startsWith('npm_package_')
-      || key.startsWith('npm_lifecycle_')
-      || key.startsWith('PNPM_')
-      || key.startsWith('YARN_')
-      || key.startsWith('BUN_')
-    ) {
-      delete env[key];
-    }
-  }
-
-  if (!env.NO_COLOR) {
-    if (!env.TERM || env.TERM === 'xterm-color') env.TERM = 'xterm-256color';
-    if (!env.COLORTERM) env.COLORTERM = 'truecolor';
-    if (process.platform === 'win32') {
-      if (!env.FORCE_COLOR) env.FORCE_COLOR = '1';
-      if (!env.CLICOLOR) env.CLICOLOR = '1';
-    }
-  }
-
-  return env;
-}
+// Use shared spawn env sanitizer — alias for backward compat within this file
+const buildRuntimeEnv = sanitizeSpawnEnv;
 
 function computeTerminalQueryTail(buffer: string): string {
   const prefixes = ['\x1b[6n', '\x1b[?6n'];

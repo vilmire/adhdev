@@ -518,7 +518,17 @@ export class DaemonCliManager {
 
  // ─── CLI category handling (existing) ───
         const cliInfo = await detectCLI(cliType, this.providerLoader);
-        if (!cliInfo) throw new Error(`${cliType} not found`);
+        if (!cliInfo) {
+            const installHint = provider?.install || '';
+            const displayName = provider?.displayName || provider?.name || cliType;
+            const spawnCmd = provider?.spawn?.command || cliType;
+            throw new Error(
+                `${displayName} is not installed.\n` +
+                `Command '${spawnCmd}' not found on PATH.\n` +
+                (installHint ? `\n${installHint}\n` : '') +
+                `\nRun 'adhdev doctor' for detailed diagnostics.`
+            );
+        }
 
         console.log(colorize('yellow', `  ⚡ Starting CLI ${cliType} in ${resolvedDir}...`));
         if (provider) {
@@ -868,8 +878,9 @@ export class DaemonCliManager {
                 const dir = rdir.path;
                 if (!cliType) throw new Error('cliType required');
                 const found = this.findAdapter(cliType, { instanceKey: args?.targetSessionId, dir });
+                const prevCliArgs = found ? (found.adapter as any).extraArgs : undefined;
                 if (found) await this.stopSession(found.key);
-                await this.startSession(cliType, dir);
+                await this.startSession(cliType, dir, args?.cliArgs || prevCliArgs, args?.initialModel);
                 return { success: true, restarted: true };
             }
             case 'agent_command': {

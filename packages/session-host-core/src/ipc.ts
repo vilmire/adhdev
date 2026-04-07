@@ -68,6 +68,11 @@ export class SessionHostClient {
 
   async connect(): Promise<void> {
     if (this.socket && !this.socket.destroyed) return;
+    // Cleanup stale socket reference left after error/disconnect
+    if (this.socket) {
+      try { this.socket.destroy(); } catch { /* noop */ }
+      this.socket = null;
+    }
 
     const socket = net.createConnection(this.endpoint.path);
     this.socket = socket;
@@ -92,6 +97,12 @@ export class SessionHostClient {
         waiter.reject(error);
       }
       this.requestWaiters.clear();
+      // Clear the dead socket reference so the next connect() creates a fresh connection
+      // instead of skipping reconnection on the `!this.socket.destroyed` guard.
+      if (this.socket === socket) {
+        this.socket = null;
+      }
+      try { socket.destroy(); } catch { /* noop */ }
     });
 
     await new Promise<void>((resolve, reject) => {

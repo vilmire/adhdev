@@ -91,11 +91,23 @@ class NodePtyRuntimeTransport implements PtyRuntimeTransport {
 export class NodePtyTransportFactory implements PtyTransportFactory {
   spawn(command: string, args: string[], options: PtySpawnOptions): PtyRuntimeTransport {
     if (!pty) throw new Error('node-pty is not installed');
+    // Validate cwd — an invalid directory causes a native crash on Windows
+    // (node-pty error code 267: ERROR_DIRECTORY) that bypasses JS try/catch
+    let cwd = options.cwd;
+    if (cwd) {
+      try {
+        const fs = require('fs');
+        const stat = fs.statSync(cwd);
+        if (!stat.isDirectory()) cwd = os.homedir();
+      } catch {
+        cwd = os.homedir();
+      }
+    }
     const handle = pty.spawn(command, args, {
       name: 'xterm-256color',
       cols: options.cols,
       rows: options.rows,
-      cwd: options.cwd,
+      cwd,
       env: options.env,
     });
     return new NodePtyRuntimeTransport(handle);

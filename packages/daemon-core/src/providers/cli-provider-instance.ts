@@ -148,16 +148,72 @@ export class CliProviderInstance implements ProviderInstance {
         if (this.providerSessionId) return;
 
         let probedSessionId: string | null = null;
-        if (this.type === 'opencode-cli') {
-            probedSessionId = this.probeOpenCodeSessionId();
-        } else if (this.type === 'codex-cli') {
-            probedSessionId = this.probeCodexSessionId();
-        } else if (this.type === 'goose-cli') {
-            probedSessionId = this.probeGooseSessionId();
+
+        // Prefer declarative probe from provider.json schema
+        const probeConfig = this.provider.sessionProbe;
+        if (probeConfig) {
+            probedSessionId = this.probeSessionIdFromConfig(probeConfig);
+        } else {
+            // Legacy hardcoded probes (backward compat until providers migrate)
+            if (this.type === 'opencode-cli') {
+                probedSessionId = this.probeSessionIdFromConfig({
+                    dbPath: '~/.local/share/opencode/opencode.db',
+                    query: 'select id from session where directory in ({dirs}) and time_created >= ? and time_archived is null order by time_updated desc limit 1',
+                    timestampFormat: 'unix_ms',
+                });
+            } else if (this.type === 'codex-cli') {
+                probedSessionId = this.probeSessionIdFromConfig({
+                    dbPath: '~/.codex/state_5.sqlite',
+                    query: 'select id from threads where cwd in ({dirs}) and created_at >= ? and archived = 0 order by created_at desc limit 1',
+                    timestampFormat: 'unix_s',
+                });
+            } else if (this.type === 'goose-cli') {
+                probedSessionId = this.probeSessionIdFromConfig({
+                    dbPath: '~/.local/share/goose/sessions/sessions.db',
+                    query: 'select id from sessions where working_dir in ({dirs}) and created_at >= ? order by updated_at desc limit 1',
+                    timestampFormat: 'iso',
+                });
+            }
         }
 
         if (probedSessionId) {
             this.promoteProviderSessionId(probedSessionId);
+        }
+    }
+
+    /**
+     * Generic session ID probe using declarative ProviderSessionProbe config.
+     * Replaces the previously duplicated probeOpenCode/Codex/Goose functions.
+     */
+    private probeSessionIdFromConfig(probe: {
+        dbPath: string;
+        query: string;
+        timestampFormat?: 'unix_ms' | 'unix_s' | 'iso';
+    }): string | null {
+        const resolvedDbPath = probe.dbPath.replace(/^~/, os.homedir());
+        if (!fs.existsSync(resolvedDbPath)) return null;
+
+        const directories = this.getProbeDirectories();
+        const minCreatedAt = Math.max(0, this.startedAt - 60_000);
+        const tsFormat = probe.timestampFormat || 'unix_ms';
+
+        let timestampParam: string | number;
+        if (tsFormat === 'unix_s') {
+            timestampParam = Math.floor(minCreatedAt / 1000);
+        } else if (tsFormat === 'iso') {
+            timestampParam = new Date(minCreatedAt).toISOString().slice(0, 19).replace('T', ' ');
+        } else {
+            timestampParam = minCreatedAt;
+        }
+
+        // Build query: replace {dirs} with SQL placeholder list
+        const placeholders = this.buildSqlPlaceholderList(directories.length);
+        const query = probe.query.replace('{dirs}', placeholders);
+
+        try {
+            return this.querySqliteText(resolvedDbPath, query, [...directories, timestampParam]);
+        } catch {
+            return null;
         }
     }
 
@@ -480,36 +536,6 @@ export class CliProviderInstance implements ProviderInstance {
         LOG.info('CLI', `[${this.type}] discovered provider session id: ${nextSessionId}`);
     }
 
-    private probeOpenCodeSessionId(): string | null {
-        const dbPath = path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db');
-        if (!fs.existsSync(dbPath)) return null;
-        const minCreatedAt = Math.max(0, this.startedAt - 60_000);
-        const directories = this.getProbeDirectories();
-        const query = `select id from session where directory in (${this.buildSqlPlaceholderList(directories.length)}) and time_created >= ? and time_archived is null order by time_updated desc limit 1;`;
-        return this.querySqliteText(dbPath, query, [...directories, minCreatedAt]);
-    }
-
-    private probeCodexSessionId(): string | null {
-        const dbPath = path.join(os.homedir(), '.codex', 'state_5.sqlite');
-        if (!fs.existsSync(dbPath)) return null;
-        const minCreatedAt = Math.max(0, Math.floor((this.startedAt - 60_000) / 1000));
-        const directories = this.getProbeDirectories();
-        const query = `select id from threads where cwd in (${this.buildSqlPlaceholderList(directories.length)}) and created_at >= ? and archived = 0 order by created_at desc limit 1;`;
-        return this.querySqliteText(dbPath, query, [...directories, minCreatedAt]);
-    }
-
-    private probeGooseSessionId(): string | null {
-        const dbPath = path.join(os.homedir(), '.local', 'share', 'goose', 'sessions', 'sessions.db');
-        if (!fs.existsSync(dbPath)) return null;
-        const minCreatedAtIso = new Date(Math.max(0, this.startedAt - 60_000)).toISOString().slice(0, 19).replace('T', ' ');
-        const directories = this.getProbeDirectories();
-        const query = `select id from sessions where working_dir in (${this.buildSqlPlaceholderList(directories.length)}) and created_at >= ? order by updated_at desc limit 1;`;
-        try {
-            return this.querySqliteText(dbPath, query, [...directories, minCreatedAtIso]);
-        } catch {
-            return null;
-        }
-    }
 
     private getProbeDirectories(): string[] {
         const dirs = new Set<string>();

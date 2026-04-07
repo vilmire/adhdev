@@ -325,6 +325,8 @@ export interface ProviderModule {
   };
   cleanOutput?: (raw: string, lastUserInput?: string) => string;
   resume?: ProviderResumeCapability;
+  /** Session ID probe config — auto-discovers provider session ID from local SQLite DB */
+  sessionProbe?: ProviderSessionProbe;
 
  // ─── CDP scripts (ide/extension category) ───
   scripts?: ProviderScripts;
@@ -398,10 +400,47 @@ export interface ProviderResumeCapability {
   stopStrategy?: 'command' | 'ctrl_c';
   stopCommand?: string;
   shutdownGraceMs?: number;
+  /** Delay (ms) between Ctrl+C interrupt and stop command (default 500ms) */
+  interruptGraceMs?: number;
   resumeArgs?: string[];
   resumeSessionArgs?: string[];
   newSessionArgs?: string[];
   sessionIdFormat?: 'uuid' | 'string';
+}
+
+/**
+ * Declarative session ID probe config for CLI providers.
+ * Instead of hardcoded probe functions, providers declare their SQLite schema.
+ *
+ * Example (OpenCode):
+ * ```
+ * sessionProbe: {
+ *   dbPath: '~/.local/share/opencode/opencode.db',
+ *   query: 'SELECT id FROM session WHERE directory IN ({dirs}) AND time_created >= ? AND time_archived IS NULL ORDER BY time_updated DESC LIMIT 1',
+ *   timestampFormat: 'unix_ms',
+ * }
+ * ```
+ */
+export interface ProviderSessionProbe {
+  /**
+   * Path to SQLite database. Supports ~ for home directory.
+   * Supports platform-specific paths via {platform} placeholder.
+   */
+  dbPath: string;
+  /**
+   * SQL query to find the session ID.
+   * Use {dirs} placeholder for the directory IN-clause parameters.
+   * The query must SELECT a column named 'id'.
+   * A '?' placeholder after {dirs} receives the min-created-at timestamp.
+   */
+  query: string;
+  /**
+   * How the provider stores timestamps.
+   * - 'unix_ms': milliseconds since epoch (default)
+   * - 'unix_s': seconds since epoch
+   * - 'iso': ISO 8601 string (YYYY-MM-DD HH:MM:SS)
+   */
+  timestampFormat?: 'unix_ms' | 'unix_s' | 'iso';
 }
 
 // ─── ACP Auth Types ─────────────────────────────────

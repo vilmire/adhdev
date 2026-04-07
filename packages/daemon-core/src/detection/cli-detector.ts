@@ -93,10 +93,44 @@ export async function detectCLIs(providerLoader?: ProviderLoader): Promise<CLIIn
     return results;
 }
 
-/** Detect specific CLI */
+/** Detect specific CLI — only probes the one requested provider */
 export async function detectCLI(cliId: string, providerLoader?: ProviderLoader): Promise<CLIInfo | null> {
-    // Resolve alias
     const resolvedId = providerLoader ? providerLoader.resolveAlias(cliId) : cliId;
+
+    if (providerLoader) {
+        const cliList = providerLoader.getCliDetectionList();
+        const target = cliList.find((c) => c.id === resolvedId);
+        if (target) {
+            const platform = os.platform();
+            const whichCmd = platform === 'win32' ? 'where' : 'which';
+            try {
+                const pathResult = await execAsync(`${whichCmd} ${target.command}`);
+                if (!pathResult) return null;
+                const firstPath = pathResult.split('\n')[0];
+                let version: string | undefined;
+                try {
+                    const versionCommands = [
+                        target.versionCommand,
+                        `${target.command} --version`,
+                        `${target.command} -V`,
+                        `${target.command} -v`,
+                    ].filter((v): v is string => !!v);
+                    for (const versionCommand of versionCommands) {
+                        const versionResult = await execAsync(versionCommand, 3000);
+                        if (versionResult) {
+                            version = parseVersion(versionResult);
+                            break;
+                        }
+                    }
+                } catch { }
+                return { ...target, installed: true, version, path: firstPath };
+            } catch {
+                return null;
+            }
+        }
+    }
+
+    // Fallback: full scan for unknown provider IDs
     const all = await detectCLIs(providerLoader);
     return all.find((c) => c.id === resolvedId && c.installed) || null;
 }
