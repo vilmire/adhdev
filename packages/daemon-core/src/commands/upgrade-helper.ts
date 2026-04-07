@@ -32,7 +32,11 @@ function appendUpgradeLog(message: string): void {
 }
 
 function getNpmExecutable(): string {
-  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  return 'npm';
+}
+
+function getNpmExecOptions(): { shell: boolean } {
+  return { shell: process.platform === 'win32' };
 }
 
 function killPid(pid: number): boolean {
@@ -104,9 +108,10 @@ function removeDaemonPidFile(): void {
 }
 
 function cleanupStaleGlobalInstallDirs(pkgName: string): void {
-  const npmRoot = execFileSync(getNpmExecutable(), ['root', '-g'], { encoding: 'utf8' }).trim();
+  const npmExecOpts = getNpmExecOptions();
+  const npmRoot = execFileSync(getNpmExecutable(), ['root', '-g'], { encoding: 'utf8', ...npmExecOpts }).trim();
   if (!npmRoot) return;
-  const npmPrefix = execFileSync(getNpmExecutable(), ['prefix', '-g'], { encoding: 'utf8' }).trim();
+  const npmPrefix = execFileSync(getNpmExecutable(), ['prefix', '-g'], { encoding: 'utf8', ...npmExecOpts }).trim();
   const binDir = process.platform === 'win32' ? npmPrefix : path.join(npmPrefix, 'bin');
   const packageBaseName = pkgName.startsWith('@') ? pkgName.split('/')[1] : pkgName;
   const binNames = new Set<string>([packageBaseName]);
@@ -175,6 +180,7 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
       encoding: 'utf8',
       stdio: 'pipe',
       maxBuffer: 20 * 1024 * 1024,
+      ...getNpmExecOptions(),
     },
   );
   if (installOutput.trim()) {
