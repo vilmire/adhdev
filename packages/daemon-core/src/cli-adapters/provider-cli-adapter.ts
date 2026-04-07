@@ -27,15 +27,7 @@ import {
     type PtyRuntimeTransport,
     type PtyTransportFactory,
 } from './pty-transport.js';
-import { sanitizeSpawnEnv, ensureNodePtySpawnHelperPermissions } from './spawn-env.js';
-
-let pty: any;
-try {
-    pty = require('node-pty');
-    ensureNodePtySpawnHelperPermissions((msg: string) => LOG.info('CLI', msg));
-} catch {
-    LOG.error('CLI', '[ProviderCliAdapter] node-pty not found. Terminal features disabled.');
-}
+import { sanitizeSpawnEnv } from './spawn-env.js';
 
 // ─── Types ──────────────────────────────────────────
 

@@ -1,10 +1,20 @@
 import * as os from 'os';
+import { ensureNodePtySpawnHelperPermissions } from './spawn-env.js';
 
-let pty: any;
-try {
-  pty = require('node-pty');
-} catch {
-  pty = null;
+let cachedPty: any | null | undefined;
+
+function loadNodePty(): any {
+  if (cachedPty !== undefined) return cachedPty;
+  try {
+    // Keep node-pty out of processes that delegate PTY ownership elsewhere
+    // (for example via session-host on Windows), so native PTY crashes do not
+    // take down the daemon just by importing this module.
+    cachedPty = require('node-pty');
+    ensureNodePtySpawnHelperPermissions();
+  } catch {
+    cachedPty = null;
+  }
+  return cachedPty;
 }
 
 export interface PtySpawnOptions {
@@ -90,6 +100,7 @@ class NodePtyRuntimeTransport implements PtyRuntimeTransport {
 
 export class NodePtyTransportFactory implements PtyTransportFactory {
   spawn(command: string, args: string[], options: PtySpawnOptions): PtyRuntimeTransport {
+    const pty = loadNodePty();
     if (!pty) throw new Error('node-pty is not installed');
     // Validate cwd — an invalid directory causes a native crash on Windows
     // (node-pty error code 267: ERROR_DIRECTORY) that bypasses JS try/catch

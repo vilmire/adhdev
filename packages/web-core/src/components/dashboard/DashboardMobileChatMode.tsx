@@ -706,6 +706,7 @@ export default function DashboardMobileChatMode({
                 <DashboardMobileChatRoom
                     selectedConversation={selectedConversation}
                     isAcp={isAcpConv(selectedConversation)}
+                    isStandalone={isStandalone}
                     selectedIdeEntry={selectedIdeEntry}
                     actionLogs={actionLogs}
                     userName={userName}
@@ -747,6 +748,7 @@ export default function DashboardMobileChatMode({
                     selectedMachineNeedsUpgrade={selectedMachineNeedsUpgrade}
                     appVersion={appVersion}
                     machineAction={{ state: machineActionState, message: machineActionMessage }}
+                    isStandalone={isStandalone}
                     section={section}
                     showBottomNav={machineBackTarget === 'inbox'}
                     onBack={handleBackFromMachine}

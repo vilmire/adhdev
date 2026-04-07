@@ -2,6 +2,15 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.15] - 2026-04-07
+
+### Fixed
+- **Windows CLI Isolation** — Lazy-load `node-pty` only when the local PTY backend is actually used, so session-host based CLI launches do not pull the native PTY module into the daemon process on Windows/Node 24.
+- **Mobile PWA Header Insets** — Removed duplicate top safe-area padding on mobile chat and machine detail screens when running in standalone/PWA mode.
+
+### Changed
+- **Windows Node 24+ Standalone Guard** — Treat Windows + Node.js 24+ as unsupported for standalone install/startup until the PTY/session-host path is stable there.
+
 ## [0.8.14] - 2026-04-07
 
 ### Added

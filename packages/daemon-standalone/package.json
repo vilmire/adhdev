@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/daemon-standalone",
-  "version": "0.8.14",
+  "version": "0.8.15",
   "description": "ADHDev standalone daemon — embedded HTTP/WS server for local dashboard",
   "main": "dist/index.js",
   "bin": {
@@ -8,6 +8,7 @@
     "adhdev": "./dist/index.js"
   },
   "scripts": {
+    "preinstall": "node -e \"const major=Number.parseInt(process.versions.node.split('.')[0],10); if (process.platform === 'win32' && major >= 24) { console.error('\\n✗ ADHDev standalone does not currently support Node.js 24+ on Windows.\\n  Install Node.js 22.x on Windows, then retry.\\n'); process.exit(1); }\"",
     "build": "tsup",
     "bundle:web": "node -e \"const{cpSync,mkdirSync}=require('fs');mkdirSync('public',{recursive:true});cpSync('../web-standalone/dist','public',{recursive:true});console.log('bundled web-standalone → public/')\"",
     "bundle:vendor": "node ./scripts/vendor-runtime-deps.mjs",

@@ -11,6 +11,7 @@ import CliViewModeToggle from './CliViewModeToggle'
 interface DashboardMobileChatRoomProps {
     selectedConversation: ActiveConversation
     isAcp: boolean
+    isStandalone: boolean
     selectedIdeEntry?: DaemonData
     actionLogs: { ideId: string; text: string; timestamp: number }[]
     userName?: string
@@ -34,6 +35,7 @@ interface DashboardMobileChatRoomProps {
 export default function DashboardMobileChatRoom({
     selectedConversation,
     isAcp,
+    isStandalone,
     selectedIdeEntry,
     actionLogs,
     userName,
@@ -56,10 +58,13 @@ export default function DashboardMobileChatRoom({
     const terminalRef = useRef<CliTerminalHandle | null>(null)
     const isCli = isCliConv(selectedConversation) && !isAcp
     const isCliTerminal = isCli && cliViewMode === 'terminal'
+    const headerPaddingClass = isStandalone
+        ? 'px-4 pt-3.5 pb-2.5'
+        : 'px-4 pt-[calc(14px+env(safe-area-inset-top,0px))] pb-2.5'
 
     return (
         <>
-            <div className="flex items-center justify-between gap-3 px-4 pt-[calc(14px+env(safe-area-inset-top,0px))] pb-2.5 border-b border-border-subtle/70 bg-bg-primary backdrop-blur-md">
+            <div className={`flex items-center justify-between gap-3 ${headerPaddingClass} border-b border-border-subtle/70 bg-bg-primary backdrop-blur-md`}>
                 <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <button
                         className="w-[34px] h-[34px] rounded-full border border-border-default bg-surface-primary/70 text-text-secondary shrink-0 inline-flex items-center justify-center hover:bg-surface-primary transition-colors"

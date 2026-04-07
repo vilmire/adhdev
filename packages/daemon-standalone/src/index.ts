@@ -71,6 +71,15 @@ if (pkgVersion === 'unknown') {
   } catch { /* noop */ }
 }
 
+if (process.platform === 'win32') {
+  const nodeMajor = Number.parseInt(process.versions.node.split('.')[0] || '0', 10);
+  if (nodeMajor >= 24) {
+    console.error('\n✗ Windows is currently unsupported on Node.js 24+ for ADHDev standalone.');
+    console.error('  Install Node.js 22.x on Windows, then retry.\n');
+    process.exit(1);
+  }
+}
+
 // ─── Types ───
 interface StandaloneOptions {
   port?: number;

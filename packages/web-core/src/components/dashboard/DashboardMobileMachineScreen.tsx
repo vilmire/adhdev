@@ -28,6 +28,7 @@ interface DashboardMobileMachineScreenProps {
     selectedMachineNeedsUpgrade: boolean
     appVersion: string | null
     machineAction: MobileMachineActionState
+    isStandalone: boolean
     section: DashboardMobileSection
     showBottomNav: boolean
     onBack: () => void
@@ -51,6 +52,7 @@ export default function DashboardMobileMachineScreen({
     selectedMachineNeedsUpgrade,
     appVersion,
     machineAction,
+    isStandalone,
     section,
     showBottomNav,
     onBack,
@@ -254,10 +256,13 @@ export default function DashboardMobileMachineScreen({
     }, [defaultWorkspaceId, onOpenConversation, onOpenRecent, openLaunchConfirm, topConversationItems, topRecentLaunches, workspaceRows])
     const visibleRecentCards = showAllRecent ? recentCards : recentCards.slice(0, 5)
     const hasRecentItems = recentCards.length > 0
+    const headerPaddingClass = isStandalone
+        ? 'px-4 pt-4 pb-3'
+        : 'px-4 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-3'
 
     return (
         <>
-            <div className="flex items-center justify-between gap-3 px-4 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-3 border-b border-border-subtle/70 bg-bg-primary backdrop-blur-md">
+            <div className={`flex items-center justify-between gap-3 ${headerPaddingClass} border-b border-border-subtle/70 bg-bg-primary backdrop-blur-md`}>
                 <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <button
                         className="w-[34px] h-[34px] rounded-full border border-border-default bg-surface-primary/70 text-text-secondary shrink-0 inline-flex items-center justify-center hover:bg-surface-primary transition-colors"
