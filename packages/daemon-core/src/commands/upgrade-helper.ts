@@ -187,6 +187,15 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
     appendUpgradeLog(installOutput.trim());
   }
 
+  // npm may leave a staging dir behind on Windows when prebuild-install holds
+  // conpty.node open during install scripts. Clean it up now that all npm child
+  // processes have exited.
+  if (process.platform === 'win32') {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    cleanupStaleGlobalInstallDirs(payload.packageName);
+    appendUpgradeLog('Post-install staging cleanup complete');
+  }
+
   if (restartArgv.length > 0) {
     const env = { ...process.env };
     delete env[UPGRADE_HELPER_ENV];
