@@ -49,6 +49,14 @@ adhdev standalone --port 8080 --host   # LAN access
 adhdev standalone --token mysecret     # Token auth
 ```
 
+On Windows, prefer:
+
+```powershell
+irm https://adhf.dev/install.ps1 | iex
+```
+
+The Windows one-line installer bootstraps a portable **Node.js 22** runtime when Node is missing or Node 24+ is installed.
+
 That's it! Open `http://localhost:3847` and your connected IDEs will appear automatically.
 
 ### CLI Options
