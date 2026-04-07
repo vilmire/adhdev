@@ -10,59 +10,119 @@ export interface ToastContainerProps {
     onClickToast?: (toast: Toast) => void;
 }
 
-const TYPE_BG: Record<string, string> = {
-    success: 'rgba(16, 185, 129, 0.95)',
-    warning: 'color-mix(in srgb, var(--status-warning) 95%, transparent)',
-    info: 'rgba(99, 102, 241, 0.95)',
+const TYPE_TONE: Record<string, { accent: string; chipBg: string; chipText: string; label: string }> = {
+    success: {
+        accent: 'var(--accent-primary)',
+        chipBg: 'color-mix(in srgb, var(--accent-primary) 14%, transparent)',
+        chipText: 'var(--accent-primary-light)',
+        label: 'Done',
+    },
+    warning: {
+        accent: 'var(--accent-primary)',
+        chipBg: 'color-mix(in srgb, var(--accent-primary) 14%, transparent)',
+        chipText: 'var(--accent-primary-light)',
+        label: 'Attention',
+    },
+    info: {
+        accent: 'var(--accent-primary)',
+        chipBg: 'color-mix(in srgb, var(--accent-primary) 14%, transparent)',
+        chipText: 'var(--accent-primary-light)',
+        label: 'Update',
+    },
 }
 
 export default function ToastContainer({ toasts, onDismiss, onClickToast }: ToastContainerProps) {
     return (
         <div className="fixed right-4 z-[9999] flex flex-col gap-2 pointer-events-none" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 16px)' }}>
-            {toasts.map(toast => (
-                <div
-                    key={toast.id}
-                    className="fade-in text-white px-5 py-3 rounded-xl text-[13px] font-semibold shadow-[0_8px_32px_rgba(0,0,0,0.3)] backdrop-blur-lg pointer-events-auto cursor-pointer animate-[toast-in_0.3s_ease-out] max-w-[360px] relative group"
-                    style={{ background: TYPE_BG[toast.type] || TYPE_BG.info }}
-                    onClick={() => {
-                        if (!toast.actions?.length) {
-                            if (onClickToast) onClickToast(toast);
-                            onDismiss(toast.id);
-                        }
-                    }}
-                >
-                    {/* Close button */}
-                    <button
-                        className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-white/50 hover:text-white hover:bg-white/20 transition-all text-[11px] leading-none opacity-0 group-hover:opacity-100 cursor-pointer"
-                        onClick={(e) => { e.stopPropagation(); onDismiss(toast.id); }}
-                        aria-label="Dismiss"
-                    >×</button>
-                    <div className="pr-4">{toast.message}</div>
-                    {toast.actions && toast.actions.length > 0 && (
-                        <div className="flex gap-2 mt-2">
-                            {toast.actions.map((action, idx) => (
-                                <button
-                                    key={idx}
-                                    className={`text-xs px-3 py-1 rounded-md font-bold transition-all cursor-pointer ${
-                                        action.variant === 'primary'
-                                            ? 'bg-white text-text-primary hover:bg-gray-100'
-                                            : action.variant === 'danger'
-                                            ? 'bg-red-500/30 text-white hover:bg-red-500/50'
-                                            : 'bg-white/20 text-white hover:bg-white/30'
-                                    }`}
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        action.onClick();
-                                        onDismiss(toast.id);
+            {toasts.map(toast => {
+                const tone = TYPE_TONE[toast.type] || TYPE_TONE.info
+                return (
+                    <div
+                        key={toast.id}
+                        className="fade-in pointer-events-auto cursor-pointer animate-[toast-in_0.3s_ease-out] max-w-[380px] relative group overflow-hidden rounded-[16px] border shadow-[0_18px_40px_rgba(2,6,23,0.24)] backdrop-blur-xl"
+                        style={{
+                            background: 'color-mix(in srgb, var(--surface-primary) 94%, var(--bg-secondary) 6%)',
+                            borderColor: 'color-mix(in srgb, var(--border-default) 88%, transparent)',
+                            color: 'var(--text-primary)',
+                        }}
+                        onClick={() => {
+                            if (!toast.actions?.length) {
+                                if (onClickToast) onClickToast(toast);
+                                onDismiss(toast.id);
+                            }
+                        }}
+                    >
+                        <div
+                            className="absolute inset-y-0 left-0 w-[3px]"
+                            style={{ background: `linear-gradient(180deg, ${tone.accent}, color-mix(in srgb, ${tone.accent} 55%, transparent))` }}
+                        />
+                        <button
+                            className="absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-glass transition-colors text-[13px] leading-none cursor-pointer"
+                            onClick={(e) => { e.stopPropagation(); onDismiss(toast.id); }}
+                            aria-label="Dismiss"
+                        >×</button>
+                        <div className="px-4 py-3.5 pl-5">
+                            <div className="flex items-center gap-2 pr-8">
+                                <span
+                                    className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em]"
+                                    style={{
+                                        background: tone.chipBg,
+                                        color: tone.chipText,
+                                        border: `1px solid color-mix(in srgb, ${tone.accent} 22%, transparent)`,
                                     }}
                                 >
-                                    {action.label}
-                                </button>
-                            ))}
+                                    {tone.label}
+                                </span>
+                            </div>
+                            <div className="mt-2 text-[13px] font-semibold leading-[1.45] text-text-primary">
+                                {toast.message}
+                            </div>
+                            {toast.actions && toast.actions.length > 0 && (
+                                <div className="flex gap-2 mt-3">
+                                    {toast.actions.map((action, idx) => (
+                                        <button
+                                            key={idx}
+                                            className={`text-xs px-3 py-1.5 rounded-lg font-bold border transition-colors cursor-pointer ${
+                                                action.variant === 'primary'
+                                                    ? ''
+                                                    : action.variant === 'danger'
+                                                        ? ''
+                                                        : ''
+                                            }`}
+                                            style={
+                                                action.variant === 'primary'
+                                                    ? {
+                                                        background: 'color-mix(in srgb, var(--accent-primary) 12%, var(--surface-primary))',
+                                                        color: 'var(--text-primary)',
+                                                        borderColor: 'color-mix(in srgb, var(--accent-primary) 26%, transparent)',
+                                                    }
+                                                    : action.variant === 'danger'
+                                                        ? {
+                                                            background: 'color-mix(in srgb, var(--status-error) 10%, var(--surface-primary))',
+                                                            color: 'var(--status-error)',
+                                                            borderColor: 'color-mix(in srgb, var(--status-error) 22%, transparent)',
+                                                        }
+                                                        : {
+                                                            background: 'var(--surface-secondary)',
+                                                            color: 'var(--text-secondary)',
+                                                            borderColor: 'var(--border-subtle)',
+                                                        }
+                                            }
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                action.onClick();
+                                                onDismiss(toast.id);
+                                            }}
+                                        >
+                                            {action.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
                         </div>
-                    )}
-                </div>
-            ))}
+                    </div>
+                )
+            })}
         </div>
     );
 }

@@ -28,8 +28,12 @@ export function getConversationSortTimestamp(conversation: ActiveConversation): 
     return getConversationTimestamp(conversation)
 }
 
-export function compareConversationRecency(left: ActiveConversation, right: ActiveConversation): number {
-    const activityDiff = getConversationSortTimestamp(right) - getConversationSortTimestamp(left)
+export function compareConversationRecency(
+    left: ActiveConversation,
+    right: ActiveConversation,
+    getSortTimestamp: (conversation: ActiveConversation) => number = getConversationSortTimestamp,
+): number {
+    const activityDiff = getSortTimestamp(right) - getSortTimestamp(left)
     if (activityDiff !== 0) return activityDiff
 
     const machineDiff = (left.machineName || '').localeCompare(right.machineName || '')

@@ -195,6 +195,20 @@ function sanitizeTerminalText(str: string): string {
     return stripTerminalNoise(stripAnsi(str));
 }
 
+function applyPreferredTerminalColorEnv(env: Record<string, string>): void {
+    if (env.NO_COLOR) return;
+
+    if (!env.TERM || env.TERM === 'xterm-color') {
+        env.TERM = 'xterm-256color';
+    }
+    if (!env.COLORTERM) env.COLORTERM = 'truecolor';
+
+    if (process.platform === 'win32') {
+        if (!env.FORCE_COLOR) env.FORCE_COLOR = '1';
+        if (!env.CLICOLOR) env.CLICOLOR = '1';
+    }
+}
+
 function buildCliSpawnEnv(baseEnv: NodeJS.ProcessEnv, overrides?: Record<string, string>): Record<string, string> {
     const env: Record<string, string> = {};
     const source = { ...baseEnv, ...(overrides || {}) } as NodeJS.ProcessEnv;
@@ -207,8 +221,6 @@ function buildCliSpawnEnv(baseEnv: NodeJS.ProcessEnv, overrides?: Record<string,
     for (const key of Object.keys(env)) {
         if (
             key === 'INIT_CWD'
-            || key === 'NO_COLOR'
-            || key === 'FORCE_COLOR'
             || key === 'npm_command'
             || key === 'npm_execpath'
             || key === 'npm_node_execpath'
@@ -224,6 +236,7 @@ function buildCliSpawnEnv(baseEnv: NodeJS.ProcessEnv, overrides?: Record<string,
         }
     }
 
+    applyPreferredTerminalColorEnv(env);
     return env;
 }
 

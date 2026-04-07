@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useRef } from 'react'
 import { buildIdeConversations, buildMachineNameMap, type LocalUserMessage } from '../components/dashboard/buildConversations'
-import { compareConversationRecency } from '../components/dashboard/conversation-sort'
+import { compareConversationRecency, getConversationSortTimestamp } from '../components/dashboard/conversation-sort'
 import type { ActiveConversation } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
+import { normalizeTextContent } from '../utils/text'
 
 type LocalMessageRef = {
     key: string
@@ -93,6 +94,27 @@ type ConversationCacheEntry = {
     conversations: ActiveConversation[]
 }
 
+type ConversationSortCacheEntry = {
+    signature: string
+    timestamp: number
+}
+
+function getLastConversationMessage(conversation: ActiveConversation) {
+    return [...conversation.messages].reverse().find((message: any) => !(message as any)?._localId)
+        || conversation.messages[conversation.messages.length - 1]
+}
+
+function getConversationSortSignature(conversation: ActiveConversation) {
+    const lastMessage: any = getLastConversationMessage(conversation)
+    if (!lastMessage) return `empty:${conversation.messages.length}`
+    if (lastMessage.id) return `id:${String(lastMessage.id)}`
+    if (lastMessage._localId) return `local:${String(lastMessage._localId)}`
+
+    const role = String(lastMessage.role || '')
+    const content = normalizeTextContent(lastMessage.content).slice(0, 240)
+    return `${conversation.messages.length}:${role}:${content}`
+}
+
 export function useDashboardConversations({
     ides,
     connectionStates,
@@ -112,6 +134,7 @@ export function useDashboardConversations({
     }, [ides])
     const machineNames = useMemo(() => buildMachineNameMap(ides), [ides])
     const cacheRef = useRef<Map<string, ConversationCacheEntry>>(new Map())
+    const sortCacheRef = useRef<Map<string, ConversationSortCacheEntry>>(new Map())
 
     const baseConversations = useMemo(() => {
         const nextCache = new Map<string, ConversationCacheEntry>()
@@ -152,7 +175,28 @@ export function useDashboardConversations({
         }
 
         cacheRef.current = nextCache
-        return [...nextConversations].sort(compareConversationRecency)
+        const nextSortCache = new Map<string, ConversationSortCacheEntry>()
+        const getStableSortTimestamp = (conversation: ActiveConversation) => {
+            const signature = getConversationSortSignature(conversation)
+            const previous = sortCacheRef.current.get(conversation.tabKey)
+            if (previous && previous.signature === signature) {
+                nextSortCache.set(conversation.tabKey, previous)
+                return previous.timestamp
+            }
+
+            const nextEntry = {
+                signature,
+                timestamp: getConversationSortTimestamp(conversation) || previous?.timestamp || 0,
+            }
+            nextSortCache.set(conversation.tabKey, nextEntry)
+            return nextEntry.timestamp
+        }
+
+        const sorted = [...nextConversations].sort((left, right) => (
+            compareConversationRecency(left, right, getStableSortTimestamp)
+        ))
+        sortCacheRef.current = nextSortCache
+        return sorted
     }, [chatIdes, localUserMessages, connectionStates, machineNames])
 
     const conversations = useMemo(() => {

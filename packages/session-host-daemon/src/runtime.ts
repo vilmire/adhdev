@@ -88,8 +88,6 @@ function buildRuntimeEnv(baseEnv: NodeJS.ProcessEnv, launchEnv?: Record<string, 
   for (const key of Object.keys(env)) {
     if (
       key === 'INIT_CWD'
-      || key === 'NO_COLOR'
-      || key === 'FORCE_COLOR'
       || key === 'npm_command'
       || key === 'npm_execpath'
       || key === 'npm_node_execpath'
@@ -102,6 +100,15 @@ function buildRuntimeEnv(baseEnv: NodeJS.ProcessEnv, launchEnv?: Record<string, 
       || key.startsWith('BUN_')
     ) {
       delete env[key];
+    }
+  }
+
+  if (!env.NO_COLOR) {
+    if (!env.TERM || env.TERM === 'xterm-color') env.TERM = 'xterm-256color';
+    if (!env.COLORTERM) env.COLORTERM = 'truecolor';
+    if (process.platform === 'win32') {
+      if (!env.FORCE_COLOR) env.FORCE_COLOR = '1';
+      if (!env.CLICOLOR) env.CLICOLOR = '1';
     }
   }
 
@@ -276,7 +283,7 @@ export class PtySessionRuntime {
     }
 
     this.ptyProcess = pty.spawn(command, args, {
-      name: os.platform() === 'win32' ? 'xterm-color' : 'xterm-256color',
+      name: 'xterm-256color',
       cols: this.cols,
       rows: this.rows,
       cwd,

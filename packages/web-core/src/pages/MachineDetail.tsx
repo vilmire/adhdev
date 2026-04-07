@@ -421,13 +421,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                     onUpgradeDaemon={async () => {
                                         try { await sendDaemonCommand(machineId!, 'daemon_upgrade', {}) } catch {}
                                     }}
-                                    onOpenLogs={() => setActiveTab('logs')}
                                     onOpenRecent={handleOpenRecent}
-                                    onOpenWorkspace={(kind) => {
-                                        setWorkspaceCategoryHint(kind)
-                                        setActiveTab('workspace')
-                                    }}
-                                    onGoTab={setActiveTab}
                                 />
                                 <MachineWorkspaceTab
                                     machine={machine}

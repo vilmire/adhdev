@@ -9,7 +9,7 @@ import DashboardMobileChatRoom from './DashboardMobileChatRoom'
 import DashboardMobileChatInbox from './DashboardMobileChatInbox'
 import DashboardMobileMachineScreen from './DashboardMobileMachineScreen'
 import type { DashboardMobileSection } from './DashboardMobileBottomNav'
-import { compareConversationRecency, getConversationTimestamp } from './conversation-sort'
+import { getConversationTimestamp } from './conversation-sort'
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
 import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, getConversationLiveInboxState } from './DashboardMobileChatShared'
 import { compareMachineEntries, getDaemonEntryActivityAt, getMachineDisplayName, isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
@@ -271,7 +271,7 @@ export default function DashboardMobileChatMode({
             isWorking: surfaceState.isWorking,
             inboxBucket: surfaceState.inboxBucket,
         }
-    }).sort((a, b) => compareConversationRecency(a.conversation, b.conversation)), [conversations, liveSessionInboxState, screen, selectedConversation])
+    }), [conversations, liveSessionInboxState, screen, selectedConversation])
 
     useEffect(() => {
         const taskCompleteItems = items.filter(item => item.inboxBucket === 'task_complete' || item.unread)

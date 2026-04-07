@@ -8,15 +8,42 @@ export interface BrowseDirectoryResult {
     directories: BrowseDirectoryEntry[]
 }
 
+function normalizeWindowsBrowseCandidate(candidate: string): string | null {
+    const value = candidate.trim()
+    if (!value) return null
+    if (value.startsWith('~')) return value
+    if (/^[A-Za-z]:$/.test(value)) return `${value[0].toUpperCase()}:\\`
+    if (/^[A-Za-z]:[\\/]/.test(value)) return `${value[0].toUpperCase()}:${value.slice(2).replace(/\//g, '\\')}`
+    if (/^[A-Za-z]:[^\\/].*$/.test(value)) return `${value[0].toUpperCase()}:\\${value.slice(2).replace(/[\\/]+/g, '\\')}`
+
+    const slashDriveMatch = value.match(/^[/\\]([A-Za-z])(?:[/\\](.*))?$/)
+    if (slashDriveMatch) {
+        const drive = slashDriveMatch[1].toUpperCase()
+        const rest = (slashDriveMatch[2] || '').replace(/[\\/]+/g, '\\')
+        return rest ? `${drive}:\\${rest}` : `${drive}:\\`
+    }
+
+    return null
+}
+
 export function getDefaultBrowseStartPath(
     platform: string | null | undefined,
     candidates: Array<string | null | undefined> = [],
 ): string {
+    if (platform === 'win32') {
+        for (const candidate of candidates) {
+            if (typeof candidate !== 'string') continue
+            const normalized = normalizeWindowsBrowseCandidate(candidate)
+            if (normalized) return normalized
+        }
+        return 'C:\\'
+    }
+
     for (const candidate of candidates) {
         const value = typeof candidate === 'string' ? candidate.trim() : ''
         if (value) return value
     }
-    return platform === 'win32' ? 'C:\\' : '~'
+    return '~'
 }
 
 export function getParentBrowsePath(currentPath: string): string | null {

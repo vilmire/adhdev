@@ -202,17 +202,54 @@ export async function handleDiscoverAgents(h: CommandHelpers, args: any): Promis
 
 // ─── File commands ─────────────────────────────
 
-function resolveSafePath(requestedPath: string): string {
-    const home = os.homedir();
-    let resolved: string;
-    if (requestedPath.startsWith('~')) {
-        resolved = path.join(home, requestedPath.slice(1));
-    } else if (path.isAbsolute(requestedPath)) {
-        resolved = requestedPath;
-    } else {
-        resolved = path.resolve(requestedPath);
+function normalizeWindowsRequestedPath(requestedPath: string): string {
+    const trimmed = requestedPath.trim();
+    if (!trimmed) return '.';
+
+    const slashDriveMatch = trimmed.match(/^[/\\]([A-Za-z])(?:[/\\](.*))?$/);
+    if (slashDriveMatch) {
+        const drive = slashDriveMatch[1].toUpperCase();
+        const rest = (slashDriveMatch[2] || '').replace(/[/\\]+/g, '\\');
+        return rest ? `${drive}:\\${rest}` : `${drive}:\\`;
     }
-    return resolved;
+
+    if (/^[A-Za-z]:$/.test(trimmed)) {
+        return `${trimmed[0].toUpperCase()}:\\`;
+    }
+
+    if (/^[A-Za-z]:[^/\\].*$/.test(trimmed)) {
+        return `${trimmed[0].toUpperCase()}:\\${trimmed.slice(2).replace(/[/\\]+/g, '\\')}`;
+    }
+
+    if (/^[A-Za-z]:[/\\]/.test(trimmed)) {
+        return `${trimmed[0].toUpperCase()}:${trimmed.slice(2)}`;
+    }
+
+    return trimmed;
+}
+
+function resolveSafePath(requestedPath: string): string {
+    const rawPath = typeof requestedPath === 'string' ? requestedPath.trim() : '';
+    const inputPath = rawPath || '.';
+    const home = os.homedir();
+
+    if (inputPath.startsWith('~')) {
+        return path.resolve(path.join(home, inputPath.slice(1)));
+    }
+
+    if (process.platform === 'win32') {
+        const normalized = normalizeWindowsRequestedPath(inputPath);
+        if (path.win32.isAbsolute(normalized)) {
+            return path.win32.normalize(normalized);
+        }
+        return path.win32.resolve(normalized);
+    }
+
+    if (path.isAbsolute(inputPath)) {
+        return path.normalize(inputPath);
+    }
+
+    return path.resolve(inputPath);
 }
 
 function listDirectoryEntriesSafe(dirPath: string): Array<{ name: string; type: 'directory' | 'file'; size?: number }> {

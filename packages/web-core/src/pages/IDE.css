@@ -660,31 +660,54 @@
 }
 
 .ide-toast {
-    padding: 10px 18px;
-    border-radius: 12px;
+    padding: 12px 16px;
+    border-radius: 16px;
     font-size: 13px;
     font-weight: 600;
-    backdrop-filter: blur(12px);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    line-height: 1.45;
+    backdrop-filter: blur(18px);
+    box-shadow: 0 18px 40px rgba(2, 6, 23, 0.24);
     pointer-events: auto;
     cursor: pointer;
     animation: toast-in 0.25s ease-out;
     max-width: 360px;
+    border: 1px solid var(--border-default);
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--surface-primary) 94%, var(--bg-secondary) 6%);
+    position: relative;
+    overflow: hidden;
+}
+
+.ide-toast::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: color-mix(in srgb, var(--accent-primary) 82%, transparent);
 }
 
 .ide-toast.success {
-    background: rgba(16, 185, 129, 0.92);
-    color: white;
+    border-color: color-mix(in srgb, var(--accent-primary) 22%, var(--border-default));
 }
 
 .ide-toast.warning {
-    background: color-mix(in srgb, var(--status-warning) 92%, transparent);
-    color: white;
+    border-color: color-mix(in srgb, var(--accent-primary) 22%, var(--border-default));
 }
 
 .ide-toast.info {
-    background: rgba(99, 102, 241, 0.92);
-    color: white;
+    border-color: color-mix(in srgb, var(--accent-primary) 22%, var(--border-default));
+}
+
+.ide-toast.success::before {
+    background: linear-gradient(180deg, var(--accent-primary), color-mix(in srgb, var(--accent-primary) 55%, transparent));
+}
+
+.ide-toast.warning::before {
+    background: linear-gradient(180deg, var(--accent-primary), color-mix(in srgb, var(--accent-primary) 55%, transparent));
+}
+
+.ide-toast.info::before {
+    background: linear-gradient(180deg, var(--accent-primary), color-mix(in srgb, var(--accent-primary) 55%, transparent));
 }
 
 /* ─── Animations ─────────────────────────────────────── */

@@ -92,7 +92,7 @@ export class NodePtyTransportFactory implements PtyTransportFactory {
   spawn(command: string, args: string[], options: PtySpawnOptions): PtyRuntimeTransport {
     if (!pty) throw new Error('node-pty is not installed');
     const handle = pty.spawn(command, args, {
-      name: os.platform() === 'win32' ? 'xterm-color' : 'xterm-256color',
+      name: 'xterm-256color',
       cols: options.cols,
       rows: options.rows,
       cwd: options.cwd,
