@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/terminal-render-web",
-  "version": "0.8.18",
+  "version": "0.8.19",
   "private": true,
   "type": "module",
   "main": "src/index.tsx",
