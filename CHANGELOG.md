@@ -2,6 +2,11 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.24] - 2026-04-08
+
+### Fixed
+- Removed the xterm canvas fallback dependency from `terminal-render-web` so release builds no longer depend on the incompatible `@xterm/addon-canvas` + xterm 5 pairing.
+
 ## [0.8.23] - 2026-04-08
 
 ### Added
@@ -16,7 +21,7 @@ All notable changes to ADHDev will be documented in this file.
 - Terminal renderer module loading so the xterm-based terminal initializes correctly under Vite dev/HMR.
 
 ### Changed
-- Replaced `ghostty-web` with xterm.js-based terminal rendering with WebGL, Canvas, and DOM fallback paths.
+- Replaced `ghostty-web` with xterm.js-based terminal rendering with WebGL and DOM fallback paths.
 - Made dashboard terminal sizing daemon-authoritative by default and removed frontend transcript re-parsing from chat rendering.
 - Simplified CLI transcript rendering so providers own parsing and the web renderer only decides presentation from explicit metadata.
 

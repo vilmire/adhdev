@@ -8,7 +8,6 @@ import React, {
 import '@xterm/xterm/css/xterm.css';
 import { Terminal } from '@xterm/xterm';
 import { WebglAddon } from '@xterm/addon-webgl';
-import { CanvasAddon } from '@xterm/addon-canvas';
 import { FitAddon } from '@xterm/addon-fit';
 
 export interface TerminalRendererHandle {
@@ -38,7 +37,7 @@ export interface GhosttyTerminalViewProps {
 const DEFAULT_TERMINAL_COLS = 80;
 const DEFAULT_TERMINAL_ROWS = 24;
 
-type RendererKind = 'webgl' | 'canvas' | 'dom';
+type RendererKind = 'webgl' | 'dom';
 
 const TERMINAL_THEME = {
   background: '#0f1117',
@@ -172,7 +171,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           fitAddonRef.current = fitAddon;
         }
 
-        // WebGL → Canvas → DOM fallback
+        // WebGL → DOM fallback
         let kind: RendererKind = 'dom';
         try {
           const webglAddon = new WebglAddon();
@@ -181,12 +180,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           });
           term.loadAddon(webglAddon);
           kind = 'webgl';
-        } catch {
-          try {
-            term.loadAddon(new CanvasAddon());
-            kind = 'canvas';
-          } catch {}
-        }
+        } catch {}
 
         if (!rendererRuntimeLogged) {
           rendererRuntimeLogged = true;
