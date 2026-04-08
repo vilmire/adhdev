@@ -104,20 +104,25 @@ export function useDashboardEventManager({
     useEffect(() => {
         const handler = (event: MessageEvent) => {
             const data = event.data
-            if (data?.type !== 'notification_action' || data.action !== 'approve') return
+            if (data?.type !== 'notification_action' || typeof data.action !== 'string' || !data.action.startsWith('approval_')) return
             if (!(data.ideId || data.targetSessionId || data.targetKey)) return
 
             const targetKey = data.targetSessionId || data.targetKey || data.ideId
             const matchedConv = resolveConversationByTarget(targetKey)
             const routeId = matchedConv?.ideId || data.ideId
             if (!routeId) return
+            const buttonIndex = Number(data.buttonIndex)
+            const buttonText = data.button || matchedConv?.modalButtons?.[buttonIndex] || 'Approve'
+            const clean = String(buttonText).replace(/[⌥⏎⇧⌫⌘⌃↵]/g, '').trim().toLowerCase()
+            const isApprove = /^(run|approve|accept|yes|allow|always|proceed|save)/.test(clean)
 
             sendDaemonCommand(routeId, 'resolve_action', {
-                action: 'approve',
-                button: 'Approve',
+                action: isApprove ? 'approve' : 'reject',
+                button: buttonText,
+                ...(Number.isFinite(buttonIndex) && { buttonIndex }),
                 ...(matchedConv?.sessionId && { targetSessionId: matchedConv.sessionId }),
                 ...(data.targetSessionId && { targetSessionId: data.targetSessionId }),
-            }).catch(error => console.error('[SW Action] approve failed:', error))
+            }).catch(error => console.error('[SW Action] approval failed:', error))
         }
 
         navigator.serviceWorker?.addEventListener('message', handler)

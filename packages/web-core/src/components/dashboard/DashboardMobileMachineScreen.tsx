@@ -200,62 +200,57 @@ export default function DashboardMobileMachineScreen({
         setActiveLauncherKind(getDefaultLauncherKind(hasIdeOptions, cliProviders.length, acpProviders.length))
     }, [activeLauncherKind, acpProviders.length, cliProviders.length, hasIdeOptions])
 
-    const recentCards = useMemo(() => {
-        const launchCards = topRecentLaunches.map(session => ({
-            key: `recent-launch:${session.id}`,
-            type: 'session' as const,
-            primary: session.label,
-            secondary: `${formatKindLabel(session.kind)}${session.subtitle ? ` · ${session.subtitle}` : ''}`,
-            unread: false,
-            onClick: () => {
-                const { options, selectedKey } = buildLaunchWorkspaceOptions({
-                    machine: {
-                        workspaces: workspaceRows,
-                        defaultWorkspaceId,
-                    },
-                    currentWorkspacePath: session.workspace,
+    const recentLaunchCards = useMemo(() => topRecentLaunches.map(session => ({
+        key: `recent-launch:${session.id}`,
+        primary: session.label,
+        secondary: `${formatKindLabel(session.kind)}${session.subtitle ? ` · ${session.subtitle}` : ''}`,
+        onClick: () => {
+            const { options, selectedKey } = buildLaunchWorkspaceOptions({
+                machine: {
+                    workspaces: workspaceRows,
+                    defaultWorkspaceId,
+                },
+                currentWorkspacePath: session.workspace,
+            })
+            openLaunchConfirm({
+                title: `Launch ${session.label}?`,
+                description: 'Recent launches require one more confirmation before they run.',
+                confirmLabel: 'Launch',
+                workspaceOptions: options,
+                selectedWorkspaceKey: selectedKey,
+                details: [
+                    { label: 'Mode', value: formatKindLabel(session.kind) },
+                    ...(session.providerType ? [{ label: 'Provider', value: session.providerType }] : []),
+                ],
+            }, async () => {
+                const selectedOption = options.find(option => option.key === launchConfirmWorkspaceKeyRef.current)
+                if (selectedOption?.workspaceId) {
+                    setWorkspaceChoice(selectedOption.workspaceId)
+                    setCustomWorkspacePath('')
+                } else if (selectedOption?.workspacePath) {
+                    setWorkspaceChoice('__custom__')
+                    setCustomWorkspacePath(selectedOption.workspacePath)
+                } else {
+                    setWorkspaceChoice('')
+                    setCustomWorkspacePath('')
+                }
+                await onOpenRecent({
+                    ...session,
+                    workspace: selectedOption?.workspacePath ?? null,
                 })
-                openLaunchConfirm({
-                    title: `Launch ${session.label}?`,
-                    description: 'Recent launches require one more confirmation before they run.',
-                    confirmLabel: 'Launch',
-                    workspaceOptions: options,
-                    selectedWorkspaceKey: selectedKey,
-                    details: [
-                        { label: 'Mode', value: formatKindLabel(session.kind) },
-                        ...(session.providerType ? [{ label: 'Provider', value: session.providerType }] : []),
-                    ],
-                }, async () => {
-                    const selectedOption = options.find(option => option.key === launchConfirmWorkspaceKeyRef.current)
-                    if (selectedOption?.workspaceId) {
-                        setWorkspaceChoice(selectedOption.workspaceId)
-                        setCustomWorkspacePath('')
-                    } else if (selectedOption?.workspacePath) {
-                        setWorkspaceChoice('__custom__')
-                        setCustomWorkspacePath(selectedOption.workspacePath)
-                    } else {
-                        setWorkspaceChoice('')
-                        setCustomWorkspacePath('')
-                    }
-                    await onOpenRecent({
-                        ...session,
-                        workspace: selectedOption?.workspacePath ?? null,
-                    })
-                })
-            },
-        }))
-        const conversationCards = topConversationItems.map(item => ({
-            key: `recent-chat:${item.conversation.tabKey}`,
-            type: 'conversation' as const,
-            primary: item.conversation.displayPrimary,
-            secondary: `Chat${item.conversation.displaySecondary ? ` · ${item.conversation.displaySecondary}` : ''}${item.timestamp ? ` · ${formatRelativeTime(item.timestamp)}` : ''}`,
-            unread: item.unread,
-            onClick: () => onOpenConversation(item.conversation),
-        }))
-        return [...launchCards, ...conversationCards]
-    }, [defaultWorkspaceId, onOpenConversation, onOpenRecent, openLaunchConfirm, topConversationItems, topRecentLaunches, workspaceRows])
-    const visibleRecentCards = showAllRecent ? recentCards : recentCards.slice(0, 5)
-    const hasRecentItems = recentCards.length > 0
+            })
+        },
+    })), [defaultWorkspaceId, onOpenRecent, openLaunchConfirm, topRecentLaunches, workspaceRows])
+    const conversationCards = useMemo(() => topConversationItems.map(item => ({
+        key: `recent-chat:${item.conversation.tabKey}`,
+        primary: item.conversation.displayPrimary,
+        secondary: `Chat${item.conversation.displaySecondary ? ` · ${item.conversation.displaySecondary}` : ''}${item.timestamp ? ` · ${formatRelativeTime(item.timestamp)}` : ''}`,
+        unread: item.unread,
+        onClick: () => onOpenConversation(item.conversation),
+    })), [onOpenConversation, topConversationItems])
+    const visibleRecentLaunchCards = showAllRecent ? recentLaunchCards : recentLaunchCards.slice(0, 4)
+    const hasRecentLaunches = recentLaunchCards.length > 0
+    const hasCurrentChats = conversationCards.length > 0
     const headerPaddingClass = isStandalone
         ? 'px-4 pt-4 pb-3'
         : 'px-4 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-3'
@@ -285,11 +280,11 @@ export default function DashboardMobileMachineScreen({
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto py-2 flex flex-col gap-2 -webkit-overflow-scrolling-touch">
-                {hasRecentItems && (
+                {hasCurrentChats && (
                     <section className="flex flex-col gap-0">
-                        <div className="text-[11px] font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Recent</div>
+                        <div className="text-[11px] font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Current Chats</div>
                         <div className="grid grid-cols-1 gap-2.5 px-4">
-                            {visibleRecentCards.map(card => (
+                            {conversationCards.map(card => (
                                 <button
                                     key={card.key}
                                     className={`flex flex-col gap-1 w-full text-left p-[14px] rounded-2xl border ${card.unread ? 'border-accent-primary/25 bg-accent-primary/5' : 'border-border-default/80 bg-surface-primary/90'} text-text-primary`}
@@ -303,14 +298,35 @@ export default function DashboardMobileMachineScreen({
                                 </button>
                             ))}
                         </div>
-                        {recentCards.length > 5 && (
+                    </section>
+                )}
+
+                {hasRecentLaunches && (
+                    <section className="flex flex-col gap-0">
+                        <div className="text-[11px] font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Recent Launches</div>
+                        <div className="grid grid-cols-1 gap-2.5 px-4">
+                            {visibleRecentLaunchCards.map(card => (
+                                <button
+                                    key={card.key}
+                                    className="flex flex-col gap-1 w-full text-left p-[14px] rounded-2xl border border-border-default/80 bg-surface-primary/90 text-text-primary"
+                                    type="button"
+                                    onClick={card.onClick}
+                                >
+                                    <span className="text-sm font-bold text-text-primary">{card.primary}</span>
+                                    <span className="text-xs leading-relaxed text-text-secondary">
+                                        {card.secondary}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+                        {recentLaunchCards.length > 4 && (
                             <div className="flex justify-center px-4 pt-2">
                                 <button
                                     type="button"
                                     className="min-h-[34px] px-3.5 rounded-full border border-border-default/80 bg-surface-primary/90 text-text-secondary text-xs font-bold"
                                     onClick={() => setShowAllRecent(current => !current)}
                                 >
-                                    {showAllRecent ? 'Show fewer' : `Show ${recentCards.length - 5} more`}
+                                    {showAllRecent ? 'Show fewer' : `Show ${recentLaunchCards.length - 4} more`}
                                 </button>
                             </div>
                         )}

@@ -9,7 +9,7 @@ import IDEChatTabs from '../ide/IDEChatTabs'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 import { useIdeRemoteStream } from '../../hooks/useIdeRemoteStream'
 import { useIdeConversations } from '../../hooks/useIdeConversations'
-import { IconMonitor, IconScroll } from '../Icons'
+import { IconMonitor, IconScroll, IconSplitView } from '../Icons'
 import { formatIdeType } from '../../utils/daemon-utils'
 
 type RemoteDialogViewMode = 'split' | 'remote'
@@ -158,7 +158,7 @@ export default function DashboardRemoteDialog({
                                         onClick={() => setViewMode(mode)}
                                         title={mode === 'split' ? 'Split view' : 'Remote only'}
                                     >
-                                        {mode === 'split' ? <span className="font-bold text-lg leading-none mb-0.5">⊞</span> : <IconMonitor size={15} />}
+                                        {mode === 'split' ? <IconSplitView size={15} /> : <IconMonitor size={15} />}
                                     </button>
                                 )
                             })}

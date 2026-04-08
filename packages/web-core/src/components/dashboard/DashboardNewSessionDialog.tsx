@@ -4,8 +4,25 @@ import { compareMachineEntries, getMachineDisplayName, getWorkspaceDisplayLabel 
 import { IconFolder, IconPlay, IconX } from '../Icons'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
 import { getDefaultBrowseStartPath, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
+import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
 
 type LaunchKind = 'ide' | 'cli' | 'acp'
+
+interface SavedSessionOption {
+    id: string
+    providerSessionId: string
+    providerType: string
+    providerName: string
+    kind: 'cli' | 'acp'
+    title: string
+    workspace?: string | null
+    currentModel?: string
+    preview?: string
+    messageCount: number
+    firstMessageAt: number
+    lastMessageAt: number
+    canResume: boolean
+}
 
 interface DashboardNewSessionDialogProps {
     machines: DaemonData[]
@@ -17,8 +34,15 @@ interface DashboardNewSessionDialogProps {
         machineId: string,
         kind: 'cli' | 'acp',
         providerType: string,
-        opts?: { workspaceId?: string | null; workspacePath?: string | null },
+        opts?: {
+            workspaceId?: string | null
+            workspacePath?: string | null
+            resumeSessionId?: string | null
+            cliArgs?: string[]
+            initialModel?: string | null
+        },
     ) => Promise<{ ok: boolean; error?: string }>
+    onListSavedSessions: (machineId: string, providerType: string) => Promise<SavedSessionOption[]>
 }
 
 function getDefaultLaunchKind(machine: DaemonData | undefined) {
@@ -31,6 +55,14 @@ function getDefaultLaunchKind(machine: DaemonData | undefined) {
     return null
 }
 
+function normalizePath(path: string | null | undefined) {
+    return String(path || '')
+        .trim()
+        .replace(/\\/g, '/')
+        .replace(/\/+$/, '')
+        .toLowerCase()
+}
+
 export default function DashboardNewSessionDialog({
     machines,
     onClose,
@@ -38,6 +70,7 @@ export default function DashboardNewSessionDialog({
     onSaveWorkspace,
     onLaunchIde,
     onLaunchProvider,
+    onListSavedSessions,
 }: DashboardNewSessionDialogProps) {
     const sortedMachines = useMemo(
         () => [...machines].sort(compareMachineEntries),
@@ -57,6 +90,12 @@ export default function DashboardNewSessionDialog({
     const [customWorkspacePath, setCustomWorkspacePath] = useState('')
     const [activeKind, setActiveKind] = useState<LaunchKind | null>(getDefaultLaunchKind(sortedMachines[0]))
     const [selectedTarget, setSelectedTarget] = useState('')
+    const [launchArgs, setLaunchArgs] = useState('')
+    const [recentArgsOptions, setRecentArgsOptions] = useState<string[]>([])
+    const [selectedResumeSessionId, setSelectedResumeSessionId] = useState('')
+    const [savedSessions, setSavedSessions] = useState<SavedSessionOption[]>([])
+    const [savedSessionsLoading, setSavedSessionsLoading] = useState(false)
+    const [savedSessionsError, setSavedSessionsError] = useState('')
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState('')
     const [browseDialogOpen, setBrowseDialogOpen] = useState(false)
@@ -66,6 +105,7 @@ export default function DashboardNewSessionDialog({
     const [browseError, setBrowseError] = useState('')
     const [savingWorkspace, setSavingWorkspace] = useState(false)
     const initializedMachineIdRef = useRef<string | null>(null)
+    const savedSessionsRequestSeqRef = useRef(0)
 
     useEffect(() => {
         if (!selectedMachineId && sortedMachines[0]?.id) {
@@ -116,6 +156,10 @@ export default function DashboardNewSessionDialog({
             setCustomWorkspacePath('')
             setActiveKind(getDefaultLaunchKind(selectedMachine))
             setSelectedTarget('')
+            setLaunchArgs('')
+            setSelectedResumeSessionId('')
+            setSavedSessions([])
+            setSavedSessionsError('')
             setMessage('')
             return
         }
@@ -140,11 +184,78 @@ export default function DashboardNewSessionDialog({
         setSelectedTarget(providerTargets[0]?.id || '')
     }, [activeKind, providerTargets, selectedTarget])
 
+    const loadSavedSessions = useCallback(async (machineId: string, providerType: string) => {
+        const requestSeq = savedSessionsRequestSeqRef.current + 1
+        savedSessionsRequestSeqRef.current = requestSeq
+        setSavedSessionsLoading(true)
+        setSavedSessionsError('')
+        return onListSavedSessions(machineId, providerType)
+            .then((sessions) => {
+                if (savedSessionsRequestSeqRef.current !== requestSeq) return
+                setSavedSessions(sessions)
+            })
+            .catch((error) => {
+                if (savedSessionsRequestSeqRef.current !== requestSeq) return
+                setSavedSessions([])
+                setSavedSessionsError(error instanceof Error ? error.message : 'Could not load saved sessions')
+            })
+            .finally(() => {
+                if (savedSessionsRequestSeqRef.current !== requestSeq) return
+                setSavedSessionsLoading(false)
+            })
+    }, [onListSavedSessions])
+
+    const loadRecentArgs = useCallback((machineId: string, providerType: string) => {
+        setRecentArgsOptions(getRecentLaunchArgs(machineId, providerType))
+    }, [])
+
+    useEffect(() => {
+        setSelectedResumeSessionId('')
+        if (!selectedMachine || !selectedTarget || activeKind === 'ide') {
+            setRecentArgsOptions([])
+        } else {
+            loadRecentArgs(selectedMachine.id, selectedTarget)
+        }
+        if (activeKind !== 'cli') {
+            setSavedSessions([])
+            setSavedSessionsError('')
+            setSavedSessionsLoading(false)
+            return
+        }
+        if (!selectedMachine || !selectedTarget) {
+            setSavedSessions([])
+            setSavedSessionsError('')
+            setSavedSessionsLoading(false)
+            return
+        }
+        void loadSavedSessions(selectedMachine.id, selectedTarget)
+    }, [activeKind, loadRecentArgs, loadSavedSessions, selectedMachine, selectedTarget])
+
+    useEffect(() => {
+        if (!selectedResumeSessionId) return
+        const selectedSession = savedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
+        if (selectedSession?.canResume) return
+        setSelectedResumeSessionId('')
+    }, [savedSessions, selectedResumeSessionId])
+
     const resolvedWorkspacePath = workspaceChoice === '__custom__'
         ? customWorkspacePath.trim()
         : workspaceChoice === '__home__'
             ? ''
             : (workspaceRows.find(workspace => workspace.id === workspaceChoice)?.path || '')
+
+    const applySavedSessionWorkspace = useCallback((session: SavedSessionOption) => {
+        const sessionWorkspace = String(session.workspace || '').trim()
+        if (!sessionWorkspace) return
+        const matchedWorkspace = workspaceRows.find(workspace => normalizePath(workspace.path) === normalizePath(sessionWorkspace))
+        if (matchedWorkspace) {
+            setWorkspaceChoice(matchedWorkspace.id)
+            setCustomWorkspacePath('')
+            return
+        }
+        setWorkspaceChoice('__custom__')
+        setCustomWorkspacePath(sessionWorkspace)
+    }, [workspaceRows])
 
     const openBrowseDialog = useCallback(() => {
         if (!selectedMachine) return
@@ -203,6 +314,9 @@ export default function DashboardNewSessionDialog({
         if (!selectedMachine || !activeKind || !selectedTarget) return
         setBusy(true)
         setMessage('')
+        const parsedArgs = launchArgs.trim()
+            ? launchArgs.trim().split(/\s+/).filter(Boolean)
+            : []
         const result = activeKind === 'ide'
             ? await onLaunchIde(selectedMachine.id, selectedTarget, {
                 workspacePath: resolvedWorkspacePath || null,
@@ -210,14 +324,32 @@ export default function DashboardNewSessionDialog({
             : await onLaunchProvider(selectedMachine.id, activeKind, selectedTarget, {
                 workspaceId: workspaceChoice !== '__home__' && workspaceChoice !== '__custom__' ? workspaceChoice : null,
                 workspacePath: workspaceChoice === '__custom__' ? resolvedWorkspacePath || null : null,
+                resumeSessionId: activeKind === 'cli' && selectedResumeSessionId ? selectedResumeSessionId : null,
+                cliArgs: parsedArgs,
             })
         setBusy(false)
         if (!result.ok) {
             setMessage(result.error || 'Could not start session')
             return
         }
+        if (activeKind !== 'ide' && launchArgs.trim()) {
+            pushRecentLaunchArgs(selectedMachine.id, selectedTarget, launchArgs)
+            loadRecentArgs(selectedMachine.id, selectedTarget)
+        }
         onClose()
-    }, [activeKind, onClose, onLaunchIde, onLaunchProvider, resolvedWorkspacePath, selectedMachine, selectedTarget, workspaceChoice])
+    }, [
+        activeKind,
+        launchArgs,
+        loadRecentArgs,
+        onClose,
+        onLaunchIde,
+        onLaunchProvider,
+        resolvedWorkspacePath,
+        selectedMachine,
+        selectedResumeSessionId,
+        selectedTarget,
+        workspaceChoice,
+    ])
 
     if (!selectedMachine) {
         return null
@@ -376,6 +508,108 @@ export default function DashboardNewSessionDialog({
                                 )}
                             </div>
                         </div>
+
+                        {activeKind !== 'ide' && (
+                            <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
+                                <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">Startup arguments</div>
+                                <input
+                                    type="text"
+                                    value={launchArgs}
+                                    onChange={(event) => setLaunchArgs(event.target.value)}
+                                    placeholder="Optional flags..."
+                                    className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
+                                    disabled={busy}
+                                />
+                                {recentArgsOptions.length > 0 && (
+                                    <div className="mt-2 flex flex-wrap gap-1.5">
+                                        {recentArgsOptions.map(argsOption => (
+                                            <button
+                                                key={argsOption}
+                                                type="button"
+                                                className="btn btn-secondary btn-sm"
+                                                onClick={() => setLaunchArgs(argsOption)}
+                                                disabled={busy}
+                                                title={argsOption}
+                                            >
+                                                {argsOption}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {activeKind === 'cli' && (
+                            <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Resume from history</div>
+                                        <div className="text-xs text-text-secondary mt-1">Pick a saved CLI session, then launch with optional args.</div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        disabled={busy || !selectedMachine || !selectedTarget || savedSessionsLoading}
+                                        onClick={() => {
+                                            if (!selectedMachine || !selectedTarget) return
+                                            void loadSavedSessions(selectedMachine.id, selectedTarget)
+                                        }}
+                                    >
+                                        {savedSessionsLoading ? 'Loading…' : 'Refresh'}
+                                    </button>
+                                </div>
+                                <div className="mt-2">
+                                    <select
+                                        value={selectedResumeSessionId}
+                                        onChange={(event) => {
+                                            const nextId = event.target.value
+                                            setSelectedResumeSessionId(nextId)
+                                            if (!nextId) return
+                                            const session = savedSessions.find(item => item.providerSessionId === nextId)
+                                            if (!session || !session.canResume) return
+                                            applySavedSessionWorkspace(session)
+                                        }}
+                                        className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
+                                        disabled={busy || savedSessionsLoading}
+                                    >
+                                        <option value="">Start a new CLI session</option>
+                                        {savedSessions.map(session => (
+                                            <option
+                                                key={session.providerSessionId}
+                                                value={session.providerSessionId}
+                                                disabled={!session.canResume}
+                                            >
+                                                {session.title || session.providerSessionId}
+                                                {!session.canResume ? ' (workspace missing)' : ''}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                {selectedResumeSessionId && (() => {
+                                    const selectedSession = savedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
+                                    if (!selectedSession) return null
+                                    return (
+                                        <div className="mt-2 text-[11px] text-text-muted leading-relaxed">
+                                            <div className="font-mono break-all">{selectedSession.providerSessionId}</div>
+                                            <div className="mt-1">
+                                                {selectedSession.workspace || 'Workspace unknown'}
+                                                {selectedSession.currentModel ? ` · ${selectedSession.currentModel}` : ''}
+                                            </div>
+                                        </div>
+                                    )
+                                })()}
+                                {savedSessionsError && (
+                                    <div className="mt-2 text-[11px] text-status-error">
+                                        {savedSessionsError}
+                                    </div>
+                                )}
+                                {!savedSessionsLoading && !savedSessionsError && savedSessions.length === 0 && (
+                                    <div className="mt-2 text-[11px] text-text-muted">
+                                        No saved sessions found for this provider yet.
+                                    </div>
+                                )}
+                            </div>
+                        )}
 
                         {message && (
                             <div className={`rounded-xl border px-4 py-3 text-sm ${message.includes('saved') || message.includes('requested') ? 'border-accent/25 bg-accent/10 text-text-primary' : 'border-status-error/25 bg-status-error/10 text-status-error'}`}>

@@ -22,14 +22,31 @@ function getShortcutSection(action: DashboardActionShortcutDefinition): Shortcut
         case 'triggerTertiaryApprovalAction':
             return 'approvals'
         case 'splitActiveTabRight':
+        case 'splitActiveTabDown':
         case 'focusLeftPane':
         case 'focusRightPane':
+        case 'focusUpPane':
+        case 'focusDownPane':
         case 'moveActiveTabToLeftPane':
         case 'moveActiveTabToRightPane':
+        case 'moveActiveTabToUpPane':
+        case 'moveActiveTabToDownPane':
             return 'panes'
         default:
             return 'workspace'
     }
+}
+
+function getCommandErrorMessage(error: unknown): string {
+    if (error instanceof Error) return error.message
+    return String(error || '')
+}
+
+function isExpectedResolveActionFailure(error: unknown): boolean {
+    const message = getCommandErrorMessage(error).toLowerCase()
+    return message.includes('button not found')
+        || message.includes('not in approval state')
+        || message.includes('command failed')
 }
 
 interface DashboardMainViewProps {
@@ -95,8 +112,29 @@ interface DashboardMainViewProps {
         machineId: string,
         kind: 'cli' | 'acp',
         providerType: string,
-        opts?: { workspaceId?: string | null; workspacePath?: string | null },
+        opts?: {
+            workspaceId?: string | null
+            workspacePath?: string | null
+            resumeSessionId?: string | null
+            cliArgs?: string[]
+            initialModel?: string | null
+        },
     ) => Promise<{ ok: boolean; error?: string }>
+    onListMachineSavedSessions: (machineId: string, providerType: string) => Promise<Array<{
+        id: string
+        providerSessionId: string
+        providerType: string
+        providerName: string
+        kind: 'cli' | 'acp'
+        title: string
+        workspace?: string | null
+        currentModel?: string
+        preview?: string
+        messageCount: number
+        firstMessageAt: number
+        lastMessageAt: number
+        canResume: boolean
+    }>>
 }
 
 export default function DashboardMainView({
@@ -159,16 +197,22 @@ export default function DashboardMainView({
     onSaveMachineWorkspace,
     onLaunchMachineIde,
     onLaunchMachineProvider,
+    onListMachineSavedSessions,
 }: DashboardMainViewProps) {
     const dockviewActionHandlersRef = React.useRef<{
         setShortcutForActiveTab: () => void
         activatePreviousTabInGroup: () => void
         activateNextTabInGroup: () => void
         splitActiveTabRight: () => void
+        splitActiveTabDown: () => void
         focusLeftPane: () => void
         focusRightPane: () => void
+        focusUpPane: () => void
+        focusDownPane: () => void
         moveActiveTabToLeftPane: () => void
         moveActiveTabToRightPane: () => void
+        moveActiveTabToUpPane: () => void
+        moveActiveTabToDownPane: () => void
     } | null>(null)
     const [inboxOpen, setInboxOpen] = React.useState(false)
     const [hiddenOpen, setHiddenOpen] = React.useState(false)
@@ -214,7 +258,9 @@ export default function DashboardMainView({
                 ...getProviderArgs(activeConv),
             })
         } catch (error) {
-            console.error('[Shortcut approval] Failed:', error)
+            if (!isExpectedResolveActionFailure(error)) {
+                console.error('[Shortcut approval] Failed:', error)
+            }
         }
     }, [activeConv, sendDaemonCommand])
 
@@ -254,6 +300,10 @@ export default function DashboardMainView({
                 dockviewActionHandlersRef.current?.splitActiveTabRight()
                 return
             }
+            if (actionId === 'splitActiveTabDown') {
+                dockviewActionHandlersRef.current?.splitActiveTabDown()
+                return
+            }
             if (actionId === 'focusLeftPane') {
                 dockviewActionHandlersRef.current?.focusLeftPane()
                 return
@@ -262,12 +312,28 @@ export default function DashboardMainView({
                 dockviewActionHandlersRef.current?.focusRightPane()
                 return
             }
+            if (actionId === 'focusUpPane') {
+                dockviewActionHandlersRef.current?.focusUpPane()
+                return
+            }
+            if (actionId === 'focusDownPane') {
+                dockviewActionHandlersRef.current?.focusDownPane()
+                return
+            }
             if (actionId === 'moveActiveTabToLeftPane') {
                 dockviewActionHandlersRef.current?.moveActiveTabToLeftPane()
                 return
             }
             if (actionId === 'moveActiveTabToRightPane') {
                 dockviewActionHandlersRef.current?.moveActiveTabToRightPane()
+                return
+            }
+            if (actionId === 'moveActiveTabToUpPane') {
+                dockviewActionHandlersRef.current?.moveActiveTabToUpPane()
+                return
+            }
+            if (actionId === 'moveActiveTabToDownPane') {
+                dockviewActionHandlersRef.current?.moveActiveTabToDownPane()
                 return
             }
             if (actionId === 'triggerPrimaryApprovalAction') {
@@ -489,6 +555,7 @@ export default function DashboardMainView({
                     onSaveWorkspace={onSaveMachineWorkspace}
                     onLaunchIde={onLaunchMachineIde}
                     onLaunchProvider={onLaunchMachineProvider}
+                    onListSavedSessions={onListMachineSavedSessions}
                 />
             )}
             {shortcutHelpOpen && (

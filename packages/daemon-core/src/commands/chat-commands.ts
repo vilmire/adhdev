@@ -90,6 +90,31 @@ function isRecentDuplicateSend(key: string): boolean {
     return false;
 }
 
+function parseMaybeJson(value: any): any {
+    if (typeof value !== 'string') return value;
+    try {
+        return JSON.parse(value);
+    } catch {
+        return value;
+    }
+}
+
+function didProviderConfirmSend(result: any): boolean {
+    const parsed = parseMaybeJson(result);
+    if (parsed === true) return true;
+    if (typeof parsed === 'string') {
+        const normalized = parsed.trim().toLowerCase();
+        return normalized === 'ok' || normalized === 'sent' || normalized === 'success' || normalized === 'true';
+    }
+    if (!parsed || typeof parsed !== 'object') return false;
+
+    return parsed.sent === true
+        || parsed.success === true
+        || parsed.ok === true
+        || parsed.submitted === true
+        || parsed.dispatched === true;
+}
+
 export async function handleChatHistory(h: CommandHelpers, args: any): Promise<CommandResult> {
     const { agentType, offset, limit } = args;
     const historySessionId = getHistorySessionId(h, args);
@@ -280,9 +305,8 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
         try {
             const evalResult = await h.evaluateProviderScript('sendMessage', { MESSAGE: text }, 30000);
             if (evalResult?.result) {
-                let parsed = evalResult.result;
-                if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
-                if (parsed?.sent) {
+                const parsed = parseMaybeJson(evalResult.result);
+                if (didProviderConfirmSend(parsed)) {
                     _log(`Extension script sent OK`);
                     return _logSendSuccess('extension-script');
                 }
@@ -318,9 +342,8 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
     if (sendScript) {
         try {
             const result = await targetCdp.evaluate(sendScript, 30000);
-            let parsed: any = result;
-            if (typeof result === 'string') { try { parsed = JSON.parse(result); } catch { } }
-            if (parsed?.sent) {
+            const parsed: any = parseMaybeJson(result);
+            if (didProviderConfirmSend(parsed)) {
                 _log(`sendMessage script OK`);
                 return _logSendSuccess('script');
             }
@@ -365,9 +388,8 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                         const matchText = provider.webviewMatchText;
                         const matchFn = matchText ? (body: string) => body.includes(matchText) : undefined;
                         const wvResult = await targetCdp.evaluateInWebviewFrame(webviewScript, matchFn);
-                        let wvParsed: any = wvResult;
-                        if (typeof wvResult === 'string') { try { wvParsed = JSON.parse(wvResult); } catch { } }
-                        if (wvParsed?.sent) {
+                        const wvParsed: any = parseMaybeJson(wvResult);
+                        if (didProviderConfirmSend(wvParsed)) {
                             _log(`webviewSendMessage OK`);
                             return _logSendSuccess('webview-script');
                         }
@@ -390,9 +412,8 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
                 const matchText = provider.webviewMatchText;
                 const matchFn = matchText ? (body: string) => body.includes(matchText) : undefined;
                 const wvResult = await targetCdp.evaluateInWebviewFrame(webviewScript, matchFn);
-                let wvParsed: any = wvResult;
-                if (typeof wvResult === 'string') { try { wvParsed = JSON.parse(wvResult); } catch { } }
-                if (wvParsed?.sent) {
+                const wvParsed: any = parseMaybeJson(wvResult);
+                if (didProviderConfirmSend(wvParsed)) {
                     _log(`webviewSendMessage OK`);
                     return _logSendSuccess('webview-script');
                 }

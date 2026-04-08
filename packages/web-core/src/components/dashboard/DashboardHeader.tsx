@@ -229,9 +229,17 @@ export default function DashboardHeader({
                         </span>
                         </h1>
                         <div className="header-subtitle">
-                            <span className="header-subtitle-copy">
-                                {agentCount} agent{agentCount !== 1 ? 's' : ''} active
-                            </span>
+                            {onOpenNewSession && (
+                                <button
+                                    type="button"
+                                    onClick={onOpenNewSession}
+                                    className="btn btn-secondary btn-sm"
+                                    title="Start a new session"
+                                    aria-label="Start a new session"
+                                >
+                                    <IconPlus size={14} />
+                                </button>
+                            )}
                             <span
                                 title={isConnected ? 'Connected' : wsStatus === 'connected' ? 'Partial' : 'Disconnected'}
                                 className="header-subtitle-dot inline-block w-1.5 h-1.5 rounded-full shrink-0"
@@ -247,17 +255,6 @@ export default function DashboardHeader({
                 </div>
             </div>
             <div className="flex gap-2 items-center">
-                {onOpenNewSession && (
-                    <button
-                        type="button"
-                        onClick={onOpenNewSession}
-                        className="btn btn-secondary btn-sm"
-                        title="Start a new session"
-                        aria-label="Start a new session"
-                    >
-                        <IconPlus size={14} />
-                    </button>
-                )}
                 {activeConv && (isCliActive || !isAcpConv(activeConv)) && (
                     <div className="dashboard-header-actions-group">
                         <span

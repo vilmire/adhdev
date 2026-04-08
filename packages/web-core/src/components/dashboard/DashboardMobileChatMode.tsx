@@ -103,6 +103,14 @@ function isP2PLaunchTimeout(error: unknown) {
     return message.includes('P2P command timeout')
 }
 
+function isExpectedCliViewModeError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error || '')
+    return message.includes('P2P command timeout')
+        || message.includes('P2P not connected')
+        || message.includes('CLI session not found')
+        || message.includes('CLI_SESSION_NOT_FOUND')
+}
+
 export default function DashboardMobileChatMode({
     conversations,
     hiddenConversations,
@@ -732,7 +740,11 @@ export default function DashboardMobileChatMode({
                                 mode,
                             })
                         } catch (error) {
-                            console.error('Failed to switch CLI view mode:', error)
+                            if (!isExpectedCliViewModeError(error)) {
+                                console.error('Failed to switch CLI view mode:', error)
+                            } else {
+                                console.warn('Skipped CLI view mode switch:', error instanceof Error ? error.message : String(error))
+                            }
                         }
                     }}
                     handleSendChat={cmds.handleSendChat}

@@ -56,10 +56,15 @@ interface DashboardDockviewWorkspaceProps {
         activatePreviousTabInGroup: () => void
         activateNextTabInGroup: () => void
         splitActiveTabRight: () => void
+        splitActiveTabDown: () => void
         focusLeftPane: () => void
         focusRightPane: () => void
+        focusUpPane: () => void
+        focusDownPane: () => void
         moveActiveTabToLeftPane: () => void
         moveActiveTabToRightPane: () => void
+        moveActiveTabToUpPane: () => void
+        moveActiveTabToDownPane: () => void
     } | null) => void
     onActiveTabChange: (tabKey: string | null) => void
     requestedActiveTabKey?: string | null
@@ -96,6 +101,8 @@ interface DashboardDockviewRemotePanelParams {
     kind: 'remote'
     ideId: string
 }
+
+type DockviewPaneDirection = 'left' | 'right' | 'above' | 'below'
 
 const DashboardDockviewContext = createContext<DashboardDockviewContextValue | null>(null)
 
@@ -596,40 +603,95 @@ export default function DashboardDockviewWorkspace({
         nextPanel.group.model.openPanel(nextPanel)
         nextPanel.api.setActive()
     }, [])
-    const focusAdjacentGroup = useCallback((direction: -1 | 1) => {
+    const getAdjacentGroup = useCallback((direction: DockviewPaneDirection) => {
         const api = apiRef.current
         const activeGroup = api?.activeGroup || api?.activePanel?.group
         if (!api || !activeGroup) return
         const groups = api.groups || []
-        const currentIndex = groups.findIndex(group => group.id === activeGroup.id)
-        if (currentIndex < 0) return
-        const nextGroup = groups[currentIndex + direction]
+        const activeEntry = groups.find(group => group.id === activeGroup.id)
+        if (!activeEntry) return
+
+        const activeRect = activeEntry.element.getBoundingClientRect()
+        const activeCenterX = activeRect.left + activeRect.width / 2
+        const activeCenterY = activeRect.top + activeRect.height / 2
+
+        const getOverlap = (aStart: number, aEnd: number, bStart: number, bEnd: number) => Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart))
+        const getDistanceScore = (candidate: typeof activeEntry) => {
+            const rect = candidate.element.getBoundingClientRect()
+            const centerX = rect.left + rect.width / 2
+            const centerY = rect.top + rect.height / 2
+
+            let primaryGap = 0
+            let crossAxisDistance = 0
+            let overlap = 0
+            let isValidDirection = false
+
+            if (direction === 'left') {
+                isValidDirection = centerX < activeCenterX
+                primaryGap = Math.max(0, activeRect.left - rect.right)
+                crossAxisDistance = Math.abs(centerY - activeCenterY)
+                overlap = getOverlap(activeRect.top, activeRect.bottom, rect.top, rect.bottom)
+            } else if (direction === 'right') {
+                isValidDirection = centerX > activeCenterX
+                primaryGap = Math.max(0, rect.left - activeRect.right)
+                crossAxisDistance = Math.abs(centerY - activeCenterY)
+                overlap = getOverlap(activeRect.top, activeRect.bottom, rect.top, rect.bottom)
+            } else if (direction === 'above') {
+                isValidDirection = centerY < activeCenterY
+                primaryGap = Math.max(0, activeRect.top - rect.bottom)
+                crossAxisDistance = Math.abs(centerX - activeCenterX)
+                overlap = getOverlap(activeRect.left, activeRect.right, rect.left, rect.right)
+            } else {
+                isValidDirection = centerY > activeCenterY
+                primaryGap = Math.max(0, rect.top - activeRect.bottom)
+                crossAxisDistance = Math.abs(centerX - activeCenterX)
+                overlap = getOverlap(activeRect.left, activeRect.right, rect.left, rect.right)
+            }
+
+            if (!isValidDirection) return Number.POSITIVE_INFINITY
+
+            const overlapPenalty = overlap > 0 ? 0 : 120
+            return (primaryGap * 3) + crossAxisDistance + overlapPenalty
+        }
+
+        let bestGroup: typeof activeEntry | null = null
+        let bestScore = Number.POSITIVE_INFINITY
+        for (const group of groups) {
+            if (group.id === activeEntry.id) continue
+            const score = getDistanceScore(group)
+            if (!Number.isFinite(score)) continue
+            if (score >= bestScore) continue
+            bestScore = score
+            bestGroup = group
+        }
+
+        return bestGroup || undefined
+    }, [])
+    const focusAdjacentGroup = useCallback((direction: DockviewPaneDirection) => {
+        const nextGroup = getAdjacentGroup(direction)
         if (!nextGroup) return
         const nextPanel = nextGroup.activePanel || nextGroup.panels[0]
         if (!nextPanel) return
         nextGroup.model.openPanel(nextPanel)
         nextPanel.api.setActive()
-    }, [])
-    const moveActivePanelToDirection = useCallback((direction: -1 | 1, options?: { createGroupIfMissing?: boolean }) => {
+    }, [getAdjacentGroup])
+    const moveActivePanelToDirection = useCallback((direction: DockviewPaneDirection, options?: { createGroupIfMissing?: boolean }) => {
         const api = apiRef.current
         const activePanel = api?.activePanel
         const activeGroup = api?.activeGroup || activePanel?.group
         if (!api || !activePanel || !activeGroup) return
-        const groups = api.groups || []
-        const currentIndex = groups.findIndex(group => group.id === activeGroup.id)
-        if (currentIndex < 0) return
-        let targetGroup = groups[currentIndex + direction]
+        let targetGroup = getAdjacentGroup(direction)
         if (!targetGroup && options?.createGroupIfMissing) {
             targetGroup = api.addGroup({
                 referenceGroup: activeGroup,
-                direction: direction < 0 ? 'left' : 'right',
+                direction,
             })
         }
         if (!targetGroup) return
         activePanel.api.moveTo({ group: targetGroup, position: 'center' })
         activePanel.group.model.openPanel(activePanel)
         activePanel.api.setActive()
-    }, [])
+    }, [getAdjacentGroup])
     const {
         isMac,
         tabShortcuts,
@@ -663,11 +725,16 @@ export default function DashboardDockviewWorkspace({
             setShortcutForActiveTab: startShortcutListeningForActiveTab,
             activatePreviousTabInGroup: () => activateRelativeTabInGroup(-1),
             activateNextTabInGroup: () => activateRelativeTabInGroup(1),
-            splitActiveTabRight: () => moveActivePanelToDirection(1, { createGroupIfMissing: true }),
-            focusLeftPane: () => focusAdjacentGroup(-1),
-            focusRightPane: () => focusAdjacentGroup(1),
-            moveActiveTabToLeftPane: () => moveActivePanelToDirection(-1),
-            moveActiveTabToRightPane: () => moveActivePanelToDirection(1),
+            splitActiveTabRight: () => moveActivePanelToDirection('right', { createGroupIfMissing: true }),
+            splitActiveTabDown: () => moveActivePanelToDirection('below', { createGroupIfMissing: true }),
+            focusLeftPane: () => focusAdjacentGroup('left'),
+            focusRightPane: () => focusAdjacentGroup('right'),
+            focusUpPane: () => focusAdjacentGroup('above'),
+            focusDownPane: () => focusAdjacentGroup('below'),
+            moveActiveTabToLeftPane: () => moveActivePanelToDirection('left'),
+            moveActiveTabToRightPane: () => moveActivePanelToDirection('right'),
+            moveActiveTabToUpPane: () => moveActivePanelToDirection('above'),
+            moveActiveTabToDownPane: () => moveActivePanelToDirection('below'),
         })
         return () => registerActionHandlers?.(null)
     }, [activateRelativeTabInGroup, focusAdjacentGroup, moveActivePanelToDirection, registerActionHandlers, startShortcutListeningForActiveTab])

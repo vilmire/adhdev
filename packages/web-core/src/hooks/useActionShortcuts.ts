@@ -7,10 +7,15 @@ export type DashboardActionShortcutId =
     | 'openHistoryForActiveTab'
     | 'openRemoteForActiveTab'
     | 'splitActiveTabRight'
+    | 'splitActiveTabDown'
     | 'focusLeftPane'
     | 'focusRightPane'
+    | 'focusUpPane'
+    | 'focusDownPane'
     | 'moveActiveTabToLeftPane'
     | 'moveActiveTabToRightPane'
+    | 'moveActiveTabToUpPane'
+    | 'moveActiveTabToDownPane'
     | 'triggerPrimaryApprovalAction'
     | 'triggerSecondaryApprovalAction'
     | 'triggerTertiaryApprovalAction'
@@ -61,14 +66,24 @@ function getDefaultShortcut(actionId: DashboardActionShortcutId, isMac: boolean)
             return isMac ? '⌥+R' : 'Ctrl+Alt+R'
         case 'splitActiveTabRight':
             return isMac ? '⌘+⌥+=' : 'Ctrl+Alt+\\'
+        case 'splitActiveTabDown':
+            return isMac ? '⌘+⌥+-' : 'Ctrl+Alt+-'
         case 'focusLeftPane':
             return isMac ? '⌘+⌥+[' : 'Ctrl+Alt+←'
         case 'focusRightPane':
             return isMac ? '⌘+⌥+]' : 'Ctrl+Alt+→'
+        case 'focusUpPane':
+            return isMac ? '⌘+⌥+U' : 'Ctrl+Alt+↑'
+        case 'focusDownPane':
+            return isMac ? '⌘+⌥+J' : 'Ctrl+Alt+↓'
         case 'moveActiveTabToLeftPane':
             return isMac ? '⌘+⌥+,' : 'Ctrl+Alt+Shift+←'
         case 'moveActiveTabToRightPane':
             return isMac ? '⌘+⌥+.' : 'Ctrl+Alt+Shift+→'
+        case 'moveActiveTabToUpPane':
+            return isMac ? '⌘+⌥+I' : 'Ctrl+Alt+Shift+↑'
+        case 'moveActiveTabToDownPane':
+            return isMac ? '⌘+⌥+K' : 'Ctrl+Alt+Shift+↓'
         case 'triggerPrimaryApprovalAction':
             return isMac ? '⌥+J' : 'Ctrl+Alt+J'
         case 'triggerSecondaryApprovalAction':
@@ -125,6 +140,12 @@ function getActionShortcutDefinitions(isMac: boolean): DashboardActionShortcutDe
             defaultShortcut: getDefaultShortcut('splitActiveTabRight', isMac),
         },
         {
+            id: 'splitActiveTabDown',
+            label: 'Move active tab to new lower pane',
+            description: 'Create a pane below and move the active tab into it.',
+            defaultShortcut: getDefaultShortcut('splitActiveTabDown', isMac),
+        },
+        {
             id: 'focusLeftPane',
             label: 'Focus left pane',
             description: 'Move focus to the pane on the left.',
@@ -137,6 +158,18 @@ function getActionShortcutDefinitions(isMac: boolean): DashboardActionShortcutDe
             defaultShortcut: getDefaultShortcut('focusRightPane', isMac),
         },
         {
+            id: 'focusUpPane',
+            label: 'Focus upper pane',
+            description: 'Move focus to the pane above.',
+            defaultShortcut: getDefaultShortcut('focusUpPane', isMac),
+        },
+        {
+            id: 'focusDownPane',
+            label: 'Focus lower pane',
+            description: 'Move focus to the pane below.',
+            defaultShortcut: getDefaultShortcut('focusDownPane', isMac),
+        },
+        {
             id: 'moveActiveTabToLeftPane',
             label: 'Move active tab left',
             description: 'Move the active tab into the pane on the left.',
@@ -147,6 +180,18 @@ function getActionShortcutDefinitions(isMac: boolean): DashboardActionShortcutDe
             label: 'Move active tab right',
             description: 'Move the active tab into the pane on the right.',
             defaultShortcut: getDefaultShortcut('moveActiveTabToRightPane', isMac),
+        },
+        {
+            id: 'moveActiveTabToUpPane',
+            label: 'Move active tab up',
+            description: 'Move the active tab into the pane above.',
+            defaultShortcut: getDefaultShortcut('moveActiveTabToUpPane', isMac),
+        },
+        {
+            id: 'moveActiveTabToDownPane',
+            label: 'Move active tab down',
+            description: 'Move the active tab into the pane below.',
+            defaultShortcut: getDefaultShortcut('moveActiveTabToDownPane', isMac),
         },
         {
             id: 'triggerPrimaryApprovalAction',

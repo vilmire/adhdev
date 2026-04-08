@@ -25,8 +25,25 @@ import LaunchConfirmDialog from '../../components/machine/LaunchConfirmDialog'
 import { browseMachineDirectories, getDefaultBrowseStartPath, type BrowseDirectoryEntry } from '../../components/machine/workspaceBrowse'
 import { buildLaunchWorkspaceOptions } from '../../components/machine/launchWorkspaceOptions'
 import type { LaunchWorkspaceOption } from './types'
+import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
 
 type AgentCategory = 'ide' | 'cli' | 'acp'
+
+interface SavedSessionOption {
+    id: string
+    providerSessionId: string
+    providerType: string
+    providerName: string
+    kind: 'cli' | 'acp'
+    title: string
+    workspace?: string | null
+    currentModel?: string
+    preview?: string
+    messageCount: number
+    firstMessageAt: number
+    lastMessageAt: number
+    canResume: boolean
+}
 
 // Union type for running entries
 type AgentEntry = IdeSessionEntry | CliSessionEntry | AcpSessionEntry
@@ -51,6 +68,22 @@ const CATEGORY_CONFIG = {
     cli: { label: 'CLI', plural: 'CLIs', accent: 'border-violet-500/[0.12]' },
     acp: { label: 'ACP Agent', plural: 'ACP agents', accent: 'border-emerald-500/[0.12]' },
 } as const
+
+function normalizePath(path: string | null | undefined) {
+    return String(path || '')
+        .trim()
+        .replace(/\\/g, '/')
+        .replace(/\/+$/, '')
+        .toLowerCase()
+}
+
+function isExpectedCliViewModeError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error || '')
+    return message.includes('P2P command timeout')
+        || message.includes('P2P not connected')
+        || message.includes('CLI session not found')
+        || message.includes('CLI_SESSION_NOT_FOUND')
+}
 
 export default function AgentTab({
     category, machine, machineId, providers, managedEntries, getIcon, actions, sendDaemonCommand,
@@ -84,7 +117,12 @@ export default function AgentTab({
     // ─── Launch Form State ──────────────────────────
     const [selectedType, setSelectedType] = useState('')
     const [launchArgs, setLaunchArgs] = useState('')
+    const [recentArgsOptions, setRecentArgsOptions] = useState<string[]>([])
     const [launchModel, setLaunchModel] = useState('')
+    const [selectedResumeSessionId, setSelectedResumeSessionId] = useState('')
+    const [savedSessions, setSavedSessions] = useState<SavedSessionOption[]>([])
+    const [savedSessionsLoading, setSavedSessionsLoading] = useState(false)
+    const [savedSessionsError, setSavedSessionsError] = useState('')
     // Workspace selection: workspace-id | '__custom__' | '' (home)
     const [selectedWorkspace, setSelectedWorkspace] = useState(
         initialWorkspacePath ? '__custom__' : (initialWorkspaceId || machine.defaultWorkspaceId || ''),
@@ -107,6 +145,7 @@ export default function AgentTab({
     const launchConfirmWorkspaceKeyRef = useRef('__home__')
     const [launchConfirmWorkspaceKey, setLaunchConfirmWorkspaceKey] = useState('__home__')
     const [launchConfirmBusy, setLaunchConfirmBusy] = useState(false)
+    const savedSessionsRequestSeqRef = useRef(0)
     const visiblePendingLaunches = pendingLaunchTypes
         .filter(type => !managedEntries.some(entry => entry.type === type && normalizeManagedStatus(entry.status) !== 'stopped'))
     const pendingTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -181,6 +220,76 @@ export default function AgentTab({
         ])
         void loadBrowsePath(initialPath)
     }, [customPath, loadBrowsePath, machine.defaultWorkspacePath, machine.platform, machine.workspaces, resolvedWorkspacePath, sendDaemonCommand])
+
+    const applySavedSessionWorkspace = useCallback((session: SavedSessionOption) => {
+        const workspacePath = String(session.workspace || '').trim()
+        if (!workspacePath) return
+        const matchedWorkspace = (machine.workspaces || []).find(workspace => normalizePath(workspace.path) === normalizePath(workspacePath))
+        if (matchedWorkspace) {
+            setSelectedWorkspace(matchedWorkspace.id)
+            setCustomPath('')
+            return
+        }
+        setSelectedWorkspace('__custom__')
+        setCustomPath(workspacePath)
+    }, [machine.workspaces])
+
+    const loadSavedSessions = useCallback(async (providerType: string) => {
+        if (!sendDaemonCommand || !providerType || category !== 'cli') {
+            setSavedSessions([])
+            setSavedSessionsLoading(false)
+            setSavedSessionsError('')
+            return
+        }
+        const requestSeq = savedSessionsRequestSeqRef.current + 1
+        savedSessionsRequestSeqRef.current = requestSeq
+        setSavedSessionsLoading(true)
+        setSavedSessionsError('')
+        try {
+            const raw: any = await sendDaemonCommand(machineId, 'list_saved_sessions', {
+                providerType,
+                kind: 'cli',
+                limit: 30,
+            })
+            if (savedSessionsRequestSeqRef.current !== requestSeq) return
+            const result = raw?.result ?? raw
+            setSavedSessions(Array.isArray(result?.sessions) ? result.sessions : [])
+        } catch (error) {
+            if (savedSessionsRequestSeqRef.current !== requestSeq) return
+            setSavedSessions([])
+            setSavedSessionsError(error instanceof Error ? error.message : 'Could not load saved sessions')
+        } finally {
+            if (savedSessionsRequestSeqRef.current !== requestSeq) return
+            setSavedSessionsLoading(false)
+        }
+    }, [category, machineId, sendDaemonCommand])
+
+    const loadRecentArgs = useCallback((providerType: string) => {
+        if (category === 'ide' || !providerType) {
+            setRecentArgsOptions([])
+            return
+        }
+        setRecentArgsOptions(getRecentLaunchArgs(machineId, providerType))
+    }, [category, machineId])
+
+    useEffect(() => {
+        setSelectedResumeSessionId('')
+        loadRecentArgs(selectedType)
+        if (category !== 'cli' || !selectedType) {
+            setSavedSessions([])
+            setSavedSessionsError('')
+            setSavedSessionsLoading(false)
+            return
+        }
+        void loadSavedSessions(selectedType)
+    }, [category, loadRecentArgs, loadSavedSessions, selectedType])
+
+    useEffect(() => {
+        if (!selectedResumeSessionId) return
+        const selectedSession = savedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
+        if (selectedSession?.canResume) return
+        setSelectedResumeSessionId('')
+    }, [savedSessions, selectedResumeSessionId])
 
     const openLaunchConfirm = useCallback((
         config: {
@@ -279,6 +388,7 @@ export default function AgentTab({
         useHome?: boolean
         argsStr?: string
         model?: string
+        resumeSessionId?: string | null
     }) => {
         const launchType = opts?.type || selectedType
         const workspacePath = opts?.workspacePath ?? resolvedWorkspacePath
@@ -297,8 +407,14 @@ export default function AgentTab({
             useHome: opts?.useHome || (!opts?.workspaceId && !workspacePath),
             argsStr: opts?.argsStr ?? (launchArgs || undefined),
             model: opts?.model ?? (isAcp ? launchModel || undefined : undefined),
+            resumeSessionId: opts?.resumeSessionId || (!isAcp && category === 'cli' && launchType === selectedType ? selectedResumeSessionId || undefined : undefined),
         })
         if (launched.success || launched.pending) {
+            const argsToPersist = opts?.argsStr ?? launchArgs
+            if (!isIde && argsToPersist?.trim()) {
+                pushRecentLaunchArgs(machineId, launchType, argsToPersist)
+                loadRecentArgs(launchType)
+            }
             markPendingLaunch(launchType)
             if (launched.success && launched.sessionId) openSessionInDashboard(launched.sessionId)
         }
@@ -309,9 +425,12 @@ export default function AgentTab({
         isIde,
         launchArgs,
         launchModel,
+        loadRecentArgs,
         markPendingLaunch,
+        machineId,
         openSessionInDashboard,
         resolvedWorkspacePath,
+        selectedResumeSessionId,
         selectedType,
     ])
 
@@ -333,6 +452,12 @@ export default function AgentTab({
             details: [
                 { label: 'Mode', value: config.label },
                 { label: 'Provider', value: providerName },
+                ...(!isIde && category === 'cli' && selectedResumeSessionId
+                    ? [{
+                        label: 'Resume',
+                        value: savedSessions.find(session => session.providerSessionId === selectedResumeSessionId)?.title || selectedResumeSessionId,
+                    }]
+                    : []),
                 ...(!isIde && launchArgs.trim() ? [{ label: 'Arguments', value: launchArgs.trim() }] : []),
                 ...(isAcp && launchModel.trim() ? [{ label: 'Model', value: launchModel.trim() }] : []),
             ],
@@ -385,7 +510,11 @@ export default function AgentTab({
             })
             if (openInDashboard) openSessionInDashboard(entry.sessionId)
         } catch (error) {
-            console.error('Failed to switch CLI view mode:', error)
+            if (!isExpectedCliViewModeError(error)) {
+                console.error('Failed to switch CLI view mode:', error)
+            } else {
+                console.warn('Skipped CLI view mode switch:', error instanceof Error ? error.message : String(error))
+            }
         }
     }, [machineId, openSessionInDashboard, sendDaemonCommand])
 
@@ -574,28 +703,101 @@ export default function AgentTab({
                         {workspaceSelector}
                         
                         {!isIde && (
-                            <div className="flex flex-col sm:flex-row gap-3">
-                                {isAcp && (
-                                    <div className="flex flex-col gap-1.5 flex-1">
-                                        <span className="text-[10px] font-semibold text-text-secondary uppercase">Target Model</span>
-                                        <input
-                                            type="text"
-                                            placeholder="Leave empty for default"
-                                            value={launchModel}
-                                            onChange={e => setLaunchModel(e.target.value)}
+                            <div className="flex flex-col gap-3">
+                                {!isAcp && category === 'cli' && (
+                                    <div className="flex flex-col gap-1.5">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="text-[10px] font-semibold text-text-secondary uppercase">Resume from History</span>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary btn-sm"
+                                                onClick={() => void loadSavedSessions(selectedType)}
+                                                disabled={!selectedType || savedSessionsLoading}
+                                            >
+                                                {savedSessionsLoading ? 'Loading…' : 'Refresh'}
+                                            </button>
+                                        </div>
+                                        <select
+                                            value={selectedResumeSessionId}
+                                            onChange={event => {
+                                                const nextId = event.target.value
+                                                setSelectedResumeSessionId(nextId)
+                                                if (!nextId) return
+                                                const session = savedSessions.find(item => item.providerSessionId === nextId)
+                                                if (!session || !session.canResume) return
+                                                applySavedSessionWorkspace(session)
+                                            }}
                                             className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors w-full"
-                                        />
+                                        >
+                                            <option value="">Start a new CLI session</option>
+                                            {savedSessions.map(session => (
+                                                <option
+                                                    key={session.providerSessionId}
+                                                    value={session.providerSessionId}
+                                                    disabled={!session.canResume}
+                                                >
+                                                    {session.title || session.providerSessionId}
+                                                    {!session.canResume ? ' (workspace missing)' : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        {selectedResumeSessionId && (() => {
+                                            const selectedSession = savedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
+                                            if (!selectedSession) return null
+                                            return (
+                                                <div className="text-[10px] text-text-muted break-all leading-relaxed">
+                                                    <div className="font-mono">{selectedSession.providerSessionId}</div>
+                                                    <div>{selectedSession.workspace || 'Workspace unknown'}</div>
+                                                </div>
+                                            )
+                                        })()}
+                                        {savedSessionsError && (
+                                            <div className="text-[10px] text-red-400">{savedSessionsError}</div>
+                                        )}
+                                        {!savedSessionsLoading && !savedSessionsError && savedSessions.length === 0 && (
+                                            <div className="text-[10px] text-text-muted">No saved sessions found for this provider.</div>
+                                        )}
                                     </div>
                                 )}
-                                <div className="flex flex-col gap-1.5 flex-1">
-                                    <span className="text-[10px] font-semibold text-text-secondary uppercase">Startup Arguments</span>
-                                    <input
-                                        type="text"
-                                        placeholder="Optional flags..."
-                                        value={launchArgs}
-                                        onChange={e => setLaunchArgs(e.target.value)}
-                                        className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors w-full"
-                                    />
+
+                                <div className="flex flex-col sm:flex-row gap-3">
+                                    {isAcp && (
+                                        <div className="flex flex-col gap-1.5 flex-1">
+                                            <span className="text-[10px] font-semibold text-text-secondary uppercase">Target Model</span>
+                                            <input
+                                                type="text"
+                                                placeholder="Leave empty for default"
+                                                value={launchModel}
+                                                onChange={e => setLaunchModel(e.target.value)}
+                                                className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors w-full"
+                                            />
+                                        </div>
+                                    )}
+                                    <div className="flex flex-col gap-1.5 flex-1">
+                                        <span className="text-[10px] font-semibold text-text-secondary uppercase">Startup Arguments</span>
+                                        <input
+                                            type="text"
+                                            placeholder="Optional flags..."
+                                            value={launchArgs}
+                                            onChange={e => setLaunchArgs(e.target.value)}
+                                            className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors w-full"
+                                        />
+                                        {recentArgsOptions.length > 0 && (
+                                            <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                                {recentArgsOptions.map(argsOption => (
+                                                    <button
+                                                        key={argsOption}
+                                                        type="button"
+                                                        className="btn btn-secondary btn-sm"
+                                                        onClick={() => setLaunchArgs(argsOption)}
+                                                        title={argsOption}
+                                                    >
+                                                        {argsOption}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         )}

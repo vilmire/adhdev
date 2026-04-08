@@ -38,6 +38,7 @@ interface PendingDashboardLaunch {
     kind: WorkspaceLaunchKind
     providerType: string
     workspacePath?: string | null
+    resumeSessionId?: string | null
     startedAt: number
 }
 
@@ -58,6 +59,14 @@ function normalizeWorkspacePath(path: string | null | undefined) {
 function isP2PLaunchTimeout(error: unknown) {
     const message = error instanceof Error ? error.message : String(error || '')
     return message.includes('P2P command timeout')
+}
+
+function isExpectedCliViewModeError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error || '')
+    return message.includes('P2P command timeout')
+        || message.includes('P2P not connected')
+        || message.includes('CLI session not found')
+        || message.includes('CLI_SESSION_NOT_FOUND')
 }
 
 export default function Dashboard() {
@@ -322,13 +331,22 @@ export default function Dashboard() {
         machineId: string,
         kind: 'cli' | 'acp',
         providerType: string,
-        opts?: { workspaceId?: string | null; workspacePath?: string | null },
+        opts?: {
+            workspaceId?: string | null
+            workspacePath?: string | null
+            resumeSessionId?: string | null
+            cliArgs?: string[]
+            initialModel?: string | null
+        },
     ) => {
         const startedAt = Date.now()
         try {
             const payload: Record<string, unknown> = { cliType: providerType }
             if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
             else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
+            if (opts?.resumeSessionId?.trim()) payload.resumeSessionId = opts.resumeSessionId.trim()
+            if (Array.isArray(opts?.cliArgs) && opts.cliArgs.length > 0) payload.cliArgs = opts.cliArgs
+            if (opts?.initialModel?.trim()) payload.initialModel = opts.initialModel.trim()
             const res: any = await sendDaemonCommand(machineId, 'launch_cli', payload)
             const result = res?.result || res
             const launchedSessionId = result?.sessionId || result?.id
@@ -342,6 +360,7 @@ export default function Dashboard() {
                     kind,
                     providerType,
                     workspacePath: opts?.workspacePath || null,
+                    resumeSessionId: opts?.resumeSessionId || null,
                     startedAt,
                 })
                 return { ok: true }
@@ -354,6 +373,7 @@ export default function Dashboard() {
                     kind,
                     providerType,
                     workspacePath: opts?.workspacePath || null,
+                    resumeSessionId: opts?.resumeSessionId || null,
                     startedAt,
                 })
                 return { ok: true }
@@ -361,6 +381,25 @@ export default function Dashboard() {
             return { ok: false, error: error instanceof Error ? error.message : `Could not launch ${kind.toUpperCase()} session` }
         }
     }, [handleRequestOpenSession, sendDaemonCommand])
+
+    const handleListMachineSavedSessions = useCallback(async (
+        machineId: string,
+        providerType: string,
+    ): Promise<SavedSessionHistoryEntry[]> => {
+        if (!machineId || !providerType) return []
+        try {
+            const raw: any = await sendDaemonCommand(machineId, 'list_saved_sessions', {
+                providerType,
+                kind: 'cli',
+                limit: 30,
+            })
+            const result = raw?.result ?? raw
+            return Array.isArray(result?.sessions) ? result.sessions : []
+        } catch (error) {
+            console.error('List saved sessions failed', error)
+            return []
+        }
+    }, [sendDaemonCommand])
 
     useEffect(() => {
         if (!pendingDashboardLaunch) return
@@ -380,6 +419,11 @@ export default function Dashboard() {
 
             const entryProviderType = String(entry.agentType || entry.ideType || entry.type || '')
             if (entryProviderType !== pendingDashboardLaunch.providerType) return false
+
+            if (pendingDashboardLaunch.resumeSessionId) {
+                const entryProviderSessionId = String((entry as any).providerSessionId || '')
+                return entryProviderSessionId === pendingDashboardLaunch.resumeSessionId
+            }
 
             if (normalizedTargetWorkspace) {
                 const entryWorkspace = normalizeWorkspacePath(entry.workspace || entry.runtimeWorkspaceLabel)
@@ -594,7 +638,11 @@ export default function Dashboard() {
                 mode,
             })
         } catch (error) {
-            console.error('Failed to switch CLI view mode:', error)
+            if (!isExpectedCliViewModeError(error)) {
+                console.error('Failed to switch CLI view mode:', error)
+            } else {
+                console.warn('Skipped CLI view mode switch:', error instanceof Error ? error.message : String(error))
+            }
         }
     }, [activeConv, sendDaemonCommand])
 
@@ -716,6 +764,7 @@ export default function Dashboard() {
                 onSaveMachineWorkspace={handleSaveMachineWorkspace}
                 onLaunchMachineIde={handleLaunchMachineIde}
                 onLaunchMachineProvider={handleLaunchMachineProvider}
+                onListMachineSavedSessions={handleListMachineSavedSessions}
             />
 
             <style>{`

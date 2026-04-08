@@ -10,6 +10,24 @@ interface UseDashboardConversationCommandsOptions {
     isStandalone: boolean
 }
 
+function unwrapCommandResult(raw: any): any {
+    if (!raw || typeof raw !== 'object') return raw
+    if (raw.result && typeof raw.result === 'object') return raw.result
+    return raw
+}
+
+function getErrorMessage(error: unknown): string {
+    if (error instanceof Error) return error.message
+    return String(error || '')
+}
+
+function isExpectedActionResolutionError(error: unknown): boolean {
+    const message = getErrorMessage(error).toLowerCase()
+    return message.includes('button not found')
+        || message.includes('not in approval state')
+        || message.includes('command failed')
+}
+
 export function useDashboardConversationCommands({
     sendDaemonCommand,
     activeConv,
@@ -55,11 +73,12 @@ export function useDashboardConversationCommands({
             const routeTarget = getRouteTarget(activeConv)
             if (!routeTarget) return
 
-            const res = await sendDaemonCommand(routeTarget, 'send_chat', {
+            const raw = await sendDaemonCommand(routeTarget, 'send_chat', {
                 message,
                 text: message,
                 ...getProviderArgs(activeConv),
             })
+            const res = unwrapCommandResult(raw)
 
             if (res?.deduplicated || res?.sent === false) {
                 setLocalUserMessages(prev => ({
@@ -67,6 +86,10 @@ export function useDashboardConversationCommands({
                     [tabKey]: (prev[tabKey] || []).filter(entry => entry._localId !== localId),
                 }))
                 return
+            }
+
+            if (res?.success === false) {
+                throw new Error(res?.error || 'Send failed')
             }
 
             setTimeout(() => {
@@ -80,7 +103,12 @@ export function useDashboardConversationCommands({
                 })
             }, 60000)
         } catch (e) {
-            console.error('Send failed', e)
+            const message = getErrorMessage(e)
+            if (message.toLowerCase().includes('provider sendmessage did not confirm send')) {
+                console.warn('Send not confirmed by provider script:', message)
+            } else {
+                console.error('Send failed', e)
+            }
             setLocalUserMessages(prev => ({
                 ...prev,
                 [tabKey]: (prev[tabKey] || []).filter(entry => entry._localId !== localId),
@@ -115,12 +143,13 @@ export function useDashboardConversationCommands({
             const routeTarget = getRouteTarget(activeConv)
             if (!routeTarget) return
 
-            const res = await sendDaemonCommand(routeTarget, 'resolve_action', {
+            const raw = await sendDaemonCommand(routeTarget, 'resolve_action', {
                 button: buttonText,
                 action: isApprove ? 'approve' : 'reject',
                 ...(buttonIndex >= 0 && { buttonIndex }),
                 ...getProviderArgs(activeConv),
             })
+            const res = unwrapCommandResult(raw)
 
             if (!res.success) {
                 setActionLogs(prev => [...prev, {
@@ -130,10 +159,14 @@ export function useDashboardConversationCommands({
                 }])
             }
         } catch (e) {
-            console.error('[ModalButton] Error:', e)
+            if (!isExpectedActionResolutionError(e)) {
+                console.error('[ModalButton] Error:', e)
+            }
             setActionLogs(prev => [...prev, {
                 ideId: activeConv.tabKey,
-                text: `❌ **${buttonText}** error`,
+                text: isExpectedActionResolutionError(e)
+                    ? `⚠️ **${buttonText}** unavailable`
+                    : `❌ **${buttonText}** error`,
                 timestamp: Date.now(),
             }])
         }

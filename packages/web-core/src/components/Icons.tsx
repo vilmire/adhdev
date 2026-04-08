@@ -325,6 +325,15 @@ export function IconFit({ size = defaults.size, className }: IconProps) {
   );
 }
 
+export function IconSplitView({ size = defaults.size, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <line x1="12" y1="5" x2="12" y2="19" />
+    </svg>
+  );
+}
+
 // Play
 export function IconPlay({ size = defaults.size, className }: IconProps) {
   return (
