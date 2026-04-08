@@ -145,6 +145,17 @@ function formatTime(ms?: number): string {
     return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
+function getRenderableTimestamp(message: ChatMessage, index: number, receivedAtMap: Record<string, number>): number {
+    const anyMessage = message as any;
+    return Number(
+        anyMessage.timestamp
+        || anyMessage.receivedAt
+        || anyMessage.createdAt
+        || receivedAtMap[getChatMessageStableKey(message, index)]
+        || 0,
+    ) || 0;
+}
+
 function likelyNeedsMarkdownRender(content: string): boolean {
     return /[`*_#[\]()>-]|https?:\/\/|\n\s*[-*]\s|\n\s*\d+\.\s|\|/.test(content);
 }
@@ -544,7 +555,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             type: 'message' as const,
             data: m,
             index: i,
-            ts: m.receivedAt || receivedAtMap[getChatMessageStableKey(m, i)] || 0,
+            ts: getRenderableTimestamp(m, i, receivedAtMap),
         }));
 
         if (!actionLogs || actionLogs.length === 0) return msgItems;

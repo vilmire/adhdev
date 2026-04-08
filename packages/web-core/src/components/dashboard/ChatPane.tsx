@@ -40,6 +40,15 @@ function getMessageTimestamp(message: any): number {
     return Number.isFinite(ts) ? ts : 0;
 }
 
+function sortMessagesChronologically(messages: any[]) {
+    return [...messages].sort((left, right) => {
+        const leftTs = getMessageTimestamp(left);
+        const rightTs = getMessageTimestamp(right);
+        if (leftTs && rightTs && leftTs !== rightTs) return leftTs - rightTs;
+        return 0;
+    });
+}
+
 function isLikelySameMessage(a: any, b: any): boolean {
     if (!a || !b) return false;
     if (a === b) return true;
@@ -238,11 +247,11 @@ export default function ChatPane({
             ? activeConv.messages.slice(-tabHistory.visibleLiveCount)
             : activeConv.messages;
         if (historyMessages.length === 0) {
-            const dedupedLiveMessages = dedupeOptimisticMessages(liveMessages);
+            const dedupedLiveMessages = sortMessagesChronologically(dedupeOptimisticMessages(liveMessages));
             const liveReceivedAtMap: Record<string, number> = {};
             dedupedLiveMessages.forEach((message: any, index: number) => {
                 const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;
-                let receivedAt = message.receivedAt || receivedAtCache.current.get(messageKey) || 0;
+                let receivedAt = getMessageTimestamp(message) || receivedAtCache.current.get(messageKey) || 0;
                 if (!receivedAt) {
                     receivedAt = Date.now();
                     receivedAtCache.current.set(messageKey, receivedAt);
@@ -257,11 +266,13 @@ export default function ChatPane({
         const uniqueHistory = historyMessages.filter(
             m => !liveHashes.has(`${m.role}:${(m.content || '').slice(0, 100)}`)
         );
-        const mergedMessages = dedupeOptimisticMessages([...uniqueHistory, ...liveMessages]);
+        const mergedMessages = sortMessagesChronologically(
+            dedupeOptimisticMessages([...uniqueHistory, ...liveMessages]),
+        );
         const nextReceivedAtMap: Record<string, number> = {};
         mergedMessages.forEach((message: any, index: number) => {
             const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;
-            let receivedAt = message.receivedAt || receivedAtCache.current.get(messageKey) || 0;
+            let receivedAt = getMessageTimestamp(message) || receivedAtCache.current.get(messageKey) || 0;
             if (!receivedAt) {
                 receivedAt = Date.now();
                 receivedAtCache.current.set(messageKey, receivedAt);

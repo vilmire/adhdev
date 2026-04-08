@@ -125,6 +125,7 @@ export function buildIdeConversations(
         sessionId?: string;
         instanceId?: string;
         providerSessionId?: string;
+        transport?: string;
         agentType: string;
         agentName: string;
         status: string;
@@ -141,6 +142,7 @@ export function buildIdeConversations(
             sessionId: child.id,
             instanceId: child.id,
             providerSessionId: (child as any).providerSessionId,
+            transport: child.transport,
             agentType: child.providerType,
             agentName: child.providerName,
             status: child.status,
@@ -254,7 +256,10 @@ export function buildIdeConversations(
             return true;
         });
         const hasMeaningfulStream =
-            serverMsgs.length > 0
+            stream.transport === 'cdp-webview'
+            || !!stream.sessionId
+            || !!stream.providerSessionId
+            || serverMsgs.length > 0
             || pendingLocal.length > 0
             || hasModal
             || !!effectiveStreamTitle
@@ -275,8 +280,8 @@ export function buildIdeConversations(
             messages: [...serverMsgs, ...pendingLocal],
             ideType: stream.agentType,
             workspaceName,
-            displayPrimary: effectiveStreamTitle || parentTitle || workspaceName || ideLabel,
-            displaySecondary: `${ideLabel}·${stream.agentName}`,
+            displayPrimary: workspaceName || parentTitle || effectiveStreamTitle || ideLabel,
+            displaySecondary: `${ideLabel} · ${stream.agentName}`,
             cdpConnected: ide.cdpConnected,
             modalButtons: hasModal ? stream.activeModal!.buttons : undefined,
             modalMessage: hasModal ? stream.activeModal!.message : undefined,

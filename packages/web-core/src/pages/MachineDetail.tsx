@@ -12,7 +12,7 @@
  * Shared hook: useMachineActions (launch/stop/restart/workspace handlers)
  * Shared types: ./machine/types.ts
  */
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
@@ -35,6 +35,9 @@ import MachineWorkspaceTab from './machine/MachineWorkspaceTab'
 import LaunchConfirmDialog from '../components/machine/LaunchConfirmDialog'
 import { buildLaunchWorkspaceOptions } from '../components/machine/launchWorkspaceOptions'
 import type { LaunchWorkspaceOption } from './machine/types'
+import { buildIdeConversations } from '../components/dashboard/buildConversations'
+import { getConversationActivityAt } from '../components/dashboard/conversation-sort'
+import type { ActiveConversation } from '../components/dashboard/types'
 
 // ─── Component ───────────────────────────────────────
 interface MachineDetailProps {
@@ -256,6 +259,20 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             currentModel: launch.currentModel,
         }))
         : fallbackRecentLaunches
+    const currentConversations = useMemo<ActiveConversation[]>(() => {
+        const connectionState = daemonCtx.connectionStates?.[machineId || ''] || undefined
+        return allIdes
+            .filter(entry => (entry as any).daemonId === machineId && !(entry as any).daemonMode)
+            .flatMap(entry => buildIdeConversations(entry, {}, { connectionState }))
+            .filter(conversation => !(conversation.transport === 'pty' && conversation.mode === 'terminal'))
+            .sort((left, right) => getConversationActivityAt(right) - getConversationActivityAt(left))
+    }, [allIdes, daemonCtx.connectionStates, machineId])
+
+    const handleOpenConversation = useCallback((conversation: ActiveConversation) => {
+        const targetKey = conversation.sessionId || conversation.tabKey
+        if (!targetKey) return
+        navigate(`/dashboard?activeTab=${encodeURIComponent(targetKey)}`)
+    }, [navigate])
 
     const handleConfirmRecentLaunch = useCallback(() => {
         if (!recentLaunchActionRef.current) return
@@ -418,10 +435,12 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                     machineEntry={machineEntry as DaemonData}
                                     providers={providers}
                                     recentLaunches={recentLaunches}
+                                    currentConversations={currentConversations}
                                     onUpgradeDaemon={async () => {
                                         try { await sendDaemonCommand(machineId!, 'daemon_upgrade', {}) } catch {}
                                     }}
                                     onOpenRecent={handleOpenRecent}
+                                    onOpenConversation={handleOpenConversation}
                                 />
                                 <MachineWorkspaceTab
                                     machine={machine}
@@ -504,8 +523,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                 onDismiss={(id) => daemonCtx.setToasts((prev: any[]) => prev.filter(t => t.id !== id))}
                 onClickToast={(toast) => {
                     if (toast.targetKey) {
-                        // Switch to the appropriate tab depending on the agent type if we had enough context,
-                        // but for now we just let the user see the notification.
+                        navigate(`/dashboard?activeTab=${encodeURIComponent(toast.targetKey)}`)
                     }
                 }}
             />

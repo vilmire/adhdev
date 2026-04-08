@@ -48,7 +48,6 @@ export default function ToastContainer({ toasts, onDismiss, onClickToast }: Toas
                         onClick={() => {
                             if (!toast.actions?.length) {
                                 if (onClickToast) onClickToast(toast);
-                                onDismiss(toast.id);
                             }
                         }}
                     >

@@ -31,6 +31,7 @@ export interface StatusEventPayload {
     elapsedSec?: number
     modalMessage?: string
     modalButtons?: string[]
+    timestamp?: number
 }
 
 export interface ToastAction {
@@ -283,6 +284,7 @@ class EventManager {
                     : `${machineName}/${ideLabel}`         // IDE event → "MachineName/Cursor" for clarity
             }
         }
+        const eventTimestamp = Number.isFinite(payload.timestamp) ? Number(payload.timestamp) : Date.now()
         let msg = ''
         let type: 'success' | 'info' | 'warning' = 'info'
 
@@ -301,9 +303,9 @@ class EventManager {
             if (conversationKey && getNotificationPrefs().chatTaskCompletionBubble) {
                 this.emitSystemMessage(conversationKey, {
                     role: 'system',
-                    timestamp: Date.now(),
+                    timestamp: eventTimestamp,
                     content: `✅ Task completed${dur}`,
-                    _localId: `sys_complete_${Date.now()}`,
+                    _localId: `sys_complete_${eventTimestamp}`,
                 })
             }
 
@@ -328,9 +330,9 @@ class EventManager {
                     : '[Approve] [Reject]'
                 this.emitSystemMessage(conversationKey, {
                     role: 'system',
-                    timestamp: Date.now(),
+                    timestamp: eventTimestamp,
                     content: `⚡ Approval requested: ${modalText}\n${buttons}`,
-                    _localId: `sys_approval_${Date.now()}`,
+                    _localId: `sys_approval_${eventTimestamp}`,
                 })
             }
 
