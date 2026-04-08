@@ -796,7 +796,8 @@ export class ProviderCliAdapter implements CliAdapter {
         );
         // On Windows, .cmd/.bat shims cannot be spawned directly — must go through cmd.exe
         const isCmdShim = isWin && /\.(cmd|bat)$/i.test(binaryPath);
-        const useShellWin = isCmdShim
+        const useShellWin = !!spawnConfig.shell
+            || isCmdShim
             || !path.isAbsolute(binaryPath)
             || isScriptBinary(binaryPath);
         const useShell = isWin ? useShellWin : useShellUnix;
@@ -1051,6 +1052,52 @@ export class ProviderCliAdapter implements CliAdapter {
             || /Type your message(?:\s+or\s+@path\/to\/file)?/i.test(text)
             || /workspace\s*\(\/directory\)/i.test(text)
             || /for\s*shortcuts/i.test(text);
+    }
+
+    private findLastMatchingLineIndex(lines: string[], predicate: (line: string) => boolean): number {
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+            if (predicate(lines[index])) return index;
+        }
+        return -1;
+    }
+
+    private looksLikeClaudeGeneratingLine(line: string): boolean {
+        const trimmed = String(line || '').trim();
+        if (!trimmed) return false;
+        if (/esc to (cancel|interrupt|stop)/i.test(trimmed)) return true;
+        if (/^[✻✶✳✢✽⠂⠐⠒⠓⠦⠴⠶⠷⠿]+\s+\S+.*\b(?:thinking|thought for \d+s?)\b/i.test(trimmed)) return true;
+        if (/^[✻✶✳✢✽⠂⠐⠒⠓⠦⠴⠶⠷⠿]+\s+[A-Z][A-Za-z-]{3,}ing\b.*(?:…|\.{3})/u.test(trimmed)) return true;
+        if (/^[⏺•]\s+(?:Reading|Writing|Editing|Searching|Inspecting|Planning|Analyzing|Synthesizing|Drafting|Running|Listing|Scanning|Matching)\b.*(?:…|\.{3})/i.test(trimmed)) {
+            return /ctrl\+o to expand/i.test(trimmed)
+                || /\b\d+\s+(?:file|files|pattern|patterns|director(?:y|ies)|match|matches|result|results)\b/i.test(trimmed);
+        }
+        return false;
+    }
+
+    private detectClaudeGeneratingOverride(screenText: string, tail: string): boolean {
+        if (this.cliType !== 'claude-cli') return false;
+
+        const source = sanitizeTerminalText(screenText || tail || '');
+        if (!source.trim()) return false;
+
+        const allLines = source
+            .split(/\r\n|\n|\r/g)
+            .map(line => line.trim())
+            .filter(Boolean);
+        if (allLines.length === 0) return false;
+
+        const recentLines = allLines.slice(-12);
+        const promptIndex = this.findLastMatchingLineIndex(recentLines, (line) => /^[❯›>]\s*$/.test(line));
+        const activeRegion = promptIndex >= 0 ? recentLines.slice(promptIndex + 1) : recentLines;
+        if (activeRegion.length === 0) return false;
+
+        return activeRegion.some((line) => this.looksLikeClaudeGeneratingLine(line));
+    }
+
+    private refineDetectedStatus(status: string | null, tail: string, screenText?: string): string | null {
+        if (status === 'waiting_approval') return status;
+        if (this.detectClaudeGeneratingOverride(screenText || '', tail)) return 'generating';
+        return status;
     }
 
     private looksLikeVisibleAssistantCandidate(screenText: string): boolean {
@@ -1488,11 +1535,13 @@ export class ProviderCliAdapter implements CliAdapter {
     private runDetectStatus(text: string): string | null {
         if (!this.cliScripts?.detectStatus) return null;
         try {
-            return this.cliScripts.detectStatus({
+            const screenText = this.terminalScreen.getText();
+            const status = this.cliScripts.detectStatus({
                 tail: text.slice(-500),
-                screenText: this.terminalScreen.getText(),
+                screenText,
                 rawBuffer: this.accumulatedRawBuffer,
             });
+            return this.refineDetectedStatus(status, text, screenText || '');
         } catch (e: any) {
             LOG.warn('CLI', `[${this.cliType}] detectStatus error: ${e.message}`);
             return null;
@@ -1568,6 +1617,10 @@ export class ProviderCliAdapter implements CliAdapter {
         try {
             const input = this.buildParseInput(baseMessages, partialResponse, scope);
             const parsed = this.cliScripts.parseOutput(input);
+            const refinedStatus = this.refineDetectedStatus(typeof parsed?.status === 'string' ? parsed.status : null, input.recentBuffer, input.screenText);
+            if (parsed && refinedStatus && parsed.status !== refinedStatus) {
+                parsed.status = refinedStatus;
+            }
             const promptForTrim = scope?.prompt || getLastUserPromptText(baseMessages);
             if (parsed && Array.isArray(parsed.messages) && promptForTrim) {
                 const lastAssistant = [...parsed.messages].reverse().find((message: any) => message?.role === 'assistant' && typeof message.content === 'string');
