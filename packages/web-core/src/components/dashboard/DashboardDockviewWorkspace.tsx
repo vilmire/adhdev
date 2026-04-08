@@ -32,6 +32,7 @@ import {
     writeDashboardDockviewStoredLayout,
 } from '../../utils/dashboardLayoutStorage'
 import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, type LiveSessionInboxState } from './DashboardMobileChatShared'
+import { getPreferredConversationForIde } from './conversation-sort'
 import { getCliConversationViewMode, isAcpConv } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
@@ -124,15 +125,6 @@ function getRemotePanelId(ideId: string) {
 
 function isRemotePanelId(panelId: string) {
     return panelId.startsWith('remote:')
-}
-
-function getPreferredConversationForIde(
-    conversations: ActiveConversation[],
-    ideId: string,
-) {
-    return conversations.find(conversation => conversation.ideId === ideId && conversation.streamSource === 'native')
-        ?? conversations.find(conversation => conversation.ideId === ideId)
-        ?? null
 }
 
 function useDockviewHeaderRenderTick(props: Pick<IDockviewPanelHeaderProps, 'api' | 'containerApi'>) {

@@ -16,6 +16,7 @@ import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { registerExtensionProviders } from '../cdp/setup.js';
 import type { SessionRegistry } from '../sessions/registry.js';
+import { reconcileIdeRuntimeSessions } from '../sessions/reconcile.js';
 import { LOG } from '../logging/logger.js';
 import type { AgentStreamState } from './types.js';
 
@@ -77,6 +78,9 @@ export class AgentStreamPoller {
         } = this.deps;
 
         if (!agentStreamManager || cdpManagers.size === 0) return;
+
+        // Defensive repair: keep SessionRegistry aligned with live IDE/extension instances.
+        reconcileIdeRuntimeSessions(instanceManager as any, sessionRegistry);
 
         // ─── Phase 1: Refresh extension providers + IDE instance extensions ───
         for (const [ideType, cdp] of cdpManagers) {

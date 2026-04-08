@@ -1,4 +1,5 @@
 import type { ActiveConversation } from './types'
+import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 
 function parseMessageTimestamp(value: unknown): number {
     if (typeof value === 'number' && Number.isFinite(value)) return value
@@ -46,4 +47,50 @@ export function compareConversationRecency(
     if (secondaryDiff !== 0) return secondaryDiff
 
     return left.tabKey.localeCompare(right.tabKey)
+}
+
+function isConversationWorking(conversation: ActiveConversation): boolean {
+    const status = normalizeManagedStatus(conversation.status, {
+        activeModal: conversation.modalButtons?.length
+            ? { buttons: conversation.modalButtons }
+            : null,
+    })
+    return status === 'generating' || status === 'waiting_approval'
+}
+
+function isConversationEmptyShell(conversation: ActiveConversation): boolean {
+    return conversation.messages.length === 0
+        && !conversation.modalButtons?.length
+        && !isConversationWorking(conversation)
+        && !conversation.title.trim()
+}
+
+function getPreferredStreamConversation(streams: ActiveConversation[]): ActiveConversation | null {
+    if (streams.length === 0) return null
+    return [...streams].sort((left, right) => {
+        const workingDiff = Number(isConversationWorking(right)) - Number(isConversationWorking(left))
+        if (workingDiff !== 0) return workingDiff
+
+        const messageDiff = right.messages.length - left.messages.length
+        if (messageDiff !== 0) return messageDiff
+
+        return compareConversationRecency(left, right)
+    })[0] || null
+}
+
+export function getPreferredConversationForIde(
+    conversations: ActiveConversation[],
+    ideId: string,
+): ActiveConversation | null {
+    const ideConversations = conversations.filter(conversation => conversation.ideId === ideId)
+    if (ideConversations.length === 0) return null
+
+    const nativeConversation = ideConversations.find(conversation => conversation.streamSource === 'native') || null
+    const streamConversations = ideConversations.filter(conversation => conversation.streamSource === 'agent-stream')
+    const preferredStream = getPreferredStreamConversation(streamConversations)
+
+    if (!nativeConversation) return preferredStream || ideConversations[0] || null
+    if (!preferredStream) return nativeConversation
+
+    return isConversationEmptyShell(nativeConversation) ? preferredStream : nativeConversation
 }

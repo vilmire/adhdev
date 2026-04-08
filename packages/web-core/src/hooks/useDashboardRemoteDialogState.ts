@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { NavigateFunction, Location } from 'react-router-dom'
 import type { DaemonData } from '../types'
 import type { ActiveConversation } from '../components/dashboard/types'
+import { getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
 import { isAcpConv, isCliConv } from '../components/dashboard/types'
 
 interface UseDashboardRemoteDialogStateOptions {
@@ -43,9 +44,7 @@ export function useDashboardRemoteDialogState({
                 ? conversations.find(conversation => conversation.tabKey === requestedDesktopTabKey)
                 : null
         if (requestedConversation?.ideId === targetIdeId) return requestedConversation
-        return conversations.find(conversation => conversation.ideId === targetIdeId && conversation.streamSource === 'native')
-            || conversations.find(conversation => conversation.ideId === targetIdeId)
-            || null
+        return getPreferredConversationForIde(conversations, targetIdeId)
     }, [conversations, remoteDialogState, requestedDesktopTabKey])
 
     const remoteDialogIdeEntry = useMemo(() => {

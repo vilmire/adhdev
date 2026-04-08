@@ -9,6 +9,7 @@ import IDEChatTabs from '../ide/IDEChatTabs'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 import { useIdeRemoteStream } from '../../hooks/useIdeRemoteStream'
 import { useIdeConversations } from '../../hooks/useIdeConversations'
+import { getPreferredConversationForIde } from './conversation-sort'
 import { IconMonitor, IconScroll, IconSplitView } from '../Icons'
 import { formatIdeType } from '../../utils/daemon-utils'
 
@@ -69,12 +70,24 @@ export default function DashboardRemoteDialog({
         connectionStates,
         localUserMessages,
         ideName: ideDisplayName || 'IDE',
-        preferredTabKey: activeConv.streamSource === 'native' ? 'native' : activeConv.tabKey,
+        preferredTabKey: activeConv.streamSource === 'native' ? undefined : activeConv.tabKey,
     })
+    const preferredConversation = useMemo(
+        () => activeIdeEntry ? getPreferredConversationForIde(conversations, activeIdeEntry.id) : null,
+        [activeIdeEntry, conversations],
+    )
 
     useEffect(() => {
-        setDialogChatTab(activeConv.streamSource === 'native' ? 'native' : activeConv.tabKey)
-    }, [activeConv.streamSource, activeConv.tabKey])
+        if (activeConv.streamSource === 'native') {
+            setDialogChatTab(
+                preferredConversation?.streamSource === 'agent-stream'
+                    ? preferredConversation.tabKey
+                    : 'native',
+            )
+            return
+        }
+        setDialogChatTab(activeConv.tabKey)
+    }, [activeConv.streamSource, activeConv.tabKey, preferredConversation])
 
     const effectiveConv = useMemo(() => {
         if (dialogChatTab === 'native') {

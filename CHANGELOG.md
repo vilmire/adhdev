@@ -2,6 +2,13 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.25] - 2026-04-09
+
+### Fixed
+- Reconcile live IDE and extension runtime sessions back into the daemon session registry so Codex child sessions recover without relying on a full daemon restart.
+- Hard-fail session-scoped extension commands when `targetSessionId` is stale instead of falling back to string-based route guesses.
+- Prefer active extension stream conversations over empty native IDE tabs in the dashboard so Codex chats open on the conversation that actually has messages.
+
 ## [0.8.24] - 2026-04-08
 
 ### Fixed

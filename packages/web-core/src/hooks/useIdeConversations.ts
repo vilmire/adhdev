@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { buildIdeConversations, buildMachineNameMap, type LocalUserMessage } from '../components/dashboard/buildConversations'
+import { getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
 import type { DaemonData } from '../types'
 
 interface UseIdeConversationsOptions {
@@ -40,11 +41,25 @@ export function useIdeConversations({
         () => conversations.filter(conversation => conversation.streamSource === 'agent-stream'),
         [conversations],
     )
+    const preferredConversation = useMemo(
+        () => (ideData ? getPreferredConversationForIde(conversations, ideData.id) : null),
+        [conversations, ideData],
+    )
 
     useEffect(() => {
         if (!preferredTabKey) return
         setActiveChatTab(preferredTabKey)
     }, [preferredTabKey])
+
+    useEffect(() => {
+        if (preferredTabKey || !preferredConversation) return
+        const preferredTab = preferredConversation.streamSource === 'native'
+            ? 'native'
+            : preferredConversation.tabKey
+        if (!preferredTab || activeChatTab === preferredTab) return
+        if (activeChatTab !== 'native') return
+        setActiveChatTab(preferredTab)
+    }, [activeChatTab, preferredConversation, preferredTabKey])
 
     useEffect(() => {
         if (activeChatTab === 'native') return
@@ -62,9 +77,10 @@ export function useIdeConversations({
     const activeConv = useMemo(() => {
         if (activeChatTab === 'native' && nativeConv) return nativeConv
         return streamConvs.find(conversation => conversation.tabKey === activeChatTab)
+            || preferredConversation
             || nativeConv
             || streamConvs[0]
-    }, [activeChatTab, nativeConv, streamConvs])
+    }, [activeChatTab, nativeConv, preferredConversation, streamConvs])
 
     const extensionTabs = useMemo(
         () => streamConvs.map(conversation => ({

@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef } from 'react'
 import { buildIdeConversations, buildMachineNameMap, type LocalUserMessage } from '../components/dashboard/buildConversations'
-import { compareConversationRecency, getConversationSortTimestamp } from '../components/dashboard/conversation-sort'
+import { compareConversationRecency, getConversationSortTimestamp, getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
 import type { ActiveConversation } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
 import { normalizeTextContent } from '../utils/text'
@@ -205,22 +205,37 @@ export function useDashboardConversations({
         conversationsRef.current = next
         return next
     }, [baseConversations, clearedTabs])
+    const preferredConversationByIdeId = useMemo(() => {
+        const map = new Map<string, ActiveConversation>()
+        const ideIds = Array.from(new Set(conversations.map(conversation => conversation.ideId)))
+        for (const ideId of ideIds) {
+            const preferred = getPreferredConversationForIde(conversations, ideId)
+            if (preferred) map.set(ideId, preferred)
+        }
+        return map
+    }, [conversations])
     const conversationBySessionId = useMemo(() => {
         const map = new Map<string, ActiveConversation>()
         for (const conversation of conversations) {
             if (conversation.sessionId) map.set(conversation.sessionId, conversation)
+            if (conversation.streamSource === 'native' && conversation.sessionId) {
+                const preferred = preferredConversationByIdeId.get(conversation.ideId)
+                if (preferred) {
+                    map.set(conversation.sessionId, preferred)
+                }
+            }
         }
         return map
-    }, [conversations])
+    }, [conversations, preferredConversationByIdeId])
     const conversationTargetMap = useMemo(() => {
         const map = new Map<string, ActiveConversation>()
         for (const conversation of conversations) {
             if (conversation.sessionId) map.set(conversation.sessionId, conversation)
-            map.set(conversation.ideId, conversation)
+            map.set(conversation.ideId, preferredConversationByIdeId.get(conversation.ideId) || conversation)
             map.set(conversation.tabKey, conversation)
         }
         return map
-    }, [conversations])
+    }, [conversations, preferredConversationByIdeId])
 
     const resolveConversationBySessionId = useCallback((sessionId: string | null | undefined) => {
         if (!sessionId) return undefined

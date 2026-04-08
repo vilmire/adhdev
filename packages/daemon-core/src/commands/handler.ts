@@ -21,6 +21,7 @@ import type { DaemonAgentStreamManager } from '../agent-stream/index.js';
 import { loadConfig } from '../config/config.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import type { SessionRegistry, SessionRuntimeTarget } from '../sessions/registry.js';
+import { reconcileIdeRuntimeSessions } from '../sessions/reconcile.js';
 import { LOG } from '../logging/logger.js';
 
 // Sub-module imports
@@ -165,6 +166,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         session?: SessionRuntimeTarget;
         managerKey?: string;
         providerType?: string;
+        sessionLookupFailed?: boolean;
     } = {};
 
     constructor(ctx: CommandContext) {
@@ -284,23 +286,36 @@ export class DaemonCommandHandler implements CommandHelpers {
         return key.split('_')[0];
     }
 
-    private resolveRoute(args: any): { session?: SessionRuntimeTarget; managerKey?: string; providerType?: string } {
-        const session = this._ctx.sessionRegistry?.get(args?.targetSessionId);
-        const managerKey = this.extractIdeType(args);
-        const providerType =
-            args?.agentType
-            || args?.providerType
-            || session?.providerType
-            || this.inferProviderType(managerKey);
-        return { session, managerKey, providerType };
+    private resolveRoute(args: any): { session?: SessionRuntimeTarget; managerKey?: string; providerType?: string; sessionLookupFailed?: boolean } {
+        const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+        let session = targetSessionId ? this._ctx.sessionRegistry?.get(targetSessionId) : undefined;
+        if (targetSessionId && !session) {
+            reconcileIdeRuntimeSessions(this._ctx.instanceManager as any, this._ctx.sessionRegistry);
+            session = this._ctx.sessionRegistry?.get(targetSessionId);
+        }
+        const sessionLookupFailed = !!targetSessionId && !session;
+
+        const managerKey = this.extractIdeType(args, sessionLookupFailed);
+        let providerType: string | undefined;
+
+        if (!sessionLookupFailed) {
+            providerType =
+                session?.providerType
+                || args?.agentType
+                || args?.providerType
+                || this.inferProviderType(managerKey);
+        }
+
+        return { session, managerKey, providerType, sessionLookupFailed };
     }
 
     /** Extract CDP scope key from target session or explicit ideType */
-    private extractIdeType(args: any): string | undefined {
+    private extractIdeType(args: any, sessionLookupFailed = false): string | undefined {
         if (args?.targetSessionId) {
             const target = this._ctx.sessionRegistry?.get(args.targetSessionId);
             if (target?.cdpManagerKey) return target.cdpManagerKey;
             if (this._ctx.cdpManagers.has(args.targetSessionId)) return args.targetSessionId;
+            if (sessionLookupFailed) return undefined;
         }
 
         // Also accept explicit ideType from args (P2P input, agentType for extensions)
@@ -359,6 +374,35 @@ export class DaemonCommandHandler implements CommandHelpers {
         this._currentRoute = this.resolveRoute(args);
         const startedAt = Date.now();
         this.logCommandStart(cmd, args);
+
+        const sessionScopedCommands = new Set([
+            'read_chat',
+            'send_chat',
+            'list_chats',
+            'new_chat',
+            'switch_chat',
+            'set_mode',
+            'change_model',
+            'set_thought_level',
+            'resolve_action',
+            'focus_session',
+            'pty_input',
+            'pty_resize',
+            'invoke_provider_script',
+            'list_extension_models',
+            'set_extension_model',
+            'list_extension_modes',
+            'set_extension_mode',
+        ]);
+
+        if (this._currentRoute.sessionLookupFailed && sessionScopedCommands.has(cmd)) {
+            const result = {
+                success: false,
+                error: `Live session not found for targetSessionId: ${String(args?.targetSessionId || '').trim() || 'unknown'}`,
+            };
+            this.logCommandEnd(cmd, result, startedAt);
+            return result;
+        }
 
         // Commands without ideType CDP silently fail (prevent P2P retry spam)
         let result: CommandResult;
