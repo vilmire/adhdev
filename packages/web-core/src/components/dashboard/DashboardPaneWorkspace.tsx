@@ -30,6 +30,7 @@ interface DashboardPaneWorkspaceProps {
     groupTabOrders: Record<number, string[]>
     setGroupTabOrders: React.Dispatch<React.SetStateAction<Record<number, string[]>>>
     toggleHiddenTab: (tabKey: string) => void
+    allowTabShortcuts?: boolean
 }
 
 export default function DashboardPaneWorkspace({
@@ -59,6 +60,7 @@ export default function DashboardPaneWorkspace({
     groupTabOrders,
     setGroupTabOrders,
     toggleHiddenTab,
+    allowTabShortcuts = true,
 }: DashboardPaneWorkspaceProps) {
     return (
         <div ref={containerRef} className={`flex-1 min-h-0 flex ${isSplitMode ? 'flex-row' : 'flex-col'} overflow-hidden`}>
@@ -124,6 +126,7 @@ export default function DashboardPaneWorkspace({
                                 return { ...prev, [groupIndex]: order }
                             })}
                             onHideTab={toggleHiddenTab}
+                            allowTabShortcuts={allowTabShortcuts}
                         />
                     </React.Fragment>
                 )

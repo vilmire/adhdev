@@ -59,6 +59,7 @@ export interface PaneGroupProps {
     onHideTab?: (tabKey: string) => void;
     /** Whether this group is the focused/active group (split mode) */
     isFocused?: boolean;
+    allowTabShortcuts?: boolean;
 }
 
 export default function PaneGroup({
@@ -77,6 +78,7 @@ export default function PaneGroup({
     onTabOrderChange,
     onHideTab,
     isFocused,
+    allowTabShortcuts = true,
 }: PaneGroupProps) {
     const { sendCommand } = useTransport()
     const terminalRef = useRef<CliTerminalHandle>(null)
@@ -197,6 +199,7 @@ export default function PaneGroup({
                 onReceiveTab={onReceiveTab}
                 onHideTab={onHideTab}
                 isGroupActive={isFocused ?? false}
+                allowTabShortcuts={allowTabShortcuts}
             />
 
             {/* ── Content Area ────────────────────── */}
@@ -233,6 +236,7 @@ export default function PaneGroup({
                         isFocusingAgent={cmds.isFocusingAgent}
                         actionLogs={activeActionLogs}
                         userName={userName}
+                        isInputActive={!isSplitMode || !!isFocused}
                     />
                 )}
             </div>

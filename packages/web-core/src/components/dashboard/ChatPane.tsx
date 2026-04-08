@@ -103,6 +103,8 @@ export interface ChatPaneProps {
     /** Display name for user messages */
     userName?: string;
     showMetaChips?: boolean;
+    scrollToBottomRequestNonce?: number;
+    isInputActive?: boolean;
 }
 
 const DEFAULT_VISIBLE_LIVE_MESSAGES = 60;
@@ -113,6 +115,8 @@ export default function ChatPane({
     isSendingChat = false,
     handleFocusAgent, isFocusingAgent, actionLogs, userName,
     showMetaChips = false,
+    scrollToBottomRequestNonce,
+    isInputActive = true,
 }: ChatPaneProps) {
     const receivedAtCache = useRef<Map<string, number>>(new Map());
     const { sendCommand } = useTransport();
@@ -355,10 +359,11 @@ export default function ChatPane({
                 hiddenLiveCount={hiddenLiveCount}
                 loadError={loadError ?? undefined}
                 emptyState={emptyState}
+                scrollToBottomRequestNonce={scrollToBottomRequestNonce}
             />
 
             {/* Controls Bar (dynamic or legacy fallback) */}
-            {!isCliTerminalConv(activeConv) && (() => {
+            {isInputActive && !isCliTerminalConv(activeConv) && (() => {
                 const isNativeConversation = activeConv.streamSource !== 'agent-stream'
                 const modelBarAgentType = isNativeConversation
                     ? activeConv.ideType
@@ -396,6 +401,7 @@ export default function ChatPane({
                 panelLabel={panelLabel}
                 isSending={isSendingChat}
                 onSend={handleSendChat}
+                isActive={isInputActive}
             />
         </div>
     );

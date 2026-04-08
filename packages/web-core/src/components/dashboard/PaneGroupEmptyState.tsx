@@ -28,7 +28,7 @@ export default function PaneGroupEmptyState({
                     </h2>
                     <p className="text-[14px] text-text-secondary mb-8 leading-relaxed max-w-md mx-auto">
                         {isStandalone
-                            ? 'Launch any supported IDE or CLI agent to start monitoring automatically.'
+                            ? 'Open an IDE directly, or choose a workspace first before launching CLI or ACP sessions.'
                             : 'Install the ADHDev daemon and link your dashboard to start.'}
                     </p>
                     {!isStandalone && (
@@ -36,7 +36,7 @@ export default function PaneGroupEmptyState({
                     )}
                     {isStandalone && detectedIdes.length > 0 && (
                         <div className="flex flex-col gap-3 items-center">
-                            <div className="text-xs font-semibold uppercase tracking-wider text-text-muted">Fast Launch</div>
+                            <div className="text-xs font-semibold uppercase tracking-wider text-text-muted">Detected IDEs</div>
                             <div className="flex flex-wrap gap-2.5 justify-center mt-1">
                                 {detectedIdes.map(ide => (
                                     <button
@@ -44,7 +44,7 @@ export default function PaneGroupEmptyState({
                                         className="btn btn-sm bg-accent/10 border border-accent/25 text-accent text-xs font-medium px-4 py-2.5 rounded-lg cursor-pointer flex items-center gap-2 transition-all hover:bg-accent/20 hover:scale-105 active:scale-95"
                                         onClick={() => handleLaunchIde(ide.type)}
                                     >
-                                        <IconRocket size={14} className="opacity-70" /> Launch {ide.name}
+                                        <IconRocket size={14} className="opacity-70" /> Open {ide.name}
                                     </button>
                                 ))}
                             </div>

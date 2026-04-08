@@ -42,6 +42,7 @@ export interface ChatMessageListProps {
     hiddenLiveCount?: number;
     /** Error message to show on load button (e.g. retry hint) */
     loadError?: string;
+    scrollToBottomRequestNonce?: number;
 }
 
 export interface ChatMessageListRef {
@@ -339,7 +340,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
 // ─── Component ────────────────────────────────
 
 const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(function ChatMessageList(
-    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError },
+    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce },
     ref
 ) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -428,6 +429,22 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         }
         prevCountRef.current = messages.length;
     }, [lastMsgFingerprint, contextKey, isWorking, messages.length, scheduleScrollToBottom]);
+
+    useEffect(() => {
+        if (!scrollToBottomRequestNonce) return;
+        userScrolledUp.current = false;
+        contextAutoScrollRef.current = true;
+        if (contextAutoScrollTimerRef.current != null) {
+            window.clearTimeout(contextAutoScrollTimerRef.current);
+        }
+        contextAutoScrollTimerRef.current = window.setTimeout(() => {
+            contextAutoScrollRef.current = false;
+            contextAutoScrollTimerRef.current = null;
+        }, 180);
+        if (!hasSelectionRef.current) {
+            scheduleScrollToBottom('auto');
+        }
+    }, [scheduleScrollToBottom, scrollToBottomRequestNonce]);
 
     useEffect(() => () => {
         if (scrollFrameRef.current != null) {
@@ -663,6 +680,7 @@ const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     && prev.hasMoreHistory === next.hasMoreHistory
     && prev.hiddenLiveCount === next.hiddenLiveCount
     && prev.loadError === next.loadError
+    && prev.scrollToBottomRequestNonce === next.scrollToBottomRequestNonce
 ));
 
 export default MemoizedChatMessageList;

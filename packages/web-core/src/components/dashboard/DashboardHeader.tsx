@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActiveConversation, CliConversationViewMode } from './types';
 import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
-import { IconBell, IconChat, IconScroll, IconMonitor, IconEyeOff, IconX } from '../Icons';
+import { IconBell, IconChat, IconScroll, IconMonitor, IconEyeOff, IconX, IconPlus } from '../Icons';
 import { useDaemons } from '../../compat';
 import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared';
 import CliViewModeToggle from './CliViewModeToggle';
@@ -31,17 +31,26 @@ export interface DashboardHeaderProps {
     onShowConversation?: (conversation: ActiveConversation) => void;
     onShowAllHidden?: () => void;
     onClearDevHistory?: () => void;
+    inboxOpen: boolean;
+    onInboxOpenChange: (next: boolean) => void;
+    hiddenOpen: boolean;
+    onHiddenOpenChange: (next: boolean) => void;
+    onOpenNewSession?: () => void;
 }
 
 function DashboardHeaderInboxItem({
     conversation,
     isAttention,
+    shortcutIndex,
     onClick,
 }: {
     conversation: ActiveConversation;
     isAttention?: boolean;
+    shortcutIndex?: number;
     onClick: () => void;
 }) {
+    const metaParts = [conversation.displaySecondary, conversation.machineName].filter(Boolean);
+
     return (
         <button
             type="button"
@@ -49,7 +58,12 @@ function DashboardHeaderInboxItem({
             onClick={onClick}
         >
             <span className="dashboard-header-inbox-item-title">{conversation.displayPrimary}</span>
-            <span className="dashboard-header-inbox-item-meta">{conversation.displaySecondary}</span>
+            {(shortcutIndex || metaParts.length > 0) && (
+                <span className="dashboard-header-inbox-item-meta">
+                    {shortcutIndex ? <span className="dashboard-header-item-shortcut">⌥{shortcutIndex}</span> : null}
+                    {metaParts.join(' · ')}
+                </span>
+            )}
         </button>
     );
 }
@@ -70,14 +84,17 @@ export default function DashboardHeader({
     hiddenConversations = [],
     onShowConversation,
     onShowAllHidden,
+    inboxOpen,
+    onInboxOpenChange,
+    hiddenOpen,
+    onHiddenOpenChange,
+    onOpenNewSession,
 }: DashboardHeaderProps) {
     const daemonCtx = useDaemons() as any;
     const p2pStates: Record<string, string> = daemonCtx.p2pStates || {};
     const ides = daemonCtx.ides || [];
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
     const effectiveCliViewMode = activeCliViewMode || (activeConv ? (isCliTerminalConv(activeConv) ? 'terminal' : 'chat') : null);
-    const [inboxOpen, setInboxOpen] = useState(false);
-    const [hiddenOpen, setHiddenOpen] = useState(false);
     const [isHiddenDropTarget, setIsHiddenDropTarget] = useState(false);
     const inboxRef = useRef<HTMLDivElement | null>(null);
     const hiddenRef = useRef<HTMLDivElement | null>(null);
@@ -122,25 +139,68 @@ export default function DashboardHeader({
         }),
         [activeConv, desktopInboxConversations, liveSessionInboxState],
     );
+    const inboxShortcutTargets = useMemo(
+        () => [...inboxAttention, ...inboxUnread].slice(0, 9),
+        [inboxAttention, inboxUnread],
+    )
     const inboxCount = inboxAttention.length + inboxUnread.length;
 
     useEffect(() => {
         if (!inboxOpen) return;
         const onPointerDown = (event: MouseEvent) => {
-            if (!inboxRef.current?.contains(event.target as Node)) setInboxOpen(false);
+            if (!inboxRef.current?.contains(event.target as Node)) onInboxOpenChange(false);
         };
         document.addEventListener('mousedown', onPointerDown);
         return () => document.removeEventListener('mousedown', onPointerDown);
-    }, [inboxOpen]);
+    }, [inboxOpen, onInboxOpenChange]);
 
     useEffect(() => {
         if (!hiddenOpen) return;
         const onPointerDown = (event: MouseEvent) => {
-            if (!hiddenRef.current?.contains(event.target as Node)) setHiddenOpen(false);
+            if (!hiddenRef.current?.contains(event.target as Node)) onHiddenOpenChange(false);
         };
         document.addEventListener('mousedown', onPointerDown);
         return () => document.removeEventListener('mousedown', onPointerDown);
-    }, [hiddenOpen]);
+    }, [hiddenOpen, onHiddenOpenChange]);
+
+    useEffect(() => {
+        if (!hiddenOpen && !inboxOpen) return
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (!event.altKey) return
+            const match = event.code.match(/^Digit([1-9])$/)
+            if (!match) return
+            const index = Number(match[1]) - 1
+            const hiddenTarget = hiddenOpen ? hiddenConversations[index] : undefined
+            const inboxTarget = inboxOpen ? inboxShortcutTargets[index] : undefined
+            const target = hiddenTarget || inboxTarget
+            if (!target) return
+
+            event.preventDefault()
+            event.stopPropagation()
+
+            if (hiddenTarget) {
+                onShowConversation?.(hiddenTarget)
+                onHiddenOpenChange(false)
+                return
+            }
+
+            onOpenConversation?.(target)
+            onInboxOpenChange(false)
+        }
+
+        window.addEventListener('keydown', handleKeyDown, true)
+        return () => window.removeEventListener('keydown', handleKeyDown, true)
+    }, [
+        hiddenConversations,
+        hiddenOpen,
+        inboxOpen,
+        inboxShortcutTargets,
+        onHiddenOpenChange,
+        onInboxOpenChange,
+        onOpenConversation,
+        onShowConversation,
+    ])
 
     const handleHideDrop = (tabKey: string | null | undefined) => {
         if (!tabKey) return
@@ -187,6 +247,17 @@ export default function DashboardHeader({
                 </div>
             </div>
             <div className="flex gap-2 items-center">
+                {onOpenNewSession && (
+                    <button
+                        type="button"
+                        onClick={onOpenNewSession}
+                        className="btn btn-secondary btn-sm"
+                        title="Start a new session"
+                        aria-label="Start a new session"
+                    >
+                        <IconPlus size={14} />
+                    </button>
+                )}
                 {activeConv && (isCliActive || !isAcpConv(activeConv)) && (
                     <div className="dashboard-header-actions-group">
                         <span
@@ -264,7 +335,7 @@ export default function DashboardHeader({
                     >
                         <button
                             type="button"
-                            onClick={() => setHiddenOpen(open => !open)}
+                            onClick={() => onHiddenOpenChange(!hiddenOpen)}
                             className="btn btn-secondary btn-sm dashboard-header-hidden-button"
                             title="Hidden tabs. Drag a tab here to hide it."
                         >
@@ -281,7 +352,7 @@ export default function DashboardHeader({
                                             className="dashboard-header-hidden-restore-all"
                                             onClick={() => {
                                                 onShowAllHidden();
-                                                setHiddenOpen(false);
+                                                onHiddenOpenChange(false);
                                             }}
                                         >
                                             Restore all
@@ -307,11 +378,16 @@ export default function DashboardHeader({
                                                 className="dashboard-header-inbox-item"
                                                 onClick={() => {
                                                     onShowConversation?.(conversation);
-                                                    setHiddenOpen(false);
+                                                    onHiddenOpenChange(false);
                                                 }}
                                             >
                                                 <span className="dashboard-header-inbox-item-title">{conversation.displayPrimary}</span>
-                                                <span className="dashboard-header-inbox-item-meta">{conversation.displaySecondary}</span>
+                                                <span className="dashboard-header-inbox-item-meta">
+                                                    {hiddenConversations.indexOf(conversation) < 9 ? (
+                                                        <span className="dashboard-header-item-shortcut">⌥{hiddenConversations.indexOf(conversation) + 1}</span>
+                                                    ) : null}
+                                                    {[conversation.displaySecondary, conversation.machineName].filter(Boolean).join(' · ')}
+                                                </span>
                                             </button>
                                         ))}
                                     </div>
@@ -323,7 +399,7 @@ export default function DashboardHeader({
                     </div>
                     <button
                         type="button"
-                        onClick={() => setInboxOpen(open => !open)}
+                        onClick={() => onInboxOpenChange(!inboxOpen)}
                         className="btn btn-secondary btn-sm dashboard-header-inbox-button"
                         title="Activity inbox"
                     >
@@ -340,9 +416,10 @@ export default function DashboardHeader({
                                             key={conversation.tabKey}
                                             conversation={conversation}
                                             isAttention={true}
+                                            shortcutIndex={inboxShortcutTargets.indexOf(conversation) >= 0 ? inboxShortcutTargets.indexOf(conversation) + 1 : undefined}
                                             onClick={() => {
                                                 onOpenConversation?.(conversation);
-                                                setInboxOpen(false);
+                                                onInboxOpenChange(false);
                                             }}
                                         />
                                     ))}
@@ -355,9 +432,10 @@ export default function DashboardHeader({
                                         <DashboardHeaderInboxItem
                                             key={conversation.tabKey}
                                             conversation={conversation}
+                                            shortcutIndex={inboxShortcutTargets.indexOf(conversation) >= 0 ? inboxShortcutTargets.indexOf(conversation) + 1 : undefined}
                                             onClick={() => {
                                                 onOpenConversation?.(conversation);
-                                                setInboxOpen(false);
+                                                onInboxOpenChange(false);
                                             }}
                                         />
                                     ))}

@@ -1913,6 +1913,21 @@
         line-height: 1.25;
     }
 
+    .dashboard-header-item-shortcut {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 30px;
+        margin-right: 6px;
+        padding: 1px 6px;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--surface-tertiary) 88%, transparent);
+        color: var(--text-primary);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+    }
+
     .dashboard-header-inbox-empty {
         padding: 12px 10px;
         color: var(--text-muted);

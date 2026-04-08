@@ -433,7 +433,7 @@ export default function DashboardMobileChatMode({
                 fallbackActivityAt,
                 preview: latestConversation
                     ? `${latestConversation.displayPrimary} · ${getConversationPreview(latestConversation)}`
-                    : 'No active conversations yet. Open the machine to launch an IDE, CLI, or ACP session.',
+                    : 'No active conversations yet. Open the machine, choose a workspace, then launch an IDE, CLI, or ACP session.',
             }
         }).sort((a, b) => {
             const aTs = a.latestTimestamp || a.fallbackActivityAt || 0

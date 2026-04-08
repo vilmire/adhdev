@@ -11,7 +11,7 @@
  *   - ACP: Model field in launch form, model/plan badges, chat button
  *   - CLI: Simplest — just the base
  */
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { formatIdeType, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
@@ -72,8 +72,14 @@ export default function AgentTab({
     const config = CATEGORY_CONFIG[category]
     const isIde = category === 'ide'
     const isAcp = category === 'acp'
-    const categoryProviders = providers.filter(p => p.category === category)
-    const providerLabelMap = new Map(categoryProviders.map(provider => [provider.type, provider.displayName || provider.type]))
+    const categoryProviders = useMemo(
+        () => providers.filter(provider => provider.category === category),
+        [category, providers],
+    )
+    const providerLabelMap = useMemo(
+        () => new Map(categoryProviders.map(provider => [provider.type, provider.displayName || provider.type])),
+        [categoryProviders],
+    )
 
     // ─── Launch Form State ──────────────────────────
     const [selectedType, setSelectedType] = useState('')
@@ -140,7 +146,9 @@ export default function AgentTab({
             clearTimeout(timeout)
             delete pendingTimeoutsRef.current[type]
         }
-        setPendingLaunchTypes(prev => prev.filter(item => item !== type))
+        setPendingLaunchTypes(prev => (
+            prev.includes(type) ? prev.filter(item => item !== type) : prev
+        ))
     }, [])
 
     const announcedPendingLaunchesRef = useRef<Set<string>>(new Set())
@@ -208,7 +216,9 @@ export default function AgentTab({
         const existing = pendingTimeoutsRef.current[type]
         if (existing) clearTimeout(existing)
         pendingTimeoutsRef.current[type] = setTimeout(() => {
-            setPendingLaunchTypes(prev => prev.filter(item => item !== type))
+            setPendingLaunchTypes(prev => (
+                prev.includes(type) ? prev.filter(item => item !== type) : prev
+            ))
             delete pendingTimeoutsRef.current[type]
         }, 20000)
     }, [])

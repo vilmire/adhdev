@@ -127,6 +127,42 @@ function mergeDaemonVersionFlags(existing: DaemonData, incoming: DaemonData, mer
     return next
 }
 
+function stripVolatileEntryFields(value: unknown): unknown {
+    if (Array.isArray(value)) {
+        return value.map(stripVolatileEntryFields)
+    }
+    if (!value || typeof value !== 'object') {
+        return value
+    }
+
+    return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+            .filter(([key]) => key !== 'timestamp' && key !== '_lastUpdate')
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, nested]) => [key, stripVolatileEntryFields(nested)]),
+    )
+}
+
+function areEntriesRenderEquivalent(existing: DaemonData, next: DaemonData): boolean {
+    try {
+        return JSON.stringify(stripVolatileEntryFields(existing)) === JSON.stringify(stripVolatileEntryFields(next))
+    } catch {
+        return false
+    }
+}
+
+function preserveReferenceWhenOnlyVolatileFieldsChanged(existing: DaemonData, next: DaemonData, freshAt: number): DaemonData {
+    if (!areEntriesRenderEquivalent(existing, next)) {
+        return next
+    }
+
+    ;(existing as any)._lastUpdate = freshAt
+    if (typeof (next as any).timestamp === 'number') {
+        ;(existing as any).timestamp = (next as any).timestamp
+    }
+    return existing
+}
+
 /**
  * reconcileIdes — merge IDE status with richness-aware priority.
  *
@@ -170,7 +206,7 @@ export function reconcileIdes(
             // Incoming is richer → always overwrite, preserve chats if incoming lacks them
             const chats = (ide.chats?.length) ? ide.chats : existing.chats;
             const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, _lastUpdate: now } as any)
-            resultMap.set(ide.id, merged as any);
+            resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged as any, now) as any);
         } else if (incomingRichness < existingRichness) {
             // Incoming is weaker → NEVER overwrite core data.
             // Only merge non-destructive routing metadata (status, cdpConnected, timestamp).
@@ -189,7 +225,9 @@ export function reconcileIdes(
 
             if (Object.keys(safeUpdate).length > 0) {
                 const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...safeUpdate, _lastUpdate: existing._lastUpdate } as any)
-                resultMap.set(ide.id, merged as any);
+                resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged as any, now) as any);
+            } else {
+                preserveReferenceWhenOnlyVolatileFieldsChanged(existing, { ...existing, _lastUpdate: existing._lastUpdate } as any, now)
             }
             // Do NOT update _lastUpdate — preserve rich data's timestamp authority
         } else {
@@ -199,7 +237,7 @@ export function reconcileIdes(
             if (incomingTs >= existingTs) {
                 const chats = (ide.chats?.length) ? ide.chats : existing.chats;
                 const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, _lastUpdate: now } as any)
-                resultMap.set(ide.id, merged as any);
+                resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged as any, now) as any);
             } else {
                 if (ide.chats?.length && !existing.chats?.length) {
                     resultMap.set(ide.id, { ...existing, chats: ide.chats });

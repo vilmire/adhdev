@@ -22,6 +22,8 @@ interface PaneGroupContentProps {
     isFocusingAgent: boolean
     actionLogs: { ideId: string; text: string; timestamp: number }[]
     userName?: string
+    scrollToBottomRequestNonce?: number
+    isInputActive?: boolean
 }
 
 const PaneGroupContent = memo(function PaneGroupContent({
@@ -38,6 +40,8 @@ const PaneGroupContent = memo(function PaneGroupContent({
     isFocusingAgent,
     actionLogs,
     userName,
+    scrollToBottomRequestNonce,
+    isInputActive = true,
 }: PaneGroupContentProps) {
     return (
         <>
@@ -79,6 +83,8 @@ const PaneGroupContent = memo(function PaneGroupContent({
                                 isFocusingAgent={isFocusingAgent}
                                 actionLogs={actionLogs}
                                 userName={userName}
+                                scrollToBottomRequestNonce={scrollToBottomRequestNonce}
+                                isInputActive={isInputActive}
                             />
                         </div>
                     )}
@@ -93,6 +99,8 @@ const PaneGroupContent = memo(function PaneGroupContent({
                     isFocusingAgent={isFocusingAgent}
                     actionLogs={actionLogs}
                     userName={userName}
+                    scrollToBottomRequestNonce={scrollToBottomRequestNonce}
+                    isInputActive={isInputActive}
                 />
             )}
         </>
@@ -110,6 +118,8 @@ const PaneGroupContent = memo(function PaneGroupContent({
     && prev.isFocusingAgent === next.isFocusingAgent
     && prev.actionLogs === next.actionLogs
     && prev.userName === next.userName
+    && prev.scrollToBottomRequestNonce === next.scrollToBottomRequestNonce
+    && prev.isInputActive === next.isInputActive
 ));
 
 export default PaneGroupContent

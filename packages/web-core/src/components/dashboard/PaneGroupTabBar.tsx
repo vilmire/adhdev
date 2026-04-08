@@ -24,6 +24,7 @@ interface PaneGroupTabBarProps {
     onReceiveTab?: (tabKey: string) => void
     onHideTab?: (tabKey: string) => void
     isGroupActive?: boolean
+    allowTabShortcuts?: boolean
 }
 
 interface PaneGroupTabBarItemProps {
@@ -224,7 +225,6 @@ export default function PaneGroupTabBar({
     conversations,
     activeTabId,
     groupIndex,
-    numGroups,
     unreadTabKeys,
     draggingTabRef,
     onFocus,
@@ -236,10 +236,10 @@ export default function PaneGroupTabBar({
     onClearPreviewOrder,
     onDragStateReset,
     onDragTabKeyChange,
-    onMoveTab,
     onReceiveTab,
     onHideTab,
     isGroupActive,
+    allowTabShortcuts = true,
 }: PaneGroupTabBarProps) {
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabKey: string } | null>(null)
     const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -259,6 +259,7 @@ export default function PaneGroupTabBar({
         setShortcutListening,
         saveShortcuts,
     } = useTabShortcuts({
+        enabled: allowTabShortcuts,
         sortedTabKeys: conversations.map(conv => conv.tabKey),
         onFocus,
         onSelectTab,
@@ -312,7 +313,7 @@ export default function PaneGroupTabBar({
                             isActive={activeTabId === conv.tabKey}
                             isDraggedTab={draggingTabRef.current === conv.tabKey}
                             isTaskCompleteUnread={unreadTabKeys.has(conv.tabKey)}
-                            shortcut={tabShortcuts[conv.tabKey]}
+                            shortcut={allowTabShortcuts ? tabShortcuts[conv.tabKey] : undefined}
                             conversationKeys={conversationKeys}
                             draggingTabRef={draggingTabRef}
                             onFocus={onFocus}
@@ -342,65 +343,36 @@ export default function PaneGroupTabBar({
                     className="fixed z-50 bg-bg-primary border border-border-subtle rounded-lg shadow-lg py-1 min-w-[160px]"
                     style={{ left: ctxMenu.x, top: ctxMenu.y }}
                 >
-                    {onMoveTab && groupIndex > 0 && (
-                        <button
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors "
-                            onClick={() => { onMoveTab(ctxMenu.tabKey, 'left'); setCtxMenu(null) }}
-                        >
-                            ← Move to Left Group
-                        </button>
-                    )}
-                    {onMoveTab && groupIndex < numGroups - 1 && (
-                        <button
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors "
-                            onClick={() => { onMoveTab(ctxMenu.tabKey, 'right'); setCtxMenu(null) }}
-                        >
-                            Move to Right Group →
-                        </button>
-                    )}
-                    {onMoveTab && numGroups < 4 && (
-                        <button
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors "
-                            onClick={() => { onMoveTab(ctxMenu.tabKey, 'split-left'); setCtxMenu(null) }}
-                        >
-                            ⇤ Split Left
-                        </button>
-                    )}
-                    {onMoveTab && numGroups < 4 && (
-                        <button
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors "
-                            onClick={() => { onMoveTab(ctxMenu.tabKey, 'split-right'); setCtxMenu(null) }}
-                        >
-                            Split Right ⇥
-                        </button>
-                    )}
-                    <div className="border-t border-border-subtle my-1 " />
-                    <button
-                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors "
-                        onClick={(e) => {
-                            e.stopPropagation()
-                            setShortcutListening(ctxMenu.tabKey)
-                            setCtxMenu(null)
-                        }}
-                    >
-                        ⌨ {tabShortcuts[ctxMenu.tabKey] ? `Change shortcut (${tabShortcuts[ctxMenu.tabKey]})` : 'Set shortcut'}
-                    </button>
-                    {tabShortcuts[ctxMenu.tabKey] && (
-                        <button
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors text-text-muted "
-                            onClick={() => {
-                                const next = { ...tabShortcuts }
-                                delete next[ctxMenu.tabKey]
-                                saveShortcuts(next)
-                                setCtxMenu(null)
-                            }}
-                        >
-                            ✕ Remove shortcut
-                        </button>
+                    {allowTabShortcuts && (
+                        <>
+                            <button
+                                className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors "
+                                onClick={(e) => {
+                                    e.stopPropagation()
+                                    setShortcutListening(ctxMenu.tabKey)
+                                    setCtxMenu(null)
+                                }}
+                            >
+                                ⌨ {tabShortcuts[ctxMenu.tabKey] ? `Change shortcut (${tabShortcuts[ctxMenu.tabKey]})` : 'Set shortcut'}
+                            </button>
+                            {tabShortcuts[ctxMenu.tabKey] && (
+                                <button
+                                    className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors text-text-muted "
+                                    onClick={() => {
+                                        const next = { ...tabShortcuts }
+                                        delete next[ctxMenu.tabKey]
+                                        saveShortcuts(next)
+                                        setCtxMenu(null)
+                                    }}
+                                >
+                                    ✕ Remove shortcut
+                                </button>
+                            )}
+                        </>
                     )}
                     {onHideTab && (
                         <>
-                            <div className="border-t border-border-subtle my-1" />
+                            {allowTabShortcuts && <div className="border-t border-border-subtle my-1" />}
                             <button
                                 className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors text-text-muted"
                                 onClick={() => { onHideTab(ctxMenu.tabKey); setCtxMenu(null) }}
@@ -409,15 +381,10 @@ export default function PaneGroupTabBar({
                             </button>
                         </>
                     )}
-                    {!onMoveTab && !onHideTab && (
-                        <div className="px-3 py-1.5 text-[11px] text-text-muted opacity-50 italic">
-                            No actions available
-                        </div>
-                    )}
                 </div>
             )}
 
-            {shortcutListening && (
+            {allowTabShortcuts && shortcutListening && (
                 <div
                     className="fixed inset-0 z-[60] flex items-center justify-center"
                     style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)' }}

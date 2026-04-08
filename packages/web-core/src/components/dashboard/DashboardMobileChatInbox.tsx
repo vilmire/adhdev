@@ -236,7 +236,7 @@ export default function DashboardMobileChatInbox({
                                 title={isStandalone ? 'Waiting for your IDE' : 'Connect your first machine'}
                                 subtitle={
                                     isStandalone
-                                        ? 'Launch any supported IDE or CLI agent — it will appear here automatically.'
+                                        ? 'Open an IDE directly, or choose a workspace before launching CLI or ACP sessions.'
                                         : 'Install the ADHDev daemon on your machine, then it will show up here.'
                                 }
                             >
@@ -382,7 +382,7 @@ export default function DashboardMobileChatInbox({
                                         </div>
                                     }
                                     title="No conversations yet"
-                                    subtitle="Your machines are connected. Open an IDE or launch a CLI agent to start your first conversation."
+                                    subtitle="Your machines are connected. Open the machine screen, choose a workspace, then launch your first IDE, CLI, or ACP session."
                                 />
                             )
                         ) : (

@@ -5,6 +5,7 @@ interface ChatInputBarProps {
     panelLabel: string;
     isSending: boolean;
     onSend: (message: string) => void;
+    isActive?: boolean;
 }
 
 const ChatInputBar = memo(function ChatInputBar({
@@ -12,6 +13,7 @@ const ChatInputBar = memo(function ChatInputBar({
     panelLabel,
     isSending,
     onSend,
+    isActive = true,
 }: ChatInputBarProps) {
     const chatInputRef = useRef<HTMLInputElement>(null);
     const [draftInput, setDraftInput] = useState('');
@@ -19,6 +21,11 @@ const ChatInputBar = memo(function ChatInputBar({
     useEffect(() => {
         setDraftInput('');
     }, [contextKey]);
+
+    useEffect(() => {
+        if (!isActive) return;
+        chatInputRef.current?.focus();
+    }, [contextKey, isActive]);
 
     const submitDraft = () => {
         const message = draftInput.trim();
@@ -28,8 +35,19 @@ const ChatInputBar = memo(function ChatInputBar({
     };
 
     return (
-        <div className="dashboard-input-area px-3 py-2.5 bg-[var(--surface-primary)] border-t border-border-subtle shrink-0">
-            <div className="flex gap-2.5 items-center">
+        <div
+            className="dashboard-input-area bg-[var(--surface-primary)] shrink-0 overflow-hidden transition-all duration-200 ease-out"
+            style={{
+                borderTop: isActive ? '1px solid var(--border-subtle)' : '1px solid transparent',
+                maxHeight: isActive ? 72 : 0,
+                opacity: isActive ? 1 : 0,
+                transform: isActive ? 'translateY(0)' : 'translateY(10px)',
+                padding: isActive ? '10px 12px' : '0 12px',
+                pointerEvents: isActive ? 'auto' : 'none',
+            }}
+            aria-hidden={!isActive}
+        >
+            <div className="flex gap-2.5 items-center" title={isActive ? `Send message to ${panelLabel}` : undefined}>
                 <div className="flex-1 relative">
                     <input
                         ref={chatInputRef}

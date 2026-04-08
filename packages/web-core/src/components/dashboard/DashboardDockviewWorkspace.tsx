@@ -35,6 +35,7 @@ import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, type L
 import { getCliConversationViewMode, isAcpConv } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
+import { useTabShortcuts } from '../../hooks/useTabShortcuts'
 
 interface DashboardDockviewWorkspaceProps {
     visibleConversations: ActiveConversation[]
@@ -45,14 +46,26 @@ interface DashboardDockviewWorkspaceProps {
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
     setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
+    initialDataLoaded: boolean
     userName?: string
     detectedIdes?: { type: string; name: string; running: boolean; id?: string }[]
     handleLaunchIde?: (ideType: string) => void
     toggleHiddenTab: (tabKey: string) => void
+    registerActionHandlers?: (handlers: {
+        setShortcutForActiveTab: () => void
+        activatePreviousTabInGroup: () => void
+        activateNextTabInGroup: () => void
+        splitActiveTabRight: () => void
+        focusLeftPane: () => void
+        focusRightPane: () => void
+        moveActiveTabToLeftPane: () => void
+        moveActiveTabToRightPane: () => void
+    } | null) => void
     onActiveTabChange: (tabKey: string | null) => void
     requestedActiveTabKey?: string | null
     requestedRemoteIdeId?: string | null
     onRequestedActiveTabConsumed?: () => void
+    scrollToBottomRequest?: { tabKey: string; nonce: number } | null
 }
 
 interface DashboardDockviewContextValue {
@@ -69,6 +82,9 @@ interface DashboardDockviewContextValue {
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
     toggleHiddenTab: (tabKey: string) => void
     userName?: string
+    scrollToBottomRequest?: { tabKey: string; nonce: number } | null
+    tabShortcuts: Record<string, string>
+    openTabContextMenu: (args: { x: number; y: number; tabKey: string }) => void
 }
 
 interface DashboardDockviewPanelParams {
@@ -241,9 +257,10 @@ function syncRemotePanels(
     })
 }
 
-function DashboardDockviewPanel({ params }: IDockviewPanelProps<DashboardDockviewPanelParams>) {
+function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDockviewPanelParams>) {
     const ctx = useDashboardDockviewContext()
     const terminalRef = useRef<CliTerminalHandle>(null)
+    const [isPanelActive, setIsPanelActive] = useState(api.isActive)
     const activeConv = ctx.conversationsByTabKey.get(params.tabKey)
     const cmds = useDashboardConversationCommands({
         sendDaemonCommand: ctx.sendDaemonCommand,
@@ -252,6 +269,23 @@ function DashboardDockviewPanel({ params }: IDockviewPanelProps<DashboardDockvie
         setActionLogs: ctx.setActionLogs,
         isStandalone: ctx.isStandalone,
     })
+
+    useEffect(() => {
+        setIsPanelActive(api.isActive)
+        const disposables = [
+            api.onDidActiveChange(event => setIsPanelActive(event.isActive)),
+            api.onDidActiveGroupChange(event => {
+                if (!api.isActive && !event.isActive) {
+                    setIsPanelActive(false)
+                    return
+                }
+                setIsPanelActive(api.isActive)
+            }),
+        ]
+        return () => {
+            for (const disposable of disposables) disposable.dispose()
+        }
+    }, [api])
 
     const activeIdeEntry = useMemo(
         () => activeConv ? ctx.ides.find(ide => ide.id === activeConv.ideId) : undefined,
@@ -295,6 +329,8 @@ function DashboardDockviewPanel({ params }: IDockviewPanelProps<DashboardDockvie
                 isFocusingAgent={cmds.isFocusingAgent}
                 actionLogs={activeActionLogs}
                 userName={ctx.userName}
+                scrollToBottomRequestNonce={ctx.scrollToBottomRequest?.tabKey === activeConv.tabKey ? ctx.scrollToBottomRequest.nonce : undefined}
+                isInputActive={isPanelActive}
             />
         </div>
     )
@@ -360,6 +396,11 @@ function DashboardDockviewWatermark() {
 function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockviewPanelParams | DashboardDockviewRemotePanelParams>) {
     useDockviewHeaderRenderTick(props)
     const ctx = useDashboardDockviewContext()
+    const activatePanel = useCallback((event: React.MouseEvent | React.PointerEvent | React.TouchEvent) => {
+        if ('button' in event && event.button !== 0) return
+        props.api.setActive()
+    }, [props.api])
+
     if (props.params.kind === 'remote') {
         const remoteConversation = getPreferredConversationForIde([...ctx.conversationsByTabKey.values()], props.params.ideId)
         const isActive = props.api.group.activePanel?.id === props.api.id
@@ -369,6 +410,8 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
                 className={`adhdev-dockview-tab${isActive ? ' is-active' : ''}${isGroupActive ? ' is-group-active' : ''}`}
                 title={props.api.title || 'Remote'}
                 data-tab-key={remoteConversation?.tabKey || ''}
+                onMouseDown={activatePanel}
+                onTouchStart={activatePanel}
             >
                 <div className="adhdev-dockview-tab-status" aria-hidden="true">
                     <span className="adhdev-dockview-tab-status-text is-connected">◫</span>
@@ -418,12 +461,24 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
     const isGenerating = surfaceState.isGenerating
     const isWaiting = surfaceState.isWaiting
     const isTaskCompleteUnread = surfaceState.unread
+    const shortcut = ctx.tabShortcuts[conversation.tabKey]
 
     return (
         <div
             className={`adhdev-dockview-tab${isActive ? ' is-active' : ''}${isGroupActive ? ' is-group-active' : ''}${isReconnecting ? ' is-reconnecting' : ''}`}
             title={conversation.displayPrimary}
             data-tab-key={props.params.tabKey}
+            onMouseDown={activatePanel}
+            onTouchStart={activatePanel}
+            onContextMenu={(event) => {
+                event.preventDefault()
+                activatePanel(event)
+                ctx.openTabContextMenu({
+                    x: event.clientX,
+                    y: event.clientY,
+                    tabKey: conversation.tabKey,
+                })
+            }}
         >
             {isTaskCompleteUnread && <span className="adhdev-dockview-tab-unread-dot" aria-hidden="true" />}
             <div className="adhdev-dockview-tab-status" aria-hidden="true">
@@ -461,6 +516,11 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
                     )}
                 </div>
             </div>
+            {shortcut && (
+                <span className="text-[9px] opacity-50 font-mono ml-0.5 shrink-0 bg-bg-secondary px-1 rounded" title={shortcut}>
+                    {shortcut}
+                </span>
+            )}
         </div>
     )
 }
@@ -474,20 +534,27 @@ export default function DashboardDockviewWorkspace({
     setLocalUserMessages,
     setActionLogs,
     isStandalone,
+    initialDataLoaded,
     userName,
     detectedIdes,
     handleLaunchIde,
     toggleHiddenTab,
+    registerActionHandlers,
     onActiveTabChange,
     requestedActiveTabKey,
     requestedRemoteIdeId,
     onRequestedActiveTabConsumed,
+    scrollToBottomRequest,
 }: DashboardDockviewWorkspaceProps) {
     const { theme } = useTheme()
     const { sendCommand } = useTransport()
     const apiRef = useRef<DockviewApi | null>(null)
     const dockviewContainerRef = useRef<HTMLDivElement | null>(null)
     const hasInitializedRef = useRef(false)
+    const awaitingInitialLayoutHydrationRef = useRef(false)
+    const hasRestoredStoredActiveTabRef = useRef(false)
+    const storedActiveTabIdRef = useRef<string | null>(null)
+    const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabKey: string } | null>(null)
     const [isDraggingDockview, setIsDraggingDockview] = useState(false)
     const [isShowingDockviewOverlay, setIsShowingDockviewOverlay] = useState(false)
     const overlayCleanupTimeoutRef = useRef<number | null>(null)
@@ -503,6 +570,118 @@ export default function DashboardDockviewWorkspace({
         () => buildLiveSessionInboxStateMap(ides),
         [ides],
     )
+    const focusDockview = useCallback(() => {
+        apiRef.current?.focus()
+    }, [])
+    const selectTabByShortcut = useCallback((tabKey: string) => {
+        const api = apiRef.current
+        if (!api) return
+        const panel = api.getPanel(tabKey)
+        if (!panel) return
+        panel.group.model.openPanel(panel)
+        panel.api.setActive()
+    }, [])
+    const activateRelativeTabInGroup = useCallback((direction: -1 | 1) => {
+        const api = apiRef.current
+        const activePanel = api?.activePanel
+        const group = api?.activeGroup || activePanel?.group
+        if (!api || !activePanel || !group) return
+        const panels = group.panels || []
+        if (panels.length <= 1) return
+        const currentIndex = panels.findIndex(panel => panel.id === activePanel.id)
+        if (currentIndex < 0) return
+        const nextIndex = (currentIndex + direction + panels.length) % panels.length
+        const nextPanel = panels[nextIndex]
+        if (!nextPanel) return
+        nextPanel.group.model.openPanel(nextPanel)
+        nextPanel.api.setActive()
+    }, [])
+    const focusAdjacentGroup = useCallback((direction: -1 | 1) => {
+        const api = apiRef.current
+        const activeGroup = api?.activeGroup || api?.activePanel?.group
+        if (!api || !activeGroup) return
+        const groups = api.groups || []
+        const currentIndex = groups.findIndex(group => group.id === activeGroup.id)
+        if (currentIndex < 0) return
+        const nextGroup = groups[currentIndex + direction]
+        if (!nextGroup) return
+        const nextPanel = nextGroup.activePanel || nextGroup.panels[0]
+        if (!nextPanel) return
+        nextGroup.model.openPanel(nextPanel)
+        nextPanel.api.setActive()
+    }, [])
+    const moveActivePanelToDirection = useCallback((direction: -1 | 1, options?: { createGroupIfMissing?: boolean }) => {
+        const api = apiRef.current
+        const activePanel = api?.activePanel
+        const activeGroup = api?.activeGroup || activePanel?.group
+        if (!api || !activePanel || !activeGroup) return
+        const groups = api.groups || []
+        const currentIndex = groups.findIndex(group => group.id === activeGroup.id)
+        if (currentIndex < 0) return
+        let targetGroup = groups[currentIndex + direction]
+        if (!targetGroup && options?.createGroupIfMissing) {
+            targetGroup = api.addGroup({
+                referenceGroup: activeGroup,
+                direction: direction < 0 ? 'left' : 'right',
+            })
+        }
+        if (!targetGroup) return
+        activePanel.api.moveTo({ group: targetGroup, position: 'center' })
+        activePanel.group.model.openPanel(activePanel)
+        activePanel.api.setActive()
+    }, [])
+    const {
+        isMac,
+        tabShortcuts,
+        shortcutListening,
+        setShortcutListening,
+        saveShortcuts,
+    } = useTabShortcuts({
+        sortedTabKeys: visibleConversations.map(conv => conv.tabKey),
+        onFocus: focusDockview,
+        onSelectTab: selectTabByShortcut,
+    })
+    const startShortcutListeningForActiveTab = useCallback(() => {
+        const api = apiRef.current
+        if (!api) return
+        const activePanel = api.activePanel
+        if (!activePanel) return
+        if (isRemotePanelId(activePanel.id)) {
+            const remoteIdeId = (activePanel.params as DashboardDockviewRemotePanelParams | undefined)?.ideId || activePanel.id.slice('remote:'.length)
+            const relatedConversation = getPreferredConversationForIde(visibleConversations, remoteIdeId)
+            if (relatedConversation?.tabKey) {
+                setShortcutListening(relatedConversation.tabKey)
+            }
+            return
+        }
+        if (!conversationsByTabKey.has(activePanel.id)) return
+        setShortcutListening(activePanel.id)
+    }, [conversationsByTabKey, setShortcutListening, visibleConversations])
+
+    useEffect(() => {
+        registerActionHandlers?.({
+            setShortcutForActiveTab: startShortcutListeningForActiveTab,
+            activatePreviousTabInGroup: () => activateRelativeTabInGroup(-1),
+            activateNextTabInGroup: () => activateRelativeTabInGroup(1),
+            splitActiveTabRight: () => moveActivePanelToDirection(1, { createGroupIfMissing: true }),
+            focusLeftPane: () => focusAdjacentGroup(-1),
+            focusRightPane: () => focusAdjacentGroup(1),
+            moveActiveTabToLeftPane: () => moveActivePanelToDirection(-1),
+            moveActiveTabToRightPane: () => moveActivePanelToDirection(1),
+        })
+        return () => registerActionHandlers?.(null)
+    }, [activateRelativeTabInGroup, focusAdjacentGroup, moveActivePanelToDirection, registerActionHandlers, startShortcutListeningForActiveTab])
+
+    useEffect(() => {
+        if (!ctxMenu) return
+        const close = (event: MouseEvent) => {
+            const menu = document.querySelector('[data-dockview-tab-context-menu]')
+            if (menu && menu.contains(event.target as Node)) return
+            setCtxMenu(null)
+        }
+        window.addEventListener('mousedown', close, true)
+        return () => window.removeEventListener('mousedown', close, true)
+    }, [ctxMenu])
     const contextValue = useMemo<DashboardDockviewContextValue>(() => ({
         actionLogs,
         clearedTabs,
@@ -517,6 +696,9 @@ export default function DashboardDockviewWorkspace({
         setLocalUserMessages,
         toggleHiddenTab,
         userName,
+        scrollToBottomRequest,
+        tabShortcuts,
+        openTabContextMenu: ({ x, y, tabKey }) => setCtxMenu({ x, y, tabKey }),
     }), [
         actionLogs,
         clearedTabs,
@@ -531,6 +713,8 @@ export default function DashboardDockviewWorkspace({
         setLocalUserMessages,
         toggleHiddenTab,
         userName,
+        scrollToBottomRequest,
+        tabShortcuts,
     ])
 
     const activateRequestedTab = useCallback((tabKey: string | null | undefined) => {
@@ -540,9 +724,26 @@ export default function DashboardDockviewWorkspace({
         const panel = api.getPanel(tabKey)
         if (!panel) return false
         panel.group.model.openPanel(panel)
+        panel.api.setActive()
         onRequestedActiveTabConsumed?.()
         return true
     }, [onRequestedActiveTabConsumed])
+
+    const activateStoredActiveTab = useCallback(() => {
+        if (hasRestoredStoredActiveTabRef.current) return false
+        const activated = activateRequestedTab(storedActiveTabIdRef.current)
+        if (activated) hasRestoredStoredActiveTabRef.current = true
+        return activated
+    }, [activateRequestedTab])
+
+    const persistDockviewLayout = useCallback(() => {
+        const api = apiRef.current
+        if (!api) return
+        writeDashboardDockviewStoredLayout(layoutProfile, {
+            activeTabId: api.activePanel?.id ?? null,
+            layout: api.toJSON(),
+        })
+    }, [layoutProfile])
 
     const markDockviewOverlaysHidden = useCallback(() => {
         const root = dockviewContainerRef.current
@@ -609,29 +810,38 @@ export default function DashboardDockviewWorkspace({
         apiRef.current = event.api
 
         const stored = readDashboardDockviewStoredLayout(layoutProfile)
+        storedActiveTabIdRef.current = stored?.activeTabId ?? null
         if (stored?.layout) {
             event.api.fromJSON(stored.layout, { reuseExistingPanels: false })
         }
 
-        syncDockviewPanels(event.api, visibleConversations)
-        syncRemotePanels(event.api, visibleConversations, requestedRemoteIdeId)
+        awaitingInitialLayoutHydrationRef.current = !!stored?.layout && !initialDataLoaded && visibleConversations.length === 0
+
+        if (!awaitingInitialLayoutHydrationRef.current) {
+            syncDockviewPanels(event.api, visibleConversations)
+            syncRemotePanels(event.api, visibleConversations, requestedRemoteIdeId)
+        }
 
         if (event.api.totalPanels === 0 && visibleConversations.length > 0) {
             buildInitialDockviewLayout(event.api, visibleConversations, requestedActiveTabKey)
-        } else if (!activateRequestedTab(requestedActiveTabKey)) {
-            activateRequestedTab(stored?.activeTabId)
+        } else if (!awaitingInitialLayoutHydrationRef.current && !activateRequestedTab(requestedActiveTabKey)) {
+            activateStoredActiveTab()
         }
 
         hasInitializedRef.current = true
 
         event.api.onDidActivePanelChange(panel => {
+            storedActiveTabIdRef.current = panel?.id ?? null
+            hasRestoredStoredActiveTabRef.current = true
             if (panel && isRemotePanelId(panel.id)) {
                 const remoteIdeId = (panel.params as DashboardDockviewRemotePanelParams | undefined)?.ideId || panel.id.slice('remote:'.length)
                 const relatedConversation = getPreferredConversationForIde(visibleConversations, remoteIdeId)
                 onActiveTabChange(relatedConversation?.tabKey ?? null)
+                persistDockviewLayout()
                 return
             }
             onActiveTabChange(panel?.id ?? null)
+            persistDockviewLayout()
             if (!panel) return
             const conversation = conversationsByTabKey.get(panel.id)
             if (conversation?.streamSource === 'agent-stream' && conversation.agentType) {
@@ -643,10 +853,7 @@ export default function DashboardDockviewWorkspace({
         })
 
         event.api.onDidLayoutChange(() => {
-            writeDashboardDockviewStoredLayout(layoutProfile, {
-                activeTabId: event.api.activePanel?.id ?? null,
-                layout: event.api.toJSON(),
-            })
+            persistDockviewLayout()
         })
 
         event.api.onWillDragPanel(() => {
@@ -672,11 +879,14 @@ export default function DashboardDockviewWorkspace({
         cleanupDockviewOverlays,
         clearDockviewOverlayHiddenMarks,
         conversationsByTabKey,
+        initialDataLoaded,
         layoutProfile,
         markDockviewOverlaysHidden,
         removeDockviewOverlayNodes,
         onActiveTabChange,
+        persistDockviewLayout,
         requestedActiveTabKey,
+        requestedRemoteIdeId,
         sendCommand,
         visibleConversations,
     ])
@@ -685,13 +895,28 @@ export default function DashboardDockviewWorkspace({
         const api = apiRef.current
         if (!api || !hasInitializedRef.current) return
 
+        if (awaitingInitialLayoutHydrationRef.current && !initialDataLoaded) return
+        if (awaitingInitialLayoutHydrationRef.current) {
+            awaitingInitialLayoutHydrationRef.current = false
+        }
+
         syncDockviewPanels(api, visibleConversations)
         syncRemotePanels(api, visibleConversations, requestedRemoteIdeId)
 
+        if (requestedActiveTabKey && activateRequestedTab(requestedActiveTabKey)) {
+            return
+        }
+
         if (!api.activePanel && api.panels[0]) {
             api.panels[0].group.model.openPanel(api.panels[0])
+            api.panels[0].api.setActive()
         }
-    }, [requestedRemoteIdeId, visibleConversations])
+
+        const activePanelStillExists = !!(api.activePanel && api.getPanel(api.activePanel.id))
+        if (!activePanelStillExists) {
+            activateStoredActiveTab()
+        }
+    }, [activateRequestedTab, activateStoredActiveTab, initialDataLoaded, requestedActiveTabKey, requestedRemoteIdeId, visibleConversations])
 
     useEffect(() => {
         if (!hasInitializedRef.current) return
@@ -752,6 +977,56 @@ export default function DashboardDockviewWorkspace({
                     theme={dockviewTheme}
                 />
             </div>
+            {ctxMenu && (
+                <div
+                    data-dockview-tab-context-menu
+                    className="fixed z-50 bg-bg-primary border border-border-subtle rounded-lg shadow-lg py-1 min-w-[160px]"
+                    style={{ left: ctxMenu.x, top: ctxMenu.y }}
+                >
+                    <button
+                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors"
+                        onClick={(event) => {
+                            event.stopPropagation()
+                            setShortcutListening(ctxMenu.tabKey)
+                            setCtxMenu(null)
+                        }}
+                    >
+                        ⌨ {tabShortcuts[ctxMenu.tabKey] ? `Change shortcut (${tabShortcuts[ctxMenu.tabKey]})` : 'Set shortcut'}
+                    </button>
+                    {tabShortcuts[ctxMenu.tabKey] && (
+                        <button
+                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors text-text-muted"
+                            onClick={() => {
+                                const next = { ...tabShortcuts }
+                                delete next[ctxMenu.tabKey]
+                                saveShortcuts(next)
+                                setCtxMenu(null)
+                            }}
+                        >
+                            ✕ Remove shortcut
+                        </button>
+                    )}
+                </div>
+            )}
+            {shortcutListening && (
+                <div
+                    className="fixed inset-0 z-[60] flex items-center justify-center"
+                    style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)' }}
+                    onClick={() => setShortcutListening(null)}
+                >
+                    <div
+                        className="bg-bg-primary border border-border-subtle rounded-xl px-8 py-6 text-center shadow-xl"
+                        onClick={event => event.stopPropagation()}
+                    >
+                        <div className="text-sm font-bold text-text-primary mb-2">⌨ Set shortcut</div>
+                        <div className="text-xs text-text-secondary mb-4">
+                            Press a key combo (e.g. {isMac ? '⌘+1' : 'Ctrl+1'}, {isMac ? '⌥+A' : 'Alt+A'})
+                        </div>
+                        <div className="text-lg font-mono text-accent animate-pulse">Listening...</div>
+                        <div className="text-[10px] text-text-muted mt-3">Press Esc to cancel</div>
+                    </div>
+                </div>
+            )}
         </DashboardDockviewContext.Provider>
     )
 }

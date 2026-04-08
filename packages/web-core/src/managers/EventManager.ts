@@ -319,8 +319,9 @@ class EventManager {
             msg = `⚡ ${ideLabel} approval needed`
             type = 'warning'
 
-            // Approval system message
-            if (conversationKey) {
+            // Approval banner already renders the modal/buttons in chat.
+            // Keep the system bubble only as a fallback when no actionable buttons exist.
+            if (conversationKey && !payload.modalButtons?.length) {
                 const modalText = payload.modalMessage || 'Approval requested'
                 const buttons = payload.modalButtons?.length
                     ? payload.modalButtons.map(b => `[${b}]`).join(' ')

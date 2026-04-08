@@ -29,7 +29,36 @@ import type { DashboardMobileSection } from '../components/dashboard/DashboardMo
 import { getMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
 import { getConversationTimestamp } from '../components/dashboard/conversation-sort'
-import { getMachineDisplayName } from '../utils/daemon-utils'
+import { compareMachineEntries, getMachineDisplayName, isAcpEntry, isCliEntry } from '../utils/daemon-utils'
+import { browseMachineDirectories } from '../components/machine/workspaceBrowse'
+import type { WorkspaceLaunchKind } from './machine/types'
+
+interface PendingDashboardLaunch {
+    machineId: string
+    kind: WorkspaceLaunchKind
+    providerType: string
+    workspacePath?: string | null
+    startedAt: number
+}
+
+function getRouteMachineId(id: string | null | undefined) {
+    if (!id) return ''
+    const value = String(id)
+    return value.includes(':') ? value.split(':')[0] || value : value
+}
+
+function normalizeWorkspacePath(path: string | null | undefined) {
+    return String(path || '')
+        .trim()
+        .replace(/\\/g, '/')
+        .replace(/\/+$/, '')
+        .toLowerCase()
+}
+
+function isP2PLaunchTimeout(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error || '')
+    return message.includes('P2P command timeout')
+}
 
 export default function Dashboard() {
     const { sendCommand: sendDaemonCommand } = useTransport()
@@ -43,6 +72,7 @@ export default function Dashboard() {
 
     const daemonCtx = useDaemons() as any
     const ides: DaemonData[] = daemonCtx.ides || []
+    const initialLoaded: boolean = daemonCtx.initialLoaded ?? true
     const { updateIdeChats } = daemonCtx
     const [showOnboarding, setShowOnboarding] = useState(() => {
         try { return !localStorage.getItem('adhdev_onboarding_v1') } catch { return false }
@@ -81,6 +111,8 @@ export default function Dashboard() {
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
     const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
     const [desktopActiveTabKey, setDesktopActiveTabKey] = useState<string | null>(null)
+    const [scrollToBottomRequest, setScrollToBottomRequest] = useState<{ tabKey: string; nonce: number } | null>(null)
+    const [pendingDashboardLaunch, setPendingDashboardLaunch] = useState<PendingDashboardLaunch | null>(null)
     const savedHistoryRefreshKeyRef = useRef<string | null>(null)
     useDevRenderTrace('Dashboard', {
         ideCount: ides.length,
@@ -94,6 +126,12 @@ export default function Dashboard() {
     // Extract detectedIdes from machine-level entry (for standalone)
     const daemonEntry = ides.find(ide => ide.type === 'adhdev-daemon')
     const detectedIdes: { type: string; name: string; running: boolean; id?: string }[] = (daemonEntry as any)?.detectedIdes || []
+    const machineEntries = useMemo(
+        () => ides
+            .filter((entry: any) => entry.type === 'adhdev-daemon' || entry.daemonMode)
+            .sort(compareMachineEntries),
+        [ides],
+    )
     const isStandalone = !!daemonEntry
     const terminalBackend = (daemonEntry as any)?.terminalBackend || null
     const terminalBackendMachineLabel = daemonEntry
@@ -237,6 +275,152 @@ export default function Dashboard() {
         () => conversations.filter(conversation => hiddenTabs.has(conversation.tabKey)),
         [conversations, hiddenTabs],
     )
+
+    const handleRequestOpenSession = useCallback((sessionId: string) => {
+        const next = new URLSearchParams(searchParams)
+        next.set('activeTab', sessionId)
+        setSearchParams(next, { replace: true })
+    }, [searchParams, setSearchParams])
+
+    const handleBrowseMachineDirectory = useCallback(async (machineId: string, path: string) => (
+        browseMachineDirectories(sendDaemonCommand, machineId, path)
+    ), [sendDaemonCommand])
+
+    const handleSaveMachineWorkspace = useCallback(async (machineId: string, path: string) => {
+        if (!path.trim()) return { ok: false, error: 'Choose a workspace path first.' }
+        try {
+            const res: any = await sendDaemonCommand(machineId, 'workspace_add', { path: path.trim() })
+            if (res?.success) return { ok: true }
+            return { ok: false, error: res?.error || 'Could not save workspace' }
+        } catch (error) {
+            return { ok: false, error: error instanceof Error ? error.message : 'Could not save workspace' }
+        }
+    }, [sendDaemonCommand])
+
+    const handleLaunchMachineIde = useCallback(async (machineId: string, ideType: string, opts?: { workspacePath?: string | null }) => {
+        try {
+            const payload: Record<string, unknown> = { ideType, enableCdp: true }
+            if (opts?.workspacePath?.trim()) payload.workspace = opts.workspacePath.trim()
+            const res: any = await sendDaemonCommand(machineId, 'launch_ide', payload)
+            if (!res?.success && res?.success !== undefined) {
+                return { ok: false, error: res?.error || 'Could not launch IDE' }
+            }
+            setPendingDashboardLaunch({
+                machineId,
+                kind: 'ide',
+                providerType: ideType,
+                workspacePath: opts?.workspacePath || null,
+                startedAt: Date.now(),
+            })
+            return { ok: true }
+        } catch (error) {
+            return { ok: false, error: error instanceof Error ? error.message : 'Could not launch IDE' }
+        }
+    }, [sendDaemonCommand])
+
+    const handleLaunchMachineProvider = useCallback(async (
+        machineId: string,
+        kind: 'cli' | 'acp',
+        providerType: string,
+        opts?: { workspaceId?: string | null; workspacePath?: string | null },
+    ) => {
+        const startedAt = Date.now()
+        try {
+            const payload: Record<string, unknown> = { cliType: providerType }
+            if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
+            else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
+            const res: any = await sendDaemonCommand(machineId, 'launch_cli', payload)
+            const result = res?.result || res
+            const launchedSessionId = result?.sessionId || result?.id
+            if (res?.success && launchedSessionId) {
+                handleRequestOpenSession(launchedSessionId)
+                return { ok: true }
+            }
+            if (res?.success) {
+                setPendingDashboardLaunch({
+                    machineId,
+                    kind,
+                    providerType,
+                    workspacePath: opts?.workspacePath || null,
+                    startedAt,
+                })
+                return { ok: true }
+            }
+            return { ok: false, error: res?.error || result?.error || `Could not launch ${kind.toUpperCase()} session` }
+        } catch (error) {
+            if (isP2PLaunchTimeout(error)) {
+                setPendingDashboardLaunch({
+                    machineId,
+                    kind,
+                    providerType,
+                    workspacePath: opts?.workspacePath || null,
+                    startedAt,
+                })
+                return { ok: true }
+            }
+            return { ok: false, error: error instanceof Error ? error.message : `Could not launch ${kind.toUpperCase()} session` }
+        }
+    }, [handleRequestOpenSession, sendDaemonCommand])
+
+    useEffect(() => {
+        if (!pendingDashboardLaunch) return
+
+        const normalizedTargetWorkspace = normalizeWorkspacePath(pendingDashboardLaunch.workspacePath)
+        const matchingEntry = ides.find((entry: any) => {
+            if (!entry || entry.type === 'adhdev-daemon' || entry.daemonMode) return false
+            const entryMachineId = getRouteMachineId(entry.daemonId || entry.id)
+            if (entryMachineId !== pendingDashboardLaunch.machineId) return false
+
+            const entryKind: WorkspaceLaunchKind = isCliEntry(entry)
+                ? 'cli'
+                : isAcpEntry(entry)
+                    ? 'acp'
+                    : 'ide'
+            if (entryKind !== pendingDashboardLaunch.kind) return false
+
+            const entryProviderType = String(entry.agentType || entry.ideType || entry.type || '')
+            if (entryProviderType !== pendingDashboardLaunch.providerType) return false
+
+            if (normalizedTargetWorkspace) {
+                const entryWorkspace = normalizeWorkspacePath(entry.workspace || entry.runtimeWorkspaceLabel)
+                if (!entryWorkspace) return false
+                return entryWorkspace === normalizedTargetWorkspace
+            }
+
+            const activityAt = Number(
+                entry.lastUpdated
+                || entry._lastUpdate
+                || entry.timestamp
+                || entry.activeChat?.messages?.at?.(-1)?.timestamp
+                || 0,
+            )
+            return activityAt >= (pendingDashboardLaunch.startedAt - 5_000)
+        })
+
+        if (!matchingEntry) return
+
+        const targetSessionId = typeof matchingEntry.sessionId === 'string' && matchingEntry.sessionId
+            ? matchingEntry.sessionId
+            : typeof matchingEntry.instanceId === 'string' && matchingEntry.instanceId
+                ? matchingEntry.instanceId
+                : conversations.find((conversation) => conversation.ideId === matchingEntry.id)?.sessionId
+
+        if (!targetSessionId) return
+
+        setPendingDashboardLaunch(null)
+        handleRequestOpenSession(targetSessionId)
+    }, [conversations, handleRequestOpenSession, ides, pendingDashboardLaunch])
+
+    useEffect(() => {
+        if (!pendingDashboardLaunch) return
+        const timeout = window.setTimeout(() => {
+            setPendingDashboardLaunch(current => {
+                if (!current || current.startedAt !== pendingDashboardLaunch.startedAt) return current
+                return null
+            })
+        }, 45_000)
+        return () => window.clearTimeout(timeout)
+    }, [pendingDashboardLaunch])
 
     useDashboardConversationMeta({
         visibleConversations,
@@ -487,6 +671,7 @@ export default function Dashboard() {
                 setLocalUserMessages={setLocalUserMessages}
                 setActionLogs={setActionLogs}
                 isStandalone={isStandalone}
+                initialDataLoaded={initialLoaded}
                 userName={daemonCtx.userName}
                 requestedMobileTabKey={requestedMobileTabKey}
                 onRequestedMobileTabConsumed={consumeRequestedActiveTab}
@@ -525,6 +710,12 @@ export default function Dashboard() {
                 onHideConversation={handleHideConversation}
                 onShowHiddenConversation={handleShowHiddenConversation}
                 onShowAllHiddenConversations={showAllHiddenTabs}
+                scrollToBottomRequest={scrollToBottomRequest}
+                machineEntries={machineEntries}
+                onBrowseMachineDirectory={handleBrowseMachineDirectory}
+                onSaveMachineWorkspace={handleSaveMachineWorkspace}
+                onLaunchMachineIde={handleLaunchMachineIde}
+                onLaunchMachineProvider={handleLaunchMachineProvider}
             />
 
             <style>{`
@@ -584,6 +775,7 @@ export default function Dashboard() {
                         if (matchedConv) {
                             setFocusedGroup(normalizedGroupAssignments.get(matchedConv.tabKey) ?? 0)
                             handleShowHiddenConversation(matchedConv)
+                            setScrollToBottomRequest({ tabKey: matchedConv.tabKey, nonce: Date.now() })
                         }
                     }
                 }}

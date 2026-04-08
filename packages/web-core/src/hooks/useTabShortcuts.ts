@@ -11,12 +11,13 @@ function readTabShortcuts() {
 }
 
 interface UseTabShortcutsOptions {
+    enabled?: boolean
     sortedTabKeys: string[]
     onFocus: () => void
     onSelectTab: (tabKey: string) => void
 }
 
-export function useTabShortcuts({ sortedTabKeys, onFocus, onSelectTab }: UseTabShortcutsOptions) {
+export function useTabShortcuts({ enabled = true, sortedTabKeys, onFocus, onSelectTab }: UseTabShortcutsOptions) {
     const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent)
     const [tabShortcuts, setTabShortcuts] = useState<Record<string, string>>(() => readTabShortcuts())
     const [shortcutListening, setShortcutListening] = useState<string | null>(null)
@@ -40,6 +41,7 @@ export function useTabShortcuts({ sortedTabKeys, onFocus, onSelectTab }: UseTabS
     }, [])
 
     useEffect(() => {
+        if (!enabled) return
         if (!shortcutListening) return
 
         const handler = (e: KeyboardEvent) => {
@@ -64,9 +66,10 @@ export function useTabShortcuts({ sortedTabKeys, onFocus, onSelectTab }: UseTabS
 
         window.addEventListener('keydown', handler, true)
         return () => window.removeEventListener('keydown', handler, true)
-    }, [shortcutListening, tabShortcuts, saveShortcuts, encodeShortcut])
+    }, [enabled, shortcutListening, tabShortcuts, saveShortcuts, encodeShortcut])
 
     useEffect(() => {
+        if (!enabled) return
         const handler = (e: KeyboardEvent) => {
             if (!e.ctrlKey && !e.metaKey && !e.altKey) return
 
@@ -82,7 +85,7 @@ export function useTabShortcuts({ sortedTabKeys, onFocus, onSelectTab }: UseTabS
 
         window.addEventListener('keydown', handler)
         return () => window.removeEventListener('keydown', handler)
-    }, [tabShortcuts, sortedTabKeys, onFocus, onSelectTab, encodeShortcut])
+    }, [enabled, tabShortcuts, sortedTabKeys, onFocus, onSelectTab, encodeShortcut])
 
     return {
         isMac,
