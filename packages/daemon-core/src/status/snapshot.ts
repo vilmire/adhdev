@@ -8,6 +8,7 @@
 
 import * as os from 'os';
 import { loadConfig } from '../config/config.js';
+import { loadState } from '../config/state-store.js';
 import { getRecentActivity, getSessionSeenAt, getSessionSeenMarker } from '../config/recent-activity.js';
 import { getWorkspaceState } from '../config/workspaces.js';
 import { getHostMemorySnapshot } from '../system/host-memory.js';
@@ -195,16 +196,17 @@ function buildRecentLaunches(
 
 export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnapshot {
     const cfg = loadConfig();
+    const state = loadState();
     const wsState = getWorkspaceState(cfg);
     const memSnap = getHostMemorySnapshot();
-    const recentActivity = getRecentActivity(cfg, 20);
+    const recentActivity = getRecentActivity(state, 20);
     const sessions = buildSessionEntries(
         options.allStates,
         options.cdpManagers as Map<string, any>,
     );
     for (const session of sessions) {
-        const lastSeenAt = getSessionSeenAt(cfg, session.id);
-        const seenCompletionMarker = getSessionSeenMarker(cfg, session.id);
+        const lastSeenAt = getSessionSeenAt(state, session.id);
+        const seenCompletionMarker = getSessionSeenMarker(state, session.id);
         const lastUsedAt = getSessionLastUsedAt(session);
         const completionMarker = getSessionCompletionMarker(session);
         const { unread, inboxBucket } = session.surfaceHidden

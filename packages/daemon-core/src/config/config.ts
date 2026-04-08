@@ -9,11 +9,10 @@ import { join } from 'path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'fs';
 import { randomUUID } from 'crypto';
 import type { WorkspaceEntry } from './workspaces.js';
-import type { RecentActivityEntry } from './recent-activity.js';
-import type { SavedProviderSessionEntry } from './saved-sessions.js';
 export type { WorkspaceEntry } from './workspaces.js';
 export type { RecentActivityEntry } from './recent-activity.js';
 export type { SavedProviderSessionEntry } from './saved-sessions.js';
+export type { DaemonState } from './state-store.js';
 
 export interface ADHDevConfig {
  // Server connection
@@ -43,15 +42,6 @@ export interface ADHDevConfig {
     workspaces?: WorkspaceEntry[];
  /** Default workspace id (from workspaces[]) — never used implicitly for launch */
     defaultWorkspaceId?: string | null;
-
-    /** Unified recent activity across IDE / CLI / ACP launch flows */
-    recentActivity?: RecentActivityEntry[];
-    /** Persistent resume-capable provider sessions keyed by providerSessionId */
-    savedProviderSessions?: SavedProviderSessionEntry[];
-    /** Last seen timestamps for live sessions, keyed by sessionId */
-    sessionReads?: Record<string, number>;
-    /** Last seen completion marker for live sessions, keyed by sessionId */
-    sessionReadMarkers?: Record<string, string>;
 
  // Machine nickname (user-customizable label for this machine)
     machineNickname: string | null;
@@ -102,10 +92,6 @@ const DEFAULT_CONFIG: ADHDevConfig = {
     enabledIdes: [],
     workspaces: [],
     defaultWorkspaceId: null,
-    recentActivity: [],
-    savedProviderSessions: [],
-    sessionReads: {},
-    sessionReadMarkers: {},
     machineNickname: null,
     machineId: undefined,
     machineSecret: null,
@@ -140,16 +126,6 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
 
 function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: string | null } {
     const parsed = isPlainObject(raw) ? raw : {};
-    const legacySessionReads = isPlainObject(parsed.recentSessionReads) ? parsed.recentSessionReads : {};
-    const sessionReads = isPlainObject(parsed.sessionReads) ? parsed.sessionReads : {};
-    const mergedSessionReads = Object.fromEntries(
-        Object.entries({ ...legacySessionReads, ...sessionReads })
-            .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
-    );
-    const sessionReadMarkers = Object.fromEntries(
-        Object.entries(isPlainObject(parsed.sessionReadMarkers) ? parsed.sessionReadMarkers : {})
-            .filter(([, value]) => typeof value === 'string')
-    );
 
     return {
         serverUrl: typeof parsed.serverUrl === 'string' && parsed.serverUrl.trim()
@@ -165,10 +141,6 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
         enabledIdes: asStringArray(parsed.enabledIdes),
         workspaces: Array.isArray(parsed.workspaces) ? parsed.workspaces as WorkspaceEntry[] : [],
         defaultWorkspaceId: asNullableString(parsed.defaultWorkspaceId) ?? asNullableString(parsed.activeWorkspaceId),
-        recentActivity: Array.isArray(parsed.recentActivity) ? parsed.recentActivity as RecentActivityEntry[] : [],
-        savedProviderSessions: Array.isArray(parsed.savedProviderSessions) ? parsed.savedProviderSessions as SavedProviderSessionEntry[] : [],
-        sessionReads: mergedSessionReads,
-        sessionReadMarkers,
         machineNickname: asNullableString(parsed.machineNickname),
         machineId: asOptionalString(parsed.machineId),
         machineSecret: parsed.machineSecret === null ? null : asOptionalString(parsed.machineSecret),
@@ -228,6 +200,48 @@ function getConfigPath(): string {
 }
 
 /**
+ * One-time migration: move runtime state fields from config.json to state.json.
+ * Called eagerly during loadConfig so state is extracted before the config
+ * normalizer strips the unknown fields.
+ */
+function migrateStateToStateFile(raw: Record<string, any>): void {
+    const statePath = join(getConfigDir(), 'state.json');
+    if (existsSync(statePath)) return;
+
+    const recentActivity = Array.isArray(raw.recentActivity) ? raw.recentActivity : [];
+    const savedProviderSessions = Array.isArray(raw.savedProviderSessions) ? raw.savedProviderSessions : [];
+    const legacySessionReads = isPlainObject(raw.recentSessionReads) ? raw.recentSessionReads : {};
+    const sessionReads = isPlainObject(raw.sessionReads) ? raw.sessionReads : {};
+    const sessionReadMarkers = isPlainObject(raw.sessionReadMarkers) ? raw.sessionReadMarkers : {};
+
+    const hasData = recentActivity.length > 0
+        || savedProviderSessions.length > 0
+        || Object.keys(sessionReads).length > 0
+        || Object.keys(legacySessionReads as object).length > 0
+        || Object.keys(sessionReadMarkers as object).length > 0;
+
+    if (!hasData) return;
+
+    const mergedReads = Object.fromEntries(
+        Object.entries({ ...legacySessionReads, ...sessionReads })
+            .filter(([, v]) => typeof v === 'number' && Number.isFinite(v as number))
+    );
+    const cleanedMarkers = Object.fromEntries(
+        Object.entries(sessionReadMarkers as Record<string, unknown>)
+            .filter(([, v]) => typeof v === 'string')
+    );
+
+    const state = {
+        recentActivity,
+        savedProviderSessions,
+        sessionReads: mergedReads,
+        sessionReadMarkers: cleanedMarkers,
+    };
+
+    writeFileSync(statePath, JSON.stringify(state, null, 2), { encoding: 'utf-8', mode: 0o600 });
+}
+
+/**
  * Load configuration from disk
  */
 export function loadConfig(): ADHDevConfig {
@@ -244,6 +258,10 @@ export function loadConfig(): ADHDevConfig {
     try {
         const raw = readFileSync(configPath, 'utf-8');
         const parsed = JSON.parse(raw);
+
+        // One-time migration: move runtime state to ~/.adhdev/state.json
+        migrateStateToStateFile(parsed);
+
         const normalizedInput = normalizeConfig(parsed);
         const ensured = ensureMachineId(normalizedInput);
         const normalized = ensured.config as ADHDevConfig & { activeWorkspaceId?: string | null };

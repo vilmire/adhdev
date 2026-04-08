@@ -4,11 +4,10 @@
  * Manages launcher config, machine auth, and user preferences.
  */
 import type { WorkspaceEntry } from './workspaces.js';
-import type { RecentActivityEntry } from './recent-activity.js';
-import type { SavedProviderSessionEntry } from './saved-sessions.js';
 export type { WorkspaceEntry } from './workspaces.js';
 export type { RecentActivityEntry } from './recent-activity.js';
 export type { SavedProviderSessionEntry } from './saved-sessions.js';
+export type { DaemonState } from './state-store.js';
 export interface ADHDevConfig {
     serverUrl: string;
     selectedIde: string | null;
@@ -23,14 +22,6 @@ export interface ADHDevConfig {
     workspaces?: WorkspaceEntry[];
     /** Default workspace id (from workspaces[]) — never used implicitly for launch */
     defaultWorkspaceId?: string | null;
-    /** Unified recent activity across IDE / CLI / ACP launch flows */
-    recentActivity?: RecentActivityEntry[];
-    /** Persistent resume-capable provider sessions keyed by providerSessionId */
-    savedProviderSessions?: SavedProviderSessionEntry[];
-    /** Last seen timestamps for live sessions, keyed by sessionId */
-    sessionReads?: Record<string, number>;
-    /** Last seen completion marker for live sessions, keyed by sessionId */
-    sessionReadMarkers?: Record<string, string>;
     machineNickname: string | null;
     /**
      * Stable local machine ID (prefix: `mach_`) — generated locally on first run.

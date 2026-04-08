@@ -69,6 +69,10 @@ export type { RecentActivityEntry } from './config/recent-activity.js';
 export { getSavedProviderSessions, upsertSavedProviderSession } from './config/saved-sessions.js';
 export type { SavedProviderSessionEntry } from './config/saved-sessions.js';
 
+// ── State Store ──
+export { loadState, saveState, resetState } from './config/state-store.js';
+export type { DaemonState } from './config/state-store.js';
+
 // ── Detection ──
 export { detectIDEs } from './detection/ide-detector.js';
 export type { IDEInfo } from './detection/ide-detector.js';

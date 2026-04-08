@@ -8,7 +8,7 @@
  */
 
 import * as path from 'path';
-import type { ADHDevConfig } from './config.js';
+import type { DaemonState } from './state-store.js';
 import { expandPath } from './workspaces.js';
 
 export interface RecentActivityEntry {
@@ -49,9 +49,9 @@ export function buildRecentActivityKeyForEntry(
 }
 
 export function appendRecentActivity(
-    config: ADHDevConfig,
+    state: DaemonState,
     entry: Omit<RecentActivityEntry, 'id' | 'lastUsedAt'> & { lastUsedAt?: number },
-): ADHDevConfig {
+): DaemonState {
     const nextEntry: RecentActivityEntry = {
         ...entry,
         workspace: entry.workspace ? normalizeWorkspace(entry.workspace) : undefined,
@@ -59,39 +59,39 @@ export function appendRecentActivity(
         lastUsedAt: entry.lastUsedAt || Date.now(),
     };
 
-    const filtered = (config.recentActivity || []).filter((item) => item.id !== nextEntry.id);
+    const filtered = (state.recentActivity || []).filter((item) => item.id !== nextEntry.id);
     return {
-        ...config,
+        ...state,
         recentActivity: [nextEntry, ...filtered].slice(0, MAX_ACTIVITY),
     };
 }
 
-export function getRecentActivity(config: ADHDevConfig, limit = 20): RecentActivityEntry[] {
-    return [...(config.recentActivity || [])]
+export function getRecentActivity(state: DaemonState, limit = 20): RecentActivityEntry[] {
+    return [...(state.recentActivity || [])]
         .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
         .slice(0, limit);
 }
 
-export function getSessionSeenAt(config: ADHDevConfig, sessionId: string): number {
-    return config.sessionReads?.[sessionId] || 0;
+export function getSessionSeenAt(state: DaemonState, sessionId: string): number {
+    return state.sessionReads?.[sessionId] || 0;
 }
 
-export function getSessionSeenMarker(config: ADHDevConfig, sessionId: string): string {
-    return config.sessionReadMarkers?.[sessionId] || '';
+export function getSessionSeenMarker(state: DaemonState, sessionId: string): string {
+    return state.sessionReadMarkers?.[sessionId] || '';
 }
 
 export function markSessionSeen(
-    config: ADHDevConfig,
+    state: DaemonState,
     sessionId: string,
     seenAt = Date.now(),
     completionMarker?: string | null,
-): ADHDevConfig {
-    const prev = config.sessionReads || {};
+): DaemonState {
+    const prev = state.sessionReads || {};
     const nextSeenAt = Math.max(prev[sessionId] || 0, seenAt);
-    const prevMarkers = config.sessionReadMarkers || {};
+    const prevMarkers = state.sessionReadMarkers || {};
     const nextMarker = typeof completionMarker === 'string' ? completionMarker : '';
     return {
-        ...config,
+        ...state,
         sessionReads: {
             ...prev,
             [sessionId]: nextSeenAt,

@@ -1,5 +1,5 @@
 import * as path from 'path';
-import type { ADHDevConfig } from './config.js';
+import type { DaemonState } from './state-store.js';
 import { expandPath } from './workspaces.js';
 
 export interface SavedProviderSessionEntry {
@@ -31,14 +31,14 @@ export function buildSavedProviderSessionKey(providerSessionId: string) {
 }
 
 export function upsertSavedProviderSession(
-    config: ADHDevConfig,
+    state: DaemonState,
     entry: Omit<SavedProviderSessionEntry, 'id' | 'createdAt' | 'lastUsedAt'> & { createdAt?: number; lastUsedAt?: number },
-): ADHDevConfig {
+): DaemonState {
     const providerSessionId = typeof entry.providerSessionId === 'string' ? entry.providerSessionId.trim() : '';
-    if (!providerSessionId) return config;
+    if (!providerSessionId) return state;
 
     const id = buildSavedProviderSessionKey(providerSessionId);
-    const existing = (config.savedProviderSessions || []).find(item => item.id === id);
+    const existing = (state.savedProviderSessions || []).find(item => item.id === id);
     const nextEntry: SavedProviderSessionEntry = {
         id,
         kind: entry.kind,
@@ -52,18 +52,18 @@ export function upsertSavedProviderSession(
         lastUsedAt: entry.lastUsedAt || Date.now(),
     };
 
-    const filtered = (config.savedProviderSessions || []).filter(item => item.id !== id);
+    const filtered = (state.savedProviderSessions || []).filter(item => item.id !== id);
     return {
-        ...config,
+        ...state,
         savedProviderSessions: [nextEntry, ...filtered].slice(0, MAX_SAVED_SESSIONS),
     };
 }
 
 export function getSavedProviderSessions(
-    config: ADHDevConfig,
+    state: DaemonState,
     filters?: { providerType?: string; kind?: SavedProviderSessionEntry['kind'] },
 ): SavedProviderSessionEntry[] {
-    return [...(config.savedProviderSessions || [])]
+    return [...(state.savedProviderSessions || [])]
         .filter(entry => {
             if (filters?.providerType && entry.providerType !== filters.providerType) return false;
             if (filters?.kind && entry.kind !== filters.kind) return false;

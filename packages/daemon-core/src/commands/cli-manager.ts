@@ -11,7 +11,8 @@ import * as crypto from 'crypto';
 import chalk from 'chalk';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import { detectCLI } from '../detection/cli-detector.js';
-import { loadConfig, saveConfig } from '../config/config.js';
+import { loadConfig } from '../config/config.js';
+import { loadState, saveState } from '../config/state-store.js';
 import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.js';
 import { appendRecentActivity } from '../config/recent-activity.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
@@ -260,9 +261,9 @@ export class DaemonCliManager {
         title?: string;
     }): void {
         try {
-            let nextConfig = appendRecentActivity(loadConfig(), entry);
+            let nextState = appendRecentActivity(loadState(), entry);
             if (entry.providerSessionId && (entry.kind === 'cli' || entry.kind === 'acp')) {
-                nextConfig = upsertSavedProviderSession(nextConfig, {
+                nextState = upsertSavedProviderSession(nextState, {
                     kind: entry.kind,
                     providerType: entry.providerType,
                     providerName: entry.providerName,
@@ -272,7 +273,7 @@ export class DaemonCliManager {
                     title: entry.title,
                 });
             }
-            saveConfig(nextConfig);
+            saveState(nextState);
         } catch (e) {
             console.error(colorize('red', `  ✗ Failed to save recent activity: ${e}`));
         }

@@ -18,6 +18,7 @@ import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { launchWithCdp, killIdeProcess, isIdeRunning } from '../launch.js';
 import { loadConfig, saveConfig, updateConfig } from '../config/config.js';
+import { loadState, saveState } from '../config/state-store.js';
 import { resolveIdeLaunchWorkspace } from '../config/workspaces.js';
 import { appendRecentActivity, getRecentActivity, markSessionSeen } from '../config/recent-activity.js';
 import { getSavedProviderSessions } from '../config/saved-sessions.js';
@@ -172,9 +173,9 @@ export class DaemonCommandRouter {
                 const offset = Math.max(0, Number(args?.offset) || 0);
                 const limit = Math.max(1, Math.min(100, Number(args?.limit) || 30));
                 const { sessions: historySessions, hasMore } = listSavedHistorySessions(providerType, { offset, limit });
-                const config = loadConfig();
-                const savedSessions = getSavedProviderSessions(config, { providerType, kind });
-                const recentSessions = getRecentActivity(config, 200)
+                const state = loadState();
+                const savedSessions = getSavedProviderSessions(state, { providerType, kind });
+                const recentSessions = getRecentActivity(state, 200)
                     .filter(entry => entry.providerType === providerType && entry.kind === kind && entry.providerSessionId);
                 const savedSessionById = new Map(savedSessions.map(entry => [entry.providerSessionId, entry]));
                 const recentSessionById = new Map(recentSessions.map(entry => [entry.providerSessionId!, entry]));
@@ -284,18 +285,18 @@ export class DaemonCommandRouter {
                 this.deps.onIdeConnected?.();
                 if (result.success && resolvedWorkspace) {
                     try {
-                        const next = appendRecentActivity(loadConfig(), {
+                        const next = appendRecentActivity(loadState(), {
                             kind: 'ide',
                             providerType: result.ideId || ideKey,
                             providerName: result.ideId || ideKey,
                             workspace: resolvedWorkspace,
                             title: result.ideId || ideKey,
                         });
-                        saveConfig(next);
+                        saveState(next);
                     } catch { /* ignore activity persist errors */ }
                 } else if (result.success && (result.ideId || ideKey)) {
                     try {
-                        saveConfig(appendRecentActivity(loadConfig(), {
+                        saveState(appendRecentActivity(loadState(), {
                             kind: 'ide',
                             providerType: result.ideId || ideKey,
                             providerName: result.ideId || ideKey,
@@ -326,8 +327,8 @@ export class DaemonCommandRouter {
                 if (!sessionId || typeof sessionId !== 'string') {
                     return { success: false, error: 'sessionId is required' };
                 }
-                const currentConfig = loadConfig();
-                const prevSeenAt = currentConfig.sessionReads?.[sessionId] || 0;
+                const currentState = loadState();
+                const prevSeenAt = currentState.sessionReads?.[sessionId] || 0;
                 const sessionEntries = buildSessionEntries(
                     this.deps.instanceManager.collectAllStates(),
                     this.deps.cdpManagers as Map<string, any>,
@@ -335,7 +336,7 @@ export class DaemonCommandRouter {
                 const targetSession = sessionEntries.find((entry) => entry.id === sessionId);
                 const completionMarker = targetSession ? getSessionCompletionMarker(targetSession) : '';
                 const next = markSessionSeen(
-                    currentConfig,
+                    currentState,
                     sessionId,
                     typeof args?.seenAt === 'number' ? args.seenAt : Date.now(),
                     completionMarker,
@@ -343,7 +344,7 @@ export class DaemonCommandRouter {
                 if (READ_DEBUG_ENABLED) {
                     LOG.info('RecentRead', `mark_session_seen sessionId=${sessionId} seenAt=${String(args?.seenAt || '')} prevSeenAt=${String(prevSeenAt)} nextSeenAt=${String(next.sessionReads?.[sessionId] || 0)} marker=${completionMarker || '-'}`);
                 }
-                saveConfig(next);
+                saveState(next);
                 this.deps.onStatusChange?.();
                 return {
                     success: true,
