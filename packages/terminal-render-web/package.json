@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/terminal-render-web",
-  "version": "0.8.22",
+  "version": "0.8.23",
   "private": true,
   "type": "module",
   "main": "src/index.tsx",
@@ -14,7 +14,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "ghostty-web": "^0.4.0",
+    "@xterm/addon-canvas": "^0.7.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^5.5.0",
     "react": "^18.3.0"
   },
   "devDependencies": {

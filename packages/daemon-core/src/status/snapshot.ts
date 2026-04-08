@@ -256,6 +256,7 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
         workspaces: wsState.workspaces,
         defaultWorkspaceId: wsState.defaultWorkspaceId,
         defaultWorkspacePath: wsState.defaultWorkspacePath,
+        terminalSizingMode: cfg.terminalSizingMode || 'measured',
         recentLaunches: buildRecentLaunches(recentActivity),
         terminalBackend,
         availableProviders: buildAvailableProviders(options.providerLoader),

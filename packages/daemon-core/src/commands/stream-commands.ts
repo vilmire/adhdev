@@ -96,7 +96,67 @@ export function handleSetProviderSetting(h: CommandHelpers, args: any): CommandR
 
 // ─── Extension Script Execution (Model/Mode) ─────
 
-export async function handleExtensionScript(h: CommandHelpers, args: any, scriptName: string): Promise<CommandResult> {
+function normalizeProviderScriptArgs(args: any): Record<string, any> {
+    const normalizedArgs = { ...(args || {}) };
+    for (const key of ['mode', 'model', 'message', 'action', 'button', 'text', 'sessionId', 'value']) {
+        if (key in normalizedArgs && !(key.toUpperCase() in normalizedArgs)) {
+            normalizedArgs[key.toUpperCase()] = normalizedArgs[key];
+        }
+    }
+    return normalizedArgs;
+}
+
+function parseScriptResult(result: unknown): { success: boolean; payload: any } {
+    if (typeof result === 'string') {
+        try {
+            const parsed = JSON.parse(result);
+            if (parsed && typeof parsed === 'object' && parsed.success === false) {
+                return { success: false, payload: parsed };
+            }
+            return { success: true, payload: parsed };
+        } catch {
+            return { success: true, payload: { result } };
+        }
+    }
+    if (result && typeof result === 'object' && (result as any).success === false) {
+        return { success: false, payload: result };
+    }
+    return { success: true, payload: result };
+}
+
+function getCliScriptCommand(payload: any): { type: string; text?: string } | null {
+    if (!payload || typeof payload !== 'object') return null;
+
+    if (typeof payload.sendMessage === 'string' && payload.sendMessage.trim()) {
+        return { type: 'send_message', text: payload.sendMessage.trim() };
+    }
+
+    const command = payload.command;
+    if (!command || typeof command !== 'object') return null;
+    if (command.type !== 'send_message') return null;
+
+    const text = typeof command.text === 'string'
+        ? command.text.trim()
+        : typeof command.message === 'string'
+            ? command.message.trim()
+            : '';
+    if (!text) return null;
+    return { type: 'send_message', text };
+}
+
+function applyProviderPatch(h: CommandHelpers, args: any, payload: any): void {
+    if (!payload || typeof payload !== 'object') return;
+    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+    const targetSession = targetSessionId ? h.ctx.sessionRegistry?.get(targetSessionId) : undefined;
+    const instanceKey = targetSession?.instanceKey || targetSessionId;
+    if (!instanceKey) return;
+    h.ctx.instanceManager?.sendEvent(instanceKey, 'provider_state_patch', {
+        ...payload,
+        extensionType: targetSession?.transport === 'cdp-webview' ? targetSession.providerType : undefined,
+    });
+}
+
+async function executeProviderScript(h: CommandHelpers, args: any, scriptName: string): Promise<CommandResult> {
     const { agentType, ideType } = args || {};
     if (!agentType) return { success: false, error: 'agentType is required' };
 
@@ -115,15 +175,31 @@ export async function handleExtensionScript(h: CommandHelpers, args: any, script
         return { success: false, error: `Script '${actualScriptName}' not available for ${agentType}` };
     }
 
-    const scriptFn = provider.scripts[actualScriptName as keyof typeof provider.scripts] as Function;
-    // Normalize args: script placeholders use UPPERCASE (${MODE}, ${MODEL}, ${MESSAGE})
-    // but WebSocket args typically use lowercase. Add uppercase versions of common keys.
-    const normalizedArgs = { ...args };
-    for (const key of ['mode', 'model', 'message', 'action', 'button', 'text', 'sessionId']) {
-        if (key in normalizedArgs && !(key.toUpperCase() in normalizedArgs)) {
-            normalizedArgs[key.toUpperCase()] = normalizedArgs[key];
+    const normalizedArgs = normalizeProviderScriptArgs(args);
+
+    if (provider.category === 'cli') {
+        const adapter = h.getCliAdapter(args?.targetSessionId || agentType);
+        if (!adapter?.invokeScript) {
+            return { success: false, error: `CLI adapter does not support script '${actualScriptName}'` };
+        }
+        try {
+            const raw = await adapter.invokeScript(actualScriptName, normalizedArgs);
+            const parsed = parseScriptResult(raw);
+            if (!parsed.success) {
+                return { success: false, ...(parsed.payload || {}) };
+            }
+            const cliCommand = getCliScriptCommand(parsed.payload);
+            if (cliCommand?.type === 'send_message' && cliCommand.text) {
+                await adapter.sendMessage(cliCommand.text);
+            }
+            applyProviderPatch(h, args, parsed.payload);
+            return { success: true, ...(parsed.payload && typeof parsed.payload === 'object' ? parsed.payload : { result: parsed.payload }) };
+        } catch (e: any) {
+            return { success: false, error: `Script execution failed: ${e.message}` };
         }
     }
+
+    const scriptFn = provider.scripts[actualScriptName as keyof typeof provider.scripts] as Function;
     const scriptCode = scriptFn(normalizedArgs);
     if (!scriptCode) return { success: false, error: `Script '${actualScriptName}' returned null` };
 
@@ -187,15 +263,30 @@ export async function handleExtensionScript(h: CommandHelpers, args: any, script
         if (typeof result === 'string') {
             try {
                 const parsed = JSON.parse(result);
+                applyProviderPatch(h, args, parsed);
+                if (parsed && typeof parsed === 'object' && parsed.success === false) {
+                    return { success: false, ...parsed };
+                }
                 return { success: true, ...parsed };
             } catch {
                 return { success: true, result };
             }
         }
+        applyProviderPatch(h, args, result);
         return { success: true, result };
     } catch (e: any) {
         return { success: false, error: `Script execution failed: ${e.message}` };
     }
+}
+
+export async function handleExtensionScript(h: CommandHelpers, args: any, scriptName: string): Promise<CommandResult> {
+    return executeProviderScript(h, args, scriptName);
+}
+
+export async function handleProviderScript(h: CommandHelpers, args: any): Promise<CommandResult> {
+    const scriptName = typeof args?.scriptName === 'string' ? args.scriptName.trim() : '';
+    if (!scriptName) return { success: false, error: 'scriptName is required' };
+    return executeProviderScript(h, args, scriptName);
 }
 
 // ─── IDE Extension Settings (per-IDE on/off) ─────

@@ -16,9 +16,10 @@ import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
-import { ChatHistoryWriter } from '../config/chat-history.js';
+import { ChatHistoryWriter, readChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
+import { extractProviderControlValues, normalizeProviderEffects } from './control-effects.js';
 
 let CachedDatabaseSync: (new (path: string, options?: { readOnly?: boolean }) => {
     prepare(sql: string): { get(...params: Array<string | number>): unknown };
@@ -54,6 +55,8 @@ export class CliProviderInstance implements ProviderInstance {
     private generatingDebounceTimer: NodeJS.Timeout | null = null;
     private generatingDebouncePending: { chatTitle: string; timestamp: number } | null = null;
     private lastApprovalEventAt = 0;
+    private controlValues: Record<string, string | number | boolean> = {};
+    private appliedEffectKeys = new Set<string>();
     private historyWriter: ChatHistoryWriter;
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     readonly instanceId: string;
@@ -106,6 +109,7 @@ export class CliProviderInstance implements ProviderInstance {
     async init(context: InstanceContext): Promise<void> {
         this.context = context;
         this.settings = context.settings || {};
+        this.adapter.updateRuntimeSettings?.(this.settings);
         this.monitor.updateConfig({
             approvalAlert: this.settings.approvalAlert !== false,
             longGeneratingAlert: this.settings.longGeneratingAlert !== false,
@@ -129,6 +133,21 @@ export class CliProviderInstance implements ProviderInstance {
 
  // PTY spawn
         await this.adapter.spawn();
+        if (this.providerSessionId) {
+            const restoredHistory = readChatHistory(this.type, 0, 200, this.providerSessionId);
+            if (restoredHistory.messages.length > 0) {
+                this.adapter.seedCommittedMessages(
+                    restoredHistory.messages.map((message) => ({
+                        role: message.role,
+                        content: message.content,
+                        timestamp: message.receivedAt,
+                        receivedAt: message.receivedAt,
+                        kind: message.kind,
+                        senderName: message.senderName,
+                    })),
+                );
+            }
+        }
         if (this.providerSessionId && this.launchMode === 'resume') {
             const resumedAt = Date.now();
             this.historyWriter.appendSystemMarker(
@@ -228,6 +247,12 @@ export class CliProviderInstance implements ProviderInstance {
         }
         const runtime = this.adapter.getRuntimeMetadata();
         const parsedMessages = Array.isArray(parsedStatus?.messages) ? parsedStatus.messages : [];
+        const controlValues = extractProviderControlValues(this.provider.controls, parsedStatus);
+        if (controlValues) {
+            this.controlValues = controlValues;
+        } else if (Object.keys(this.controlValues).length > 0) {
+            this.controlValues = {};
+        }
         const mergedMessages = this.mergeConversationMessages(parsedMessages);
 
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
@@ -250,6 +275,8 @@ export class CliProviderInstance implements ProviderInstance {
                 );
             }
         }
+
+        this.applyProviderResponse(parsedStatus, { phase: 'immediate' });
 
         return {
             type: this.type,
@@ -280,7 +307,7 @@ export class CliProviderInstance implements ProviderInstance {
                 attachedClients: runtime.attachedClients || [],
             } : undefined,
             resume: this.provider.resume,
-            controlValues: undefined, // CLI controls not yet wired from stream
+            controlValues: this.controlValues,
             providerControls: this.provider.controls as any,
         };
     }
@@ -294,6 +321,16 @@ export class CliProviderInstance implements ProviderInstance {
         return this.presentationMode;
     }
 
+    updateSettings(newSettings: Record<string, any>): void {
+        this.settings = { ...newSettings };
+        this.adapter.updateRuntimeSettings?.(this.settings);
+        this.monitor.updateConfig({
+            approvalAlert: this.settings.approvalAlert !== false,
+            longGeneratingAlert: this.settings.longGeneratingAlert !== false,
+            longGeneratingThresholdSec: this.settings.longGeneratingThresholdSec || 180,
+        });
+    }
+
     onEvent(event: string, data?: any): void {
         if (event === 'send_message' && data?.text) {
             void this.adapter.sendMessage(data.text).catch((e: any) => {
@@ -305,12 +342,15 @@ export class CliProviderInstance implements ProviderInstance {
             void this.adapter.resolveAction(data).catch((e: any) => {
                 LOG.warn('CLI', `[${this.type}] resolve_action failed: ${e?.message || e}`);
             });
+        } else if (event === 'provider_state_patch' && data && typeof data === 'object') {
+            this.applyProviderResponse(data, { phase: 'immediate' });
         }
     }
 
     dispose(): void {
         this.adapter.shutdown();
         this.monitor.reset();
+        this.appliedEffectKeys.clear();
     }
 
     private completedDebounceTimer: NodeJS.Timeout | null = null;
@@ -319,6 +359,7 @@ export class CliProviderInstance implements ProviderInstance {
     private detectStatusTransition(): void {
         const now = Date.now();
         const adapterStatus = this.adapter.getStatus();
+        const parsedStatus = this.adapter.getScriptParsedStatus?.() || null;
         const newStatus = adapterStatus.status;
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
         const chatTitle = `${this.provider.name} · ${dirName}`;
@@ -327,6 +368,7 @@ export class CliProviderInstance implements ProviderInstance {
             ? `${partial || ''}::${adapterStatus.messages.at(-1)?.content || ''}`.slice(-2000)
             : undefined;
 
+        const previousStatus = this.lastStatus;
         if (newStatus !== this.lastStatus) {
             LOG.info('CLI', `[${this.type}] status: ${this.lastStatus} → ${newStatus}`);
             if (this.lastStatus === 'idle' && newStatus === 'generating') {
@@ -411,6 +453,12 @@ export class CliProviderInstance implements ProviderInstance {
             this.lastStatus = newStatus;
         }
 
+        this.applyProviderResponse(parsedStatus, {
+            phase: (newStatus === 'idle' && (previousStatus === 'generating' || previousStatus === 'waiting_approval'))
+                ? 'turn_completed'
+                : 'immediate',
+        });
+
  // Monitor check (cooldown based notification, IDE/CLI common)
         const agentKey = `${this.type}:cli`;
         const monitorEvents = this.monitor.check(agentKey, newStatus, now, progressFingerprint);
@@ -429,6 +477,104 @@ export class CliProviderInstance implements ProviderInstance {
         const events = [...this.events];
         this.events = [];
         return events;
+    }
+
+    private applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void {
+        if (!data || typeof data !== 'object') return;
+
+        const controlValues = extractProviderControlValues(this.provider.controls, data);
+        if (controlValues) {
+            this.controlValues = { ...this.controlValues, ...controlValues };
+        }
+
+        const effects = normalizeProviderEffects(data);
+        for (const effect of effects) {
+            const effectWhen = effect.when || 'immediate';
+            if (effectWhen === 'turn_completed' && options.phase !== 'turn_completed') continue;
+            if (effectWhen === 'immediate' && options.phase === 'turn_completed') continue;
+
+            const effectKey = this.getEffectDedupKey(effect);
+            if (this.appliedEffectKeys.has(effectKey)) continue;
+            this.appliedEffectKeys.add(effectKey);
+
+            if (effect.persist !== false) {
+                const persisted = this.getPersistedEffectContent(effect);
+                if (persisted) this.appendRuntimeSystemMessage(persisted, effectKey);
+            }
+
+            if (effect.type === 'message' && effect.message) {
+                const content = typeof effect.message.content === 'string'
+                    ? effect.message.content
+                    : JSON.stringify(effect.message.content);
+                this.pushEvent({
+                    event: 'provider:message',
+                    timestamp: Date.now(),
+                    content,
+                    role: effect.message.role || 'system',
+                    kind: effect.message.kind,
+                    senderName: effect.message.senderName,
+                });
+            } else if (effect.type === 'toast' && effect.toast) {
+                this.pushEvent({
+                    event: 'provider:toast',
+                    effectId: effect.id || effectKey,
+                    timestamp: Date.now(),
+                    message: effect.toast.message,
+                    level: effect.toast.level || 'info',
+                });
+            } else if (effect.type === 'notification' && effect.notification) {
+                this.pushEvent({
+                    event: 'provider:notification',
+                    effectId: effect.id || effectKey,
+                    timestamp: Date.now(),
+                    title: effect.notification.title,
+                    message: effect.notification.body,
+                    content: typeof effect.notification.bubbleContent === 'string'
+                        ? effect.notification.bubbleContent
+                        : effect.notification.body,
+                    level: effect.notification.level || 'info',
+                    channels: effect.notification.channels || ['toast'],
+                    preferenceKey: effect.notification.preferenceKey,
+                });
+            }
+        }
+
+        if (this.appliedEffectKeys.size > 200) {
+            this.appliedEffectKeys = new Set(Array.from(this.appliedEffectKeys).slice(-100));
+        }
+    }
+
+    private getEffectDedupKey(effect: { id?: string; type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string } }): string {
+        if (effect.id) return `provider_effect:${effect.id}`;
+        if (effect.type === 'message') {
+            const content = typeof effect.message?.content === 'string'
+                ? effect.message.content
+                : JSON.stringify(effect.message?.content || '');
+            return `provider_effect:message:${content}`;
+        }
+        if (effect.type === 'notification') {
+            return `provider_effect:notification:${effect.notification?.title || ''}:${effect.notification?.body || ''}`;
+        }
+        return `provider_effect:toast:${effect.toast?.message || ''}`;
+    }
+
+    private getPersistedEffectContent(effect: { type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string; bubbleContent?: unknown } }): string | null {
+        if (effect.type === 'message') {
+            return typeof effect.message?.content === 'string'
+                ? effect.message.content
+                : JSON.stringify(effect.message?.content || '');
+        }
+        if (effect.type === 'toast') {
+            return effect.toast?.message || null;
+        }
+        if (effect.type === 'notification') {
+            if (typeof effect.notification?.bubbleContent === 'string') return effect.notification.bubbleContent;
+            if (typeof effect.notification?.title === 'string' && effect.notification.title.trim()) {
+                return `${effect.notification.title}\n${effect.notification.body || ''}`.trim();
+            }
+            return effect.notification?.body || null;
+        }
+        return null;
     }
 
  // ─── Adapter access (backward compat) ──────────────────

@@ -6,6 +6,10 @@ import React, {
   useState,
 } from 'react';
 import '@xterm/xterm/css/xterm.css';
+import { Terminal } from '@xterm/xterm';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { CanvasAddon } from '@xterm/addon-canvas';
+import { FitAddon } from '@xterm/addon-fit';
 
 export interface TerminalRendererHandle {
   write: (data: string) => void;
@@ -21,6 +25,12 @@ export interface GhosttyTerminalViewProps {
   onResize?: (cols: number, rows: number) => void;
   fontSize?: number;
   readOnly?: boolean;
+  /**
+   * Default is `measured`, which avoids xterm's `fit()` and only uses measured
+   * dimensions plus explicit `resize()`. `fit` is an opt-in escape hatch for
+   * non-dashboard consumers and is not exposed in the dashboard GUI.
+   */
+  sizingMode?: 'measured' | 'fit';
   className?: string;
   style?: React.CSSProperties;
 }
@@ -28,32 +38,7 @@ export interface GhosttyTerminalViewProps {
 const DEFAULT_TERMINAL_COLS = 80;
 const DEFAULT_TERMINAL_ROWS = 24;
 
-type TerminalLike = {
-  cols: number;
-  rows: number;
-  write: (data: string) => void;
-  clear: () => void;
-  reset?: () => void;
-  resize?: (cols: number, rows: number) => void;
-  open: (host: HTMLElement) => void;
-  dispose: () => void;
-  onData: (listener: (data: string) => void) => { dispose: () => void };
-  focus?: () => void;
-  blur?: () => void;
-};
-
-type FitAddonLike = {
-  fit: () => void;
-};
-
-type TerminalCtor = new (options: Record<string, unknown>) => TerminalLike;
-type FitAddonCtor = new () => FitAddonLike;
-
-interface RendererRuntime {
-  kind: 'ghostty-web';
-  Terminal: TerminalCtor;
-  FitAddon: FitAddonCtor;
-}
+type RendererKind = 'webgl' | 'canvas' | 'dom';
 
 const TERMINAL_THEME = {
   background: '#0f1117',
@@ -80,94 +65,29 @@ const TERMINAL_THEME = {
   brightWhite: '#a6adc8',
 };
 
-let terminalRuntimePromise: Promise<RendererRuntime> | null = null;
 let rendererRuntimeLogged = false;
 
-function stripUnsupportedOscPaletteCommands(chunk: string): { output: string; carry: string } {
-  if (!chunk) return { output: '', carry: '' };
-
-  let output = '';
-  let cursor = 0;
-
-  while (cursor < chunk.length) {
-    const oscStart = chunk.indexOf('\x1b]', cursor);
-    if (oscStart < 0) {
-      output += chunk.slice(cursor);
-      break;
-    }
-
-    output += chunk.slice(cursor, oscStart);
-
-    const belIndex = chunk.indexOf('\x07', oscStart + 2);
-    const stIndex = chunk.indexOf('\x1b\\', oscStart + 2);
-    let endIndex = -1;
-    let terminatorLength = 0;
-
-    if (belIndex >= 0 && (stIndex < 0 || belIndex < stIndex)) {
-      endIndex = belIndex;
-      terminatorLength = 1;
-    } else if (stIndex >= 0) {
-      endIndex = stIndex;
-      terminatorLength = 2;
-    }
-
-    if (endIndex < 0) {
-      return {
-        output,
-        carry: chunk.slice(oscStart),
-      };
-    }
-
-    const sequence = chunk.slice(oscStart, endIndex + terminatorLength);
-    const body = chunk.slice(oscStart + 2, endIndex);
-    if (!body.startsWith('4;')) {
-      output += sequence;
-    }
-
-    cursor = endIndex + terminatorLength;
-  }
-
-  return { output, carry: '' };
-}
-
-async function loadRendererRuntime(): Promise<RendererRuntime> {
-  if (!terminalRuntimePromise) {
-    terminalRuntimePromise = (async () => {
-      const ghostty = await import('ghostty-web');
-      if (typeof ghostty.init === 'function') {
-        await ghostty.init();
-      }
-      return {
-        kind: 'ghostty-web',
-        Terminal: ghostty.Terminal as TerminalCtor,
-        FitAddon: ghostty.FitAddon as FitAddonCtor,
-      };
-    })();
-  }
-  return terminalRuntimePromise;
-}
-
 export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTerminalViewProps>(
-  ({ onInput, onResize, fontSize = 13, readOnly = false, className, style }, ref) => {
+  ({ onInput, onResize, fontSize = 13, readOnly = false, sizingMode = 'measured', className, style }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
-    const terminalRef = useRef<TerminalLike | null>(null);
-    const fitAddonRef = useRef<FitAddonLike | null>(null);
+    const terminalRef = useRef<Terminal | null>(null);
+    const fitAddonRef = useRef<FitAddon | null>(null);
+    const resizeObserverRef = useRef<ResizeObserver | null>(null);
     const pendingWritesRef = useRef<string[]>([]);
-    const pendingOscCarryRef = useRef('');
     const onInputRef = useRef(onInput);
     const onResizeRef = useRef(onResize);
     const readOnlyRef = useRef(readOnly);
     const lastReportedSizeRef = useRef<{ cols: number; rows: number } | null>(null);
     const [ready, setReady] = useState(false);
-    const [rendererKind, setRendererKind] = useState<'ghostty-web' | null>(null);
+    const [rendererKind, setRendererKind] = useState<RendererKind | null>(null);
 
-    const fitAndReport = (force = false) => {
+    const applyFitIfEnabled = (force = false) => {
+      if (sizingMode !== 'fit') return;
       try {
         fitAddonRef.current?.fit();
         const term = terminalRef.current;
         if (!term) return;
-        const cols = term.cols;
-        const rows = term.rows;
+        const { cols, rows } = term;
         const last = lastReportedSizeRef.current;
         if (force || !last || last.cols !== cols || last.rows !== rows) {
           lastReportedSizeRef.current = { cols, rows };
@@ -176,20 +96,13 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
       } catch {}
     };
 
-    useEffect(() => {
-      onInputRef.current = onInput;
-    }, [onInput]);
-
-    useEffect(() => {
-      onResizeRef.current = onResize;
-    }, [onResize]);
+    useEffect(() => { onInputRef.current = onInput; }, [onInput]);
+    useEffect(() => { onResizeRef.current = onResize; }, [onResize]);
 
     useEffect(() => {
       readOnlyRef.current = readOnly;
       if (!readOnly) return;
-      try {
-        terminalRef.current?.blur?.();
-      } catch {}
+      try { terminalRef.current?.blur(); } catch {}
       try {
         const activeElement = document.activeElement;
         if (activeElement instanceof HTMLElement && containerRef.current?.contains(activeElement)) {
@@ -200,46 +113,37 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
 
     useImperativeHandle(ref, () => ({
       write: (data: string) => {
-        const normalized = `${pendingOscCarryRef.current}${data}`;
-        const sanitized = stripUnsupportedOscPaletteCommands(normalized);
-        pendingOscCarryRef.current = sanitized.carry;
-        if (!sanitized.output) return;
-        if (terminalRef.current) terminalRef.current.write(sanitized.output);
-        else pendingWritesRef.current.push(sanitized.output);
+        if (terminalRef.current) terminalRef.current.write(data);
+        else pendingWritesRef.current.push(data);
       },
       clear: () => {
         if (terminalRef.current) terminalRef.current.clear();
         else pendingWritesRef.current = [];
       },
       reset: () => {
-        if (terminalRef.current?.reset) terminalRef.current.reset();
+        if (terminalRef.current) terminalRef.current.reset();
         else pendingWritesRef.current = [];
       },
       resize: (cols: number, rows: number) => {
-        if (terminalRef.current?.resize) {
+        if (terminalRef.current) {
           terminalRef.current.resize(cols, rows);
           lastReportedSizeRef.current = { cols, rows };
         }
       },
-      fit: () => {
-        fitAndReport(true);
-      },
-      bumpResize: () => {
-        fitAndReport(false);
-      },
+      fit: () => applyFitIfEnabled(true),
+      bumpResize: () => applyFitIfEnabled(false),
     }), []);
 
     useEffect(() => {
       let cancelled = false;
       let disposable: { dispose: () => void } | null = null;
-      let termForCleanup: TerminalLike | null = null;
+      let termForCleanup: Terminal | null = null;
 
-      async function init(): Promise<void> {
+      function init(): void {
         if (!containerRef.current) return;
-        const runtime = await loadRendererRuntime();
-        if (cancelled || !containerRef.current) return;
+        if (cancelled) return;
 
-        const term = new runtime.Terminal({
+        const term = new Terminal({
           cols: DEFAULT_TERMINAL_COLS,
           rows: DEFAULT_TERMINAL_ROWS,
           cursorBlink: true,
@@ -256,20 +160,39 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           disableStdin: false,
         });
 
-        const fitAddon = new runtime.FitAddon();
         term.open(containerRef.current);
-        if ((term as any).loadAddon) {
-          (term as any).loadAddon(fitAddon);
-        }
 
         terminalRef.current = term;
         termForCleanup = term;
-        fitAddonRef.current = fitAddon;
-        setRendererKind(runtime.kind);
+        fitAddonRef.current = null;
+
+        if (sizingMode === 'fit') {
+          const fitAddon = new FitAddon();
+          term.loadAddon(fitAddon);
+          fitAddonRef.current = fitAddon;
+        }
+
+        // WebGL → Canvas → DOM fallback
+        let kind: RendererKind = 'dom';
+        try {
+          const webglAddon = new WebglAddon();
+          webglAddon.onContextLoss(() => {
+            webglAddon.dispose();
+          });
+          term.loadAddon(webglAddon);
+          kind = 'webgl';
+        } catch {
+          try {
+            term.loadAddon(new CanvasAddon());
+            kind = 'canvas';
+          } catch {}
+        }
+
         if (!rendererRuntimeLogged) {
           rendererRuntimeLogged = true;
-          console.info(`[terminal-render-web] renderer=${runtime.kind}`);
+          console.info(`[terminal-render-web] renderer=${kind}`);
         }
+        setRendererKind(kind);
 
         disposable = term.onData((data: string) => {
           if (readOnlyRef.current) return;
@@ -278,8 +201,9 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
 
         requestAnimationFrame(() => {
           try {
+            applyFitIfEnabled(true);
             setReady(true);
-            if (!readOnlyRef.current) term.focus?.();
+            if (!readOnlyRef.current) term.focus();
             for (const chunk of pendingWritesRef.current) term.write(chunk);
             pendingWritesRef.current = [];
           } catch {}
@@ -291,20 +215,49 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         }
       }
 
-      init().catch((error) => {
+      try {
+        init();
+      } catch (error) {
         console.error('[terminal-render-web] failed to initialize terminal renderer', error);
-      });
+      }
 
       return () => {
         cancelled = true;
         lastReportedSizeRef.current = null;
+        resizeObserverRef.current?.disconnect();
+        resizeObserverRef.current = null;
         disposable?.dispose();
         termForCleanup?.dispose();
         terminalRef.current = null;
         fitAddonRef.current = null;
-        pendingOscCarryRef.current = '';
       };
-    }, [fontSize]);
+    }, [fontSize, sizingMode]);
+
+    useEffect(() => {
+      if (sizingMode !== 'fit') return;
+      const container = containerRef.current;
+      if (!container || typeof ResizeObserver === 'undefined') return;
+
+      const observer = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (!entry) return;
+        const { width, height } = entry.contentRect;
+        if (width <= 0 || height <= 0) return;
+        requestAnimationFrame(() => {
+          applyFitIfEnabled(false);
+        });
+      });
+
+      observer.observe(container);
+      resizeObserverRef.current = observer;
+
+      return () => {
+        observer.disconnect();
+        if (resizeObserverRef.current === observer) {
+          resizeObserverRef.current = null;
+        }
+      };
+    }, [sizingMode]);
 
     return (
       <div

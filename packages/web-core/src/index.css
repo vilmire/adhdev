@@ -1240,6 +1240,29 @@
         border: none;
     }
 
+    .chat-preformatted {
+        margin: 0;
+        padding: 0;
+        border-radius: 0;
+        background: transparent;
+        border: none;
+        overflow-x: auto;
+        overflow-y: hidden;
+        font-size: 12px;
+        line-height: 1.55;
+        white-space: pre;
+        word-break: normal;
+        overflow-wrap: normal;
+        letter-spacing: 0;
+        word-spacing: 0;
+        font-kerning: none;
+        font-variant-ligatures: none;
+        font-feature-settings: "liga" 0, "calt" 0;
+        tab-size: 4;
+        text-rendering: optimizeSpeed;
+        font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    }
+
     .chat-markdown ul,
     .chat-markdown ol {
         margin: 0.4em 0;

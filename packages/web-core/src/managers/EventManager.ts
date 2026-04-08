@@ -32,6 +32,16 @@ export interface StatusEventPayload {
     modalMessage?: string
     modalButtons?: string[]
     timestamp?: number
+    content?: string
+    message?: string
+    title?: string
+    level?: 'info' | 'success' | 'warning'
+    role?: 'system' | 'assistant' | 'user'
+    kind?: string
+    senderName?: string
+    effectId?: string
+    channels?: Array<'bubble' | 'toast' | 'browser'>
+    preferenceKey?: 'disconnect' | 'completion' | 'approval' | 'browser'
 }
 
 export interface ToastAction {
@@ -270,7 +280,8 @@ class EventManager {
 
         const conversationKey = this.resolveConversationKey(payload)
         const dedupTarget = conversationKey || payload.instanceId || payload.ideType || payload.providerType || ''
-        const dedupKey = `${dedupTarget}:${payload.event}:${payload.chatTitle || ''}`
+        const dedupDetail = payload.effectId || payload.message || payload.content || payload.chatTitle || ''
+        const dedupKey = `${dedupTarget}:${payload.event}:${dedupDetail}`
         if (this.isDuplicate(dedupKey)) return
 
         // Resolve ideLabel: find the owning daemon for this event's IDE
@@ -288,8 +299,53 @@ class EventManager {
         let msg = ''
         let type: 'success' | 'info' | 'warning' = 'info'
 
+        // ── provider:message ──
+        if (payload.event === 'provider:message') {
+            if (conversationKey && payload.content) {
+                this.emitSystemMessage(conversationKey, {
+                    role: 'system',
+                    timestamp: eventTimestamp,
+                    content: payload.content,
+                    _localId: `sys_provider_${eventTimestamp}_${(payload.content || '').slice(0, 24)}`,
+                })
+            }
+            return
+
+        // ── provider:toast ──
+        } else if (payload.event === 'provider:toast') {
+            msg = payload.message || ''
+            type = payload.level || 'info'
+
+        // ── provider:notification ──
+        } else if (payload.event === 'provider:notification') {
+            const channels = payload.channels?.length ? payload.channels : ['toast']
+            const prefKey = payload.preferenceKey
+            const allowBrowser = shouldNotify('browser') && (!prefKey || prefKey === 'browser' || shouldNotify(prefKey))
+
+            if (channels.includes('bubble') && conversationKey && payload.content) {
+                this.emitSystemMessage(conversationKey, {
+                    role: 'system',
+                    timestamp: eventTimestamp,
+                    content: payload.content,
+                    _localId: `sys_provider_notification_${payload.effectId || eventTimestamp}`,
+                })
+            }
+
+            if (channels.includes('browser') && payload.title && payload.message && allowBrowser && !document.hasFocus()) {
+                notify(
+                    payload.title,
+                    payload.message,
+                    `provider-${payload.effectId || eventTimestamp}`,
+                )
+            }
+
+            if (channels.includes('toast')) {
+                msg = payload.message || payload.title || ''
+                type = payload.level || 'info'
+            }
+
         // ── agent:generating_completed ──
-        if (payload.event === 'agent:generating_completed') {
+        } else if (payload.event === 'agent:generating_completed') {
             const dur = payload.duration ? ` (${payload.duration}s)` : ''
             msg = `✅ ${ideLabel} agent task completed${dur}`
             type = 'success'

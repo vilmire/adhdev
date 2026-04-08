@@ -76,6 +76,7 @@ export function statusPayloadToEntries(
         ...(payload.workspaces && { workspaces: payload.workspaces }),
         ...(payload.defaultWorkspaceId !== undefined && { defaultWorkspaceId: payload.defaultWorkspaceId }),
         ...(payload.defaultWorkspacePath !== undefined && { defaultWorkspacePath: payload.defaultWorkspacePath }),
+        ...(payload.terminalSizingMode !== undefined && { terminalSizingMode: payload.terminalSizingMode }),
         ...((payload as any).recentLaunches && { recentLaunches: (payload as any).recentLaunches }),
         ...(payload.terminalBackend && { terminalBackend: payload.terminalBackend }),
         ...(payload.detectedIdes && { detectedIdes: payload.detectedIdes }),

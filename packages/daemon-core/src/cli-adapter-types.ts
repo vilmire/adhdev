@@ -11,6 +11,8 @@ export interface CliAdapter {
     spawn(): Promise<void>;
     sendMessage(text: string): Promise<void>;
     getStatus(): any;
+    getScriptParsedStatus?(): any;
+    invokeScript?(scriptName: string, args?: any): Promise<any>;
     getPartialResponse(): string;
     saveAndStop?(): Promise<void>;
     shutdown(): void;
@@ -19,6 +21,7 @@ export interface CliAdapter {
     isProcessing(): boolean;
     isReady(): boolean;
     setOnStatusChange(callback: () => void): void;
+    updateRuntimeSettings?(settings: Record<string, any>): void;
     setServerConn?(serverConn: any): void;
  // Raw PTY I/O (for terminal view)
     setOnPtyData?(callback: (data: string) => void): void;

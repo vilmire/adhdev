@@ -32,6 +32,7 @@ export interface PaneGroupProps {
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>;
     setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>;
     isStandalone: boolean;
+    hasRegisteredMachines?: boolean;
     userName?: string;
     /** Group identity */
     groupIndex: number;
@@ -67,7 +68,7 @@ export default function PaneGroup({
     clearedTabs,
     actionLogs,
     sendDaemonCommand, setLocalUserMessages, setActionLogs,
-    isStandalone, userName,
+    isStandalone, hasRegisteredMachines, userName,
     groupIndex, onFocus,
     isSplitMode, numGroups, onMoveTab, onReceiveTab,
     style: styleProp,
@@ -217,6 +218,7 @@ export default function PaneGroup({
                             conversationsCount={conversations.length}
                             isSplitMode={isSplitMode}
                             isStandalone={isStandalone}
+                            hasRegisteredMachines={hasRegisteredMachines}
                             detectedIdes={detectedIdes}
                             handleLaunchIde={handleLaunchIde}
                         />

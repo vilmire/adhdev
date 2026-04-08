@@ -8,6 +8,9 @@
 import type { ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
+import { extractProviderControlValues, normalizeProviderEffects } from './control-effects.js';
+import { ChatHistoryWriter } from '../config/chat-history.js';
+import type { ChatMessage } from '../types.js';
 
 export class ExtensionProviderInstance implements ProviderInstance {
     readonly type: string;
@@ -26,9 +29,12 @@ export class ExtensionProviderInstance implements ProviderInstance {
     private currentModel: string = '';
     private currentMode: string = '';
     private controlValues: Record<string, string | number | boolean> = {};
+    private appliedEffectKeys = new Set<string>();
+    private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     private lastAgentStatus: string = 'idle';
     private generatingStartedAt: number = 0;
     private monitor: StatusMonitor;
+    private historyWriter: ChatHistoryWriter;
 
  // meta
     private instanceId: string;
@@ -43,6 +49,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
         this.provider = provider;
         this.instanceId = crypto.randomUUID();
         this.monitor = new StatusMonitor();
+        this.historyWriter = new ChatHistoryWriter();
     }
 
  // ─── Lifecycle ──────────────────────────────────
@@ -73,11 +80,11 @@ export class ExtensionProviderInstance implements ProviderInstance {
             name: this.provider.name,
             category: 'extension',
             status: this.currentStatus as ProviderState['status'],
-            activeChat: this.messages.length > 0 ? {
+            activeChat: (this.messages.length > 0 || this.runtimeMessages.length > 0) ? {
                 id: this.chatId || this.instanceId,
                 title: this.chatTitle || this.agentName || this.provider.name,
                 status: this.currentStatus,
-                messages: this.messages,
+                messages: this.mergeConversationMessages(this.messages),
                 activeModal: this.activeModal,
                 inputContent: '',
             } : null,
@@ -101,7 +108,8 @@ export class ExtensionProviderInstance implements ProviderInstance {
             if (data?.activeModal !== undefined) this.activeModal = data.activeModal;
             if (data?.model) this.currentModel = data.model;
             if (data?.mode) this.currentMode = data.mode;
-            if (data?.controlValues) this.controlValues = data.controlValues;
+            const controlValues = extractProviderControlValues(this.provider.controls, data) || data?.controlValues;
+            if (controlValues) this.controlValues = controlValues;
             if (typeof data?.sessionId === 'string' && data.sessionId.trim()) this.chatId = data.sessionId;
             if (typeof data?.title === 'string' && data.title.trim()) this.chatTitle = data.title;
             if (typeof data?.agentName === 'string' && data.agentName.trim()) this.agentName = data.agentName;
@@ -115,6 +123,8 @@ export class ExtensionProviderInstance implements ProviderInstance {
             this.resetStreamState();
         } else if (event === 'extension_connected') {
             this.ideType = data?.ideType || '';
+        } else if (event === 'provider_state_patch' && data && typeof data === 'object') {
+            this.applyProviderResponse(data, { phase: 'immediate' });
  // Maintain instanceId UUID — do not overwrite
         }
     }
@@ -123,6 +133,17 @@ export class ExtensionProviderInstance implements ProviderInstance {
         this.agentStreams = [];
         this.messages = [];
         this.monitor.reset();
+        this.appliedEffectKeys.clear();
+        this.runtimeMessages = [];
+    }
+
+    updateSettings(newSettings: Record<string, any>): void {
+        this.settings = { ...newSettings };
+        this.monitor.updateConfig({
+            approvalAlert: this.settings.approvalAlert !== false,
+            longGeneratingAlert: this.settings.longGeneratingAlert !== false,
+            longGeneratingThresholdSec: this.settings.longGeneratingThresholdSec || 180,
+        });
     }
 
  /** Query UUID instanceId */
@@ -143,6 +164,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
             ? `${lastMsg?.role || ''}:${typeof lastMsg?.content === 'string' ? lastMsg.content : JSON.stringify(lastMsg?.content || '')}`.slice(-2000)
             : undefined;
 
+        const previousStatus = this.lastAgentStatus;
         if (agentStatus !== this.lastAgentStatus) {
             if (this.lastAgentStatus === 'idle' && agentStatus === 'generating') {
                 this.generatingStartedAt = now;
@@ -185,6 +207,12 @@ export class ExtensionProviderInstance implements ProviderInstance {
             this.lastAgentStatus = agentStatus;
         }
 
+        this.applyProviderResponse(data, {
+            phase: (agentStatus === 'idle' && (previousStatus === 'generating' || previousStatus === 'waiting_approval'))
+                ? 'turn_completed'
+                : 'immediate',
+        });
+
  // Monitor check (cooldown based notification) — keep monitor events (long_generating etc)
         const agentKey = `${this.type}:ext`;
         const monitorEvents = this.monitor.check(agentKey, agentStatus, now, progressFingerprint);
@@ -196,6 +224,138 @@ export class ExtensionProviderInstance implements ProviderInstance {
     private pushEvent(event: ProviderEvent): void {
         this.events.push(event);
         if (this.events.length > 50) this.events = this.events.slice(-50);
+    }
+
+    private applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void {
+        if (!data || typeof data !== 'object') return;
+
+        const controlValues = extractProviderControlValues(this.provider.controls, data);
+        if (controlValues) this.controlValues = { ...this.controlValues, ...controlValues };
+
+        const effects = normalizeProviderEffects(data);
+        for (const effect of effects) {
+            const effectWhen = effect.when || 'immediate';
+            if (effectWhen === 'turn_completed' && options.phase !== 'turn_completed') continue;
+            if (effectWhen === 'immediate' && options.phase === 'turn_completed') continue;
+
+            const effectKey = this.getEffectDedupKey(effect);
+            if (this.appliedEffectKeys.has(effectKey)) continue;
+            this.appliedEffectKeys.add(effectKey);
+
+            if (effect.persist !== false) {
+                const persisted = this.getPersistedEffectContent(effect);
+                if (persisted) this.appendRuntimeSystemMessage(persisted, effectKey);
+            }
+
+            if (effect.type === 'message' && effect.message) {
+                this.pushEvent({
+                    event: 'provider:message',
+                    timestamp: Date.now(),
+                    content: typeof effect.message.content === 'string' ? effect.message.content : JSON.stringify(effect.message.content),
+                    role: effect.message.role || 'system',
+                    kind: effect.message.kind,
+                    senderName: effect.message.senderName,
+                });
+            } else if (effect.type === 'toast' && effect.toast) {
+                this.pushEvent({
+                    event: 'provider:toast',
+                    effectId: effect.id || effectKey,
+                    timestamp: Date.now(),
+                    message: effect.toast.message,
+                    level: effect.toast.level || 'info',
+                });
+            } else if (effect.type === 'notification' && effect.notification) {
+                this.pushEvent({
+                    event: 'provider:notification',
+                    effectId: effect.id || effectKey,
+                    timestamp: Date.now(),
+                    title: effect.notification.title,
+                    message: effect.notification.body,
+                    content: typeof effect.notification.bubbleContent === 'string'
+                        ? effect.notification.bubbleContent
+                        : effect.notification.body,
+                    level: effect.notification.level || 'info',
+                    channels: effect.notification.channels || ['toast'],
+                    preferenceKey: effect.notification.preferenceKey,
+                });
+            }
+        }
+    }
+
+    private appendRuntimeSystemMessage(content: string, dedupKey: string, receivedAt = Date.now()): void {
+        const normalizedContent = String(content || '').trim();
+        if (!normalizedContent) return;
+        if (this.runtimeMessages.some((entry) => entry.key === dedupKey)) return;
+
+        this.runtimeMessages.push({
+            key: dedupKey,
+            message: {
+                role: 'system',
+                senderName: 'System',
+                content: normalizedContent,
+                receivedAt,
+                timestamp: receivedAt,
+            },
+        });
+        if (this.runtimeMessages.length > 50) this.runtimeMessages = this.runtimeMessages.slice(-50);
+
+        this.historyWriter.appendNewMessages(
+            this.type,
+            [{
+                role: 'system',
+                senderName: 'System',
+                content: normalizedContent,
+                kind: 'system',
+                receivedAt,
+                historyDedupKey: dedupKey,
+            }],
+            this.chatTitle || this.agentName || this.provider.name,
+            this.instanceId,
+            this.chatId || this.instanceId,
+        );
+    }
+
+    private mergeConversationMessages(messages: any[]): ChatMessage[] {
+        if (this.runtimeMessages.length === 0) return messages;
+        return [...messages, ...this.runtimeMessages.map((entry) => entry.message)]
+            .map((message, index) => ({ message, index }))
+            .sort((a, b) => {
+                const aTime = a.message.receivedAt || a.message.timestamp || 0;
+                const bTime = b.message.receivedAt || b.message.timestamp || 0;
+                if (aTime !== bTime) return aTime - bTime;
+                return a.index - b.index;
+            })
+            .map((entry) => entry.message);
+    }
+
+    private getPersistedEffectContent(effect: { type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string; bubbleContent?: unknown } }): string | null {
+        if (effect.type === 'message') {
+            return typeof effect.message?.content === 'string'
+                ? effect.message.content
+                : JSON.stringify(effect.message?.content || '');
+        }
+        if (effect.type === 'toast') {
+            return effect.toast?.message || null;
+        }
+        if (effect.type === 'notification') {
+            if (typeof effect.notification?.bubbleContent === 'string') return effect.notification.bubbleContent;
+            if (typeof effect.notification?.title === 'string' && effect.notification.title.trim()) {
+                return `${effect.notification.title}\n${effect.notification.body || ''}`.trim();
+            }
+            return effect.notification?.body || null;
+        }
+        return null;
+    }
+
+    private getEffectDedupKey(effect: { id?: string; type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string } }): string {
+        if (effect.id) return `provider_effect:${effect.id}`;
+        if (effect.type === 'message') {
+            return `provider_effect:message:${typeof effect.message?.content === 'string' ? effect.message.content : JSON.stringify(effect.message?.content || '')}`;
+        }
+        if (effect.type === 'notification') {
+            return `provider_effect:notification:${effect.notification?.title || ''}:${effect.notification?.body || ''}`;
+        }
+        return `provider_effect:toast:${effect.toast?.message || ''}`;
     }
 
     private flushEvents(): ProviderEvent[] {

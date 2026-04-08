@@ -187,6 +187,7 @@ export interface StatusReportPayload {
     workspaces?: WorkspaceEntry[];
     defaultWorkspaceId?: string | null;
     defaultWorkspacePath?: string | null;
+    terminalSizingMode?: 'measured' | 'fit';
     workspaceActivity?: WorkspaceActivity[];
     recentLaunches?: RecentLaunchEntry[];
 }

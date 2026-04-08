@@ -15,7 +15,7 @@ import { useTransport } from '../../context/TransportContext';
 // Avoids build dependency on daemon-core re-export timing
 interface ProviderControlSchema {
     id: string;
-    type: 'select' | 'toggle' | 'cycle' | 'slider' | 'action';
+    type: 'select' | 'toggle' | 'cycle' | 'slider' | 'action' | 'display';
     label: string;
     icon?: string;
     placement: 'bar' | 'header' | 'menu';
@@ -102,6 +102,36 @@ export default function ControlsBar({
         return await sendCommand(ideId, cmd, enriched);
     }, [ideId, sessionId, sendCommand]);
 
+    const invokeProviderScript = useCallback(async (
+        scriptName: string,
+        payload: Record<string, unknown> = {},
+        fallbackCmd?: string,
+    ) => {
+        try {
+            const res = await exec('invoke_provider_script', {
+                agentType: providerType,
+                ideType,
+                scriptName,
+                ...payload,
+            });
+            if (res?.success === false && fallbackCmd) {
+                return await exec(fallbackCmd, {
+                    agentType: providerType,
+                    ideType,
+                    ...payload,
+                });
+            }
+            return res;
+        } catch (error) {
+            if (!fallbackCmd) throw error;
+            return await exec(fallbackCmd, {
+                agentType: providerType,
+                ideType,
+                ...payload,
+            });
+        }
+    }, [exec, providerType, ideType]);
+
     if (!controls || controls.length === 0) return null;
 
     const barControls = controls
@@ -127,13 +157,8 @@ export default function ControlsBar({
         if (ctrl.dynamic && ctrl.listScript) {
             setLoadingOption(ctrl.id);
             try {
-                const res: any = await exec(ctrl.listScript === 'listModels'
-                    ? 'list_extension_models'
-                    : ctrl.listScript === 'listModes'
-                        ? 'list_extension_modes'
-                        : ctrl.listScript,
-                    { agentType: providerType, ideType }
-                );
+                const fallbackCmd = mapLegacyScriptCommand(ctrl.listScript);
+                const res: any = await invokeProviderScript(ctrl.listScript, {}, fallbackCmd);
                 const rawList = res?.models || res?.modes || res?.result?.models || res?.result?.modes || res?.options || [];
                 const list = rawList.map((item: any) =>
                     typeof item === 'string' ? item : (item?.name || item?.id || item?.value || String(item))
@@ -155,16 +180,12 @@ export default function ControlsBar({
         localOverrideUntil.current = Date.now() + 5000;
 
         try {
-            // Map setScript to the appropriate daemon command
             if (!ctrl.setScript) return;
-            const cmd = mapSetScript(ctrl.setScript, providerType);
-            await exec(cmd, {
-                agentType: providerType,
-                ideType,
+            await invokeProviderScript(ctrl.setScript, {
                 model: ctrl.id === 'model' ? value : undefined,
                 mode: ctrl.id === 'mode' ? value : undefined,
                 value,
-            });
+            }, mapLegacyScriptCommand(ctrl.setScript));
         } catch { /* silent */ }
     };
 
@@ -182,8 +203,7 @@ export default function ControlsBar({
 
         try {
             if (!ctrl.setScript) return;
-            const cmd = mapSetScript(ctrl.setScript, providerType);
-            await exec(cmd, { agentType: providerType, ideType, value: nextValue });
+            await invokeProviderScript(ctrl.setScript, { value: nextValue }, mapLegacyScriptCommand(ctrl.setScript));
         } catch { /* silent */ }
     };
 
@@ -196,21 +216,14 @@ export default function ControlsBar({
 
         try {
             if (!ctrl.setScript) return;
-            const cmd = mapSetScript(ctrl.setScript, providerType);
-            await exec(cmd, { agentType: providerType, ideType, value: nextValue });
+            await invokeProviderScript(ctrl.setScript, { value: nextValue }, mapLegacyScriptCommand(ctrl.setScript));
         } catch { /* silent */ }
     };
 
     const handleActionClick = async (ctrl: ProviderControlSchema) => {
         if (!ctrl.invokeScript) return;
         try {
-            // Actions map directly to invokeScript
-            await exec('invoke_extension_script', {
-                agentType: providerType,
-                ideType,
-                scriptName: ctrl.invokeScript,
-            });
-            // Optional: Handle resultDisplay='toast' here if daemon doesn't automatically toast
+            await invokeProviderScript(ctrl.invokeScript);
         } catch { /* silent */ }
     };
 
@@ -323,7 +336,25 @@ export default function ControlsBar({
                                 onClick={() => handleActionClick(ctrl)}
                             >
                                 {ctrl.icon && <span className="text-[9px] opacity-60">{ctrl.icon}</span>}
-                                {ctrl.label}
+                                {ctrl.resultDisplay === 'inline' && currentValue
+                                    ? `${ctrl.label}: ${currentValue}`
+                                    : ctrl.label}
+                            </span>
+                        );
+
+                    case 'display':
+                        return (
+                            <span
+                                key={ctrl.id}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-xl text-[10px] font-medium whitespace-nowrap"
+                                style={{
+                                    border: '1px solid var(--border-default)',
+                                    background: 'var(--surface-tertiary)',
+                                    color: currentValue ? 'var(--text-primary)' : 'var(--text-muted)',
+                                }}
+                            >
+                                {ctrl.icon && <span className="text-[9px] opacity-60">{ctrl.icon}</span>}
+                                {currentValue ? `${ctrl.label}: ${currentValue}` : ctrl.label}
                             </span>
                         );
 
@@ -338,14 +369,15 @@ export default function ControlsBar({
 // ─── Helpers ────────────────────────────────────────────
 
 /**
- * Map provider setScript name to the daemon command name.
- * Handles both new-style and legacy command names.
+ * Legacy daemon commands kept as fallback while providers migrate to generic invoke_provider_script.
  */
-function mapSetScript(setScript: string, _providerType: string): string {
+function mapLegacyScriptCommand(setScript: string): string | undefined {
     const mapping: Record<string, string> = {
         'setModel': 'set_extension_model',
         'setMode': 'set_extension_mode',
+        'listModels': 'list_extension_models',
+        'listModes': 'list_extension_modes',
         'setThinkingLevel': 'set_thought_level',
     };
-    return mapping[setScript] || setScript;
+    return mapping[setScript];
 }

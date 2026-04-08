@@ -2,6 +2,24 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.23] - 2026-04-08
+
+### Added
+- Provider-driven controls, control values, effects, and notification routing for CLI/IDE/extension providers.
+- CLI saved-session resume flow from both the machine page and the dashboard new-session dialog.
+- Config-only terminal sizing escape hatch via `terminalSizingMode: "fit"` while keeping the dashboard GUI locked to the measured default.
+
+### Fixed
+- Standalone empty-state copy and machine-registration gating so install guidance only appears when no machines are registered.
+- macOS Cursor launch/restart handling and process detection for standalone daemon IDE launch.
+- Claude CLI parsing, startup state handling, generating hold behavior, restart transcript restore, and timestamp ordering for persisted chat history.
+- Terminal renderer module loading so the xterm-based terminal initializes correctly under Vite dev/HMR.
+
+### Changed
+- Replaced `ghostty-web` with xterm.js-based terminal rendering with WebGL, Canvas, and DOM fallback paths.
+- Made dashboard terminal sizing daemon-authoritative by default and removed frontend transcript re-parsing from chat rendering.
+- Simplified CLI transcript rendering so providers own parsing and the web renderer only decides presentation from explicit metadata.
+
 ## [0.8.22] - 2026-04-08
 
 ### Added
@@ -12,6 +30,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.21] - 2026-04-08
 
 ### Added

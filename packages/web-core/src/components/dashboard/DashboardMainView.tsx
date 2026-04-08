@@ -507,6 +507,7 @@ export default function DashboardMainView({
                     setLocalUserMessages={setLocalUserMessages}
                     setActionLogs={setActionLogs}
                     isStandalone={isStandalone}
+                    hasRegisteredMachines={machineEntries.length > 0}
                     userName={userName}
                     focusedGroup={focusedGroup}
                     setFocusedGroup={setFocusedGroup}
@@ -533,6 +534,7 @@ export default function DashboardMainView({
                     setLocalUserMessages={setLocalUserMessages}
                     setActionLogs={setActionLogs}
                     isStandalone={isStandalone}
+                    hasRegisteredMachines={machineEntries.length > 0}
                     initialDataLoaded={initialDataLoaded}
                     userName={userName}
                     detectedIdes={detectedIdes}

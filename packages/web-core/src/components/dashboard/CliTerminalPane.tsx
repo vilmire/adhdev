@@ -6,6 +6,7 @@ import { CliTerminal } from '../CliTerminal';
 import type { CliTerminalHandle } from '../CliTerminal';
 import { useTransport } from '../../context/TransportContext';
 import { connectionManager } from '../../compat';
+import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import type { ActiveConversation } from './types';
 
 export interface CliTerminalPaneProps {
@@ -24,6 +25,7 @@ export default function CliTerminalPane({
     isSendingChat = false,
     isVisible = true,
 }: CliTerminalPaneProps) {
+    const { ides } = useBaseDaemons();
     const chatInputRef = useRef<HTMLInputElement>(null);
     const { sendCommand, sendData } = useTransport();
     const [draftInput, setDraftInput] = useState('');
@@ -40,6 +42,8 @@ export default function CliTerminalPane({
     const tabKey = activeConv.tabKey;
     const sessionId = activeConv.sessionId || '';
     const daemonRouteId = activeConv.daemonId || activeConv.ideId?.split(':')[0] || activeConv.ideId || '';
+    const daemonEntry = ides.find(entry => entry.id === daemonRouteId && entry.daemonMode);
+    const terminalSizingMode = daemonEntry?.terminalSizingMode === 'fit' ? 'fit' : 'measured';
     const MIN_TERMINAL_SCALE = 0.6;
     const MAX_TERMINAL_SCALE = 1.15;
     const getAutoTerminalScale = () => {
@@ -212,6 +216,10 @@ export default function CliTerminalPane({
         if (pendingLiveOutputRef.current && flushFrameRef.current === null) {
             flushFrameRef.current = requestAnimationFrame(flushPendingLiveOutput);
         }
+
+        requestAnimationFrame(() => {
+            terminalRef.current?.bumpResize();
+        });
     }, [isVisible]);
 
     useEffect(() => {
@@ -228,7 +236,7 @@ export default function CliTerminalPane({
             const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
             if (detail?.sessionId && detail.sessionId !== sessionId) return;
             if (!runtimeReady) return;
-            terminalRef.current?.fit();
+            terminalRef.current?.bumpResize();
         };
         window.addEventListener('adhdev:fit-cli-terminal', handleFit as EventListener);
         return () => {
@@ -276,16 +284,11 @@ export default function CliTerminalPane({
                         <CliTerminal
                             ref={terminalRef as any}
                             readOnly={!runtimeReady || !isVisible}
+                            sizingMode={terminalSizingMode}
                             onInput={(data) => {
                                 if (!runtimeReady) return;
                                 if (!sendData?.(daemonRouteId, { type: 'pty_input', targetSessionId: sessionId, data })) {
                                     sendCommand(daemonRouteId, 'pty_input', { targetSessionId: sessionId, data }).catch(console.error)
-                                }
-                            }}
-                            onResize={(cols, rows) => {
-                                if (!runtimeReady) return;
-                                if (!sendData?.(daemonRouteId, { type: 'pty_resize', targetSessionId: sessionId, cols, rows })) {
-                                    sendCommand(daemonRouteId, 'pty_resize', { targetSessionId: sessionId, cols, rows, force: true }).catch(() => { })
                                 }
                             }}
                         />

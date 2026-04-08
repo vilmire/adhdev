@@ -8,6 +8,7 @@ import type { DaemonData } from '../../types';
 import { formatIdeType } from '../../utils/daemon-utils';
 import { IconCandle, IconRefresh } from '../Icons';
 import { isAcpConv, isCliConv, type ActiveConversation } from './types';
+import { createPortal } from 'react-dom';
 
 export interface SavedSessionHistoryEntry {
     id: string;
@@ -64,7 +65,7 @@ export default function HistoryModal({
     const activeChatId = (ideEntry as any)?.activeChat?.id;
     const isSavedSessionMode = isCliConv(activeConv) && !isAcpConv(activeConv);
 
-    return (
+    const content = (
         <div className="fixed inset-0 z-[1300] flex items-center justify-center">
             <div onClick={onClose} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
             <div className="card fade-in relative w-[90%] max-w-[500px] max-h-[80vh] flex flex-col p-0 overflow-hidden shadow-[0_20px_40px_rgba(0,0,0,0.4)] rounded-[20px]">
@@ -198,4 +199,7 @@ export default function HistoryModal({
             </div>
         </div>
     );
+
+    if (typeof document === 'undefined') return content;
+    return createPortal(content, document.body);
 }

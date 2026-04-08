@@ -5,6 +5,7 @@ interface PaneGroupEmptyStateProps {
     conversationsCount: number
     isSplitMode: boolean
     isStandalone: boolean
+    hasRegisteredMachines?: boolean
     detectedIdes?: { type: string; name: string; running: boolean; id?: string }[]
     handleLaunchIde?: (ideType: string) => void
 }
@@ -13,9 +14,22 @@ export default function PaneGroupEmptyState({
     conversationsCount,
     isSplitMode,
     isStandalone,
+    hasRegisteredMachines = false,
     detectedIdes,
     handleLaunchIde,
 }: PaneGroupEmptyStateProps) {
+    const shouldShowInstallCta = !isStandalone && !hasRegisteredMachines
+    const title = isStandalone
+        ? 'Waiting for your daemon'
+        : hasRegisteredMachines
+            ? 'No conversations yet'
+            : 'Connect your first machine'
+    const description = isStandalone
+        ? 'Start the ADHDev daemon to connect this dashboard. Once it is online, you can open an IDE or launch CLI and ACP sessions.'
+        : hasRegisteredMachines
+            ? 'Your machines are connected. Open a machine, choose a workspace, then launch an IDE, CLI, or ACP session.'
+            : 'Install the ADHDev daemon and link your dashboard to start.'
+
     if (conversationsCount === 0 && !isSplitMode && detectedIdes && handleLaunchIde) {
         return (
             <div className="empty-dashboard flex-1 flex flex-col items-center justify-center -mt-8">
@@ -24,14 +38,12 @@ export default function PaneGroupEmptyState({
                 </div>
                 <div className="text-center max-w-lg">
                     <h2 className="font-bold text-2xl mb-2.5 tracking-tight text-text-primary">
-                        Waiting for your IDE
+                        {title}
                     </h2>
                     <p className="text-[14px] text-text-secondary mb-8 leading-relaxed max-w-md mx-auto">
-                        {isStandalone
-                            ? 'Open an IDE directly, or choose a workspace first before launching CLI or ACP sessions.'
-                            : 'Install the ADHDev daemon and link your dashboard to start.'}
+                        {description}
                     </p>
-                    {!isStandalone && (
+                    {shouldShowInstallCta && (
                         <InstallCommand />
                     )}
                     {isStandalone && detectedIdes.length > 0 && (
@@ -50,7 +62,7 @@ export default function PaneGroupEmptyState({
                             </div>
                         </div>
                     )}
-                    {!isStandalone && (
+                    {shouldShowInstallCta && (
                         <div className="mt-8">
                             <a
                                 href="https://docs.adhf.dev"

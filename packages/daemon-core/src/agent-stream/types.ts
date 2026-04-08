@@ -5,6 +5,8 @@
  * No vscode dependency — can be used as-is.
  */
 
+import type { ProviderEffect } from '../providers/contracts.js';
+
 /** Agent chat message */
 export interface AgentChatMessage {
     role: 'user' | 'assistant' | 'system';
@@ -36,6 +38,8 @@ export interface AgentStreamState {
     activeModal?: { message: string; buttons: string[] };
     /** Dynamic control current values (populated from readChat + provider controls schema) */
     controlValues?: Record<string, string | number | boolean>;
+    /** Provider-driven UI effects from readChat */
+    effects?: ProviderEffect[];
 }
 
 /** Agent webview target info */

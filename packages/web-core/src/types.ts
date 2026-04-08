@@ -141,6 +141,7 @@ export interface BaseDaemonData {
     workspaces?: WorkspaceEntry[];
     defaultWorkspaceId?: string | null;
     defaultWorkspacePath?: string | null;
+    terminalSizingMode?: 'measured' | 'fit';
     recentLaunches?: RecentLaunchEntry[];
     terminalBackend?: TerminalBackendStatus;
     aiAgents?: WebAiAgentInfo[];

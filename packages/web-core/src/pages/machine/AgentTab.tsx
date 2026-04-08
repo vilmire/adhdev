@@ -18,6 +18,8 @@ import { formatIdeType, getWorkspaceDisplayLabel } from '../../utils/daemon-util
 import { IconChat, IconMonitor, IconSearch, IconPlay, IconRefresh, IconX } from '../../components/Icons'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, ProviderInfo } from './types'
 import type { useMachineActions } from './useMachineActions'
+import HistoryModal, { type SavedSessionHistoryEntry } from '../../components/dashboard/HistoryModal'
+import type { ActiveConversation } from '../../components/dashboard/types'
 import { describeMuxOwner } from '../../utils/mux-ui'
 import CliViewModeToggle from '../../components/dashboard/CliViewModeToggle'
 import WorkspaceBrowseDialog from '../../components/machine/WorkspaceBrowseDialog'
@@ -29,21 +31,7 @@ import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLau
 
 type AgentCategory = 'ide' | 'cli' | 'acp'
 
-interface SavedSessionOption {
-    id: string
-    providerSessionId: string
-    providerType: string
-    providerName: string
-    kind: 'cli' | 'acp'
-    title: string
-    workspace?: string | null
-    currentModel?: string
-    preview?: string
-    messageCount: number
-    firstMessageAt: number
-    lastMessageAt: number
-    canResume: boolean
-}
+interface SavedSessionOption extends SavedSessionHistoryEntry {}
 
 // Union type for running entries
 type AgentEntry = IdeSessionEntry | CliSessionEntry | AcpSessionEntry
@@ -123,6 +111,8 @@ export default function AgentTab({
     const [savedSessions, setSavedSessions] = useState<SavedSessionOption[]>([])
     const [savedSessionsLoading, setSavedSessionsLoading] = useState(false)
     const [savedSessionsError, setSavedSessionsError] = useState('')
+    const [resumeHistoryOpen, setResumeHistoryOpen] = useState(false)
+    const [resumingSavedSessionId, setResumingSavedSessionId] = useState<string | null>(null)
     // Workspace selection: workspace-id | '__custom__' | '' (home)
     const [selectedWorkspace, setSelectedWorkspace] = useState(
         initialWorkspacePath ? '__custom__' : (initialWorkspaceId || machine.defaultWorkspaceId || ''),
@@ -234,6 +224,18 @@ export default function AgentTab({
         setCustomPath(workspacePath)
     }, [machine.workspaces])
 
+    const resolveSavedSessionLaunchTarget = useCallback((session: SavedSessionOption) => {
+        const workspacePath = String(session.workspace || '').trim()
+        if (!workspacePath) {
+            return { workspaceId: null, workspacePath: '', useHome: true }
+        }
+        const matchedWorkspace = (machine.workspaces || []).find(workspace => normalizePath(workspace.path) === normalizePath(workspacePath))
+        if (matchedWorkspace) {
+            return { workspaceId: matchedWorkspace.id, workspacePath: '', useHome: false }
+        }
+        return { workspaceId: null, workspacePath, useHome: false }
+    }, [machine.workspaces])
+
     const loadSavedSessions = useCallback(async (providerType: string) => {
         if (!sendDaemonCommand || !providerType || category !== 'cli') {
             setSavedSessions([])
@@ -263,6 +265,29 @@ export default function AgentTab({
             setSavedSessionsLoading(false)
         }
     }, [category, machineId, sendDaemonCommand])
+
+    const resumeHistoryConversation = useMemo<ActiveConversation | null>(() => {
+        if (category !== 'cli' || !selectedType) return null
+        const providerLabel = providerLabelMap.get(selectedType) || selectedType
+        return {
+            ideId: machineId,
+            daemonId: machineId,
+            providerSessionId: selectedResumeSessionId || undefined,
+            transport: 'pty',
+            mode: 'chat',
+            agentName: providerLabel,
+            agentType: selectedType,
+            status: 'idle',
+            title: providerLabel,
+            messages: [],
+            ideType: selectedType,
+            workspaceName: resolvedWorkspacePath,
+            displayPrimary: providerLabel,
+            displaySecondary: 'CLI',
+            streamSource: 'native',
+            tabKey: `machine:${machineId}:resume-history:${selectedType}`,
+        }
+    }, [category, machineId, providerLabelMap, resolvedWorkspacePath, selectedResumeSessionId, selectedType])
 
     const loadRecentArgs = useCallback((providerType: string) => {
         if (category === 'ide' || !providerType) {
@@ -708,54 +733,59 @@ export default function AgentTab({
                                     <div className="flex flex-col gap-1.5">
                                         <div className="flex items-center justify-between gap-2">
                                             <span className="text-[10px] font-semibold text-text-secondary uppercase">Resume from History</span>
-                                            <button
-                                                type="button"
-                                                className="btn btn-secondary btn-sm"
-                                                onClick={() => void loadSavedSessions(selectedType)}
-                                                disabled={!selectedType || savedSessionsLoading}
-                                            >
-                                                {savedSessionsLoading ? 'Loading…' : 'Refresh'}
-                                            </button>
-                                        </div>
-                                        <select
-                                            value={selectedResumeSessionId}
-                                            onChange={event => {
-                                                const nextId = event.target.value
-                                                setSelectedResumeSessionId(nextId)
-                                                if (!nextId) return
-                                                const session = savedSessions.find(item => item.providerSessionId === nextId)
-                                                if (!session || !session.canResume) return
-                                                applySavedSessionWorkspace(session)
-                                            }}
-                                            className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors w-full"
-                                        >
-                                            <option value="">Start a new CLI session</option>
-                                            {savedSessions.map(session => (
-                                                <option
-                                                    key={session.providerSessionId}
-                                                    value={session.providerSessionId}
-                                                    disabled={!session.canResume}
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-secondary btn-sm"
+                                                    onClick={() => void loadSavedSessions(selectedType)}
+                                                    disabled={!selectedType || savedSessionsLoading}
                                                 >
-                                                    {session.title || session.providerSessionId}
-                                                    {!session.canResume ? ' (workspace missing)' : ''}
-                                                </option>
-                                            ))}
-                                        </select>
-                                        {selectedResumeSessionId && (() => {
+                                                    {savedSessionsLoading ? 'Loading…' : 'Refresh'}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-primary btn-sm"
+                                                    onClick={() => {
+                                                        if (!selectedType) return
+                                                        setResumeHistoryOpen(true)
+                                                        void loadSavedSessions(selectedType)
+                                                    }}
+                                                    disabled={!selectedType}
+                                                >
+                                                    Open History
+                                                </button>
+                                            </div>
+                                        </div>
+                                        {selectedResumeSessionId ? (() => {
                                             const selectedSession = savedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
                                             if (!selectedSession) return null
                                             return (
-                                                <div className="text-[10px] text-text-muted break-all leading-relaxed">
-                                                    <div className="font-mono">{selectedSession.providerSessionId}</div>
-                                                    <div>{selectedSession.workspace || 'Workspace unknown'}</div>
+                                                <div className="rounded-md border border-[#ffffff1a] bg-bg-primary px-3 py-2 text-[10px] text-text-muted leading-relaxed">
+                                                    <div className="flex items-start justify-between gap-2">
+                                                        <div className="min-w-0">
+                                                            <div className="text-text-primary text-[11px] font-semibold truncate">
+                                                                {selectedSession.title || selectedSession.providerSessionId}
+                                                            </div>
+                                                            <div className="font-mono break-all">{selectedSession.providerSessionId}</div>
+                                                            <div>{selectedSession.workspace || 'Workspace unknown'}</div>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            className="btn btn-secondary btn-sm shrink-0"
+                                                            onClick={() => setSelectedResumeSessionId('')}
+                                                        >
+                                                            Clear
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             )
-                                        })()}
+                                        })() : (
+                                            <div className="text-[10px] text-text-muted">
+                                                Start a new CLI session, or choose one from history.
+                                            </div>
+                                        )}
                                         {savedSessionsError && (
                                             <div className="text-[10px] text-red-400">{savedSessionsError}</div>
-                                        )}
-                                        {!savedSessionsLoading && !savedSessionsError && savedSessions.length === 0 && (
-                                            <div className="text-[10px] text-text-muted">No saved sessions found for this provider.</div>
                                         )}
                                     </div>
                                 )}
@@ -1149,6 +1179,44 @@ export default function AgentTab({
                     onCancel={() => {
                         launchConfirmActionRef.current = null
                         setLaunchConfirm(null)
+                    }}
+                />
+            )}
+            {resumeHistoryOpen && resumeHistoryConversation && (
+                <HistoryModal
+                    activeConv={resumeHistoryConversation}
+                    ides={[]}
+                    isCreatingChat={false}
+                    isRefreshingHistory={savedSessionsLoading}
+                    savedSessions={savedSessions}
+                    isSavedSessionsLoading={savedSessionsLoading}
+                    isResumingSavedSessionId={resumingSavedSessionId}
+                    onClose={() => setResumeHistoryOpen(false)}
+                    onNewChat={() => {
+                        setSelectedResumeSessionId('')
+                        setResumeHistoryOpen(false)
+                    }}
+                    onSwitchSession={() => {}}
+                    onRefreshHistory={() => { void loadSavedSessions(selectedType) }}
+                    onResumeSavedSession={(session) => {
+                        if (!session.canResume) return
+                        if (resumingSavedSessionId) return
+                        const launchTarget = resolveSavedSessionLaunchTarget(session)
+                        setSelectedResumeSessionId(session.providerSessionId)
+                        applySavedSessionWorkspace(session)
+                        setResumingSavedSessionId(session.providerSessionId)
+                        setResumeHistoryOpen(false)
+                        void executeLaunch({
+                            type: session.providerType,
+                            workspaceId: launchTarget.workspaceId,
+                            workspacePath: launchTarget.workspacePath,
+                            useHome: launchTarget.useHome,
+                            resumeSessionId: session.providerSessionId,
+                        }).finally(() => {
+                            setResumingSavedSessionId(current => (
+                                current === session.providerSessionId ? null : current
+                            ))
+                        })
                     }}
                 />
             )}

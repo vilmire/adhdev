@@ -1,7 +1,8 @@
 /**
  * CliTerminal — browser terminal wrapper used by dashboard/machine views.
  *
- * Renderer is ghostty-web via @adhdev/terminal-render-web.
+ * Renderer is xterm.js via @adhdev/terminal-render-web (WebGL → Canvas → DOM fallback).
+ * Dashboard keeps terminal sizing in measured mode; xterm `fit()` is not exposed in GUI.
  */
 import {
     forwardRef,
@@ -104,7 +105,7 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
                 .then((mod) => {
                     if (!rendererLoadLogged) {
                         rendererLoadLogged = true;
-                        console.info('[CliTerminal] renderer module loaded: ghostty-web');
+                        console.info('[CliTerminal] renderer module loaded: terminal-render-web');
                     }
                     if (!cancelled) setLoadedTerminal(() => mod.GhosttyTerminalView as TerminalViewComponent);
                 })

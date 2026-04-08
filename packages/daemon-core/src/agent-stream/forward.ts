@@ -32,6 +32,8 @@ export function forwardAgentStreamsToIdeInstance(
             activeModal: stream.activeModal || null,
             model: stream.model || undefined,
             mode: stream.mode || undefined,
+            controlValues: stream.controlValues || undefined,
+            effects: stream.effects || undefined,
             sessionId: stream.sessionId || stream.instanceId || undefined,
             title: stream.title || stream.agentName || undefined,
             agentType: stream.agentType || undefined,

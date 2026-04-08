@@ -37,6 +37,7 @@ export interface ADHDevConfig {
     }>;
     disableUpstream?: boolean;
     providerDir?: string;
+    terminalSizingMode?: 'measured' | 'fit';
 }
 export declare function generateMachineId(): string;
 export declare function isStableMachineId(machineId?: string | null): boolean;

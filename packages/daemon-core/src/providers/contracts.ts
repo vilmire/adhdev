@@ -26,6 +26,10 @@ export interface ReadChatResult {
   inputContent?: string;
   model?: string;
   autoApprove?: string;
+  /** Explicit dynamic control values returned by the provider */
+  controlValues?: Record<string, string | number | boolean>;
+  /** Provider-driven UI effects derived from chat state */
+  effects?: ProviderEffect[];
 }
 
 import type { ChatMessage } from '../types.js';
@@ -44,6 +48,43 @@ export interface ModalInfo {
   buttons: string[];
   width?: number;
   height?: number;
+}
+
+export interface ProviderEffectMessage {
+  role?: 'system' | 'assistant' | 'user';
+  content: string | ContentBlock[];
+  kind?: string;
+  senderName?: string;
+}
+
+export interface ProviderEffectToast {
+  level?: 'info' | 'success' | 'warning';
+  message: string;
+}
+
+export type ProviderNotificationPreferenceKey = 'disconnect' | 'completion' | 'approval' | 'browser';
+export type ProviderNotificationChannel = 'bubble' | 'toast' | 'browser';
+
+export interface ProviderEffectNotification {
+  title?: string;
+  body: string;
+  level?: 'info' | 'success' | 'warning';
+  channels?: ProviderNotificationChannel[];
+  preferenceKey?: ProviderNotificationPreferenceKey;
+  bubbleContent?: string | ContentBlock[];
+}
+
+export interface ProviderEffect {
+  type: 'message' | 'toast' | 'notification';
+  /** Stable dedup key; falls back to a content hash when omitted */
+  id?: string;
+  /** Default immediate. turn_completed fires only on generating/waiting -> idle transitions. */
+  when?: 'immediate' | 'turn_completed';
+  /** Default true. False keeps the effect UI-only. */
+  persist?: boolean;
+  message?: ProviderEffectMessage;
+  toast?: ProviderEffectToast;
+  notification?: ProviderEffectNotification;
 }
 
 // ─── Rich Content Types (ACP Standard) ─────────────────
@@ -290,12 +331,34 @@ export interface ProviderModule {
   versionCommand?: string;
  /** Versions tested by provider maintainer (informational) */
   testedVersions?: string[];
- /** Per-OS process names — used by launch.ts to detect/kill IDE processes */
+  /** Per-OS process names — used by launch.ts to detect/kill IDE processes */
   processNames?: {
     darwin?: string;
     win32?: string[];
     linux?: string[];
     [key: string]: string | string[] | undefined;
+  };
+  /**
+   * IDE launch preferences.
+   * Lets each provider choose how its GUI app should be started per platform.
+   */
+  launch?: {
+    /**
+     * Preferred launch method by platform.
+     * - 'cli': use the IDE CLI wrapper/binary
+     * - 'app': use platform app launcher (e.g. `open -a` on macOS)
+     * - 'auto': let core choose a sensible default
+     */
+    prefer?: {
+      darwin?: 'auto' | 'cli' | 'app';
+      win32?: 'auto' | 'cli' | 'app';
+      linux?: 'auto' | 'cli' | 'app';
+      [key: string]: 'auto' | 'cli' | 'app' | undefined;
+    };
+    /**
+     * Override how long core waits for CDP to come up after launch.
+     */
+    cdpStartupTimeoutMs?: number;
   };
  /** Per-OS install paths — used by detector.ts to detect IDE installation */
   paths?: {
@@ -580,7 +643,7 @@ export interface ProviderSettingSchema extends ProviderSettingDef {
  * - 'slider'  — numeric range (temperature: 0–2)
  * - 'action'  — one-shot button (show usage, restart, clear context)
  */
-export type ProviderControlType = 'select' | 'toggle' | 'cycle' | 'slider' | 'action';
+export type ProviderControlType = 'select' | 'toggle' | 'cycle' | 'slider' | 'action' | 'display';
 
 /**
  * Where the control appears in the chat UI:

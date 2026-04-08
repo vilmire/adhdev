@@ -23,6 +23,7 @@ import * as path from 'path';
 import { detectIDEs } from './detection/ide-detector.js';
 import { IDEInfo } from './detection/ide-detector.js';
 import { ProviderLoader } from './providers/provider-loader.js';
+import type { ProviderModule } from './providers/contracts.js';
 
 // ─── Provider-based dynamic IDE infrastructure ────────────────
 // Reads cdpPorts, processNames from provider.js — only create provider.js to add new IDE
@@ -48,6 +49,26 @@ function getMacAppIdentifiers(): Record<string, string> {
 
 function getWinProcessNames(): Record<string, string[]> {
     return getProviderLoader().getWinProcessNames();
+}
+
+function getProviderMeta(ideId: string): ProviderModule | undefined {
+    return getProviderLoader().getMeta(ideId);
+}
+
+function getPreferredLaunchMethod(ideId: string, platform: NodeJS.Platform): 'auto' | 'cli' | 'app' {
+    const prefer = getProviderMeta(ideId)?.launch?.prefer;
+    const value = prefer?.[platform];
+    return value === 'cli' || value === 'app' || value === 'auto' ? value : 'auto';
+}
+
+function getCdpStartupTimeoutMs(ideId: string): number {
+    const value = getProviderMeta(ideId)?.launch?.cdpStartupTimeoutMs;
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 15000;
+    return Math.max(1000, Math.floor(value));
+}
+
+function escapeForAppleScript(value: string): string {
+    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 // ─── Helpers ────────────────────────────────────
@@ -110,11 +131,11 @@ export async function killIdeProcess(ideId: string): Promise<boolean> {
         if (plat === 'darwin' && appName) {
  // macOS: graceful quit via osascript
             try {
-                execSync(`osascript -e 'tell application "${appName}" to quit' 2>/dev/null`, {
+                execSync(`osascript -e 'tell application "${escapeForAppleScript(appName)}" to quit' 2>/dev/null`, {
                     timeout: 5000,
                 });
             } catch {
-                try { execSync(`pkill -f "${appName}" 2>/dev/null`); } catch { }
+                try { execSync(`pkill -x "${appName}" 2>/dev/null`, { timeout: 5000 }); } catch { }
             }
         } else if (plat === 'win32' && winProcesses) {
  // Windows: taskkill for each process name
@@ -142,7 +163,7 @@ export async function killIdeProcess(ideId: string): Promise<boolean> {
 
  // Force terminate retry
         if (plat === 'darwin' && appName) {
-            try { execSync(`pkill -9 -f "${appName}" 2>/dev/null`); } catch { }
+            try { execSync(`pkill -9 -x "${appName}" 2>/dev/null`, { timeout: 5000 }); } catch { }
         } else if (plat === 'win32' && winProcesses) {
             for (const proc of winProcesses) {
                 try { execSync(`taskkill /IM "${proc}" /F 2>nul`); } catch { }
@@ -165,8 +186,23 @@ export function isIdeRunning(ideId: string): boolean {
         if (plat === 'darwin') {
             const appName = getMacAppIdentifiers()[ideId];
             if (!appName) return false;
-            const result = execSync(`pgrep -f "${appName}" 2>/dev/null`, { encoding: 'utf-8' });
-            return result.trim().length > 0;
+            try {
+                const result = execSync(`pgrep -x "${appName}" 2>/dev/null`, {
+                    encoding: 'utf-8',
+                    timeout: 3000,
+                });
+                return result.trim().length > 0;
+            } catch {
+                const result = execSync(
+                    `osascript -e 'tell application "System Events" to count (every process whose name is "${escapeForAppleScript(appName)}")'`,
+                    {
+                        encoding: 'utf-8',
+                        timeout: 3000,
+                        stdio: ['pipe', 'pipe', 'pipe'],
+                    },
+                );
+                return Number.parseInt(result.trim() || '0', 10) > 0;
+            }
         } else if (plat === 'win32') {
             const winProcesses = getWinProcessNames()[ideId];
             if (!winProcesses) return false;
@@ -350,7 +386,8 @@ export async function launchWithCdp(options: LaunchOptions = {}): Promise<Launch
 
  // Wait for CDP to enable (max 15 seconds)
         let cdpReady = false;
-        for (let i = 0; i < 30; i++) {
+        const waitDeadline = Date.now() + getCdpStartupTimeoutMs(targetIde.id);
+        while (Date.now() < waitDeadline) {
             await new Promise(r => setTimeout(r, 500));
             if (await isCdpActive(port)) {
                 cdpReady = true;
@@ -378,18 +415,27 @@ export async function launchWithCdp(options: LaunchOptions = {}): Promise<Launch
 
 async function launchMacOS(ide: IDEInfo, port: number, workspace?: string, newWindow?: boolean): Promise<void> {
     const appName = getMacAppIdentifiers()[ide.id];
+    const preferredMethod = getPreferredLaunchMethod(ide.id, 'darwin');
 
     const args = ['--remote-debugging-port=' + port];
     if (newWindow) args.push('--new-window');
     if (workspace) args.push(workspace);
 
-    if (appName) {
- // 'open -a' execution (ensures GUI session)
-        const openArgs = ['-a', appName, '--args', ...args];
-        spawn('open', openArgs, { detached: true, stdio: 'ignore' }).unref();
-    } else if (ide.cliCommand) {
+    const canUseCli = !!ide.cliCommand;
+    const canUseAppLauncher = !!appName;
+    const useAppLauncher = preferredMethod === 'app'
+        ? canUseAppLauncher
+        : preferredMethod === 'cli'
+            ? false
+            : !canUseCli && canUseAppLauncher;
+
+    if (!useAppLauncher && ide.cliCommand) {
  // CLI based execute
         spawn(ide.cliCommand, args, { detached: true, stdio: 'ignore' }).unref();
+    } else if (appName) {
+ // Fallback to `open -a` when no CLI wrapper is available or the provider prefers it.
+        const openArgs = ['-a', appName, '--args', ...args];
+        spawn('open', openArgs, { detached: true, stdio: 'ignore' }).unref();
     } else {
         throw new Error(`No app identifier or CLI for ${ide.displayName}`);
     }

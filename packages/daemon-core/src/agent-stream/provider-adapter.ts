@@ -12,6 +12,7 @@ import type {
     AgentEvaluateFn,
 } from './types.js';
 import type { ProviderModule } from '../providers/contracts.js';
+import { extractProviderControlValues, normalizeProviderEffects } from '../providers/control-effects.js';
 
 export class ProviderStreamAdapter implements IAgentStreamAdapter {
     readonly agentType: string;
@@ -86,21 +87,10 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
                 mode: data.mode,
                 activeModal: data.activeModal,
             };
-            // Build controlValues from provider controls schema
-            if (this.provider.controls?.length) {
-                const cv: Record<string, string | number | boolean> = {};
-                for (const ctrl of this.provider.controls) {
-                    if (!ctrl.readFrom) continue; // action type — no value
-                    const val = data[ctrl.readFrom];
-                    if (val !== undefined && val !== null) {
-                        cv[ctrl.id] = typeof val === 'object' ? (val.name || val.id || String(val)) : val;
-                    }
-                }
-                // Also include model/mode as fallback controls
-                if (data.model && !cv['model']) cv['model'] = data.model;
-                if (data.mode && !cv['mode']) cv['mode'] = data.mode;
-                if (Object.keys(cv).length > 0) state.controlValues = cv;
-            }
+            const controlValues = extractProviderControlValues(this.provider.controls, data);
+            if (controlValues) state.controlValues = controlValues;
+            const effects = normalizeProviderEffects(data);
+            if (effects.length > 0) state.effects = effects;
             if (state.messages.length > 0) {
                 this.lastSuccessState = state;
             }

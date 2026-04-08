@@ -5,6 +5,8 @@ import { IconFolder, IconPlay, IconX } from '../Icons'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
 import { getDefaultBrowseStartPath, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
+import HistoryModal from './HistoryModal'
+import type { ActiveConversation } from './types'
 
 type LaunchKind = 'ide' | 'cli' | 'acp'
 
@@ -96,6 +98,8 @@ export default function DashboardNewSessionDialog({
     const [savedSessions, setSavedSessions] = useState<SavedSessionOption[]>([])
     const [savedSessionsLoading, setSavedSessionsLoading] = useState(false)
     const [savedSessionsError, setSavedSessionsError] = useState('')
+    const [resumeHistoryOpen, setResumeHistoryOpen] = useState(false)
+    const [resumingSavedSessionId, setResumingSavedSessionId] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState('')
     const [browseDialogOpen, setBrowseDialogOpen] = useState(false)
@@ -256,6 +260,42 @@ export default function DashboardNewSessionDialog({
         setWorkspaceChoice('__custom__')
         setCustomWorkspacePath(sessionWorkspace)
     }, [workspaceRows])
+
+    const resolveSavedSessionLaunchTarget = useCallback((session: SavedSessionOption) => {
+        const sessionWorkspace = String(session.workspace || '').trim()
+        if (!sessionWorkspace) {
+            return { workspaceId: null, workspacePath: null }
+        }
+        const matchedWorkspace = workspaceRows.find(workspace => normalizePath(workspace.path) === normalizePath(sessionWorkspace))
+        if (matchedWorkspace) {
+            return { workspaceId: matchedWorkspace.id, workspacePath: null }
+        }
+        return { workspaceId: null, workspacePath: sessionWorkspace }
+    }, [workspaceRows])
+
+    const resumeHistoryConversation = useMemo<ActiveConversation | null>(() => {
+        if (activeKind !== 'cli' || !selectedMachine || !selectedTarget) return null
+        const providerLabel = cliProviders.find(provider => provider.type === selectedTarget)?.displayName || selectedTarget
+        return {
+            ideId: selectedMachine.id,
+            daemonId: selectedMachine.id,
+            providerSessionId: selectedResumeSessionId || undefined,
+            transport: 'pty',
+            mode: 'chat',
+            agentName: providerLabel,
+            agentType: selectedTarget,
+            status: 'idle',
+            title: providerLabel,
+            messages: [],
+            ideType: selectedTarget,
+            workspaceName: resolvedWorkspacePath,
+            displayPrimary: providerLabel,
+            displaySecondary: 'CLI',
+            streamSource: 'native',
+            tabKey: `dashboard:new-session:resume-history:${selectedMachine.id}:${selectedTarget}`,
+            machineName: getMachineDisplayName(selectedMachine, { fallbackId: selectedMachine.id }),
+        }
+    }, [activeKind, cliProviders, resolvedWorkspacePath, selectedMachine, selectedResumeSessionId, selectedTarget])
 
     const openBrowseDialog = useCallback(() => {
         if (!selectedMachine) return
@@ -557,6 +597,18 @@ export default function DashboardNewSessionDialog({
                                     >
                                         {savedSessionsLoading ? 'Loading…' : 'Refresh'}
                                     </button>
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        disabled={busy || !selectedMachine || !selectedTarget}
+                                        onClick={() => {
+                                            if (!selectedMachine || !selectedTarget) return
+                                            setResumeHistoryOpen(true)
+                                            void loadSavedSessions(selectedMachine.id, selectedTarget)
+                                        }}
+                                    >
+                                        Open History
+                                    </button>
                                 </div>
                                 <div className="mt-2">
                                     <select
@@ -655,6 +707,53 @@ export default function DashboardNewSessionDialog({
                         setBrowseCurrentPath(path)
                         setWorkspaceChoice('__custom__')
                         setBrowseDialogOpen(false)
+                    }}
+                />
+            )}
+            {resumeHistoryOpen && resumeHistoryConversation && (
+                <HistoryModal
+                    activeConv={resumeHistoryConversation}
+                    ides={[]}
+                    isCreatingChat={false}
+                    isRefreshingHistory={savedSessionsLoading}
+                    savedSessions={savedSessions}
+                    isSavedSessionsLoading={savedSessionsLoading}
+                    isResumingSavedSessionId={resumingSavedSessionId}
+                    onClose={() => setResumeHistoryOpen(false)}
+                    onNewChat={() => {
+                        setSelectedResumeSessionId('')
+                        setResumeHistoryOpen(false)
+                    }}
+                    onSwitchSession={() => {}}
+                    onRefreshHistory={() => {
+                        if (!selectedMachine || !selectedTarget) return
+                        void loadSavedSessions(selectedMachine.id, selectedTarget)
+                    }}
+                    onResumeSavedSession={(session) => {
+                        if (!selectedMachine || !selectedTarget || resumingSavedSessionId || !session.canResume) return
+                        const launchTarget = resolveSavedSessionLaunchTarget(session)
+                        setSelectedResumeSessionId(session.providerSessionId)
+                        applySavedSessionWorkspace(session)
+                        setResumingSavedSessionId(session.providerSessionId)
+                        setResumeHistoryOpen(false)
+                        setBusy(true)
+                        setMessage('')
+                        void onLaunchProvider(selectedMachine.id, 'cli', selectedTarget, {
+                            workspaceId: launchTarget.workspaceId,
+                            workspacePath: launchTarget.workspacePath,
+                            resumeSessionId: session.providerSessionId,
+                        }).then((result) => {
+                            if (!result.ok) {
+                                setMessage(result.error || 'Could not resume session')
+                                return
+                            }
+                            onClose()
+                        }).finally(() => {
+                            setBusy(false)
+                            setResumingSavedSessionId(current => (
+                                current === session.providerSessionId ? null : current
+                            ))
+                        })
                     }}
                 />
             )}

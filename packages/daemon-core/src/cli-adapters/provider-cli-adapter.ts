@@ -35,7 +35,18 @@ export interface CliChatMessage {
     role: 'user' | 'assistant';
     content: string;
     timestamp?: number;
+    receivedAt?: number;
+    kind?: string;
+    id?: string;
+    index?: number;
+    meta?: Record<string, any>;
+    senderName?: string;
 }
+
+type SeedCliChatMessage = Omit<Partial<CliChatMessage>, 'role'> & {
+    role?: string;
+    content?: string;
+};
 
 export interface CliSessionStatus {
     status: 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting';
@@ -53,13 +64,37 @@ export interface CliScripts {
     /** Full PTY buffer → ReadChatResult (messages, status, activeModal) */
     parseOutput?: (input: CliScriptInput) => any;
     /** Lightweight status detection (high-frequency polling) → AgentStatus string */
-    detectStatus?: (input: { tail: string; screenText?: string; rawBuffer?: string }) => string | null;
+    detectStatus?: (input: CliStatusInput) => string | null;
     /** Parse approval modal from PTY output → ModalInfo | null */
-    parseApproval?: (input: { buffer: string; screenText?: string; rawBuffer?: string; tail: string }) => { message: string; buttons: string[] } | null;
+    parseApproval?: (input: CliApprovalInput) => { message: string; buttons: string[] } | null;
     /** Produce a cli-specific prompt from a dashboard action payload */
     resolveAction?: (data: any) => string;
     /** Custom scripts */
     [name: string]: ((input: any) => any) | undefined;
+}
+
+export interface CliScreenLine {
+    index: number;
+    fromTop: number;
+    fromBottom: number;
+    text: string;
+    trimmed: string;
+    isEmpty: boolean;
+}
+
+export interface CliScreenSnapshot {
+    text: string;
+    lineCount: number;
+    lines: CliScreenLine[];
+    nonEmptyLines: CliScreenLine[];
+    firstNonEmptyLineIndex: number;
+    lastNonEmptyLineIndex: number;
+    firstNonEmptyLine: CliScreenLine | null;
+    lastNonEmptyLine: CliScreenLine | null;
+    promptLineIndex: number;
+    promptLine: CliScreenLine | null;
+    linesAbovePrompt: CliScreenLine[];
+    linesBelowPrompt: CliScreenLine[];
 }
 
 export interface CliScriptInput {
@@ -67,9 +102,32 @@ export interface CliScriptInput {
     rawBuffer: string;       // Raw PTY output (with ANSI)
     recentBuffer: string;    // Recent 1000 chars (ANSI-stripped)
     screenText: string;      // Current visible screen snapshot
+    screen: CliScreenSnapshot;
+    bufferScreen: CliScreenSnapshot;
+    recentScreen: CliScreenSnapshot;
     messages: CliChatMessage[];  // Previously parsed messages
     partialResponse: string; // Current partial response being generated
     promptText?: string;     // Current turn prompt when available
+    settings?: Record<string, any>;
+    args?: Record<string, any>;
+}
+
+export interface CliStatusInput {
+    tail: string;
+    screenText?: string;
+    rawBuffer?: string;
+    screen: CliScreenSnapshot;
+    tailScreen: CliScreenSnapshot;
+}
+
+export interface CliApprovalInput {
+    buffer: string;
+    screenText?: string;
+    rawBuffer?: string;
+    tail: string;
+    screen: CliScreenSnapshot;
+    bufferScreen: CliScreenSnapshot;
+    tailScreen: CliScreenSnapshot;
 }
 
 interface TurnParseScope {
@@ -172,6 +230,61 @@ function stripTerminalNoise(str: string): string {
 
 function sanitizeTerminalText(str: string): string {
     return stripTerminalNoise(stripAnsi(str));
+}
+
+function splitCliScreenLines(text: string): string[] {
+    return String(text || '')
+        .replace(/\u0007/g, '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .split('\n')
+        .map((line) => line.replace(/\s+$/, ''));
+}
+
+function isPromptLikeCliLine(line: string): boolean {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) return false;
+    return /^[❯›>]\s*(?:$|\S.*)$/.test(trimmed);
+}
+
+function buildCliScreenSnapshot(text: string): CliScreenSnapshot {
+    const normalizedText = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const rawLines = splitCliScreenLines(normalizedText);
+    const lines = rawLines.map((line, index, arr) => {
+        const trimmed = String(line || '').trim();
+        return {
+            index,
+            fromTop: index,
+            fromBottom: arr.length - index - 1,
+            text: line,
+            trimmed,
+            isEmpty: trimmed.length === 0,
+        };
+    });
+    const nonEmptyLines = lines.filter((line) => !line.isEmpty);
+    const firstNonEmptyLine = nonEmptyLines[0] ?? null;
+    const lastNonEmptyLine = nonEmptyLines[nonEmptyLines.length - 1] ?? null;
+    let promptLineIndex = -1;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+        if (isPromptLikeCliLine(lines[i].text)) {
+            promptLineIndex = i;
+            break;
+        }
+    }
+    return {
+        text: normalizedText,
+        lineCount: lines.length,
+        lines,
+        nonEmptyLines,
+        firstNonEmptyLineIndex: firstNonEmptyLine?.index ?? -1,
+        lastNonEmptyLineIndex: lastNonEmptyLine?.index ?? -1,
+        firstNonEmptyLine,
+        lastNonEmptyLine,
+        promptLineIndex,
+        promptLine: promptLineIndex >= 0 ? lines[promptLineIndex] : null,
+        linesAbovePrompt: promptLineIndex >= 0 ? lines.slice(0, promptLineIndex) : [...lines],
+        linesBelowPrompt: promptLineIndex >= 0 ? lines.slice(promptLineIndex + 1) : [],
+    };
 }
 
 // Re-export sanitizeSpawnEnv under the local alias for backward compat within this file
@@ -412,7 +525,9 @@ export class ProviderCliAdapter implements CliAdapter {
     private ready = false;
     private startupBuffer = '';
     private startupParseGate = false;
+    private startupSettleTimer: NodeJS.Timeout | null = null;
     private spawnAt = 0;
+    private startupFirstOutputAt = 0;
 
  // PTY I/O
     private onPtyDataCallback: ((data: string) => void) | null = null;
@@ -459,8 +574,9 @@ export class ProviderCliAdapter implements CliAdapter {
  // Debug: status transition history
     private statusHistory: { status: string; at: number; trigger?: string }[] = [];
 
- // ─── CLI Scripts (script-based parsing) ───
+    // ─── CLI Scripts (script-based parsing) ───
     private cliScripts: CliScripts;
+    private runtimeSettings: Record<string, any> = {};
     /** Full accumulated ANSI-stripped PTY output */
     private accumulatedBuffer: string = '';
     /** Full accumulated raw PTY output (with ANSI) */
@@ -475,7 +591,8 @@ export class ProviderCliAdapter implements CliAdapter {
     private traceSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     private static readonly MAX_TRACE_ENTRIES = 250;
     private readonly providerResolutionMeta: Record<string, any>;
-    private static readonly IDLE_FINISH_CONFIRM_MS = 900;
+    private static readonly IDLE_FINISH_CONFIRM_MS = 2000;
+    private static readonly STATUS_ACTIVITY_HOLD_MS = 2000;
     private static readonly FINISH_RETRY_DELAY_MS = 300;
     private static readonly MAX_FINISH_RETRIES = 2;
 
@@ -484,7 +601,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.structuredMessages = [...this.committedMessages];
     }
 
-    private normalizeParsedMessages(parsedMessages: any[]): CliChatMessage[] {
+    private hydrateParsedMessages(parsedMessages: any[], scope?: TurnParseScope | null): any[] {
         const referenceMessages = [...this.committedMessages];
         const usedReferenceIndexes = new Set<number>();
         const now = Date.now();
@@ -533,12 +650,34 @@ export class ProviderCliAdapter implements CliAdapter {
                     ? message.timestamp
                     : undefined;
                 const referenceTimestamp = parsedTimestamp ?? findReferenceTimestamp(role, content, index);
+                const fallbackTimestamp = role === 'user'
+                    ? (scope?.startedAt || now)
+                    : (this.lastOutputAt || scope?.startedAt || now);
+                const timestamp = referenceTimestamp ?? fallbackTimestamp;
                 return {
+                    ...message,
                     role,
                     content,
-                    timestamp: referenceTimestamp ?? now,
+                    timestamp,
+                    receivedAt: typeof message.receivedAt === 'number' && Number.isFinite(message.receivedAt)
+                        ? message.receivedAt
+                        : timestamp,
                 };
             });
+    }
+
+    private normalizeParsedMessages(parsedMessages: any[], scope?: TurnParseScope | null): CliChatMessage[] {
+        return this.hydrateParsedMessages(parsedMessages, scope).map((message) => ({
+            role: message.role,
+            content: message.content,
+            timestamp: message.timestamp,
+            receivedAt: message.receivedAt,
+            kind: message.kind,
+            id: message.id,
+            index: message.index,
+            meta: message.meta,
+            senderName: message.senderName,
+        }));
     }
 
     private sliceFromOffset(text: string, start: number): string {
@@ -555,15 +694,21 @@ export class ProviderCliAdapter implements CliAdapter {
         const rawBuffer = scope
             ? (this.sliceFromOffset(this.accumulatedRawBuffer, scope.rawBufferStart) || this.accumulatedRawBuffer)
             : this.accumulatedRawBuffer;
+        const screenText = this.terminalScreen.getText();
+        const recentBuffer = buffer.slice(-1000) || this.recentOutputBuffer;
 
         return {
             buffer,
             rawBuffer,
-            recentBuffer: buffer.slice(-1000) || this.recentOutputBuffer,
-            screenText: this.terminalScreen.getText(),
+            recentBuffer,
+            screenText,
+            screen: buildCliScreenSnapshot(screenText),
+            bufferScreen: buildCliScreenSnapshot(buffer),
+            recentScreen: buildCliScreenSnapshot(recentBuffer),
             messages: [...baseMessages],
             partialResponse,
             promptText: scope?.prompt || '',
+            settings: { ...this.runtimeSettings },
         };
     }
 
@@ -746,6 +891,10 @@ export class ProviderCliAdapter implements CliAdapter {
         LOG.info('CLI', `[${this.cliType}] CLI scripts injected: [${scriptNames.join(', ')}]`);
     }
 
+    updateRuntimeSettings(settings: Record<string, any>): void {
+        this.runtimeSettings = { ...settings };
+    }
+
  // ─── Lifecycle ─────────────────────────────────
 
     setServerConn(serverConn: any): void {
@@ -917,6 +1066,8 @@ export class ProviderCliAdapter implements CliAdapter {
         this.spawnAt = Date.now();
         this.startupParseGate = true;
         this.startupBuffer = '';
+        this.startupFirstOutputAt = 0;
+        if (this.startupSettleTimer) { clearTimeout(this.startupSettleTimer); this.startupSettleTimer = null; }
         this.terminalScreen.reset(24, 80);
         this.pendingTerminalQueryTail = '';
         this.currentTurnScope = null;
@@ -927,7 +1078,8 @@ export class ProviderCliAdapter implements CliAdapter {
         this.recordTrace('ready', {
             runtimeMeta: this.getRuntimeMetadata(),
         });
-        this.setStatus('idle', 'pty_ready');
+        this.setStatus('starting', 'pty_ready');
+        this.scheduleStartupSettleCheck();
         this.onStatusChange?.();
     }
 
@@ -944,6 +1096,9 @@ export class ProviderCliAdapter implements CliAdapter {
             this.lastScreenSnapshot = normalizedScreenSnapshot;
             this.lastScreenChangeAt = now;
         }
+        if (this.startupParseGate && !this.startupFirstOutputAt && (cleanData.trim() || normalizedScreenSnapshot.trim())) {
+            this.startupFirstOutputAt = now;
+        }
         if (this.idleFinishCandidate && (rawData.length > 0 || cleanData.length > 0)) {
             this.clearIdleFinishCandidate('new_output');
         }
@@ -954,6 +1109,10 @@ export class ProviderCliAdapter implements CliAdapter {
             cleanPreview: this.summarizeTraceText(cleanData, 300),
             screenText: this.summarizeTraceText(this.terminalScreen.getText(), 1200),
         });
+
+        if (this.startupParseGate) {
+            this.scheduleStartupSettleCheck();
+        }
 
         if (this.isWaitingForResponse && cleanData) {
             this.responseBuffer = (this.responseBuffer + cleanData).slice(-8000);
@@ -973,34 +1132,59 @@ export class ProviderCliAdapter implements CliAdapter {
         this.accumulatedBuffer = (this.accumulatedBuffer + cleanData).slice(-ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
         this.accumulatedRawBuffer = (this.accumulatedRawBuffer + rawData).slice(-ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
 
-        // ─── Startup: detect CLI readiness (no auto-proceed)
-        if (this.startupParseGate) {
-            this.startupBuffer += cleanData;
-            const elapsed = Date.now() - this.spawnAt;
-            const screenText = this.terminalScreen.getText() || '';
-            const startupModal = this.getStartupConfirmationModal(screenText);
-            const scriptStatus = startupModal ? 'waiting_approval' : this.runDetectStatus(this.startupBuffer);
-            const hasInteractivePrompt = this.looksLikeVisibleIdlePrompt(screenText);
-            const startupStableMs = this.lastScreenChangeAt ? (now - this.lastScreenChangeAt) : 0;
-            const isReady = ((scriptStatus === 'idle' || scriptStatus === 'waiting_approval') && hasInteractivePrompt && startupStableMs >= 700)
-                || (!!startupModal && startupStableMs >= 700)
-                || elapsed > 8000
-                || this.startupBuffer.length > 12000;
-
-            if (isReady) {
-                this.startupParseGate = false;
-                this.ready = true;
-                LOG.info(
-                    'CLI',
-                    `[${this.cliType}] Startup ready (${elapsed}ms, scriptStatus=${scriptStatus}, prompt=${hasInteractivePrompt}, stableMs=${startupStableMs}) providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'} scriptsPath=${this.providerResolutionMeta.scriptsPath || '-'}`
-                );
-                this.onStatusChange?.();
-            }
-            // No early return — status detection runs from the start
-        }
+        this.resolveStartupState('output');
 
         // ─── Script-based status detection
         this.scheduleSettle();
+    }
+
+    private resolveStartupState(trigger: string): void {
+        if (!this.startupParseGate) return;
+
+        const now = Date.now();
+        const screenText = this.terminalScreen.getText() || '';
+        const normalizedScreen = normalizeScreenSnapshot(screenText);
+        const hasStartupOutput = !!this.startupFirstOutputAt || !!normalizedScreen.trim();
+        if (!hasStartupOutput) return;
+
+        const stableMs = this.lastScreenChangeAt ? (now - this.lastScreenChangeAt) : 0;
+        if (stableMs < 2000) return;
+
+        const startupModal = this.getStartupConfirmationModal(screenText);
+        this.startupParseGate = false;
+        if (this.startupSettleTimer) {
+            clearTimeout(this.startupSettleTimer);
+            this.startupSettleTimer = null;
+        }
+        this.ready = true;
+        if (startupModal) {
+            this.activeModal = startupModal;
+            this.setStatus('waiting_approval', `startup_ready:${trigger}`);
+        } else {
+            this.setStatus('idle', `startup_ready:${trigger}`);
+        }
+        LOG.info(
+            'CLI',
+            `[${this.cliType}] Startup settled (${trigger}, stableMs=${stableMs}, modal=${!!startupModal}) providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'} scriptsPath=${this.providerResolutionMeta.scriptsPath || '-'}`
+        );
+        this.onStatusChange?.();
+    }
+
+    private scheduleStartupSettleCheck(): void {
+        if (!this.startupParseGate) return;
+        if (this.startupSettleTimer) clearTimeout(this.startupSettleTimer);
+
+        const now = Date.now();
+        const stableMs = this.lastScreenChangeAt ? (now - this.lastScreenChangeAt) : 0;
+        const delayMs = Math.max(250, 2050 - stableMs);
+
+        this.startupSettleTimer = setTimeout(() => {
+            this.startupSettleTimer = null;
+            this.resolveStartupState('startup_timer');
+            if (this.startupParseGate && (Date.now() - this.spawnAt) < 10000) {
+                this.scheduleStartupSettleCheck();
+            }
+        }, delayMs);
     }
 
     private scheduleSettle(): void {
@@ -1088,13 +1272,18 @@ export class ProviderCliAdapter implements CliAdapter {
 
         const recentLines = allLines.slice(-12);
         const promptIndex = this.findLastMatchingLineIndex(recentLines, (line) => /^[❯›>]\s*$/.test(line));
-        const activeRegion = promptIndex >= 0 ? recentLines.slice(promptIndex + 1) : recentLines;
+        const activeRegion = promptIndex >= 0 ? recentLines.slice(Math.max(0, promptIndex - 2), promptIndex) : recentLines;
         if (activeRegion.length === 0) return false;
 
         return activeRegion.some((line) => this.looksLikeClaudeGeneratingLine(line));
     }
 
     private refineDetectedStatus(status: string | null, tail: string, screenText?: string): string | null {
+        if (this.startupParseGate) {
+            return this.getStartupConfirmationModal(screenText || '')
+                ? 'waiting_approval'
+                : 'starting';
+        }
         if (status === 'waiting_approval') return status;
         if (this.detectClaudeGeneratingOverride(screenText || '', tail)) return 'generating';
         return status;
@@ -1138,6 +1327,13 @@ export class ProviderCliAdapter implements CliAdapter {
         return quietForMs < 1200 || screenStableMs < 1200 || !commitResult.hasAssistant;
     }
 
+    private hasRecentInteractiveActivity(now: number): boolean {
+        const quietForMs = this.lastNonEmptyOutputAt ? (now - this.lastNonEmptyOutputAt) : Number.MAX_SAFE_INTEGER;
+        const screenStableMs = this.lastScreenChangeAt ? (now - this.lastScreenChangeAt) : Number.MAX_SAFE_INTEGER;
+        return quietForMs < ProviderCliAdapter.STATUS_ACTIVITY_HOLD_MS
+            || screenStableMs < ProviderCliAdapter.STATUS_ACTIVITY_HOLD_MS;
+    }
+
     private getStartupConfirmationModal(screenText: string): { message: string; buttons: string[] } | null {
         const text = sanitizeTerminalText(String(screenText || ''));
         if (!text.trim()) return null;
@@ -1175,6 +1371,7 @@ export class ProviderCliAdapter implements CliAdapter {
         let loggedWait = false;
 
         while (Date.now() - startedAt < maxWaitMs) {
+            this.resolveStartupState('interactive_wait');
             const screenText = this.terminalScreen.getText() || '';
             const hasPrompt = this.looksLikeVisibleIdlePrompt(screenText);
             const stableMs = this.lastScreenChangeAt ? (Date.now() - this.lastScreenChangeAt) : 0;
@@ -1184,7 +1381,6 @@ export class ProviderCliAdapter implements CliAdapter {
             const interactiveReady = hasPrompt
                 && stableMs >= 700
                 && recentlyOutput >= 350
-                && status !== 'starting'
                 && status !== 'generating';
 
             if (interactiveReady) {
@@ -1228,6 +1424,10 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         const tail = this.settledBuffer;
         const screenText = this.terminalScreen.getText() || '';
+        this.resolveStartupState('settled');
+        if (this.startupParseGate) {
+            return;
+        }
         const startupModal = this.getStartupConfirmationModal(screenText);
         const modal = this.runParseApproval(tail) || startupModal;
         const rawScriptStatus = this.runDetectStatus(tail);
@@ -1299,6 +1499,34 @@ export class ProviderCliAdapter implements CliAdapter {
             }
         } else {
             clearPendingScriptStatus();
+        }
+
+        const recentInteractiveActivity = this.hasRecentInteractiveActivity(now);
+        const shouldHoldGenerating =
+            scriptStatus === 'idle'
+            && this.isWaitingForResponse
+            && !modal
+            && recentInteractiveActivity;
+
+        if (shouldHoldGenerating) {
+            this.clearIdleFinishCandidate('hold_generating_recent_activity');
+            this.setStatus('generating', 'recent_activity_hold');
+            if (this.idleTimeout) clearTimeout(this.idleTimeout);
+            this.idleTimeout = setTimeout(() => {
+                if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
+                    this.finishResponse();
+                }
+            }, this.timeouts.generatingIdle);
+            this.recordTrace('hold_generating_recent_activity', {
+                scriptStatus,
+                recentInteractiveActivity,
+                lastNonEmptyOutputAt: this.lastNonEmptyOutputAt,
+                lastScreenChangeAt: this.lastScreenChangeAt,
+                holdMs: ProviderCliAdapter.STATUS_ACTIVITY_HOLD_MS,
+                ...this.buildTraceParseSnapshot(this.currentTurnScope, this.responseBuffer),
+            });
+            this.onStatusChange?.();
+            return;
         }
 
         if (scriptStatus === 'waiting_approval') {
@@ -1380,8 +1608,8 @@ export class ProviderCliAdapter implements CliAdapter {
                 const screenStableMs = this.lastScreenChangeAt ? (now - this.lastScreenChangeAt) : 0;
                 const hasAssistantTurn = !!lastParsedAssistant;
                 const assistantLength = lastParsedAssistant?.content?.length || 0;
-                const idleQuietThresholdMs = Math.max(220, this.timeouts.outputSettle);
-                const idleStableThresholdMs = Math.max(120, Math.min(220, this.timeouts.outputSettle));
+                const idleQuietThresholdMs = Math.max(2000, this.timeouts.outputSettle);
+                const idleStableThresholdMs = 2000;
                 const idleReady = visibleIdlePrompt
                     && !modal
                     && hasAssistantTurn
@@ -1496,7 +1724,7 @@ export class ProviderCliAdapter implements CliAdapter {
             this.currentTurnScope,
         );
         if (parsed && Array.isArray(parsed.messages)) {
-            this.committedMessages = this.normalizeParsedMessages(parsed.messages);
+            this.committedMessages = this.normalizeParsedMessages(parsed.messages, this.currentTurnScope);
             const promptForTrim = this.currentTurnScope?.prompt || getLastUserPromptText(this.committedMessages);
             if (promptForTrim) {
                 const lastAssistantForTrim = [...this.committedMessages].reverse().find((message) => message.role === 'assistant');
@@ -1540,6 +1768,8 @@ export class ProviderCliAdapter implements CliAdapter {
                 tail: text.slice(-500),
                 screenText,
                 rawBuffer: this.accumulatedRawBuffer,
+                screen: buildCliScreenSnapshot(screenText),
+                tailScreen: buildCliScreenSnapshot(text.slice(-500)),
             });
             return this.refineDetectedStatus(status, text, screenText || '');
         } catch (e: any) {
@@ -1551,11 +1781,16 @@ export class ProviderCliAdapter implements CliAdapter {
     private runParseApproval(tail: string): { message: string; buttons: string[] } | null {
         if (!this.cliScripts?.parseApproval) return null;
         try {
+            const screenText = this.terminalScreen.getText();
+            const buffer = screenText || this.accumulatedBuffer;
             return this.cliScripts.parseApproval({
-                buffer: this.terminalScreen.getText() || this.accumulatedBuffer,
-                screenText: this.terminalScreen.getText(),
+                buffer,
+                screenText,
                 rawBuffer: this.accumulatedRawBuffer,
                 tail,
+                screen: buildCliScreenSnapshot(screenText),
+                bufferScreen: buildCliScreenSnapshot(buffer),
+                tailScreen: buildCliScreenSnapshot(tail),
             });
         } catch (e: any) {
             LOG.warn('CLI', `[${this.cliType}] parseApproval error: ${e.message}`);
@@ -1574,6 +1809,28 @@ export class ProviderCliAdapter implements CliAdapter {
         };
     }
 
+    seedCommittedMessages(messages: SeedCliChatMessage[]): void {
+        const normalized = (Array.isArray(messages) ? messages : [])
+            .filter((message) => message && (message.role === 'user' || message.role === 'assistant'))
+            .map((message) => ({
+                role: message.role as 'user' | 'assistant',
+                content: typeof message.content === 'string' ? message.content : String(message.content || ''),
+                timestamp: typeof message.timestamp === 'number' && Number.isFinite(message.timestamp)
+                    ? message.timestamp
+                    : undefined,
+                receivedAt: typeof message.receivedAt === 'number' && Number.isFinite(message.receivedAt)
+                    ? message.receivedAt
+                    : undefined,
+                kind: typeof message.kind === 'string' ? message.kind : undefined,
+                id: typeof message.id === 'string' ? message.id : undefined,
+                index: typeof message.index === 'number' ? message.index : undefined,
+                meta: message.meta && typeof message.meta === 'object' ? { ...(message.meta as Record<string, any>) } : undefined,
+                senderName: typeof message.senderName === 'string' ? message.senderName : undefined,
+            }));
+        this.committedMessages = normalized;
+        this.syncMessageViews();
+    }
+
     /**
      * Script-based full parse — returns ReadChatResult.
      * Called by command handler / dashboard for rich content rendering.
@@ -1584,12 +1841,27 @@ export class ProviderCliAdapter implements CliAdapter {
             this.responseBuffer,
             this.currentTurnScope,
         );
+        const shouldPreferCommittedMessages =
+            !this.currentTurnScope
+            && this.currentStatus === 'idle'
+            && !this.activeModal;
         if (parsed && Array.isArray(parsed.messages)) {
+            const hydratedMessages = shouldPreferCommittedMessages
+                ? this.committedMessages.map((message, index) => ({
+                    ...message,
+                    id: (message as any).id || `msg_${index}`,
+                    index: typeof (message as any).index === 'number' ? (message as any).index : index,
+                    kind: (message as any).kind || 'standard',
+                    receivedAt: typeof (message as any).receivedAt === 'number'
+                        ? (message as any).receivedAt
+                        : message.timestamp,
+                }))
+                : this.hydrateParsedMessages(parsed.messages, this.currentTurnScope);
             return {
                 id: parsed.id || 'cli_session',
                 status: parsed.status || this.currentStatus,
                 title: parsed.title || this.cliName,
-                messages: parsed.messages,
+                messages: hydratedMessages,
                 activeModal: parsed.activeModal ?? this.activeModal,
                 providerSessionId: typeof parsed.providerSessionId === 'string' ? parsed.providerSessionId : undefined,
             };
@@ -1610,6 +1882,22 @@ export class ProviderCliAdapter implements CliAdapter {
             })),
             activeModal: this.activeModal,
         };
+    }
+
+    async invokeScript(scriptName: string, args?: Record<string, any>): Promise<any> {
+        const fn = this.cliScripts?.[scriptName];
+        if (typeof fn !== 'function') {
+            throw new Error(`CLI script '${scriptName}' not available`);
+        }
+        const input = this.buildParseInput(
+            this.committedMessages,
+            this.responseBuffer,
+            this.currentTurnScope,
+        );
+        return await Promise.resolve(fn({
+            ...input,
+            args: args && typeof args === 'object' ? { ...args } : {},
+        }));
     }
 
     private parseCurrentTranscript(baseMessages: CliChatMessage[], partialResponse: string, scope?: TurnParseScope | null): any {
@@ -1667,12 +1955,23 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.startupParseGate) {
             const deadline = Date.now() + 10000;
             while (this.startupParseGate && Date.now() < deadline) {
+                this.resolveStartupState('send_wait');
                 await new Promise(resolve => setTimeout(resolve, 50));
+            }
+        }
+        await this.waitForInteractivePrompt();
+        if (!this.ready) {
+            this.resolveStartupState('send_precheck');
+            const screenText = this.terminalScreen.getText() || '';
+            const hasPrompt = this.looksLikeVisibleIdlePrompt(screenText);
+            if (hasPrompt && this.currentStatus === 'idle') {
+                this.ready = true;
+                this.startupParseGate = false;
+                LOG.info('CLI', `[${this.cliType}] sendMessage recovered idle prompt readiness`);
             }
         }
         if (!this.ready) throw new Error(`${this.cliName} not ready (status: ${this.currentStatus})`);
         if (this.isWaitingForResponse) return;
-        await this.waitForInteractivePrompt();
         const blockingModal = this.activeModal || this.getStartupConfirmationModal(this.terminalScreen.getText() || '');
         if (blockingModal || this.currentStatus === 'waiting_approval') {
             throw new Error(`${this.cliName} is awaiting confirmation before it can accept a prompt`);
@@ -1714,8 +2013,6 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         this.responseEpoch += 1;
         this.responseSettleIgnoreUntil = Date.now() + submitDelayMs + this.timeouts.outputSettle + 250;
-        this.setStatus('generating', 'sendMessage');
-        this.onStatusChange?.();
         const startResponseTimeout = () => {
             if (this.responseTimeout) clearTimeout(this.responseTimeout);
             this.responseTimeout = setTimeout(() => {
@@ -1735,7 +2032,7 @@ export class ProviderCliAdapter implements CliAdapter {
             const retrySubmitIfStuck = (attempt: number) => {
                 this.submitRetryTimer = null;
                 if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
-                if (this.currentStatus !== 'generating') return;
+                if (this.currentStatus === 'waiting_approval') return;
                 if ((this.responseBuffer || '').trim()) return;
                 const screenText = this.terminalScreen.getText();
                 if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
@@ -1771,7 +2068,7 @@ export class ProviderCliAdapter implements CliAdapter {
             this.submitRetryTimer = setTimeout(() => {
                 this.submitRetryTimer = null;
                 if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
-                if (this.currentStatus !== 'generating') return;
+                if (this.currentStatus === 'waiting_approval') return;
                 if ((this.responseBuffer || '').trim()) return;
                 const screenText = this.terminalScreen.getText();
                 if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;

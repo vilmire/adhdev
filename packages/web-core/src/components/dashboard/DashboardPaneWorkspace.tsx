@@ -16,6 +16,7 @@ interface DashboardPaneWorkspaceProps {
     setLocalUserMessages: React.Dispatch<React.SetStateAction<Record<string, any[]>>>
     setActionLogs: React.Dispatch<React.SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
+    hasRegisteredMachines: boolean
     userName?: string
     focusedGroup: number
     setFocusedGroup: React.Dispatch<React.SetStateAction<number>>
@@ -46,6 +47,7 @@ export default function DashboardPaneWorkspace({
     setLocalUserMessages,
     setActionLogs,
     isStandalone,
+    hasRegisteredMachines,
     userName,
     focusedGroup,
     setFocusedGroup,
@@ -97,6 +99,7 @@ export default function DashboardPaneWorkspace({
                             setLocalUserMessages={setLocalUserMessages}
                             setActionLogs={setActionLogs}
                             isStandalone={isStandalone}
+                            hasRegisteredMachines={hasRegisteredMachines}
                             userName={userName}
                             groupIndex={groupIndex}
                             isFocused={isSplitMode && focusedGroup === groupIndex}

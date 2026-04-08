@@ -441,6 +441,7 @@ export class DaemonCommandHandler implements CommandHelpers {
             case 'set_ide_extension': return Stream.handleSetIdeExtension(this, args);
 
             // ─── Extension Model / Mode Control (stream-commands.ts) ──────────
+            case 'invoke_provider_script': return Stream.handleProviderScript(this, args);
             case 'list_extension_models': return Stream.handleExtensionScript(this, args, 'listModels');
             case 'set_extension_model': return Stream.handleExtensionScript(this, args, 'setModel');
             case 'list_extension_modes': return Stream.handleExtensionScript(this, args, 'listModes');

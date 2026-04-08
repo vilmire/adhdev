@@ -233,10 +233,10 @@ export default function DashboardMobileChatInbox({
                                         style={{ animationDuration: '3s' }}
                                     />
                                 }
-                                title={isStandalone ? 'Waiting for your IDE' : 'Connect your first machine'}
+                                title={isStandalone ? 'Waiting for your daemon' : 'Connect your first machine'}
                                 subtitle={
                                     isStandalone
-                                        ? 'Open an IDE directly, or choose a workspace before launching CLI or ACP sessions.'
+                                        ? 'Start the ADHDev daemon to connect this dashboard. Once it is online, you can open an IDE or launch CLI and ACP sessions.'
                                         : 'Install the ADHDev daemon on your machine, then it will show up here.'
                                 }
                             >

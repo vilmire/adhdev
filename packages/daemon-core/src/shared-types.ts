@@ -159,7 +159,7 @@ export interface AcpMode {
 /** Provider control schema transmitted to frontend */
 export interface ProviderControlSchema {
     id: string;
-    type: 'select' | 'toggle' | 'cycle' | 'slider' | 'action';
+    type: 'select' | 'toggle' | 'cycle' | 'slider' | 'action' | 'display';
     label: string;
     icon?: string;
     placement: 'bar' | 'header' | 'menu';
@@ -255,6 +255,7 @@ export interface StatusReportPayload {
     workspaces?: WorkspaceEntry[];
     defaultWorkspaceId?: string | null;
     defaultWorkspacePath?: string | null;
+    terminalSizingMode?: 'measured' | 'fit';
     recentLaunches?: RecentLaunchEntry[];
     terminalBackend?: TerminalBackendStatus;
     /** Available providers (present in StatusSnapshot, optional in raw payload) */

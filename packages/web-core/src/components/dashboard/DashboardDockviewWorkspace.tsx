@@ -46,6 +46,7 @@ interface DashboardDockviewWorkspaceProps {
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
     setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
+    hasRegisteredMachines: boolean
     initialDataLoaded: boolean
     userName?: string
     detectedIdes?: { type: string; name: string; running: boolean; id?: string }[]
@@ -81,6 +82,7 @@ interface DashboardDockviewContextValue {
     handleLaunchIde?: (ideType: string) => void
     ides: DaemonData[]
     isStandalone: boolean
+    hasRegisteredMachines: boolean
     liveSessionInboxState: Map<string, LiveSessionInboxState>
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
@@ -310,6 +312,7 @@ function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDo
                     conversationsCount={0}
                     isSplitMode={false}
                     isStandalone={ctx.isStandalone}
+                    hasRegisteredMachines={ctx.hasRegisteredMachines}
                     detectedIdes={ctx.detectedIdes}
                     handleLaunchIde={ctx.handleLaunchIde}
                 />
@@ -393,6 +396,7 @@ function DashboardDockviewWatermark() {
                 conversationsCount={0}
                 isSplitMode={false}
                 isStandalone={ctx.isStandalone}
+                hasRegisteredMachines={ctx.hasRegisteredMachines}
                 detectedIdes={ctx.detectedIdes}
                 handleLaunchIde={ctx.handleLaunchIde}
             />
@@ -541,6 +545,7 @@ export default function DashboardDockviewWorkspace({
     setLocalUserMessages,
     setActionLogs,
     isStandalone,
+    hasRegisteredMachines,
     initialDataLoaded,
     userName,
     detectedIdes,
@@ -757,6 +762,7 @@ export default function DashboardDockviewWorkspace({
         handleLaunchIde,
         ides,
         isStandalone,
+        hasRegisteredMachines,
         liveSessionInboxState,
         sendDaemonCommand,
         setActionLogs,
@@ -774,6 +780,7 @@ export default function DashboardDockviewWorkspace({
         handleLaunchIde,
         ides,
         isStandalone,
+        hasRegisteredMachines,
         liveSessionInboxState,
         sendDaemonCommand,
         setActionLogs,

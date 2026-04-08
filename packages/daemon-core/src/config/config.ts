@@ -78,6 +78,13 @@ export interface ADHDevConfig {
 
  // Optional custom provider directory for local development
     providerDir?: string;
+
+    /**
+     * Browser terminal sizing behavior for dashboard CLI panes.
+     * Default `measured` keeps terminal size daemon-authoritative.
+     * `fit` opt-in restores xterm fit-based sizing for advanced users.
+     */
+    terminalSizingMode?: 'measured' | 'fit';
 }
 
 const DEFAULT_CONFIG: ADHDevConfig = {
@@ -99,6 +106,7 @@ const DEFAULT_CONFIG: ADHDevConfig = {
     providerSettings: {},
     ideSettings: {},
     disableUpstream: false,
+    terminalSizingMode: 'measured',
 };
 
 const MACHINE_ID_PREFIX = 'mach_';
@@ -149,6 +157,7 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
         ideSettings: isPlainObject(parsed.ideSettings) ? parsed.ideSettings : {},
         disableUpstream: asBoolean(parsed.disableUpstream, DEFAULT_CONFIG.disableUpstream ?? false),
         providerDir: asOptionalString(parsed.providerDir),
+        terminalSizingMode: parsed.terminalSizingMode === 'fit' ? 'fit' : 'measured',
     };
 }
 

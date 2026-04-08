@@ -17,6 +17,8 @@ import { ExtensionProviderInstance } from './extension-provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
+import { extractProviderControlValues, normalizeProviderEffects } from './control-effects.js';
+import type { ChatMessage } from '../types.js';
 
 export class IdeProviderInstance implements ProviderInstance {
     readonly type: string;
@@ -37,6 +39,8 @@ export class IdeProviderInstance implements ProviderInstance {
     private monitor: StatusMonitor;
     private historyWriter: ChatHistoryWriter;
     private autoApproveBusy = false;
+    private appliedEffectKeys = new Set<string>();
+    private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
 
  // IDE meta
     private ideVersion: string = '';
@@ -115,7 +119,7 @@ export class IdeProviderInstance implements ProviderInstance {
                 id: this.cachedChat.id || 'active_session',
                 title: this.cachedChat.title || this.type,
                 status: this.cachedChat.status || this.currentStatus,
-                messages: this.cachedChat.messages || [],
+                messages: this.mergeConversationMessages(this.cachedChat.messages || []),
                 activeModal: this.cachedChat.activeModal || null,
                 inputContent: this.cachedChat.inputContent || '',
             } : null,
@@ -136,7 +140,7 @@ export class IdeProviderInstance implements ProviderInstance {
 
     onEvent(event: string, data?: any): void {
         if (event === 'cdp_connected') {
- // CDP connection done
+// CDP connection done
         } else if (event === 'cdp_disconnected') {
             this.cachedChat = null;
             this.currentStatus = 'idle';
@@ -158,6 +162,13 @@ export class IdeProviderInstance implements ProviderInstance {
             for (const ext of this.extensions.values()) {
                 ext.onEvent('stream_reset');
             }
+        } else if (event === 'provider_state_patch' && data && typeof data === 'object') {
+            const extType = typeof data.extensionType === 'string' ? data.extensionType : '';
+            if (extType && this.extensions.has(extType)) {
+                this.extensions.get(extType)!.onEvent('provider_state_patch', data);
+            } else {
+                this.applyProviderResponse(data, { phase: 'immediate' });
+            }
         }
     }
 
@@ -166,11 +177,22 @@ export class IdeProviderInstance implements ProviderInstance {
         this.lastAgentStatuses.clear();
         this.generatingStartedAt.clear();
         this.monitor.reset();
+        this.appliedEffectKeys.clear();
+        this.runtimeMessages = [];
  // Child Extension cleanup
         for (const ext of this.extensions.values()) {
             ext.dispose();
         }
         this.extensions.clear();
+    }
+
+    updateSettings(newSettings: Record<string, any>): void {
+        this.settings = { ...newSettings };
+        this.monitor.updateConfig({
+            approvalAlert: this.settings.approvalAlert !== false,
+            longGeneratingAlert: this.settings.longGeneratingAlert !== false,
+            longGeneratingThresholdSec: this.settings.longGeneratingThresholdSec || 180,
+        });
     }
 
  // ─── Extension manage ─────────────────────────────
@@ -298,6 +320,9 @@ export class IdeProviderInstance implements ProviderInstance {
                 }
             }
 
+            const controlValues = extractProviderControlValues(this.provider.controls, raw);
+            if (controlValues) raw.controlValues = controlValues;
+
             this.cachedChat = { ...raw, activeModal };
             this.detectAgentTransitions(raw, now);
 
@@ -382,6 +407,12 @@ export class IdeProviderInstance implements ProviderInstance {
             this.lastAgentStatuses.set(agentKey, agentStatus);
         }
 
+        this.applyProviderResponse(chatData, {
+            phase: (agentStatus === 'idle' && (lastStatus === 'generating' || lastStatus === 'waiting_approval'))
+                ? 'turn_completed'
+                : 'immediate',
+        });
+
  // Auto-approve: when waiting_approval + settings.autoApprove → auto-click approve via CDP
         if (agentStatus === 'waiting_approval' && this.settings.autoApprove && !this.autoApproveBusy) {
             this.autoApproveViaScript(chatData);
@@ -397,6 +428,154 @@ export class IdeProviderInstance implements ProviderInstance {
     private pushEvent(event: ProviderEvent): void {
         this.events.push(event);
         if (this.events.length > 50) this.events = this.events.slice(-50);
+    }
+
+    private applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void {
+        if (!data || typeof data !== 'object') return;
+
+        const controlValues = extractProviderControlValues(this.provider.controls, data);
+        if (controlValues) {
+            this.cachedChat = {
+                ...(this.cachedChat || {}),
+                ...data,
+                controlValues: { ...(this.cachedChat?.controlValues || {}), ...controlValues },
+            };
+        }
+
+        const effects = normalizeProviderEffects(data);
+        for (const effect of effects) {
+            const effectWhen = effect.when || 'immediate';
+            if (effectWhen === 'turn_completed' && options.phase !== 'turn_completed') continue;
+            if (effectWhen === 'immediate' && options.phase === 'turn_completed') continue;
+
+            const effectKey = this.getEffectDedupKey(effect);
+            if (this.appliedEffectKeys.has(effectKey)) continue;
+            this.appliedEffectKeys.add(effectKey);
+
+            if (effect.persist !== false) {
+                const persisted = this.getPersistedEffectContent(effect);
+                if (persisted) this.appendRuntimeSystemMessage(persisted, effectKey);
+            }
+
+            if (effect.type === 'message' && effect.message) {
+                this.pushEvent({
+                    event: 'provider:message',
+                    timestamp: Date.now(),
+                    content: typeof effect.message.content === 'string' ? effect.message.content : JSON.stringify(effect.message.content),
+                    role: effect.message.role || 'system',
+                    kind: effect.message.kind,
+                    senderName: effect.message.senderName,
+                });
+            } else if (effect.type === 'toast' && effect.toast) {
+                this.pushEvent({
+                    event: 'provider:toast',
+                    effectId: effect.id || effectKey,
+                    timestamp: Date.now(),
+                    message: effect.toast.message,
+                    level: effect.toast.level || 'info',
+                });
+            } else if (effect.type === 'notification' && effect.notification) {
+                this.pushEvent({
+                    event: 'provider:notification',
+                    effectId: effect.id || effectKey,
+                    timestamp: Date.now(),
+                    title: effect.notification.title,
+                    message: effect.notification.body,
+                    content: typeof effect.notification.bubbleContent === 'string'
+                        ? effect.notification.bubbleContent
+                        : effect.notification.body,
+                    level: effect.notification.level || 'info',
+                    channels: effect.notification.channels || ['toast'],
+                    preferenceKey: effect.notification.preferenceKey,
+                });
+            }
+        }
+    }
+
+    private appendRuntimeSystemMessage(content: string, dedupKey: string, receivedAt = Date.now()): void {
+        const normalizedContent = String(content || '').trim();
+        if (!normalizedContent) return;
+        if (this.runtimeMessages.some((entry) => entry.key === dedupKey)) return;
+        if (!this.cachedChat) {
+            this.cachedChat = {
+                id: 'active_session',
+                title: this.provider.name,
+                status: this.currentStatus,
+                messages: [],
+                activeModal: null,
+                inputContent: '',
+            };
+        }
+
+        this.runtimeMessages.push({
+            key: dedupKey,
+            message: {
+                role: 'system',
+                senderName: 'System',
+                content: normalizedContent,
+                receivedAt,
+                timestamp: receivedAt,
+            },
+        });
+        if (this.runtimeMessages.length > 50) this.runtimeMessages = this.runtimeMessages.slice(-50);
+
+        this.historyWriter.appendNewMessages(
+            this.type,
+            [{
+                role: 'system',
+                senderName: 'System',
+                content: normalizedContent,
+                kind: 'system',
+                receivedAt,
+                historyDedupKey: dedupKey,
+            }],
+            this.cachedChat?.title || this.provider.name,
+            this.instanceId,
+            this.cachedChat?.id || this.instanceId,
+        );
+    }
+
+    private mergeConversationMessages(messages: any[]): ChatMessage[] {
+        if (this.runtimeMessages.length === 0) return messages;
+        return [...messages, ...this.runtimeMessages.map((entry) => entry.message)]
+            .map((message, index) => ({ message, index }))
+            .sort((a, b) => {
+                const aTime = a.message.receivedAt || a.message.timestamp || 0;
+                const bTime = b.message.receivedAt || b.message.timestamp || 0;
+                if (aTime !== bTime) return aTime - bTime;
+                return a.index - b.index;
+            })
+            .map((entry) => entry.message);
+    }
+
+    private getPersistedEffectContent(effect: { type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string; bubbleContent?: unknown } }): string | null {
+        if (effect.type === 'message') {
+            return typeof effect.message?.content === 'string'
+                ? effect.message.content
+                : JSON.stringify(effect.message?.content || '');
+        }
+        if (effect.type === 'toast') {
+            return effect.toast?.message || null;
+        }
+        if (effect.type === 'notification') {
+            if (typeof effect.notification?.bubbleContent === 'string') return effect.notification.bubbleContent;
+            if (typeof effect.notification?.title === 'string' && effect.notification.title.trim()) {
+                return `${effect.notification.title}\n${effect.notification.body || ''}`.trim();
+            }
+            return effect.notification?.body || null;
+        }
+        return null;
+    }
+
+    private getEffectDedupKey(effect: { id?: string; type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string } }): string {
+        if (effect.id) return `provider_effect:${effect.id}`;
+        if (effect.type === 'message') {
+            return `provider_effect:message:${typeof effect.message?.content === 'string' ? effect.message.content : JSON.stringify(effect.message?.content || '')}`;
+        }
+        if (effect.type === 'notification') {
+            return `provider_effect:notification:${effect.notification?.title || ''}:${effect.notification?.body || ''}`;
+        }
+        return `provider_effect:toast:${effect.toast?.message || ''}`;
     }
 
     private flushEvents(): ProviderEvent[] {
