@@ -401,11 +401,13 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "validatedFlows": [
       "read_chat",
       "new_session",
-      "send_chat"
+      "send_chat",
+      "list_sessions",
+      "switch_session"
     ],
     "lastValidated": "2026-04-09",
-    "notes": "A fresh Codex extension chat could be created and answered correctly inside Antigravity. The current provider surface still does not expose dedicated list_sessions or switch_session scripts, and extension history listing remains empty in local validation.",
-    "evidence": "Manual local validation via standalone API on 2026-04-09",
+    "notes": "A fresh Codex extension chat could be created and answered correctly inside Antigravity. Dedicated list_sessions and switch_session scripts now work against the Recent tasks history view, but an actively generating task can still collapse history access back to the current chat. Promotion stays at Partial until history switching is reliable while idle and during normal operator use.",
+    "evidence": "Manual local validation via standalone API on 2026-04-09, including invoke_provider_script listSessions/switchSession against Antigravity Codex webview",
     "owner": "core",
     "source": "docs/site/data/provider-catalog.mjs"
   },
