@@ -48,7 +48,7 @@ interface DashboardNewSessionDialogProps {
         },
     ) => Promise<{ ok: boolean; error?: string }>
     onListSavedSessions: (machineId: string, providerType: string) => Promise<SavedSessionOption[]>
-    sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
+    sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     onOpenConversation: (conversation: ActiveConversation) => void
 }
 
