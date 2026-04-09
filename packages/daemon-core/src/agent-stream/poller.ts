@@ -19,6 +19,7 @@ import type { SessionRegistry } from '../sessions/registry.js';
 import { reconcileIdeRuntimeSessions } from '../sessions/reconcile.js';
 import { LOG } from '../logging/logger.js';
 import type { AgentStreamState } from './types.js';
+import { formatAutoApprovalMessage, pickApprovalButton } from '../providers/approval-utils.js';
 
 // ─── Types ───
 
@@ -189,7 +190,43 @@ export class AgentStreamPoller {
 
             try {
                 await agentStreamManager.syncActiveSession(cdp, parentSessionId);
-                const stream = await agentStreamManager.collectActiveSession(cdp, parentSessionId);
+                let stream = await agentStreamManager.collectActiveSession(cdp, parentSessionId);
+                if (stream?.status === 'waiting_approval') {
+                    const autoApprove = providerLoader.getSettings(stream.agentType).autoApprove !== false;
+                    if (autoApprove && resolvedActiveSessionId) {
+                        const provider = providerLoader.getMeta(stream.agentType);
+                        const { label: buttonLabel } = pickApprovalButton(stream.activeModal?.buttons, provider);
+                        const approved = await agentStreamManager.resolveSessionAction(cdp, resolvedActiveSessionId, 'approve', buttonLabel);
+                        if (approved) {
+                            const effectId = [
+                                'auto_approval',
+                                resolvedActiveSessionId,
+                                String(stream.messages?.length || 0),
+                                buttonLabel,
+                                String(stream.activeModal?.message || '').trim(),
+                            ].join(':');
+                            stream = {
+                                ...stream,
+                                status: 'streaming',
+                                activeModal: undefined,
+                                effects: [
+                                    ...(stream.effects || []),
+                                    {
+                                        type: 'message',
+                                        id: effectId,
+                                        persist: true,
+                                        message: {
+                                            role: 'system',
+                                            senderName: 'System',
+                                            kind: 'system',
+                                            content: formatAutoApprovalMessage(stream.activeModal?.message, buttonLabel),
+                                        },
+                                    },
+                                ],
+                            };
+                        }
+                    }
+                }
                 this.deps.onStreamsUpdated?.(ideType, stream ? [stream] : []);
             } catch { }
         }

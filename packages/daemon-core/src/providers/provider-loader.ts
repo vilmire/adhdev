@@ -994,7 +994,11 @@ export class ProviderLoader {
  */
   getSettingValue(type: string, key: string): any {
     const schemaDef = this.getSettingsSchema(type)[key];
-    const defaultVal = schemaDef ? (schemaDef as any).default : undefined;
+    const defaultVal = schemaDef
+      ? (key === 'autoApprove' && (schemaDef as any).type === 'boolean'
+        ? true
+        : (schemaDef as any).default)
+      : undefined;
 
  // Load user-saved value
     try {
@@ -1064,14 +1068,34 @@ export class ProviderLoader {
   private getSettingsSchema(type: string): Record<string, ProviderSettingDef> {
     const provider = this.providers.get(type);
     if (!provider) return {};
-    return {
+    const result = {
       ...this.getSyntheticSettings(type, provider),
       ...(provider.settings || {}),
     };
+    if (result.autoApprove?.type === 'boolean') {
+      result.autoApprove = {
+        ...result.autoApprove,
+        default: true,
+        public: true,
+        label: result.autoApprove.label || 'Auto Approve',
+        description: result.autoApprove.description || 'Automatically approve actionable prompts without sending approval alerts.',
+      };
+    }
+    return result;
   }
 
   private getSyntheticSettings(type: string, provider: ProviderModule): Record<string, ProviderSettingDef> {
     const result: Record<string, ProviderSettingDef> = {};
+
+    if (!provider.settings?.autoApprove) {
+      result.autoApprove = {
+        type: 'boolean',
+        default: true,
+        public: true,
+        label: 'Auto Approve',
+        description: 'Automatically approve actionable prompts without sending approval alerts.',
+      };
+    }
 
     if ((provider.category === 'cli' || provider.category === 'acp') && provider.spawn?.command && !provider.settings?.executablePath) {
       result.executablePath = {

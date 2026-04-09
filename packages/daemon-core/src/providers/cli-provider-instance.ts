@@ -20,6 +20,7 @@ import { ChatHistoryWriter, readChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
 import { extractProviderControlValues, normalizeProviderEffects } from './control-effects.js';
+import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
 
 let CachedDatabaseSync: (new (path: string, options?: { readOnly?: boolean }) => {
     prepare(sql: string): { get(...params: Array<string | number>): unknown };
@@ -249,6 +250,8 @@ export class CliProviderInstance implements ProviderInstance {
     getState(): ProviderState {
         const adapterStatus = this.adapter.getStatus();
         const parsedStatus = this.adapter.getScriptParsedStatus?.() || null;
+        const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
+        const visibleStatus = autoApproveActive ? 'generating' : adapterStatus.status;
         const parsedProviderSessionId = typeof parsedStatus?.providerSessionId === 'string'
             ? parsedStatus.providerSessionId.trim()
             : '';
@@ -297,14 +300,16 @@ export class CliProviderInstance implements ProviderInstance {
             type: this.type,
             name: this.provider.name,
             category: 'cli',
-            status: adapterStatus.status,
+            status: visibleStatus,
             mode: this.presentationMode,
             activeChat: {
                 id: `${this.type}_${this.workingDir}`,
                 title: parsedStatus?.title || dirName,
-                status: parsedStatus?.status || adapterStatus.status,
+                status: autoApproveActive && parsedStatus?.status === 'waiting_approval'
+                    ? 'generating'
+                    : (parsedStatus?.status || visibleStatus),
                 messages: mergedMessages,
-                activeModal: parsedStatus?.activeModal ?? adapterStatus.activeModal,
+                activeModal: autoApproveActive ? null : (parsedStatus?.activeModal ?? adapterStatus.activeModal),
                 inputContent: '',
             },
             workspace: this.workingDir,
@@ -375,7 +380,16 @@ export class CliProviderInstance implements ProviderInstance {
         const now = Date.now();
         const adapterStatus = this.adapter.getStatus();
         const parsedStatus = this.adapter.getScriptParsedStatus?.() || null;
-        const newStatus = adapterStatus.status;
+        const rawStatus = adapterStatus.status;
+        const autoApproveActive = rawStatus === 'waiting_approval' && this.shouldAutoApprove();
+        if (autoApproveActive) {
+            const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(adapterStatus.activeModal?.buttons, this.provider);
+            this.recordAutoApproval(adapterStatus.activeModal?.message, buttonLabel, now);
+            setTimeout(() => {
+                this.adapter.resolveModal(buttonIndex);
+            }, 0);
+        }
+        const newStatus = autoApproveActive ? 'generating' : rawStatus;
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
         const chatTitle = `${this.provider.name} · ${dirName}`;
         const partial = this.adapter.getPartialResponse();
@@ -602,6 +616,18 @@ export class CliProviderInstance implements ProviderInstance {
 
     get cliType(): string { return this.type; }
     get cliName(): string { return this.provider.name; }
+
+    private shouldAutoApprove(): boolean {
+        return this.settings.autoApprove !== false;
+    }
+
+    private recordAutoApproval(modalMessage?: string, buttonLabel?: string, now = Date.now()): void {
+        this.appendRuntimeSystemMessage(
+            formatAutoApprovalMessage(modalMessage, buttonLabel),
+            `auto_approval:${now}:${buttonLabel || 'approve'}`,
+            now,
+        );
+    }
 
     recordApprovalSelection(buttonText: string): void {
         const cleanButton = String(buttonText || '').trim();

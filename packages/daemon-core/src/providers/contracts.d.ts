@@ -253,6 +253,7 @@ export interface ProviderModule {
     };
     cleanOutput?: (raw: string, lastUserInput?: string) => string;
     resume?: ProviderResumeCapability;
+    approvalPositiveHints?: string[];
     scripts?: ProviderScripts;
     vscodeCommands?: {
         focusPanel?: string;

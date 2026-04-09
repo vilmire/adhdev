@@ -19,6 +19,7 @@ import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import { extractProviderControlValues, normalizeProviderEffects } from './control-effects.js';
 import type { ChatMessage } from '../types.js';
+import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
 
 export class IdeProviderInstance implements ProviderInstance {
     readonly type: string;
@@ -103,6 +104,11 @@ export class IdeProviderInstance implements ProviderInstance {
 
     getState(): ProviderState {
         const cdp = this.context?.cdp;
+        const autoApproveActive = (
+            this.currentStatus === 'waiting_approval'
+            || this.cachedChat?.status === 'waiting_approval'
+        ) && this.canAutoApprove();
+        const visibleStatus = (autoApproveActive ? 'generating' : this.currentStatus) as ProviderState['status'];
 
  // Collect extension status
         const extensionStates: ProviderState[] = [];
@@ -114,13 +120,15 @@ export class IdeProviderInstance implements ProviderInstance {
             type: this.type,
             name: this.provider.name,
             category: 'ide',
-            status: this.currentStatus as ProviderState['status'],
+            status: visibleStatus,
             activeChat: this.cachedChat ? {
                 id: this.cachedChat.id || 'active_session',
                 title: this.cachedChat.title || this.type,
-                status: this.cachedChat.status || this.currentStatus,
+                status: autoApproveActive && this.cachedChat.status === 'waiting_approval'
+                    ? 'generating'
+                    : (this.cachedChat.status || visibleStatus),
                 messages: this.mergeConversationMessages(this.cachedChat.messages || []),
-                activeModal: this.cachedChat.activeModal || null,
+                activeModal: autoApproveActive ? null : (this.cachedChat.activeModal || null),
                 inputContent: this.cachedChat.inputContent || '',
             } : null,
             workspace: this.workspace || null,
@@ -370,9 +378,11 @@ export class IdeProviderInstance implements ProviderInstance {
         if (!chatStatus) return;
 
         const agentKey = `${this.type}:native`;
-        const agentStatus = (chatStatus === 'streaming' || chatStatus === 'generating') ? 'generating'
+        const rawAgentStatus = (chatStatus === 'streaming' || chatStatus === 'generating') ? 'generating'
             : chatStatus === 'waiting_approval' ? 'waiting_approval'
             : 'idle';
+        const autoApproveActive = rawAgentStatus === 'waiting_approval' && this.canAutoApprove();
+        const agentStatus = autoApproveActive ? 'generating' : rawAgentStatus;
         const lastMsg = Array.isArray(chatData?.messages) && chatData.messages.length > 0
             ? chatData.messages[chatData.messages.length - 1]
             : null;
@@ -414,7 +424,7 @@ export class IdeProviderInstance implements ProviderInstance {
         });
 
  // Auto-approve: when waiting_approval + settings.autoApprove → auto-click approve via CDP
-        if (agentStatus === 'waiting_approval' && this.settings.autoApprove && !this.autoApproveBusy) {
+        if (rawAgentStatus === 'waiting_approval' && autoApproveActive && !this.autoApproveBusy) {
             this.autoApproveViaScript(chatData);
         }
 
@@ -590,6 +600,12 @@ export class IdeProviderInstance implements ProviderInstance {
         if (this.context) this.context.cdp = cdp;
     }
 
+    private canAutoApprove(): boolean {
+        return this.settings.autoApprove !== false
+            && typeof this.provider.scripts?.resolveAction === 'function'
+            && !!this.context?.cdp?.isConnected;
+    }
+
  // ─── Auto-approve via CDP script ────────────────────
 
     private async autoApproveViaScript(_chatData: any): Promise<void> {
@@ -605,20 +621,16 @@ export class IdeProviderInstance implements ProviderInstance {
 
         this.autoApproveBusy = true;
         try {
-            let targetButton = _chatData?.activeModal?.buttons?.[0] || 'Run';
-            const buttons = _chatData?.activeModal?.buttons || [];
-            
-            // Prefer buttons like 'Run', 'Approve', 'Yes'
-            for (const b of buttons) {
-                const lower = String(b).toLowerCase().replace(/[^\w]/g, '');
-                if (/^(run|approve|accept|yes|allow|always|proceed|save)/.test(lower)) {
-                    targetButton = b;
-                    break;
-                }
-            }
+            const { label: targetButton } = pickApprovalButton(_chatData?.activeModal?.buttons, this.provider);
 
             const script = scriptFn({ action: 'approve', button: targetButton, buttonText: targetButton });
             if (!script) return;
+            const now = Date.now();
+            this.appendRuntimeSystemMessage(
+                formatAutoApprovalMessage(_chatData?.activeModal?.message, targetButton),
+                `auto_approval:${now}:${targetButton}`,
+                now,
+            );
 
             LOG.info('IdeInstance', `[IdeInstance:${this.type}] autoApprove: executing resolveAction for "${targetButton}"`);
             let rawResult = await cdp.evaluate(script, 10000);
@@ -641,13 +653,6 @@ export class IdeProviderInstance implements ProviderInstance {
                     LOG.warn('IdeInstance', `[IdeInstance:${this.type}] autoApprove: cdp.send() not available for coordinate click`);
                 }
             }
-
-            this.pushEvent({
-                event: 'agent:auto_approved',
-                chatTitle: _chatData?.title || this.provider.name,
-                timestamp: Date.now(),
-                ideType: this.type,
-            });
         } catch (e: any) {
             LOG.warn('IdeInstance', `[IdeInstance:${this.type}] autoApprove error: ${e?.message}`);
         } finally {

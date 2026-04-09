@@ -600,8 +600,10 @@ export class AcpProviderInstance implements ProviderInstance {
                 }
 
                 // ─── Auto-approve: skip user confirmation ───
-                if (this.settings.autoApprove) {
-                    this.log.info(`[${this.type}] Auto-approving: ${tc.title || tc.toolCallId}`);
+                if (this.settings.autoApprove !== false) {
+                    const toolTitle = tc.title || tc.toolCallId || 'tool call';
+                    this.log.info(`[${this.type}] Auto-approving: ${toolTitle}`);
+                    this.appendSystemMessage(`Auto-approved: ${toolTitle}`);
                     const allowOption = params.options.find(o => o.kind === 'allow_once') || params.options.find(o => o.kind === 'allow_always');
                     if (allowOption) {
                         return { outcome: { outcome: 'selected', optionId: allowOption.optionId } };
@@ -1141,6 +1143,19 @@ export class AcpProviderInstance implements ProviderInstance {
     private pushEvent(event: ProviderEvent): void {
         this.events.push(event);
         if (this.events.length > 50) this.events = this.events.slice(-50);
+    }
+
+    private appendSystemMessage(content: string, timestamp = Date.now()): void {
+        const normalizedContent = String(content || '').trim();
+        if (!normalizedContent) return;
+        this.messages.push({
+            role: 'system',
+            content: normalizedContent,
+            timestamp,
+        });
+        if (this.messages.length > 200) {
+            this.messages = this.messages.slice(-100);
+        }
     }
 
     private flushEvents(): ProviderEvent[] {

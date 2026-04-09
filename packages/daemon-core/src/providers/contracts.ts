@@ -388,8 +388,10 @@ export interface ProviderModule {
   };
   cleanOutput?: (raw: string, lastUserInput?: string) => string;
   resume?: ProviderResumeCapability;
-  /** Session ID probe config — auto-discovers provider session ID from local SQLite DB */
+ /** Session ID probe config — auto-discovers provider session ID from local SQLite DB */
   sessionProbe?: ProviderSessionProbe;
+  /** Approval button priority hints used when auto-approve must pick a positive action */
+  approvalPositiveHints?: string[];
 
  // ─── CDP scripts (ide/extension category) ───
   scripts?: ProviderScripts;
