@@ -171,14 +171,27 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
             const raw = await evaluate(script, 10000) as string;
             const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
             if (data?.error) return [];
-            return Array.isArray(data) ? data : [];
+            if (Array.isArray(data)) return data;
+            if (Array.isArray(data?.sessions)) return data.sessions;
+            if (Array.isArray(data?.chats)) return data.chats;
+            return [];
         } catch { return []; }
     }
 
     async switchSession(evaluate: AgentEvaluateFn, sessionId: string): Promise<boolean> {
         const script = this.callScript('switchSession', sessionId);
         if (!script) return false;
-        return (await evaluate(script, 10000)) === true;
+        const raw = await evaluate(script, 10000);
+        const data = this.parseMaybeJson(raw);
+        if (data === true) return true;
+        if (typeof data === 'string') {
+            const normalized = data.trim().toLowerCase();
+            return normalized === 'true' || normalized === 'ok' || normalized === 'switched' || normalized === 'success';
+        }
+        if (data && typeof data === 'object') {
+            return data.switched === true || data.success === true || data.ok === true;
+        }
+        return false;
     }
 
     async focusEditor(evaluate: AgentEvaluateFn): Promise<void> {

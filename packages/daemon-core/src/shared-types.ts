@@ -136,6 +136,8 @@ export interface AvailableProviderInfo {
     category: 'ide' | 'extension' | 'cli' | 'acp';
     displayName: string;
     icon: string;
+    installed?: boolean;
+    detectedPath?: string | null;
 }
 
 /** ACP config option (model/mode/thought_level selection) */

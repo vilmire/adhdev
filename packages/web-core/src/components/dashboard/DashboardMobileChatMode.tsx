@@ -384,12 +384,13 @@ export default function DashboardMobileChatMode({
             displayName?: string
             icon?: string
             category?: string
+            installed?: boolean
         }>,
         [selectedMachineEntry],
     )
     const selectedMachineCliProviders = useMemo(
         () => selectedMachineProviders
-            .filter(provider => provider.category === 'cli')
+            .filter(provider => provider.category === 'cli' && provider.installed !== false)
             .map(provider => ({
                 type: provider.type,
                 displayName: provider.displayName || provider.type,
@@ -399,7 +400,7 @@ export default function DashboardMobileChatMode({
     )
     const selectedMachineAcpProviders = useMemo(
         () => selectedMachineProviders
-            .filter(provider => provider.category === 'acp')
+            .filter(provider => provider.category === 'acp' && provider.installed !== false)
             .map(provider => ({
                 type: provider.type,
                 displayName: provider.displayName || provider.type,

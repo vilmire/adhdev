@@ -94,7 +94,10 @@ export default function AgentTab({
     const isIde = category === 'ide'
     const isAcp = category === 'acp'
     const categoryProviders = useMemo(
-        () => providers.filter(provider => provider.category === category),
+        () => providers.filter(provider =>
+            provider.category === category
+            && (category === 'ide' || provider.installed !== false),
+        ),
         [category, providers],
     )
     const providerLabelMap = useMemo(
@@ -160,6 +163,14 @@ export default function AgentTab({
             setCustomPath('')
         }
     }, [initialWorkspaceId, initialWorkspacePath])
+
+    useEffect(() => {
+        if (isIde) return
+        if (!selectedType) return
+        if (categoryProviders.some(provider => provider.type === selectedType)) return
+        setSelectedType('')
+        setSelectedResumeSessionId('')
+    }, [categoryProviders, isIde, selectedType])
 
     // Resolve the actual workspace path from selection
     const resolvedWorkspacePath = (() => {
@@ -712,7 +723,10 @@ export default function AgentTab({
                             )
                         }) : (
                             <div className="col-span-full py-6 text-center bg-bg-primary/50 border border-dashed border-[#ffffff1a] rounded-xl text-xs text-text-muted">
-                                No {category.toUpperCase()} providers available
+                                No usable {category.toUpperCase()} providers available.
+                                <div className="mt-1 text-[11px] text-text-muted">
+                                    Set a custom executable path in Providers if the binary is installed outside the default location.
+                                </div>
                             </div>
                         )
                     )}

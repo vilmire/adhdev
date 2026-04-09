@@ -23,8 +23,6 @@ export interface NotificationPrefs {
     completionAlert: boolean
     /** Approval alert (agent waiting) — used by useBrowserNotifications */
     approvalAlert: boolean
-    /** Whether to show a system chat bubble when an agent completes a task */
-    chatTaskCompletionBubble: boolean
 }
 
 const DEFAULT_PREFS: NotificationPrefs = {
@@ -33,7 +31,6 @@ const DEFAULT_PREFS: NotificationPrefs = {
     browserNotifications: true,
     completionAlert: true,
     approvalAlert: true,
-    chatTaskCompletionBubble: false,
 }
 
 function loadPrefs(): NotificationPrefs {

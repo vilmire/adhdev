@@ -87,8 +87,23 @@ export type { IdeSessionSummary, CliSessionSummary, AcpSessionSummary } from './
 export { statusPayloadToEntries } from './utils/status-transform'
 export type { StatusTransformOptions } from './utils/status-transform'
 export { parseDaemonRouteId, applyRouteTarget, extractDaemonId, collectDaemonIds } from './utils/route-id'
-export { SUPPORTED_IDES, SUPPORTED_CLI_AGENTS, SUPPORTED_EXTENSIONS, SUPPORTED_ACP_COUNT } from './constants/supported'
-export type { SupportedEntry } from './constants/supported'
+export {
+    BUILTIN_IDES,
+    BUILTIN_CLI_AGENTS,
+    BUILTIN_EXTENSIONS,
+    BUILTIN_ACP_COUNT,
+    DEFAULT_PROVIDER_VERIFICATION,
+    PROVIDER_VERIFICATION,
+    PROVIDER_VERIFICATION_STATUS,
+    VERIFICATION_CANDIDATES,
+    getProviderVerification,
+    getProviderVerificationStatus,
+    SUPPORTED_IDES,
+    SUPPORTED_CLI_AGENTS,
+    SUPPORTED_EXTENSIONS,
+    SUPPORTED_ACP_COUNT,
+} from './constants/supported'
+export type { SupportedEntry, ProviderVerification, ProviderVerificationStatus, VerificationCandidate } from './constants/supported'
 
 // ── Managers ──
 export { eventManager } from './managers/EventManager'

@@ -10,6 +10,8 @@
 import { execSync } from 'child_process';
 import { existsSync } from 'fs';
 import { platform, homedir } from 'os';
+import * as path from 'path';
+import type { ProviderLoader } from '../providers/provider-loader.js';
 
 // ─── Types ──────────────────────────────────────
 
@@ -62,9 +64,18 @@ function getMergedDefinitions(): IDEDefinition[] {
 }
 
 function findCliCommand(command: string): string | null {
+    const trimmed = String(command || '').trim();
+    if (!trimmed) return null;
+    if (path.isAbsolute(trimmed) || trimmed.includes('/') || trimmed.includes('\\') || trimmed.startsWith('~')) {
+        const candidate = trimmed.startsWith('~')
+            ? path.join(homedir(), trimmed.slice(1))
+            : trimmed;
+        const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(candidate);
+        return existsSync(resolved) ? resolved : null;
+    }
     try {
         const result = execSync(
-            platform() === 'win32' ? `where ${command}` : `which ${command}`,
+            platform() === 'win32' ? `where ${trimmed}` : `which ${trimmed}`,
             { encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }
         ).trim();
         return result.split('\n')[0] || null;
@@ -89,27 +100,29 @@ function getIdeVersion(cliCommand: string): string | null {
 function checkPathExists(paths: string[]): string | null {
     const home = homedir();
     for (const p of paths) {
-        if (p.includes('*')) {
+        const normalized = p.startsWith('~')
+            ? path.join(home, p.slice(1))
+            : p;
+        if (normalized.includes('*')) {
             // Wildcard expansion: replace `*` with the current user's home folder name
             // e.g. "C:\Users\*\AppData\..." → "C:\Users\vilmi\AppData\..."
             const username = home.split(/[\\/]/).pop() || '';
-            const resolved = p.replace('*', username);
+            const resolved = normalized.replace('*', username);
             if (existsSync(resolved)) return resolved;
         } else {
-            if (existsSync(p)) return p;
+            if (existsSync(normalized)) return normalized;
         }
     }
     return null;
 }
 
-export async function detectIDEs(): Promise<IDEInfo[]> {
+export async function detectIDEs(providerLoader?: ProviderLoader): Promise<IDEInfo[]> {
     const os = platform() as 'darwin' | 'win32' | 'linux';
     const results: IDEInfo[] = [];
 
     for (const def of getMergedDefinitions()) {
-        const cliPath = findCliCommand(def.cli);
-        const appPath = checkPathExists(def.paths[os] || []);
-        const installed = !!(cliPath || appPath);
+        const cliPath = findCliCommand(providerLoader?.getIdeCliCommand(def.id, def.cli) || def.cli);
+        const appPath = checkPathExists(providerLoader?.getIdePathCandidates(def.id, def.paths[os] || []) || []);
 
         let resolvedCli = cliPath;
 
@@ -136,6 +149,9 @@ export async function detectIDEs(): Promise<IDEInfo[]> {
             }
         }
 
+        const installed = os === 'darwin'
+            ? !!(resolvedCli || appPath)
+            : !!resolvedCli;
         const version = resolvedCli ? getIdeVersion(resolvedCli) : null;
 
         results.push({

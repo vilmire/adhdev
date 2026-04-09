@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DaemonData } from '../../types'
 import { compareMachineEntries, getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
-import { IconFolder, IconPlay, IconX } from '../Icons'
+import { IconFolder, IconPlay, IconServer, IconX } from '../Icons'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
 import { getDefaultBrowseStartPath, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
 import HistoryModal from './HistoryModal'
 import type { ActiveConversation } from './types'
+import DashboardMobileSessionHostSheet from './DashboardMobileSessionHostSheet'
 
 type LaunchKind = 'ide' | 'cli' | 'acp'
 
@@ -28,6 +29,8 @@ interface SavedSessionOption {
 
 interface DashboardNewSessionDialogProps {
     machines: DaemonData[]
+    conversations: ActiveConversation[]
+    ides: DaemonData[]
     onClose: () => void
     onBrowseDirectory: (machineId: string, path: string) => Promise<BrowseDirectoryResult>
     onSaveWorkspace: (machineId: string, path: string) => Promise<{ ok: boolean; error?: string }>
@@ -45,15 +48,17 @@ interface DashboardNewSessionDialogProps {
         },
     ) => Promise<{ ok: boolean; error?: string }>
     onListSavedSessions: (machineId: string, providerType: string) => Promise<SavedSessionOption[]>
+    sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
+    onOpenConversation: (conversation: ActiveConversation) => void
 }
 
 function getDefaultLaunchKind(machine: DaemonData | undefined) {
     if (!machine) return null
-    const hasIde = (machine.detectedIdes?.length || 0) > 0
     const providers = machine.availableProviders || []
+    if (providers.some(provider => provider.category === 'cli' && provider.installed !== false)) return 'cli' as const
+    const hasIde = (machine.detectedIdes?.length || 0) > 0
     if (hasIde) return 'ide' as const
-    if (providers.some(provider => provider.category === 'cli')) return 'cli' as const
-    if (providers.some(provider => provider.category === 'acp')) return 'acp' as const
+    if (providers.some(provider => provider.category === 'acp' && provider.installed !== false)) return 'acp' as const
     return null
 }
 
@@ -67,12 +72,16 @@ function normalizePath(path: string | null | undefined) {
 
 export default function DashboardNewSessionDialog({
     machines,
+    conversations,
+    ides,
     onClose,
     onBrowseDirectory,
     onSaveWorkspace,
     onLaunchIde,
     onLaunchProvider,
     onListSavedSessions,
+    sendDaemonCommand,
+    onOpenConversation,
 }: DashboardNewSessionDialogProps) {
     const sortedMachines = useMemo(
         () => [...machines].sort(compareMachineEntries),
@@ -99,6 +108,7 @@ export default function DashboardNewSessionDialog({
     const [savedSessionsLoading, setSavedSessionsLoading] = useState(false)
     const [savedSessionsError, setSavedSessionsError] = useState('')
     const [resumeHistoryOpen, setResumeHistoryOpen] = useState(false)
+    const [sessionHostOpen, setSessionHostOpen] = useState(false)
     const [resumingSavedSessionId, setResumingSavedSessionId] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState('')
@@ -118,11 +128,11 @@ export default function DashboardNewSessionDialog({
     }, [selectedMachineId, sortedMachines])
 
     const cliProviders = useMemo(
-        () => ((selectedMachine?.availableProviders || []).filter(provider => provider.category === 'cli')),
+        () => ((selectedMachine?.availableProviders || []).filter(provider => provider.category === 'cli' && provider.installed !== false)),
         [selectedMachine],
     )
     const acpProviders = useMemo(
-        () => ((selectedMachine?.availableProviders || []).filter(provider => provider.category === 'acp')),
+        () => ((selectedMachine?.availableProviders || []).filter(provider => provider.category === 'acp' && provider.installed !== false)),
         [selectedMachine],
     )
     const ideTargets = useMemo(
@@ -440,6 +450,28 @@ export default function DashboardNewSessionDialog({
                             </select>
                         </div>
 
+                        {activeKind === 'cli' && (
+                            <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Session Host</div>
+                                        <div className="text-xs text-text-secondary mt-1">
+                                            Inspect hosted runtimes first, then resume or restart without leaving this flow.
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        disabled={busy || !selectedMachine}
+                                        onClick={() => setSessionHostOpen(true)}
+                                    >
+                                        <IconServer size={14} />
+                                        Open
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
                             <div className="flex items-center justify-between gap-3 mb-2">
                                 <div>
@@ -509,8 +541,8 @@ export default function DashboardNewSessionDialog({
                             <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-2">Category</div>
                             <div className="flex flex-wrap gap-2">
                                 {([
-                                    { id: 'ide', label: 'IDE', enabled: ideTargets.length > 0 },
                                     { id: 'cli', label: 'CLI', enabled: cliProviders.length > 0 },
+                                    { id: 'ide', label: 'IDE', enabled: ideTargets.length > 0 },
                                     { id: 'acp', label: 'ACP', enabled: acpProviders.length > 0 },
                                 ] as const).map(kind => (
                                     <button
@@ -544,7 +576,9 @@ export default function DashboardNewSessionDialog({
                                     </button>
                                 ))}
                                 {providerTargets.length === 0 && (
-                                    <div className="text-sm text-text-muted">Nothing available for this category on the selected machine.</div>
+                                    <div className="text-sm text-text-muted">
+                                        Nothing usable for this category on the selected machine. Set a custom executable path in Providers if the binary lives outside the default location.
+                                    </div>
                                 )}
                             </div>
                         </div>
@@ -586,29 +620,31 @@ export default function DashboardNewSessionDialog({
                                         <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Resume from history</div>
                                         <div className="text-xs text-text-secondary mt-1">Pick a saved CLI session, then launch with optional args.</div>
                                     </div>
-                                    <button
-                                        type="button"
-                                        className="btn btn-secondary btn-sm"
-                                        disabled={busy || !selectedMachine || !selectedTarget || savedSessionsLoading}
-                                        onClick={() => {
-                                            if (!selectedMachine || !selectedTarget) return
-                                            void loadSavedSessions(selectedMachine.id, selectedTarget)
-                                        }}
-                                    >
-                                        {savedSessionsLoading ? 'Loading…' : 'Refresh'}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className="btn btn-secondary btn-sm"
-                                        disabled={busy || !selectedMachine || !selectedTarget}
-                                        onClick={() => {
-                                            if (!selectedMachine || !selectedTarget) return
-                                            setResumeHistoryOpen(true)
-                                            void loadSavedSessions(selectedMachine.id, selectedTarget)
-                                        }}
-                                    >
-                                        Open History
-                                    </button>
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary btn-sm"
+                                            disabled={busy || !selectedMachine || !selectedTarget || savedSessionsLoading}
+                                            onClick={() => {
+                                                if (!selectedMachine || !selectedTarget) return
+                                                void loadSavedSessions(selectedMachine.id, selectedTarget)
+                                            }}
+                                        >
+                                            {savedSessionsLoading ? 'Loading…' : 'Refresh'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary btn-sm"
+                                            disabled={busy || !selectedMachine || !selectedTarget}
+                                            onClick={() => {
+                                                if (!selectedMachine || !selectedTarget) return
+                                                setResumeHistoryOpen(true)
+                                                void loadSavedSessions(selectedMachine.id, selectedTarget)
+                                            }}
+                                        >
+                                            Open History
+                                        </button>
+                                    </div>
                                 </div>
                                 <div className="mt-2">
                                     <select
@@ -755,6 +791,29 @@ export default function DashboardNewSessionDialog({
                             ))
                         })
                     }}
+                />
+            )}
+            {sessionHostOpen && selectedMachine && (
+                <DashboardMobileSessionHostSheet
+                    machineCards={[{
+                        id: selectedMachine.id,
+                        label: getMachineDisplayName(selectedMachine, { fallbackId: selectedMachine.id }),
+                        subtitle: [selectedMachine.platform || 'machine', selectedMachine.status || 'Connected'].filter(Boolean).join(' · '),
+                        unread: 0,
+                        total: 0,
+                        latestConversation: null,
+                        preview: '',
+                    }]}
+                    conversations={conversations}
+                    ides={ides}
+                    initialMachineId={selectedMachine.id}
+                    sendDaemonCommand={sendDaemonCommand}
+                    onOpenConversation={(conversation) => {
+                        setSessionHostOpen(false)
+                        onClose()
+                        onOpenConversation(conversation)
+                    }}
+                    onClose={() => setSessionHostOpen(false)}
                 />
             )}
         </>

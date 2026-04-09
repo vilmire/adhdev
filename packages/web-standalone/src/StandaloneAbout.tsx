@@ -6,6 +6,9 @@
  */
 import {
     AppPage,
+    BUILTIN_CLI_AGENTS,
+    BUILTIN_EXTENSIONS,
+    BUILTIN_IDES,
     EmptyState,
     IconBell,
     IconBook,
@@ -21,9 +24,6 @@ import {
     IconShield,
     IconUsers,
     Section,
-    SUPPORTED_CLI_AGENTS,
-    SUPPORTED_EXTENSIONS,
-    SUPPORTED_IDES,
     IconDiscord,
 } from '@adhdev/web-core'
 
@@ -67,7 +67,7 @@ export default function StandaloneAbout() {
         <AppPage
             icon={<IconInfo className="text-text-primary" />}
             title="About"
-            subtitle="Self-hosted ADHDev overview, supported surfaces, and what changes in Cloud"
+            subtitle="Self-hosted ADHDev overview, built-in surfaces, and what changes in Cloud"
             widthClassName="max-w-5xl"
             actions={(
                 <div className="px-3 py-1 text-[11px] font-semibold tracking-wide rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
@@ -108,12 +108,12 @@ export default function StandaloneAbout() {
                 </div>
             </Section>
 
-            <Section title="Compatible with" description="Supported editors and agent surfaces exposed in the standalone dashboard.">
+            <Section title="Built-in inventory" description="Bundled editors and agent surfaces exposed in the standalone dashboard. These lists describe inventory, not verified support.">
                 <div className="grid gap-4 md:grid-cols-3">
                     {[
-                        { label: 'IDEs', items: SUPPORTED_IDES.map(item => `${item.icon} ${item.name}`) },
-                        { label: 'Extensions', items: SUPPORTED_EXTENSIONS.map(item => `${item.icon} ${item.name}`) },
-                        { label: 'CLI agents', items: SUPPORTED_CLI_AGENTS.map(item => `${item.icon} ${item.name}`) },
+                        { label: 'IDEs', items: BUILTIN_IDES.map(item => `${item.icon} ${item.name}`) },
+                        { label: 'Extensions', items: BUILTIN_EXTENSIONS.map(item => `${item.icon} ${item.name}`) },
+                        { label: 'CLI agents', items: BUILTIN_CLI_AGENTS.map(item => `${item.icon} ${item.name}`) },
                     ].map(group => (
                         <div key={group.label} className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-4">
                             <div className="text-[10px] font-bold tracking-wider text-text-muted mb-3 uppercase">{group.label}</div>

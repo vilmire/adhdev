@@ -304,12 +304,20 @@ function computeTerminalQueryTail(buffer: string): string {
 }
 
 function findBinary(name: string): string {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) return trimmed;
+    const expanded = trimmed.startsWith('~')
+        ? path.join(os.homedir(), trimmed.slice(1))
+        : trimmed;
+    if (path.isAbsolute(expanded) || expanded.includes('/') || expanded.includes('\\')) {
+        return path.isAbsolute(expanded) ? expanded : path.resolve(expanded);
+    }
     const isWin = os.platform() === 'win32';
     try {
-        const cmd = isWin ? `where ${name}` : `which ${name}`;
+        const cmd = isWin ? `where ${trimmed}` : `which ${trimmed}`;
         return execSync(cmd, { encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).trim().split('\n')[0].trim();
     } catch {
-        return isWin ? `${name}.cmd` : name;
+        return isWin ? `${trimmed}.cmd` : trimmed;
     }
 }
 
@@ -928,7 +936,10 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.ptyProcess) return;
 
         const { spawn: spawnConfig } = this.provider;
-        const binaryPath = findBinary(spawnConfig.command);
+        const configuredCommand = typeof this.runtimeSettings.executablePath === 'string' && this.runtimeSettings.executablePath.trim()
+            ? this.runtimeSettings.executablePath.trim()
+            : spawnConfig.command;
+        const binaryPath = findBinary(configuredCommand);
         const isWin = os.platform() === 'win32';
         const allArgs = [...spawnConfig.args, ...this.extraArgs];
 

@@ -94,6 +94,7 @@ export default function DashboardHeader({
     const p2pStates: Record<string, string> = daemonCtx.p2pStates || {};
     const ides = daemonCtx.ides || [];
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
+    const isAcpActive = !!activeConv && isAcpConv(activeConv);
     const effectiveCliViewMode = activeCliViewMode || (activeConv ? (isCliTerminalConv(activeConv) ? 'terminal' : 'chat') : null);
     const [isHiddenDropTarget, setIsHiddenDropTarget] = useState(false);
     const inboxRef = useRef<HTMLDivElement | null>(null);
@@ -255,7 +256,7 @@ export default function DashboardHeader({
                 </div>
             </div>
             <div className="flex gap-2 items-center">
-                {activeConv && (isCliActive || !isAcpConv(activeConv)) && (
+                {activeConv && (isCliActive || isAcpActive || !isAcpConv(activeConv)) && (
                     <div className="dashboard-header-actions-group">
                         <span
                             className="dashboard-header-action-target"
@@ -264,15 +265,15 @@ export default function DashboardHeader({
                             {activeConv.displayPrimary}
                         </span>
 
-                        {isCliActive && onStopCli && (
+                        {(isCliActive || isAcpActive) && onStopCli && (
                             <>
-                                {onSetCliViewMode && effectiveCliViewMode && (
+                                {isCliActive && onSetCliViewMode && effectiveCliViewMode && (
                                     <CliViewModeToggle mode={effectiveCliViewMode} onChange={onSetCliViewMode} compact />
                                 )}
                                 <button
                                     onClick={() => onStopCli(activeConv)}
                                     className="btn btn-secondary btn-sm"
-                                    title="Stop CLI process"
+                                    title={isAcpActive ? 'Stop ACP session' : 'Stop CLI process'}
                                     style={{
                                         color: 'var(--status-error, #ef4444)',
                                         borderColor: 'color-mix(in srgb, var(--status-error, #ef4444) 25%, transparent)',

@@ -327,8 +327,9 @@ export class AcpProviderInstance implements ProviderInstance {
  // Find configId for this category
         const opt = this.configOptions.find(c => c.category === category);
         if (!opt) {
-            this.log.warn(`[${this.type}] No config option for category: ${category}`);
-            return;
+            const message = `[${this.type}] No config option for category: ${category}`;
+            this.log.warn(message);
+            throw new Error(message);
         }
 
  // Static config mode: update selection and restart process
@@ -343,8 +344,9 @@ export class AcpProviderInstance implements ProviderInstance {
         }
 
         if (!this.connection || !this.sessionId) {
-            this.log.warn(`[${this.type}] Cannot set config: no active connection/session`);
-            return;
+            const message = `[${this.type}] Cannot set config: no active connection/session`;
+            this.log.warn(message);
+            throw new Error(message);
         }
 
         try {
@@ -361,7 +363,9 @@ export class AcpProviderInstance implements ProviderInstance {
             if (result?.configOptions) this.parseConfigOptions(result.configOptions);
             this.log.info(`[${this.type}] Config ${category} set to: ${value} | response: ${JSON.stringify(result)?.slice(0, 300)}`);
         } catch (e: any) {
-            this.log.warn(`[${this.type}] set_config_option failed: ${e?.message}`);
+            const message = e?.message || 'Unknown ACP config error';
+            this.log.warn(`[${this.type}] set_config_option failed: ${message}`);
+            throw new Error(message);
         }
     }
 
@@ -380,8 +384,9 @@ export class AcpProviderInstance implements ProviderInstance {
         }
 
         if (!this.connection || !this.sessionId) {
-            this.log.warn(`[${this.type}] Cannot set mode: no active connection/session`);
-            return;
+            const message = `[${this.type}] Cannot set mode: no active connection/session`;
+            this.log.warn(message);
+            throw new Error(message);
         }
 
         try {
@@ -392,7 +397,9 @@ export class AcpProviderInstance implements ProviderInstance {
             this.currentMode = modeId;
             this.log.info(`[${this.type}] Mode set to: ${modeId}`);
         } catch (e: any) {
-            this.log.warn(`[${this.type}] set_mode failed: ${e?.message}`);
+            const message = e?.message || 'Unknown ACP mode error';
+            this.log.warn(`[${this.type}] set_mode failed: ${message}`);
+            throw new Error(message);
         }
     }
 
@@ -447,7 +454,9 @@ export class AcpProviderInstance implements ProviderInstance {
             throw new Error(`[ACP:${this.type}] No spawn config defined`);
         }
 
-        const command = spawnConfig.command;
+        const command = typeof this.settings.executablePath === 'string' && this.settings.executablePath.trim()
+            ? this.settings.executablePath.trim()
+            : spawnConfig.command;
  // Static config: create args via spawnArgBuilder (when provider defines it)
         let baseArgs = spawnConfig.args || [];
         if (this.provider.spawnArgBuilder && Object.keys(this.selectedConfig).length > 0) {
@@ -822,7 +831,7 @@ export class AcpProviderInstance implements ProviderInstance {
 
     private permissionResolvers: ((approved: boolean) => void)[] = [];
 
-    private async resolvePermission(approved: boolean): Promise<void> {
+    async resolvePermission(approved: boolean): Promise<void> {
         const resolver = this.permissionResolvers.shift();
         if (resolver) {
             resolver(approved);

@@ -44,6 +44,7 @@ export interface CommandContext {
     /** ProviderInstanceManager — for runtime settings propagation */
     instanceManager?: ProviderInstanceManager;
     sessionRegistry?: SessionRegistry;
+    onProviderSettingChanged?: (providerType: string, key: string, value: any) => Promise<void> | void;
 }
 
 /**

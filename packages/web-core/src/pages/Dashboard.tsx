@@ -625,7 +625,7 @@ export default function Dashboard() {
         conversation?: import('../components/dashboard/types').ActiveConversation | null,
     ) => {
         const targetConv = conversation || cliStopTargetConv || activeConv
-        if (!targetConv || !isCliConv(targetConv) || isAcpConv(targetConv)) return
+        if (!targetConv || (!isCliConv(targetConv) && !isAcpConv(targetConv))) return
         const cliType = targetConv.ideType || targetConv.agentType || ''
         const daemonId = targetConv.ideId || targetConv.daemonId || ''
         try {
@@ -641,10 +641,10 @@ export default function Dashboard() {
 
     const handleActiveCliStop = useCallback(async (conversation?: import('../components/dashboard/types').ActiveConversation) => {
         const targetConv = conversation || activeConv
-        if (!targetConv || !isCliConv(targetConv) || isAcpConv(targetConv)) return
+        if (!targetConv || (!isCliConv(targetConv) && !isAcpConv(targetConv))) return
         setCliStopTargetConv(targetConv)
         setCliStopDialogOpen(true)
-    }, [activeConv, performActiveCliStop])
+    }, [activeConv])
 
     const activeCliViewMode = useMemo(() => {
         if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return null

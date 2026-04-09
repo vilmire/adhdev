@@ -553,12 +553,20 @@ export default function DashboardMainView({
             {newSessionOpen && (
                 <DashboardNewSessionDialog
                     machines={machineEntries}
+                    conversations={mobileChatConversations}
+                    ides={ides}
                     onClose={() => setNewSessionOpen(false)}
                     onBrowseDirectory={onBrowseMachineDirectory}
                     onSaveWorkspace={onSaveMachineWorkspace}
                     onLaunchIde={onLaunchMachineIde}
                     onLaunchProvider={onLaunchMachineProvider}
                     onListSavedSessions={onListMachineSavedSessions}
+                    sendDaemonCommand={sendDaemonCommand}
+                    onOpenConversation={(conversation) => {
+                        setNewSessionOpen(false)
+                        onShowHiddenConversation(conversation)
+                        onDesktopActiveTabChange(conversation.tabKey)
+                    }}
                 />
             )}
             {shortcutHelpOpen && (

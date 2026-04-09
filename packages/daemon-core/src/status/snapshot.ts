@@ -35,6 +35,14 @@ export interface StatusSnapshotOptions {
             displayName?: string;
             category: 'ide' | 'extension' | 'cli' | 'acp';
         }>;
+        getAvailableProviderInfos?: () => Array<{
+            type: string;
+            icon?: string;
+            displayName?: string;
+            category: 'ide' | 'extension' | 'cli' | 'acp';
+            installed?: boolean;
+            detectedPath?: string | null;
+        }>;
     };
     detectedIdes: Array<{
         id: string;
@@ -75,12 +83,22 @@ function buildDetectedIdeInfos(
 function buildAvailableProviders(
     providerLoader: StatusSnapshotOptions['providerLoader'],
 ): AvailableProviderInfo[] {
-    return providerLoader.getAll().map((provider) => ({
+    const providers: Array<{
+        type: string;
+        icon?: string;
+        displayName?: string;
+        category: 'ide' | 'extension' | 'cli' | 'acp';
+        installed?: boolean;
+        detectedPath?: string | null;
+    }> = providerLoader.getAvailableProviderInfos?.() || providerLoader.getAll();
+    return providers.map((provider) => ({
         type: provider.type,
         name: provider.displayName || provider.type,
         displayName: provider.displayName || provider.type,
         icon: provider.icon || '💻',
         category: provider.category,
+        ...(provider.installed !== undefined ? { installed: provider.installed } : {}),
+        ...(provider.detectedPath !== undefined ? { detectedPath: provider.detectedPath } : {}),
     }));
 }
 

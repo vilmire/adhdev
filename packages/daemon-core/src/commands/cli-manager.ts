@@ -522,10 +522,10 @@ export class DaemonCliManager {
         if (!cliInfo) {
             const installHint = provider?.install || '';
             const displayName = provider?.displayName || provider?.name || cliType;
-            const spawnCmd = provider?.spawn?.command || cliType;
+            const spawnCmd = this.providerLoader.getSpawnCommand(normalizedType, provider?.spawn?.command || cliType);
             throw new Error(
                 `${displayName} is not installed.\n` +
-                `Command '${spawnCmd}' not found on PATH.\n` +
+                `Command '${spawnCmd}' is not available.\n` +
                 (installHint ? `\n${installHint}\n` : '') +
                 `\nRun 'adhdev doctor' for detailed diagnostics.`
             );

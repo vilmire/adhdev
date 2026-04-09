@@ -28,6 +28,15 @@ function isExpectedActionResolutionError(error: unknown): boolean {
         || message.includes('command failed')
 }
 
+function getActionFailureText(buttonText: string, error?: unknown): string {
+    const message = getErrorMessage(error)
+    if (!message) return `⚠️ **${buttonText}** unavailable`
+    if (message.toLowerCase().includes('button not found')) {
+        return `⚠️ **${buttonText}** failed — button not found`
+    }
+    return `⚠️ **${buttonText}** failed — ${message}`
+}
+
 export function useDashboardConversationCommands({
     sendDaemonCommand,
     activeConv,
@@ -153,7 +162,7 @@ export function useDashboardConversationCommands({
             if (!res.success) {
                 setActionLogs(prev => [...prev, {
                     ideId: activeConv.tabKey,
-                    text: `⚠️ **${buttonText}** failed — button not found`,
+                    text: getActionFailureText(buttonText, res?.error),
                     timestamp: Date.now(),
                 }])
             }
@@ -164,7 +173,7 @@ export function useDashboardConversationCommands({
             setActionLogs(prev => [...prev, {
                 ideId: activeConv.tabKey,
                 text: isExpectedActionResolutionError(e)
-                    ? `⚠️ **${buttonText}** unavailable`
+                    ? getActionFailureText(buttonText, e)
                     : `❌ **${buttonText}** error`,
                 timestamp: Date.now(),
             }])

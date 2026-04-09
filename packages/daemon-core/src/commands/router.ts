@@ -365,6 +365,11 @@ export class DaemonCommandRouter {
                 if (!ideType) throw new Error('ideType required');
                 const killProcess = args?.killProcess !== false; // default true
                 await this.stopIde(ideType, killProcess);
+                try {
+                    const results = await detectIDEs(this.deps.providerLoader);
+                    this.deps.detectedIdes.value = results;
+                    this.deps.providerLoader.setIdeDetectionResults(results, true);
+                } catch { /* ignore detection refresh errors */ }
                 return { success: true, ideType, stopped: true, processKilled: killProcess };
             }
 
@@ -415,6 +420,11 @@ export class DaemonCommandRouter {
                     }
                 }
                 this.deps.onIdeConnected?.();
+                try {
+                    const results = await detectIDEs(this.deps.providerLoader);
+                    this.deps.detectedIdes.value = results;
+                    this.deps.providerLoader.setIdeDetectionResults(results, true);
+                } catch { /* ignore detection refresh errors */ }
                 if (result.success && resolvedWorkspace) {
                     try {
                         const next = appendRecentActivity(loadState(), {
@@ -441,8 +451,9 @@ export class DaemonCommandRouter {
 
             // ─── Detect IDEs ───
             case 'detect_ides': {
-                const results = await detectIDEs();
+                const results = await detectIDEs(this.deps.providerLoader);
                 this.deps.detectedIdes.value = results;
+                this.deps.providerLoader.setIdeDetectionResults(results, true);
                 return { success: true, detectedInfo: results };
             }
 

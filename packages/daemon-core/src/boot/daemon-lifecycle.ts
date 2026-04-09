@@ -25,6 +25,7 @@ import { VersionArchive, detectAllVersions } from '../providers/version-archive.
 import { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { DevServer } from '../daemon/dev-server.js';
 import { detectIDEs } from '../detection/ide-detector.js';
+import { detectCLI, detectCLIs } from '../detection/cli-detector.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { installGlobalInterceptor, LOG } from '../logging/logger.js';
 import { loadConfig } from '../config/config.js';
@@ -160,6 +161,28 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     let agentStreamManager: DaemonAgentStreamManager | null = null;
     let poller: AgentStreamPoller | null = null;
 
+    const refreshProviderAvailability = async (providerType?: string) => {
+        const targetProvider = providerType ? providerLoader.getMeta(providerLoader.resolveAlias(providerType)) : null;
+        const targetCategory = targetProvider?.category;
+
+        if (!providerType || targetCategory === 'cli' || targetCategory === 'acp') {
+            if (providerType && targetProvider) {
+                const detected = await detectCLI(targetProvider.type, providerLoader, { includeVersion: false });
+                providerLoader.setProviderAvailability(targetProvider.type, {
+                    installed: !!detected,
+                    detectedPath: detected?.path || null,
+                });
+            } else {
+                providerLoader.setCliDetectionResults(await detectCLIs(providerLoader, { includeVersion: false }), true);
+            }
+        }
+
+        if (!providerType || targetCategory === 'ide') {
+            detectedIdesRef.value = await detectIDEs(providerLoader);
+            providerLoader.setIdeDetectionResults(detectedIdesRef.value, true);
+        }
+    };
+
     // 4. CLI Manager
     const cliManager = new DaemonCliManager({
         ...config.cliManagerDeps,
@@ -169,7 +192,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
 
     // 5. Detect IDEs
     LOG.info('Init', 'Detecting IDEs...');
-    detectedIdesRef.value = await detectIDEs();
+    await refreshProviderAvailability();
     const installed = detectedIdesRef.value.filter((i: any) => i.installed);
     LOG.info('Init', `Found ${installed.length} IDE(s): ${installed.map((i: any) => i.id).join(', ') || 'none'}`);
 
@@ -219,6 +242,10 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         providerLoader,
         instanceManager,
         sessionRegistry,
+        onProviderSettingChanged: async (providerType) => {
+            await refreshProviderAvailability(providerType);
+            config.onStatusChange?.();
+        },
     });
 
     // 8. AgentStreamManager

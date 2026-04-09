@@ -310,7 +310,7 @@ export async function launchWithCdp(options: LaunchOptions = {}): Promise<Launch
 
  // 1. IDE determine
     let targetIde: IDEInfo | undefined;
-    const ides = await detectIDEs();
+    const ides = await detectIDEs(getProviderLoader());
 
     if (options.ideId) {
         targetIde = ides.find(i => i.id === options.ideId && i.installed);

@@ -478,6 +478,14 @@ export async function handleListChats(h: CommandHelpers, args: any): Promise<Com
         if (evalResult) {
             let parsed = evalResult.result;
             if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
+            if (parsed?.sessions && Array.isArray(parsed.sessions)) {
+                LOG.info('Command', `[list_chats] OK: ${parsed.sessions.length} chats`);
+                return { success: true, chats: parsed.sessions };
+            }
+            if (parsed?.chats && Array.isArray(parsed.chats)) {
+                LOG.info('Command', `[list_chats] OK: ${parsed.chats.length} chats`);
+                return { success: true, chats: parsed.chats };
+            }
             if (Array.isArray(parsed)) {
                 LOG.info('Command', `[list_chats] OK: ${parsed.length} chats`);
                 return { success: true, chats: parsed };
@@ -561,8 +569,14 @@ export async function handleSwitchChat(h: CommandHelpers, args: any): Promise<Co
         return { success: false, error: `webviewSwitchSession failed: ${e.message}` };
     }
 
-    const script = h.getProviderScript('switchSession', { SESSION_ID: JSON.stringify(sessionId) })
-        || h.getProviderScript('switch_session', { SESSION_ID: JSON.stringify(sessionId) });
+    const switchParams = {
+        sessionId,
+        title: sessionId,
+        id: sessionId,
+        SESSION_ID: JSON.stringify(sessionId),
+    };
+    const script = h.getProviderScript('switchSession', switchParams)
+        || h.getProviderScript('switch_session', switchParams);
     if (!script) return { success: false, error: 'switch_session script not available' };
 
     try {
@@ -630,8 +644,8 @@ export async function handleSetMode(h: CommandHelpers, args: any): Promise<Comma
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (adapter) {
             const acpInstance = (adapter as any)._acpInstance;
-            if (acpInstance && typeof acpInstance.onEvent === 'function') {
-                acpInstance.onEvent('set_mode', { mode });
+            if (acpInstance && typeof acpInstance.setMode === 'function') {
+                await acpInstance.setMode(mode);
                 return { success: true, mode };
             }
         }
@@ -687,9 +701,9 @@ export async function handleChangeModel(h: CommandHelpers, args: any): Promise<C
         LOG.info('Command', `[change_model] ACP adapter found: ${!!adapter}, type=${(adapter as any)?.cliType}, hasAcpInstance=${!!(adapter as any)?._acpInstance}`);
         if (adapter) {
             const acpInstance = (adapter as any)._acpInstance;
-            if (acpInstance && typeof acpInstance.onEvent === 'function') {
-                acpInstance.onEvent('change_model', { model });
-                LOG.info('Command', `[change_model] Dispatched change_model event to ACP instance`);
+            if (acpInstance && typeof acpInstance.setConfigOption === 'function') {
+                await acpInstance.setConfigOption('model', model);
+                LOG.info('Command', `[change_model] Updated ACP model to ${model}`);
                 return { success: true, model };
             }
         }
@@ -817,6 +831,21 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
     if (isExtensionTransport(transport) && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
         const ok = await h.agentStream.resolveSessionAction(h.getCdp()!, h.currentSession.sessionId, action);
         return { success: ok };
+    }
+
+    // 1.5 ACP transport: resolve protocol permission request directly
+    if (transport === 'acp') {
+        const adapter = getTargetedCliAdapter(h, args, provider?.type);
+        const acpInstance = adapter?._acpInstance;
+        if (!acpInstance) return { success: false, error: 'ACP instance not found' };
+
+        try {
+            await acpInstance.resolvePermission(action === 'approve' || action === 'accept' || action === 'always');
+            LOG.info('Command', `[resolveAction] ACP → ${action}`);
+            return { success: true, action };
+        } catch (e: any) {
+            return { success: false, error: e?.message || 'ACP resolve action failed' };
+        }
     }
 
     // 2. Webview Provider script

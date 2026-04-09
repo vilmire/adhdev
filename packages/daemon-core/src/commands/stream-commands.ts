@@ -76,7 +76,7 @@ export function handleGetProviderSettings(h: CommandHelpers, args: any): Command
     return { success: true, settings: allSettings, values: allValues };
 }
 
-export function handleSetProviderSetting(h: CommandHelpers, args: any): CommandResult {
+export async function handleSetProviderSetting(h: CommandHelpers, args: any): Promise<CommandResult> {
     const loader = h.ctx.providerLoader as ProviderLoader | undefined;
     const { providerType, key, value } = args || {};
     if (!providerType || !key || value === undefined) {
@@ -89,6 +89,7 @@ export function handleSetProviderSetting(h: CommandHelpers, args: any): CommandR
             const updated = h.ctx.instanceManager.updateInstanceSettings(providerType, allSettings);
             LOG.info('Command', `[set_provider_setting] ${providerType}.${key}=${JSON.stringify(value)} → ${updated} instance(s) updated`);
         }
+        await h.ctx.onProviderSettingChanged?.(providerType, key, value);
         return { success: true, providerType, key, value };
     }
     return { success: false, error: `Failed to set ${providerType}.${key} — invalid key, value, or not a public setting` };

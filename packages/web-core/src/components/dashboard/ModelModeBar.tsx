@@ -157,15 +157,21 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, provi
 
     const selectModel = async (model: string) => {
         setModelOpen(false);
+        const previousModel = currentModel;
         setCurrentModel(model);
         localOverrideUntil.current = Date.now() + 5000; // 5s ignore server values
         try {
-            if (isAcp) {
-                await exec('change_model', { agentType: providerType, ideType, model });
-            } else {
-                await exec('set_extension_model', { agentType: providerType, ideType, model });
+            const res: any = isAcp
+                ? await exec('change_model', { agentType: providerType, ideType, model })
+                : await exec('set_extension_model', { agentType: providerType, ideType, model });
+            if (res?.success === false) {
+                throw new Error(res?.error || 'Could not change model');
             }
-        } catch { /* silent */ }
+        } catch (error) {
+            console.warn('Model change failed', error);
+            setCurrentModel(previousModel);
+            localOverrideUntil.current = 0;
+        }
     };
 
     // If ACP has no modes but has thought_level configOption, change thought_level
@@ -174,18 +180,26 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, provi
 
     const selectMode = async (mode: string) => {
         setModeOpen(false);
+        const previousMode = currentMode;
         setCurrentMode(mode);
         localOverrideUntil.current = Date.now() + 5000;
         try {
+            let res: any;
             if (isAcp && isThoughtLevel && thoughtConfigId) {
-                // thought_level → change via set_config_option
-                await exec('set_thought_level', { agentType: providerType, ideType, configId: thoughtConfigId, value: mode });
+                res = await exec('set_thought_level', { agentType: providerType, ideType, configId: thoughtConfigId, value: mode });
             } else if (isAcp) {
-                await exec('set_mode', { agentType: providerType, ideType, mode });
+                res = await exec('set_mode', { agentType: providerType, ideType, mode });
             } else {
-                await exec('set_extension_mode', { agentType: providerType, ideType, mode });
+                res = await exec('set_extension_mode', { agentType: providerType, ideType, mode });
             }
-        } catch { /* silent */ }
+            if (res?.success === false) {
+                throw new Error(res?.error || 'Could not change mode');
+            }
+        } catch (error) {
+            console.warn('Mode change failed', error);
+            setCurrentMode(previousMode);
+            localOverrideUntil.current = 0;
+        }
     };
 
     const AGENT_COLORS: Record<string, string> = {

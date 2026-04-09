@@ -12,7 +12,7 @@
  */
 
 import { formatIdeType, getMachineDisplayName } from '../utils/daemon-utils'
-import { shouldNotify, getNotificationPrefs } from '../hooks/useNotificationPrefs'
+import { shouldNotify } from '../hooks/useNotificationPrefs'
 import { notify } from '../hooks/useBrowserNotifications'
 
 // ─── Types ────────────────────────────────────────
@@ -151,10 +151,6 @@ class EventManager {
 
     private emitSystemMessage(targetKey: string, msg: SystemMessage): void {
         for (const cb of this.systemMessageCallbacks) cb(targetKey, msg)
-    }
-
-    private emitClearSystemMessage(targetKey: string, prefix: string): void {
-        for (const cb of this.clearSystemMessageCallbacks) cb(targetKey, prefix)
     }
 
     // ─── Deduplication ────────────────────────────
@@ -355,23 +351,8 @@ class EventManager {
                 new Audio('data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQQAAAB/f39/').play().catch(() => {})
             } catch {}
 
-            // System message
-            if (conversationKey && getNotificationPrefs().chatTaskCompletionBubble) {
-                this.emitSystemMessage(conversationKey, {
-                    role: 'system',
-                    timestamp: eventTimestamp,
-                    content: `✅ Task completed${dur}`,
-                    _localId: `sys_complete_${eventTimestamp}`,
-                })
-            }
-
         // ── agent:generating_started ──
         } else if (payload.event === 'agent:generating_started') {
-            // Clear previous completion messages
-            if (conversationKey) {
-                this.emitClearSystemMessage(conversationKey, 'sys_complete_')
-            }
-
         // ── agent:waiting_approval ──
         } else if (payload.event === 'agent:waiting_approval') {
             msg = `⚡ ${ideLabel} approval needed`

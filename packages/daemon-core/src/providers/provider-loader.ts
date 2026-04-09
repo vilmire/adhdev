@@ -24,12 +24,19 @@ import type {
   ProviderModule,
   ProviderCategory,
   ProviderScripts,
+  ProviderSettingDef,
   ProviderSettingSchema,
   ResolvedProvider,
 } from './contracts.js';
 
+interface ProviderAvailabilityState {
+  installed: boolean;
+  detectedPath: string | null;
+}
+
 export class ProviderLoader {
   private providers = new Map<string, ProviderModule>();
+  private providerAvailability = new Map<string, ProviderAvailabilityState>();
   private userDir: string;
   private upstreamDir: string;
   private disableUpstream: boolean;
@@ -152,6 +159,7 @@ export class ProviderLoader {
  */
   loadAll(): void {
     this.providers.clear();
+    this.providerAvailability.clear();
 
  // 1. Load upstream (GitHub auto-download — primary source)
     let upstreamCount = 0;
@@ -236,11 +244,12 @@ export class ProviderLoader {
         const versionCommand = typeof verCmdConfig === 'object' && verCmdConfig !== null
           ? verCmdConfig[process.platform]
           : verCmdConfig;
+        const command = this.getSpawnCommand(p.type, p.spawn.command);
         result.push({
           id: p.type,
           displayName: p.displayName || p.name,
           icon: p.icon || '🔧',
-          command: p.spawn.command,
+          command,
           category: p.category,
           ...(typeof versionCommand === 'string' && versionCommand.trim()
             ? { versionCommand: versionCommand.trim() }
@@ -384,6 +393,80 @@ export class ProviderLoader {
     return [...this.providers.values()]
       .filter(p => p.category === 'ide' && p.cdpPorts)
       .map(p => p.type);
+  }
+
+  getSpawnCommand(type: string, fallback?: string): string {
+    const override = this.getOptionalStringSetting(type, 'executablePath');
+    if (override) return override;
+    return fallback || this.providers.get(type)?.spawn?.command || type;
+  }
+
+  getIdeCliCommand(type: string, fallback?: string | null): string | null {
+    const override = this.getOptionalStringSetting(type, 'cliPathOverride');
+    if (override) return override;
+    return fallback || this.providers.get(type)?.cli || null;
+  }
+
+  getIdePathCandidates(type: string, fallback?: string[]): string[] {
+    const override = this.getOptionalStringSetting(type, 'appPathOverride');
+    if (override) return [override];
+    if (fallback && fallback.length > 0) return fallback;
+    const osPaths = this.providers.get(type)?.paths?.[process.platform];
+    return Array.isArray(osPaths) ? [...osPaths] : [];
+  }
+
+  setProviderAvailability(type: string, state: { installed: boolean; detectedPath?: string | null }): void {
+    this.providerAvailability.set(type, {
+      installed: !!state.installed,
+      detectedPath: state.detectedPath ?? null,
+    });
+  }
+
+  setCliDetectionResults(results: Array<{ id: string; installed: boolean; path?: string }>, replace: boolean = true): void {
+    if (replace) {
+      for (const provider of this.providers.values()) {
+        if (provider.category === 'cli' || provider.category === 'acp') {
+          this.providerAvailability.set(provider.type, { installed: false, detectedPath: null });
+        }
+      }
+    }
+    for (const result of results) {
+      this.setProviderAvailability(result.id, {
+        installed: !!result.installed,
+        detectedPath: result.path || null,
+      });
+    }
+  }
+
+  setIdeDetectionResults(results: Array<{ id: string; installed: boolean; path?: string | null; cliCommand?: string | null }>, replace: boolean = true): void {
+    if (replace) {
+      for (const provider of this.providers.values()) {
+        if (provider.category === 'ide') {
+          this.providerAvailability.set(provider.type, { installed: false, detectedPath: null });
+        }
+      }
+    }
+    for (const result of results) {
+      this.setProviderAvailability(result.id, {
+        installed: !!result.installed,
+        detectedPath: result.cliCommand || result.path || null,
+      });
+    }
+  }
+
+  getAvailableProviderInfos(): Array<ProviderModule & { installed?: boolean; detectedPath?: string | null }> {
+    return this.getAll().map((provider) => {
+      const availability = this.providerAvailability.get(provider.type);
+      return {
+        ...provider,
+        ...(availability
+          ? {
+              installed: availability.installed,
+              detectedPath: availability.detectedPath,
+            }
+          : {}),
+      };
+    });
   }
 
  /**
@@ -888,9 +971,8 @@ export class ProviderLoader {
  * Get public settings schema for a provider (for dashboard UI rendering)
  */
   getPublicSettings(type: string): ProviderSettingSchema[] {
-    const provider = this.providers.get(type);
-    if (!provider?.settings) return [];
-    return Object.entries(provider.settings)
+    const settings = this.getSettingsSchema(type);
+    return Object.entries(settings)
       .filter(([, def]) => (def as any).public === true)
       .map(([key, def]) => ({ key, ...(def as any) }));
   }
@@ -911,8 +993,7 @@ export class ProviderLoader {
  * Resolved setting value for a provider (default + user override)
  */
   getSettingValue(type: string, key: string): any {
-    const provider = this.providers.get(type);
-    const schemaDef = provider?.settings?.[key];
+    const schemaDef = this.getSettingsSchema(type)[key];
     const defaultVal = schemaDef ? (schemaDef as any).default : undefined;
 
  // Load user-saved value
@@ -930,10 +1011,9 @@ export class ProviderLoader {
  * All resolved settings for a provider (default + user override)
  */
   getSettings(type: string): Record<string, any> {
-    const provider = this.providers.get(type);
-    if (!provider?.settings) return {};
+    const settings = this.getSettingsSchema(type);
     const result: Record<string, any> = {};
-    for (const [key, def] of Object.entries(provider.settings)) {
+    for (const [key] of Object.entries(settings)) {
       result[key] = this.getSettingValue(type, key);
     }
     return result;
@@ -943,8 +1023,7 @@ export class ProviderLoader {
  * Save provider setting value (writes to config.json)
  */
   setSetting(type: string, key: string, value: any): boolean {
-    const provider = this.providers.get(type);
-    const schemaDef = provider?.settings?.[key] as any;
+    const schemaDef = this.getSettingsSchema(type)[key] as any;
     if (!schemaDef) return false;
 
  // Non-public settings cannot be modified externally
@@ -952,6 +1031,7 @@ export class ProviderLoader {
 
  // Type validation
     if (schemaDef.type === 'boolean' && typeof value !== 'boolean') return false;
+    if (schemaDef.type === 'string' && typeof value !== 'string') return false;
     if (schemaDef.type === 'number') {
       if (typeof value !== 'number') return false;
       if (schemaDef.min !== undefined && value < schemaDef.min) return false;
@@ -972,6 +1052,59 @@ export class ProviderLoader {
       this.log(`Failed to save setting: ${(e as Error).message}`);
       return false;
     }
+  }
+
+  private getOptionalStringSetting(type: string, key: string): string | null {
+    const value = this.getSettingValue(type, key);
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  private getSettingsSchema(type: string): Record<string, ProviderSettingDef> {
+    const provider = this.providers.get(type);
+    if (!provider) return {};
+    return {
+      ...this.getSyntheticSettings(type, provider),
+      ...(provider.settings || {}),
+    };
+  }
+
+  private getSyntheticSettings(type: string, provider: ProviderModule): Record<string, ProviderSettingDef> {
+    const result: Record<string, ProviderSettingDef> = {};
+
+    if ((provider.category === 'cli' || provider.category === 'acp') && provider.spawn?.command && !provider.settings?.executablePath) {
+      result.executablePath = {
+        type: 'string',
+        default: '',
+        public: true,
+        label: 'Executable path',
+        description: 'Optional absolute path for this provider binary. Leave blank to use the default PATH lookup.',
+      };
+    }
+
+    if (provider.category === 'ide') {
+      if (provider.cli && !provider.settings?.cliPathOverride) {
+        result.cliPathOverride = {
+          type: 'string',
+          default: '',
+          public: true,
+          label: 'CLI path override',
+          description: 'Optional absolute path for the IDE CLI launcher. Leave blank to use the detected default.',
+        };
+      }
+      if (provider.paths && !provider.settings?.appPathOverride) {
+        result.appPathOverride = {
+          type: 'string',
+          default: '',
+          public: true,
+          label: 'App path override',
+          description: 'Optional absolute path for the IDE app bundle or executable. Leave blank to use the default install locations.',
+        };
+      }
+    }
+
+    return result;
   }
 
  // ─── Private ───────────────────────────────────
