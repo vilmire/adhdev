@@ -75,7 +75,6 @@ export function useDashboardConversationCommands({
 
             const raw = await sendDaemonCommand(routeTarget, 'send_chat', {
                 message,
-                text: message,
                 ...getProviderArgs(activeConv),
             })
             const res = unwrapCommandResult(raw)

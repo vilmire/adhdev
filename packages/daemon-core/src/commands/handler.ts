@@ -216,14 +216,26 @@ export class DaemonCommandHandler implements CommandHelpers {
             const fn = (provider.scripts as any)[scriptName];
             if (typeof fn === 'function') {
                 if (params && Object.keys(params).length > 0) {
-                    const script = fn(params);
-                    if (script) return script;
-
                     const firstVal = Object.values(params)[0];
+                    if (scriptName === 'sendMessage' && typeof firstVal === 'string') {
+                        const legacyScript = fn(firstVal);
+                        if (legacyScript) return legacyScript;
+                    }
+                    const script = fn(params);
+                    if (script) {
+                        const likelyLegacyObjectLeak =
+                            typeof script === 'string'
+                            && script.includes('[object Object]')
+                            && typeof firstVal === 'string';
+                        if (!likelyLegacyObjectLeak) return script;
+                    }
+
                     if (firstVal !== undefined) {
                         const legacyScript = fn(firstVal);
                         if (legacyScript) return legacyScript;
                     }
+
+                    if (script) return script;
                 } else {
                     const script = fn();
                     if (script) return script;

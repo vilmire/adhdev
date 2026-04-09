@@ -40,7 +40,7 @@ interface DashboardMobileMachineScreenProps {
     onLaunchDetectedIde: (ideType: string, opts?: { workspacePath?: string | null }) => void
     onAddWorkspace: (path: string, opts?: { createIfMissing?: boolean }) => void
     onBrowseDirectory: (path: string) => Promise<BrowseDirectoryResult>
-    onLaunchWorkspaceProvider: (kind: Extract<WorkspaceLaunchKind, 'cli' | 'acp'>, providerType: string, opts?: { workspaceId?: string | null; workspacePath?: string | null }) => void
+    onLaunchWorkspaceProvider: (kind: Extract<WorkspaceLaunchKind, 'cli' | 'acp'>, providerType: string, opts?: { workspaceId?: string | null; workspacePath?: string | null; args?: string; model?: string }) => void
 }
 
 export default function DashboardMobileMachineScreen({
@@ -103,9 +103,13 @@ export default function DashboardMobileMachineScreen({
         details: Array<{ label: string; value: string }>
         confirmLabel: string
         workspaceOptions?: LaunchWorkspaceOption[]
+        showArgsInput?: boolean
+        showModelInput?: boolean
     } | null>(null)
     const launchConfirmWorkspaceKeyRef = useRef('__home__')
     const [launchConfirmWorkspaceKey, setLaunchConfirmWorkspaceKey] = useState('__home__')
+    const [launchConfirmArgs, setLaunchConfirmArgs] = useState('')
+    const [launchConfirmModel, setLaunchConfirmModel] = useState('')
     const [launchConfirmBusy, setLaunchConfirmBusy] = useState(false)
     const lastMachineIdRef = useRef<string | null>(null)
     const resolvedWorkspacePath = workspaceChoice === '__custom__'
@@ -154,12 +158,18 @@ export default function DashboardMobileMachineScreen({
             confirmLabel: string
             workspaceOptions?: LaunchWorkspaceOption[]
             selectedWorkspaceKey?: string
+            showArgsInput?: boolean
+            showModelInput?: boolean
+            initialArgs?: string
+            initialModel?: string
         },
         action: () => Promise<void>,
     ) => {
         launchConfirmActionRef.current = action
         launchConfirmWorkspaceKeyRef.current = config.selectedWorkspaceKey || '__home__'
         setLaunchConfirmWorkspaceKey(config.selectedWorkspaceKey || '__home__')
+        setLaunchConfirmArgs(config.initialArgs || '')
+        setLaunchConfirmModel(config.initialModel || '')
         setLaunchConfirm(config)
     }, [])
 
@@ -523,6 +533,10 @@ export default function DashboardMobileMachineScreen({
                                                             { label: 'Mode', value: activeLauncherKind.toUpperCase() },
                                                             { label: 'Provider', value: provider.displayName },
                                                         ],
+                                                        showArgsInput: activeLauncherKind === 'cli' || activeLauncherKind === 'acp',
+                                                        showModelInput: activeLauncherKind === 'acp',
+                                                        initialArgs: '',
+                                                        initialModel: '',
                                                     }, async () => {
                                                         const selectedOption = options.find(option => option.key === launchConfirmWorkspaceKeyRef.current)
                                                         if (selectedOption?.workspaceId) {
@@ -538,6 +552,8 @@ export default function DashboardMobileMachineScreen({
                                                         onLaunchWorkspaceProvider(activeLauncherKind, provider.type, {
                                                             workspaceId: selectedOption?.workspaceId ?? null,
                                                             workspacePath: selectedOption?.workspacePath ?? null,
+                                                            args: launchConfirmArgs,
+                                                            model: launchConfirmModel,
                                                         })
                                                     })
                                                 }}
@@ -631,6 +647,12 @@ export default function DashboardMobileMachineScreen({
                     }}
                     confirmLabel={launchConfirm.confirmLabel}
                     busy={launchConfirmBusy}
+                    showArgsInput={launchConfirm.showArgsInput}
+                    argsValue={launchConfirmArgs}
+                    onArgsChange={setLaunchConfirmArgs}
+                    showModelInput={launchConfirm.showModelInput}
+                    modelValue={launchConfirmModel}
+                    onModelChange={setLaunchConfirmModel}
                     onConfirm={handleConfirmLaunch}
                     onCancel={() => {
                         launchConfirmActionRef.current = null

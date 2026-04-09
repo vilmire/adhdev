@@ -88,7 +88,6 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
         try {
             await sendCommand('send_chat', {
                 agentType: activeAgent,
-                text: message,
                 message,
                 ...(targetSessionId && { targetSessionId }),
             });

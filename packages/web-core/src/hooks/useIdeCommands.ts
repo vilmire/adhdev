@@ -34,7 +34,6 @@ export function useIdeCommands({
         try {
             await sendDaemonCommand(ideId, 'send_chat', {
                 message,
-                text: message,
                 waitForResponse: true,
                 ...getProviderArgs(activeConv),
             })

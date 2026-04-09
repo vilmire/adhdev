@@ -303,7 +303,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
         _log(`Extension: ${provider?.type || 'unknown_extension'}`);
         // Method 1: provider sendMessage script via evaluateInSession
         try {
-            const evalResult = await h.evaluateProviderScript('sendMessage', { MESSAGE: text }, 30000);
+            const evalResult = await h.evaluateProviderScript('sendMessage', { message: text }, 30000);
             if (evalResult?.result) {
                 const parsed = parseMaybeJson(evalResult.result);
                 if (didProviderConfirmSend(parsed)) {
@@ -338,7 +338,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
     }
 
     _log(`Targeting IDE: ${getCurrentManagerKey(h)}`);
-    const sendScript = h.getProviderScript('sendMessage', { MESSAGE: text });
+    const sendScript = h.getProviderScript('sendMessage', { message: text });
     if (sendScript) {
         try {
             const result = await targetCdp.evaluate(sendScript, 30000);

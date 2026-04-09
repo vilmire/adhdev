@@ -586,7 +586,16 @@ export class SessionHostMuxClient {
   }
 
   private async handleHostEvent(event: SessionHostEvent): Promise<void> {
-    const paneIds = this.paneIdsByRuntime.get(event.sessionId);
+    const sessionId = 'sessionId' in event
+      ? event.sessionId
+      : event.type === 'runtime_transition'
+        ? event.transition.sessionId
+        : event.type === 'request_trace'
+          ? event.trace.sessionId
+          : event.entry.sessionId;
+    if (!sessionId) return;
+
+    const paneIds = this.paneIdsByRuntime.get(sessionId);
     if (!paneIds || paneIds.size === 0) return;
 
     for (const paneId of paneIds) {

@@ -120,7 +120,7 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
     }
 
     async sendMessage(evaluate: AgentEvaluateFn, text: string): Promise<void> {
-        const params = { message: text, MESSAGE: text, text };
+        const params = { message: text };
         const script = this.callScript('sendMessage', params) || this.callScript('sendMessage', text);
         if (!script) throw new Error(`[${this.agentName}] sendMessage script not available`);
         const result = await evaluate(script) as string;

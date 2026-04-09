@@ -572,7 +572,13 @@ export default function DashboardMobileChatMode({
         machineId: string,
         kind: 'cli' | 'acp',
         providerType: string,
-        opts?: { workspaceId?: string | null; workspacePath?: string | null; resumeSessionId?: string | null },
+        opts?: {
+            workspaceId?: string | null
+            workspacePath?: string | null
+            resumeSessionId?: string | null
+            args?: string | null
+            model?: string | null
+        },
     ) => {
         const startedAt = Date.now()
         const pendingLaunch: PendingWorkspaceLaunch = {
@@ -592,6 +598,8 @@ export default function DashboardMobileChatMode({
             if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
             else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
             if (opts?.resumeSessionId) payload.resumeSessionId = opts.resumeSessionId
+            if (opts?.args?.trim()) payload.cliArgs = opts.args.trim().split(/\s+/).filter(Boolean)
+            if (opts?.model?.trim()) payload.initialModel = opts.model.trim()
             const res: any = await sendDaemonCommand(machineId, 'launch_cli', payload)
             const result = res?.result || res
             const launchedSessionId = result?.sessionId || result?.id
