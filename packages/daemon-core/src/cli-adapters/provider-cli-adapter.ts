@@ -1241,6 +1241,9 @@ export class ProviderCliAdapter implements CliAdapter {
     private looksLikeVisibleIdlePrompt(screenText: string): boolean {
         const text = String(screenText || '');
         if (!text.trim()) return false;
+        if (this.cliType === 'codex-cli' && /(^|\n)\s*[❯›>]\s+(?:Find and fix a bug in @filename|Improve documentation in @filename|Use \/skills|Write tests for @filename|Explain this codebase|Summarize recent commits|Implement \{feature\}|Run \/review on my current changes)(?:\n|$)/im.test(text)) {
+            return true;
+        }
         return /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(text)
             || /⏎\s+send/i.test(text)
             || /\?\s*for\s*shortcuts/i.test(text)

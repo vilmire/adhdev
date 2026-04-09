@@ -687,6 +687,7 @@ export class DaemonCliManager {
         if (!instanceManager) return 0;
         const sessions = records || await this.deps.listHostedCliRuntimes?.() || [];
         let restored = 0;
+        const restoredBindings = new Set<string>();
 
         for (const record of sessions) {
             if (!record?.runtimeId || !record?.cliType || !record?.workspace) continue;
@@ -702,6 +703,18 @@ export class DaemonCliManager {
                 record.cliArgs,
                 record.providerSessionId,
             );
+            const bindingKey = [
+                normalizedType,
+                record.workspace,
+                sessionBinding.providerSessionId || record.runtimeId,
+            ].join('::');
+            if (restoredBindings.has(bindingKey)) {
+                LOG.info(
+                    'CLI',
+                    `↷ Skipping duplicate hosted runtime restore: ${record.runtimeKey || record.runtimeId} (${normalizedType} @ ${record.workspace}) binding=${sessionBinding.providerSessionId || 'runtime'}`
+                );
+                continue;
+            }
             try {
                 await this.registerCliInstance(
                     record.runtimeId,
@@ -717,6 +730,7 @@ export class DaemonCliManager {
                         launchMode: 'manual',
                     },
                 );
+                restoredBindings.add(bindingKey);
                 restored += 1;
                 LOG.info('CLI', `♻ Restored hosted runtime: ${record.runtimeKey || record.runtimeId} (${record.displayName || record.workspace})`);
             } catch (error: any) {

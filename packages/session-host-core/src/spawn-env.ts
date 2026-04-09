@@ -40,10 +40,19 @@ export function sanitizeSpawnEnv(
             || key.startsWith('PNPM_')
             || key.startsWith('YARN_')
             || key.startsWith('BUN_')
+            || key.startsWith('VSCODE_')
+            || key.startsWith('ELECTRON_')
         ) {
             delete env[key];
         }
     }
+
+    // Do not leak the parent Codex app/extension thread identity into child CLIs.
+    // Those variables cause codex-cli to attach to the current IDE thread instead
+    // of creating or resuming its own standalone CLI thread, which breaks
+    // providerSessionId discovery and reconnect semantics.
+    delete env.CODEX_THREAD_ID;
+    delete env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE;
 
     applyTerminalColorEnv(env);
     return env;

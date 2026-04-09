@@ -60,6 +60,7 @@ export class CliProviderInstance implements ProviderInstance {
     private historyWriter: ChatHistoryWriter;
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     readonly instanceId: string;
+    private suppressIdleHistoryReplay = false;
 
     private presentationMode: 'terminal' | 'chat';
     private providerSessionId?: string;
@@ -135,7 +136,15 @@ export class CliProviderInstance implements ProviderInstance {
         await this.adapter.spawn();
         this.maybeAppendRuntimeRecoveryMessage(this.adapter.getRuntimeMetadata());
         if (this.providerSessionId) {
+            this.historyWriter.compactHistorySession(this.type, this.providerSessionId);
             const restoredHistory = readChatHistory(this.type, 0, 200, this.providerSessionId);
+            this.historyWriter.seedSessionHistory(
+                this.type,
+                restoredHistory.messages,
+                this.providerSessionId,
+                this.instanceId,
+            );
+            this.suppressIdleHistoryReplay = restoredHistory.messages.length > 0;
             if (restoredHistory.messages.length > 0) {
                 this.adapter.seedCommittedMessages(
                     restoredHistory.messages.map((message) => ({
@@ -184,7 +193,7 @@ export class CliProviderInstance implements ProviderInstance {
             } else if (this.type === 'codex-cli') {
                 probedSessionId = this.probeSessionIdFromConfig({
                     dbPath: '~/.codex/state_5.sqlite',
-                    query: 'select id from threads where cwd in ({dirs}) and created_at >= ? and archived = 0 order by created_at desc limit 1',
+                    query: 'select id from threads where cwd in ({dirs}) and updated_at >= ? and archived = 0 order by updated_at desc limit 1',
                     timestampFormat: 'unix_s',
                 });
             } else if (this.type === 'goose-cli') {
@@ -260,6 +269,10 @@ export class CliProviderInstance implements ProviderInstance {
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
 
         if (parsedMessages.length > 0) {
+            const shouldSkipReplayPersist =
+                this.suppressIdleHistoryReplay
+                && adapterStatus.status === 'idle'
+                && parsedStatus?.status === 'idle';
             let messagesToSave = parsedMessages;
             if ((parsedStatus?.status === 'generating' || parsedStatus?.status === 'long_generating')) {
                 const lastIdx = messagesToSave.length - 1;
@@ -267,7 +280,7 @@ export class CliProviderInstance implements ProviderInstance {
                     messagesToSave = messagesToSave.slice(0, lastIdx);
                 }
             }
-            if (messagesToSave.length > 0) {
+            if (!shouldSkipReplayPersist && messagesToSave.length > 0) {
                 this.historyWriter.appendNewMessages(
                     this.type,
                     messagesToSave,
@@ -374,6 +387,7 @@ export class CliProviderInstance implements ProviderInstance {
         if (newStatus !== this.lastStatus) {
             LOG.info('CLI', `[${this.type}] status: ${this.lastStatus} → ${newStatus}`);
             if (this.lastStatus === 'idle' && newStatus === 'generating') {
+                this.suppressIdleHistoryReplay = false;
                 // Cancel any pending completed event (multi-step: idle→generating resume)
                 if (this.completedDebouncePending) {
                     LOG.info('CLI', `[${this.type}] cancelled pending completed (resumed generating)`);
@@ -394,6 +408,7 @@ export class CliProviderInstance implements ProviderInstance {
                     this.generatingDebounceTimer = null;
                 }, 1000);
             } else if (newStatus === 'waiting_approval') {
+                this.suppressIdleHistoryReplay = false;
                 // Flush pending generating_started if debounce still pending
                 if (this.generatingDebouncePending) {
                     if (this.generatingDebounceTimer) { clearTimeout(this.generatingDebounceTimer); this.generatingDebounceTimer = null; }

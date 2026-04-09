@@ -303,7 +303,7 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "codex-cli": {
-    "status": "unverified",
+    "status": "partial",
     "testedOn": [
       "macOS 26.4"
     ],
@@ -315,11 +315,12 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
       "send_chat",
       "read_chat",
       "resume",
+      "reconnect",
       "stop"
     ],
     "lastValidated": "2026-04-09",
-    "notes": "Saved-session resume works locally, but reconnect after daemon or transport disruption is still unverified. Fresh launch still lands in an onboarding-style prompt state often enough that exact-answer send/read validation is not yet trustworthy.",
-    "evidence": "Manual local validation via standalone API on 2026-04-09",
+    "notes": "Fresh launch, live send/read, saved-session resume, daemon-restart reconnect, and stop were validated locally after tightening onboarding-screen parsing, providerSessionId recovery, and history replay dedupe. Some older saved transcripts may still need one-time compaction if they were polluted before the fix.",
+    "evidence": "Manual local validation via standalone API and session-host restart recovery on 2026-04-09",
     "owner": "core",
     "source": "docs/site/data/provider-catalog.mjs"
   },
@@ -831,7 +832,7 @@ export const PROVIDER_VERIFICATION_STATUS: Record<string, ProviderVerificationSt
   "windsurf": "unverified",
   "aider-cli": "unverified",
   "claude-cli": "partial",
-  "codex-cli": "unverified",
+  "codex-cli": "partial",
   "cursor-cli": "unverified",
   "gemini-cli": "unverified",
   "github-copilot-cli": "unverified",
