@@ -197,7 +197,7 @@ export default function ChatPane({
         setIsLoadingMore(true);
         updateTabHistory(tk, { error: null });
         try {
-            const daemonId = (ideEntry as any)?.daemonId || activeConv.ideId?.split(':')[0] || '';
+            const daemonId = ideEntry?.daemonId || activeConv.ideId?.split(':')[0] || '';
             if (!daemonId) {
                 updateTabHistory(tk, { hasMore: false });
                 return;
@@ -384,12 +384,12 @@ export default function ChatPane({
                     : (activeConv.agentName || formatIdeType(activeConv.agentType || ''))
 
                 const targetEntry = (!isNativeConversation && ideEntry?.childSessions)
-                    ? (ideEntry.childSessions.find((s: any) => s.id === activeConv.sessionId || s.providerType === activeConv.agentType) || ideEntry)
+                    ? (ideEntry.childSessions.find(s => s.id === activeConv.sessionId || s.providerType === activeConv.agentType) || ideEntry)
                     : ideEntry;
 
                 // Use new ControlsBar (schema-driven) when providerControls are available
-                const providerControls = (targetEntry as any)?.providerControls;
-                const controlValues = (targetEntry as any)?.controlValues;
+                const providerControls = targetEntry?.providerControls;
+                const controlValues = targetEntry?.controlValues;
 
                 return (
                     <ControlsBar
@@ -400,10 +400,10 @@ export default function ChatPane({
                         displayLabel={modelBarLabel}
                         controls={providerControls}
                         controlValues={controlValues}
-                        serverModel={(targetEntry as any)?.currentModel || undefined}
-                        serverMode={(targetEntry as any)?.currentPlan || undefined}
-                        acpConfigOptions={isAcpConv(activeConv) ? (targetEntry as any)?.acpConfigOptions : undefined}
-                        acpModes={isAcpConv(activeConv) ? (targetEntry as any)?.acpModes : undefined}
+                        serverModel={targetEntry?.currentModel || undefined}
+                        serverMode={targetEntry?.currentPlan || undefined}
+                        acpConfigOptions={isAcpConv(activeConv) ? targetEntry?.acpConfigOptions : undefined}
+                        acpModes={isAcpConv(activeConv) ? targetEntry?.acpModes : undefined}
                     />
                 );
             })()}

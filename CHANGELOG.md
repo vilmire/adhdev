@@ -5,13 +5,15 @@ All notable changes to ADHDev will be documented in this file.
 ## [0.8.28] - 2026-04-09
 
 ### Added
-- 
+- `adhdev service install / uninstall / status` — register the daemon as an OS-level auto-start service (macOS LaunchAgent, Windows Startup folder).
+- Session host duplicate prune actions exposed through the cloud daemon control plane.
 
 ### Fixed
-- 
+- Codex extension session switching now works against the Recent tasks history view; `list_sessions` and `switch_session` flows validated.
+- Codex CLI promoted to `partial` after validating fresh launch, live send/read, saved-session resume, daemon-restart reconnect, and stop.
 
 ### Changed
-- 
+- Removed legacy `AccentColor` configuration field from daemon settings in favor of the existing CSS custom-property theme system.
 ## [0.8.27] - 2026-04-09
 
 ### Fixed

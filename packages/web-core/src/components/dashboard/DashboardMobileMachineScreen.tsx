@@ -86,8 +86,8 @@ export default function DashboardMobileMachineScreen({
     const topRecentLaunches = selectedMachineRecentLaunches.slice(0, 4)
     const topConversationItems = selectedMachineConversations.slice(0, 3)
     const hasIdeOptions = (selectedMachineEntry.detectedIdes?.length || 0) > 0
-    const workspaceRows = useMemo(() => ((selectedMachineEntry as any).workspaces || []) as Array<{ id: string; path: string; label?: string }>, [selectedMachineEntry])
-    const defaultWorkspaceId = ((selectedMachineEntry as any).defaultWorkspaceId as string | null | undefined) || null
+    const workspaceRows = useMemo(() => (selectedMachineEntry.workspaces || []).map(w => ({ id: w.id, path: w.path, label: w.label })), [selectedMachineEntry])
+    const defaultWorkspaceId = selectedMachineEntry.defaultWorkspaceId || null
     const [workspaceChoice, setWorkspaceChoice] = useState<string>(defaultWorkspaceId || (workspaceRows[0]?.id || ''))
     const [customWorkspacePath, setCustomWorkspacePath] = useState('')
     const [browseCurrentPath, setBrowseCurrentPath] = useState('')

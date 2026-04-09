@@ -77,6 +77,57 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
         return lhs === rhs || lhs.includes(rhs) || rhs.includes(lhs);
     }
 
+    private messageCount(state: AgentStreamState | null | undefined): number {
+        return Array.isArray(state?.messages) ? state!.messages.length : 0;
+    }
+
+    private lastMessageSignature(state: AgentStreamState | null | undefined): string {
+        const messages = Array.isArray(state?.messages) ? state!.messages : [];
+        const last = messages[messages.length - 1] as any;
+        if (!last) return '';
+        return `${last.role || ''}:${String(last.content || '').replace(/\s+/g, ' ').trim()}`;
+    }
+
+    private async verifySendOutcome(
+        evaluate: AgentEvaluateFn,
+        before: AgentStreamState | null,
+    ): Promise<boolean> {
+        const beforeCount = this.messageCount(before);
+        const beforeSignature = this.lastMessageSignature(before);
+
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            let state: AgentStreamState;
+            try {
+                state = await this.readChat(evaluate);
+            } catch {
+                continue;
+            }
+
+            if (state.status === 'waiting_approval') {
+                return true;
+            }
+
+            const afterCount = this.messageCount(state);
+            const afterSignature = this.lastMessageSignature(state);
+            if (afterCount > beforeCount) return true;
+            if (afterSignature && afterSignature !== beforeSignature) return true;
+        }
+
+        return false;
+    }
+
+    private async readStableBaselineState(evaluate: AgentEvaluateFn): Promise<AgentStreamState | null> {
+        const first = await this.readChat(evaluate);
+        if (this.messageCount(first) > 0 || this.lastMessageSignature(first)) {
+            return first;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        const second = await this.readChat(evaluate);
+        return this.messageCount(second) >= this.messageCount(first) ? second : first;
+    }
+
     async readChat(evaluate: AgentEvaluateFn): Promise<AgentStreamState> {
         const script = this.callScript('readChat');
         if (!script) return this.errorState('readChat script not available');
@@ -130,6 +181,13 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
     }
 
     async sendMessage(evaluate: AgentEvaluateFn, text: string): Promise<void> {
+        let beforeState: AgentStreamState | null = null;
+        try {
+            beforeState = await this.readStableBaselineState(evaluate);
+        } catch {
+            beforeState = null;
+        }
+
         const params = { message: text };
         const script = this.callScript('sendMessage', params) || this.callScript('sendMessage', text);
         if (!script) throw new Error(`[${this.agentName}] sendMessage script not available`);
@@ -148,7 +206,9 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
         }
         if (parsed && typeof parsed === 'object') {
             if (parsed.sent === true || parsed.success === true || parsed.ok === true || parsed.submitted === true || parsed.dispatched === true) {
-                return;
+                const verified = await this.verifySendOutcome(evaluate, beforeState);
+                if (verified) return;
+                throw new Error(`[${this.agentName}] sendMessage was not observed in chat state`);
             }
             if (typeof parsed.error === 'string' && parsed.error.trim()) {
                 throw new Error(`[${this.agentName}] sendMessage failed: ${parsed.error}`);
@@ -161,7 +221,23 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
     async resolveAction(evaluate: AgentEvaluateFn, action: string, button?: string): Promise<boolean> {
         const script = this.callScript('resolveAction', { action, button });
         if (!script) return false; // Not supported if provider has no resolveAction
-        return (await evaluate(script)) === true;
+        const result = await evaluate(script);
+        const parsed = this.parseMaybeJson(result);
+        if (parsed === true) return true;
+        if (typeof parsed === 'string') {
+            const normalized = parsed.trim().toLowerCase();
+            return normalized === 'ok'
+                || normalized === 'success'
+                || normalized === 'true'
+                || normalized === 'resolved'
+                || normalized === 'approved'
+                || normalized === 'rejected';
+        }
+        if (!parsed || typeof parsed !== 'object') return false;
+        return parsed.resolved === true
+            || parsed.success === true
+            || parsed.ok === true
+            || parsed.found === true;
     }
 
     async newSession(evaluate: AgentEvaluateFn): Promise<void> {

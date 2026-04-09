@@ -94,7 +94,7 @@ export function buildLiveSessionInboxStateMap(ides: DaemonData[]) {
     }
 
     for (const entry of ides) {
-        if ((entry as any).daemonMode) continue
+        if (entry.daemonMode) continue
         register(entry.sessionId, entry)
         for (const child of entry.childSessions || []) {
             register(child.id, child)

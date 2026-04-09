@@ -244,7 +244,7 @@ export class DaemonAgentStreamManager {
         }
     }
 
-    async resolveSessionAction(cdp: DaemonCdpManager, sessionId: string, action: 'approve' | 'reject'): Promise<boolean> {
+    async resolveSessionAction(cdp: DaemonCdpManager, sessionId: string, action: 'approve' | 'reject', button?: string): Promise<boolean> {
         await this.ensureSessionPanelOpen(sessionId);
         const target = this.getSessionTarget(sessionId);
         if (!target?.parentSessionId) return false;
@@ -255,7 +255,7 @@ export class DaemonAgentStreamManager {
         try {
             const evaluate: AgentEvaluateFn = (expr, timeout) =>
                 cdp.evaluateInSessionFrame(agent.cdpSessionId, expr, timeout);
-            return await agent.adapter.resolveAction(evaluate, action);
+            return await agent.adapter.resolveAction(evaluate, action, button);
         } catch (e) {
             this.logFn(`[AgentStream] resolveAction(${sessionId}) error: ${(e as Error).message}`);
             return false;

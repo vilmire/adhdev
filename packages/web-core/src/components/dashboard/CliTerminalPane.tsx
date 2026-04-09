@@ -66,7 +66,7 @@ export default function CliTerminalPane({
             flushFrameRef.current = null;
         }
         setRuntimeReady(false);
-        (terminalRef.current as any)?.reset?.();
+        terminalRef.current?.reset?.();
     };
 
     const clearRuntimeView = () => {
@@ -80,7 +80,7 @@ export default function CliTerminalPane({
             flushFrameRef.current = null;
         }
         setRuntimeReady(true);
-        (terminalRef.current as any)?.reset?.();
+        terminalRef.current?.reset?.();
     };
 
     const flushPendingLiveOutput = () => {
@@ -106,9 +106,9 @@ export default function CliTerminalPane({
         seededSnapshotSeqRef.current = seq;
         setRuntimeReady(true);
         if (typeof cols === 'number' && typeof rows === 'number' && cols > 0 && rows > 0) {
-            (terminalRef.current as any)?.resize?.(cols, rows);
+            terminalRef.current?.resize?.(cols, rows);
         }
-        (terminalRef.current as any)?.reset?.();
+        terminalRef.current?.reset?.();
         if (text) terminalRef.current?.write(text);
     };
 
@@ -125,12 +125,12 @@ export default function CliTerminalPane({
                     pendingHiddenSnapshotRef.current = {
                         text: event.text || '',
                         seq: event.seq || 0,
-                        cols: (event as any).cols,
-                        rows: (event as any).rows,
+                        cols: event.cols,
+                        rows: event.rows,
                     };
                     return;
                 }
-                seedTerminal(event.text || '', event.seq || 0, (event as any).cols, (event as any).rows);
+                seedTerminal(event.text || '', event.seq || 0, event.cols, event.rows);
                 return;
             }
             if (event.type === 'session_output') {
@@ -282,7 +282,7 @@ export default function CliTerminalPane({
                         }}
                     >
                         <CliTerminal
-                            ref={terminalRef as any}
+                            ref={terminalRef}
                             readOnly={!runtimeReady || !isVisible}
                             sizingMode={terminalSizingMode}
                             onInput={(data) => {

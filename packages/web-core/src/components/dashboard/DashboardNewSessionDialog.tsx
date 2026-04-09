@@ -93,10 +93,10 @@ export default function DashboardNewSessionDialog({
         [selectedMachineId, sortedMachines],
     )
     const workspaceRows = useMemo(
-        () => ((selectedMachine as any)?.workspaces || []) as Array<{ id: string; path: string; label?: string }>,
+        () => (selectedMachine?.workspaces || []).map(w => ({ id: w.id, path: w.path, label: w.label })),
         [selectedMachine],
     )
-    const defaultWorkspaceId = ((selectedMachine as any)?.defaultWorkspaceId as string | null | undefined) || null
+    const defaultWorkspaceId = selectedMachine?.defaultWorkspaceId || null
     const [workspaceChoice, setWorkspaceChoice] = useState<string>('')
     const [customWorkspacePath, setCustomWorkspacePath] = useState('')
     const [activeKind, setActiveKind] = useState<LaunchKind | null>(getDefaultLaunchKind(sortedMachines[0]))

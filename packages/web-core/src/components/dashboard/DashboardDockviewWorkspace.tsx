@@ -370,7 +370,7 @@ function DashboardDockviewRemotePanel({ params }: IDockviewPanelProps<DashboardD
         <div className="h-full min-h-0 min-w-0 flex flex-col overflow-hidden bg-black">
             <RemoteView
                 addLog={() => {}}
-                connState={(activeConv.connectionState || 'new') as any}
+                connState={(activeConv.connectionState || 'new') as 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed'}
                 connScreenshot={connScreenshot}
                 screenshotUsage={screenshotUsage}
                 transportType={activeConv.transport}

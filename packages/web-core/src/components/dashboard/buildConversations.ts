@@ -103,9 +103,8 @@ function getLocalMessages(
 export function buildMachineNameMap(allIdes: DaemonData[] = []): Record<string, string> {
     const machineNames: Record<string, string> = {};
     for (const daemon of allIdes) {
-        const entry = daemon as any;
-        if (entry.type === 'adhdev-daemon' || entry.daemonMode) {
-            machineNames[entry.id] = getMachineDisplayName(entry, { fallbackId: entry.id });
+        if (daemon.type === 'adhdev-daemon' || daemon.daemonMode) {
+            machineNames[daemon.id] = getMachineDisplayName(daemon, { fallbackId: daemon.id });
         }
     }
     return machineNames;
@@ -141,7 +140,7 @@ export function buildIdeConversations(
         ? ide.childSessions.map(child => ({
             sessionId: child.id,
             instanceId: child.id,
-            providerSessionId: (child as any).providerSessionId,
+            providerSessionId: child.providerSessionId,
             transport: child.transport,
             agentType: child.providerType,
             agentName: child.providerName,
@@ -149,11 +148,11 @@ export function buildIdeConversations(
             title: child.title,
             messages: child.activeChat?.messages || [],
             activeModal: child.activeChat?.activeModal || undefined,
-            unread: (child as any).unread,
-            lastSeenAt: (child as any).lastSeenAt,
-            lastUpdated: (child as any).lastUpdated,
-            inboxBucket: (child as any).inboxBucket,
-            surfaceHidden: (child as any).surfaceHidden,
+            unread: child.unread,
+            lastSeenAt: child.lastSeenAt,
+            lastUpdated: child.lastUpdated,
+            inboxBucket: child.inboxBucket,
+            surfaceHidden: child.surfaceHidden,
         }))
         : [];
     const useConversationFirst = isConversationFirstIde(ide);
@@ -164,7 +163,7 @@ export function buildIdeConversations(
 
     // 1) IDE native chat tab
     if (useConversationFirst) {
-        const nativeSessionId = (ide as any).sessionId || ide.instanceId;
+        const nativeSessionId = ide.sessionId || ide.instanceId;
         const agentName = getAgentDisplayName(ide.type);
         const modal = ide.activeChat?.activeModal;
         const hasRealModal = modal && Array.isArray(modal.buttons) && modal.buttons.length > 0;
@@ -179,10 +178,10 @@ export function buildIdeConversations(
             const matched = chats.find((c: { id: string; title?: string }) => c.id === activeId || (c.id && String(c.id) === String(activeId)));
             if (matched?.title && String(matched.title).trim()) title = String(matched.title).trim();
         }
-        const nativeProviderType = (isCliConv(ide as any) || isAcpConv(ide as any))
+        const nativeProviderType = (isCliConv(ide) || isAcpConv(ide))
             ? ((ide as any).cliType || (ide as any).acpType || ide.type)
             : ide.type;
-        const effectiveNativeTitle = (isCliConv(ide as any) || isAcpConv(ide as any))
+        const effectiveNativeTitle = (isCliConv(ide) || isAcpConv(ide))
             && isGenericAgentTitle(title, agentName, nativeProviderType)
             ? ''
             : title;
@@ -202,23 +201,23 @@ export function buildIdeConversations(
         results.push({
             ideId: ide.id,
             sessionId: nativeSessionId,
-            providerSessionId: (ide as any).providerSessionId,
+            providerSessionId: ide.providerSessionId,
             nativeSessionId,
             transport: ide.transport,
             daemonId: ide.daemonId || undefined,
-            mode: isCliConv(ide as any) ? (((ide as any).mode as 'terminal' | 'chat' | undefined) || 'terminal') : 'chat',
+            mode: isCliConv(ide) ? ((ide.mode || 'terminal') as 'terminal' | 'chat') : 'chat',
             agentName,
             agentType: nativeProviderType,
             status: agentStatus,
             title: effectiveNativeTitle,
             messages: [...nativeServerMsgs, ...nativePendingLocal],
-            resume: (ide as any).resume,
+            resume: ide.resume,
             ideType: nativeProviderType,
             workspaceName,
             displayPrimary: workspaceName
                 || effectiveNativeTitle
-                || (isCliConv(ide as any)
-                    ? (((ide as any).mode as 'terminal' | 'chat' | undefined) === 'chat' ? agentName : 'Terminal')
+                || (isCliConv(ide)
+                    ? ((ide.mode === 'chat') ? agentName : 'Terminal')
                     : agentName),
             displaySecondary: ideLabel,
             cdpConnected: ide.cdpConnected,
@@ -232,7 +231,7 @@ export function buildIdeConversations(
     }
 
     // 2) Per-agent-stream tabs
-    if (useConversationFirst && (isCliConv(ide as any) || isAcpConv(ide as any))) {
+    if (useConversationFirst && (isCliConv(ide) || isAcpConv(ide))) {
         return results;
     }
     for (const stream of streams) {
@@ -267,10 +266,10 @@ export function buildIdeConversations(
         if (!hasMeaningfulStream) continue;
         results.push({
             ideId: ide.id,
-            sessionId: (stream as any).sessionId || (stream as any).instanceId,
-            providerSessionId: (stream as any).providerSessionId,
-            nativeSessionId: (ide as any).sessionId || ide.instanceId,
-            transport: (stream as any).transport || 'cdp-webview',
+            sessionId: stream.sessionId || stream.instanceId,
+            providerSessionId: stream.providerSessionId,
+            nativeSessionId: ide.sessionId || ide.instanceId,
+            transport: (stream.transport || 'cdp-webview') as import('../../types').SessionTransport,
             daemonId: ide.daemonId || undefined,
             mode: 'chat',
             agentName: stream.agentName,
@@ -286,7 +285,7 @@ export function buildIdeConversations(
             modalButtons: hasModal ? stream.activeModal!.buttons : undefined,
             modalMessage: hasModal ? stream.activeModal!.message : undefined,
             streamSource: 'agent-stream',
-            tabKey: getConversationTabKey((stream as any).sessionId || (stream as any).instanceId, streamTabKey),
+            tabKey: getConversationTabKey(stream.sessionId || stream.instanceId, streamTabKey),
             machineName,
             connectionState,
         });
@@ -296,9 +295,9 @@ export function buildIdeConversations(
     if (results.length === 0) {
         results.push({
             ideId: ide.id,
-            sessionId: (ide as any).sessionId || ide.instanceId,
-            providerSessionId: (ide as any).providerSessionId,
-            nativeSessionId: (ide as any).sessionId || ide.instanceId,
+            sessionId: ide.sessionId || ide.instanceId,
+            providerSessionId: ide.providerSessionId,
+            nativeSessionId: ide.sessionId || ide.instanceId,
             transport: ide.transport,
             daemonId: ide.daemonId || undefined,
             mode: 'chat',
@@ -313,7 +312,7 @@ export function buildIdeConversations(
             displaySecondary: ideLabel,
             cdpConnected: ide.cdpConnected,
             streamSource: 'native',
-            tabKey: getConversationTabKey((ide as any).sessionId || ide.instanceId, ide.id),
+            tabKey: getConversationTabKey(ide.sessionId || ide.instanceId, ide.id),
             connectionState,
         });
     }

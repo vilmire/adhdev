@@ -2,13 +2,13 @@
     "files": [],
     "references": [
         {
-            "path": "./packages/web"
+            "path": "./packages/web-core"
         },
         {
-            "path": "./packages/server"
+            "path": "./packages/daemon-core"
         },
         {
-            "path": "./packages/core"
+            "path": "./packages/web-standalone"
         }
     ]
 }

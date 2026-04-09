@@ -178,8 +178,8 @@ export default function DashboardMobileSessionHostSheet({
     )
 
     const activeCliEntries = useMemo(
-        () => ides.filter((entry: any) => {
-            if ((entry as any).daemonMode) return false
+        () => ides.filter(entry => {
+            if (entry.daemonMode) return false
             if (entry.transport !== 'pty') return false
             const entryMachineId = getRouteMachineId(entry.daemonId || entry.id)
             return !!activeMachine?.id && entryMachineId === activeMachine.id

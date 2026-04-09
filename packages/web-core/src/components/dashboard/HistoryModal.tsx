@@ -62,7 +62,7 @@ export default function HistoryModal({
 }: HistoryModalProps) {
     const ideEntry = ides.find(i => i.id === activeConv.ideId);
     const chats = ideEntry?.chats || [];
-    const activeChatId = (ideEntry as any)?.activeChat?.id;
+    const activeChatId = ideEntry?.activeChat?.id;
     const isSavedSessionMode = isCliConv(activeConv) && !isAcpConv(activeConv);
 
     const content = (

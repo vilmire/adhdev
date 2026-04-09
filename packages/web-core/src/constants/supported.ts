@@ -403,11 +403,12 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
       "new_session",
       "send_chat",
       "list_sessions",
-      "switch_session"
+      "switch_session",
+      "resolve_action"
     ],
-    "lastValidated": "2026-04-09",
-    "notes": "A fresh Codex extension chat could be created and answered correctly inside Antigravity. Dedicated list_sessions and switch_session scripts now work against the Recent tasks history view, but an actively generating task can still collapse history access back to the current chat. Promotion stays at Partial until history switching is reliable while idle and during normal operator use.",
-    "evidence": "Manual local validation via standalone API on 2026-04-09, including invoke_provider_script listSessions/switchSession against Antigravity Codex webview",
+    "lastValidated": "2026-04-10",
+    "notes": "Cursor-hosted Codex on macOS now has locale-agnostic read/list/switch handling, approve-path resolve_action, and transcript cleanup for localized timestamps plus stale replay turns. It remains Partial because recent-task history can still collapse to the current chat and some send_chat attempts still fail to materialize as a real turn, even though false-success reporting is now blocked.",
+    "evidence": "Manual local validation via standalone API on 2026-04-10 against Cursor-hosted Codex webview, including recent-task list/switch, approve-path resolve_action, and transcript cleanup verification",
     "owner": "core",
     "source": "docs/site/data/provider-catalog.mjs"
   },

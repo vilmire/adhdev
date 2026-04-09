@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActiveConversation, CliConversationViewMode } from './types';
 import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
 import { IconBell, IconChat, IconScroll, IconMonitor, IconEyeOff, IconX, IconPlus } from '../Icons';
-import { useDaemons } from '../../compat';
+import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared';
 import CliViewModeToggle from './CliViewModeToggle';
 
@@ -90,9 +90,7 @@ export default function DashboardHeader({
     onHiddenOpenChange,
     onOpenNewSession,
 }: DashboardHeaderProps) {
-    const daemonCtx = useDaemons() as any;
-    const p2pStates: Record<string, string> = daemonCtx.p2pStates || {};
-    const ides = daemonCtx.ides || [];
+    const { ides, p2pStates = {} } = useBaseDaemons();
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
     const isAcpActive = !!activeConv && isAcpConv(activeConv);
     const effectiveCliViewMode = activeCliViewMode || (activeConv ? (isCliTerminalConv(activeConv) ? 'terminal' : 'chat') : null);
@@ -104,7 +102,7 @@ export default function DashboardHeader({
     const dotGlow = isConnected ? '0 0 4px #22c55e80' : wsStatus === 'connected' ? '0 0 4px #eab30880' : '0 0 4px #ef444480';
 
     // Derive connection stage summary
-    const daemons = ides.filter((i: any) => i.type === 'adhdev-daemon');
+    const daemons = ides.filter(i => i.type === 'adhdev-daemon');
     const liveSessionInboxState = useMemo(
         () => buildLiveSessionInboxStateMap(ides),
         [ides],

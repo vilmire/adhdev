@@ -115,6 +115,51 @@ function didProviderConfirmSend(result: any): boolean {
         || parsed.dispatched === true;
 }
 
+async function readExtensionChatState(h: CommandHelpers): Promise<any | null> {
+    try {
+        const evalResult = await h.evaluateProviderScript('readChat', undefined, 50000);
+        if (!evalResult?.result) return null;
+        const parsed = parseMaybeJson(evalResult.result);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
+function getStateMessageCount(state: any): number {
+    return Array.isArray(state?.messages) ? state.messages.length : 0;
+}
+
+function getStateLastSignature(state: any): string {
+    const messages = Array.isArray(state?.messages) ? state.messages : [];
+    const last = messages[messages.length - 1];
+    if (!last) return '';
+    return `${last.role || ''}:${String(last.content || '').replace(/\s+/g, ' ').trim()}`;
+}
+
+async function getStableExtensionBaseline(h: CommandHelpers): Promise<any | null> {
+    const first = await readExtensionChatState(h);
+    if (getStateMessageCount(first) > 0 || getStateLastSignature(first)) return first;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const second = await readExtensionChatState(h);
+    return getStateMessageCount(second) >= getStateMessageCount(first) ? second : first;
+}
+
+async function verifyExtensionSendObserved(h: CommandHelpers, before: any): Promise<boolean> {
+    const beforeCount = getStateMessageCount(before);
+    const beforeSignature = getStateLastSignature(before);
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const state = await readExtensionChatState(h);
+        if (state?.status === 'waiting_approval') return true;
+        const afterCount = getStateMessageCount(state);
+        const afterSignature = getStateLastSignature(state);
+        if (afterCount > beforeCount) return true;
+        if (afterSignature && afterSignature !== beforeSignature) return true;
+    }
+    return false;
+}
+
 export async function handleChatHistory(h: CommandHelpers, args: any): Promise<CommandResult> {
     const { agentType, offset, limit } = args;
     const historySessionId = getHistorySessionId(h, args);
@@ -303,12 +348,17 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
         _log(`Extension: ${provider?.type || 'unknown_extension'}`);
         // Method 1: provider sendMessage script via evaluateInSession
         try {
+            const beforeState = await getStableExtensionBaseline(h);
             const evalResult = await h.evaluateProviderScript('sendMessage', { message: text }, 30000);
             if (evalResult?.result) {
                 const parsed = parseMaybeJson(evalResult.result);
                 if (didProviderConfirmSend(parsed)) {
-                    _log(`Extension script sent OK`);
-                    return _logSendSuccess('extension-script');
+                    const observed = await verifyExtensionSendObserved(h, beforeState);
+                    if (observed) {
+                        _log(`Extension script sent OK`);
+                        return _logSendSuccess('extension-script');
+                    }
+                    _log(`Extension script reported send but no chat-state change was observed`);
                 }
                 if (parsed?.needsTypeAndSend) {
                     _log(`Extension needsTypeAndSend → AgentStreamManager`);
@@ -829,7 +879,7 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
 
     // 1. Extension transport: via AgentStreamManager
     if (isExtensionTransport(transport) && h.agentStream && h.getCdp() && h.currentSession?.sessionId) {
-        const ok = await h.agentStream.resolveSessionAction(h.getCdp()!, h.currentSession.sessionId, action);
+        const ok = await h.agentStream.resolveSessionAction(h.getCdp()!, h.currentSession.sessionId, action, button);
         return { success: ok };
     }
 

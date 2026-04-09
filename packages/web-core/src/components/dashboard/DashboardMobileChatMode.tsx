@@ -164,7 +164,7 @@ export default function DashboardMobileChatMode({
     }, [selectedConversation])
     const machineEntries = useMemo(
         () => ides
-            .filter((entry: any) => entry.type === 'adhdev-daemon' || entry.daemonMode)
+            .filter(entry => entry.type === 'adhdev-daemon' || entry.daemonMode)
             .sort(compareMachineEntries),
         [ides],
     )
@@ -334,7 +334,7 @@ export default function DashboardMobileChatMode({
     const selectedMachineRecentLaunches = useMemo<MachineRecentLaunch[]>(
         () => {
             if (!selectedMachineEntry) return []
-            const recentLaunches = ((selectedMachineEntry as any).recentLaunches || []) as any[]
+            const recentLaunches = selectedMachineEntry.recentLaunches || []
             if (recentLaunches.length > 0) {
                 return recentLaunches.map((launch) => ({
                     id: launch.id,
@@ -349,25 +349,25 @@ export default function DashboardMobileChatMode({
             }
 
             return ides
-                .filter((entry: any) => !(entry as any).daemonMode && (entry as any).daemonId === selectedMachineEntry.id)
-                .map((entry: any) => {
+                .filter(entry => !entry.daemonMode && entry.daemonId === selectedMachineEntry.id)
+                .map(entry => {
                     const kind: MachineRecentLaunch['kind'] = isCliEntry(entry) ? 'cli' : isAcpEntry(entry) ? 'acp' : 'ide'
                     return {
                         id: `${kind}:${entry.type}:${entry.workspace || ''}`,
                         label: entry.activeChat?.title
                             || (isCliEntry(entry)
-                                ? ((entry as any).cliName || entry.type)
+                                ? (entry.cliName || entry.type)
                                 : isAcpEntry(entry)
-                                    ? ((entry as any).cliName || entry.type)
+                                    ? (entry.cliName || entry.type)
                                     : entry.type),
                         kind,
                         providerType: entry.type,
-                        providerSessionId: (entry as any).providerSessionId,
+                        providerSessionId: entry.providerSessionId,
                         subtitle: isAcpEntry(entry)
-                            ? ((entry as any).currentModel || (entry as any).workspace || undefined)
-                            : ((entry as any).workspace || undefined),
-                        workspace: (entry as any).workspace || undefined,
-                        currentModel: (entry as any).currentModel,
+                            ? (entry.currentModel || entry.workspace || undefined)
+                            : (entry.workspace || undefined),
+                        workspace: entry.workspace || undefined,
+                        currentModel: entry.currentModel,
                         timestamp: entry.activeChat?.messages?.at?.(-1)?.timestamp || 0,
                     }
                 })
@@ -376,16 +376,10 @@ export default function DashboardMobileChatMode({
         },
         [ides, selectedMachineEntry],
     )
-    const selectedMachineVersion = selectedMachineEntry?.version || (selectedMachineEntry as any)?.daemonVersion || null
+    const selectedMachineVersion = selectedMachineEntry?.version || null
     const selectedMachineNeedsUpgrade = !!selectedMachineEntry && !!selectedMachineVersion && !!appVersion && selectedMachineVersion !== appVersion
     const selectedMachineProviders = useMemo(
-        () => ((selectedMachineEntry as any)?.availableProviders || []) as Array<{
-            type: string
-            displayName?: string
-            icon?: string
-            category?: string
-            installed?: boolean
-        }>,
+        () => selectedMachineEntry?.availableProviders || [],
         [selectedMachineEntry],
     )
     const selectedMachineCliProviders = useMemo(
@@ -652,7 +646,7 @@ export default function DashboardMobileChatMode({
         if (!pendingWorkspaceLaunch) return
 
         const normalizedTargetWorkspace = normalizeWorkspacePath(pendingWorkspaceLaunch.workspacePath)
-        const matchingEntry = ides.find((entry: any) => {
+        const matchingEntry = ides.find(entry => {
             if (!entry || entry.type === 'adhdev-daemon' || entry.daemonMode) return false
             const entryMachineId = getRouteMachineId(entry.daemonId || entry.id)
             if (entryMachineId !== pendingWorkspaceLaunch.machineId) return false

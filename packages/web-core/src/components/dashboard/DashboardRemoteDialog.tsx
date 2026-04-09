@@ -224,7 +224,7 @@ export default function DashboardRemoteDialog({
                     <div className={`flex flex-col min-w-0 min-h-0 bg-black ${viewMode === 'split' ? 'order-1 md:order-2' : ''}`}>
                         <RemoteView
                             addLog={() => {}}
-                            connState={(effectiveConv.connectionState || 'new') as any}
+                            connState={(effectiveConv.connectionState || 'new') as 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed'}
                             connScreenshot={connScreenshot}
                             screenshotUsage={screenshotUsage}
                             transportType={effectiveConv.transport}

@@ -69,16 +69,16 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
                 }
             },
             reset: () => {
-                if (innerRef.current && 'reset' in innerRef.current && typeof (innerRef.current as any).reset === 'function') {
-                    (innerRef.current as any).reset();
+                if (innerRef.current && typeof innerRef.current.reset === 'function') {
+                    innerRef.current.reset();
                 } else {
                     pendingWritesRef.current = [];
                     pendingClearRef.current = true;
                 }
             },
             resize: (cols: number, rows: number) => {
-                if (innerRef.current && 'resize' in innerRef.current && typeof (innerRef.current as any).resize === 'function') {
-                    (innerRef.current as any).resize(cols, rows);
+                if (innerRef.current && typeof innerRef.current.resize === 'function') {
+                    innerRef.current.resize(cols, rows);
                 }
             },
             fit: () => {
