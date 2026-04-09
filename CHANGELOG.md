@@ -2,6 +2,13 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.26] - 2026-04-09
+
+### Fixed
+- Standardized provider `sendMessage` payloads around `params.message` while preserving legacy string fallback for older routers.
+- Hardened daemon provider-script dispatch so legacy IDE providers no longer leak `[object Object]` when receiving object params.
+- Fixed terminal mux and mobile dashboard typing regressions that were blocking the OSS release build.
+
 ## [0.8.25] - 2026-04-09
 
 ### Fixed
