@@ -44,6 +44,7 @@ export interface SessionHostControlPlane {
     restartSession(sessionId: string): Promise<any>;
     sendSignal(sessionId: string, signal: string): Promise<any>;
     forceDetachClient(sessionId: string, clientId: string): Promise<any>;
+    pruneDuplicateSessions(payload?: { providerType?: string; workspace?: string; dryRun?: boolean }): Promise<any>;
     acquireWrite(payload: { sessionId: string; clientId: string; ownerType: 'agent' | 'user'; force?: boolean }): Promise<any>;
     releaseWrite(payload: { sessionId: string; clientId: string }): Promise<any>;
 }
@@ -263,6 +264,16 @@ export class DaemonCommandRouter {
                 if (!clientId) return { success: false, error: 'clientId required' };
                 const record = await this.deps.sessionHostControl.forceDetachClient(sessionId, clientId);
                 return { success: true, record };
+            }
+
+            case 'session_host_prune_duplicate_sessions': {
+                if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
+                const result = await this.deps.sessionHostControl.pruneDuplicateSessions({
+                    providerType: typeof args?.providerType === 'string' ? args.providerType : undefined,
+                    workspace: typeof args?.workspace === 'string' ? args.workspace : undefined,
+                    dryRun: args?.dryRun === true,
+                });
+                return { success: true, result };
             }
 
             case 'session_host_acquire_write': {

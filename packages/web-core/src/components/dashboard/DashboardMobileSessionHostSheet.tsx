@@ -139,6 +139,20 @@ function lifecyclePillClass(lifecycle: string): string {
     }
 }
 
+function countDuplicateSessionGroups(sessions: SessionHostRecordView[]): number {
+    const groups = new Map<string, number>()
+    for (const session of sessions) {
+        if (!['starting', 'running', 'stopping', 'interrupted'].includes(session.lifecycle)) continue
+        const providerSessionId = typeof session.meta?.providerSessionId === 'string'
+            ? String(session.meta.providerSessionId).trim()
+            : ''
+        if (!providerSessionId) continue
+        const key = `${session.providerType}::${session.workspace}::${providerSessionId}`
+        groups.set(key, (groups.get(key) || 0) + 1)
+    }
+    return Array.from(groups.values()).filter((count) => count > 1).length
+}
+
 export default function DashboardMobileSessionHostSheet({
     machineCards,
     conversations,
@@ -245,9 +259,38 @@ export default function DashboardMobileSessionHostSheet({
         }
     }, [activeMachine?.id, loadDiagnostics, sendDaemonCommand])
 
+    const runPruneDuplicates = useCallback(async () => {
+        if (!activeMachine?.id) return
+        const confirmed = window.confirm('Prune duplicate hosted runtimes?\nThe newest runtime for each provider session will be kept and older duplicates will be stopped and removed.')
+        if (!confirmed) return
+
+        setBusyActionKey('session_host_prune_duplicate_sessions')
+        try {
+            const raw = await sendDaemonCommand(activeMachine.id, 'session_host_prune_duplicate_sessions', {})
+            const envelope = unwrapCommandEnvelope(raw)
+            if (!envelope?.success) throw new Error(envelope?.error || 'Duplicate prune failed')
+            const result = envelope.result || {}
+            const prunedCount = Array.isArray(result.prunedSessionIds) ? result.prunedSessionIds.length : 0
+            const groupCount = typeof result.duplicateGroupCount === 'number' ? result.duplicateGroupCount : 0
+            eventManager.showToast(`Pruned ${prunedCount} duplicate runtime(s) across ${groupCount} group(s)`, 'success')
+            await loadDiagnostics({ silent: true })
+        } catch (cause) {
+            const message = cause instanceof Error ? cause.message : 'Duplicate prune failed'
+            setError(message)
+            eventManager.showToast(message, 'warning')
+        } finally {
+            setBusyActionKey((current) => (current === 'session_host_prune_duplicate_sessions' ? null : current))
+        }
+    }, [activeMachine?.id, loadDiagnostics, sendDaemonCommand])
+
     const sessions = useMemo(
         () => [...(diagnostics?.sessions || [])].sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0)),
         [diagnostics?.sessions],
+    )
+
+    const duplicateGroupCount = useMemo(
+        () => countDuplicateSessionGroups(sessions),
+        [sessions],
     )
 
     const totalAttachedClients = useMemo(
@@ -368,7 +411,21 @@ export default function DashboardMobileSessionHostSheet({
                                 <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-text-secondary">
                                     <IconTerminal size={14} /> Hosted runtimes
                                 </div>
-                                <div className="text-[11px] text-text-secondary">{activeCliEntries.length} dashboard session{activeCliEntries.length === 1 ? '' : 's'}</div>
+                                <div className="flex items-center gap-2">
+                                    {duplicateGroupCount > 0 && (
+                                        <button
+                                            type="button"
+                                            className="machine-btn px-2.5 py-1 text-[11px]"
+                                            disabled={busyActionKey === 'session_host_prune_duplicate_sessions'}
+                                            onClick={() => { void runPruneDuplicates() }}
+                                        >
+                                            {busyActionKey === 'session_host_prune_duplicate_sessions'
+                                                ? 'Pruning…'
+                                                : `Prune ${duplicateGroupCount}`}
+                                        </button>
+                                    )}
+                                    <div className="text-[11px] text-text-secondary">{activeCliEntries.length} dashboard session{activeCliEntries.length === 1 ? '' : 's'}</div>
+                                </div>
                             </div>
 
                             {sessions.length === 0 ? (

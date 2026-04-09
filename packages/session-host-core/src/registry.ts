@@ -241,6 +241,10 @@ export class SessionHostRegistry {
     return this.cloneRecord(state.record);
   }
 
+  deleteSession(sessionId: string): boolean {
+    return this.sessions.delete(sessionId);
+  }
+
   private requireSession(sessionId: string): SessionRuntimeState {
     const state = this.sessions.get(sessionId);
     if (!state) throw new Error(`Unknown session: ${sessionId}`);

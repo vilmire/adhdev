@@ -142,6 +142,20 @@ function lifecyclePillClass(lifecycle: string): string {
     }
 }
 
+function countDuplicateSessionGroups(sessions: SessionHostRecordView[]): number {
+    const groups = new Map<string, number>()
+    for (const session of sessions) {
+        if (!['starting', 'running', 'stopping', 'interrupted'].includes(session.lifecycle)) continue
+        const providerSessionId = typeof session.meta?.providerSessionId === 'string'
+            ? String(session.meta.providerSessionId).trim()
+            : ''
+        if (!providerSessionId) continue
+        const key = `${session.providerType}::${session.workspace}::${providerSessionId}`
+        groups.set(key, (groups.get(key) || 0) + 1)
+    }
+    return Array.from(groups.values()).filter((count) => count > 1).length
+}
+
 export default function SessionHostPanel({
     machineId,
     cliSessions,
@@ -219,9 +233,38 @@ export default function SessionHostPanel({
         }
     }, [loadDiagnostics, machineId, sendDaemonCommand])
 
+    const runPruneDuplicates = useCallback(async () => {
+        const confirmed = window.confirm('Prune duplicate hosted runtimes?\nThe newest runtime for each provider session will be kept and older duplicates will be stopped and removed.')
+        if (!confirmed) return
+
+        setBusyActionKey('session_host_prune_duplicate_sessions')
+        try {
+            const raw = await sendDaemonCommand(machineId, 'session_host_prune_duplicate_sessions', {})
+            const envelope = unwrapCommandEnvelope(raw)
+            if (!envelope?.success) {
+                throw new Error(envelope?.error || 'Duplicate prune failed')
+            }
+            const result = envelope.result || {}
+            const prunedCount = Array.isArray(result.prunedSessionIds) ? result.prunedSessionIds.length : 0
+            const groupCount = typeof result.duplicateGroupCount === 'number' ? result.duplicateGroupCount : 0
+            eventManager.showToast(`Pruned ${prunedCount} duplicate runtime(s) across ${groupCount} group(s)`, 'success')
+            await loadDiagnostics({ silent: true })
+        } catch (cause) {
+            const message = cause instanceof Error ? cause.message : 'Duplicate prune failed'
+            eventManager.showToast(message, 'warning')
+            setError(message)
+        } finally {
+            setBusyActionKey((current) => (current === 'session_host_prune_duplicate_sessions' ? null : current))
+        }
+    }, [loadDiagnostics, machineId, sendDaemonCommand])
+
     const sessions = useMemo(
         () => [...(diagnostics?.sessions || [])].sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0)),
         [diagnostics?.sessions],
+    )
+    const duplicateGroupCount = useMemo(
+        () => countDuplicateSessionGroups(sessions),
+        [sessions],
     )
     const totalAttachedClients = useMemo(
         () => sessions.reduce((sum, session) => sum + (session.attachedClients?.length || 0), 0),
@@ -248,6 +291,18 @@ export default function SessionHostPanel({
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
+                    {duplicateGroupCount > 0 && (
+                        <button
+                            type="button"
+                            className="machine-btn"
+                            onClick={() => { void runPruneDuplicates() }}
+                            disabled={busyActionKey === 'session_host_prune_duplicate_sessions'}
+                        >
+                            {busyActionKey === 'session_host_prune_duplicate_sessions'
+                                ? 'Pruning…'
+                                : `Prune duplicates (${duplicateGroupCount})`}
+                        </button>
+                    )}
                     <span className={`px-2 py-1 rounded-md text-[10px] font-semibold ${
                         diagnostics ? 'bg-green-500/[0.08] text-green-500' : 'bg-amber-500/[0.08] text-amber-400'
                     }`}>

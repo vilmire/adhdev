@@ -12,9 +12,11 @@ import type {
   CreateSessionPayload,
   SessionHostDiagnostics,
   SessionAttachedClient,
+  SessionHostDuplicateSessionGroup,
   SessionHostEndpoint,
   SessionHostEvent,
   SessionHostLogEntry,
+  SessionHostPruneDuplicatesResult,
   SessionHostRecord,
   SessionHostRequestEnvelope,
   SessionHostRequestTrace,
@@ -255,6 +257,10 @@ export class SessionHostServer extends EventEmitter {
         case 'restart_session': {
           const restarted = await this.restartRuntime(request.payload.sessionId);
           return { success: true, result: restarted };
+        }
+        case 'prune_duplicate_sessions': {
+          const result = await this.pruneDuplicateSessions(request.payload);
+          return { success: true, result };
         }
         case 'send_signal': {
           const runtime = this.requireRuntime(request.payload.sessionId);
@@ -516,6 +522,83 @@ export class SessionHostServer extends EventEmitter {
     return restarted;
   }
 
+  private async pruneDuplicateSessions(payload?: {
+    providerType?: string;
+    workspace?: string;
+    dryRun?: boolean;
+  }): Promise<SessionHostPruneDuplicatesResult> {
+    const providerFilter = typeof payload?.providerType === 'string' ? payload.providerType.trim() : '';
+    const workspaceFilter = typeof payload?.workspace === 'string' ? payload.workspace.trim() : '';
+    const dryRun = payload?.dryRun === true;
+
+    const sessions = this.registry.listSessions()
+      .filter((record) => ['starting', 'running', 'stopping', 'interrupted'].includes(record.lifecycle))
+      .filter((record) => !providerFilter || record.providerType === providerFilter)
+      .filter((record) => !workspaceFilter || record.workspace === workspaceFilter);
+
+    const groups = new Map<string, SessionHostRecord[]>();
+    for (const record of sessions) {
+      const providerSessionId = typeof record.meta?.providerSessionId === 'string'
+        ? String(record.meta.providerSessionId).trim()
+        : '';
+      if (!providerSessionId) continue;
+      const bindingKey = `${record.providerType}::${record.workspace}::${providerSessionId}`;
+      const bucket = groups.get(bindingKey) || [];
+      bucket.push(record);
+      groups.set(bindingKey, bucket);
+    }
+
+    const duplicateGroups: SessionHostDuplicateSessionGroup[] = [];
+    const keptSessionIds: string[] = [];
+    const prunedSessionIds: string[] = [];
+
+    for (const [bindingKey, records] of groups.entries()) {
+      if (records.length < 2) continue;
+      const sorted = [...records].sort((a, b) => this.compareDuplicateCandidates(a, b));
+      const kept = sorted[0];
+      const duplicates = sorted.slice(1);
+      const providerSessionId = typeof kept.meta?.providerSessionId === 'string'
+        ? String(kept.meta.providerSessionId)
+        : '';
+      duplicateGroups.push({
+        bindingKey,
+        providerType: kept.providerType,
+        workspace: kept.workspace,
+        providerSessionId,
+        keptSessionId: kept.sessionId,
+        prunedSessionIds: duplicates.map((record) => record.sessionId),
+      });
+      keptSessionIds.push(kept.sessionId);
+
+      if (dryRun) continue;
+
+      for (const duplicate of duplicates) {
+        await this.pruneDuplicateRuntime(duplicate);
+        prunedSessionIds.push(duplicate.sessionId);
+      }
+    }
+
+    this.recordHostLog(
+      dryRun ? 'info' : 'warn',
+      `${dryRun ? 'session host dry-run found' : 'session host pruned'} ${duplicateGroups.length} duplicate group(s)`,
+      undefined,
+      {
+        providerType: providerFilter || undefined,
+        workspace: workspaceFilter || undefined,
+        dryRun,
+        prunedSessionIds,
+        keptSessionIds,
+      },
+    );
+
+    return {
+      duplicateGroupCount: duplicateGroups.length,
+      keptSessionIds,
+      prunedSessionIds,
+      groups: duplicateGroups,
+    };
+  }
+
   private restorePersistedRuntimes(): void {
     const states = this.storage.loadAll();
     const runtimesToResume: Array<{
@@ -591,6 +674,61 @@ export class SessionHostServer extends EventEmitter {
         this.recordHostLog('error', `restore resume failed for ${recoveredRecord.sessionId}: ${error?.message || String(error)}`, recoveredRecord.sessionId);
       }
     }
+  }
+
+  private compareDuplicateCandidates(a: SessionHostRecord, b: SessionHostRecord): number {
+    const score = (record: SessionHostRecord) => {
+      const lifecycleScore = record.lifecycle === 'running'
+        ? 4
+        : record.lifecycle === 'starting'
+          ? 3
+          : record.lifecycle === 'stopping'
+            ? 2
+            : record.lifecycle === 'interrupted'
+              ? 1
+              : 0;
+      return [
+        lifecycleScore,
+        record.writeOwner ? 1 : 0,
+        Array.isArray(record.attachedClients) ? record.attachedClients.length : 0,
+        record.lastActivityAt || 0,
+        record.startedAt || 0,
+        record.createdAt || 0,
+      ];
+    };
+
+    const aScore = score(a);
+    const bScore = score(b);
+    for (let i = 0; i < aScore.length; i += 1) {
+      if (aScore[i] === bScore[i]) continue;
+      return bScore[i] - aScore[i];
+    }
+    return 0;
+  }
+
+  private async pruneDuplicateRuntime(record: SessionHostRecord): Promise<void> {
+    const providerSessionId = typeof record.meta?.providerSessionId === 'string'
+      ? String(record.meta.providerSessionId)
+      : undefined;
+    this.recordRuntimeTransition(
+      record.sessionId,
+      'prune_duplicate_session',
+      record.lifecycle,
+      providerSessionId ? `providerSessionId=${providerSessionId}` : undefined,
+      true,
+    );
+
+    if (this.runtimes.has(record.sessionId)) {
+      this.registry.setLifecycle(record.sessionId, 'stopping');
+      this.persistNow(record.sessionId);
+      this.requireRuntime(record.sessionId).stop();
+      await this.waitForRuntimeExit(record.sessionId).catch((error: any) => {
+        this.recordRuntimeTransition(record.sessionId, 'prune_duplicate_timeout', 'stopping', undefined, false, error?.message || String(error));
+      });
+    }
+
+    this.registry.deleteSession(record.sessionId);
+    this.storage.remove(record.sessionId);
   }
 
   private buildPayloadFromRecord(record: SessionHostRecord): CreateSessionPayload {

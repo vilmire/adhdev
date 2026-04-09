@@ -8,6 +8,7 @@ interface SessionHostControlPlane {
   restartSession(sessionId: string): Promise<any>;
   sendSignal(sessionId: string, signal: string): Promise<any>;
   forceDetachClient(sessionId: string, clientId: string): Promise<any>;
+  pruneDuplicateSessions(payload?: { providerType?: string; workspace?: string; dryRun?: boolean }): Promise<any>;
   acquireWrite(payload: { sessionId: string; clientId: string; ownerType: 'agent' | 'user'; force?: boolean }): Promise<any>;
   releaseWrite(payload: { sessionId: string; clientId: string }): Promise<any>;
 }
@@ -43,6 +44,10 @@ export class StandaloneSessionHostControlPlane implements SessionHostControlPlan
 
   async forceDetachClient(sessionId: string, clientId: string): Promise<any> {
     return this.request('force_detach_client', { sessionId, clientId });
+  }
+
+  async pruneDuplicateSessions(payload: { providerType?: string; workspace?: string; dryRun?: boolean } = {}): Promise<any> {
+    return this.request('prune_duplicate_sessions', payload);
   }
 
   async acquireWrite(payload: { sessionId: string; clientId: string; ownerType: 'agent' | 'user'; force?: boolean }): Promise<any> {

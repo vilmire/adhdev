@@ -155,6 +155,28 @@ export interface RestartSessionPayload {
   sessionId: string;
 }
 
+export interface PruneDuplicateSessionsPayload {
+  providerType?: string;
+  workspace?: string;
+  dryRun?: boolean;
+}
+
+export interface SessionHostDuplicateSessionGroup {
+  bindingKey: string;
+  providerType: string;
+  workspace: string;
+  providerSessionId: string;
+  keptSessionId: string;
+  prunedSessionIds: string[];
+}
+
+export interface SessionHostPruneDuplicatesResult {
+  duplicateGroupCount: number;
+  keptSessionIds: string[];
+  prunedSessionIds: string[];
+  groups: SessionHostDuplicateSessionGroup[];
+}
+
 export interface SessionHostLogEntry {
   timestamp: number;
   level: 'debug' | 'info' | 'warn' | 'error';
@@ -211,6 +233,7 @@ export type SessionHostRequest =
   | { type: 'force_detach_client'; payload: ForceDetachClientPayload }
   | { type: 'send_signal'; payload: SendSignalPayload }
   | { type: 'restart_session'; payload: RestartSessionPayload }
+  | { type: 'prune_duplicate_sessions'; payload?: PruneDuplicateSessionsPayload }
   | { type: 'list_sessions'; payload?: {} };
 
 export interface SessionHostResponse<T = unknown> {
