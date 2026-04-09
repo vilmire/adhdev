@@ -70,6 +70,13 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
             || /Cannot find context with specified id/i.test(reason);
     }
 
+    private titlesMatch(actual: string, expected: string): boolean {
+        const lhs = actual.trim().toLowerCase();
+        const rhs = expected.trim().toLowerCase();
+        if (!lhs || !rhs) return false;
+        return lhs === rhs || lhs.includes(rhs) || rhs.includes(lhs);
+    }
+
     async readChat(evaluate: AgentEvaluateFn): Promise<AgentStreamState> {
         const script = this.callScript('readChat');
         if (!script) return this.errorState('readChat script not available');
@@ -96,6 +103,9 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
                 mode: data.mode,
                 activeModal: data.activeModal,
             };
+            if (typeof data.title === 'string' && data.title.trim()) {
+                (state as any).title = data.title.trim();
+            }
             const controlValues = extractProviderControlValues(this.provider.controls, data);
             if (controlValues) state.controlValues = controlValues;
             const effects = normalizeProviderEffects(data);
@@ -189,7 +199,15 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
             return normalized === 'true' || normalized === 'ok' || normalized === 'switched' || normalized === 'success';
         }
         if (data && typeof data === 'object') {
-            return data.switched === true || data.success === true || data.ok === true;
+            if (data.switched === true || data.success === true || data.ok === true) return true;
+            if (typeof data.error === 'string' && data.error.trim()) return false;
+        }
+
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            const state = await this.readChat(evaluate);
+            const title = typeof (state as any).title === 'string' ? (state as any).title : '';
+            if (this.titlesMatch(title, sessionId)) return true;
         }
         return false;
     }
