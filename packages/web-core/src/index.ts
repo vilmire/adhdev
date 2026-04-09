@@ -131,7 +131,6 @@ export { ConnectedMachinesSection } from './components/settings/ConnectedMachine
 export { GeneralThemeSection } from './components/settings/GeneralThemeSection'
 export { ChatThemeSection, initChatTheme, getChatTheme, setChatTheme, CHAT_THEMES } from './components/settings/ChatThemeSection'
 export type { ChatThemePreset } from './components/settings/ChatThemeSection'
-export { AccentColorSection, initAccentColor, getAccentColor, setAccentColor } from './components/settings/AccentColorSection'
 export {
     MobileDashboardModeSection,
     getMobileDashboardMode,

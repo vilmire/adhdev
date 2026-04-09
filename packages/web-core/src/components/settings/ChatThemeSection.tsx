@@ -6,7 +6,6 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { getReadableAccentTextColor } from '../../utils/color-contrast'
-import { hasCustomAccentColor } from './AccentColorSection'
 
 // ─── Theme Definitions ──────────────────────────
 export interface ChatThemePreset {
@@ -173,8 +172,6 @@ const PRESET_ACCENTS: Record<string, { dark: string; light: string }> = {
 }
 
 function applyPresetAccentCSSVars(themeId: string, mode: 'dark' | 'light') {
-    if (hasCustomAccentColor()) return
-
     const accent = PRESET_ACCENTS[themeId]?.[mode]
     if (!accent) return
 
@@ -267,6 +264,9 @@ export function setChatTheme(themeId: string) {
 
 /** Call on app init to restore persisted theme */
 export function initChatTheme() {
+    // Clear legacy accent color to prevent theme override issues
+    try { localStorage.removeItem('adhdev-accent-color') } catch {}
+    
     const theme = getChatTheme()
     document.documentElement.setAttribute('data-chat-theme', theme)
     if (theme === 'custom') {
