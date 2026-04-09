@@ -290,6 +290,22 @@ export class PtySessionRuntime {
     this.ptyProcess.kill();
   }
 
+  sendSignal(signal: string): void {
+    if (!this.ptyProcess) throw new Error(`Session not running: ${this.sessionId}`);
+    const normalized = String(signal || '').trim().toUpperCase();
+    if (!normalized) throw new Error('signal is required');
+
+    try {
+      process.kill(this.ptyProcess.pid, normalized as NodeJS.Signals);
+    } catch {
+      if (normalized === 'SIGTERM' || normalized === 'SIGKILL') {
+        this.ptyProcess.kill();
+        return;
+      }
+      throw new Error(`Unsupported signal for runtime ${this.sessionId}: ${normalized}`);
+    }
+  }
+
   getSnapshotText(): string {
     return this.screenMirror?.formatVT() || '';
   }

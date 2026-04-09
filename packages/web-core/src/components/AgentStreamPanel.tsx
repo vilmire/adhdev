@@ -66,7 +66,7 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
                 content: m.content,
                 kind: (m as any).kind,
                 id: `${getStreamKey(activeStream)}-${i}`,
-                receivedAt: m.timestamp,
+                receivedAt: m.receivedAt,
             })),
             ideType: activeStream.agentType,
             workspaceName: '',

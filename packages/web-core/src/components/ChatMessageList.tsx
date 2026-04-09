@@ -65,9 +65,7 @@ function formatTime(ms?: number): string {
 function getRenderableTimestamp(message: ChatMessage, index: number, receivedAtMap: Record<string, number>): number {
     const anyMessage = message as any;
     return Number(
-        anyMessage.timestamp
-        || anyMessage.receivedAt
-        || anyMessage.createdAt
+        anyMessage.receivedAt
         || receivedAtMap[getChatMessageStableKey(message, index)]
         || 0,
     ) || 0;
@@ -89,7 +87,6 @@ export function getChatMessageStableKey(message: ChatMessage, index: number): st
         anyMessage._localId ? `local:${anyMessage._localId}` : '',
         anyMessage._turnKey ? `turn:${anyMessage._turnKey}` : '',
         typeof anyMessage.index === 'number' ? `msgIndex:${anyMessage.index}` : '',
-        anyMessage.timestamp ? `ts:${anyMessage.timestamp}` : '',
         anyMessage.role ? `role:${anyMessage.role}` : '',
         content ? `content:${content.slice(0, 80)}` : '',
         `fallback:${index}`,

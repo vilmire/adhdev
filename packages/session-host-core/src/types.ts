@@ -136,6 +136,64 @@ export interface UpdateSessionMetaPayload {
   replace?: boolean;
 }
 
+export interface GetHostDiagnosticsPayload {
+  includeSessions?: boolean;
+  limit?: number;
+}
+
+export interface ForceDetachClientPayload {
+  sessionId: string;
+  clientId: string;
+}
+
+export interface SendSignalPayload {
+  sessionId: string;
+  signal: string;
+}
+
+export interface RestartSessionPayload {
+  sessionId: string;
+}
+
+export interface SessionHostLogEntry {
+  timestamp: number;
+  level: 'debug' | 'info' | 'warn' | 'error';
+  message: string;
+  sessionId?: string;
+  data?: Record<string, unknown>;
+}
+
+export interface SessionHostRequestTrace {
+  timestamp: number;
+  requestId: string;
+  type: SessionHostRequest['type'];
+  sessionId?: string;
+  clientId?: string;
+  success: boolean;
+  durationMs: number;
+  error?: string;
+}
+
+export interface SessionHostRuntimeTransition {
+  timestamp: number;
+  sessionId: string;
+  action: string;
+  lifecycle?: SessionLifecycle;
+  detail?: string;
+  success?: boolean;
+  error?: string;
+}
+
+export interface SessionHostDiagnostics {
+  hostStartedAt: number;
+  endpoint: string;
+  runtimeCount: number;
+  sessions?: SessionHostRecord[];
+  recentLogs: SessionHostLogEntry[];
+  recentRequests: SessionHostRequestTrace[];
+  recentTransitions: SessionHostRuntimeTransition[];
+}
+
 export type SessionHostRequest =
   | { type: 'create_session'; payload: CreateSessionPayload }
   | { type: 'attach_session'; payload: AttachSessionPayload }
@@ -149,6 +207,10 @@ export type SessionHostRequest =
   | { type: 'get_snapshot'; payload: GetSnapshotPayload }
   | { type: 'clear_session_buffer'; payload: ClearSessionBufferPayload }
   | { type: 'update_session_meta'; payload: UpdateSessionMetaPayload }
+  | { type: 'get_host_diagnostics'; payload?: GetHostDiagnosticsPayload }
+  | { type: 'force_detach_client'; payload: ForceDetachClientPayload }
+  | { type: 'send_signal'; payload: SendSignalPayload }
+  | { type: 'restart_session'; payload: RestartSessionPayload }
   | { type: 'list_sessions'; payload?: {} };
 
 export interface SessionHostResponse<T = unknown> {
@@ -168,7 +230,10 @@ export type SessionHostEvent =
   | { type: 'session_resized'; sessionId: string; cols: number; rows: number }
   | { type: 'write_owner_changed'; sessionId: string; owner: SessionWriteOwner | null }
   | { type: 'client_attached'; sessionId: string; client: SessionAttachedClient }
-  | { type: 'client_detached'; sessionId: string; clientId: string };
+  | { type: 'client_detached'; sessionId: string; clientId: string }
+  | { type: 'host_log'; entry: SessionHostLogEntry }
+  | { type: 'request_trace'; trace: SessionHostRequestTrace }
+  | { type: 'runtime_transition'; transition: SessionHostRuntimeTransition };
 
 export interface SessionHostRequestEnvelope {
   kind: 'request';

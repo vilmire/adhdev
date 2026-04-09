@@ -293,6 +293,7 @@ async function attachRuntime(target: string, readOnly = false, takeover = false)
     });
 
     const unsubscribe = client.onEvent((event: SessionHostEvent) => {
+      if (!('sessionId' in event)) return;
       if (event.sessionId !== runtimeId) return;
       if (event.type === 'session_output') {
         if (event.seq <= lastSeq) return;

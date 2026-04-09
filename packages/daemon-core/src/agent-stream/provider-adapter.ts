@@ -41,6 +41,15 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
         return typeof (this.provider.scripts as any)?.[name] === 'function';
     }
 
+    private parseMaybeJson(raw: unknown): any {
+        if (typeof raw !== 'string') return raw;
+        try {
+            return JSON.parse(raw);
+        } catch {
+            return raw;
+        }
+    }
+
     private summarizeRaw(raw: unknown): string {
         try {
             if (typeof raw === 'string') return raw.replace(/\s+/g, ' ').trim().slice(0, 240);
@@ -111,12 +120,32 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
     }
 
     async sendMessage(evaluate: AgentEvaluateFn, text: string): Promise<void> {
-        const script = this.callScript('sendMessage', text);
+        const params = { message: text, MESSAGE: text, text };
+        const script = this.callScript('sendMessage', params) || this.callScript('sendMessage', text);
         if (!script) throw new Error(`[${this.agentName}] sendMessage script not available`);
         const result = await evaluate(script) as string;
         if (result && typeof result === 'string' && result.startsWith('error:')) {
             throw new Error(`[${this.agentName}] sendMessage failed: ${result}`);
         }
+
+        const parsed = this.parseMaybeJson(result);
+        if (parsed === true) return;
+        if (typeof parsed === 'string') {
+            const normalized = parsed.trim().toLowerCase();
+            if (normalized === 'ok' || normalized === 'sent' || normalized === 'success' || normalized === 'true') {
+                return;
+            }
+        }
+        if (parsed && typeof parsed === 'object') {
+            if (parsed.sent === true || parsed.success === true || parsed.ok === true || parsed.submitted === true || parsed.dispatched === true) {
+                return;
+            }
+            if (typeof parsed.error === 'string' && parsed.error.trim()) {
+                throw new Error(`[${this.agentName}] sendMessage failed: ${parsed.error}`);
+            }
+        }
+
+        throw new Error(`[${this.agentName}] sendMessage was not confirmed`);
     }
 
     async resolveAction(evaluate: AgentEvaluateFn, action: string, button?: string): Promise<boolean> {

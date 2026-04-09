@@ -288,15 +288,10 @@ function parseActivityTimestamp(value: unknown): number {
     return 0
 }
 
-function getActiveChatActivityAt(activeChat?: { messages?: Array<{ timestamp?: unknown; receivedAt?: unknown; createdAt?: unknown }> | null } | null): number {
+function getActiveChatActivityAt(activeChat?: { messages?: Array<{ receivedAt?: unknown }> | null } | null): number {
     const lastMessage = activeChat?.messages?.at?.(-1)
     if (!lastMessage) return 0
-    return (
-        parseActivityTimestamp(lastMessage.timestamp)
-        || parseActivityTimestamp(lastMessage.receivedAt)
-        || parseActivityTimestamp(lastMessage.createdAt)
-        || 0
-    )
+    return parseActivityTimestamp(lastMessage.receivedAt) || 0
 }
 
 function getRecentLaunchActivityAt(entry: DaemonData): number {

@@ -25,6 +25,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
     private currentStatus: string = 'idle';
     private agentStreams: any[] = [];
     private messages: any[] = [];
+    private prevMessageHashes = new Map<string, number>();
     private activeModal: any = null;
     private currentModel: string = '';
     private currentMode: string = '';
@@ -104,7 +105,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
         if (event === 'stream_update') {
  // Reflect data collected from agent-stream-manager
             if (data?.streams) this.agentStreams = data.streams;
-            if (data?.messages) this.messages = data.messages;
+            if (data?.messages) this.messages = this.assignReceivedAt(data.messages);
             if (data?.activeModal !== undefined) this.activeModal = data.activeModal;
             if (data?.model) this.currentModel = data.model;
             if (data?.mode) this.currentMode = data.mode;
@@ -132,6 +133,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
     dispose(): void {
         this.agentStreams = [];
         this.messages = [];
+        this.prevMessageHashes.clear();
         this.monitor.reset();
         this.appliedEffectKeys.clear();
         this.runtimeMessages = [];
@@ -315,6 +317,26 @@ export class ExtensionProviderInstance implements ProviderInstance {
         );
     }
 
+    /**
+     * Assign stable receivedAt to extension messages.
+     * Same pattern as IdeProviderInstance.readChat() prevByHash —
+     * preserves first-seen timestamp across polling cycles.
+     */
+    private assignReceivedAt(messages: any[]): any[] {
+        const now = Date.now();
+        const nextHashes = new Map<string, number>();
+
+        for (const msg of messages) {
+            const hash = `${msg.role}:${(msg.content || '').slice(0, 100)}`;
+            const prevTime = this.prevMessageHashes.get(hash);
+            msg.receivedAt = prevTime || now;
+            nextHashes.set(hash, msg.receivedAt);
+        }
+
+        this.prevMessageHashes = nextHashes;
+        return messages;
+    }
+
     private mergeConversationMessages(messages: any[]): ChatMessage[] {
         if (this.runtimeMessages.length === 0) return messages;
         return [...messages, ...this.runtimeMessages.map((entry) => entry.message)]
@@ -382,6 +404,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
         }
         this.agentStreams = [];
         this.messages = [];
+        this.prevMessageHashes.clear();
         this.activeModal = null;
         this.currentModel = '';
         this.currentMode = '';

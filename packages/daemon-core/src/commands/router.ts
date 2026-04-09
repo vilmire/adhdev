@@ -14,6 +14,7 @@ import { registerExtensionProviders } from '../cdp/setup.js';
 import { DaemonCommandHandler } from './handler.js';
 import { DaemonCliManager } from './cli-manager.js';
 import { supportsExplicitSessionResume } from './cli-manager.js';
+import type { HostedCliRuntimeDescriptor } from './cli-manager.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { launchWithCdp, killIdeProcess, isIdeRunning } from '../launch.js';
@@ -34,6 +35,18 @@ import { spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
 import * as fs from 'fs';
 
 // ─── Types ───
+
+export interface SessionHostControlPlane {
+    getDiagnostics(payload?: { includeSessions?: boolean; limit?: number }): Promise<any>;
+    listSessions(): Promise<any[]>;
+    stopSession(sessionId: string): Promise<any>;
+    resumeSession(sessionId: string): Promise<any>;
+    restartSession(sessionId: string): Promise<any>;
+    sendSignal(sessionId: string, signal: string): Promise<any>;
+    forceDetachClient(sessionId: string, clientId: string): Promise<any>;
+    acquireWrite(payload: { sessionId: string; clientId: string; ownerType: 'agent' | 'user'; force?: boolean }): Promise<any>;
+    releaseWrite(payload: { sessionId: string; clientId: string }): Promise<any>;
+}
 
 export interface CommandRouterDeps {
     commandHandler: DaemonCommandHandler;
@@ -56,6 +69,8 @@ export interface CommandRouterDeps {
     getCdpLogFn?: (ideType: string) => (msg: string) => void;
     /** Package name for upgrade detection ('adhdev' or '@adhdev/daemon-standalone') */
     packageName?: string;
+    /** Session host control plane */
+    sessionHostControl?: SessionHostControlPlane | null;
 }
 
 export interface CommandRouterResult {
@@ -69,6 +84,30 @@ const CHAT_COMMANDS = [
     'change_model',
 ];
 const READ_DEBUG_ENABLED = process.argv.includes('--dev') || process.env.ADHDEV_READ_DEBUG === '1';
+
+function toHostedCliRuntimeDescriptor(record: any): HostedCliRuntimeDescriptor | null {
+    if (!record || typeof record !== 'object') return null;
+    const runtimeId = typeof record.sessionId === 'string' ? record.sessionId : '';
+    const cliType = typeof record.providerType === 'string' ? record.providerType : '';
+    const workspace = typeof record.workspace === 'string' ? record.workspace : '';
+    if (!runtimeId || !cliType || !workspace) return null;
+    return {
+        runtimeId,
+        runtimeKey: typeof record.runtimeKey === 'string' ? record.runtimeKey : undefined,
+        displayName: typeof record.displayName === 'string' ? record.displayName : undefined,
+        workspaceLabel: typeof record.workspaceLabel === 'string' ? record.workspaceLabel : undefined,
+        lifecycle: typeof record.lifecycle === 'string' ? record.lifecycle as HostedCliRuntimeDescriptor['lifecycle'] : undefined,
+        recoveryState: typeof record.meta?.runtimeRecoveryState === 'string'
+            ? String(record.meta.runtimeRecoveryState)
+            : null,
+        cliType,
+        workspace,
+        cliArgs: Array.isArray(record.meta?.cliArgs) ? record.meta.cliArgs as string[] : [],
+        providerSessionId: typeof record.meta?.providerSessionId === 'string'
+            ? String(record.meta.providerSessionId)
+            : undefined,
+    };
+}
 
 export class DaemonCommandRouter {
     private deps: CommandRouterDeps;
@@ -157,6 +196,99 @@ export class DaemonCommandRouter {
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }
+            }
+
+            case 'session_host_get_diagnostics': {
+                if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
+                const diagnostics = await this.deps.sessionHostControl.getDiagnostics({
+                    includeSessions: args?.includeSessions !== false,
+                    limit: Number(args?.limit) || undefined,
+                });
+                return { success: true, diagnostics };
+            }
+
+            case 'session_host_list_sessions': {
+                if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
+                const sessions = await this.deps.sessionHostControl.listSessions();
+                return { success: true, sessions };
+            }
+
+            case 'session_host_stop_session': {
+                if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
+                const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
+                if (!sessionId) return { success: false, error: 'sessionId required' };
+                const record = await this.deps.sessionHostControl.stopSession(sessionId);
+                return { success: true, record };
+            }
+
+            case 'session_host_resume_session': {
+                if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
+                const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
+                if (!sessionId) return { success: false, error: 'sessionId required' };
+                const record = await this.deps.sessionHostControl.resumeSession(sessionId);
+                const hosted = toHostedCliRuntimeDescriptor(record);
+                if (hosted) {
+                    await this.deps.cliManager.restoreHostedSessions([hosted]);
+                }
+                return { success: true, record };
+            }
+
+            case 'session_host_restart_session': {
+                if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
+                const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
+                if (!sessionId) return { success: false, error: 'sessionId required' };
+                const record = await this.deps.sessionHostControl.restartSession(sessionId);
+                const hosted = toHostedCliRuntimeDescriptor(record);
+                if (hosted) {
+                    await this.deps.cliManager.restoreHostedSessions([hosted]);
+                }
+                return { success: true, record };
+            }
+
+            case 'session_host_send_signal': {
+                if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
+                const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
+                const signal = typeof args?.signal === 'string' ? args.signal : '';
+                if (!sessionId) return { success: false, error: 'sessionId required' };
+                if (!signal) return { success: false, error: 'signal required' };
+                const record = await this.deps.sessionHostControl.sendSignal(sessionId, signal);
+                return { success: true, record };
+            }
+
+            case 'session_host_force_detach_client': {
+                if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
+                const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
+                const clientId = typeof args?.clientId === 'string' ? args.clientId : '';
+                if (!sessionId) return { success: false, error: 'sessionId required' };
+                if (!clientId) return { success: false, error: 'clientId required' };
+                const record = await this.deps.sessionHostControl.forceDetachClient(sessionId, clientId);
+                return { success: true, record };
+            }
+
+            case 'session_host_acquire_write': {
+                if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
+                const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
+                const clientId = typeof args?.clientId === 'string' ? args.clientId : '';
+                const ownerType = args?.ownerType === 'agent' ? 'agent' : 'user';
+                if (!sessionId) return { success: false, error: 'sessionId required' };
+                if (!clientId) return { success: false, error: 'clientId required' };
+                const record = await this.deps.sessionHostControl.acquireWrite({
+                    sessionId,
+                    clientId,
+                    ownerType,
+                    force: args?.force !== false,
+                });
+                return { success: true, record };
+            }
+
+            case 'session_host_release_write': {
+                if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
+                const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
+                const clientId = typeof args?.clientId === 'string' ? args.clientId : '';
+                if (!sessionId) return { success: false, error: 'sessionId required' };
+                if (!clientId) return { success: false, error: 'clientId required' };
+                const record = await this.deps.sessionHostControl.releaseWrite({ sessionId, clientId });
+                return { success: true, record };
             }
 
             case 'list_saved_sessions': {

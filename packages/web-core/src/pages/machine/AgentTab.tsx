@@ -261,8 +261,9 @@ export default function AgentTab({
             setSavedSessions([])
             setSavedSessionsError(error instanceof Error ? error.message : 'Could not load saved sessions')
         } finally {
-            if (savedSessionsRequestSeqRef.current !== requestSeq) return
-            setSavedSessionsLoading(false)
+            if (savedSessionsRequestSeqRef.current === requestSeq) {
+                setSavedSessionsLoading(false)
+            }
         }
     }, [category, machineId, sendDaemonCommand])
 

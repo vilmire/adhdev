@@ -12,6 +12,7 @@ import { DaemonCdpInitializer, type CdpInitializerConfig } from '../cdp/initiali
 import { setupIdeInstance, type CdpSetupContext } from '../cdp/setup.js';
 import { DaemonCommandHandler } from '../commands/handler.js';
 import { DaemonCommandRouter, type CommandRouterDeps } from '../commands/router.js';
+import type { SessionHostControlPlane } from '../commands/router.js';
 import {
     DaemonCliManager,
     type CliTransportFactoryParams,
@@ -51,6 +52,7 @@ export interface DaemonInitConfig {
     /** Router transport-specific callbacks */
     onStatusChange?: () => void;
     onPostChatCommand?: () => void;
+    sessionHostControl?: SessionHostControlPlane | null;
     getCdpLogFn?: (ideType: string) => (msg: string) => void;
 
     /** Additional callback after CDP manager created (transport-specific extras) */
@@ -245,6 +247,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         onIdeConnected: () => poller?.start(),
         onStatusChange: config.onStatusChange,
         onPostChatCommand: config.onPostChatCommand,
+        sessionHostControl: config.sessionHostControl,
         getCdpLogFn: config.getCdpLogFn || ((ideType: string) => LOG.forComponent(`CDP:${ideType}`).asLogFn()),
     });
 

@@ -29,8 +29,8 @@ export default function CliStopDialog({
                     <h3 className="m-0 text-base md:text-lg font-extrabold">Stop {agentLabel}?</h3>
                     <div className="mt-1 text-[13px] md:text-sm text-text-muted leading-relaxed">
                         {canSaveAndStop
-                            ? 'The CLI runtime will stop. Choose whether to stop immediately or ask the provider to save and exit first.'
-                            : 'The CLI runtime will stop immediately. This provider does not expose save-and-stop.'}
+                            ? 'Stop asks the provider to exit cleanly when supported. Force Stop ends the runtime immediately.'
+                            : 'This provider does not support graceful stop. Force Stop will end the runtime immediately.'}
                     </div>
                 </div>
 
@@ -40,14 +40,14 @@ export default function CliStopDialog({
                             onClick={onSaveAndStop}
                             className="btn btn-primary w-full justify-center min-h-[42px]"
                         >
-                            Save and stop
+                            Stop
                         </button>
                     )}
                     <button
                         onClick={onStopNow}
                         className="btn btn-secondary w-full justify-center min-h-[42px] text-red-400 border-red-500/25 hover:bg-red-500/10"
                     >
-                        Stop now
+                        Force Stop
                     </button>
                     <button
                         onClick={onCancel}

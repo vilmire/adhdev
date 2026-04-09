@@ -305,6 +305,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     }
 
     private handleEvent(event: SessionHostEvent): void {
+        if (!('sessionId' in event)) return;
         if (event.sessionId !== this.options.runtimeId) return;
         if ((event.type === 'session_started' || event.type === 'session_resumed') && typeof event.pid === 'number') {
             this.currentPid = event.pid;
@@ -383,6 +384,13 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
                 type: client.type,
                 readOnly: client.readOnly,
             })),
+            restoredFromStorage: record.meta?.restoredFromStorage === true,
+            recoveryState: typeof record.meta?.runtimeRecoveryState === 'string'
+                ? String(record.meta.runtimeRecoveryState)
+                : null,
+            recoveryError: typeof record.meta?.runtimeRecoveryError === 'string'
+                ? String(record.meta.runtimeRecoveryError)
+                : null,
         };
     }
 

@@ -2,7 +2,7 @@
  * MachineDetail — Shared types & utils for machine sub-tabs.
  */
 
-import type { SessionEntry, RuntimeWriteOwner, AvailableProviderInfo } from '../../types'
+import type { SessionEntry, RuntimeWriteOwner, RuntimeAttachedClient, AvailableProviderInfo } from '../../types'
 
 // ─── Types ───────────────────────────────────────────
 export interface IdeSessionEntry {
@@ -20,6 +20,7 @@ export interface CliSessionEntry {
     mode?: 'terminal' | 'chat'
     runtimeKey?: string; runtimeDisplayName?: string; runtimeWorkspaceLabel?: string
     runtimeWriteOwner?: RuntimeWriteOwner | null
+    runtimeAttachedClients?: RuntimeAttachedClient[]
 }
 
 export interface AcpSessionEntry {
@@ -52,7 +53,7 @@ export interface ProviderSettingsEntry {
 
 export type WorkspaceLaunchKind = 'ide' | 'cli' | 'acp'
 
-export type TabId = 'workspace' | 'overview' | 'providers' | 'logs' | 'ides' | 'clis' | 'acps'
+export type TabId = 'workspace' | 'overview' | 'session-host' | 'providers' | 'logs' | 'ides' | 'clis' | 'acps'
 
 export type ProviderInfo = AvailableProviderInfo
 

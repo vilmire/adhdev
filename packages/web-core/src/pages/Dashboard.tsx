@@ -227,15 +227,39 @@ export default function Dashboard() {
 
         const autoReadKey = `${activeConv.tabKey}:${activeConv.sessionId}`
         if (lastDesktopAutoReadKeyRef.current === autoReadKey) return
-        lastDesktopAutoReadKeyRef.current = autoReadKey
 
-        const liveState = getConversationLiveInboxState(activeConv, liveSessionInboxState)
-        const readAt = Math.max(Date.now(), getConversationTimestamp(activeConv), liveState.lastUpdated || 0)
+        const doMarkSeen = () => {
+            if (document.visibilityState !== 'visible') return
+            if (lastDesktopAutoReadKeyRef.current === autoReadKey) return
+            lastDesktopAutoReadKeyRef.current = autoReadKey
 
-        void sendDaemonCommand(activeConv.daemonId || activeConv.ideId, 'mark_session_seen', {
-            sessionId: activeConv.sessionId,
-            seenAt: readAt,
-        }).catch(() => {})
+            const liveState = getConversationLiveInboxState(activeConv, liveSessionInboxState)
+            const readAt = Math.max(Date.now(), getConversationTimestamp(activeConv), liveState.lastUpdated || 0)
+
+            void sendDaemonCommand(activeConv.daemonId || activeConv.ideId, 'mark_session_seen', {
+                sessionId: activeConv.sessionId,
+                seenAt: readAt,
+            }).catch(() => {})
+        }
+
+        // If page is already visible, debounce to avoid drive-by tab switches
+        // If page is hidden (user in another app/tab), defer until they return
+        if (document.visibilityState === 'visible') {
+            const timer = setTimeout(doMarkSeen, 1500)
+            const onVisChange = () => { if (document.visibilityState !== 'visible') clearTimeout(timer) }
+            document.addEventListener('visibilitychange', onVisChange)
+            return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', onVisChange) }
+        } else {
+            const onVisible = () => {
+                if (document.visibilityState === 'visible') {
+                    // Small delay after returning to page
+                    setTimeout(doMarkSeen, 800)
+                    document.removeEventListener('visibilitychange', onVisible)
+                }
+            }
+            document.addEventListener('visibilitychange', onVisible)
+            return () => { document.removeEventListener('visibilitychange', onVisible) }
+        }
     }, [activeConv, isMobile, liveSessionInboxState, sendDaemonCommand])
 
     const {

@@ -39,6 +39,7 @@ import {
   proxySessionHostAttach,
   proxySessionHostList,
 } from './session-host.js';
+import { StandaloneSessionHostControlPlane } from './session-host-control.js';
 import { SessionHostClient, type SessionHostEndpoint, type SessionHostEvent } from '@adhdev/session-host-core';
 import {
   AdhMuxControlClient,
@@ -183,6 +184,9 @@ class StandaloneServer {
     const host = options.host || '127.0.0.1';
     const sessionHostEndpoint = await ensureSessionHostReady();
     this.sessionHostEndpoint = sessionHostEndpoint;
+    const sessionHostControl = new StandaloneSessionHostControlPlane(
+      async () => this.ensureActiveSessionHostEndpoint(),
+    );
 
     // Auth token setup (opt-in only)
     this.authToken = options.token || process.env.ADHDEV_TOKEN || null;
@@ -228,6 +232,7 @@ class StandaloneServer {
         ),
       },
       onStatusChange: () => this.scheduleBroadcastStatus(),
+      sessionHostControl,
       onStreamsUpdated: (ideType: string, streams: any[]) => {
         if (!this.components) return;
         forwardAgentStreamsToIdeInstance(this.components.instanceManager, ideType, streams);
@@ -623,6 +628,7 @@ class StandaloneServer {
     }
 
     const writeEvent = (event: SessionHostEvent) => {
+      if (!('sessionId' in event)) return;
       if (event.sessionId !== sessionId) return;
       if (!this.isCliSession(sessionId)) return;
       res.write(`event: ${event.type}\n`);
@@ -819,7 +825,7 @@ class StandaloneServer {
       return { success: false, error: 'command type required' };
     }
     const result = await this.components.router.execute(type, args, 'standalone');
-    if (type.startsWith('workspace_')) this.scheduleBroadcastStatus();
+    if (type.startsWith('workspace_') || type.startsWith('session_host_')) this.scheduleBroadcastStatus();
     return result;
   }
 

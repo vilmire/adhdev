@@ -64,6 +64,23 @@ function trimMessageForStatus(message: unknown, stringLimit: number): unknown {
     return trimStructuredStrings(message, stringLimit);
 }
 
+/**
+ * Collapse timestamp / createdAt into receivedAt so downstream consumers
+ * only ever need to read a single canonical time field.
+ */
+function normalizeMessageTime(message: unknown): unknown {
+    if (!message || typeof message !== 'object') return message;
+    const msg = message as Record<string, unknown>;
+    if (msg.receivedAt == null) {
+        const fallback = msg.timestamp ?? msg.createdAt;
+        if (fallback != null) {
+            const ts = typeof fallback === 'string' ? Date.parse(fallback as string) : Number(fallback);
+            if (Number.isFinite(ts) && ts > 0) msg.receivedAt = ts;
+        }
+    }
+    return msg;
+}
+
 function trimMessagesForStatus(messages: unknown[] | null | undefined): unknown[] {
     if (!Array.isArray(messages) || messages.length === 0) return [];
 
@@ -72,11 +89,11 @@ function trimMessagesForStatus(messages: unknown[] | null | undefined): unknown[
     let totalBytes = 0;
 
     for (let i = recent.length - 1; i >= 0; i -= 1) {
-        let normalized = trimMessageForStatus(recent[i], STATUS_ACTIVE_CHAT_STRING_LIMIT);
+        let normalized = normalizeMessageTime(trimMessageForStatus(recent[i], STATUS_ACTIVE_CHAT_STRING_LIMIT));
         let size = estimateBytes(normalized);
 
         if (size > STATUS_ACTIVE_CHAT_TOTAL_BYTES_LIMIT) {
-            normalized = trimMessageForStatus(recent[i], STATUS_ACTIVE_CHAT_FALLBACK_STRING_LIMIT);
+            normalized = normalizeMessageTime(trimMessageForStatus(recent[i], STATUS_ACTIVE_CHAT_FALLBACK_STRING_LIMIT));
             size = estimateBytes(normalized);
         }
 

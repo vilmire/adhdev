@@ -14,7 +14,7 @@ import type { ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
-import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
+import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter, readChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
@@ -133,6 +133,7 @@ export class CliProviderInstance implements ProviderInstance {
 
  // PTY spawn
         await this.adapter.spawn();
+        this.maybeAppendRuntimeRecoveryMessage(this.adapter.getRuntimeMetadata());
         if (this.providerSessionId) {
             const restoredHistory = readChatHistory(this.type, 0, 200, this.providerSessionId);
             if (restoredHistory.messages.length > 0) {
@@ -246,6 +247,7 @@ export class CliProviderInstance implements ProviderInstance {
             this.promoteProviderSessionId(parsedProviderSessionId);
         }
         const runtime = this.adapter.getRuntimeMetadata();
+        this.maybeAppendRuntimeRecoveryMessage(runtime);
         const parsedMessages = Array.isArray(parsedStatus?.messages) ? parsedStatus.messages : [];
         const controlValues = extractProviderControlValues(this.provider.controls, parsedStatus);
         if (controlValues) {
@@ -601,6 +603,32 @@ export class CliProviderInstance implements ProviderInstance {
         const date = new Date(timestamp);
         const pad = (value: number) => String(value).padStart(2, '0');
         return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    }
+
+    private maybeAppendRuntimeRecoveryMessage(runtime: PtyRuntimeMetadata | null): void {
+        if (!runtime?.restoredFromStorage || !runtime.runtimeId) return;
+
+        const recoveryState = String(runtime.recoveryState || '').trim();
+        if (!recoveryState) return;
+
+        let content = '';
+        if (recoveryState === 'auto_resumed') {
+            content = 'Session host restored this CLI after restart and reattached it from a saved snapshot.';
+        } else if (recoveryState === 'resume_failed') {
+            const errorSuffix = runtime.recoveryError ? ` Resume failed: ${runtime.recoveryError}` : '';
+            content = `Session host found this CLI after restart, but automatic resume failed.${errorSuffix}`;
+        } else if (recoveryState === 'host_restart_interrupted') {
+            content = 'Session host found this CLI in interrupted state after restart and is attempting to resume it.';
+        } else if (recoveryState === 'orphan_snapshot') {
+            content = 'Session host restored the last snapshot for this CLI, but the original runtime was not resumed automatically.';
+        } else {
+            content = `Session host restored this CLI after restart (${recoveryState}).`;
+        }
+
+        this.appendRuntimeSystemMessage(
+            content,
+            `runtime_recovery:${runtime.runtimeId}:${recoveryState}`,
+        );
     }
 
     private appendRuntimeSystemMessage(content: string, dedupKey: string, receivedAt = Date.now()): void {

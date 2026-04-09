@@ -95,17 +95,12 @@ function parseMessageTime(value: unknown): number {
 
 function getSessionMessageUpdatedAt(session: {
     activeChat?: {
-        messages?: Array<{ timestamp?: number | string; receivedAt?: number | string; createdAt?: number | string }> | null
+        messages?: Array<{ receivedAt?: number | string }> | null
     } | null
 }) {
     const lastMessage = session.activeChat?.messages?.at?.(-1);
     if (!lastMessage) return 0;
-    return (
-        parseMessageTime(lastMessage.timestamp)
-        || parseMessageTime(lastMessage.receivedAt)
-        || parseMessageTime(lastMessage.createdAt)
-        || 0
-    );
+    return parseMessageTime(lastMessage.receivedAt) || 0;
 }
 
 export function getSessionCompletionMarker(session: {
@@ -114,9 +109,7 @@ export function getSessionCompletionMarker(session: {
             role?: string;
             id?: string;
             index?: number;
-            timestamp?: number | string;
             receivedAt?: number | string;
-            createdAt?: number | string;
             _turnKey?: string;
         }> | null
     } | null
@@ -124,17 +117,17 @@ export function getSessionCompletionMarker(session: {
     const lastMessage = session.activeChat?.messages?.at?.(-1) as any;
     if (!lastMessage) return '';
     const role = typeof lastMessage.role === 'string' ? lastMessage.role : '';
-    if (role === 'user' || role === 'human') return '';
+    if (role === 'user' || role === 'human' || role === 'system') return '';
     if (typeof lastMessage._turnKey === 'string' && lastMessage._turnKey) return `turn:${lastMessage._turnKey}`;
     if (typeof lastMessage.id === 'string' && lastMessage.id) return `id:${lastMessage.id}`;
     if (typeof lastMessage.index === 'number' && Number.isFinite(lastMessage.index)) return `idx:${lastMessage.index}`;
-    const timestamp = parseMessageTime(lastMessage.timestamp) || parseMessageTime(lastMessage.receivedAt) || parseMessageTime(lastMessage.createdAt);
+    const timestamp = parseMessageTime(lastMessage.receivedAt);
     return timestamp > 0 ? `ts:${timestamp}` : '';
 }
 
 function getSessionLastUsedAt(session: {
     activeChat?: {
-        messages?: Array<{ timestamp?: number | string; receivedAt?: number | string; createdAt?: number | string }> | null
+        messages?: Array<{ receivedAt?: number | string }> | null
     } | null
     lastUpdated?: number
 }) {
@@ -171,7 +164,7 @@ function getUnreadState(
     }
     const unread = completionMarker
         ? completionMarker !== seenCompletionMarker
-        : hasContentChange && lastUsedAt > lastSeenAt && lastRole !== 'user' && lastRole !== 'human';
+        : hasContentChange && lastUsedAt > lastSeenAt && lastRole !== 'user' && lastRole !== 'human' && lastRole !== 'system';
     return { unread, inboxBucket: unread ? 'task_complete' : 'idle' };
 }
 

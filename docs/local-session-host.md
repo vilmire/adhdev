@@ -264,6 +264,14 @@ HTTP는 가능하지만 기본 IPC로는 덜 적합하다. 지속 connection / s
 
 - request/response command channel
 - event stream channel
+- daemon-owned persistent subscription channel
+
+핵심은 session host를 "spawn 후 잊는 detached helper"로 두지 않는 것이다.
+
+- daemon은 startup 시 session host에 장기 attach 한다
+- runtime state 뿐 아니라 host-side diagnostics도 계속 수신한다
+- session host는 최근 request trace / runtime transition / host log를 버퍼링한다
+- daemon/UI/CLI는 같은 control surface로 이 정보를 읽고 조작한다
 
 ### Request examples
 
@@ -279,7 +287,11 @@ type SessionHostRequest =
   | { type: 'get_snapshot'; payload: { sessionId: string; sinceSeq?: number } }
   | { type: 'acquire_write'; payload: AcquireWritePayload }
   | { type: 'release_write'; payload: ReleaseWritePayload }
-  | { type: 'stop_session'; payload: { sessionId: string } };
+  | { type: 'stop_session'; payload: { sessionId: string } }
+  | { type: 'restart_session'; payload: { sessionId: string } }
+  | { type: 'send_signal'; payload: { sessionId: string; signal: string } }
+  | { type: 'force_detach_client'; payload: { sessionId: string; clientId: string } }
+  | { type: 'get_host_diagnostics'; payload?: { includeSessions?: boolean; limit?: number } };
 ```
 
 ### Event examples
@@ -292,8 +304,40 @@ type SessionHostEvent =
   | { type: 'session_resized'; sessionId: string; cols: number; rows: number }
   | { type: 'write_owner_changed'; sessionId: string; owner: WriteOwner | null }
   | { type: 'client_attached'; sessionId: string; clientId: string }
-  | { type: 'client_detached'; sessionId: string; clientId: string };
+  | { type: 'client_detached'; sessionId: string; clientId: string }
+  | { type: 'host_log'; entry: SessionHostLogEntry }
+  | { type: 'request_trace'; trace: SessionHostRequestTrace }
+  | { type: 'runtime_transition'; transition: SessionHostRuntimeTransition };
 ```
+
+### Diagnostics snapshot
+
+```ts
+type SessionHostDiagnostics = {
+  hostStartedAt: number;
+  endpoint: string;
+  runtimeCount: number;
+  sessions?: SessionHostRecord[];
+  recentLogs: SessionHostLogEntry[];
+  recentRequests: SessionHostRequestTrace[];
+  recentTransitions: SessionHostRuntimeTransition[];
+};
+```
+
+이 snapshot은 "지금 session host가 왜 이런 상태인지"를 daemon이 설명할 수 있게 만드는 최소 운영 단위다.
+
+없으면 daemon은:
+
+- IPC가 살아 있는지
+- runtime count가 몇 개인지
+
+정도만 알게 되고,
+
+- 왜 resume가 실패했는지
+- 누가 write owner를 가져갔는지
+- 어떤 request가 timeout/거부됐는지
+
+를 구조적으로 알 수 없다.
 
 ## Session Identity Rules
 
@@ -450,6 +494,60 @@ PTY session이라고 해서 특별 category로 취급하지 않는다.
 - daemon은 product-facing session projection
 
 즉 parsing responsibility는 daemon/provider layer에 둔다.
+
+## Control Plane
+
+session host 분리는 fault isolation에는 좋지만, observability/control plane이 없으면 product 운영이 막힌다.
+
+그래서 daemon은 session host를 단순 호출 대상이 아니라 "관리 가능한 하위 runtime"으로 다뤄야 한다.
+
+필수 요소:
+
+- daemon이 session host event stream을 지속 구독
+- host-side logs / request traces / runtime transitions를 daemon log로 미러링
+- local IPC와 UI에 동일한 event를 중계
+- control actions를 router command로 노출
+
+현재 필요한 운영 액션:
+
+- `list_sessions`
+- `get_host_diagnostics`
+- `stop_session`
+- `resume_session`
+- `restart_session`
+- `send_signal`
+- `force_detach_client`
+- `acquire_write`
+- `release_write`
+
+이 액션들은 "세션을 띄우고 붙는 기능"이 아니라 "문제가 생겼을 때 host를 운영하는 기능"이다.
+
+예를 들어 daemon/UI/CLI에서 아래가 가능해야 한다.
+
+- 특정 runtime이 왜 `interrupted`인지 확인
+- stuck client를 강제 detach
+- write owner를 명시적으로 회수
+- 세션 전체를 stop 대신 restart
+- provider-level resume 전에 host-level restart/signal 조치
+
+즉 구조는 아래여야 한다.
+
+```text
+UI / local CLI / dev tools
+          |
+          v
+  adhdev-daemon router
+          |
+          v
+SessionHostController
+  - persistent IPC client
+  - event subscription
+  - diagnostics read
+  - admin actions
+          |
+          v
+   adhdev-sessiond
+```
 
 ## Approval / Chat / Parser Integration
 
@@ -652,6 +750,7 @@ v1에서 반드시 되는 것:
 5. single write owner
 6. scrollback restore
 7. session list / reconnect / stop
+8. host diagnostics / restart / signal / force-detach / write-owner control
 
 v1에서 보류 가능한 것:
 

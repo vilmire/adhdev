@@ -42,6 +42,9 @@ export interface PtyRuntimeMetadata {
   workspaceLabel?: string;
   writeOwner?: PtyRuntimeWriteOwner | null;
   attachedClients?: PtyRuntimeClientInfo[];
+  restoredFromStorage?: boolean;
+  recoveryState?: string | null;
+  recoveryError?: string | null;
 }
 
 export interface PtyRuntimeTransport {

@@ -55,7 +55,7 @@ function normalizeMessageContent(content: unknown): string {
 }
 
 function getMessageTimestamp(message: any): number {
-    const ts = Number(message?.timestamp || message?.receivedAt || message?.createdAt || 0)
+    const ts = Number(message?.receivedAt || 0)
     return Number.isFinite(ts) ? ts : 0
 }
 

@@ -18,7 +18,7 @@ import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
 import type { DaemonData } from '../types'
 import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel } from '../utils/daemon-utils'
-import { IconBarChart, IconMonitor, IconSettings, IconClipboard } from '../components/Icons'
+import { IconBarChart, IconMonitor, IconSettings, IconClipboard, IconServer } from '../components/Icons'
 import type { ReactNode } from 'react'
 import { eventManager, type ToastConfig } from '../managers/EventManager'
 import ToastContainer from '../components/dashboard/ToastContainer'
@@ -29,6 +29,7 @@ import { useMachineActions } from './machine/useMachineActions'
 import OverviewTab from './machine/OverviewTab'
 import ProvidersTab from './machine/ProvidersTab'
 import LogsTab from './machine/LogsTab'
+import SessionHostPanel from './machine/SessionHostPanel'
 import LaunchPickModal from './machine/LaunchPickModal'
 import MachineCommandCenter from './machine/MachineCommandCenter'
 import MachineWorkspaceTab from './machine/MachineWorkspaceTab'
@@ -161,6 +162,11 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             activeChat: (i as any).activeChat || null,
             providerSessionId: (i as any).providerSessionId,
             mode: (i as any).mode,
+            runtimeKey: (i as any).runtimeKey,
+            runtimeDisplayName: (i as any).runtimeDisplayName,
+            runtimeWorkspaceLabel: (i as any).runtimeWorkspaceLabel,
+            runtimeWriteOwner: (i as any).runtimeWriteOwner || null,
+            runtimeAttachedClients: (i as any).runtimeAttachedClients || [],
             daemonId: machineId!,
         }))
 
@@ -177,21 +183,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             daemonId: machineId!,
         }))
 
-    // ─── Loading / Not Found ─────────────────────────
-    if (!machine) {
-        if (!initialLoaded) {
-            return <div className="p-10 text-center text-text-muted"><p>⏳ Loading machine...</p></div>
-        }
-        return (
-            <div className="p-10 text-center text-text-muted">
-                <h2 className="text-text-primary">Machine not found</h2>
-                <p className="mt-3">The machine may be offline or not yet connected.</p>
-                <button onClick={handleBack} className="machine-btn-back">← Back</button>
-            </div>
-        )
-    }
-
-    const displayName = getMachineDisplayName(machineEntry as any, { fallbackId: machine.id })
+    const displayName = machineEntry ? getMachineDisplayName(machineEntry as any, { fallbackId: machineId }) : ''
     const defaultTab: TabId = 'workspace'
     const locationState = (location.state as {
         initialMachineTab?: TabId
@@ -286,6 +278,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     }, [])
 
     const handleOpenRecent = useCallback((session: MachineRecentLaunch) => {
+        if (!machine) return
         const { options, selectedKey } = buildLaunchWorkspaceOptions({
             machine,
             currentWorkspacePath: session.workspace,
@@ -333,16 +326,31 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
 
     useEffect(() => {
         setActiveTab(effectiveTab)
-    }, [defaultTab, effectiveTab, machine.id])
+    }, [defaultTab, effectiveTab, machineId])
 
     useEffect(() => {
         if (initialWorkspaceCategory) {
             setWorkspaceCategoryHint(initialWorkspaceCategory)
         }
-    }, [initialWorkspaceCategory, machine.id])
+    }, [initialWorkspaceCategory, machineId])
+
+    // ─── Loading / Not Found ─────────────────────────
+    if (!machine) {
+        if (!initialLoaded) {
+            return <div className="p-10 text-center text-text-muted"><p>⏳ Loading machine...</p></div>
+        }
+        return (
+            <div className="p-10 text-center text-text-muted">
+                <h2 className="text-text-primary">Machine not found</h2>
+                <p className="mt-3">The machine may be offline or not yet connected.</p>
+                <button onClick={handleBack} className="machine-btn-back">← Back</button>
+            </div>
+        )
+    }
 
     const TABS: { id: TabId; label: string | ReactNode; count?: number }[] = [
         { id: 'workspace', label: <span className="flex items-center gap-1.5"><IconMonitor size={14} /> Workspace</span>, count: ideSessions.length + cliSessions.length + acpSessions.length },
+        { id: 'session-host', label: <span className="flex items-center gap-1.5"><IconServer size={14} /> Session Host</span> },
         { id: 'providers', label: <span className="flex items-center gap-1.5"><IconSettings size={14} /> Providers</span> },
         { id: 'overview', label: <span className="flex items-center gap-1.5"><IconBarChart size={14} /> System</span> },
         { id: 'logs', label: <span className="flex items-center gap-1.5"><IconClipboard size={14} /> Logs</span> },
@@ -475,6 +483,14 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 cliSessions={cliSessions}
                                 acpSessions={acpSessions}
                                 actions={actions}
+                                sendDaemonCommand={sendDaemonCommand}
+                            />
+                        )}
+
+                        {activeTab === 'session-host' && (
+                            <SessionHostPanel
+                                machineId={machineId!}
+                                cliSessions={cliSessions}
                                 sendDaemonCommand={sendDaemonCommand}
                             />
                         )}

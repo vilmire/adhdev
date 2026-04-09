@@ -14,9 +14,7 @@ export function getConversationTimestamp(conversation: ActiveConversation): numb
     const lastMessage = [...conversation.messages].reverse().find((message: any) => !(message as any)?._localId) as any
         || conversation.messages[conversation.messages.length - 1] as any
     return (
-        parseMessageTimestamp(lastMessage?.timestamp)
-        || parseMessageTimestamp(lastMessage?.receivedAt)
-        || parseMessageTimestamp(lastMessage?.createdAt)
+        parseMessageTimestamp(lastMessage?.receivedAt)
         || 0
     )
 }
