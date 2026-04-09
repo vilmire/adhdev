@@ -2,6 +2,12 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.27] - 2026-04-09
+
+### Fixed
+- Added the remaining mobile dashboard chat and launch-confirm updates that were left out of the `0.8.26` release.
+- Surface reconnecting and connecting states in the mobile inbox and expose optional model/CLI argument inputs in the launch confirm dialog.
+
 ## [0.8.26] - 2026-04-09
 
 ### Fixed
