@@ -133,7 +133,7 @@ function getCliScriptCommand(payload: any): { type: string; text?: string } | nu
 
     const command = payload.command;
     if (!command || typeof command !== 'object') return null;
-    if (command.type !== 'send_message') return null;
+    if (command.type !== 'send_message' && command.type !== 'pty_write') return null;
 
     const text = typeof command.text === 'string'
         ? command.text.trim()
@@ -141,7 +141,7 @@ function getCliScriptCommand(payload: any): { type: string; text?: string } | nu
             ? command.message.trim()
             : '';
     if (!text) return null;
-    return { type: 'send_message', text };
+    return { type: command.type, text };
 }
 
 function applyProviderPatch(h: CommandHelpers, args: any, payload: any): void {
@@ -191,6 +191,8 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
             const cliCommand = getCliScriptCommand(parsed.payload);
             if (cliCommand?.type === 'send_message' && cliCommand.text) {
                 await adapter.sendMessage(cliCommand.text);
+            } else if (cliCommand?.type === 'pty_write' && cliCommand.text && adapter.writeRaw) {
+                adapter.writeRaw(cliCommand.text + '\r');
             }
             applyProviderPatch(h, args, parsed.payload);
             return { success: true, ...(parsed.payload && typeof parsed.payload === 'object' ? parsed.payload : { result: parsed.payload }) };
