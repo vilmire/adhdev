@@ -1,6 +1,6 @@
 import { IconBell, IconSettings, IconMonitor, IconChat } from '../Icons'
 import InstallCommand from '../InstallCommand'
-import { formatRelativeTime, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
+import { formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 
@@ -86,6 +86,7 @@ function DashboardMobileChatItem({
     const isUnread = type === 'needs_attention' || type === 'task_complete'
     const isWorking = type === 'working'
     const isEarlier = type === 'earlier'
+    const { isReconnecting, isConnecting } = getConversationViewStates(item.conversation)
     
     return (
         <button
@@ -125,7 +126,17 @@ function DashboardMobileChatItem({
                             <span className="flex items-center gap-1 opacity-80"><IconMonitor size={11} /> {item.conversation.machineName}</span>
                         </>
                     )}
-                    {type === 'needs_attention' && (
+                    {isReconnecting ? (
+                        <>
+                            <span className="mx-1 opacity-50">·</span>
+                            <span className="text-orange-400 animate-pulse">Reconnecting…</span>
+                        </>
+                    ) : isConnecting ? (
+                        <>
+                            <span className="mx-1 opacity-50">·</span>
+                            <span className="text-text-muted">Connecting…</span>
+                        </>
+                    ) : type === 'needs_attention' && (
                         <>
                             <span className="mx-1 opacity-50">·</span>
                             <span className="text-orange-400">Action needed</span>

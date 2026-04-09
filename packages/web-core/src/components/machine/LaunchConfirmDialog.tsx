@@ -10,6 +10,12 @@ interface LaunchConfirmDialogProps {
     onWorkspaceChange?: (key: string) => void
     confirmLabel?: string
     busy?: boolean
+    showArgsInput?: boolean
+    argsValue?: string
+    onArgsChange?: (val: string) => void
+    showModelInput?: boolean
+    modelValue?: string
+    onModelChange?: (val: string) => void
     onConfirm: () => void
     onCancel: () => void
 }
@@ -23,6 +29,12 @@ export default function LaunchConfirmDialog({
     onWorkspaceChange,
     confirmLabel = 'Launch',
     busy = false,
+    showArgsInput,
+    argsValue,
+    onArgsChange,
+    showModelInput,
+    modelValue,
+    onModelChange,
     onConfirm,
     onCancel,
 }: LaunchConfirmDialogProps) {
@@ -90,6 +102,36 @@ export default function LaunchConfirmDialog({
                             </div>
                         </div>
                     ))}
+                    {showModelInput && onModelChange && (
+                        <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
+                            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">
+                                Language Model (Optional)
+                            </div>
+                            <input
+                                type="text"
+                                value={modelValue || ''}
+                                onChange={(e) => onModelChange(e.target.value)}
+                                placeholder="Auto-detect or default"
+                                className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm placeholder:text-text-muted"
+                                disabled={busy}
+                            />
+                        </div>
+                    )}
+                    {showArgsInput && onArgsChange && (
+                        <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
+                            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">
+                                CLI Arguments (Optional)
+                            </div>
+                            <input
+                                type="text"
+                                value={argsValue || ''}
+                                onChange={(e) => onArgsChange(e.target.value)}
+                                placeholder="e.g. --experimental"
+                                className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm placeholder:text-text-muted"
+                                disabled={busy}
+                            />
+                        </div>
+                    )}
                 </div>
 
                 <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-border-subtle bg-bg-secondary">
