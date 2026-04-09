@@ -16,6 +16,7 @@ interface LaunchConfirmDialogProps {
     showModelInput?: boolean
     modelValue?: string
     onModelChange?: (val: string) => void
+    historyProviderNode?: React.ReactNode
     onConfirm: () => void
     onCancel: () => void
 }
@@ -35,6 +36,7 @@ export default function LaunchConfirmDialog({
     showModelInput,
     modelValue,
     onModelChange,
+    historyProviderNode,
     onConfirm,
     onCancel,
 }: LaunchConfirmDialogProps) {
@@ -92,6 +94,7 @@ export default function LaunchConfirmDialog({
                             )}
                         </div>
                     )}
+                    {historyProviderNode}
                     {details.map((detail) => (
                         <div key={`${detail.label}:${detail.value}`} className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
                             <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">

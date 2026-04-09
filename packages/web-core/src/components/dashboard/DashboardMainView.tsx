@@ -492,6 +492,7 @@ export default function DashboardMainView({
                     isConnected={isConnected}
                     onShowHiddenConversation={onShowHiddenConversation}
                     onShowAllHiddenConversations={onShowAllHiddenConversations}
+                    onOpenNewSession={() => setNewSessionOpen(true)}
                 />
             ) : isMobile ? (
                 <DashboardPaneWorkspace

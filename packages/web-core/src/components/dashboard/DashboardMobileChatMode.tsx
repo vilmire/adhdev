@@ -42,6 +42,7 @@ interface DashboardMobileChatModeProps {
     onShowHiddenConversation: (conversation: ActiveConversation) => void
     onShowAllHiddenConversations: () => void
     onHideConversation?: (conversation: ActiveConversation) => void
+    onOpenNewSession?: () => void
 }
 
 interface PendingWorkspaceLaunch {
@@ -135,6 +136,7 @@ export default function DashboardMobileChatMode({
     onShowHiddenConversation,
     onShowAllHiddenConversations,
     onHideConversation,
+    onOpenNewSession,
 }: DashboardMobileChatModeProps) {
     const [selectedTabKey, setSelectedTabKey] = useState<string | null>(() => conversations[0]?.tabKey || null)
     const [screen, setScreen] = useState<'inbox' | 'chat' | 'machine'>(() => (conversations[0] ? 'chat' : 'inbox'))
@@ -630,6 +632,21 @@ export default function DashboardMobileChatMode({
         }
     }, [navigate, sendDaemonCommand])
 
+    const handleListSavedSessions = useCallback(async (machineId: string, providerType: string) => {
+        try {
+            const raw: any = await sendDaemonCommand(machineId, 'list_saved_sessions', {
+                providerType,
+                kind: 'cli',
+                limit: 30,
+            })
+            const result = raw?.result ?? raw
+            return Array.isArray(result?.sessions) ? result.sessions : []
+        } catch (error) {
+            console.error('Failed to list saved sessions on mobile:', error)
+            return []
+        }
+    }, [sendDaemonCommand])
+
     useEffect(() => {
         if (!pendingWorkspaceLaunch) return
 
@@ -808,6 +825,7 @@ export default function DashboardMobileChatMode({
                         return { path: currentPath, directories }
                     }}
                     onLaunchWorkspaceProvider={(kind, providerType, opts) => handleLaunchWorkspaceProvider(selectedMachineEntry.id, kind, providerType, opts)}
+                    onListSavedSessions={(providerType) => handleListSavedSessions(selectedMachineEntry.id, providerType)}
                 />
             ) : (
                 <DashboardMobileChatInbox
@@ -822,6 +840,7 @@ export default function DashboardMobileChatMode({
                     onOpenConversation={handleOpenConversation}
                     onShowConversation={onShowHiddenConversation}
                     onShowAllHidden={onShowAllHiddenConversations}
+                    onOpenNewSession={onOpenNewSession}
                     onOpenMachine={handleOpenMachine}
                     onOpenSettings={() => navigate('/settings')}
                     onSectionChange={setSection}

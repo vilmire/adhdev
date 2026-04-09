@@ -16,6 +16,7 @@ interface DashboardMobileChatInboxProps {
     onOpenConversation: (conversation: ActiveConversation) => void
     onShowConversation: (conversation: ActiveConversation) => void
     onShowAllHidden: () => void
+    onOpenNewSession?: () => void
     onOpenMachine: (machineId: string) => void
     onOpenSettings: () => void
     onSectionChange: (section: DashboardMobileSection) => void
@@ -179,6 +180,7 @@ export default function DashboardMobileChatInbox({
     onOpenConversation,
     onShowConversation,
     onShowAllHidden,
+    onOpenNewSession,
     onOpenMachine,
     onOpenSettings,
     onSectionChange,
@@ -451,6 +453,17 @@ export default function DashboardMobileChatInbox({
                     </section>
                 )}
             </div>
+
+            {section === 'chats' && onOpenNewSession && (
+                <button
+                    className="fixed right-5 bottom-[calc(env(safe-area-inset-bottom,0px)+64px+20px)] z-50 flex items-center justify-center w-14 h-14 rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.15)] hover:scale-105 active:scale-95 transition-transform"
+                    style={{ background: 'var(--accent-primary)', color: 'var(--accent-on-primary)' }}
+                    onClick={onOpenNewSession}
+                    aria-label="Start new session"
+                >
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                </button>
+            )}
 
             <DashboardMobileBottomNav section={section} onSectionChange={onSectionChange} />
         </div>

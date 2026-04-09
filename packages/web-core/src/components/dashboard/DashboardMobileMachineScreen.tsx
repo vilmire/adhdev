@@ -40,7 +40,8 @@ interface DashboardMobileMachineScreenProps {
     onLaunchDetectedIde: (ideType: string, opts?: { workspacePath?: string | null }) => void
     onAddWorkspace: (path: string, opts?: { createIfMissing?: boolean }) => void
     onBrowseDirectory: (path: string) => Promise<BrowseDirectoryResult>
-    onLaunchWorkspaceProvider: (kind: Extract<WorkspaceLaunchKind, 'cli' | 'acp'>, providerType: string, opts?: { workspaceId?: string | null; workspacePath?: string | null; args?: string; model?: string }) => void
+    onLaunchWorkspaceProvider: (kind: Extract<WorkspaceLaunchKind, 'cli' | 'acp'>, providerType: string, opts?: { workspaceId?: string | null; workspacePath?: string | null; args?: string; model?: string; resumeSessionId?: string | null }) => void
+    onListSavedSessions?: (providerType: string) => Promise<any[]>
 }
 
 export default function DashboardMobileMachineScreen({
@@ -65,6 +66,7 @@ export default function DashboardMobileMachineScreen({
     onAddWorkspace,
     onBrowseDirectory,
     onLaunchWorkspaceProvider,
+    onListSavedSessions,
 }: DashboardMobileMachineScreenProps) {
     const getDefaultLauncherKind = (
         ideAvailable: boolean,
@@ -105,11 +107,15 @@ export default function DashboardMobileMachineScreen({
         workspaceOptions?: LaunchWorkspaceOption[]
         showArgsInput?: boolean
         showModelInput?: boolean
+        providerType?: string
     } | null>(null)
     const launchConfirmWorkspaceKeyRef = useRef('__home__')
     const [launchConfirmWorkspaceKey, setLaunchConfirmWorkspaceKey] = useState('__home__')
     const [launchConfirmArgs, setLaunchConfirmArgs] = useState('')
     const [launchConfirmModel, setLaunchConfirmModel] = useState('')
+    const [launchConfirmResumeId, setLaunchConfirmResumeId] = useState('')
+    const [launchConfirmSavedSessions, setLaunchConfirmSavedSessions] = useState<any[]>([])
+    const [launchConfirmSessionsLoading, setLaunchConfirmSessionsLoading] = useState(false)
     const [launchConfirmBusy, setLaunchConfirmBusy] = useState(false)
     const lastMachineIdRef = useRef<string | null>(null)
     const resolvedWorkspacePath = workspaceChoice === '__custom__'
@@ -162,6 +168,7 @@ export default function DashboardMobileMachineScreen({
             showModelInput?: boolean
             initialArgs?: string
             initialModel?: string
+            providerType?: string
         },
         action: () => Promise<void>,
     ) => {
@@ -170,8 +177,18 @@ export default function DashboardMobileMachineScreen({
         setLaunchConfirmWorkspaceKey(config.selectedWorkspaceKey || '__home__')
         setLaunchConfirmArgs(config.initialArgs || '')
         setLaunchConfirmModel(config.initialModel || '')
+        setLaunchConfirmResumeId('')
+        setLaunchConfirmSavedSessions([])
         setLaunchConfirm(config)
-    }, [])
+        
+        if (config.providerType && onListSavedSessions) {
+            setLaunchConfirmSessionsLoading(true)
+            onListSavedSessions(config.providerType)
+                .then(sessions => setLaunchConfirmSavedSessions(sessions || []))
+                .catch(err => console.warn('Failed to load saved sessions', err))
+                .finally(() => setLaunchConfirmSessionsLoading(false))
+        }
+    }, [onListSavedSessions])
 
     const handleConfirmLaunch = useCallback(() => {
         if (!launchConfirmActionRef.current) return
@@ -537,6 +554,7 @@ export default function DashboardMobileMachineScreen({
                                                         showModelInput: activeLauncherKind === 'acp',
                                                         initialArgs: '',
                                                         initialModel: '',
+                                                        providerType: provider.type,
                                                     }, async () => {
                                                         const selectedOption = options.find(option => option.key === launchConfirmWorkspaceKeyRef.current)
                                                         if (selectedOption?.workspaceId) {
@@ -554,6 +572,7 @@ export default function DashboardMobileMachineScreen({
                                                             workspacePath: selectedOption?.workspacePath ?? null,
                                                             args: launchConfirmArgs,
                                                             model: launchConfirmModel,
+                                                            resumeSessionId: launchConfirmResumeId || null,
                                                         })
                                                     })
                                                 }}
@@ -653,6 +672,29 @@ export default function DashboardMobileMachineScreen({
                     showModelInput={launchConfirm.showModelInput}
                     modelValue={launchConfirmModel}
                     onModelChange={setLaunchConfirmModel}
+                    historyProviderNode={
+                        launchConfirm.providerType && (launchConfirmSessionsLoading || launchConfirmSavedSessions.length > 0) && (
+                            <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
+                                <div className="flex items-center justify-between mb-1">
+                                    <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Resume from history</div>
+                                    {launchConfirmSessionsLoading && <div className="text-[10px] text-text-secondary font-medium">Loading...</div>}
+                                </div>
+                                <select
+                                    value={launchConfirmResumeId}
+                                    onChange={(e) => setLaunchConfirmResumeId(e.target.value)}
+                                    className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
+                                    disabled={launchConfirmBusy || launchConfirmSessionsLoading}
+                                >
+                                    <option value="">Start a new session</option>
+                                    {launchConfirmSavedSessions.map(sess => (
+                                        <option key={sess.providerSessionId} value={sess.providerSessionId} disabled={!sess.canResume}>
+                                            {sess.title || sess.providerSessionId} {!sess.canResume ? '(workspace missing)' : ''}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )
+                    }
                     onConfirm={handleConfirmLaunch}
                     onCancel={() => {
                         launchConfirmActionRef.current = null
