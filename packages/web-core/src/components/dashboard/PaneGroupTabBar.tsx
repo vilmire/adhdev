@@ -3,6 +3,7 @@ import { useDevRenderTrace } from '../../hooks/useDevRenderTrace'
 import { useTabShortcuts } from '../../hooks/useTabShortcuts'
 import type { ActiveConversation } from './types'
 import { getConversationViewStates } from './DashboardMobileChatShared'
+import { getConversationTabMetaText, getConversationTitle } from './conversation-presenters'
 
 interface PaneGroupTabBarProps {
     conversations: ActiveConversation[]
@@ -187,22 +188,14 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
                 )}
             </div>
             <div className="adhdev-dockview-tab-copy">
-                <span className="adhdev-dockview-tab-primary" title={conv.displayPrimary}>{conv.displayPrimary}</span>
+                <span className="adhdev-dockview-tab-primary" title={getConversationTitle(conv)}>{getConversationTitle(conv)}</span>
                 <span className="adhdev-dockview-tab-meta">
                     {isReconnecting ? (
-                        <span className="adhdev-dockview-tab-reconnecting">Reconnecting…</span>
+                        <span className="adhdev-dockview-tab-reconnecting">{getConversationTabMetaText(conv)}</span>
                     ) : viewStates.isConnecting ? (
-                        <span className="adhdev-dockview-tab-connecting">Connecting<span className="connecting-dots"></span></span>
+                        <span className="adhdev-dockview-tab-connecting">{getConversationTabMetaText(conv)}<span className="connecting-dots"></span></span>
                     ) : (
-                        <>
-                            {conv.displaySecondary}
-                            {conv.machineName && (
-                                <>
-                                    <span className="adhdev-dockview-tab-dot">·</span>
-                                    <span className="adhdev-dockview-tab-machine">🖥 {conv.machineName}</span>
-                                </>
-                            )}
-                        </>
+                        getConversationTabMetaText(conv)
                     )}
                 </span>
             </div>

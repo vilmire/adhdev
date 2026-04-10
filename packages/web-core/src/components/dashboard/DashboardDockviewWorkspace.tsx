@@ -37,6 +37,7 @@ import { getCliConversationViewMode, isAcpConv } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
 import { useTabShortcuts } from '../../hooks/useTabShortcuts'
+import { getConversationTabMetaText, getConversationTitle, getRemotePanelTitle } from './conversation-presenters'
 
 interface DashboardDockviewWorkspaceProps {
     visibleConversations: ActiveConversation[]
@@ -116,7 +117,7 @@ function useDashboardDockviewContext() {
 }
 
 function getDockviewTitle(conversation: ActiveConversation) {
-    return conversation.displayPrimary || conversation.title || conversation.agentName || conversation.tabKey
+    return getConversationTitle(conversation) || conversation.tabKey
 }
 
 function getRemotePanelId(ideId: string) {
@@ -232,9 +233,7 @@ function syncRemotePanels(
     if (!preferredConversation && api.totalPanels === 0) return
 
     const existing = api.getPanel(desiredPanelId)
-    const nextTitle = preferredConversation
-        ? `Remote · ${preferredConversation.displayPrimary || preferredConversation.workspaceName || preferredConversation.agentName}`
-        : 'Remote'
+    const nextTitle = getRemotePanelTitle(preferredConversation)
 
     if (existing) {
         if (existing.title !== nextTitle) {
@@ -469,7 +468,7 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
     return (
         <div
             className={`adhdev-dockview-tab${isActive ? ' is-active' : ''}${isGroupActive ? ' is-group-active' : ''}${isReconnecting ? ' is-reconnecting' : ''}`}
-            title={conversation.displayPrimary}
+            title={getConversationTitle(conversation)}
             data-tab-key={props.params.tabKey}
             onMouseDown={activatePanel}
             onTouchStart={activatePanel}
@@ -500,22 +499,14 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
                 )}
             </div>
             <div className="adhdev-dockview-tab-copy">
-                <div className="adhdev-dockview-tab-primary">{conversation.displayPrimary}</div>
+                <div className="adhdev-dockview-tab-primary">{getConversationTitle(conversation)}</div>
                 <div className="adhdev-dockview-tab-meta">
                     {isReconnecting ? (
-                        <span className="adhdev-dockview-tab-reconnecting">Reconnecting…</span>
+                        <span className="adhdev-dockview-tab-reconnecting">{getConversationTabMetaText(conversation)}</span>
                     ) : isConnecting ? (
-                        <span className="adhdev-dockview-tab-connecting">Connecting…</span>
+                        <span className="adhdev-dockview-tab-connecting">{getConversationTabMetaText(conversation)}</span>
                     ) : (
-                        <>
-                            <span>{conversation.displaySecondary}</span>
-                            {conversation.machineName && (
-                                <>
-                                    <span className="adhdev-dockview-tab-dot">·</span>
-                                    <span className="adhdev-dockview-tab-machine">🖥 {conversation.machineName}</span>
-                                </>
-                            )}
-                        </>
+                        <span>{getConversationTabMetaText(conversation)}</span>
                     )}
                 </div>
             </div>

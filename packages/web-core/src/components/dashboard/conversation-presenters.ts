@@ -29,3 +29,12 @@ export function getMachineConversationCardSubtitle(
     if (options?.timestampLabel) parts.push(options.timestampLabel)
     return parts.filter(Boolean).join(' · ')
 }
+
+export function getConversationTabMetaText(conversation: ActiveConversation): string {
+    return getConversationStatusHint(conversation) || getConversationMetaText(conversation)
+}
+
+export function getRemotePanelTitle(conversation: ActiveConversation | null | undefined): string {
+    if (!conversation) return 'Remote'
+    return `Remote · ${conversation.displayPrimary || conversation.workspaceName || conversation.agentName || 'Session'}`
+}
