@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/web-core",
-  "version": "0.8.32",
+  "version": "0.8.33",
   "private": true,
   "type": "module",
   "main": "src/index.ts",

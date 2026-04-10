@@ -713,7 +713,10 @@ class StandaloneServer {
       allStates,
       cdpManagers: this.components!.cdpManagers,
       providerLoader: this.components!.providerLoader,
-      detectedIdes: this.components!.detectedIdes.value,
+      detectedIdes: this.components!.detectedIdes.value.map((ide) => ({
+        ...ide,
+        path: ide.path ?? undefined,
+      })),
       instanceId: `standalone_${machineId}`,
       version: pkgVersion,
       daemonMode: false,
