@@ -220,7 +220,7 @@ export default function DashboardHeader({
                         {/* Mobile: show active tab title; Desktop: "Dashboard" */}
                         <span className="header-title-desktop">Dashboard</span>
                         <span className="header-title-mobile">
-                            {activeConv?.displayPrimary || 'Dashboard'}
+                            {activeConv ? getConversationTitle(activeConv) : 'Dashboard'}
                         </span>
                         <span className="header-count-mobile text-[10px] font-semibold opacity-60 ml-2 tracking-wide">
                             <span
@@ -260,9 +260,9 @@ export default function DashboardHeader({
                     <div className="dashboard-header-actions-group">
                         <span
                             className="dashboard-header-action-target"
-                            title={activeConv.displaySecondary || activeConv.displayPrimary}
+                            title={getConversationMetaText(activeConv) || getConversationTitle(activeConv)}
                         >
-                            {activeConv.displayPrimary}
+                            {getConversationTitle(activeConv)}
                         </span>
 
                         {(isCliActive || isAcpActive) && onStopCli && (

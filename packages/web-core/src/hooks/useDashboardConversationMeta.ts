@@ -1,4 +1,5 @@
 import { useEffect, useMemo, type Dispatch, type SetStateAction } from 'react'
+import { getConversationNotificationLabel } from '../components/dashboard/conversation-presenters'
 import type { ActiveConversation } from '../components/dashboard/types'
 import { requestNotificationPermission, useBrowserNotifications } from './useBrowserNotifications'
 
@@ -22,7 +23,7 @@ export function useDashboardConversationMeta({
     const agentStates = useMemo(() =>
         visibleConversations.map(c => ({
             id: c.tabKey,
-            name: c.title || c.agentName || c.ideId,
+            name: getConversationNotificationLabel(c),
             status: c.status,
             activeModal: c.modalMessage ? { message: c.modalMessage, buttons: c.modalButtons } : null,
         })),

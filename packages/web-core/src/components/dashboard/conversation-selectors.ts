@@ -18,6 +18,10 @@ export function getConversationMachineId(conversation: ActiveConversation): stri
     return conversation.daemonId || conversation.ideId?.split(':')[0] || conversation.ideId || ''
 }
 
+export function getConversationMachineLabel(conversation: ActiveConversation): string {
+    return conversation.machineName || ''
+}
+
 export function getConversationDaemonRouteId(conversation: ActiveConversation): string {
     return getConversationMachineId(conversation)
 }
@@ -33,7 +37,7 @@ export function getConversationDisplayLabel(conversation: ActiveConversation): s
 }
 
 export function getConversationMetaParts(conversation: ActiveConversation): string[] {
-    return [conversation.displaySecondary, conversation.machineName].filter(Boolean)
+    return [conversation.displaySecondary, getConversationMachineLabel(conversation)].filter(Boolean)
 }
 
 export function getConversationProviderLabel(conversation: ActiveConversation): string {
@@ -52,6 +56,14 @@ export function getConversationNativeTargetSessionId(conversation: ActiveConvers
     return isNativeConversation(conversation)
         ? conversation.sessionId
         : conversation.nativeSessionId
+}
+
+export function getConversationRemoteTabKey(conversation: ActiveConversation): string {
+    return isNativeConversation(conversation) ? 'native' : conversation.tabKey
+}
+
+export function getConversationActiveTabTarget(conversation: ActiveConversation): string | undefined {
+    return conversation.sessionId
 }
 
 export function resolveConversationTargetEntry(

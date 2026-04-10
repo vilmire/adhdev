@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { NavigateFunction, Location } from 'react-router-dom'
 import type { DaemonData } from '../types'
+import { getConversationRemoteTabKey } from '../components/dashboard/conversation-selectors'
 import type { ActiveConversation } from '../components/dashboard/types'
 import { getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
 import { isAcpConv, isCliConv } from '../components/dashboard/types'
@@ -56,9 +57,7 @@ export function useDashboardRemoteDialogState({
         if (!requestedRemoteConversation) return
         setRemoteDialogState({
             ideId: requestedRemoteConversation.ideId,
-            tabKey: requestedRemoteConversation.streamSource === 'native'
-                ? 'native'
-                : requestedRemoteConversation.tabKey,
+            tabKey: getConversationRemoteTabKey(requestedRemoteConversation),
         })
         setRemoteDialogActiveConv(requestedRemoteConversation)
         navigate(
@@ -77,7 +76,7 @@ export function useDashboardRemoteDialogState({
         if (!conversation) return
         setRemoteDialogState({
             ideId: conversation.ideId,
-            tabKey: conversation.streamSource === 'native' ? 'native' : conversation.tabKey,
+            tabKey: getConversationRemoteTabKey(conversation),
         })
         setRemoteDialogActiveConv(conversation)
     }, [])

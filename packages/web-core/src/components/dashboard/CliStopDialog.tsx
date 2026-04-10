@@ -1,4 +1,5 @@
 import type { ActiveConversation } from './types'
+import { getConversationStopDialogLabel } from './conversation-presenters'
 
 interface CliStopDialogProps {
     activeConv: ActiveConversation
@@ -15,7 +16,7 @@ export default function CliStopDialog({
     onStopNow,
     onSaveAndStop,
 }: CliStopDialogProps) {
-    const agentLabel = activeConv.agentName || activeConv.ideType || 'CLI'
+    const agentLabel = getConversationStopDialogLabel(activeConv)
 
     return (
         <div className="fixed inset-0 z-[1400] flex items-center justify-center p-4">

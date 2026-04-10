@@ -6,6 +6,7 @@ import { IconChat, IconClock, IconRefresh, IconWarning } from '../../components/
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { MachineRecentLaunch, ProviderInfo } from './types'
 import { getConversationActivityAt } from '../../components/dashboard/conversation-sort'
+import { getConversationMetaText, getConversationTitle } from '../../components/dashboard/conversation-presenters'
 
 interface MachineCommandCenterProps {
     machineEntry: DaemonData
@@ -70,7 +71,7 @@ export default function MachineCommandCenter({
                                     >
                                         <div className="flex items-center justify-between gap-3 w-full">
                                             <span className="text-sm font-semibold text-text-primary truncate group-hover:text-accent-primary transition-colors">
-                                                {conversation.displayPrimary}
+                                                {getConversationTitle(conversation)}
                                             </span>
                                             {activityAt > 0 && (
                                                 <span className="text-[11px] text-text-muted shrink-0">
@@ -79,7 +80,7 @@ export default function MachineCommandCenter({
                                             )}
                                         </div>
                                         <span className="text-xs text-text-secondary truncate w-full opacity-80">
-                                            {conversation.displaySecondary}
+                                            {getConversationMetaText(conversation)}
                                         </span>
                                     </button>
                                 )

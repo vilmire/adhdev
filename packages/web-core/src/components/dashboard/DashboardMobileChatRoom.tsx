@@ -7,6 +7,7 @@ import { isCliConv } from './types'
 import { useRef } from 'react'
 import type { CliTerminalHandle } from '../CliTerminal'
 import CliViewModeToggle from './CliViewModeToggle'
+import { getConversationTitle } from './conversation-presenters'
 
 interface DashboardMobileChatRoomProps {
     selectedConversation: ActiveConversation
@@ -76,7 +77,7 @@ export default function DashboardMobileChatRoom({
                     </button>
                     <div className="min-w-0 flex flex-col gap-0.5">
                         <div className="flex items-center gap-2 text-[17px] font-extrabold tracking-tight text-text-primary truncate">
-                            {selectedConversation.displayPrimary || selectedConversation.agentName}
+                            {getConversationTitle(selectedConversation)}
                         </div>
                         <div className="min-w-0 overflow-hidden text-xs text-text-secondary">
                             <ConversationMetaChips

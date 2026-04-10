@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { buildMachineNameMap, buildScopedIdeConversations, type LocalUserMessage } from '../components/dashboard/buildConversations'
+import { getConversationNotificationLabel } from '../components/dashboard/conversation-presenters'
 import { getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
 import type { DaemonData } from '../types'
 
@@ -85,7 +86,7 @@ export function useIdeConversations({
     const extensionTabs = useMemo(
         () => streamConvs.map(conversation => ({
             tabKey: conversation.tabKey,
-            title: conversation.title || conversation.agentName || ideName,
+            title: getConversationNotificationLabel(conversation) || ideName,
             status: conversation.status,
         })),
         [streamConvs, ideName],

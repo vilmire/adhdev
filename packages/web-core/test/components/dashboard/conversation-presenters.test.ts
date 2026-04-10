@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+    getConversationHistorySubtitle,
     getConversationMetaText,
+    getConversationMachineCardPreview,
+    getConversationNotificationLabel,
+    getConversationPreviewText,
     getConversationStatusHint,
+    getConversationStopDialogLabel,
     getConversationTabMetaText,
     getConversationTitle,
     getMachineConversationCardSubtitle,
@@ -37,9 +42,14 @@ describe('conversation presenters', () => {
         const conversation = createConversation()
         expect(getConversationTitle(conversation)).toBe('repo')
         expect(getConversationMetaText(conversation)).toBe('Cursor · Codex · Studio Mac')
+        expect(getConversationPreviewText(conversation)).toBe('Cursor · Codex · Studio Mac')
         expect(getConversationTabMetaText(conversation)).toBe('Cursor · Codex · Studio Mac')
+        expect(getConversationMachineCardPreview(conversation)).toBe('repo · Cursor · Codex · Studio Mac')
         expect(getMachineConversationCardSubtitle(conversation, { timestampLabel: '2m ago' }))
             .toBe('Chat · Cursor · Codex · Studio Mac · 2m ago')
+        expect(getConversationHistorySubtitle(conversation)).toBe('repo — Cursor')
+        expect(getConversationStopDialogLabel(conversation)).toBe('Codex')
+        expect(getConversationNotificationLabel(conversation)).toBe('Codex')
         expect(getRemotePanelTitle(conversation)).toBe('Remote · repo')
     })
 
@@ -52,5 +62,19 @@ describe('conversation presenters', () => {
             .toBe('Connecting…')
         expect(getConversationStatusHint(createConversation(), { requiresAction: true }))
             .toBe('Action needed')
+    })
+
+    it('prefers message previews and conversation titles when available', () => {
+        const withMessage = createConversation({
+            messages: [{ role: 'assistant', content: 'Generated answer', timestamp: 1 }],
+        })
+        const withTitle = createConversation({
+            title: 'Named thread',
+            agentName: '',
+        })
+
+        expect(getConversationPreviewText(withMessage)).toBe('Generated answer')
+        expect(getConversationPreviewText(withTitle)).toBe('Named thread')
+        expect(getConversationNotificationLabel(withTitle)).toBe('Named thread')
     })
 })

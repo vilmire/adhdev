@@ -5,10 +5,10 @@
  */
 
 import type { DaemonData } from '../../types';
-import { formatIdeType } from '../../utils/daemon-utils';
 import { IconCandle, IconRefresh } from '../Icons';
 import { isAcpConv, isCliConv, type ActiveConversation } from './types';
 import { createPortal } from 'react-dom';
+import { getConversationHistorySubtitle } from './conversation-presenters';
 
 export interface SavedSessionHistoryEntry {
     id: string;
@@ -72,7 +72,7 @@ export default function HistoryModal({
                 <div className="px-6 py-5 border-b border-border-subtle flex justify-between items-center bg-[var(--surface-primary)]">
                     <div>
                         <h3 className="m-0 text-lg font-extrabold">{isSavedSessionMode ? 'Saved Sessions' : 'Chat History'}</h3>
-                        <div className="text-xs text-text-muted mt-0.5">{activeConv.displayPrimary} — {formatIdeType(activeConv.ideType)}</div>
+                        <div className="text-xs text-text-muted mt-0.5">{getConversationHistorySubtitle(activeConv)}</div>
                     </div>
                     <button onClick={onClose} className="bg-transparent border-none text-xl text-text-muted cursor-pointer">✕</button>
                 </div>

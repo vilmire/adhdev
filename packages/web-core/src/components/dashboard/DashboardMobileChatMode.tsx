@@ -12,8 +12,9 @@ import type { DashboardMobileSection } from './DashboardMobileBottomNav'
 import { getConversationTimestamp } from './conversation-sort'
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
 import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, getConversationLiveInboxState } from './DashboardMobileChatShared'
+import { getConversationMachineId, getConversationProviderType } from './conversation-selectors'
+import { getConversationMachineCardPreview, getConversationPreviewText, getConversationTitle } from './conversation-presenters'
 import { compareMachineEntries, getDaemonEntryActivityAt, getMachineDisplayName, isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
-import { normalizeTextContent } from '../../utils/text'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
 
 declare const __APP_VERSION__: string
@@ -53,19 +54,6 @@ interface PendingWorkspaceLaunch {
     workspacePath?: string | null
     resumeSessionId?: string | null
     startedAt: number
-}
-
-function normalizePreviewText(content: unknown) {
-    return normalizeTextContent(content)
-}
-
-function getConversationPreview(conversation: ActiveConversation) {
-    const lastMessage = [...conversation.messages].reverse().find((message) => !message?._localId)
-        || conversation.messages[conversation.messages.length - 1]
-    const preview = normalizePreviewText(lastMessage?.content)
-    if (preview) return preview
-    if (conversation.title) return conversation.title
-    return conversation.displaySecondary || 'No messages yet'
 }
 
 function getAvatarText(primary: string) {
@@ -193,7 +181,7 @@ export default function DashboardMobileChatMode({
         logMobileReadDebug('mark_read:start', {
             tabKey: conversation.tabKey,
             sessionId: conversation.sessionId,
-            displayPrimary: conversation.displayPrimary,
+            displayPrimary: getConversationTitle(conversation),
             inboxBucket: liveState.inboxBucket,
             unread: liveState.unread,
             lastSeenAt: liveState.lastSeenAt,
@@ -201,7 +189,7 @@ export default function DashboardMobileChatMode({
             activityAt: getConversationTimestamp(conversation),
             readAt,
         })
-        void sendDaemonCommand(conversation.daemonId || conversation.ideId, 'mark_session_seen', {
+        void sendDaemonCommand(getConversationMachineId(conversation) || conversation.ideId, 'mark_session_seen', {
             sessionId: conversation.sessionId,
             seenAt: readAt,
         }).then((result) => {
@@ -272,7 +260,7 @@ export default function DashboardMobileChatMode({
             isOpenConversation,
         })
         const timestamp = getConversationTimestamp(conversation)
-        const preview = getConversationPreview(conversation)
+        const preview = getConversationPreviewText(conversation)
         return {
             conversation,
             timestamp,
@@ -296,7 +284,7 @@ export default function DashboardMobileChatMode({
                     liveState,
                     tabKey: item.conversation.tabKey,
                     sessionId: item.conversation.sessionId,
-                    displayPrimary: item.conversation.displayPrimary,
+                    displayPrimary: getConversationTitle(item.conversation),
                     serverBucket: liveState.inboxBucket,
                     computedBucket: item.inboxBucket,
                     serverUnread: liveState.unread,
@@ -328,7 +316,7 @@ export default function DashboardMobileChatMode({
     )
     const selectedMachineConversations = useMemo(
         () => selectedMachineEntry
-            ? items.filter(item => item.conversation.daemonId === selectedMachineEntry.id || item.conversation.ideId === selectedMachineEntry.id)
+            ? items.filter(item => getConversationMachineId(item.conversation) === selectedMachineEntry.id)
             : [],
         [items, selectedMachineEntry],
     )
@@ -408,7 +396,7 @@ export default function DashboardMobileChatMode({
         const groupedItems = new Map<string, MobileConversationListItem[]>()
 
         for (const item of items) {
-            const key = item.conversation.daemonId || item.conversation.ideId
+            const key = getConversationMachineId(item.conversation)
             const bucket = groupedItems.get(key)
             if (bucket) bucket.push(item)
             else groupedItems.set(key, [item])
@@ -438,7 +426,7 @@ export default function DashboardMobileChatMode({
                 latestTimestamp: latestItem?.timestamp || 0,
                 fallbackActivityAt,
                 preview: latestConversation
-                    ? `${latestConversation.displayPrimary} · ${getConversationPreview(latestConversation)}`
+                    ? getConversationMachineCardPreview(latestConversation)
                     : 'No active conversations yet. Open the machine, choose a workspace, then launch an IDE, CLI, or ACP session.',
             }
         }).sort((a, b) => {
@@ -482,7 +470,7 @@ export default function DashboardMobileChatMode({
     }, [])
 
     const handleOpenConversationMachine = useCallback((conversation: ActiveConversation) => {
-        const machineId = conversation.daemonId || conversation.ideId?.split(':')[0] || conversation.ideId
+        const machineId = getConversationMachineId(conversation)
         if (!machineId) return
         setSelectedMachineId(machineId)
         setMachineActionState('idle')
@@ -755,9 +743,9 @@ export default function DashboardMobileChatMode({
                         if (!selectedConversation) return
                         if (selectedCliViewMode === mode) return
                         try {
-                            await sendDaemonCommand(selectedConversation.daemonId || selectedConversation.ideId, 'set_cli_view_mode', {
+                            await sendDaemonCommand(getConversationMachineId(selectedConversation) || selectedConversation.ideId, 'set_cli_view_mode', {
                                 targetSessionId: selectedConversation.sessionId,
-                                cliType: selectedConversation.ideType || selectedConversation.agentType,
+                                cliType: getConversationProviderType(selectedConversation),
                                 mode,
                             })
                         } catch (error) {

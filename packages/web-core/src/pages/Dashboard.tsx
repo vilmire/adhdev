@@ -28,6 +28,7 @@ import type { Toast } from '../components/dashboard/ToastContainer'
 import type { DashboardMobileSection } from '../components/dashboard/DashboardMobileBottomNav'
 import { getMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
+import { getConversationActiveTabTarget, getConversationMachineId, getConversationProviderType } from '../components/dashboard/conversation-selectors'
 import { getConversationTimestamp } from '../components/dashboard/conversation-sort'
 import { compareMachineEntries, getMachineDisplayName, isAcpEntry, isCliEntry } from '../utils/daemon-utils'
 import { browseMachineDirectories } from '../components/machine/workspaceBrowse'
@@ -655,9 +656,9 @@ export default function Dashboard() {
         const currentMode = getCliConversationViewMode(activeConv)
         if (currentMode === mode) return
         try {
-            await sendDaemonCommand(activeConv.daemonId || activeConv.ideId, 'set_cli_view_mode', {
+            await sendDaemonCommand(getConversationMachineId(activeConv) || activeConv.ideId, 'set_cli_view_mode', {
                 targetSessionId: activeConv.sessionId,
-                cliType: activeConv.ideType || activeConv.agentType,
+                cliType: getConversationProviderType(activeConv),
                 mode,
             })
         } catch (error) {
@@ -685,7 +686,8 @@ export default function Dashboard() {
         setDesktopActiveTabKey(conversation.tabKey)
         setSearchParams(prev => {
             const next = new URLSearchParams(prev)
-            if (conversation.sessionId) next.set('activeTab', conversation.sessionId)
+            const activeTabTarget = getConversationActiveTabTarget(conversation)
+            if (activeTabTarget) next.set('activeTab', activeTabTarget)
             else next.delete('activeTab')
             return next
         }, { replace: true })

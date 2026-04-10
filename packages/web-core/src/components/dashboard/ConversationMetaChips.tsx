@@ -5,6 +5,7 @@ import { IconMonitor, IconPlug, IconServer } from '../Icons'
 import {
     getConversationIdeChipLabel,
     getConversationMachineId,
+    getConversationMachineLabel,
     getConversationNativeTargetSessionId,
     getConversationProviderLabel,
 } from './conversation-selectors'
@@ -26,6 +27,7 @@ export default function ConversationMetaChips({
 }: ConversationMetaChipsProps) {
     const navigate = useNavigate()
     const machineId = getConversationMachineId(conversation)
+    const machineLabel = getConversationMachineLabel(conversation)
     const showIdeChip = conversation.transport === 'cdp-page' || conversation.transport === 'cdp-webview'
     const showExtensionChip = conversation.streamSource === 'agent-stream' && !!conversation.agentName
     const showProviderChip = !showExtensionChip && (conversation.transport === 'pty' || conversation.transport === 'acp')
@@ -72,9 +74,9 @@ export default function ConversationMetaChips({
                 )
             )}
             {showExtensionChip && (
-                <span className="conversation-meta-chip is-active" title={conversation.agentName}>
+                <span className="conversation-meta-chip is-active" title={providerChipLabel}>
                     <IconPlug size={12} />
-                    <span>{conversation.agentName}</span>
+                    <span>{providerChipLabel}</span>
                 </span>
             )}
             {showProviderChip && (
@@ -83,21 +85,21 @@ export default function ConversationMetaChips({
                     <span>{providerChipLabel}</span>
                 </span>
             )}
-            {conversation.machineName && (
+            {machineLabel && (
                 interactive ? (
                     <button
                         type="button"
                         className="conversation-meta-chip is-clickable"
                         onClick={handleOpenMachine}
-                        title={conversation.machineName}
+                        title={machineLabel}
                     >
                         <IconServer size={12} />
-                        <span>{conversation.machineName}</span>
+                        <span>{machineLabel}</span>
                     </button>
                 ) : (
-                    <span className="conversation-meta-chip" title={conversation.machineName}>
+                    <span className="conversation-meta-chip" title={machineLabel}>
                         <IconServer size={12} />
-                        <span>{conversation.machineName}</span>
+                        <span>{machineLabel}</span>
                     </span>
                 )
             )}

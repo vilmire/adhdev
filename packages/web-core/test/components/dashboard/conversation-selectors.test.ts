@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+    getConversationActiveTabTarget,
     getConversationControlsContext,
     getConversationDaemonRouteId,
     getConversationIdeChipLabel,
+    getConversationMachineLabel,
     getConversationMetaParts,
     getConversationNativeTargetSessionId,
     getConversationProviderLabel,
     getConversationProviderType,
+    getConversationRemoteTabKey,
 } from '../../../src/components/dashboard/conversation-selectors'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
 import type { DaemonData } from '../../../src/types'
@@ -45,10 +48,13 @@ describe('conversation selectors', () => {
         })
 
         expect(getConversationDaemonRouteId(conversation)).toBe('machine-1')
+        expect(getConversationMachineLabel(conversation)).toBe('Studio Mac')
         expect(getConversationProviderType(conversation)).toBe('codex')
         expect(getConversationProviderLabel(conversation)).toBe('Codex')
         expect(getConversationIdeChipLabel(conversation)).toBe('Cursor')
         expect(getConversationNativeTargetSessionId(conversation)).toBe('cursor-1')
+        expect(getConversationRemoteTabKey(conversation)).toBe('cursor-1')
+        expect(getConversationActiveTabTarget(conversation)).toBe('agent-1')
         expect(getConversationMetaParts(conversation)).toEqual(['Cursor · Codex', 'Studio Mac'])
     })
 

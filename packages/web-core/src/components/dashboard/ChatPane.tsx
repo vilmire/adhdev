@@ -23,6 +23,7 @@ import {
     getConversationControlsContext,
     getConversationDaemonRouteId,
     getConversationDisplayLabel,
+    getConversationProviderLabel,
     getConversationProviderType,
 } from './conversation-selectors';
 
@@ -294,10 +295,10 @@ export default function ChatPane({
             )}
 
             {/* Message Stream */}
-            <ChatMessageList
+                <ChatMessageList
                 messages={allMessages}
                 actionLogs={visibleActionLogs}
-                agentName={activeConv.agentName || panelLabel || 'Agent'}
+                agentName={getConversationProviderLabel(activeConv) || panelLabel || 'Agent'}
                 userName={userName}
                 isCliMode={controlsContext.isCli || controlsContext.isAcp}
                 isWorking={viewStates.isGenerating}

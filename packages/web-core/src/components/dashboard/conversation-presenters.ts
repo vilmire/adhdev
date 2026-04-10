@@ -1,6 +1,8 @@
+import { formatIdeType } from '../../utils/daemon-utils'
+import { normalizeTextContent } from '../../utils/text'
 import type { ActiveConversation } from './types'
 import { getConversationViewStates } from './DashboardMobileChatShared'
-import { getConversationDisplayLabel, getConversationMetaParts } from './conversation-selectors'
+import { getConversationDisplayLabel, getConversationMetaParts, getConversationProviderLabel } from './conversation-selectors'
 
 export function getConversationTitle(conversation: ActiveConversation): string {
     return getConversationDisplayLabel(conversation)
@@ -8,6 +10,15 @@ export function getConversationTitle(conversation: ActiveConversation): string {
 
 export function getConversationMetaText(conversation: ActiveConversation): string {
     return getConversationMetaParts(conversation).join(' · ')
+}
+
+export function getConversationPreviewText(conversation: ActiveConversation): string {
+    const lastMessage = [...conversation.messages].reverse().find((message) => !message?._localId)
+        || conversation.messages[conversation.messages.length - 1]
+    const preview = normalizeTextContent(lastMessage?.content)
+    if (preview) return preview
+    if (conversation.title) return conversation.title
+    return getConversationMetaText(conversation) || 'No messages yet'
 }
 
 export function getConversationStatusHint(
@@ -34,7 +45,23 @@ export function getConversationTabMetaText(conversation: ActiveConversation): st
     return getConversationStatusHint(conversation) || getConversationMetaText(conversation)
 }
 
+export function getConversationMachineCardPreview(conversation: ActiveConversation): string {
+    return `${getConversationTitle(conversation)} · ${getConversationPreviewText(conversation)}`
+}
+
+export function getConversationHistorySubtitle(conversation: ActiveConversation): string {
+    return `${getConversationTitle(conversation)} — ${formatIdeType(conversation.ideType)}`
+}
+
+export function getConversationStopDialogLabel(conversation: ActiveConversation): string {
+    return getConversationProviderLabel(conversation) || 'CLI'
+}
+
+export function getConversationNotificationLabel(conversation: ActiveConversation): string {
+    return conversation.title || getConversationProviderLabel(conversation) || conversation.ideId
+}
+
 export function getRemotePanelTitle(conversation: ActiveConversation | null | undefined): string {
     if (!conversation) return 'Remote'
-    return `Remote · ${conversation.displayPrimary || conversation.workspaceName || conversation.agentName || 'Session'}`
+    return `Remote · ${getConversationTitle(conversation) || conversation.workspaceName || 'Session'}`
 }

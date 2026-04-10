@@ -8,6 +8,7 @@ import { useTransport } from '../../context/TransportContext';
 import { connectionManager } from '../../compat';
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import type { ActiveConversation } from './types';
+import { getConversationTitle } from './conversation-presenters';
 
 export interface CliTerminalPaneProps {
     activeConv: ActiveConversation;
@@ -308,7 +309,7 @@ export default function CliTerminalPane({
                         <input
                             ref={chatInputRef}
                             type="text"
-                            placeholder={`Send message to ${activeConv.displayPrimary}...`}
+                            placeholder={`Send message to ${getConversationTitle(activeConv)}...`}
                             value={draftInput}
                             disabled={!runtimeReady || !isVisible || isSendingChat}
                             onChange={e => setDraftInput(e.target.value)}
