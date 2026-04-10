@@ -10,82 +10,17 @@ import ConversationMetaChips from './ConversationMetaChips';
 import { getConversationViewStates } from './DashboardMobileChatShared';
 import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
 import type { ActiveConversation, DashboardMessage } from './types';
-import type { ChatMessage, DaemonData } from '../../types';
+import type { DaemonData } from '../../types';
 import { useTransport } from '../../context/TransportContext';
 import { formatIdeType } from '../../utils/daemon-utils';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
 import { IconPlug, IconEye, IconFolder } from '../Icons';
-import { normalizeTextContent } from '../../utils/text';
-
-function normalizeMessageContent(content: unknown): string {
-    return normalizeTextContent(content);
-}
-
-function getMessageTimestamp(message: Pick<ChatMessage, 'receivedAt'> | null | undefined): number {
-    const ts = Number(message?.receivedAt || 0);
-    return Number.isFinite(ts) ? ts : 0;
-}
-
-function sortMessagesChronologically(messages: DashboardMessage[]) {
-    return [...messages].sort((left, right) => {
-        const leftTs = getMessageTimestamp(left);
-        const rightTs = getMessageTimestamp(right);
-        if (leftTs && rightTs && leftTs !== rightTs) return leftTs - rightTs;
-        return 0;
-    });
-}
-
-function isLikelySameMessage(a: DashboardMessage | null | undefined, b: DashboardMessage | null | undefined): boolean {
-    if (!a || !b) return false;
-    if (a === b) return true;
-    if (a.id && b.id && String(a.id) === String(b.id)) return true;
-    if (a._localId && b._localId && String(a._localId) === String(b._localId)) return true;
-
-    const roleA = String(a?.role || '').toLowerCase();
-    const roleB = String(b?.role || '').toLowerCase();
-    if (roleA !== roleB) return false;
-
-    const normalizedA = normalizeMessageContent(a?.content);
-    const normalizedB = normalizeMessageContent(b?.content);
-    if (!normalizedA || normalizedA !== normalizedB) return false;
-
-    const tsA = getMessageTimestamp(a);
-    const tsB = getMessageTimestamp(b);
-    if (tsA && tsB) return Math.abs(tsA - tsB) <= 15000;
-
-    return !!a?._localId !== !!b?._localId;
-}
-
-function getMessagePreferenceScore(message: DashboardMessage | null | undefined): number {
-    let score = 0;
-    if (!message?._localId) score += 4;
-    if (message?.id) score += 3;
-    if (message?._turnKey) score += 2;
-    if (getMessageTimestamp(message)) score += 1;
-    return score;
-}
-
-function choosePreferredMessage(existing: DashboardMessage, incoming: DashboardMessage): DashboardMessage {
-    const existingScore = getMessagePreferenceScore(existing);
-    const incomingScore = getMessagePreferenceScore(incoming);
-    if (incomingScore !== existingScore) return incomingScore > existingScore ? incoming : existing;
-    return normalizeMessageContent(incoming?.content).length >= normalizeMessageContent(existing?.content).length ? incoming : existing;
-}
-
-function dedupeOptimisticMessages(messages: DashboardMessage[]) {
-    const result: DashboardMessage[] = [];
-    for (const message of messages) {
-        const duplicateIndex = result.findIndex(existing => isLikelySameMessage(existing, message));
-
-        if (duplicateIndex >= 0) {
-            result.splice(duplicateIndex, 1, choosePreferredMessage(result[duplicateIndex], message));
-            continue;
-        }
-
-        result.push(message);
-    }
-    return result;
-}
+import {
+    dedupeOptimisticMessages,
+    excludeMessagesPresentInLiveFeed,
+    getMessageTimestamp,
+    sortMessagesChronologically,
+} from './message-utils';
 
 interface ChatHistoryResult {
     messages?: DashboardMessage[];
@@ -261,10 +196,7 @@ export default function ChatPane({
         }
 
         // Dedup: exclude history messages already visible in live feed
-        const liveHashes = new Set(liveMessages.map((m: any) => `${m.role}:${(m.content || '').slice(0, 100)}`));
-        const uniqueHistory = historyMessages.filter(
-            m => !liveHashes.has(`${m.role}:${(m.content || '').slice(0, 100)}`)
-        );
+        const uniqueHistory = excludeMessagesPresentInLiveFeed(historyMessages, liveMessages);
         const mergedMessages = sortMessagesChronologically(
             dedupeOptimisticMessages([...uniqueHistory, ...liveMessages]),
         );

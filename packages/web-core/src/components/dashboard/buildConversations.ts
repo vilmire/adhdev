@@ -10,14 +10,8 @@ import { deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, get
 import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation, DashboardMessage } from './types';
-import { normalizeTextContent } from '../../utils/text';
-
-export type LocalUserMessage = {
-    role: string;
-    content: string;
-    timestamp: number;
-    _localId: string;
-};
+import { filterUnconfirmedLocalMessages, type LocalUserMessage } from './message-utils';
+export type { LocalUserMessage } from './message-utils';
 
 interface BuildConversationContext {
     machineName?: string;
@@ -48,36 +42,6 @@ function getStreamKey(stream: { sessionId?: string; instanceId?: string; agentTy
 
 function getConversationTabKey(sessionId: string | undefined, fallbackKey: string): string {
     return sessionId || fallbackKey;
-}
-
-function normalizeMessageContent(content: unknown): string {
-    return normalizeTextContent(content)
-}
-
-function getMessageTimestamp(message: { receivedAt?: number | string; timestamp?: number } | null | undefined): number {
-    const ts = Number(message?.receivedAt || message?.timestamp || 0)
-    return Number.isFinite(ts) ? ts : 0
-}
-
-function isLikelySameMessage(a: DashboardMessage | LocalUserMessage | null | undefined, b: DashboardMessage | LocalUserMessage | null | undefined): boolean {
-    if (!a || !b) return false
-    if (a === b) return true
-    if ('id' in a && 'id' in b && a.id && b.id && String(a.id) === String(b.id)) return true
-    if (a._localId && b._localId && String(a._localId) === String(b._localId)) return true
-
-    const roleA = String(a.role || '').toLowerCase()
-    const roleB = String(b.role || '').toLowerCase()
-    if (roleA !== roleB) return false
-
-    const contentA = normalizeMessageContent(a.content)
-    const contentB = normalizeMessageContent(b.content)
-    if (!contentA || contentA !== contentB) return false
-
-    const tsA = getMessageTimestamp(a)
-    const tsB = getMessageTimestamp(b)
-    if (tsA && tsB) return Math.abs(tsA - tsB) <= 15000
-
-    return !!a._localId !== !!b._localId
 }
 
 function getLocalMessages(
@@ -187,17 +151,7 @@ export function buildIdeConversations(
             : title;
         const nativeServerMsgs = chat.messages || [];
         const nativeLocalMsgs = getLocalMessages(localUserMessages, [ide.id, nativeSessionId]);
-        const unmatchedNativeServerUsers = nativeServerMsgs
-            .filter((m) => String(m?.role || '').toLowerCase() === 'user')
-            .slice();
-        const nativePendingLocal = nativeLocalMsgs.filter(lm => {
-            const matchIndex = unmatchedNativeServerUsers.findIndex(serverMsg => isLikelySameMessage(serverMsg, lm));
-            if (matchIndex >= 0) {
-                unmatchedNativeServerUsers.splice(matchIndex, 1);
-                return false;
-            }
-            return true;
-        });
+        const nativePendingLocal = filterUnconfirmedLocalMessages(nativeServerMsgs, nativeLocalMsgs);
         results.push({
             ideId: ide.id,
             sessionId: nativeSessionId,
@@ -243,17 +197,7 @@ export function buildIdeConversations(
         const effectiveStreamTitle = isGenericAgentTitle(streamTitle, stream.agentName, stream.agentType) ? '' : streamTitle;
         const serverMsgs = stream.messages || [];
         const localMsgs = getLocalMessages(localUserMessages, [streamTabKey, stream.sessionId, stream.instanceId]);
-        const unmatchedServerUsers = serverMsgs
-            .filter((m) => String(m?.role || '').toLowerCase() === 'user')
-            .slice();
-        const pendingLocal = localMsgs.filter(lm => {
-            const matchIndex = unmatchedServerUsers.findIndex(serverMsg => isLikelySameMessage(serverMsg, lm));
-            if (matchIndex >= 0) {
-                unmatchedServerUsers.splice(matchIndex, 1);
-                return false;
-            }
-            return true;
-        });
+        const pendingLocal = filterUnconfirmedLocalMessages(serverMsgs, localMsgs);
         const hasMeaningfulStream =
             stream.transport === 'cdp-webview'
             || !!stream.sessionId
