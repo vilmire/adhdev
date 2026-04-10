@@ -12,6 +12,22 @@ interface UseIdeCommandsOptions {
     pushToast: (message: string, type?: 'success' | 'info' | 'warning') => void
 }
 
+interface ChatSessionEntry {
+    id?: string
+    active?: boolean
+}
+
+function isLikelyCollapsedHistoryResult(
+    nextChats: unknown[] | undefined,
+    activeConv: ActiveConversation | undefined,
+) {
+    if (!Array.isArray(nextChats) || nextChats.length !== 1 || !activeConv) return false
+    const onlyChat = nextChats[0] as ChatSessionEntry
+    if (onlyChat?.active === true) return true
+    const activeIds = [activeConv.providerSessionId, activeConv.sessionId].filter((value): value is string => typeof value === 'string' && value.length > 0)
+    return typeof onlyChat?.id === 'string' && activeIds.includes(onlyChat.id)
+}
+
 export function useIdeCommands({
     ideId,
     activeConv,
@@ -49,11 +65,17 @@ export function useIdeCommands({
 
         setIsRefreshingHistory(true)
         try {
-            const res: any = await sendDaemonCommand(ideId, 'list_chats', {
+            const loadChats = async () => sendDaemonCommand(ideId, 'list_chats', {
                 forceExpand: true,
                 ...getProviderArgs(activeConv),
             })
-            const nextChats = res?.chats || res?.result?.chats
+            let res: any = await loadChats()
+            let nextChats = res?.chats || res?.result?.chats
+            if (isLikelyCollapsedHistoryResult(nextChats, activeConv)) {
+                await new Promise(resolve => setTimeout(resolve, 450))
+                res = await loadChats()
+                nextChats = res?.chats || res?.result?.chats
+            }
             if (res?.success && Array.isArray(nextChats)) {
                 updateIdeChats(ideId, nextChats)
             }
@@ -113,7 +135,7 @@ export function useIdeCommands({
             return
         }
         if (historyRefreshedRef.current || isRefreshingHistory) return
-        if (!chats || chats.length === 0) {
+        if (!chats || chats.length === 0 || isLikelyCollapsedHistoryResult(chats, activeConv)) {
             historyRefreshedRef.current = true
             void handleRefreshHistory()
         }

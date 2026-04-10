@@ -3,6 +3,16 @@ import type { SetURLSearchParams } from 'react-router-dom'
 import type { ActiveConversation } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
 
+function isLikelyCollapsedHistoryResult(
+    chats: DaemonData['chats'] | undefined,
+    activeConv: ActiveConversation | undefined,
+) {
+    if (!Array.isArray(chats) || chats.length !== 1 || !activeConv) return false
+    const onlyChat = chats[0]
+    const activeIds = [activeConv.providerSessionId, activeConv.sessionId].filter((value): value is string => typeof value === 'string' && value.length > 0)
+    return typeof onlyChat?.id === 'string' && activeIds.includes(onlyChat.id)
+}
+
 interface UseDashboardPageEffectsOptions {
     urlActiveTab: string | null
     conversations: ActiveConversation[]
@@ -124,7 +134,7 @@ export function useDashboardPageEffects({
         if (!activeConv || historyRefreshedRef.current || isRefreshingHistory) return
 
         const ide = ides.find(entry => entry.id === activeConv.ideId)
-        if (ide && (!ide.chats || ide.chats.length === 0)) {
+        if (ide && (!ide.chats || ide.chats.length === 0 || isLikelyCollapsedHistoryResult(ide.chats, activeConv))) {
             historyRefreshedRef.current = true
             void handleRefreshHistory()
         }

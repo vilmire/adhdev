@@ -6,15 +6,33 @@ import { appendWarningToast, type DashboardToastSetter, getProviderArgs, getRout
 interface UseDashboardSessionCommandsOptions {
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     activeConv: ActiveConversation | undefined
+    chats?: DaemonData['chats']
     updateIdeChats: (ideId: string, chats: DaemonData['chats']) => void
     setToasts: DashboardToastSetter
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
     setClearedTabs: Dispatch<SetStateAction<Record<string, number>>>
 }
 
+interface ChatSessionEntry {
+    id?: string
+    active?: boolean
+}
+
+function isLikelyCollapsedHistoryResult(
+    nextChats: DaemonData['chats'] | undefined,
+    activeConv: ActiveConversation | undefined,
+) {
+    if (!Array.isArray(nextChats) || nextChats.length !== 1 || !activeConv) return false
+    const onlyChat = nextChats[0] as ChatSessionEntry
+    if (onlyChat?.active === true) return true
+    const activeIds = [activeConv.providerSessionId, activeConv.sessionId].filter((value): value is string => typeof value === 'string' && value.length > 0)
+    return typeof onlyChat?.id === 'string' && activeIds.includes(onlyChat.id)
+}
+
 export function useDashboardSessionCommands({
     sendDaemonCommand,
     activeConv,
+    chats,
     updateIdeChats,
     setToasts,
     setLocalUserMessages,
@@ -84,20 +102,29 @@ export function useDashboardSessionCommands({
         setIsRefreshingHistory(true)
         try {
             const routeTarget = getRouteTarget(activeConv)
-            const res: any = await sendDaemonCommand(routeTarget, 'list_chats', {
+            const loadChats = async () => sendDaemonCommand(routeTarget, 'list_chats', {
                 forceExpand: true,
                 ...getProviderArgs(activeConv),
             })
-            const chats = res?.chats || res?.result?.chats
-            if (res?.success && Array.isArray(chats)) {
-                updateIdeChats(activeConv.ideId, chats)
+            let res: any = await loadChats()
+            let nextChats = res?.chats || res?.result?.chats
+            if (isLikelyCollapsedHistoryResult(nextChats, activeConv)) {
+                await new Promise(resolve => setTimeout(resolve, 450))
+                res = await loadChats()
+                nextChats = res?.chats || res?.result?.chats
+            }
+            if (res?.success && Array.isArray(nextChats)) {
+                updateIdeChats(activeConv.ideId, nextChats)
+                if (isLikelyCollapsedHistoryResult(nextChats, activeConv) && !isLikelyCollapsedHistoryResult(chats, activeConv)) {
+                    appendWarningToast(setToasts, '⚠️ History dialog did not fully open — try once more')
+                }
             }
         } catch (e) {
             console.error('Refresh history failed', e)
         } finally {
             setIsRefreshingHistory(false)
         }
-    }, [activeConv, isRefreshingHistory, sendDaemonCommand, updateIdeChats])
+    }, [activeConv, chats, isRefreshingHistory, sendDaemonCommand, updateIdeChats, setToasts])
 
     return {
         isCreatingChat,

@@ -513,6 +513,7 @@ export default function Dashboard() {
     } = useDashboardSessionCommands({
         sendDaemonCommand,
         activeConv,
+        chats: ides.find(entry => entry.id === activeConv?.ideId)?.chats,
         updateIdeChats,
         setToasts,
         setLocalUserMessages,
@@ -528,6 +529,7 @@ export default function Dashboard() {
     } = useDashboardSessionCommands({
         sendDaemonCommand,
         activeConv: historyTargetConv,
+        chats: ides.find(entry => entry.id === historyTargetConv?.ideId)?.chats,
         updateIdeChats,
         setToasts,
         setLocalUserMessages,
