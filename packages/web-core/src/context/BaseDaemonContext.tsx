@@ -10,7 +10,7 @@
  *   // cloud: receive data from CF WS + P2P and call injectEntries
  */
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
-import type { DaemonData, SessionTransport, RuntimeWriteOwner, RuntimeAttachedClient } from '../types'
+import type { DaemonData, SessionEntry, SessionTransport, RuntimeWriteOwner, RuntimeAttachedClient } from '../types'
 
 // ─── Types ────────────────────────────────────────────
 
@@ -96,9 +96,9 @@ const ActionsCtx = createContext<BaseDaemonActions>({
 function payloadRichness(ide: DaemonData): number {
     let score = 0;
     if ('activeChat' in ide) score += 4;      // P2P always has this
-    if ((ide as any).childSessions?.length) score += 2;  // child session data
+    if (ide.childSessions?.length) score += 2;  // child session data
     if (ide.workspace) score += 1;             // workspace info
-    if ((ide as any).machine) score += 1;      // machine info (daemon entry)
+    if (ide.machine) score += 1;      // machine info (daemon entry)
     if (ide.agents?.length) score += 1;        // detected agents
     return score;
 }
@@ -106,10 +106,10 @@ function payloadRichness(ide: DaemonData): number {
 function mergeDaemonVersionFlags(existing: DaemonData, incoming: DaemonData, merged: DaemonData): DaemonData {
     if (merged.type !== 'adhdev-daemon') return merged
 
-    const next = { ...merged } as any
-    const daemonVersion = (incoming as any).version ?? (merged as any).version ?? (existing as any).version
-    const serverVersion = (incoming as any).serverVersion ?? (existing as any).serverVersion ?? (merged as any).serverVersion
-    const hasMismatchFlag = (incoming as any).versionMismatch === true || (existing as any).versionMismatch === true
+    const next: DaemonData = { ...merged }
+    const daemonVersion = incoming.version ?? merged.version ?? existing.version
+    const serverVersion = incoming.serverVersion ?? existing.serverVersion ?? merged.serverVersion
+    const hasMismatchFlag = incoming.versionMismatch === true || existing.versionMismatch === true
 
     if (daemonVersion) next.version = daemonVersion
     if (serverVersion) next.serverVersion = serverVersion
@@ -120,7 +120,7 @@ function mergeDaemonVersionFlags(existing: DaemonData, incoming: DaemonData, mer
         return next
     }
 
-    if ((incoming as any).versionMismatch === true || (hasMismatchFlag && daemonVersion && serverVersion && daemonVersion !== serverVersion)) {
+    if (incoming.versionMismatch === true || (hasMismatchFlag && daemonVersion && serverVersion && daemonVersion !== serverVersion)) {
         next.versionMismatch = true
     }
 
@@ -156,9 +156,9 @@ function preserveReferenceWhenOnlyVolatileFieldsChanged(existing: DaemonData, ne
         return next
     }
 
-    ;(existing as any)._lastUpdate = freshAt
-    if (typeof (next as any).timestamp === 'number') {
-        ;(existing as any).timestamp = (next as any).timestamp
+    existing._lastUpdate = freshAt
+    if (typeof next.timestamp === 'number') {
+        existing.timestamp = next.timestamp
     }
     return existing
 }
@@ -205,8 +205,8 @@ export function reconcileIdes(
         if (incomingRichness > existingRichness) {
             // Incoming is richer → always overwrite, preserve chats if incoming lacks them
             const chats = (ide.chats?.length) ? ide.chats : existing.chats;
-            const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, _lastUpdate: now } as any)
-            resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged as any, now) as any);
+            const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, _lastUpdate: now })
+            resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now));
         } else if (incomingRichness < existingRichness) {
             // Incoming is weaker → NEVER overwrite core data.
             // Only merge non-destructive routing metadata (status, cdpConnected, timestamp).
@@ -219,15 +219,15 @@ export function reconcileIdes(
             if (ide.machineNickname !== undefined && ide.machineNickname !== existing.machineNickname) {
                 safeUpdate.machineNickname = ide.machineNickname;
             }
-            if ((ide as any).version !== undefined) (safeUpdate as any).version = (ide as any).version
-            if ((ide as any).serverVersion !== undefined) (safeUpdate as any).serverVersion = (ide as any).serverVersion
-            if ((ide as any).versionMismatch === true) (safeUpdate as any).versionMismatch = true
+            if (ide.version !== undefined) safeUpdate.version = ide.version
+            if (ide.serverVersion !== undefined) safeUpdate.serverVersion = ide.serverVersion
+            if (ide.versionMismatch === true) safeUpdate.versionMismatch = true
 
             if (Object.keys(safeUpdate).length > 0) {
-                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...safeUpdate, _lastUpdate: existing._lastUpdate } as any)
-                resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged as any, now) as any);
+                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...safeUpdate, _lastUpdate: existing._lastUpdate })
+                resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now));
             } else {
-                preserveReferenceWhenOnlyVolatileFieldsChanged(existing, { ...existing, _lastUpdate: existing._lastUpdate } as any, now)
+                preserveReferenceWhenOnlyVolatileFieldsChanged(existing, { ...existing, _lastUpdate: existing._lastUpdate }, now)
             }
             // Do NOT update _lastUpdate — preserve rich data's timestamp authority
         } else {
@@ -236,8 +236,8 @@ export function reconcileIdes(
             const existingTs = existing._lastUpdate || existing.timestamp || 0;
             if (incomingTs >= existingTs) {
                 const chats = (ide.chats?.length) ? ide.chats : existing.chats;
-                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, _lastUpdate: now } as any)
-                resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged as any, now) as any);
+                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, _lastUpdate: now })
+                resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now));
             } else {
                 if (ide.chats?.length && !existing.chats?.length) {
                     resultMap.set(ide.id, { ...existing, chats: ide.chats });
@@ -250,12 +250,12 @@ export function reconcileIdes(
     const incomingIds = new Set(incoming.map(i => i.id))
     const incomingDaemonIds = new Set<string>()
     for (const ide of incoming) {
-        const did = (ide as any).daemonId || ide.id?.split(':')[0]
+        const did = ide.daemonId || ide.id?.split(':')[0]
         if (did) incomingDaemonIds.add(did)
     }
 
     for (const [key, ide] of resultMap) {
-        const entryDaemonId = (ide as any).daemonId || key.split(':')[0]
+        const entryDaemonId = ide.daemonId || key.split(':')[0]
         if (!incomingDaemonIds.has(entryDaemonId)) continue
 
         if (authoritativeDaemonIds.has(entryDaemonId) && !incomingIds.has(key)) {
@@ -302,11 +302,16 @@ export interface CompactDaemon {
     platform?: string
     hostname?: string
     nickname?: string
-    p2p?: any
+    p2p?: DaemonData['p2p']
     cdp?: boolean
     cdpConnected?: boolean
     ts?: number
     timestamp?: number
+    version?: string
+    serverVersion?: string
+    versionMismatch?: boolean
+    detectedIdes?: DaemonData['detectedIdes']
+    availableProviders?: DaemonData['availableProviders']
     sessions?: {
         id: string
         parentId?: string | null
@@ -314,7 +319,7 @@ export interface CompactDaemon {
         providerName?: string
         kind: 'workspace' | 'agent'
         transport: SessionTransport
-        status?: string
+        status?: SessionEntry['status'] | 'online'
         workspace?: string | null
         runtimeKey?: string
         runtimeDisplayName?: string
@@ -323,10 +328,41 @@ export interface CompactDaemon {
         runtimeAttachedClients?: RuntimeAttachedClient[]
         title?: string
         cdpConnected?: boolean
+        activeChat?: DaemonData['activeChat']
+        capabilities?: SessionEntry['capabilities']
         currentModel?: string
         currentPlan?: string
         currentAutoApprove?: string
     }[]
+}
+
+function normalizeCompactSession(session: NonNullable<CompactDaemon['sessions']>[number]): SessionEntry {
+    const normalizedStatus: SessionEntry['status'] = !session.status || session.status === 'online'
+        ? 'idle'
+        : session.status
+
+    return {
+        id: session.id,
+        parentId: session.parentId ?? null,
+        providerType: session.providerType,
+        providerName: session.providerName || session.providerType,
+        kind: session.kind,
+        transport: session.transport,
+        status: normalizedStatus,
+        title: session.title || session.providerName || session.providerType,
+        workspace: session.workspace ?? null,
+        runtimeKey: session.runtimeKey,
+        runtimeDisplayName: session.runtimeDisplayName,
+        runtimeWorkspaceLabel: session.runtimeWorkspaceLabel,
+        runtimeWriteOwner: session.runtimeWriteOwner,
+        runtimeAttachedClients: session.runtimeAttachedClients,
+        activeChat: session.activeChat ?? null,
+        capabilities: session.capabilities || [],
+        cdpConnected: session.cdpConnected,
+        currentModel: session.currentModel,
+        currentPlan: session.currentPlan,
+        currentAutoApprove: session.currentAutoApprove,
+    }
 }
 
 export function expandCompactDaemons(
@@ -364,17 +400,19 @@ export function expandCompactDaemons(
             cdpConnected: cdp,
             timestamp: ts,
             // Version mismatch (server-driven flag)
-            ...((d as any).versionMismatch && {
+            ...(d.versionMismatch && {
                 versionMismatch: true,
-                version: (d as any).version,
-                serverVersion: (d as any).serverVersion,
+                version: d.version,
+                serverVersion: d.serverVersion,
             }),
-            ...((d as any).detectedIdes && { detectedIdes: (d as any).detectedIdes }),
-            ...((d as any).availableProviders && { availableProviders: (d as any).availableProviders }),
-        } as any)
+            ...(d.detectedIdes && { detectedIdes: d.detectedIdes }),
+            ...(d.availableProviders && { availableProviders: d.availableProviders }),
+        })
 
         for (const ide of topLevelIdeSessions) {
-            const childSessions = sessions.filter(s => s.parentId === ide.id)
+            const childSessions = sessions
+                .filter(s => s.parentId === ide.id)
+                .map(normalizeCompactSession)
             const ideFullId = `${d.id}:ide:${ide.id}`
             entries.push({
                 id: ideFullId,
@@ -389,7 +427,7 @@ export function expandCompactDaemons(
                 workspace: ide.workspace || null,
                 childSessions,
                 timestamp: ts,
-            } as any)
+            })
         }
 
         for (const cli of topLevelCliSessions) {
@@ -402,14 +440,14 @@ export function expandCompactDaemons(
                 daemonId: d.id,
                 cliName: cli.providerName,
                 workspace: cli.workspace || '',
-                activeChat: (cli as any).activeChat || null,
+                activeChat: cli.activeChat || null,
                 runtimeKey: cli.runtimeKey,
                 runtimeDisplayName: cli.runtimeDisplayName,
                 runtimeWorkspaceLabel: cli.runtimeWorkspaceLabel,
                 runtimeWriteOwner: cli.runtimeWriteOwner || null,
                 runtimeAttachedClients: cli.runtimeAttachedClients || [],
                 timestamp: ts,
-            } as any)
+            })
         }
 
         for (const acp of topLevelAcpSessions) {
@@ -425,7 +463,7 @@ export function expandCompactDaemons(
                 currentModel: acp.currentModel,
                 currentPlan: acp.currentPlan,
                 timestamp: ts,
-            } as any)
+            })
         }
     }
 
