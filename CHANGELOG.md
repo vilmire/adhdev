@@ -4,34 +4,34 @@ All notable changes to ADHDev will be documented in this file.
 
 ## [0.8.35] - 2026-04-10
 
-### Added
-- 
-
 ### Fixed
-- 
+- Remote dialog now keeps the tab you selected instead of snapping back to the preferred agent tab when conversations refresh.
+- CLI and ACP dashboard sends no longer stack a web pending bubble on top of daemon-side optimistic user turns.
+- CLI chat sends now commit the user turn only after the submit boundary is actually crossed, avoiding false "sent" states when the prompt was only typed but not submitted.
+- Duplicate P2P `p2p_ready`/`connected` churn no longer fan out repeated full status reports to peers and the server.
 
 ### Changed
-- 
+- Server compact session payloads now use an explicit typed schema and stop forwarding transient UI/control metadata that is only needed on the P2P path.
+- Shared dashboard chrome and dialog surfaces now consistently use the SVG icon set instead of mixed emoji/text close affordances.
 ## [0.8.34] - 2026-04-10
 
-### Added
-- 
-
 ### Fixed
-- 
+- Mobile machine and inbox surfaces no longer show `Connected` until the P2P session is actually connected.
+- CLI terminal-mode conversations hide the chat send bar instead of exposing chat input in terminal-only views.
+- Dashboard guide access remains available from the lower-right corner after the initial hint collapses.
 
 ### Changed
-- 
+- Polished dashboard and standalone shell presentation, including notification bulk toggles, remote dialog behavior, and capabilities page removal from the standalone surface.
 ## [0.8.33] - 2026-04-10
 
 ### Added
-- 
+- Added initial Vitest coverage for `daemon-core` and `web-core`, covering state store, recent activity, provider loader settings, compact status transforms, dashboard message utilities, and mobile/dashboard helper contracts.
 
 ### Fixed
-- 
+- Release preflight now catches downstream cloud integration regressions before the cloud version bump step.
 
 ### Changed
-- 
+- Tightened `daemon-core` and `web-core` typing across provider loading, command routing, compact daemon status handling, and dashboard conversation/presenter layers.
 ## [0.8.32] - 2026-04-10
 
 ### Added
