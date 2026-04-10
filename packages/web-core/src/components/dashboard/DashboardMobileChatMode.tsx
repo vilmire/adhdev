@@ -16,6 +16,7 @@ import { getConversationMachineId, getConversationProviderType } from './convers
 import { getConversationPreviewText, getConversationTitle } from './conversation-presenters'
 import { compareMachineEntries } from '../../utils/daemon-utils'
 import { buildMobileMachineCards, buildSelectedMachineRecentLaunches } from './dashboard-mobile-chat-mode-helpers'
+import { useDashboardMobileMachineActions } from './useDashboardMobileMachineActions'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
 
 declare const __APP_VERSION__: string
@@ -47,16 +48,6 @@ interface DashboardMobileChatModeProps {
     onOpenNewSession?: () => void
 }
 
-interface PendingWorkspaceLaunch {
-    machineId: string
-    kind: 'cli' | 'acp'
-    providerType: string
-    workspaceId?: string | null
-    workspacePath?: string | null
-    resumeSessionId?: string | null
-    startedAt: number
-}
-
 function getAvatarText(primary: string) {
     const text = primary.trim()
     if (!text) return '?'
@@ -73,25 +64,6 @@ function logMobileReadDebug(event: string, payload: Record<string, unknown>) {
     } catch {
         // noop
     }
-}
-
-function getRouteMachineId(id: string | null | undefined) {
-    if (!id) return ''
-    const value = String(id)
-    return value.includes(':') ? value.split(':')[0] || value : value
-}
-
-function normalizeWorkspacePath(path: string | null | undefined) {
-    return String(path || '')
-        .trim()
-        .replace(/\\/g, '/')
-        .replace(/\/+$/, '')
-        .toLowerCase()
-}
-
-function isP2PLaunchTimeout(error: unknown) {
-    const message = error instanceof Error ? error.message : String(error || '')
-    return message.includes('P2P command timeout')
 }
 
 function isExpectedCliViewModeError(error: unknown) {
@@ -133,9 +105,6 @@ export default function DashboardMobileChatMode({
     const [section, setSection] = useState<DashboardMobileSection>('chats')
     const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null)
     const [machineBackTarget, setMachineBackTarget] = useState<'inbox' | 'chat'>('inbox')
-    const [machineActionState, setMachineActionState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
-    const [machineActionMessage, setMachineActionMessage] = useState('')
-    const [pendingWorkspaceLaunch, setPendingWorkspaceLaunch] = useState<PendingWorkspaceLaunch | null>(null)
     const lastAutoReadKeyRef = useRef<string | null>(null)
     const navigate = useNavigate()
     const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
@@ -172,6 +141,12 @@ export default function DashboardMobileChatMode({
         setLocalUserMessages,
         setActionLogs,
         isStandalone,
+    })
+    const machineActions = useDashboardMobileMachineActions({
+        sendDaemonCommand,
+        navigate,
+        ides,
+        conversations,
     })
 
     const markConversationRead = useCallback((conversation: ActiveConversation | null) => {
@@ -239,13 +214,12 @@ export default function DashboardMobileChatMode({
         const matched = machineEntries.find(machine => machine.id === requestedMachineId)
         if (!matched) return
         setSelectedMachineId(matched.id)
-        setMachineActionState('idle')
-        setMachineActionMessage('')
+        machineActions.resetMachineAction()
         setSection('machines')
         setMachineBackTarget('inbox')
         setScreen('machine')
         onRequestedMachineConsumed?.()
-    }, [machineEntries, onRequestedMachineConsumed, requestedMachineId])
+    }, [machineActions, machineEntries, onRequestedMachineConsumed, requestedMachineId])
 
     useEffect(() => {
         if (!requestedMobileSection) return
@@ -381,261 +355,31 @@ export default function DashboardMobileChatMode({
 
     const handleOpenMachine = useCallback((machineId: string) => {
         setSelectedMachineId(machineId)
-        setMachineActionState('idle')
-        setMachineActionMessage('')
-        setPendingWorkspaceLaunch(null)
+        machineActions.resetMachineAction()
         setSection('machines')
         setMachineBackTarget('inbox')
         setScreen('machine')
-    }, [])
+    }, [machineActions])
 
     const handleOpenConversationMachine = useCallback((conversation: ActiveConversation) => {
         const machineId = getConversationMachineId(conversation)
         if (!machineId) return
         setSelectedMachineId(machineId)
-        setMachineActionState('idle')
-        setMachineActionMessage('')
-        setPendingWorkspaceLaunch(null)
+        machineActions.resetMachineAction()
         setSection('machines')
         setMachineBackTarget('chat')
         setScreen('machine')
-    }, [])
+    }, [machineActions])
 
     const handleBackFromMachine = useCallback(() => {
-        setPendingWorkspaceLaunch(null)
+        machineActions.resetMachineAction()
         setScreen(machineBackTarget)
-    }, [machineBackTarget])
-
-    const handleLaunchDetectedIde = useCallback(async (machineId: string, ideType: string, opts?: { workspacePath?: string | null }) => {
-        try {
-            setMachineActionState('loading')
-            setMachineActionMessage(`Launching ${ideType}…`)
-            const payload: Record<string, unknown> = {
-                ideType,
-                enableCdp: true,
-            }
-            if (opts?.workspacePath?.trim()) payload.workspace = opts.workspacePath.trim()
-            await sendDaemonCommand(machineId, 'launch_ide', payload)
-            setMachineActionState('done')
-            setMachineActionMessage(`${ideType} launch requested`)
-        } catch (error) {
-            setMachineActionState('error')
-            setMachineActionMessage(error instanceof Error ? error.message : 'Launch IDE failed')
-            console.error('Launch IDE failed', error)
-        }
-    }, [sendDaemonCommand])
-
-    const handleAddWorkspace = useCallback(async (
-        machineId: string,
-        path: string,
-        opts?: { createIfMissing?: boolean },
-    ) => {
-        if (!path.trim()) return
-        try {
-            setMachineActionState('loading')
-            setMachineActionMessage(opts?.createIfMissing ? 'Creating folder…' : 'Saving workspace…')
-            const res: any = await sendDaemonCommand(machineId, 'workspace_add', {
-                path: path.trim(),
-                createIfMissing: opts?.createIfMissing === true,
-            })
-            if (res?.success) {
-                setMachineActionState('done')
-                setMachineActionMessage(opts?.createIfMissing ? 'Folder created and workspace saved' : 'Workspace saved')
-                return
-            }
-            setMachineActionState('error')
-            setMachineActionMessage(res?.error || 'Could not save workspace')
-        } catch (error) {
-            setMachineActionState('error')
-            setMachineActionMessage(error instanceof Error ? error.message : 'Could not save workspace')
-        }
-    }, [sendDaemonCommand])
-
-    const handleMachineUpgrade = useCallback(async (machineId: string) => {
-        try {
-            setMachineActionState('loading')
-            setMachineActionMessage('Starting daemon upgrade…')
-            const res: any = await sendDaemonCommand(machineId, 'daemon_upgrade', {})
-            if (res?.result?.alreadyLatest) {
-                setMachineActionState('done')
-                setMachineActionMessage(`Already on v${res?.result?.version || 'latest'}.`)
-                return
-            }
-            if (res?.result?.upgraded || res?.result?.success) {
-                setMachineActionState('done')
-                setMachineActionMessage(`Upgrade to v${res?.result?.version || 'latest'} started. Daemon is restarting…`)
-                return
-            }
-            setMachineActionState('error')
-            setMachineActionMessage(res?.result?.error || 'Upgrade failed')
-        } catch (error) {
-            setMachineActionState('error')
-            setMachineActionMessage(error instanceof Error ? error.message : 'Upgrade failed')
-        }
-    }, [sendDaemonCommand])
-
-    const handleLaunchWorkspaceProvider = useCallback(async (
-        machineId: string,
-        kind: 'cli' | 'acp',
-        providerType: string,
-        opts?: {
-            workspaceId?: string | null
-            workspacePath?: string | null
-            resumeSessionId?: string | null
-            args?: string | null
-            model?: string | null
-        },
-    ) => {
-        const startedAt = Date.now()
-        const pendingLaunch: PendingWorkspaceLaunch = {
-            machineId,
-            kind,
-            providerType,
-            workspaceId: opts?.workspaceId || null,
-            workspacePath: opts?.workspacePath || null,
-            resumeSessionId: opts?.resumeSessionId || null,
-            startedAt,
-        }
-        try {
-            setMachineActionState('loading')
-            setMachineActionMessage(`Launching ${providerType}…`)
-            setPendingWorkspaceLaunch(pendingLaunch)
-            const payload: Record<string, unknown> = { cliType: providerType }
-            if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
-            else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
-            if (opts?.resumeSessionId) payload.resumeSessionId = opts.resumeSessionId
-            if (opts?.args?.trim()) payload.cliArgs = opts.args.trim().split(/\s+/).filter(Boolean)
-            if (opts?.model?.trim()) payload.initialModel = opts.model.trim()
-            const res: any = await sendDaemonCommand(machineId, 'launch_cli', payload)
-            const result = res?.result || res
-            const launchedSessionId = result?.sessionId || result?.id
-            if (res?.success && launchedSessionId) {
-                setPendingWorkspaceLaunch(null)
-                setMachineActionState('done')
-                setMachineActionMessage(`${providerType} launched`)
-                navigate(`/dashboard?activeTab=${encodeURIComponent(launchedSessionId)}`)
-                return
-            }
-            if (res?.success) {
-                setMachineActionState('loading')
-                setMachineActionMessage(`${providerType} launch requested — waiting for session…`)
-                return
-            }
-            setPendingWorkspaceLaunch(null)
-            setMachineActionState('error')
-            setMachineActionMessage(res?.error || result?.error || `Could not launch ${kind.toUpperCase()} workspace`)
-        } catch (error) {
-            if (isP2PLaunchTimeout(error)) {
-                setMachineActionState('loading')
-                setMachineActionMessage(`${providerType} launch requested — waiting for session…`)
-                return
-            }
-            setPendingWorkspaceLaunch(null)
-            setMachineActionState('error')
-            setMachineActionMessage(error instanceof Error ? error.message : `Could not launch ${kind.toUpperCase()} workspace`)
-        }
-    }, [navigate, sendDaemonCommand])
-
-    const handleListSavedSessions = useCallback(async (machineId: string, providerType: string) => {
-        try {
-            const raw: any = await sendDaemonCommand(machineId, 'list_saved_sessions', {
-                providerType,
-                kind: 'cli',
-                limit: 30,
-            })
-            const result = raw?.result ?? raw
-            return Array.isArray(result?.sessions) ? result.sessions : []
-        } catch (error) {
-            console.error('Failed to list saved sessions on mobile:', error)
-            return []
-        }
-    }, [sendDaemonCommand])
-
-    useEffect(() => {
-        if (!pendingWorkspaceLaunch) return
-
-        const normalizedTargetWorkspace = normalizeWorkspacePath(pendingWorkspaceLaunch.workspacePath)
-        const matchingEntry = ides.find(entry => {
-            if (!entry || entry.type === 'adhdev-daemon' || entry.daemonMode) return false
-            const entryMachineId = getRouteMachineId(entry.daemonId || entry.id)
-            if (entryMachineId !== pendingWorkspaceLaunch.machineId) return false
-
-            const entryKind = entry.transport === 'acp'
-                ? 'acp'
-                : entry.transport === 'pty'
-                    ? 'cli'
-                    : null
-            if (entryKind !== pendingWorkspaceLaunch.kind) return false
-
-            const entryProviderType = String(entry.agentType || entry.ideType || entry.type || '')
-            if (entryProviderType !== pendingWorkspaceLaunch.providerType) return false
-
-            const entryProviderSessionId = String(entry.providerSessionId || '')
-            if (pendingWorkspaceLaunch.resumeSessionId && entryProviderSessionId) {
-                return entryProviderSessionId === pendingWorkspaceLaunch.resumeSessionId
-            }
-
-            if (normalizedTargetWorkspace) {
-                const entryWorkspace = normalizeWorkspacePath(entry.workspace || entry.runtimeWorkspaceLabel)
-                if (!entryWorkspace) return false
-                return entryWorkspace === normalizedTargetWorkspace
-            }
-
-            const activityAt = Number(
-                entry.lastUpdated
-                || entry._lastUpdate
-                || entry.timestamp
-                || entry.activeChat?.messages?.at?.(-1)?.timestamp
-                || 0,
-            )
-            return activityAt >= (pendingWorkspaceLaunch.startedAt - 5_000)
-        })
-
-        if (!matchingEntry) return
-
-        const targetSessionId = typeof matchingEntry.sessionId === 'string' && matchingEntry.sessionId
-            ? matchingEntry.sessionId
-            : typeof matchingEntry.instanceId === 'string' && matchingEntry.instanceId
-                ? matchingEntry.instanceId
-                : conversations.find((conversation) => conversation.ideId === matchingEntry.id)?.sessionId
-
-        if (!targetSessionId) return
-
-        setPendingWorkspaceLaunch(null)
-        setMachineActionState('done')
-        setMachineActionMessage(`${pendingWorkspaceLaunch.providerType} launched`)
-        navigate(`/dashboard?activeTab=${encodeURIComponent(targetSessionId)}`)
-    }, [conversations, ides, navigate, pendingWorkspaceLaunch])
-
-    useEffect(() => {
-        if (!pendingWorkspaceLaunch) return
-        const timeout = window.setTimeout(() => {
-            setPendingWorkspaceLaunch((current) => {
-                if (!current || current.startedAt !== pendingWorkspaceLaunch.startedAt) return current
-                setMachineActionState('error')
-                setMachineActionMessage('Launch response timed out. The session may already be running in Dashboard.')
-                return null
-            })
-        }, 45_000)
-        return () => window.clearTimeout(timeout)
-    }, [pendingWorkspaceLaunch])
+    }, [machineActions, machineBackTarget])
 
     const handleOpenRecent = useCallback(async (session: MachineRecentLaunch) => {
         if (!selectedMachineEntry) return
-        if (session.kind === 'ide' && session.providerType) {
-            await handleLaunchDetectedIde(selectedMachineEntry.id, session.providerType, {
-                workspacePath: session.workspace || null,
-            })
-            return
-        }
-        if ((session.kind === 'cli' || session.kind === 'acp') && session.providerType) {
-            await handleLaunchWorkspaceProvider(selectedMachineEntry.id, session.kind, session.providerType, {
-                workspacePath: session.workspace || null,
-                resumeSessionId: session.providerSessionId || null,
-            })
-            return
-        }
-    }, [handleLaunchDetectedIde, handleLaunchWorkspaceProvider, selectedMachineEntry])
+        await machineActions.handleOpenRecent(selectedMachineEntry.id, session)
+    }, [machineActions, selectedMachineEntry])
 
     return (
         <div className="dashboard-mobile-chat w-full min-w-0">
@@ -688,7 +432,7 @@ export default function DashboardMobileChatMode({
                     acpProviders={selectedMachineAcpProviders}
                     selectedMachineNeedsUpgrade={selectedMachineNeedsUpgrade}
                     appVersion={appVersion}
-                    machineAction={{ state: machineActionState, message: machineActionMessage }}
+                    machineAction={machineActions.machineAction}
                     isStandalone={isStandalone}
                     section={section}
                     showBottomNav={machineBackTarget === 'inbox'}
@@ -700,36 +444,12 @@ export default function DashboardMobileChatMode({
                     onOpenConversation={handleOpenConversation}
                     onOpenRecent={handleOpenRecent}
                     onOpenMachineDetails={() => navigate(`/machines/${selectedMachineEntry.id}`)}
-                    onMachineUpgrade={() => handleMachineUpgrade(selectedMachineEntry.id)}
-                    onLaunchDetectedIde={(ideType, opts) => handleLaunchDetectedIde(selectedMachineEntry.id, ideType, opts)}
-                    onAddWorkspace={(path, opts) => handleAddWorkspace(selectedMachineEntry.id, path, opts)}
-                    onBrowseDirectory={async (path) => {
-                        const res: any = await sendDaemonCommand(selectedMachineEntry.id, 'file_list_browse', { path })
-                        if (!res?.success) {
-                            throw new Error(res?.error || 'Could not browse folder')
-                        }
-                        const currentPath = typeof res?.path === 'string' ? res.path : path
-                        const separator = currentPath.includes('\\') ? '\\' : '/'
-                        const joinPath = (base: string, name: string) => {
-                            if (/^[A-Za-z]:\\?$/.test(base)) {
-                                return `${base.replace(/\\?$/, '\\')}${name}`
-                            }
-                            if (base === '/' || base === '\\') return `${separator}${name}`
-                            return `${base.replace(/[\\/]+$/, '')}${separator}${name}`
-                        }
-                        const directories = Array.isArray(res?.files)
-                            ? res.files
-                                .filter((entry: any) => entry?.type === 'directory' && typeof entry?.name === 'string')
-                                .map((entry: any) => ({
-                                    name: entry.name as string,
-                                    path: joinPath(currentPath, entry.name as string),
-                                }))
-                                .sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name))
-                            : []
-                        return { path: currentPath, directories }
-                    }}
-                    onLaunchWorkspaceProvider={(kind, providerType, opts) => handleLaunchWorkspaceProvider(selectedMachineEntry.id, kind, providerType, opts)}
-                    onListSavedSessions={(providerType) => handleListSavedSessions(selectedMachineEntry.id, providerType)}
+                    onMachineUpgrade={() => machineActions.handleMachineUpgrade(selectedMachineEntry.id)}
+                    onLaunchDetectedIde={(ideType, opts) => machineActions.handleLaunchDetectedIde(selectedMachineEntry.id, ideType, opts)}
+                    onAddWorkspace={(path, opts) => machineActions.handleAddWorkspace(selectedMachineEntry.id, path, opts)}
+                    onBrowseDirectory={(path) => machineActions.handleBrowseDirectory(selectedMachineEntry.id, path)}
+                    onLaunchWorkspaceProvider={(kind, providerType, opts) => machineActions.handleLaunchWorkspaceProvider(selectedMachineEntry.id, kind, providerType, opts)}
+                    onListSavedSessions={(providerType) => machineActions.handleListSavedSessions(selectedMachineEntry.id, providerType)}
                 />
             ) : (
                 <DashboardMobileChatInbox
