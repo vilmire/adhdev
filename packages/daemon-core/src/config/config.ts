@@ -57,10 +57,11 @@ export interface ADHDevConfig {
 
     /**
      * Server-side D1 `machines.id` — the row ID assigned when daemon registers via
-     * `POST /cli/complete`. Used as fallback for machine lookup on re-auth.
+     * `POST /cli/complete`. This remains useful for account-side machine actions
+     * that target the registered machine row directly (for example cloud rename).
      *
-     * @deprecated Legacy bridge field — will be removed after 2026-05-01.
-     * Modern auth flow uses `machineSecret` (adm_) to identify machines.
+     * Machine auth itself uses `machineSecret` (adm_) and no longer falls back
+     * to `registeredMachineId`.
      */
     registeredMachineId?: string;
 
@@ -174,17 +175,10 @@ function ensureMachineId(config: ADHDevConfig): { config: ADHDevConfig; changed:
         return { config, changed: false };
     }
 
-    // TODO(2026-05-01): Remove this legacy bridge after cloud clients have had
-    // time to persist registeredMachineId from the upgraded setup/login flow.
-    const legacyRegisteredMachineId = (!config.registeredMachineId && config.machineSecret && config.machineId)
-        ? config.machineId
-        : config.registeredMachineId;
-
     return {
         config: {
             ...config,
             machineId: generateMachineId(),
-            registeredMachineId: legacyRegisteredMachineId,
         },
         changed: true,
     };
