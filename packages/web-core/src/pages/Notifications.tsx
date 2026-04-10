@@ -15,6 +15,7 @@ import { ToggleRow } from '../components/settings/ToggleRow'
 import { useNotificationPrefs } from '../hooks/useNotificationPrefs'
 import { useTransport } from '../context/TransportContext'
 import type { ProviderSettingsEntry, ProviderInfo } from './machine/types'
+import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './machine/providerSettings'
 import { IconBell, IconMonitor, IconCheckCircle, IconZap, IconPlug, IconVolume } from '../components/Icons'
 import { getMachineDisplayName } from '../utils/daemon-utils'
 
@@ -22,11 +23,17 @@ import { getMachineDisplayName } from '../utils/daemon-utils'
 
 interface DaemonMachine {
     id: string
-    machineId: string
+    machineId?: string | null
     nickname?: string
     hostname?: string
     status: string
     providers?: ProviderInfo[]
+}
+
+const NOTIFICATION_SETTING_KEYS = new Set(['autoApprove', 'approvalAlert', 'longGeneratingAlert', 'longGeneratingThresholdSec'])
+
+function filterNotificationSettings(schema: ProviderSettingsEntry['schema']): ProviderSettingsEntry['schema'] {
+    return schema.filter((setting) => NOTIFICATION_SETTING_KEYS.has(setting.key))
 }
 
 /* Toggle‑switch component (self-contained — small) */
@@ -82,27 +89,12 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
         const result: Record<string, ProviderSettingsEntry[]> = {}
         for (const m of onlineMachines) {
             try {
-                const res: any = await sendCommand(m.id, 'get_provider_settings', {})
-                // Unwrap flexibly — daemon responses can be wrapped differently
-                const payload = res?.result || res
-                const settingsMap = payload?.settings || res?.settings
-                const valuesMap = payload?.values || res?.values || {}
-                if (settingsMap && typeof settingsMap === 'object') {
-                    const entries: ProviderSettingsEntry[] = []
-                    for (const [type, schema] of Object.entries(settingsMap)) {
-                        const prov = (m.providers || []).find((p: any) => p.type === type)
-                        const filteredSchema = (schema as any[]).filter(s => ['autoApprove', 'approvalAlert', 'longGeneratingAlert', 'longGeneratingThresholdSec'].includes(s.key))
-                        if (filteredSchema.length > 0) {
-                            entries.push({
-                                type,
-                                displayName: prov?.displayName || type,
-                                icon: prov?.icon || '',
-                                category: prov?.category || 'unknown',
-                                schema: filteredSchema,
-                                values: valuesMap[type] || {},
-                            })
-                        }
-                    }
+                const res = await sendCommand(m.id, 'get_provider_settings', {})
+                const payload = extractProviderSettingsPayload(res)
+                if (payload) {
+                    const entries = buildProviderSettingsEntries(payload, m.providers || [], {
+                        filterSchema: filterNotificationSettings,
+                    })
                     if (entries.length > 0) result[m.id] = entries
                 }
             } catch (e) {
@@ -148,7 +140,7 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
     }, [allEntries])
 
     // Handler for setting a single provider setting
-    const handleSet = useCallback(async (machineId: string, providerType: string, key: string, value: any) => {
+    const handleSet = useCallback(async (machineId: string, providerType: string, key: string, value: unknown) => {
         setSavingKey(`${providerType}.${key}`)
         // Optimistic update
         setSettings(prev => {
@@ -340,7 +332,7 @@ function ProviderCategoryDetail({ entries, multiMachine, savingKey, onSet }: {
     entries: (ProviderSettingsEntry & { machineId: string; machineLabel: string })[]
     multiMachine: boolean
     savingKey: string | null
-    onSet: (machineId: string, providerType: string, key: string, value: any) => Promise<void>
+    onSet: (machineId: string, providerType: string, key: string, value: unknown) => Promise<void>
 }) {
     const [expanded, setExpanded] = useState(false)
 

@@ -4,6 +4,7 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import type { ProviderSettingsEntry, ProviderInfo } from './types'
+import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './providerSettings'
 import ProviderFixModal from './ProviderFixModal'
 import ProviderCloneModal from './ProviderCloneModal'
 
@@ -25,21 +26,10 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
         if (!machineId) return
         setLoading(true)
         try {
-            const res: any = await sendDaemonCommand(machineId, 'get_provider_settings', {})
-            const payload = res?.result || res
-            if (res?.success && payload?.settings) {
-                const entries: ProviderSettingsEntry[] = []
-                for (const [type, schema] of Object.entries(payload.settings)) {
-                    const prov = providers.find((p: any) => p.type === type)
-                    entries.push({
-                        type,
-                        displayName: prov?.displayName || type,
-                        icon: prov?.icon || '',
-                        category: prov?.category || 'unknown',
-                        schema: schema as any[],
-                        values: payload.values?.[type] || {},
-                    })
-                }
+            const res = await sendDaemonCommand(machineId, 'get_provider_settings', {})
+            const payload = extractProviderSettingsPayload(res)
+            if (payload) {
+                const entries: ProviderSettingsEntry[] = buildProviderSettingsEntries(payload, providers)
                 entries.sort((a, b) => a.category.localeCompare(b.category) || a.displayName.localeCompare(b.displayName))
                 setSettings(entries)
             }
@@ -51,14 +41,14 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
         if (settings.length === 0) fetchSettings()
     }, [])
 
-    const handleSetSetting = async (providerType: string, key: string, value: any) => {
+    const handleSetSetting = async (providerType: string, key: string, value: unknown) => {
         setSavingKey(`${providerType}.${key}`)
         // Optimistic update
         setSettings(prev => prev.map(p =>
             p.type === providerType ? { ...p, values: { ...p.values, [key]: value } } : p
         ))
         try {
-            const res: any = await sendDaemonCommand(machineId, 'set_provider_setting', { providerType, key, value })
+            const res = await sendDaemonCommand(machineId, 'set_provider_setting', { providerType, key, value })
             if (!res?.success) fetchSettings()
         } catch {
             fetchSettings()
@@ -209,7 +199,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                                             ) : s.type === 'number' ? (
                                                 <input
                                                     type="number"
-                                                    value={prov.values[s.key] ?? s.default ?? 0}
+                                                    value={Number(prov.values[s.key] ?? s.default ?? 0) || 0}
                                                     min={s.min}
                                                     max={s.max}
                                                     onChange={e => {
@@ -222,7 +212,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                                                 />
                                             ) : s.type === 'select' && s.options ? (
                                                 <select
-                                                    value={prov.values[s.key] ?? s.default ?? ''}
+                                                    value={String(prov.values[s.key] ?? s.default ?? '')}
                                                     onChange={e => handleSetSetting(prov.type, s.key, e.target.value)}
                                                     className="machine-input text-[11px]"
                                                 >
@@ -231,7 +221,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                                             ) : (
                                                 <input
                                                     type="text"
-                                                    value={prov.values[s.key] ?? s.default ?? ''}
+                                                    value={String(prov.values[s.key] ?? s.default ?? '')}
                                                     onBlur={e => handleSetSetting(prov.type, s.key, e.target.value)}
                                                     className="machine-input w-[120px] text-[11px]"
                                                 />

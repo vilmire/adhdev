@@ -47,8 +47,18 @@ export interface LogEntry { timestamp: number; level: 'info' | 'warn' | 'error';
 
 export interface ProviderSettingsEntry {
     type: string; displayName: string; icon: string; category: string;
-    schema: { key: string; type: string; default: any; public: boolean; label?: string; description?: string; min?: number; max?: number; options?: string[] }[];
-    values: Record<string, any>;
+    schema: {
+        key: string
+        type: string
+        default: unknown
+        public: boolean
+        label?: string
+        description?: string
+        min?: number
+        max?: number
+        options?: string[]
+    }[];
+    values: Record<string, unknown>;
 }
 
 export type WorkspaceLaunchKind = 'ide' | 'cli' | 'acp'

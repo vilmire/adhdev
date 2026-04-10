@@ -3,8 +3,9 @@
  * with web-core abstractions. Supports gradual migration.
  */
 import { useBaseDaemons } from './context/BaseDaemonContext'
+import type { BaseDaemonContextValue } from './context/BaseDaemonContext'
 
-let _useDaemonsHook: any = useBaseDaemons
+let _useDaemonsHook: () => BaseDaemonContextValue = useBaseDaemons
 
 /** useDaemons() wrapper with dependency injection */
 export function useDaemons() {
@@ -70,7 +71,7 @@ class ConnectionManagerStub {
 export let connectionManager: any = new ConnectionManagerStub()
 
 /** Inject real implementations from the host app */
-export function setupCompat(deps: { dashboardWS?: any; connectionManager?: any; useDaemonsHook?: any }) {
+export function setupCompat(deps: { dashboardWS?: any; connectionManager?: any; useDaemonsHook?: () => BaseDaemonContextValue }) {
     if (deps.dashboardWS) dashboardWS = deps.dashboardWS
     if (deps.connectionManager) connectionManager = deps.connectionManager
     if (deps.useDaemonsHook) _useDaemonsHook = deps.useDaemonsHook

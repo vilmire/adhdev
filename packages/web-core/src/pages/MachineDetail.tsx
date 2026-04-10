@@ -45,15 +45,21 @@ interface MachineDetailProps {
     onNicknameSynced?: (args: { machineRuntimeId: string; registeredMachineId?: string | null; nickname: string }) => Promise<void>
 }
 
+type MachineDaemonEntry = DaemonData & {
+    daemonMode: true
+    activeWorkspaceId?: string | null
+    activeWorkspacePath?: string | null
+}
+
 export default function MachineDetail({ onNicknameSynced }: MachineDetailProps = {}) {
     const { id: machineId } = useParams<{ id: string }>()
     const navigate = useNavigate()
     const location = useLocation()
     const { sendCommand: sendDaemonCommand } = useTransport()
-    const daemonCtx = useDaemons() as any
+    const daemonCtx = useDaemons()
     const allIdes: DaemonData[] = daemonCtx.ides || []
     const initialLoaded: boolean = daemonCtx.initialLoaded ?? true
-    const machineEntry = allIdes.find(i => i.id === machineId && (i as any).daemonMode)
+    const machineEntry = allIdes.find((entry): entry is MachineDaemonEntry => entry.id === machineId && entry.daemonMode === true)
     const isStandalone = allIdes.some(entry => entry.type === 'adhdev-daemon')
     const [activeTab, setActiveTab] = useState<TabId>('workspace')
     const [workspaceCategoryHint, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
@@ -83,7 +89,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     // ─── Actions hook ────────────────────────────────
     const actions = useMachineActions({
         machineId,
-        registeredMachineId: (machineEntry as any)?.machineId || null,
+        registeredMachineId: machineEntry?.machineId || null,
         sendDaemonCommand,
         onNicknameSynced,
         logsEndRef,
@@ -92,98 +98,108 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     // ─── Setup Toast Listener ────────────────────────
     useEffect(() => {
         const unsubToast = eventManager.onToast((toast: ToastConfig) => {
-            daemonCtx.setToasts((prev: any[]) => {
+            daemonCtx.setToasts((prev) => {
                 // Dedup
                 const isDup = prev.some(t => t.message === toast.message && (toast.timestamp - t.timestamp) < 3000)
                 if (isDup) return prev
                 const newToast = {
                     id: toast.id, message: toast.message, type: toast.type,
                     timestamp: toast.timestamp, targetKey: toast.targetKey,
-                    actions: toast.actions as any,
+                    actions: toast.actions,
                 }
                 return [...prev.slice(-4), newToast]
             })
             const dur = toast.duration || 5000
-            setTimeout(() => daemonCtx.setToasts((prev: any[]) => prev.filter(t => t.id !== toast.id)), dur)
+            setTimeout(() => daemonCtx.setToasts((prev) => prev.filter(t => t.id !== toast.id)), dur)
         })
         return unsubToast
     }, [daemonCtx])
 
     // ─── Derive machine data ─────────────────────────
     // Build provider info from daemon
-    const providers: ProviderInfo[] = (((machineEntry as any)?.availableProviders || []) as ProviderInfo[])
+    const providers: ProviderInfo[] = machineEntry?.availableProviders || []
     const providerIconMap: Record<string, string> = {}
     for (const p of providers) { providerIconMap[p.type] = p.icon }
     const getIcon = (type: string) => providerIconMap[type] || ''
 
     const machine: MachineData | null = machineEntry ? {
         id: machineEntry.id,
-        hostname: getMachineHostnameLabel(machineEntry as any, { fallbackId: machineEntry.id }),
-        platform: (machineEntry as any).machine?.platform || 'unknown',
-        arch: (machineEntry as any).machine?.arch || '',
-        cpus: (machineEntry as any).machine?.cpus || 0,
-        totalMem: (machineEntry as any).machine?.totalMem || 0,
-        freeMem: (machineEntry as any).machine?.freeMem || 0,
-        availableMem: (machineEntry as any).machine?.availableMem,
-        loadavg: (machineEntry as any).machine?.loadavg || [],
-        uptime: (machineEntry as any).machine?.uptime || 0,
-        release: (machineEntry as any).machine?.release || '',
-        cdpConnected: !!(machineEntry as any).cdpConnected,
-        machineNickname: (machineEntry as any).machineNickname || null,
-        p2p: (machineEntry as any).p2p || { available: false, state: 'unavailable', peers: 0, screenshotActive: false },
-        detectedIdes: (machineEntry as any).detectedIdes || [],
-        workspaces: (machineEntry as any).workspaces || [],
-        defaultWorkspaceId: (machineEntry as any).defaultWorkspaceId ?? (machineEntry as any).activeWorkspaceId ?? null,
-        defaultWorkspacePath: (machineEntry as any).defaultWorkspacePath ?? (machineEntry as any).activeWorkspacePath ?? null,
+        hostname: getMachineHostnameLabel(machineEntry, { fallbackId: machineEntry.id }),
+        platform: machineEntry.machine?.platform || 'unknown',
+        arch: machineEntry.machine?.arch || '',
+        cpus: machineEntry.machine?.cpus || 0,
+        totalMem: machineEntry.machine?.totalMem || 0,
+        freeMem: machineEntry.machine?.freeMem || 0,
+        availableMem: machineEntry.machine?.availableMem,
+        loadavg: machineEntry.machine?.loadavg || [],
+        uptime: machineEntry.machine?.uptime || 0,
+        release: machineEntry.machine?.release || '',
+        cdpConnected: !!machineEntry.cdpConnected,
+        machineNickname: machineEntry.machineNickname || null,
+        p2p: machineEntry.p2p
+            ? { screenshotActive: false, ...machineEntry.p2p }
+            : { available: false, state: 'unavailable', peers: 0, screenshotActive: false },
+        detectedIdes: machineEntry.detectedIdes || [],
+        workspaces: machineEntry.workspaces || [],
+        defaultWorkspaceId: machineEntry.defaultWorkspaceId ?? machineEntry.activeWorkspaceId ?? null,
+        defaultWorkspacePath: machineEntry.defaultWorkspacePath ?? machineEntry.activeWorkspacePath ?? null,
     } : null
 
     const ideSessions: IdeSessionEntry[] = allIdes
-        .filter(i => (i as any).daemonId === machineId && !(i as any).daemonMode)
+        .filter(i => i.daemonId === machineId && !i.daemonMode)
         .filter(i => !isCliEntry(i) && !isAcpEntry(i))
         .map(i => ({
             id: i.id, sessionId: i.sessionId, type: i.type, version: i.version || '',
-            instanceId: (i as any).instanceId || '', status: i.status,
-            workspace: (i as any).workspace || null,
-            terminals: (i as any).terminals || 0,
-            aiAgents: dedupeAgents((i as any).aiAgents || i.agents || []),
-            activeChat: (i as any).activeChat || null,
-            chats: (i as any).chats || [],
-            childSessions: (i as any).childSessions || [],
-            cdpConnected: (i as any).cdpConnected || false,
+            instanceId: i.instanceId || '', status: i.status,
+            workspace: i.workspace || null,
+            terminals: i.terminals || 0,
+            aiAgents: dedupeAgents(
+                i.aiAgents
+                    || (i.agents || []).map((agent) => ({
+                        id: agent.name,
+                        name: agent.name,
+                        status: agent.status,
+                        version: agent.version,
+                    })),
+            ),
+            activeChat: i.activeChat || null,
+            chats: i.chats || [],
+            childSessions: i.childSessions || [],
+            cdpConnected: i.cdpConnected || false,
             daemonId: machineId!,
         }))
 
     const cliSessions: CliSessionEntry[] = allIdes
-        .filter(i => (i as any).daemonId === machineId && isCliEntry(i))
+        .filter(i => i.daemonId === machineId && isCliEntry(i))
         .map(i => ({
-            id: i.id, sessionId: i.sessionId, type: i.type, cliName: (i as any).cliName || i.type,
+            id: i.id, sessionId: i.sessionId, type: i.type, cliName: i.cliName || i.type,
             status: i.status,
-            workspace: (i as any).workspace || '',
-            activeChat: (i as any).activeChat || null,
-            providerSessionId: (i as any).providerSessionId,
-            mode: (i as any).mode,
-            runtimeKey: (i as any).runtimeKey,
-            runtimeDisplayName: (i as any).runtimeDisplayName,
-            runtimeWorkspaceLabel: (i as any).runtimeWorkspaceLabel,
-            runtimeWriteOwner: (i as any).runtimeWriteOwner || null,
-            runtimeAttachedClients: (i as any).runtimeAttachedClients || [],
+            workspace: i.workspace || '',
+            activeChat: i.activeChat || null,
+            providerSessionId: i.providerSessionId,
+            mode: i.mode,
+            runtimeKey: i.runtimeKey,
+            runtimeDisplayName: i.runtimeDisplayName,
+            runtimeWorkspaceLabel: i.runtimeWorkspaceLabel,
+            runtimeWriteOwner: i.runtimeWriteOwner || null,
+            runtimeAttachedClients: i.runtimeAttachedClients || [],
             daemonId: machineId!,
         }))
 
     const acpSessions: AcpSessionEntry[] = allIdes
-        .filter(i => (i as any).daemonId === machineId && isAcpEntry(i))
+        .filter(i => i.daemonId === machineId && isAcpEntry(i))
         .map(i => ({
-            id: i.id, sessionId: i.sessionId, type: i.type, acpName: (i as any).cliName || i.type,
+            id: i.id, sessionId: i.sessionId, type: i.type, acpName: i.cliName || i.type,
             status: i.status,
-            workspace: (i as any).workspace || '',
-            activeChat: (i as any).activeChat || null,
-            providerSessionId: (i as any).providerSessionId,
-            currentModel: (i as any).currentModel,
-            currentPlan: (i as any).currentPlan,
+            workspace: i.workspace || '',
+            activeChat: i.activeChat || null,
+            providerSessionId: i.providerSessionId,
+            currentModel: i.currentModel,
+            currentPlan: i.currentPlan,
             daemonId: machineId!,
         }))
 
-    const displayName = machineEntry ? getMachineDisplayName(machineEntry as any, { fallbackId: machineId }) : ''
+    const displayName = machineEntry ? getMachineDisplayName(machineEntry, { fallbackId: machineId }) : ''
     const defaultTab: TabId = 'workspace'
     const locationState = (location.state as {
         initialMachineTab?: TabId
@@ -239,8 +255,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     ]
         .sort((a, b) => b.timestamp - a.timestamp)
         .map(({ timestamp, ...session }) => session)
-    const recentLaunches: MachineRecentLaunch[] = ((machineEntry as any).recentLaunches || []).length > 0
-        ? ((machineEntry as any).recentLaunches as any[]).map((launch) => ({
+    const recentLaunches: MachineRecentLaunch[] = (machineEntry?.recentLaunches || []).length > 0
+        ? (machineEntry?.recentLaunches || []).map((launch) => ({
             id: launch.id,
             label: launch.title || launch.providerName || launch.providerType,
             kind: launch.kind,
@@ -254,7 +270,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const currentConversations = useMemo<ActiveConversation[]>(() => {
         const connectionState = daemonCtx.connectionStates?.[machineId || ''] || undefined
         return allIdes
-            .filter(entry => (entry as any).daemonId === machineId && !(entry as any).daemonMode)
+            .filter(entry => entry.daemonId === machineId && !entry.daemonMode)
             .flatMap(entry => buildIdeConversations(entry, {}, { connectionState }))
             .filter(conversation => !(conversation.transport === 'pty' && conversation.mode === 'terminal'))
             .sort((left, right) => getConversationActivityAt(right) - getConversationActivityAt(left))
@@ -394,7 +410,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                             <div className="flex flex-wrap gap-x-3 gap-y-1 items-center mt-1.5 text-xs text-text-secondary opacity-80">
                                 <span className="font-mono bg-[#ffffff08] px-1.5 py-0.5 rounded">{machine.platform} · {machine.arch}</span>
                                 <span>{machine.cpus} cores</span>
-                                {(machineEntry as any)?.version && <span>v{(machineEntry as any).version}</span>}
+                                {machineEntry?.version && <span>v{machineEntry.version}</span>}
                                 {machine.p2p.available && (
                                     <span>P2P {machine.p2p.state === 'connected' ? 'connected' : machine.p2p.state}</span>
                                 )}
@@ -440,7 +456,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                         {activeTab === 'workspace' && (
                             <div className="flex flex-col md:flex-row gap-6 md:gap-10 h-full">
                                 <MachineCommandCenter
-                                    machineEntry={machineEntry as DaemonData}
+                                    machineEntry={machineEntry}
                                     providers={providers}
                                     recentLaunches={recentLaunches}
                                     currentConversations={currentConversations}
@@ -536,7 +552,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             {/* Toast Notifications */}
             <ToastContainer
                 toasts={daemonCtx.toasts || []}
-                onDismiss={(id) => daemonCtx.setToasts((prev: any[]) => prev.filter(t => t.id !== id))}
+                onDismiss={(id) => daemonCtx.setToasts((prev) => prev.filter(t => t.id !== id))}
                 onClickToast={(toast) => {
                     if (toast.targetKey) {
                         navigate(`/dashboard?activeTab=${encodeURIComponent(toast.targetKey)}`)

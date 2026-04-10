@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useDaemons } from '../compat'
@@ -79,15 +79,14 @@ export default function Dashboard() {
     const requestedMachineId = (location.state as { openMachineId?: string } | null)?.openMachineId || null
     const requestedMobileSection = (location.state as { mobileSection?: DashboardMobileSection } | null)?.mobileSection || null
 
-    const daemonCtx = useDaemons() as any
+    const daemonCtx = useDaemons()
     const ides: DaemonData[] = daemonCtx.ides || []
     const initialLoaded: boolean = daemonCtx.initialLoaded ?? true
-    const { updateIdeChats } = daemonCtx
+    const { updateIdeChats, setToasts } = daemonCtx
     const [showOnboarding, setShowOnboarding] = useState(() => {
         try { return !localStorage.getItem('adhdev_onboarding_v1') } catch { return false }
     })
     const toasts: Toast[] = daemonCtx.toasts || []
-    const setToasts = (daemonCtx.setToasts || (() => {})) as React.Dispatch<React.SetStateAction<Toast[]>>
     // Abstract connection state (injected by platform)
     const wsStatus = daemonCtx.wsStatus || 'connected'
     const isConnected = daemonCtx.isConnected ?? true
@@ -134,7 +133,7 @@ export default function Dashboard() {
 
     // Extract detectedIdes from machine-level entry (for standalone)
     const daemonEntry = ides.find(ide => ide.type === 'adhdev-daemon')
-    const detectedIdes: { type: string; name: string; running: boolean; id?: string }[] = (daemonEntry as any)?.detectedIdes || []
+    const detectedIdes: { type: string; name: string; running: boolean; id?: string }[] = daemonEntry?.detectedIdes || []
     const machineEntries = useMemo(
         () => ides
             .filter((entry: any) => entry.type === 'adhdev-daemon' || entry.daemonMode)

@@ -87,6 +87,8 @@ export interface BaseDaemonData {
     transport?: SessionTransport;
     mode?: 'terminal' | 'chat';
     version?: string;
+    serverVersion?: string;
+    versionMismatch?: boolean;
     platform?: string;
     hostname?: string;
     nickname?: string;

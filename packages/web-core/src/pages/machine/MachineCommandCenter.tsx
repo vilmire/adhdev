@@ -115,7 +115,7 @@ export default function MachineCommandCenter({
                 </div>
             )}
 
-            {(machineEntry as any).versionMismatch && (
+            {machineEntry.versionMismatch && (
                 <div className="flex flex-col gap-2">
                     <SectionTitle icon={<IconWarning size={13} />}>Daemon Update</SectionTitle>
                     <SectionCard className="border-amber-500/20 bg-amber-500/5">

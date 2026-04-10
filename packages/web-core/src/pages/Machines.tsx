@@ -59,7 +59,7 @@ function AgentRow({ icon, name, status, statusTone = 'idle', workspace, isActive
 // ─── Page ────────────────────────────────────────────
 export default function MachinesPage() {
     const navigate = useNavigate()
-    const daemonCtx = useDaemons() as any
+    const daemonCtx = useDaemons()
     const { ides: daemons } = daemonCtx
     const connectionStates = daemonCtx.connectionStates || {}
     const connectionTransports = daemonCtx.connectionTransports || {}
