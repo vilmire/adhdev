@@ -36,7 +36,7 @@ import MachineWorkspaceTab from './machine/MachineWorkspaceTab'
 import LaunchConfirmDialog from '../components/machine/LaunchConfirmDialog'
 import { buildLaunchWorkspaceOptions } from '../components/machine/launchWorkspaceOptions'
 import type { LaunchWorkspaceOption } from './machine/types'
-import { buildIdeConversations } from '../components/dashboard/buildConversations'
+import { buildScopedIdeConversations } from '../components/dashboard/buildConversations'
 import { getConversationActivityAt } from '../components/dashboard/conversation-sort'
 import type { ActiveConversation } from '../components/dashboard/types'
 
@@ -271,7 +271,10 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         const connectionState = daemonCtx.connectionStates?.[machineId || ''] || undefined
         return allIdes
             .filter(entry => entry.daemonId === machineId && !entry.daemonMode)
-            .flatMap(entry => buildIdeConversations(entry, {}, { connectionState }))
+            .flatMap(entry => buildScopedIdeConversations(entry, {}, {
+                connectionStates: machineId && connectionState ? { [machineId]: connectionState } : undefined,
+                defaultConnectionState: connectionState,
+            }))
             .filter(conversation => !(conversation.transport === 'pty' && conversation.mode === 'terminal'))
             .sort((left, right) => getConversationActivityAt(right) - getConversationActivityAt(left))
     }, [allIdes, daemonCtx.connectionStates, machineId])

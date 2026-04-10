@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef } from 'react'
-import { buildIdeConversations, buildMachineNameMap, type LocalUserMessage } from '../components/dashboard/buildConversations'
+import { buildMachineNameMap, buildScopedIdeConversations, getIdeConversationBuildContext, type LocalUserMessage } from '../components/dashboard/buildConversations'
 import { compareConversationRecency, getConversationSortTimestamp, getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
 import type { ActiveConversation, DashboardMessage } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
@@ -141,9 +141,11 @@ export function useDashboardConversations({
         const nextConversations: ActiveConversation[] = []
 
         for (const ide of chatIdes) {
-            const daemonId = ide.daemonId || ide.id?.split(':')[0] || ide.id
-            const connectionState = connectionStates[daemonId] || 'new'
-            const machineName = (ide.daemonId && machineNames[ide.daemonId]) || undefined
+            const { connectionState = 'new', machineName } = getIdeConversationBuildContext(ide, {
+                machineNames,
+                connectionStates,
+                defaultConnectionState: 'new',
+            })
             const localRefs = getCachedLocalMessageRefs(ide, localUserMessages)
             const cached = cacheRef.current.get(ide.id)
 
@@ -159,9 +161,10 @@ export function useDashboardConversations({
                 continue
             }
 
-            const conversations = buildIdeConversations(ide, localUserMessages, {
-                machineName,
-                connectionState,
+            const conversations = buildScopedIdeConversations(ide, localUserMessages, {
+                machineNames,
+                connectionStates,
+                defaultConnectionState: 'new',
             })
             const entry: ConversationCacheEntry = {
                 ide,

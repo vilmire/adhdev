@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { buildIdeConversations, buildMachineNameMap, type LocalUserMessage } from '../components/dashboard/buildConversations'
+import { buildMachineNameMap, buildScopedIdeConversations, type LocalUserMessage } from '../components/dashboard/buildConversations'
 import { getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
 import type { DaemonData } from '../types'
 
@@ -25,10 +25,10 @@ export function useIdeConversations({
 
     const conversations = useMemo(() => {
         if (!ideData) return []
-        const daemonId = ideData.daemonId || ideData.id?.split(':')[0] || ideData.id
-        return buildIdeConversations(ideData, localUserMessages, {
-            machineName: (ideData.daemonId && machineNames[ideData.daemonId]) || undefined,
-            connectionState: connectionStates[daemonId] || 'new',
+        return buildScopedIdeConversations(ideData, localUserMessages, {
+            machineNames,
+            connectionStates,
+            defaultConnectionState: 'new',
         })
     }, [ideData, localUserMessages, machineNames, connectionStates])
 

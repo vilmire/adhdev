@@ -18,6 +18,12 @@ interface BuildConversationContext {
     connectionState?: string;
 }
 
+interface SharedConversationBuildContextOptions {
+    machineNames?: Record<string, string>;
+    connectionStates?: Record<string, string>;
+    defaultConnectionState?: string;
+}
+
 // ─── Helper functions ────────────────────────────────────────
 
 /** Conversation-first IDE: CLI or IDE category → native tab */
@@ -72,6 +78,31 @@ export function buildMachineNameMap(allIdes: DaemonData[] = []): Record<string, 
         }
     }
     return machineNames;
+}
+
+export function getIdeConversationBuildContext(
+    ide: DaemonData,
+    options: SharedConversationBuildContextOptions = {},
+): BuildConversationContext {
+    const daemonId = ide.daemonId || ide.id?.split(':')[0] || ide.id;
+    return {
+        machineName: (ide.daemonId && options.machineNames?.[ide.daemonId]) || undefined,
+        connectionState: options.connectionStates
+            ? (options.connectionStates[daemonId] || options.defaultConnectionState || 'new')
+            : options.defaultConnectionState,
+    };
+}
+
+export function buildScopedIdeConversations(
+    ide: DaemonData,
+    localUserMessages: Record<string, LocalUserMessage[]>,
+    options: SharedConversationBuildContextOptions = {},
+): ActiveConversation[] {
+    return buildIdeConversations(
+        ide,
+        localUserMessages,
+        getIdeConversationBuildContext(ide, options),
+    );
 }
 
 export function buildIdeConversations(
@@ -274,11 +305,9 @@ export function buildConversations(
     connectionStates?: Record<string, string>,
 ): ActiveConversation[] {
     const machineNames = buildMachineNameMap(allIdes);
-    return chatIdes.flatMap(ide => {
-        const daemonId = ide.daemonId || ide.id?.split(':')[0] || ide.id;
-        return buildIdeConversations(ide, localUserMessages, {
-            machineName: (ide.daemonId && machineNames[ide.daemonId]) || undefined,
-            connectionState: connectionStates ? (connectionStates[daemonId] || 'new') : undefined,
-        });
-    });
+    return chatIdes.flatMap((ide) => buildScopedIdeConversations(ide, localUserMessages, {
+        machineNames,
+        connectionStates,
+        defaultConnectionState: 'new',
+    }));
 }
