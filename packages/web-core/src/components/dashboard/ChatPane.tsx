@@ -153,12 +153,13 @@ export default function ChatPane({
             });
 
             const result = unwrapChatHistoryResult(raw);
+            const historyMessages = result.messages || [];
 
-            if (result.messages?.length > 0) {
+            if (historyMessages.length > 0) {
                 const fresh = getTabHistory(tk);
                 updateTabHistory(tk, {
-                    messages: [...result.messages, ...fresh.messages],
-                    offset: fresh.offset + result.messages.length,
+                    messages: [...historyMessages, ...fresh.messages],
+                    offset: fresh.offset + historyMessages.length,
                     hasMore: !!result.hasMore,
                 });
             } else {

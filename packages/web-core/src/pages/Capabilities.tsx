@@ -15,7 +15,10 @@ export default function CapabilitiesPage() {
     const [loading, setLoading] = useState(true)
 
     useEffect(() => {
-        fetch('https://raw.githubusercontent.com/vilmire/adhdev-providers/main/registry.json')
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 10000)
+
+        fetch('https://raw.githubusercontent.com/vilmire/adhdev-providers/main/registry.json', { signal: controller.signal })
             .then(res => res.json())
             .then(data => {
                 const ide: any[] = [], cli: any[] = [], ext: any[] = [], acp: any[] = []
@@ -50,8 +53,12 @@ export default function CapabilitiesPage() {
                     acp: acp.sort(sortByStatus)
                 })
             })
-            .catch(err => console.error('Failed to load capabilities:', err))
-            .finally(() => setLoading(false))
+            .catch(err => {
+                if (err.name !== 'AbortError') console.error('Failed to load capabilities:', err)
+            })
+            .finally(() => { clearTimeout(timer); setLoading(false) })
+
+        return () => { clearTimeout(timer); controller.abort() }
     }, [])
 
     const renderStatus = (verification: ProviderVerification) => {

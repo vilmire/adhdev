@@ -459,7 +459,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                         {activeTab === 'workspace' && (
                             <div className="flex flex-col md:flex-row gap-6 md:gap-10 h-full">
                                 <MachineCommandCenter
-                                    machineEntry={machineEntry}
+                                    machineEntry={machineEntry!}
                                     providers={providers}
                                     recentLaunches={recentLaunches}
                                     currentConversations={currentConversations}

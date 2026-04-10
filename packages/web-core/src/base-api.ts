@@ -149,19 +149,25 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
         }
 
         const url = buildUrl(path)
-        const res = await fetch(url, { ...options, headers })
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 15000)
+        try {
+            const res = await fetch(url, { ...options, headers, signal: controller.signal })
 
-        if (res.status === 401) {
-            onUnauthorized?.()
-            throw new Error('Unauthorized')
+            if (res.status === 401) {
+                onUnauthorized?.()
+                throw new Error('Unauthorized')
+            }
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({ error: res.statusText }))
+                throw new Error(err.error || `API Error: ${res.status}`)
+            }
+
+            return res.json()
+        } finally {
+            clearTimeout(timer)
         }
-
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({ error: res.statusText }))
-            throw new Error(err.error || `API Error: ${res.status}`)
-        }
-
-        return res.json()
     }
 
     return {
