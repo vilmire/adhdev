@@ -60,8 +60,8 @@ function normalizePreviewText(content: unknown) {
 }
 
 function getConversationPreview(conversation: ActiveConversation) {
-    const lastMessage = [...conversation.messages].reverse().find((message: any) => !(message as any)?._localId) as any
-        || conversation.messages[conversation.messages.length - 1] as any
+    const lastMessage = [...conversation.messages].reverse().find((message) => !message?._localId)
+        || conversation.messages[conversation.messages.length - 1]
     const preview = normalizePreviewText(lastMessage?.content)
     if (preview) return preview
     if (conversation.title) return conversation.title

@@ -136,14 +136,14 @@ export default function Dashboard() {
     const detectedIdes: { type: string; name: string; running: boolean; id?: string }[] = daemonEntry?.detectedIdes || []
     const machineEntries = useMemo(
         () => ides
-            .filter((entry: any) => entry.type === 'adhdev-daemon' || entry.daemonMode)
+            .filter((entry) => entry.type === 'adhdev-daemon' || entry.daemonMode)
             .sort(compareMachineEntries),
         [ides],
     )
     const isStandalone = !!daemonEntry
-    const terminalBackend = (daemonEntry as any)?.terminalBackend || null
+    const terminalBackend = daemonEntry?.terminalBackend || null
     const terminalBackendMachineLabel = daemonEntry
-        ? getMachineDisplayName(daemonEntry as any, { fallbackId: daemonEntry.id })
+        ? getMachineDisplayName(daemonEntry, { fallbackId: daemonEntry.id })
         : null
     const terminalBackendMachineKey = daemonEntry?.id || null
     // ─── Hidden Tabs ───
@@ -428,7 +428,7 @@ export default function Dashboard() {
         if (!pendingDashboardLaunch) return
 
         const normalizedTargetWorkspace = normalizeWorkspacePath(pendingDashboardLaunch.workspacePath)
-        const matchingEntry = ides.find((entry: any) => {
+        const matchingEntry = ides.find((entry) => {
             if (!entry || entry.type === 'adhdev-daemon' || entry.daemonMode) return false
             const entryMachineId = getRouteMachineId(entry.daemonId || entry.id)
             if (entryMachineId !== pendingDashboardLaunch.machineId) return false
@@ -444,7 +444,7 @@ export default function Dashboard() {
             if (entryProviderType !== pendingDashboardLaunch.providerType) return false
 
             if (pendingDashboardLaunch.resumeSessionId) {
-                const entryProviderSessionId = String((entry as any).providerSessionId || '')
+                const entryProviderSessionId = String(entry.providerSessionId || '')
                 return entryProviderSessionId === pendingDashboardLaunch.resumeSessionId
             }
 
@@ -499,7 +499,7 @@ export default function Dashboard() {
     useDashboardEventManager({
         ides,
         sendDaemonCommand,
-        setToasts: setToasts as any,
+        setToasts,
         setLocalUserMessages,
         resolveConversationByTarget,
     })

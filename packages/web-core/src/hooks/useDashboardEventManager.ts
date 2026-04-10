@@ -1,24 +1,17 @@
 import { useEffect } from 'react'
 import { dashboardWS } from '../compat'
 import { eventManager } from '../managers/EventManager'
-import type { SystemMessage, ToastConfig } from '../managers/EventManager'
+import type { StatusEventPayload, SystemMessage, ToastConfig } from '../managers/EventManager'
+import type { Toast } from '../context/BaseDaemonContext'
+import type { LocalUserMessage } from '../components/dashboard/buildConversations'
 import type { ActiveConversation } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
-
-type DashboardToast = {
-    id: number
-    message: string
-    type: 'success' | 'info' | 'warning'
-    timestamp: number
-    targetKey?: string
-    actions?: unknown
-}
 
 interface UseDashboardEventManagerOptions {
     ides: DaemonData[]
     sendDaemonCommand: (routeId: string, cmd: string, payload?: Record<string, unknown>) => Promise<any>
-    setToasts: React.Dispatch<React.SetStateAction<DashboardToast[]>>
-    setLocalUserMessages: React.Dispatch<React.SetStateAction<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>>
+    setToasts: React.Dispatch<React.SetStateAction<Toast[]>>
+    setLocalUserMessages: React.Dispatch<React.SetStateAction<Record<string, LocalUserMessage[]>>>
     resolveConversationByTarget: (target: string | null | undefined) => ActiveConversation | undefined
 }
 
@@ -83,7 +76,7 @@ export function useDashboardEventManager({
                 return {
                     ...prev,
                     [targetKey]: prev[targetKey].filter(
-                        (message: any) => !(message.role === 'system' && message._localId?.startsWith(prefix)),
+                        (message) => !(message.role === 'system' && message._localId?.startsWith(prefix)),
                     ),
                 }
             })
@@ -97,7 +90,10 @@ export function useDashboardEventManager({
     }, [setToasts, setLocalUserMessages])
 
     useEffect(() => {
-        const unsubWS = dashboardWS.on('status_event', (payload: any) => eventManager.handleRawEvent(payload, 'ws'))
+        const unsubWS = dashboardWS.on('status_event', (payload: unknown) => {
+            if (!payload || typeof payload !== 'object' || typeof (payload as { event?: unknown }).event !== 'string') return
+            eventManager.handleRawEvent(payload as StatusEventPayload, 'ws')
+        })
         return () => { unsubWS() }
     }, [])
 

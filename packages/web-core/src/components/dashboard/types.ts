@@ -3,8 +3,10 @@
  */
 
 import type { SessionTransport } from '@adhdev/daemon-core';
+import type { ChatMessage } from '../../types';
 
 export type CliConversationViewMode = 'terminal' | 'chat';
+export type DashboardMessage = ChatMessage & { _localId?: string; _turnKey?: string };
 
 export interface ActiveConversation {
     ideId: string;
@@ -19,7 +21,7 @@ export interface ActiveConversation {
     agentType: string;
     status: string;
     title: string;
-    messages: any[];
+    messages: DashboardMessage[];
     resume?: import('../../types').ProviderResumeCapability;
     ideType: string;
     workspaceName: string;

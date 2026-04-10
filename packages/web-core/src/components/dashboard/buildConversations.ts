@@ -9,7 +9,7 @@ import type { RecentSessionBucket } from '@adhdev/daemon-core';
 import { deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, getMachineDisplayName, isGenericAgentTitle } from '../../utils/daemon-utils';
 import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize';
 import { isCliConv, isAcpConv } from './types';
-import type { ActiveConversation } from './types';
+import type { ActiveConversation, DashboardMessage } from './types';
 import { normalizeTextContent } from '../../utils/text';
 
 export type LocalUserMessage = {
@@ -54,15 +54,15 @@ function normalizeMessageContent(content: unknown): string {
     return normalizeTextContent(content)
 }
 
-function getMessageTimestamp(message: any): number {
-    const ts = Number(message?.receivedAt || 0)
+function getMessageTimestamp(message: { receivedAt?: number | string; timestamp?: number } | null | undefined): number {
+    const ts = Number(message?.receivedAt || message?.timestamp || 0)
     return Number.isFinite(ts) ? ts : 0
 }
 
-function isLikelySameMessage(a: any, b: any): boolean {
+function isLikelySameMessage(a: DashboardMessage | LocalUserMessage | null | undefined, b: DashboardMessage | LocalUserMessage | null | undefined): boolean {
     if (!a || !b) return false
     if (a === b) return true
-    if (a.id && b.id && String(a.id) === String(b.id)) return true
+    if ('id' in a && 'id' in b && a.id && b.id && String(a.id) === String(b.id)) return true
     if (a._localId && b._localId && String(a._localId) === String(b._localId)) return true
 
     const roleA = String(a.role || '').toLowerCase()
@@ -85,7 +85,7 @@ function getLocalMessages(
     keys: Array<string | undefined>,
 ) {
     const seen = new Set<string>();
-    const merged: { role: string; content: string; timestamp: number; _localId: string }[] = [];
+    const merged: LocalUserMessage[] = [];
 
     for (const key of keys) {
         if (!key) continue;
@@ -129,7 +129,7 @@ export function buildIdeConversations(
         agentName: string;
         status: string;
         title?: string;
-        messages: any[];
+        messages: DashboardMessage[];
         activeModal?: { message: string; buttons: string[] };
         unread?: boolean;
         lastSeenAt?: number;
@@ -188,7 +188,7 @@ export function buildIdeConversations(
         const nativeServerMsgs = chat.messages || [];
         const nativeLocalMsgs = getLocalMessages(localUserMessages, [ide.id, nativeSessionId]);
         const unmatchedNativeServerUsers = nativeServerMsgs
-            .filter((m: any) => String(m?.role || '').toLowerCase() === 'user')
+            .filter((m) => String(m?.role || '').toLowerCase() === 'user')
             .slice();
         const nativePendingLocal = nativeLocalMsgs.filter(lm => {
             const matchIndex = unmatchedNativeServerUsers.findIndex(serverMsg => isLikelySameMessage(serverMsg, lm));
@@ -221,8 +221,8 @@ export function buildIdeConversations(
                     : agentName),
             displaySecondary: ideLabel,
             cdpConnected: ide.cdpConnected,
-            modalButtons: hasRealModal ? (modal.buttons as string[]) : undefined,
-            modalMessage: hasRealModal ? (modal.message as string) : undefined,
+            modalButtons: hasRealModal ? modal.buttons : undefined,
+            modalMessage: hasRealModal ? modal.message : undefined,
             streamSource: 'native',
             tabKey: getConversationTabKey(nativeSessionId, ide.id),
             machineName,
@@ -244,7 +244,7 @@ export function buildIdeConversations(
         const serverMsgs = stream.messages || [];
         const localMsgs = getLocalMessages(localUserMessages, [streamTabKey, stream.sessionId, stream.instanceId]);
         const unmatchedServerUsers = serverMsgs
-            .filter((m: any) => String(m?.role || '').toLowerCase() === 'user')
+            .filter((m) => String(m?.role || '').toLowerCase() === 'user')
             .slice();
         const pendingLocal = localMsgs.filter(lm => {
             const matchIndex = unmatchedServerUsers.findIndex(serverMsg => isLikelySameMessage(serverMsg, lm));

@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef } from 'react'
 import { buildIdeConversations, buildMachineNameMap, type LocalUserMessage } from '../components/dashboard/buildConversations'
 import { compareConversationRecency, getConversationSortTimestamp, getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
-import type { ActiveConversation } from '../components/dashboard/types'
+import type { ActiveConversation, DashboardMessage } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
 import { normalizeTextContent } from '../utils/text'
 
@@ -29,8 +29,8 @@ function dedupeChatIdes(ides: DaemonData[]) {
             continue
         }
 
-        const existingRichness = (existing.workspace ? 1 : 0) + ((existing as any).activeChat ? 1 : 0)
-        const incomingRichness = (ide.workspace ? 1 : 0) + ((ide as any).activeChat ? 1 : 0)
+        const existingRichness = (existing.workspace ? 1 : 0) + (existing.activeChat ? 1 : 0)
+        const incomingRichness = (ide.workspace ? 1 : 0) + (ide.activeChat ? 1 : 0)
         if (incomingRichness > existingRichness || (ide.timestamp || 0) > (existing.timestamp || 0)) {
             seen.set(ide.id, ide)
         }
@@ -64,7 +64,7 @@ function getCachedLocalMessageRefs(
     localUserMessages: Record<string, LocalUserMessage[]>,
 ): LocalMessageRef[] {
     const refs: LocalMessageRef[] = []
-    const nativeSessionId = (ide as any).sessionId || ide.instanceId
+    const nativeSessionId = ide.sessionId || ide.instanceId
     refs.push({ key: ide.id, ref: localUserMessages[ide.id] })
     if (nativeSessionId) refs.push({ key: nativeSessionId, ref: localUserMessages[nativeSessionId] })
 
@@ -99,13 +99,13 @@ type ConversationSortCacheEntry = {
     timestamp: number
 }
 
-function getLastConversationMessage(conversation: ActiveConversation) {
-    return [...conversation.messages].reverse().find((message: any) => !(message as any)?._localId)
+function getLastConversationMessage(conversation: ActiveConversation): DashboardMessage | undefined {
+    return [...conversation.messages].reverse().find((message) => !message?._localId)
         || conversation.messages[conversation.messages.length - 1]
 }
 
 function getConversationSortSignature(conversation: ActiveConversation) {
-    const lastMessage: any = getLastConversationMessage(conversation)
+    const lastMessage = getLastConversationMessage(conversation)
     if (!lastMessage) return `empty:${conversation.messages.length}`
     if (lastMessage.id) return `id:${String(lastMessage.id)}`
     if (lastMessage._localId) return `local:${String(lastMessage._localId)}`

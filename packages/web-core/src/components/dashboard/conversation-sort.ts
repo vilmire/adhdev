@@ -1,4 +1,4 @@
-import type { ActiveConversation } from './types'
+import type { ActiveConversation, DashboardMessage } from './types'
 import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 
 function parseMessageTimestamp(value: unknown): number {
@@ -11,8 +11,8 @@ function parseMessageTimestamp(value: unknown): number {
 }
 
 export function getConversationTimestamp(conversation: ActiveConversation): number {
-    const lastMessage = [...conversation.messages].reverse().find((message: any) => !(message as any)?._localId) as any
-        || conversation.messages[conversation.messages.length - 1] as any
+    const lastMessage: DashboardMessage | undefined = [...conversation.messages].reverse().find((message) => !message?._localId)
+        || conversation.messages[conversation.messages.length - 1]
     return (
         parseMessageTimestamp(lastMessage?.receivedAt)
         || 0

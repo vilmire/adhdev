@@ -9,8 +9,8 @@ import ChatInputBar from './ChatInputBar';
 import ConversationMetaChips from './ConversationMetaChips';
 import { getConversationViewStates } from './DashboardMobileChatShared';
 import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
-import type { ActiveConversation } from './types';
-import type { DaemonData } from '../../types';
+import type { ActiveConversation, DashboardMessage } from './types';
+import type { ChatMessage, DaemonData } from '../../types';
 import { useTransport } from '../../context/TransportContext';
 import { formatIdeType } from '../../utils/daemon-utils';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
@@ -35,12 +35,12 @@ function normalizeMessageContent(content: unknown): string {
     return String(content || '').replace(/\s+/g, ' ').trim();
 }
 
-function getMessageTimestamp(message: any): number {
+function getMessageTimestamp(message: Pick<ChatMessage, 'receivedAt'> | null | undefined): number {
     const ts = Number(message?.receivedAt || 0);
     return Number.isFinite(ts) ? ts : 0;
 }
 
-function sortMessagesChronologically(messages: any[]) {
+function sortMessagesChronologically(messages: DashboardMessage[]) {
     return [...messages].sort((left, right) => {
         const leftTs = getMessageTimestamp(left);
         const rightTs = getMessageTimestamp(right);
@@ -49,7 +49,7 @@ function sortMessagesChronologically(messages: any[]) {
     });
 }
 
-function isLikelySameMessage(a: any, b: any): boolean {
+function isLikelySameMessage(a: DashboardMessage | null | undefined, b: DashboardMessage | null | undefined): boolean {
     if (!a || !b) return false;
     if (a === b) return true;
     if (a.id && b.id && String(a.id) === String(b.id)) return true;
@@ -70,7 +70,7 @@ function isLikelySameMessage(a: any, b: any): boolean {
     return !!a?._localId !== !!b?._localId;
 }
 
-function getMessagePreferenceScore(message: any): number {
+function getMessagePreferenceScore(message: DashboardMessage | null | undefined): number {
     let score = 0;
     if (!message?._localId) score += 4;
     if (message?.id) score += 3;
@@ -79,15 +79,15 @@ function getMessagePreferenceScore(message: any): number {
     return score;
 }
 
-function choosePreferredMessage(existing: any, incoming: any): any {
+function choosePreferredMessage(existing: DashboardMessage, incoming: DashboardMessage): DashboardMessage {
     const existingScore = getMessagePreferenceScore(existing);
     const incomingScore = getMessagePreferenceScore(incoming);
     if (incomingScore !== existingScore) return incomingScore > existingScore ? incoming : existing;
     return normalizeMessageContent(incoming?.content).length >= normalizeMessageContent(existing?.content).length ? incoming : existing;
 }
 
-function dedupeOptimisticMessages(messages: any[]) {
-    const result: any[] = [];
+function dedupeOptimisticMessages(messages: DashboardMessage[]) {
+    const result: DashboardMessage[] = [];
     for (const message of messages) {
         const duplicateIndex = result.findIndex(existing => isLikelySameMessage(existing, message));
 
@@ -140,7 +140,7 @@ export default function ChatPane({
 
     // Per-tab history cache — survives tab switches
     interface TabHistoryState {
-        messages: any[];
+        messages: DashboardMessage[];
         offset: number;
         hasMore: boolean;
         error: string | null;
@@ -249,7 +249,7 @@ export default function ChatPane({
         if (historyMessages.length === 0) {
             const dedupedLiveMessages = sortMessagesChronologically(dedupeOptimisticMessages(liveMessages));
             const liveReceivedAtMap: Record<string, number> = {};
-            dedupedLiveMessages.forEach((message: any, index: number) => {
+            dedupedLiveMessages.forEach((message, index: number) => {
                 const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;
                 let receivedAt = getMessageTimestamp(message) || receivedAtCache.current.get(messageKey) || 0;
                 if (!receivedAt) {
@@ -270,7 +270,7 @@ export default function ChatPane({
             dedupeOptimisticMessages([...uniqueHistory, ...liveMessages]),
         );
         const nextReceivedAtMap: Record<string, number> = {};
-        mergedMessages.forEach((message: any, index: number) => {
+        mergedMessages.forEach((message, index: number) => {
             const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;
             let receivedAt = getMessageTimestamp(message) || receivedAtCache.current.get(messageKey) || 0;
             if (!receivedAt) {
