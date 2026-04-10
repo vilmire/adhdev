@@ -18,6 +18,7 @@ import { compareMachineEntries } from '../../utils/daemon-utils'
 import { buildMobileMachineCards, buildSelectedMachineRecentLaunches } from './dashboard-mobile-chat-mode-helpers'
 import { useDashboardMobileChatEffects } from './useDashboardMobileChatEffects'
 import { useDashboardMobileMachineActions } from './useDashboardMobileMachineActions'
+import { useDashboardMobileNavigationController } from './useDashboardMobileNavigationController'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
 
 declare const __APP_VERSION__: string
@@ -177,6 +178,18 @@ export default function DashboardMobileChatMode({
         setMachineBackTarget,
         resetMachineAction: machineActions.resetMachineAction,
     })
+    const navigation = useDashboardMobileNavigationController({
+        conversations,
+        selectedConversation,
+        machineBackTarget,
+        markConversationRead,
+        resetMachineAction: machineActions.resetMachineAction,
+        setSelectedTabKey,
+        setScreen,
+        setSelectedMachineId,
+        setSection,
+        setMachineBackTarget,
+    })
 
     const attentionItems = useMemo(
         () => items.filter(item => item.requiresAction),
@@ -237,51 +250,6 @@ export default function DashboardMobileChatMode({
         [items, machineEntries],
     )
 
-    const handleOpenConversation = useCallback((conversation: ActiveConversation) => {
-        setSelectedTabKey(conversation.tabKey)
-        setScreen('chat')
-        markConversationRead(conversation)
-    }, [markConversationRead])
-
-    const handleOpenNativeConversation = useCallback((conversation: ActiveConversation) => {
-        const nativeConversation = conversations.find(candidate => (
-            candidate.ideId === conversation.ideId
-            && candidate.streamSource === 'native'
-        ))
-        if (!nativeConversation) return
-        setSelectedTabKey(nativeConversation.tabKey)
-        setScreen('chat')
-        markConversationRead(nativeConversation)
-    }, [conversations, markConversationRead])
-
-    const handleBackFromConversation = useCallback(() => {
-        markConversationRead(selectedConversation)
-        setScreen('inbox')
-    }, [markConversationRead, selectedConversation])
-
-    const handleOpenMachine = useCallback((machineId: string) => {
-        setSelectedMachineId(machineId)
-        machineActions.resetMachineAction()
-        setSection('machines')
-        setMachineBackTarget('inbox')
-        setScreen('machine')
-    }, [machineActions])
-
-    const handleOpenConversationMachine = useCallback((conversation: ActiveConversation) => {
-        const machineId = getConversationMachineId(conversation)
-        if (!machineId) return
-        setSelectedMachineId(machineId)
-        machineActions.resetMachineAction()
-        setSection('machines')
-        setMachineBackTarget('chat')
-        setScreen('machine')
-    }, [machineActions])
-
-    const handleBackFromMachine = useCallback(() => {
-        machineActions.resetMachineAction()
-        setScreen(machineBackTarget)
-    }, [machineActions, machineBackTarget])
-
     const handleOpenRecent = useCallback(async (session: MachineRecentLaunch) => {
         if (!selectedMachineEntry) return
         await machineActions.handleOpenRecent(selectedMachineEntry.id, session)
@@ -301,9 +269,9 @@ export default function DashboardMobileChatMode({
                     isFocusingAgent={cmds.isFocusingAgent}
                     handleModalButton={cmds.handleModalButton}
                     handleRelaunch={cmds.handleRelaunch}
-                    onBack={handleBackFromConversation}
-                    onOpenNativeConversation={handleOpenNativeConversation}
-                    onOpenMachine={handleOpenConversationMachine}
+                    onBack={navigation.backFromConversation}
+                    onOpenNativeConversation={navigation.openNativeConversation}
+                    onOpenMachine={navigation.openConversationMachine}
                     onHideConversation={onHideConversation}
                     onOpenHistory={onOpenHistory}
                     onOpenRemote={onOpenRemote}
@@ -342,12 +310,9 @@ export default function DashboardMobileChatMode({
                     isStandalone={isStandalone}
                     section={section}
                     showBottomNav={machineBackTarget === 'inbox'}
-                    onBack={handleBackFromMachine}
-                    onSectionChange={(nextSection) => {
-                        setSection(nextSection)
-                        setScreen('inbox')
-                    }}
-                    onOpenConversation={handleOpenConversation}
+                    onBack={navigation.backFromMachine}
+                    onSectionChange={navigation.changeMachineSection}
+                    onOpenConversation={navigation.openConversation}
                     onOpenRecent={handleOpenRecent}
                     onOpenMachineDetails={() => navigate(`/machines/${selectedMachineEntry.id}`)}
                     onMachineUpgrade={() => machineActions.handleMachineUpgrade(selectedMachineEntry.id)}
@@ -367,11 +332,11 @@ export default function DashboardMobileChatMode({
                     hiddenConversations={hiddenConversations}
                     machineCards={machineCards}
                     getAvatarText={getAvatarText}
-                    onOpenConversation={handleOpenConversation}
+                    onOpenConversation={navigation.openConversation}
                     onShowConversation={onShowHiddenConversation}
                     onShowAllHidden={onShowAllHiddenConversations}
                     onOpenNewSession={onOpenNewSession}
-                    onOpenMachine={handleOpenMachine}
+                    onOpenMachine={navigation.openMachine}
                     onOpenSettings={() => navigate('/settings')}
                     onSectionChange={setSection}
                     wsStatus={wsStatus}
