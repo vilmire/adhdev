@@ -282,25 +282,27 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                                                 </div>
                                             </div>
                                             {keyStats.length > 0 && (
-                                                <div className="flex flex-wrap gap-x-5 gap-y-2">
+                                                <div className="flex flex-col gap-2">
                                                     {keyStats.map(({ key, label, total, onCount }) => {
                                                         const allOn = onCount === total
-                                                        const allOff = onCount === 0
+                                                        const description = onCount === total
+                                                            ? `Enabled for all ${total} providers`
+                                                            : onCount === 0
+                                                                ? `Disabled for all ${total} providers`
+                                                                : `Enabled for ${onCount} of ${total} providers`
                                                         return (
-                                                            <div key={key} className="flex items-center gap-1.5 text-[11px]">
-                                                                <span className="text-text-secondary font-medium">{label}</span>
-                                                                <span className="text-[9px] text-text-muted">({onCount}/{total})</span>
-                                                                <button
-                                                                    onClick={() => void handleBulk(category, key, true)}
-                                                                    disabled={allOn}
-                                                                    className={`machine-btn text-[9px] px-1.5 py-px ${allOn ? 'opacity-40' : 'text-green-400 border-green-500/30'}`}
-                                                                >All ON</button>
-                                                                <button
-                                                                    onClick={() => void handleBulk(category, key, false)}
-                                                                    disabled={allOff}
-                                                                    className={`machine-btn text-[9px] px-1.5 py-px ${allOff ? 'opacity-40' : 'text-red-400 border-red-500/30'}`}
-                                                                >All OFF</button>
-                                                            </div>
+                                                            <ToggleRow
+                                                                key={key}
+                                                                label={
+                                                                    <span className="flex items-center gap-1.5">
+                                                                        <span>{label}</span>
+                                                                        <span className="text-[10px] text-text-muted">({onCount}/{total})</span>
+                                                                    </span>
+                                                                }
+                                                                description={description}
+                                                                checked={allOn}
+                                                                onChange={v => void handleBulk(category, key, v)}
+                                                            />
                                                         )
                                                     })}
                                                 </div>
