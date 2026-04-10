@@ -2,16 +2,19 @@
 
 All notable changes to ADHDev will be documented in this file.
 
-## [0.8.30] - 2026-04-10
-
-### Added
-- 
-
-### Fixed
-- 
+## [Unreleased]
 
 ### Changed
-- 
+- Removed internal-only design notes from the public OSS docs set and normalized the remaining web-core UI copy/comments to English.
+
+## [0.8.30] - 2026-04-10
+
+### Fixed
+- Auto-approve now works consistently across ACP, IDE, CLI, and extension-backed approval flows, with silent auto-approval history bubbles instead of approval alerts when auto-approve is enabled.
+- Approval polling no longer surfaces transient `waiting_approval` UI states when the action was auto-approved immediately.
+
+### Changed
+- Enabled auto-approve by default for provider settings and added provider-specific positive-action hint matching so each provider can customize approval button selection priority.
 ## [0.8.29] - 2026-04-10
 
 ### Added
@@ -26,7 +29,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Added
 - `adhdev service install / uninstall / status` — register the daemon as an OS-level auto-start service (macOS LaunchAgent, Windows Startup folder).
-- Session host duplicate prune actions exposed through the cloud daemon control plane.
+- Session host duplicate prune actions exposed through the daemon control plane.
 
 ### Fixed
 - Codex extension session switching now works against the Recent tasks history view; `list_sessions` and `switch_session` flows validated.
