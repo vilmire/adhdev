@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import type * as http from 'http';
+import type { ChildProcess } from 'child_process';
 import type { DevServerContext, ProviderCategory } from './dev-server-types.js';
 import { DEV_SERVER_PORT } from './dev-server.js';
 import { LOG } from '../logging/logger.js';
@@ -33,8 +34,8 @@ type CliExerciseVerification = {
 };
 
 function getAutoImplPid(ctx: DevServerContext): number | null {
-  const proc: any = ctx.autoImplProcess;
-  return proc && typeof proc.pid === 'number' && proc.pid > 0 ? proc.pid : null;
+  const pid = ctx.autoImplProcess?.pid;
+  return typeof pid === 'number' && pid > 0 ? pid : null;
 }
 
 function isPidAlive(pid: number): boolean {
@@ -55,6 +56,15 @@ function clearStaleAutoImplState(ctx: DevServerContext, reason: string): void {
   ctx.log(`Clearing stale auto-implement state: ${reason}${pid ? ` (pid ${pid})` : ''}`);
   ctx.autoImplProcess = null;
   ctx.autoImplStatus.running = false;
+}
+
+function tryKillAutoImplProcess(processRef: ChildProcess | null, signal: NodeJS.Signals): void {
+  if (!processRef) return;
+  try {
+    processRef.kill(signal);
+  } catch {
+    // ignore
+  }
 }
 
 export function getDefaultAutoImplReference(ctx: DevServerContext, category: string, type: string): string {
@@ -283,14 +293,14 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
 
     // 5. Determine agent command from provider spawn config
     const agentProvider = ctx.providerLoader.resolve(agent) || ctx.providerLoader.getMeta(agent);
-    const spawn = (agentProvider as any)?.spawn;
+    const spawn = agentProvider?.spawn;
     if (!spawn?.command) {
       try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
       ctx.json(res, 400, { error: `Agent '${agent}' has no spawn config. Select a CLI provider with a spawn configuration.` });
       return;
     }
 
-    const agentCategory = (agentProvider as any)?.category;
+    const agentCategory = agentProvider?.category;
 
     // ─── ACP Agent: use ACP SDK (JSON-RPC protocol) ───
     if (agentCategory === 'acp') {
@@ -521,10 +531,12 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
     let autoStopIssued = false;
     
     try {
-      const { normalizeCliProviderForRuntime } = await import('../cli-adapters/provider-cli-adapter.js');
-      const normalized = normalizeCliProviderForRuntime(agentProvider);
-      approvalPatterns = normalized.patterns.approval;
-      approvalKeys = (agentProvider as any)?.approvalKeys || { 0: 'y\r', 1: 'a\r' };
+      if (agentProvider?.category === 'cli') {
+        const { normalizeCliProviderForRuntime } = await import('../cli-adapters/provider-cli-adapter.js');
+        const normalized = normalizeCliProviderForRuntime(agentProvider);
+        approvalPatterns = normalized.patterns.approval;
+        approvalKeys = agentProvider.approvalKeys || { 0: 'y\r', 1: 'a\r' };
+      }
     } catch (err: any) {
       ctx.log(`Failed to load approval patterns: ${err.message}`);
     }
@@ -547,11 +559,7 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
         sendAutoImplSSE(ctx, { event: 'output', data: { chunk: `\n[🤖 ADHDev Pipeline] Completion token detected. Proceeding...\n`, stream: 'stdout' } });
         approvalBuffer = '';
         
-        try {
-          (ctx.autoImplProcess as any).kill('SIGINT');
-        } catch {
-          // ignore
-        }
+        tryKillAutoImplProcess(ctx.autoImplProcess, 'SIGINT');
         return;
       }
       
@@ -592,11 +600,7 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
             stream: 'stdout',
           },
         });
-        try {
-          (ctx.autoImplProcess as any).kill('SIGINT');
-        } catch {
-          // ignore
-        }
+        tryKillAutoImplProcess(ctx.autoImplProcess, 'SIGINT');
       }, 30000);
     };
 

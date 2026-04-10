@@ -9,6 +9,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type * as http from 'http';
 import type { DevServerContext } from './dev-server-types.js';
+import type { CliAdapter } from '../cli-adapter-types.js';
+import type { AcpProviderState, CliProviderState, ProviderInstance, ProviderState } from '../providers/provider-instance.js';
 
 // ─── Helpers ──────────────────────────────────────
 
@@ -54,6 +56,36 @@ type CliExerciseFixture = {
   result: Record<string, any>;
   assertions: CliFixtureAssertions;
   notes?: string;
+};
+
+type CliTargetState = CliProviderState | AcpProviderState;
+type CliDebugState = {
+  status?: string;
+  activeModal?: { message?: string; buttons?: string[] } | null;
+  startupParseGate?: boolean;
+  ready?: boolean;
+  currentTurnScope?: unknown;
+  providerResolution?: Record<string, any> | null;
+  messages?: Array<{ role?: string; content?: string }>;
+  partialResponse?: string;
+  [key: string]: unknown;
+};
+type CliTraceState = {
+  entryCount?: number;
+  activeModal?: { message?: string; buttons?: string[] } | null;
+  entries?: Array<{ type?: string; [key: string]: unknown }>;
+  messages?: Array<{ role?: string; content?: string }>;
+  responseBuffer?: string;
+  [key: string]: unknown;
+};
+type CliDebugAdapter = CliAdapter & {
+  getDebugState?: () => CliDebugState | null;
+  getTraceState?: (limit?: number) => CliTraceState | null;
+  getProviderResolutionMeta?: () => Record<string, any> | null;
+};
+type CliAdapterBackedInstance = ProviderInstance & {
+  getAdapter?: () => CliDebugAdapter;
+  adapter?: CliDebugAdapter;
 };
 
 function slugifyFixtureName(value: string): string {
@@ -223,7 +255,18 @@ export function validateCliFixtureResult(result: any, assertions: CliFixtureAsse
   return failures;
 }
 
-function getCliProviderResolutionMeta(ctx: DevServerContext, type: string, adapter?: any): Record<string, any> | null {
+function isCliTargetState(state: ProviderState): state is CliTargetState {
+  return state.category === 'cli' || state.category === 'acp';
+}
+
+function getCliAdapterFromInstance(instance: ProviderInstance | undefined): CliDebugAdapter | null {
+  if (!instance) return null;
+  const candidate = instance as CliAdapterBackedInstance;
+  if (typeof candidate.getAdapter === 'function') return candidate.getAdapter();
+  return candidate.adapter || null;
+}
+
+function getCliProviderResolutionMeta(ctx: DevServerContext, type: string, adapter?: CliDebugAdapter | null): Record<string, any> | null {
   const adapterMeta = typeof adapter?.getProviderResolutionMeta === 'function'
     ? adapter.getProviderResolutionMeta()
     : (adapter?.getDebugState?.()?.providerResolution || null);
@@ -241,11 +284,11 @@ function getCliProviderResolutionMeta(ctx: DevServerContext, type: string, adapt
   };
 }
 
-function findCliTarget(ctx: DevServerContext, type?: string, instanceId?: string): any | null {
+function findCliTarget(ctx: DevServerContext, type?: string, instanceId?: string): CliTargetState | null {
   if (!ctx.instanceManager) return null;
   const cliStates = ctx.instanceManager
     .collectAllStates()
-    .filter(s => s.category === 'cli' || s.category === 'acp');
+    .filter(isCliTargetState);
   if (instanceId) return cliStates.find(s => s.instanceId === instanceId) || null;
   if (!type) return cliStates[cliStates.length - 1] || null;
   const matches = cliStates.filter(s => s.type === type);
@@ -253,16 +296,16 @@ function findCliTarget(ctx: DevServerContext, type?: string, instanceId?: string
 }
 
 function getCliTargetBundle(ctx: DevServerContext, type?: string, instanceId?: string): {
-  target: any;
-  instance: any;
-  adapter: any;
+  target: CliTargetState;
+  instance: ProviderInstance;
+  adapter: CliDebugAdapter;
 } | null {
   if (!ctx.instanceManager) return null;
   const target = findCliTarget(ctx, type, instanceId);
   if (!target) return null;
-  const instance = ctx.instanceManager.getInstance(target.instanceId) as any;
+  const instance = ctx.instanceManager.getInstance(target.instanceId);
   if (!instance) return null;
-  const adapter = instance.getAdapter?.() || instance.adapter;
+  const adapter = getCliAdapterFromInstance(instance);
   if (!adapter) return null;
   return { target, instance, adapter };
 }
@@ -838,14 +881,14 @@ export async function handleCliDebug(ctx: DevServerContext, type: string, _req: 
   }
 
   // Get the ProviderInstance and access adapter debug state
-  const instance = ctx.instanceManager.getInstance(target.instanceId) as any;
+  const instance = ctx.instanceManager.getInstance(target.instanceId);
   if (!instance) {
     ctx.json(res, 404, { error: `Instance not found: ${target.instanceId}` });
     return;
   }
 
   try {
-    const adapter = instance.getAdapter?.() || instance.adapter;
+    const adapter = getCliAdapterFromInstance(instance);
     if (adapter && typeof adapter.getDebugState === 'function') {
       const debugState = adapter.getDebugState();
       ctx.json(res, 200, {
@@ -891,14 +934,14 @@ export async function handleCliTrace(ctx: DevServerContext, type: string, req: h
     return;
   }
 
-  const instance = ctx.instanceManager.getInstance(target.instanceId) as any;
+  const instance = ctx.instanceManager.getInstance(target.instanceId);
   if (!instance) {
     ctx.json(res, 404, { error: `Instance not found: ${target.instanceId}` });
     return;
   }
 
   try {
-    const adapter = instance.getAdapter?.() || instance.adapter;
+    const adapter = getCliAdapterFromInstance(instance);
     const url = new URL(req.url || '/', 'http://127.0.0.1');
     const limit = parseInt(url.searchParams.get('limit') || '120', 10);
     if (adapter && typeof adapter.getTraceState === 'function') {
@@ -1101,8 +1144,8 @@ export async function handleCliResolve(ctx: DevServerContext, req: http.Incoming
     return;
   }
 
-  const instance = ctx.instanceManager.getInstance(target.instanceId) as any;
-  const adapter = instance?.getAdapter?.() || instance?.adapter;
+  const instance = ctx.instanceManager.getInstance(target.instanceId);
+  const adapter = getCliAdapterFromInstance(instance);
   if (!adapter) {
     ctx.json(res, 404, { error: `Adapter not found for instance: ${target.instanceId}` });
     return;
@@ -1144,8 +1187,8 @@ export async function handleCliRaw(ctx: DevServerContext, req: http.IncomingMess
     return;
   }
 
-  const instance = ctx.instanceManager.getInstance(target.instanceId) as any;
-  const adapter = instance?.getAdapter?.() || instance?.adapter;
+  const instance = ctx.instanceManager.getInstance(target.instanceId);
+  const adapter = getCliAdapterFromInstance(instance);
   if (!adapter) {
     ctx.json(res, 404, { error: `Adapter not found for instance: ${target.instanceId}` });
     return;

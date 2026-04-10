@@ -101,7 +101,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.providerSessionId = options?.providerSessionId;
         this.launchMode = options?.launchMode || 'new';
         this.onProviderSessionResolved = options?.onProviderSessionResolved;
-        this.adapter = new ProviderCliAdapter(provider as any as CliProviderModule, workingDir, cliArgs, transportFactory);
+        this.adapter = new ProviderCliAdapter(provider as CliProviderModule, workingDir, cliArgs, transportFactory);
         this.monitor = new StatusMonitor();
         this.historyWriter = new ChatHistoryWriter();
     }
@@ -328,7 +328,7 @@ export class CliProviderInstance implements ProviderInstance {
             } : undefined,
             resume: this.provider.resume,
             controlValues: this.controlValues,
-            providerControls: this.provider.controls as any,
+            providerControls: this.provider.controls,
         };
     }
 

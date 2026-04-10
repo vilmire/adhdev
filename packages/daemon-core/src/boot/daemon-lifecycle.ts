@@ -24,12 +24,13 @@ import { ProviderLoader } from '../providers/provider-loader.js';
 import { VersionArchive, detectAllVersions } from '../providers/version-archive.js';
 import { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { DevServer } from '../daemon/dev-server.js';
-import { detectIDEs } from '../detection/ide-detector.js';
+import { detectIDEs, type IDEInfo } from '../detection/ide-detector.js';
 import { detectCLI, detectCLIs } from '../detection/cli-detector.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { installGlobalInterceptor, LOG } from '../logging/logger.js';
 import { loadConfig } from '../config/config.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
+import type { IdeProviderInstance } from '../providers/ide-provider-instance.js';
 
 // ─── Init Config ───
 
@@ -82,7 +83,7 @@ export interface DaemonComponents {
     cdpInitializer: DaemonCdpInitializer;
     cdpManagers: Map<string, DaemonCdpManager>;
     sessionRegistry: SessionRegistry;
-    detectedIdes: { value: any[] };
+    detectedIdes: { value: IDEInfo[] };
 }
 
 export interface DaemonDevSupportOptions {
@@ -157,7 +158,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     const instanceManager = new ProviderInstanceManager();
     const cdpManagers = new Map<string, DaemonCdpManager>();
     const sessionRegistry = new SessionRegistry();
-    const detectedIdesRef = { value: [] as any[] };
+    const detectedIdesRef: { value: IDEInfo[] } = { value: [] };
     let agentStreamManager: DaemonAgentStreamManager | null = null;
     let poller: AgentStreamPoller | null = null;
 
@@ -193,8 +194,8 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // 5. Detect IDEs
     LOG.info('Init', 'Detecting IDEs...');
     await refreshProviderAvailability();
-    const installed = detectedIdesRef.value.filter((i: any) => i.installed);
-    LOG.info('Init', `Found ${installed.length} IDE(s): ${installed.map((i: any) => i.id).join(', ') || 'none'}`);
+    const installed = detectedIdesRef.value.filter((i) => i.installed);
+    LOG.info('Init', `Found ${installed.length} IDE(s): ${installed.map((i) => i.id).join(', ') || 'none'}`);
 
     // 6. CDP Initializer — connect + register instances
     const cdpSetupContext: CdpSetupContext = {
@@ -217,7 +218,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         onDisconnected: async (_ideType, _manager, managerKey) => {
             sessionRegistry.unregisterByManagerKey(managerKey);
             const instanceKey = `ide:${managerKey}`;
-            const ideInstance = instanceManager.getInstance(instanceKey) as any;
+            const ideInstance = instanceManager.getInstance(instanceKey) as IdeProviderInstance | undefined;
 
             if (ideInstance) {
                 instanceManager.removeInstance(instanceKey);

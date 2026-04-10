@@ -232,7 +232,7 @@ export class AcpProviderInstance implements ProviderInstance {
                 ...(this.currentModel ? { model: this.currentModel } : {}),
                 ...(this.currentMode ? { mode: this.currentMode } : {}),
             },
-            providerControls: this.provider.controls as any,
+            providerControls: this.provider.controls,
         };
     }
 

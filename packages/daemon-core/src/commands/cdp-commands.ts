@@ -62,12 +62,17 @@ export async function handleCdpCommand(h: CommandHelpers, args: any): Promise<Co
 
 export async function handleCdpBatch(h: CommandHelpers, args: any): Promise<CommandResult> {
     if (!h.getCdp()?.isConnected) return { success: false, error: 'CDP not connected' };
-    const commands = args?.commands as any[];
+    const commands = Array.isArray(args?.commands) ? args.commands : null;
     const stopOnError = args?.stopOnError !== false;
     if (!commands?.length) return { success: false, error: 'commands array required' };
 
     const results: any[] = [];
     for (const cmd of commands) {
+        if (!cmd || typeof cmd !== 'object' || typeof cmd.method !== 'string') {
+            results.push({ method: null, success: false, error: 'Invalid command entry' });
+            if (stopOnError) break;
+            continue;
+        }
         try {
             const result = await h.getCdp()!.sendCdpCommand(cmd.method, cmd.params || {});
             results.push({ method: cmd.method, success: true, result });

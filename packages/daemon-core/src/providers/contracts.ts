@@ -390,6 +390,7 @@ export interface ProviderModule {
     shell?: boolean;
     env?: Record<string, string>;
   };
+  approvalKeys?: Record<number, string>;
   patterns?: {
     prompt?: RegExp[];
     generating?: RegExp[];

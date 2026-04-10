@@ -92,7 +92,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
             currentModel: this.currentModel || undefined,
             currentPlan: this.currentMode || undefined,
             controlValues: this.controlValues,
-            providerControls: this.provider.controls as any,
+            providerControls: this.provider.controls,
             agentStreams: this.agentStreams,
             instanceId: this.instanceId,
             lastUpdated: Date.now(),

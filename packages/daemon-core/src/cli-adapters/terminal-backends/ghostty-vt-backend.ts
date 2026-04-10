@@ -26,7 +26,7 @@ let cachedBindingError: Error | null = null;
 function isModuleNotFoundError(error: unknown, ref: string): boolean {
     if (!(error instanceof Error)) return false;
     const message = error.message || '';
-    const code = (error as any).code;
+    const code = 'code' in error ? error.code : undefined;
     return code === 'MODULE_NOT_FOUND' && message.includes(ref);
 }
 

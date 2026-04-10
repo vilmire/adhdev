@@ -107,7 +107,7 @@ export class DaemonCdpInitializer {
                 port,
                 LOG.forComponent(`CDP:${ide}`).asLogFn(),
                 undefined,
-                (provider as any)?.targetFilter,
+                provider?.targetFilter,
             );
             const connected = await manager.connect();
             if (connected) {
@@ -148,7 +148,7 @@ export class DaemonCdpInitializer {
                 port,
                 LOG.forComponent(`CDP:${managerKey}`).asLogFn(),
                 target.id,
-                (provider as any)?.targetFilter,
+                provider?.targetFilter,
             );
 
             const connected = await manager.connect();

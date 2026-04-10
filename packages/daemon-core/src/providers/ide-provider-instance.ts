@@ -21,6 +21,24 @@ import { extractProviderControlValues, normalizeProviderEffects } from './contro
 import type { ChatMessage } from '../types.js';
 import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
 
+type ReadChatModal = {
+    message?: string;
+    buttons?: string[];
+    width?: number;
+    height?: number;
+};
+
+type ReadChatMessage = ChatMessage & { content: string };
+
+type ReadChatPayload = {
+    activeModal?: ReadChatModal;
+    messages?: ReadChatMessage[];
+    controlValues?: Record<string, string | number | boolean>;
+    status?: string;
+    title?: string;
+    [key: string]: unknown;
+};
+
 export class IdeProviderInstance implements ProviderInstance {
     readonly type: string;
     readonly category = 'ide' as const;
@@ -138,7 +156,7 @@ export class IdeProviderInstance implements ProviderInstance {
             currentPlan: this.cachedChat?.mode || undefined,
             currentAutoApprove: this.cachedChat?.autoApprove || undefined,
             controlValues: this.cachedChat?.controlValues || undefined,
-            providerControls: this.provider.controls as any,
+            providerControls: this.provider.controls,
             instanceId: this.instanceId,
             lastUpdated: Date.now(),
             settings: this.settings,
@@ -261,14 +279,14 @@ export class IdeProviderInstance implements ProviderInstance {
         if (!cdp?.isConnected) return;
 
         try {
-            let raw: any = null;
+            let raw: unknown = null;
 
  // path 1: webview iframe internal (Kiro, PearAI etc)
-            const webviewFn = (this.provider.scripts as any)?.webviewReadChat;
+            const webviewFn = this.provider.scripts?.webviewReadChat;
             if (typeof webviewFn === 'function' && cdp.evaluateInWebviewFrame) {
                 const webviewScript = webviewFn();
                 if (webviewScript) {
-                    const matchText = (this.provider as any).webviewMatchText;
+                    const matchText = this.provider.webviewMatchText;
                     const matchFn = matchText ? (body: string) => body.includes(matchText) : undefined;
                     const webviewRaw = await cdp.evaluateInWebviewFrame(webviewScript, matchFn);
                     if (webviewRaw) {
@@ -281,16 +299,17 @@ export class IdeProviderInstance implements ProviderInstance {
             if (!raw) {
                 const readChatScript = this.getReadChatScript();
                 if (!readChatScript) return;
-                raw = await cdp.evaluate(readChatScript, 30000) as any;
+                raw = await cdp.evaluate(readChatScript, 30000);
                 if (typeof raw === 'string') {
                     try { raw = JSON.parse(raw); } catch { return; }
                 }
             }
 
             if (!raw || typeof raw !== 'object') return;
+            const chat = raw as ReadChatPayload;
 
  // Modal filter
-            let { activeModal } = raw;
+            let { activeModal } = chat;
             if (activeModal) {
                 const w = activeModal.width ?? Infinity;
                 const h = activeModal.height ?? Infinity;
@@ -312,33 +331,35 @@ export class IdeProviderInstance implements ProviderInstance {
                 if (pm.receivedAt) prevByHash.set(h, pm.receivedAt);
             }
             const now = Date.now();
-            for (const msg of (raw.messages || [])) {
+            const messages = chat.messages || [];
+            for (const msg of messages) {
                 const h = `${msg.role}:${(msg.content || '').slice(0, 100)}`;
                 msg.receivedAt = prevByHash.get(h) || now;
             }
 
             // Filter messages by provider settings (showThinking, showToolCalls, showTerminal)
-            if (raw.messages?.length > 0) {
+            if (messages.length > 0) {
                 const hiddenKinds = new Set<string>();
                 if (this.settings.showThinking === false) hiddenKinds.add('thought');
                 if (this.settings.showToolCalls === false) hiddenKinds.add('tool');
                 if (this.settings.showTerminal === false) hiddenKinds.add('terminal');
                 if (hiddenKinds.size > 0) {
-                    raw.messages = raw.messages.filter((m: any) => !hiddenKinds.has(m.kind));
+                    chat.messages = messages.filter((m) => !hiddenKinds.has(m.kind || ''));
                 }
             }
 
-            const controlValues = extractProviderControlValues(this.provider.controls, raw);
-            if (controlValues) raw.controlValues = controlValues;
+            const controlValues = extractProviderControlValues(this.provider.controls, chat);
+            if (controlValues) chat.controlValues = controlValues;
 
-            this.cachedChat = { ...raw, activeModal };
-            this.detectAgentTransitions(raw, now);
+            this.cachedChat = { ...chat, activeModal };
+            this.detectAgentTransitions(chat, now);
 
  // Save history (new messageonly append)
  // Exclude last incomplete assistant message during generating status
-            if (raw.messages?.length > 0) {
-                let toSave = raw.messages;
-                if (raw.status === 'generating' || raw.status === 'long_generating') {
+            const persistedMessages = chat.messages || messages;
+            if (persistedMessages.length > 0) {
+                let toSave = persistedMessages;
+                if (chat.status === 'generating' || chat.status === 'long_generating') {
  // Find and exclude last assistant message
                     const lastIdx = toSave.length - 1;
                     if (lastIdx >= 0 && toSave[lastIdx].role === 'assistant') {
@@ -349,7 +370,7 @@ export class IdeProviderInstance implements ProviderInstance {
                     this.historyWriter.appendNewMessages(
                         this.type,
                         toSave,
-                        raw.title,
+                        chat.title,
                         this.instanceId,
                     );
                 }
@@ -368,7 +389,7 @@ export class IdeProviderInstance implements ProviderInstance {
     private getReadChatScript(): string | null {
         const scripts = this.provider.scripts;
         if (!scripts?.readChat) return null;
-        return typeof scripts.readChat === 'function' ? scripts.readChat({}) : scripts.readChat as any;
+        return scripts.readChat({});
     }
 
  // ─── status transition detect ─────────────────────────────

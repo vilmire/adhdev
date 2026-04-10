@@ -138,7 +138,7 @@ export async function connectCdpManager(
     port,
     logFn,
     targetId,
-    (provider as any)?.targetFilter,
+    provider?.targetFilter,
   );
   const connected = await manager.connect();
   return connected ? manager : null;
