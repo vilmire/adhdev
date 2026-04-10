@@ -15,6 +15,12 @@ import { formatIdeType, getMachineDisplayName } from '../utils/daemon-utils'
 import { shouldNotify } from '../hooks/useNotificationPrefs'
 import { notify } from '../hooks/useBrowserNotifications'
 import type { DaemonData } from '../types'
+import {
+    buildApprovalToastDescriptors,
+    buildViewRequestToastActions,
+    formatApprovalSystemMessage,
+    formatApprovalToastMessage,
+} from './event-manager-helpers'
 
 // ─── Types ────────────────────────────────────────
 
@@ -368,14 +374,10 @@ class EventManager {
             // Approval banner already renders the modal/buttons in chat.
             // Keep the system bubble only as a fallback when no actionable buttons exist.
             if (conversationKey && !payload.modalButtons?.length) {
-                const modalText = payload.modalMessage || 'Approval requested'
-                const buttons = payload.modalButtons?.length
-                    ? payload.modalButtons.map(b => `[${b}]`).join(' ')
-                    : '[Approve] [Reject]'
                 this.emitSystemMessage(conversationKey, {
                     role: 'system',
                     timestamp: eventTimestamp,
-                    content: `⚡ Approval requested: ${modalText}\n${buttons}`,
+                    content: formatApprovalSystemMessage(payload.modalMessage, payload.modalButtons),
                     _localId: `sys_approval_${eventTimestamp}`,
                 })
             }
@@ -386,38 +388,23 @@ class EventManager {
                 if (!routeId) return
                 const agentType = payload.agentType || payload.ideType || ''
                 const ideType = payload.ideType || ''
-                const modalBtns = payload.modalButtons
-
-                const cleanBtnText = (text: string) =>
-                    text.replace(/[⌥⏎⇧⌫⌘⌃↵]/g, '')
-                        .replace(/\s*(Alt|Ctrl|Shift|Cmd|Enter|Return|Esc|Tab|Backspace)(\+\s*\w+)*/gi, '')
-                        .trim()
-
                 const resolveAction = this.resolveActionFn
-                const actions: ToastAction[] = modalBtns.map((btnText, idx) => {
-                    const clean = cleanBtnText(btnText).toLowerCase()
-                    const isPrimary = /^(run|approve|accept|yes|allow|always)/.test(clean)
-                    const isDanger = /^(reject|deny|delete|remove|abort|cancel|no)/.test(clean)
-                    return {
-                        label: cleanBtnText(btnText),
-                        variant: (isPrimary ? 'primary' : isDanger ? 'danger' : 'default') as 'primary' | 'danger' | 'default',
-                        onClick: () => {
-                            const isApprove = /^(run|approve|accept|yes|allow|always|proceed|save)/.test(clean)
-                            resolveAction(routeId, 'resolve_action', {
-                                action: isApprove ? 'approve' : 'reject',
-                                button: btnText,
-                                buttonIndex: idx,
-                                agentType,
-                                ideType,
-                                ...(payload.targetSessionId && { targetSessionId: payload.targetSessionId }),
-                            })
-                        },
-                    }
-                })
+                const actions: ToastAction[] = buildApprovalToastDescriptors(payload.modalButtons).map((descriptor) => ({
+                    label: descriptor.label,
+                    variant: descriptor.variant,
+                    onClick: () => {
+                        resolveAction(routeId, 'resolve_action', {
+                            action: descriptor.action,
+                            button: descriptor.button,
+                            buttonIndex: descriptor.buttonIndex,
+                            agentType,
+                            ideType,
+                            ...(payload.targetSessionId && { targetSessionId: payload.targetSessionId }),
+                        })
+                    },
+                }))
 
-                const contextMsg = payload.modalMessage
-                    ? `⚡ ${ideLabel}: ${payload.modalMessage.replace(/[\n\r]+/g, ' ').slice(0, 80)}`
-                    : msg
+                const contextMsg = formatApprovalToastMessage(ideLabel, payload.modalMessage, msg)
 
                 const toastId = Date.now()
                 this.emitToast({
@@ -453,28 +440,13 @@ class EventManager {
 
             // Show actionable toast with Approve/Decline
             if (requestId && orgId && this.viewRequestRespondFn) {
-                const respondFn = this.viewRequestRespondFn
                 const toastId = Date.now()
-                const actions: ToastAction[] = [
-                    {
-                        label: 'Approve',
-                        variant: 'primary',
-                        onClick: () => {
-                            respondFn(orgId, requestId, 'approve').catch((e) =>
-                                console.error('[EventManager] approve view request failed:', e)
-                            )
-                        },
-                    },
-                    {
-                        label: 'Decline',
-                        variant: 'danger',
-                        onClick: () => {
-                            respondFn(orgId, requestId, 'reject').catch((e) =>
-                                console.error('[EventManager] reject view request failed:', e)
-                            )
-                        },
-                    },
-                ]
+                const actions: ToastAction[] = buildViewRequestToastActions(
+                    orgId,
+                    requestId,
+                    this.viewRequestRespondFn,
+                    (action, error) => console.error(`[EventManager] ${action} view request failed:`, error),
+                )
                 this.emitToast({
                     id: toastId, message: msg, type, timestamp: toastId,
                     actions, duration: 30000, // 30s before auto-dismiss
