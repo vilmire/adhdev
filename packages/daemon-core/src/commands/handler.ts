@@ -16,7 +16,7 @@ import { CdpDomHandlers } from '../cdp/devtools.js';
 import { findCdpManager } from '../status/builders.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
-import type { ProviderModule } from '../providers/contracts.js';
+import type { ProviderModule, ProviderScripts } from '../providers/contracts.js';
 import type { DaemonAgentStreamManager } from '../agent-stream/index.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import { loadConfig } from '../config/config.js';
@@ -66,6 +66,8 @@ export interface CommandHelpers {
     readonly ctx: CommandContext;
     readonly historyWriter: ChatHistoryWriter;
 }
+
+type LegacyStringScript = (params?: Record<string, unknown> | string) => string;
 
 const COMMAND_DEBUG_LEVELS = new Set([
     'pty_input',
@@ -215,15 +217,16 @@ export class DaemonCommandHandler implements CommandHelpers {
     getProviderScript(scriptName: string, params?: Record<string, string>, ideType?: string): string | null {
         const provider = this.getProvider(ideType);
         if (provider?.scripts) {
-            const fn = (provider.scripts as any)[scriptName];
+            const fn = provider.scripts[scriptName];
             if (typeof fn === 'function') {
+                const callScript = fn as LegacyStringScript;
                 if (params && Object.keys(params).length > 0) {
                     const firstVal = Object.values(params)[0];
                     if (scriptName === 'sendMessage' && typeof firstVal === 'string') {
-                        const legacyScript = fn(firstVal);
+                        const legacyScript = callScript(firstVal);
                         if (legacyScript) return legacyScript;
                     }
-                    const script = fn(params);
+                    const script = callScript(params);
                     if (script) {
                         const likelyLegacyObjectLeak =
                             typeof script === 'string'
@@ -233,13 +236,13 @@ export class DaemonCommandHandler implements CommandHelpers {
                     }
 
                     if (firstVal !== undefined) {
-                        const legacyScript = fn(firstVal);
+                        const legacyScript = callScript(firstVal);
                         if (legacyScript) return legacyScript;
                     }
 
                     if (script) return script;
                 } else {
-                    const script = fn();
+                    const script = callScript();
                     if (script) return script;
                 }
             }
@@ -314,7 +317,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
         let session = targetSessionId ? this._ctx.sessionRegistry?.get(targetSessionId) : undefined;
         if (targetSessionId && !session) {
-            reconcileIdeRuntimeSessions(this._ctx.instanceManager as any, this._ctx.sessionRegistry);
+            reconcileIdeRuntimeSessions(this._ctx.instanceManager, this._ctx.sessionRegistry);
             session = this._ctx.sessionRegistry?.get(targetSessionId);
         }
         const sessionLookupFailed = !!targetSessionId && !session;

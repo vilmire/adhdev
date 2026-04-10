@@ -20,6 +20,20 @@ import { reconcileIdeRuntimeSessions } from '../sessions/reconcile.js';
 import { LOG } from '../logging/logger.js';
 import type { AgentStreamState } from './types.js';
 import { formatAutoApprovalMessage, pickApprovalButton } from '../providers/approval-utils.js';
+import type { ProviderModule } from '../providers/contracts.js';
+
+interface ExtensionInstanceLike {
+    type?: string;
+    getInstanceId?(): string;
+}
+
+interface IdeInstanceLike {
+    getInstanceId?(): string;
+    getExtensionTypes?(): string[];
+    getExtension?(type: string): ExtensionInstanceLike | undefined;
+    addExtension?(provider: ProviderModule, settings: Record<string, unknown>): void;
+    removeExtension?(type: string): void;
+}
 
 // ─── Types ───
 
@@ -81,7 +95,7 @@ export class AgentStreamPoller {
         if (!agentStreamManager || cdpManagers.size === 0) return;
 
         // Defensive repair: keep SessionRegistry aligned with live IDE/extension instances.
-        reconcileIdeRuntimeSessions(instanceManager as any, sessionRegistry);
+        reconcileIdeRuntimeSessions(instanceManager, sessionRegistry);
 
         // ─── Phase 1: Refresh extension providers + IDE instance extensions ───
         for (const [ideType, cdp] of cdpManagers) {
@@ -89,12 +103,12 @@ export class AgentStreamPoller {
             registerExtensionProviders(providerLoader, cdp, ideType);
 
             // 1b. Dynamically add/remove IDE instance extensions
-            const ideInstance = instanceManager.getInstance(`ide:${ideType}`) as any;
+            const ideInstance = instanceManager.getInstance(`ide:${ideType}`) as IdeInstanceLike | undefined;
             const parentSessionId = ideInstance?.getInstanceId?.();
             if (ideInstance?.getExtensionTypes && ideInstance?.addExtension && ideInstance?.removeExtension) {
-                const currentExtTypes = new Set(ideInstance.getExtensionTypes() as string[]);
+                const currentExtTypes = new Set(ideInstance.getExtensionTypes());
                 const enabledExtTypes = new Set(
-                    providerLoader.getEnabledByCategory('extension', ideType).map((p: any) => p.type)
+                    providerLoader.getEnabledByCategory('extension', ideType).map((p) => p.type)
                 );
 
                 // Remove disabled extensions
@@ -146,7 +160,7 @@ export class AgentStreamPoller {
             const activeSessionId = parentSessionId ? agentStreamManager.getActiveSessionId(parentSessionId) : null;
             if (activeSessionId) {
                 const activeTarget = sessionRegistry.get(activeSessionId);
-                const enabledExtTypes = new Set(providerLoader.getEnabledExtensionProviders(ideType).map((p: any) => p.type));
+                const enabledExtTypes = new Set(providerLoader.getEnabledExtensionProviders(ideType).map((p) => p.type));
                 if (!activeTarget || !enabledExtTypes.has(activeTarget.providerType)) {
                     LOG.info('AgentStream', `Active agent ${activeTarget?.providerType || activeSessionId} was disabled for ${ideType} — detaching`);
                     await agentStreamManager.setActiveSession(cdp, parentSessionId!, null);
