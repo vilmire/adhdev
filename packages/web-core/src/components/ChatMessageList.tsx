@@ -16,6 +16,7 @@ import remarkGfm from 'remark-gfm';
 import remarkAlert from 'remark-github-blockquote-alert';
 import remarkBreaks from 'remark-breaks';
 import { IconThought } from './Icons';
+import { stringifyTextContent } from '../utils/text';
 
 // ─── Types ────────────────────────────────────
 
@@ -56,6 +57,8 @@ export interface ChatMessageListRef {
 
 // ─── Helpers ──────────────────────────────────
 
+type MessageMeta = NonNullable<ChatMessage['meta']> & { renderMode?: unknown };
+
 function formatTime(ms?: number): string {
     if (!ms) return '';
     const d = new Date(ms);
@@ -63,9 +66,8 @@ function formatTime(ms?: number): string {
 }
 
 function getRenderableTimestamp(message: ChatMessage, index: number, receivedAtMap: Record<string, number>): number {
-    const anyMessage = message as any;
     return Number(
-        anyMessage.receivedAt
+        message.receivedAt
         || receivedAtMap[getChatMessageStableKey(message, index)]
         || 0,
     ) || 0;
@@ -76,18 +78,14 @@ function likelyNeedsMarkdownRender(content: string): boolean {
 }
 
 export function getChatMessageStableKey(message: ChatMessage, index: number): string {
-    const anyMessage = message as any;
-    const content = typeof anyMessage.content === 'string'
-        ? anyMessage.content
-        : Array.isArray(anyMessage.content)
-            ? anyMessage.content.map((block: any) => block?.text || '').join('\n')
-            : String(anyMessage.content || '');
+    const dashboardMessage = message as ChatMessage & { _localId?: string; _turnKey?: string }
+    const content = stringifyTextContent(message.content, { joiner: '\n' });
     const parts = [
-        anyMessage.id ? `id:${anyMessage.id}` : '',
-        anyMessage._localId ? `local:${anyMessage._localId}` : '',
-        anyMessage._turnKey ? `turn:${anyMessage._turnKey}` : '',
-        typeof anyMessage.index === 'number' ? `msgIndex:${anyMessage.index}` : '',
-        anyMessage.role ? `role:${anyMessage.role}` : '',
+        message.id ? `id:${message.id}` : '',
+        dashboardMessage._localId ? `local:${dashboardMessage._localId}` : '',
+        dashboardMessage._turnKey ? `turn:${dashboardMessage._turnKey}` : '',
+        typeof message.index === 'number' ? `msgIndex:${message.index}` : '',
+        message.role ? `role:${message.role}` : '',
         content ? `content:${content.slice(0, 80)}` : '',
         `fallback:${index}`,
     ].filter(Boolean);
@@ -130,12 +128,10 @@ const ChatMessageRow = memo(function ChatMessageRow({
     const role = (message.role || '').toLowerCase();
     const isUser = role === 'user' || role === 'human';
     const kind = message.kind || (role === 'tool' ? 'tool' : 'standard');
-    const contentStr = typeof message.content === 'string'
-        ? message.content
-        : (message.content || []).map((block: any) => block.text || '').join('\n');
+    const contentStr = stringifyTextContent(message.content, { joiner: '\n' });
 
     if (kind === 'thought') {
-        const label = (message as any).meta?.label || 'Thought';
+        const label = typeof message.meta?.label === 'string' ? message.meta.label : 'Thought';
         return (
             <div className="self-start chat-msg-thought">
                 <div className="chat-msg-header">
@@ -159,9 +155,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
     }
 
     if (kind === 'terminal') {
-        const meta = (message as any).meta || {};
-        const icon = meta.isRunning ? '⏳' : '✅';
-        const label = meta.label || 'Ran command';
+        const icon = message.meta?.isRunning ? '⏳' : '✅';
+        const label = typeof message.meta?.label === 'string' ? message.meta.label : 'Ran command';
         return (
             <div className="self-start chat-msg-terminal">
                 <div className="chat-msg-header">
@@ -183,7 +178,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
         );
     }
 
-    const renderMode = String((message as any).meta?.renderMode || '').trim();
+    const meta = message.meta as MessageMeta | undefined;
+    const renderMode = typeof meta?.renderMode === 'string' ? meta.renderMode.trim() : '';
     const contentLooksPreformatted = renderMode === 'preformatted';
     const displayContent = contentStr;
     const showExpandBtn = isCliMode && !isUser && !contentLooksPreformatted && displayContent.length > CLI_TRUNCATE;

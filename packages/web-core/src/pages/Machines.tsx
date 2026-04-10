@@ -295,7 +295,7 @@ export default function MachinesPage() {
                                                 {machine.ideSessions.map(ide => {
                                                     const active = isAgentActive(ide.agents, ide.childSessions, ide.activeChat)
                                                     const statusText = active ? 'generating'
-                                                        : isManagedStatusWaiting(ide.activeChat?.status, { activeModal: (ide.activeChat as any)?.activeModal }) ? 'approval'
+                                                        : isManagedStatusWaiting(ide.activeChat?.status, { activeModal: ide.activeChat?.activeModal }) ? 'approval'
                                                         : 'idle'
                                                     const statusTone = active
                                                         ? 'active'

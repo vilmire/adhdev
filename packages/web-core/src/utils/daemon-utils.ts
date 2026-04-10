@@ -353,7 +353,7 @@ export interface IdeSessionSummary {
     workspace: string
     agents: { id: string; name: string; status: string }[]
     childSessions: SessionEntry[]
-    activeChat?: { status?: string }
+    activeChat?: { status?: string; activeModal?: { message: string; buttons: string[] } | null }
     lastActivityAt: number
 }
 
@@ -434,7 +434,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                     acpName: daemon.cliName || daemon.type,
                     status: daemon.status || 'online',
                     workspace: daemon.workspace || '',
-                    model: (daemon as any).model,
+                    model: daemon.currentModel,
                     lastActivityAt: getDaemonEntryActivityAt(daemon),
                 })
             }
@@ -463,7 +463,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                     name: providerLabels[daemon.type?.toLowerCase()] || formatIdeType(daemon.type || ''),
                     status: daemon.status || 'online',
                     workspace: daemon.workspace || '',
-                    agents: (daemon.agents || daemon.aiAgents || []).map(a => ({ id: (a as any).id || a.name, name: a.name, status: a.status })),
+                    agents: (daemon.agents || daemon.aiAgents || []).map(a => ({ id: 'id' in a && a.id ? a.id : a.name, name: a.name, status: a.status })),
                     childSessions: daemon.childSessions || [],
                     activeChat: daemon.activeChat || undefined,
                     lastActivityAt: getDaemonEntryActivityAt(daemon),

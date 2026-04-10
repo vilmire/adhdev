@@ -26,7 +26,7 @@ interface Props {
 }
 
 function getStreamKey(stream: StreamTab): string {
-    return stream.sessionId || (stream as any).instanceId || stream.agentType;
+    return stream.sessionId || stream.instanceId || stream.agentType;
 }
 
 export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: Props) {
@@ -61,10 +61,10 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
             agentType: activeStream.agentType,
             status: derivedStatus,
             title: effectiveStreamTitle,
-            messages: activeStream.messages.map((m: any, i: number) => ({
+            messages: activeStream.messages.map((m, i: number) => ({
                 role: m.role,
                 content: m.content,
-                kind: (m as any).kind,
+                kind: m.kind,
                 id: `${getStreamKey(activeStream)}-${i}`,
                 receivedAt: m.receivedAt,
             })),

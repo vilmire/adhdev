@@ -14,6 +14,7 @@
 import { formatIdeType, getMachineDisplayName } from '../utils/daemon-utils'
 import { shouldNotify } from '../hooks/useNotificationPrefs'
 import { notify } from '../hooks/useBrowserNotifications'
+import type { DaemonData } from '../types'
 
 // ─── Types ────────────────────────────────────────
 
@@ -42,6 +43,10 @@ export interface StatusEventPayload {
     effectId?: string
     channels?: Array<'bubble' | 'toast' | 'browser'>
     preferenceKey?: 'disconnect' | 'completion' | 'approval' | 'browser'
+    requesterName?: string
+    requestId?: string
+    orgId?: string
+    targetName?: string
 }
 
 export interface ToastAction {
@@ -74,6 +79,8 @@ export type DesktopNotificationCallback = (title: string, body: string, tag: str
 export type ResolveActionFn = (routeId: string, action: string, payload: Record<string, any>) => void
 export type ViewRequestRespondFn = (orgId: string, requestId: string, action: 'approve' | 'reject') => Promise<any>
 
+type KnownIdeEntry = Pick<DaemonData, 'id' | 'type' | 'daemonId' | 'machineNickname' | 'hostname' | 'machine' | 'sessionId' | 'childSessions'>
+
 // ─── Singleton EventManager ───────────────────────
 
 class EventManager {
@@ -91,7 +98,7 @@ class EventManager {
     private viewRequestRespondFn: ViewRequestRespondFn | null = null
 
     // IDE lookup (set by Dashboard)
-    private ides: Array<{ id: string; type: string; daemonId?: string; machineNickname?: string | null; hostname?: string; machine?: { hostname?: string } }> = []
+    private ides: KnownIdeEntry[] = []
 
     // ─── Registration ─────────────────────────────
 
@@ -125,7 +132,7 @@ class EventManager {
     }
 
     /** Update known IDEs (for routeId lookup) */
-    setIdes(ides: Array<{ id: string; type: string; daemonId?: string; machineNickname?: string | null; hostname?: string; machine?: { hostname?: string } }>): void {
+    setIdes(ides: KnownIdeEntry[]): void {
         this.ides = ides
     }
 
@@ -203,7 +210,7 @@ class EventManager {
 
         // Follow daemonId to find the owning daemon
         if (matchedIde) {
-            const dId = (matchedIde as any).daemonId
+            const dId = matchedIde.daemonId
             if (dId) {
                 const daemon = this.ides.find(i => i.id === dId && i.type === 'adhdev-daemon')
                 if (daemon) return daemon
@@ -230,11 +237,11 @@ class EventManager {
 
     private findOwningSession(targetSessionId: string): typeof this.ides[number] | null {
         for (const ide of this.ides) {
-            if (ide.id === targetSessionId || (ide as any).sessionId === targetSessionId) {
+            if (ide.id === targetSessionId || ide.sessionId === targetSessionId) {
                 return ide
             }
-            const childSessions = Array.isArray((ide as any).childSessions) ? (ide as any).childSessions : []
-            if (childSessions.some((child: any) => child?.id === targetSessionId)) {
+            const childSessions = Array.isArray(ide.childSessions) ? ide.childSessions : []
+            if (childSessions.some((child) => child?.id === targetSessionId)) {
                 return ide
             }
         }
@@ -437,9 +444,9 @@ class EventManager {
 
         // ── team:view_request (incoming request to view YOUR session) ──
         } else if (payload.event === 'team:view_request') {
-            const requesterName = (payload as any).requesterName || 'A team member'
-            const requestId = (payload as any).requestId
-            const orgId = (payload as any).orgId
+            const requesterName = payload.requesterName || 'A team member'
+            const requestId = payload.requestId
+            const orgId = payload.orgId
 
             msg = `👁️ ${requesterName} wants to view your session`
             type = 'warning'
@@ -453,7 +460,7 @@ class EventManager {
                         label: 'Approve',
                         variant: 'primary',
                         onClick: () => {
-                            respondFn(orgId, requestId, 'approve').catch((e: any) =>
+                            respondFn(orgId, requestId, 'approve').catch((e) =>
                                 console.error('[EventManager] approve view request failed:', e)
                             )
                         },
@@ -462,7 +469,7 @@ class EventManager {
                         label: 'Decline',
                         variant: 'danger',
                         onClick: () => {
-                            respondFn(orgId, requestId, 'reject').catch((e: any) =>
+                            respondFn(orgId, requestId, 'reject').catch((e) =>
                                 console.error('[EventManager] reject view request failed:', e)
                             )
                         },
@@ -491,7 +498,7 @@ class EventManager {
 
         // ── team:view_request_rejected (your request was declined) ──
         } else if (payload.event === 'team:view_request_rejected') {
-            const targetName = (payload as any).targetName || 'Team member'
+            const targetName = payload.targetName || 'Team member'
             msg = `❌ ${targetName} declined your view request`
             type = 'warning'
         }

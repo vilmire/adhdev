@@ -77,7 +77,8 @@ function getAvatarText(primary: string) {
 function logMobileReadDebug(event: string, payload: Record<string, unknown>) {
     if (typeof window === 'undefined') return
     try {
-        const debugEnabled = (import.meta as any).env?.DEV || window.localStorage.getItem('adhdev_mobile_debug') === '1'
+        const meta = import.meta as ImportMeta & { env?: { DEV?: boolean } }
+        const debugEnabled = !!meta.env?.DEV || window.localStorage.getItem('adhdev_mobile_debug') === '1'
         if (!debugEnabled) return
         console.debug(`[mobile-read] ${event}`, payload)
     } catch {

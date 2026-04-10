@@ -179,7 +179,7 @@ export function buildIdeConversations(
             if (matched?.title && String(matched.title).trim()) title = String(matched.title).trim();
         }
         const nativeProviderType = (isCliConv(ide) || isAcpConv(ide))
-            ? ((ide as any).cliType || (ide as any).acpType || ide.type)
+            ? ide.type
             : ide.type;
         const effectiveNativeTitle = (isCliConv(ide) || isAcpConv(ide))
             && isGenericAgentTitle(title, agentName, nativeProviderType)

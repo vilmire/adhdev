@@ -15,24 +15,10 @@ import { useTransport } from '../../context/TransportContext';
 import { formatIdeType } from '../../utils/daemon-utils';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
 import { IconPlug, IconEye, IconFolder } from '../Icons';
+import { normalizeTextContent } from '../../utils/text';
 
 function normalizeMessageContent(content: unknown): string {
-    if (typeof content === 'string') return content.replace(/\s+/g, ' ').trim();
-    if (Array.isArray(content)) {
-        return content
-            .map(block => {
-                if (typeof block === 'string') return block;
-                if (block && typeof block === 'object' && 'text' in block) return String((block as any).text || '');
-                return '';
-            })
-            .join('\n')
-            .replace(/\s+/g, ' ')
-            .trim();
-    }
-    if (content && typeof content === 'object' && 'text' in content) {
-        return String((content as any).text || '').replace(/\s+/g, ' ').trim();
-    }
-    return String(content || '').replace(/\s+/g, ' ').trim();
+    return normalizeTextContent(content);
 }
 
 function getMessageTimestamp(message: Pick<ChatMessage, 'receivedAt'> | null | undefined): number {
@@ -99,6 +85,19 @@ function dedupeOptimisticMessages(messages: DashboardMessage[]) {
         result.push(message);
     }
     return result;
+}
+
+interface ChatHistoryResult {
+    messages?: DashboardMessage[];
+    hasMore?: boolean;
+}
+
+function unwrapChatHistoryResult(raw: unknown): ChatHistoryResult {
+    if (!raw || typeof raw !== 'object') return {};
+    if ('result' in raw && raw.result && typeof raw.result === 'object') {
+        return raw.result as ChatHistoryResult;
+    }
+    return raw as ChatHistoryResult;
 }
 
 export interface ChatPaneProps {
@@ -213,7 +212,7 @@ export default function ChatPane({
                 historySessionId: activeConv.providerSessionId || activeConv.sessionId,
             });
 
-            const result = (raw as any)?.result ?? raw;
+            const result = unwrapChatHistoryResult(raw);
 
             if (result.messages?.length > 0) {
                 const fresh = getTabHistory(tk);

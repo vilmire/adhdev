@@ -21,8 +21,28 @@ export interface ConnectedMachinesSectionProps {
     onRevokeToken?: (daemonId: string) => Promise<any>
 }
 
+interface UpgradeCommandResult {
+    alreadyLatest?: boolean
+    upgraded?: boolean
+    success?: boolean
+    version?: string
+    error?: string
+}
+
+function unwrapUpgradeResult(raw: unknown): UpgradeCommandResult {
+    if (!raw || typeof raw !== 'object') return {}
+    if ('result' in raw && raw.result && typeof raw.result === 'object') {
+        return raw.result as UpgradeCommandResult
+    }
+    return raw as UpgradeCommandResult
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+    return error instanceof Error ? error.message : fallback
+}
+
 export function ConnectedMachinesSection({ ides, emptyMessage, sendDaemonCommand, onDisconnect, onRevokeToken }: ConnectedMachinesSectionProps) {
-    const machines = ides.filter((i: any) => i.type === 'adhdev-daemon')
+    const machines = ides.filter((i) => i.type === 'adhdev-daemon')
 
     if (machines.length === 0) {
         return (
@@ -132,40 +152,39 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
     const [actionState, setActionState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
     const [actionMsg, setActionMsg] = useState('')
 
-    const machine = ide as any
-    const version = machine.version || machine.daemonVersion || null
-    const platform = machine.machine?.platform || machine.system?.platform || ''
-    const nickname = getMachineDisplayName(machine, { fallbackId: ide.id })
+    const version = ide.version || null
+    const platform = ide.machine?.platform || ide.system?.platform || ''
+    const nickname = getMachineDisplayName(ide, { fallbackId: ide.id })
 
     const platformIcon = platform === 'win32' ? '🪟' : platform === 'darwin' ? '🍎' : '🐧'
 
     // Collect connected IDE/CLI instances for this daemon
-    const connectedIdes = allIdes.filter(i => (i as any).daemonId === ide.id && i.transport === 'cdp-page')
-    const connectedClis = allIdes.filter(i => (i as any).daemonId === ide.id && i.transport === 'pty')
-    const connectedAcps = allIdes.filter(i => (i as any).daemonId === ide.id && i.transport === 'acp')
+    const connectedIdes = allIdes.filter(i => i.daemonId === ide.id && i.transport === 'cdp-page')
+    const connectedClis = allIdes.filter(i => i.daemonId === ide.id && i.transport === 'pty')
+    const connectedAcps = allIdes.filter(i => i.daemonId === ide.id && i.transport === 'acp')
 
     // P2P connection status
-    const p2p = machine.p2p as { available?: boolean; state?: string; peers?: number } | undefined
+    const p2p = ide.p2p
 
     const handleUpgrade = async () => {
         if (!sendDaemonCommand) return
         setUpgradeState('upgrading')
         setUpgradeMsg('Starting upgrade...')
         try {
-            const result = await sendDaemonCommand(ide.id, 'daemon_upgrade', {})
-            if (result?.result?.alreadyLatest) {
+            const result = unwrapUpgradeResult(await sendDaemonCommand(ide.id, 'daemon_upgrade', {}))
+            if (result.alreadyLatest) {
                 setUpgradeState('done')
-                setUpgradeMsg(`Already on v${(result.result as any).version || 'latest'}.`)
-            } else if (result?.result?.upgraded || result?.result?.success) {
+                setUpgradeMsg(`Already on v${result.version || 'latest'}.`)
+            } else if (result.upgraded || result.success) {
                 setUpgradeState('done')
-                setUpgradeMsg(`Upgrade to v${(result.result as any).version || 'latest'} started. Daemon is restarting...`)
+                setUpgradeMsg(`Upgrade to v${result.version || 'latest'} started. Daemon is restarting...`)
             } else {
                 setUpgradeState('error')
-                setUpgradeMsg((result?.result as any)?.error || 'Upgrade failed')
+                setUpgradeMsg(result.error || 'Upgrade failed')
             }
-        } catch (e: any) {
+        } catch (e) {
             setUpgradeState('error')
-            setUpgradeMsg(e?.message || 'Connection lost during upgrade')
+            setUpgradeMsg(getErrorMessage(e, 'Connection lost during upgrade'))
         }
     }
 
@@ -177,9 +196,9 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
             await onDisconnect(ide.id)
             setActionState('done')
             setActionMsg('Machine disconnected.')
-        } catch (e: any) {
+        } catch (e) {
             setActionState('error')
-            setActionMsg(e?.message || 'Failed to disconnect')
+            setActionMsg(getErrorMessage(e, 'Failed to disconnect'))
         }
     }
 
@@ -191,9 +210,9 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
             await onRevokeToken(ide.id)
             setActionState('done')
             setActionMsg('Token revoked. Machine must restart "adhdev-standalone" to reconnect.')
-        } catch (e: any) {
+        } catch (e) {
             setActionState('error')
-            setActionMsg(e?.message || 'Failed to revoke token')
+            setActionMsg(getErrorMessage(e, 'Failed to revoke token'))
         }
     }
 
@@ -302,7 +321,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                         <div className="flex items-center gap-2 text-[11px] text-text-muted">
                             {connectedIdes.map(ideInst => {
                                 const label = getIdeLabel(ideInst.type)
-                                const cdp = (ideInst as any).cdpConnected
+                                const cdp = ideInst.cdpConnected
                                 return (
                                     <span key={ideInst.id} className="flex items-center gap-1 bg-bg-secondary px-1.5 py-0.5 rounded">
                                         <span>{label.icon}</span>
@@ -319,13 +338,13 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                             {connectedClis.map(cli => (
                                 <span key={cli.id} className="flex items-center gap-1 bg-bg-secondary px-1.5 py-0.5 rounded">
                                     <span>⌨️</span>
-                                    <span>{(cli as any).cliName || 'CLI'}</span>
+                                    <span>{cli.cliName || 'CLI'}</span>
                                 </span>
                             ))}
                             {connectedAcps.map(acp => (
                                 <span key={acp.id} className="flex items-center gap-1 bg-bg-secondary px-1.5 py-0.5 rounded">
                                     <span>🔗</span>
-                                    <span>{(acp as any).cliName || 'ACP'}</span>
+                                    <span>{acp.cliName || 'ACP'}</span>
                                 </span>
                             ))}
                         </div>
