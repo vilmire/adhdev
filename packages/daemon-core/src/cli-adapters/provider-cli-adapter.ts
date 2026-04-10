@@ -38,7 +38,6 @@ import {
     listCliScriptNames,
     looksLikeConfirmOnlyLabel,
     looksLikeMachOOrElf,
-    normalizeComparableMessageContent,
     normalizePromptText,
     normalizeScreenSnapshot,
     promptLikelyVisible,
@@ -52,6 +51,15 @@ import {
     type CliSessionStatus,
     type CliTraceEntry,
 } from './provider-cli-shared.js';
+import {
+    buildCliParseInput,
+    buildCliTraceParseSnapshot,
+    hydrateCliParsedMessages,
+    normalizeCliParsedMessages,
+    summarizeCliTraceMessages,
+    summarizeCliTraceText,
+    type TurnParseScope,
+} from './provider-cli-parse.js';
 
 export {
     normalizeCliProviderForRuntime,
@@ -71,13 +79,6 @@ type SeedCliChatMessage = Omit<Partial<CliChatMessage>, 'role'> & {
     role?: string;
     content?: string;
 };
-
-interface TurnParseScope {
-    prompt: string;
-    startedAt: number;
-    bufferStart: number;
-    rawBufferStart: number;
-}
 
 interface IdleFinishCandidate {
     armedAt: number;
@@ -200,117 +201,6 @@ export class ProviderCliAdapter implements CliAdapter {
         this.structuredMessages = [...this.committedMessages];
     }
 
-    private hydrateParsedMessages(parsedMessages: any[], scope?: TurnParseScope | null): any[] {
-        const referenceMessages = [...this.committedMessages];
-        const usedReferenceIndexes = new Set<number>();
-        const now = Date.now();
-
-        const findReferenceTimestamp = (role: 'user' | 'assistant', content: string, parsedIndex: number): number | undefined => {
-            const normalizedContent = normalizeComparableMessageContent(content);
-            if (!normalizedContent) return undefined;
-
-            const sameIndex = referenceMessages[parsedIndex];
-            if (
-                sameIndex
-                && !usedReferenceIndexes.has(parsedIndex)
-                && sameIndex.role === role
-                && normalizeComparableMessageContent(sameIndex.content) === normalizedContent
-                && typeof sameIndex.timestamp === 'number'
-                && Number.isFinite(sameIndex.timestamp)
-            ) {
-                usedReferenceIndexes.add(parsedIndex);
-                return sameIndex.timestamp;
-            }
-
-            for (let i = 0; i < referenceMessages.length; i++) {
-                if (usedReferenceIndexes.has(i)) continue;
-                const candidate = referenceMessages[i];
-                if (!candidate || candidate.role !== role) continue;
-                const candidateContent = normalizeComparableMessageContent(candidate.content);
-                if (!candidateContent) continue;
-                const exactMatch = candidateContent === normalizedContent;
-                const fuzzyMatch = candidateContent.includes(normalizedContent) || normalizedContent.includes(candidateContent);
-                if (!exactMatch && !fuzzyMatch) continue;
-                if (typeof candidate.timestamp === 'number' && Number.isFinite(candidate.timestamp)) {
-                    usedReferenceIndexes.add(i);
-                    return candidate.timestamp;
-                }
-            }
-
-            return undefined;
-        };
-
-        return parsedMessages
-            .filter((message) => message && (message.role === 'user' || message.role === 'assistant'))
-            .map((message, index) => {
-                const role = message.role as 'user' | 'assistant';
-                const content = typeof message.content === 'string' ? message.content : String(message.content || '');
-                const parsedTimestamp = typeof message.timestamp === 'number' && Number.isFinite(message.timestamp)
-                    ? message.timestamp
-                    : undefined;
-                const referenceTimestamp = parsedTimestamp ?? findReferenceTimestamp(role, content, index);
-                const fallbackTimestamp = role === 'user'
-                    ? (scope?.startedAt || now)
-                    : (this.lastOutputAt || scope?.startedAt || now);
-                const timestamp = referenceTimestamp ?? fallbackTimestamp;
-                return {
-                    ...message,
-                    role,
-                    content,
-                    timestamp,
-                    receivedAt: typeof message.receivedAt === 'number' && Number.isFinite(message.receivedAt)
-                        ? message.receivedAt
-                        : timestamp,
-                };
-            });
-    }
-
-    private normalizeParsedMessages(parsedMessages: any[], scope?: TurnParseScope | null): CliChatMessage[] {
-        return this.hydrateParsedMessages(parsedMessages, scope).map((message) => ({
-            role: message.role,
-            content: message.content,
-            timestamp: message.timestamp,
-            receivedAt: message.receivedAt,
-            kind: message.kind,
-            id: message.id,
-            index: message.index,
-            meta: message.meta,
-            senderName: message.senderName,
-        }));
-    }
-
-    private sliceFromOffset(text: string, start: number): string {
-        if (!text) return '';
-        if (!Number.isFinite(start) || start <= 0) return text;
-        if (start >= text.length) return '';
-        return text.slice(start);
-    }
-
-    private buildParseInput(baseMessages: CliChatMessage[], partialResponse: string, scope?: TurnParseScope | null): CliScriptInput {
-        const buffer = scope
-            ? (this.sliceFromOffset(this.accumulatedBuffer, scope.bufferStart) || this.accumulatedBuffer)
-            : this.accumulatedBuffer;
-        const rawBuffer = scope
-            ? (this.sliceFromOffset(this.accumulatedRawBuffer, scope.rawBufferStart) || this.accumulatedRawBuffer)
-            : this.accumulatedRawBuffer;
-        const screenText = this.terminalScreen.getText();
-        const recentBuffer = buffer.slice(-1000) || this.recentOutputBuffer;
-
-        return {
-            buffer,
-            rawBuffer,
-            recentBuffer,
-            screenText,
-            screen: buildCliScreenSnapshot(screenText),
-            bufferScreen: buildCliScreenSnapshot(buffer),
-            recentScreen: buildCliScreenSnapshot(recentBuffer),
-            messages: [...baseMessages],
-            partialResponse,
-            promptText: scope?.prompt || '',
-            settings: { ...this.runtimeSettings },
-        };
-    }
-
     private setStatus(status: CliSessionStatus['status'], trigger?: string): void {
         const prev = this.currentStatus;
         if (prev === status) return;
@@ -345,7 +235,13 @@ export class ProviderCliAdapter implements CliAdapter {
         this.recordTrace('idle_candidate_armed', {
             confirmMs: ProviderCliAdapter.IDLE_FINISH_CONFIRM_MS,
             candidate: this.idleFinishCandidate,
-            ...this.buildTraceParseSnapshot(this.currentTurnScope, this.responseBuffer),
+            ...buildCliTraceParseSnapshot({
+                accumulatedBuffer: this.accumulatedBuffer,
+                accumulatedRawBuffer: this.accumulatedRawBuffer,
+                responseBuffer: this.responseBuffer,
+                partialResponse: this.responseBuffer,
+                scope: this.currentTurnScope,
+            }),
         });
         if (this.settleTimer) clearTimeout(this.settleTimer);
         this.settleTimer = setTimeout(() => {
@@ -355,36 +251,6 @@ export class ProviderCliAdapter implements CliAdapter {
         }, ProviderCliAdapter.IDLE_FINISH_CONFIRM_MS);
     }
 
-    private summarizeTraceText(text: string, max = 800): string {
-        const value = sanitizeTerminalText(String(text || ''));
-        if (value.length <= max) return value;
-        return `…${value.slice(-max)}`;
-    }
-
-    private summarizeTraceMessages(messages: CliChatMessage[], limit = 3): { role: string; content: string; timestamp?: number }[] {
-        return messages.slice(-limit).map((message) => ({
-            role: message.role,
-            content: this.summarizeTraceText(message.content, 240),
-            timestamp: message.timestamp,
-        }));
-    }
-
-    private buildTraceParseSnapshot(scope?: TurnParseScope | null, partialResponse = ''): Record<string, any> {
-        const scopedBuffer = scope
-            ? (this.sliceFromOffset(this.accumulatedBuffer, scope.bufferStart) || this.accumulatedBuffer)
-            : this.accumulatedBuffer;
-        const scopedRawBuffer = scope
-            ? (this.sliceFromOffset(this.accumulatedRawBuffer, scope.rawBufferStart) || this.accumulatedRawBuffer)
-            : this.accumulatedRawBuffer;
-        return {
-            currentTurnScope: scope || null,
-            responseBuffer: this.summarizeTraceText(this.responseBuffer, 1200),
-            partialResponse: this.summarizeTraceText(partialResponse || this.responseBuffer, 1200),
-            turnBuffer: this.summarizeTraceText(scopedBuffer, 1600),
-            turnRawPreview: this.summarizeTraceText(scopedRawBuffer, 1600),
-            turnSanitizedRawPreview: this.summarizeTraceText(sanitizeTerminalText(scopedRawBuffer), 1600),
-        };
-    }
 
     private recordTrace(type: string, payload: Record<string, any> = {}): void {
         const entry: CliTraceEntry = {
@@ -707,9 +573,9 @@ export class ProviderCliAdapter implements CliAdapter {
         this.recordTrace('output', {
             rawLength: rawData.length,
             cleanLength: cleanData.length,
-            rawPreview: this.summarizeTraceText(rawData, 300),
-            cleanPreview: this.summarizeTraceText(cleanData, 300),
-            screenText: this.summarizeTraceText(this.terminalScreen.getText(), 1200),
+            rawPreview: summarizeCliTraceText(rawData, 300),
+            cleanPreview: summarizeCliTraceText(cleanData, 300),
+            screenText: summarizeCliTraceText(this.terminalScreen.getText(), 1200),
         });
 
         if (this.startupParseGate) {
@@ -1002,7 +868,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 loggedWait = true;
                 LOG.info(
                     'CLI',
-                    `[${this.cliType}] Waiting for interactive prompt: hasPrompt=${hasPrompt} stableMs=${stableMs} recentOutputMs=${recentlyOutput} status=${status} startup=${startupLikelyActive} screen=${JSON.stringify(this.summarizeTraceText(screenText, 220)).slice(0, 260)}`
+                    `[${this.cliType}] Waiting for interactive prompt: hasPrompt=${hasPrompt} stableMs=${stableMs} recentOutputMs=${recentlyOutput} status=${status} startup=${startupLikelyActive} screen=${JSON.stringify(summarizeCliTraceText(screenText, 220)).slice(0, 260)}`
                 );
             }
             await new Promise(resolve => setTimeout(resolve, 50));
@@ -1011,7 +877,7 @@ export class ProviderCliAdapter implements CliAdapter {
         const finalScreenText = this.terminalScreen.getText() || '';
         LOG.warn(
             'CLI',
-            `[${this.cliType}] Interactive prompt wait timed out after ${maxWaitMs}ms; proceeding with screen=${JSON.stringify(this.summarizeTraceText(finalScreenText, 240)).slice(0, 280)}`
+            `[${this.cliType}] Interactive prompt wait timed out after ${maxWaitMs}ms; proceeding with screen=${JSON.stringify(summarizeCliTraceText(finalScreenText, 240)).slice(0, 280)}`
         );
     }
 
@@ -1044,24 +910,34 @@ export class ProviderCliAdapter implements CliAdapter {
             this.currentTurnScope,
         );
         const parsedMessages = Array.isArray(parsedTranscript?.messages)
-            ? this.normalizeParsedMessages(parsedTranscript.messages)
+            ? normalizeCliParsedMessages(parsedTranscript.messages, {
+                committedMessages: this.committedMessages,
+                scope: this.currentTurnScope,
+                lastOutputAt: this.lastOutputAt,
+            })
             : [];
         const lastParsedAssistant = [...parsedMessages].reverse().find((message) => message.role === 'assistant');
         this.recordTrace('settled', {
-            tail: this.summarizeTraceText(tail, 500),
-            screenText: this.summarizeTraceText(screenText, 1200),
+            tail: summarizeCliTraceText(tail, 500),
+            screenText: summarizeCliTraceText(screenText, 1200),
             detectStatus: scriptStatus,
             parsedStatus: parsedTranscript?.status || null,
             parsedMessageCount: parsedMessages.length,
-            parsedLastAssistant: lastParsedAssistant ? this.summarizeTraceText(lastParsedAssistant.content, 280) : '',
+            parsedLastAssistant: lastParsedAssistant ? summarizeCliTraceText(lastParsedAssistant.content, 280) : '',
             parsedActiveModal: parsedTranscript?.activeModal ?? null,
             approval: modal,
-            ...this.buildTraceParseSnapshot(this.currentTurnScope, this.responseBuffer),
+            ...buildCliTraceParseSnapshot({
+                accumulatedBuffer: this.accumulatedBuffer,
+                accumulatedRawBuffer: this.accumulatedRawBuffer,
+                responseBuffer: this.responseBuffer,
+                partialResponse: this.responseBuffer,
+                scope: this.currentTurnScope,
+            }),
         });
         if (this.currentTurnScope && !lastParsedAssistant) {
             LOG.info(
                 'CLI',
-                `[${this.cliType}] Settled without assistant: prompt=${JSON.stringify(this.currentTurnScope.prompt).slice(0, 140)} responseBuffer=${JSON.stringify(this.summarizeTraceText(this.responseBuffer, 220)).slice(0, 260)} screen=${JSON.stringify(this.summarizeTraceText(screenText, 220)).slice(0, 260)} providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'}`
+                `[${this.cliType}] Settled without assistant: prompt=${JSON.stringify(this.currentTurnScope.prompt).slice(0, 140)} responseBuffer=${JSON.stringify(summarizeCliTraceText(this.responseBuffer, 220)).slice(0, 260)} screen=${JSON.stringify(summarizeCliTraceText(screenText, 220)).slice(0, 260)} providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'}`
             );
         }
         if (!scriptStatus) return;
@@ -1128,7 +1004,13 @@ export class ProviderCliAdapter implements CliAdapter {
                 lastNonEmptyOutputAt: this.lastNonEmptyOutputAt,
                 lastScreenChangeAt: this.lastScreenChangeAt,
                 holdMs: ProviderCliAdapter.STATUS_ACTIVITY_HOLD_MS,
-                ...this.buildTraceParseSnapshot(this.currentTurnScope, this.responseBuffer),
+                ...buildCliTraceParseSnapshot({
+                    accumulatedBuffer: this.accumulatedBuffer,
+                    accumulatedRawBuffer: this.accumulatedRawBuffer,
+                    responseBuffer: this.responseBuffer,
+                    partialResponse: this.responseBuffer,
+                    scope: this.currentTurnScope,
+                }),
             });
             this.onStatusChange?.();
             return;
@@ -1245,7 +1127,13 @@ export class ProviderCliAdapter implements CliAdapter {
                     canFinishImmediately,
                     submitPendingUntil: this.submitPendingUntil,
                     responseSettleIgnoreUntil: this.responseSettleIgnoreUntil,
-                    ...this.buildTraceParseSnapshot(this.currentTurnScope, this.responseBuffer),
+                    ...buildCliTraceParseSnapshot({
+                        accumulatedBuffer: this.accumulatedBuffer,
+                        accumulatedRawBuffer: this.accumulatedRawBuffer,
+                        responseBuffer: this.responseBuffer,
+                        partialResponse: this.responseBuffer,
+                        scope: this.currentTurnScope,
+                    }),
                 });
 
                 if (canFinishImmediately) {
@@ -1284,7 +1172,13 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.responseSettleIgnoreUntil > Date.now()) return;
         this.clearIdleFinishCandidate('finish_response_enter');
         this.recordTrace('finish_response', {
-            ...this.buildTraceParseSnapshot(this.currentTurnScope, this.responseBuffer),
+            ...buildCliTraceParseSnapshot({
+                accumulatedBuffer: this.accumulatedBuffer,
+                accumulatedRawBuffer: this.accumulatedRawBuffer,
+                responseBuffer: this.responseBuffer,
+                partialResponse: this.responseBuffer,
+                scope: this.currentTurnScope,
+            }),
         });
         const commitResult = this.commitCurrentTranscript();
         if (this.shouldRetryFinishResponse(commitResult)) {
@@ -1292,8 +1186,14 @@ export class ProviderCliAdapter implements CliAdapter {
             this.recordTrace('finish_response_retry', {
                 retryCount: this.finishRetryCount,
                 retryDelayMs: ProviderCliAdapter.FINISH_RETRY_DELAY_MS,
-                assistantContent: this.summarizeTraceText(commitResult.assistantContent, 220),
-                ...this.buildTraceParseSnapshot(this.currentTurnScope, this.responseBuffer),
+                assistantContent: summarizeCliTraceText(commitResult.assistantContent, 220),
+                ...buildCliTraceParseSnapshot({
+                    accumulatedBuffer: this.accumulatedBuffer,
+                    accumulatedRawBuffer: this.accumulatedRawBuffer,
+                    responseBuffer: this.responseBuffer,
+                    partialResponse: this.responseBuffer,
+                    scope: this.currentTurnScope,
+                }),
             });
             if (this.finishRetryTimer) clearTimeout(this.finishRetryTimer);
             this.finishRetryTimer = setTimeout(() => {
@@ -1329,7 +1229,11 @@ export class ProviderCliAdapter implements CliAdapter {
             this.currentTurnScope,
         );
         if (parsed && Array.isArray(parsed.messages)) {
-            this.committedMessages = this.normalizeParsedMessages(parsed.messages, this.currentTurnScope);
+            this.committedMessages = normalizeCliParsedMessages(parsed.messages, {
+                committedMessages: this.committedMessages,
+                scope: this.currentTurnScope,
+                lastOutputAt: this.lastOutputAt,
+            });
             const promptForTrim = this.currentTurnScope?.prompt || getLastUserPromptText(this.committedMessages);
             if (promptForTrim) {
                 const lastAssistantForTrim = [...this.committedMessages].reverse().find((message) => message.role === 'assistant');
@@ -1342,14 +1246,20 @@ export class ProviderCliAdapter implements CliAdapter {
             this.recordTrace('commit_transcript', {
                 parsedStatus: parsed.status || null,
                 messageCount: this.committedMessages.length,
-                lastAssistant: lastAssistant ? this.summarizeTraceText(lastAssistant.content, 320) : '',
-                messages: this.summarizeTraceMessages(this.committedMessages),
-                ...this.buildTraceParseSnapshot(this.currentTurnScope, this.responseBuffer),
+                lastAssistant: lastAssistant ? summarizeCliTraceText(lastAssistant.content, 320) : '',
+                messages: summarizeCliTraceMessages(this.committedMessages),
+                ...buildCliTraceParseSnapshot({
+                    accumulatedBuffer: this.accumulatedBuffer,
+                    accumulatedRawBuffer: this.accumulatedRawBuffer,
+                    responseBuffer: this.responseBuffer,
+                    partialResponse: this.responseBuffer,
+                    scope: this.currentTurnScope,
+                }),
             });
             if (!lastAssistant && this.currentTurnScope) {
                 LOG.warn(
                     'CLI',
-                    `[${this.cliType}] Commit without assistant turn: prompt=${JSON.stringify(this.currentTurnScope.prompt).slice(0, 140)} responseBuffer=${JSON.stringify(this.summarizeTraceText(this.responseBuffer, 220)).slice(0, 260)} providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'} scriptsPath=${this.providerResolutionMeta.scriptsPath || '-'}`
+                    `[${this.cliType}] Commit without assistant turn: prompt=${JSON.stringify(this.currentTurnScope.prompt).slice(0, 140)} responseBuffer=${JSON.stringify(summarizeCliTraceText(this.responseBuffer, 220)).slice(0, 260)} providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'} scriptsPath=${this.providerResolutionMeta.scriptsPath || '-'}`
                 );
             }
             return {
@@ -1461,7 +1371,11 @@ export class ProviderCliAdapter implements CliAdapter {
                         ? message.receivedAt
                         : message.timestamp,
                 }))
-                : this.hydrateParsedMessages(parsed.messages, this.currentTurnScope);
+                : hydrateCliParsedMessages(parsed.messages, {
+                    committedMessages: this.committedMessages,
+                    scope: this.currentTurnScope,
+                    lastOutputAt: this.lastOutputAt,
+                });
             return {
                 id: parsed.id || 'cli_session',
                 status: parsed.status || this.currentStatus,
@@ -1494,11 +1408,16 @@ export class ProviderCliAdapter implements CliAdapter {
         if (typeof fn !== 'function') {
             throw new Error(`CLI script '${scriptName}' not available`);
         }
-        const input = this.buildParseInput(
-            this.committedMessages,
-            this.responseBuffer,
-            this.currentTurnScope,
-        );
+        const input = buildCliParseInput({
+            accumulatedBuffer: this.accumulatedBuffer,
+            accumulatedRawBuffer: this.accumulatedRawBuffer,
+            recentOutputBuffer: this.recentOutputBuffer,
+            terminalScreenText: this.terminalScreen.getText(),
+            baseMessages: this.committedMessages,
+            partialResponse: this.responseBuffer,
+            scope: this.currentTurnScope,
+            runtimeSettings: this.runtimeSettings,
+        });
         return await Promise.resolve(fn({
             ...input,
             args: args && typeof args === 'object' ? { ...args } : {},
@@ -1508,7 +1427,16 @@ export class ProviderCliAdapter implements CliAdapter {
     private parseCurrentTranscript(baseMessages: CliChatMessage[], partialResponse: string, scope?: TurnParseScope | null): any {
         if (!this.cliScripts?.parseOutput) return null;
         try {
-            const input = this.buildParseInput(baseMessages, partialResponse, scope);
+            const input = buildCliParseInput({
+                accumulatedBuffer: this.accumulatedBuffer,
+                accumulatedRawBuffer: this.accumulatedRawBuffer,
+                recentOutputBuffer: this.recentOutputBuffer,
+                terminalScreenText: this.terminalScreen.getText(),
+                baseMessages,
+                partialResponse,
+                scope,
+                runtimeSettings: this.runtimeSettings,
+            });
             const parsed = this.cliScripts.parseOutput(input);
             const refinedStatus = this.refineDetectedStatus(typeof parsed?.status === 'string' ? parsed.status : null, input.recentBuffer, input.screenText);
             if (parsed && refinedStatus && parsed.status !== refinedStatus) {
@@ -1596,7 +1524,7 @@ export class ProviderCliAdapter implements CliAdapter {
             rawBufferStart: this.accumulatedRawBuffer.length,
         };
         this.recordTrace('send_message', {
-            text: this.summarizeTraceText(text, 500),
+            text: summarizeCliTraceText(text, 500),
             estimatedLines: estimatePromptDisplayLines(text),
             turnScope: this.currentTurnScope,
         });
@@ -1631,7 +1559,7 @@ export class ProviderCliAdapter implements CliAdapter {
             this.recordTrace('submit_write', {
                 mode: 'submit_key',
                 sendKey: this.sendKey,
-                screenText: this.summarizeTraceText(this.terminalScreen.getText(), 500),
+                screenText: summarizeCliTraceText(this.terminalScreen.getText(), 500),
             });
             this.ptyProcess.write(this.sendKey);
             const retrySubmitIfStuck = (attempt: number) => {
@@ -1648,7 +1576,7 @@ export class ProviderCliAdapter implements CliAdapter {
                     mode: 'submit_retry',
                     attempt,
                     sendKey: this.sendKey,
-                    screenText: this.summarizeTraceText(screenText, 500),
+                    screenText: summarizeCliTraceText(screenText, 500),
                 });
                 this.ptyProcess.write(this.sendKey);
                 if (attempt >= 3) {
@@ -1665,9 +1593,9 @@ export class ProviderCliAdapter implements CliAdapter {
             this.submitPendingUntil = 0;
             this.recordTrace('submit_write', {
                 mode: 'immediate',
-                text: this.summarizeTraceText(text, 500),
+                text: summarizeCliTraceText(text, 500),
                 sendKey: this.sendKey,
-                screenText: this.summarizeTraceText(this.terminalScreen.getText(), 500),
+                screenText: summarizeCliTraceText(this.terminalScreen.getText(), 500),
             });
             this.ptyProcess.write(text + this.sendKey);
             this.submitRetryTimer = setTimeout(() => {
@@ -1683,7 +1611,7 @@ export class ProviderCliAdapter implements CliAdapter {
                     mode: 'immediate_retry',
                     attempt: 1,
                     sendKey: this.sendKey,
-                    screenText: this.summarizeTraceText(screenText, 500),
+                    screenText: summarizeCliTraceText(screenText, 500),
                 });
                 this.ptyProcess.write(this.sendKey);
                 this.submitRetryUsed = true;
@@ -1698,9 +1626,9 @@ export class ProviderCliAdapter implements CliAdapter {
         this.ptyProcess.write(text);
         this.recordTrace('submit_write', {
             mode: 'type_then_submit',
-            text: this.summarizeTraceText(text, 500),
+            text: summarizeCliTraceText(text, 500),
             sendKey: this.sendKey,
-            screenText: this.summarizeTraceText(this.terminalScreen.getText(), 500),
+            screenText: summarizeCliTraceText(this.terminalScreen.getText(), 500),
         });
         const submitStartedAt = Date.now();
         let lastNormalizedScreen = '';
@@ -2003,13 +1931,13 @@ export class ProviderCliAdapter implements CliAdapter {
             providerResolution: this.providerResolutionMeta,
             entryCount: this.traceEntries.length,
             entries: this.traceEntries.slice(-cappedLimit),
-            screenText: this.summarizeTraceText(this.terminalScreen.getText(), 4000),
-            recentOutputBuffer: this.summarizeTraceText(this.recentOutputBuffer, 1000),
-            responseBuffer: this.summarizeTraceText(this.responseBuffer, 1200),
+            screenText: summarizeCliTraceText(this.terminalScreen.getText(), 4000),
+            recentOutputBuffer: summarizeCliTraceText(this.recentOutputBuffer, 1000),
+            responseBuffer: summarizeCliTraceText(this.responseBuffer, 1200),
             status: this.currentStatus,
             activeModal: this.activeModal,
             currentTurnScope: this.currentTurnScope,
-            messages: this.summarizeTraceMessages(this.committedMessages, 5),
+            messages: summarizeCliTraceMessages(this.committedMessages, 5),
         };
     }
 
