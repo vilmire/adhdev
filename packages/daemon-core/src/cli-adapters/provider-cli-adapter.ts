@@ -160,9 +160,11 @@ export interface CliProviderModule {
     name: string;
     category: 'cli';
     binary: string;
+    approvalKeys?: Record<number, string>;
     sendDelayMs?: number;
     sendKey?: string;
     submitStrategy?: 'wait_for_echo' | 'immediate';
+    scripts?: CliScripts;
     spawn: {
         command: string;
         args: string[];
@@ -188,6 +190,25 @@ export interface CliProviderModule {
         outputSettle?: number;
     };
     resume?: ProviderResumeCapability;
+    _resolvedVersion?: string | null;
+    _resolvedOs?: string | null;
+    _resolvedProviderDir?: string | null;
+    _resolvedScriptDir?: string | null;
+    _resolvedScriptsPath?: string | null;
+    _resolvedScriptsSource?: string | null;
+    _versionWarning?: string | null;
+}
+
+interface ProviderResolutionMeta {
+    type: string;
+    name: string;
+    resolvedVersion: string | null;
+    resolvedOs: string | null;
+    providerDir: string | null;
+    scriptDir: string | null;
+    scriptsPath: string | null;
+    scriptsSource: string | null;
+    versionWarning: string | null;
 }
 
 // ─── Utility Functions ──────────────────────────────
@@ -230,6 +251,13 @@ function stripTerminalNoise(str: string): string {
 
 function sanitizeTerminalText(str: string): string {
     return stripTerminalNoise(stripAnsi(str));
+}
+
+function listCliScriptNames(scripts: CliScripts | undefined): string[] {
+    if (!scripts) return [];
+    return Object.entries(scripts)
+        .filter(([, fn]) => typeof fn === 'function')
+        .map(([name]) => name);
 }
 
 function splitCliScreenLines(text: string): string[] {
@@ -598,7 +626,7 @@ export class ProviderCliAdapter implements CliAdapter {
     private traceSeq = 0;
     private traceSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     private static readonly MAX_TRACE_ENTRIES = 250;
-    private readonly providerResolutionMeta: Record<string, any>;
+    private readonly providerResolutionMeta: ProviderResolutionMeta;
     private static readonly IDLE_FINISH_CONFIRM_MS = 2000;
     private static readonly STATUS_ACTIVITY_HOLD_MS = 2000;
     private static readonly FINISH_RETRY_DELAY_MS = 300;
@@ -859,28 +887,28 @@ export class ProviderCliAdapter implements CliAdapter {
             outputSettle: t.outputSettle ?? 300,
         };
 
-        const rawKeys = (provider as any).approvalKeys;
+        const rawKeys = provider.approvalKeys;
         this.approvalKeys = (rawKeys && typeof rawKeys === 'object') ? rawKeys : {};
-        this.sendDelayMs = typeof (provider as any).sendDelayMs === 'number' ? Math.max(0, (provider as any).sendDelayMs) : 0;
-        this.sendKey = typeof (provider as any).sendKey === 'string' && (provider as any).sendKey.length > 0
-            ? (provider as any).sendKey
+        this.sendDelayMs = typeof provider.sendDelayMs === 'number' ? Math.max(0, provider.sendDelayMs) : 0;
+        this.sendKey = typeof provider.sendKey === 'string' && provider.sendKey.length > 0
+            ? provider.sendKey
             : '\r';
-        this.submitStrategy = (provider as any).submitStrategy === 'immediate' ? 'immediate' : 'wait_for_echo';
+        this.submitStrategy = provider.submitStrategy === 'immediate' ? 'immediate' : 'wait_for_echo';
         this.providerResolutionMeta = {
             type: provider.type,
             name: provider.name,
-            resolvedVersion: (provider as any)._resolvedVersion || null,
-            resolvedOs: (provider as any)._resolvedOs || null,
-            providerDir: (provider as any)._resolvedProviderDir || null,
-            scriptDir: (provider as any)._resolvedScriptDir || null,
-            scriptsPath: (provider as any)._resolvedScriptsPath || null,
-            scriptsSource: (provider as any)._resolvedScriptsSource || null,
-            versionWarning: (provider as any)._versionWarning || null,
+            resolvedVersion: provider._resolvedVersion || null,
+            resolvedOs: provider._resolvedOs || null,
+            providerDir: provider._resolvedProviderDir || null,
+            scriptDir: provider._resolvedScriptDir || null,
+            scriptsPath: provider._resolvedScriptsPath || null,
+            scriptsSource: provider._resolvedScriptsSource || null,
+            versionWarning: provider._versionWarning || null,
         };
 
         // Scripts are required — loaded by ProviderLoader via compatibility array
-        this.cliScripts = (provider as any).scripts || {};
-        const scriptNames = Object.keys(this.cliScripts).filter(k => typeof (this.cliScripts as any)[k] === 'function');
+        this.cliScripts = provider.scripts || {};
+        const scriptNames = listCliScriptNames(this.cliScripts);
         if (scriptNames.length > 0) {
             LOG.info('CLI', `[${this.cliType}] CLI scripts: [${scriptNames.join(', ')}]`);
             LOG.info(
@@ -895,7 +923,7 @@ export class ProviderCliAdapter implements CliAdapter {
     /** Inject CLI scripts after construction (e.g. when resolved by ProviderLoader) */
     setCliScripts(scripts: CliScripts): void {
         this.cliScripts = scripts;
-        const scriptNames = Object.keys(scripts).filter(k => typeof (scripts as any)[k] === 'function');
+        const scriptNames = listCliScriptNames(scripts);
         LOG.info('CLI', `[${this.cliType}] CLI scripts injected: [${scriptNames.join(', ')}]`);
     }
 
@@ -1863,11 +1891,11 @@ export class ProviderCliAdapter implements CliAdapter {
             const hydratedMessages = shouldPreferCommittedMessages
                 ? this.committedMessages.map((message, index) => ({
                     ...message,
-                    id: (message as any).id || `msg_${index}`,
-                    index: typeof (message as any).index === 'number' ? (message as any).index : index,
-                    kind: (message as any).kind || 'standard',
-                    receivedAt: typeof (message as any).receivedAt === 'number'
-                        ? (message as any).receivedAt
+                    id: message.id || `msg_${index}`,
+                    index: typeof message.index === 'number' ? message.index : index,
+                    kind: message.kind || 'standard',
+                    receivedAt: typeof message.receivedAt === 'number'
+                        ? message.receivedAt
                         : message.timestamp,
                 }))
                 : this.hydrateParsedMessages(parsed.messages, this.currentTurnScope);
@@ -2394,7 +2422,7 @@ export class ProviderCliAdapter implements CliAdapter {
             responseSettleIgnoreUntil: this.responseSettleIgnoreUntil,
             resizeSuppressUntil: this.resizeSuppressUntil,
             hasCliScripts: this.hasCliScripts(),
-            scriptNames: Object.keys(this.cliScripts).filter(k => typeof (this.cliScripts as any)[k] === 'function'),
+            scriptNames: listCliScriptNames(this.cliScripts),
             traceSessionId: this.traceSessionId,
             traceEntryCount: this.traceEntries.length,
             statusHistory: this.statusHistory.slice(-30),
@@ -2422,7 +2450,7 @@ export class ProviderCliAdapter implements CliAdapter {
         };
     }
 
-    getProviderResolutionMeta(): Record<string, any> {
+    getProviderResolutionMeta(): ProviderResolutionMeta {
         return { ...this.providerResolutionMeta };
     }
 
