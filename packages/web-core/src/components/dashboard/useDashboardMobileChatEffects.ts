@@ -16,7 +16,7 @@ interface UseDashboardMobileChatEffectsOptions {
     selectedTabKey: string | null
     screen: MobileChatScreen
     liveSessionInboxState: Map<string, LiveSessionInboxState>
-    sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
+    sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     requestedActiveTabKey?: string | null
     onRequestedActiveTabConsumed?: () => void
     requestedMachineId?: string | null

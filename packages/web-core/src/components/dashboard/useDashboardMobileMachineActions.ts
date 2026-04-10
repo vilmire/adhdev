@@ -16,7 +16,7 @@ interface PendingWorkspaceLaunch {
 }
 
 interface UseDashboardMobileMachineActionsOptions {
-    sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
+    sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     navigate: NavigateFunction
     ides: DaemonData[]
     conversations: ActiveConversation[]
