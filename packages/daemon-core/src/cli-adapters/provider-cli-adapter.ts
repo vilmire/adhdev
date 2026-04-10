@@ -15,7 +15,6 @@
  */
 
 import * as os from 'os';
-import * as path from 'path';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import { LOG } from '../logging/logger.js';
 import { TerminalScreen } from './terminal-screen.js';
@@ -27,22 +26,16 @@ import {
 } from './pty-transport.js';
 import {
     buildCliScreenSnapshot,
-    buildCliSpawnEnv,
     compactPromptText,
-    computeTerminalQueryTail,
     estimatePromptDisplayLines,
     extractPromptRetrySnippet,
-    findBinary,
     getLastUserPromptText,
-    isScriptBinary,
     listCliScriptNames,
     looksLikeConfirmOnlyLabel,
-    looksLikeMachOOrElf,
     normalizePromptText,
     normalizeScreenSnapshot,
     promptLikelyVisible,
     sanitizeTerminalText,
-    shSingleQuote,
     trimPromptEchoPrefix,
     type CliChatMessage,
     type CliProviderModule,
@@ -64,6 +57,12 @@ import {
     resolveCliAdapterConfig,
     type ProviderResolutionMeta,
 } from './provider-cli-config.js';
+import {
+    buildCliLoginShellRetry,
+    getCliSpawnErrorHint,
+    resolveCliSpawnPlan,
+    respondToCliTerminalQueries,
+} from './provider-cli-runtime.js';
 
 export {
     normalizeCliProviderForRuntime,
@@ -361,99 +360,44 @@ export class ProviderCliAdapter implements CliAdapter {
     async spawn(): Promise<void> {
         if (this.ptyProcess) return;
 
-        const { spawn: spawnConfig } = this.provider;
-        const configuredCommand = typeof this.runtimeSettings.executablePath === 'string' && this.runtimeSettings.executablePath.trim()
-            ? this.runtimeSettings.executablePath.trim()
-            : spawnConfig.command;
-        const binaryPath = findBinary(configuredCommand);
-        const isWin = os.platform() === 'win32';
-        const allArgs = [...spawnConfig.args, ...this.extraArgs];
+        const spawnPlan = resolveCliSpawnPlan({
+            provider: this.provider,
+            runtimeSettings: this.runtimeSettings,
+            workingDir: this.workingDir,
+            extraArgs: this.extraArgs,
+        });
 
         LOG.info('CLI', `[${this.cliType}] Spawning in ${this.workingDir}`);
         this.resetTraceSession();
-
-        let shellCmd: string;
-        let shellArgs: string[];
-        const useShellUnix = !isWin && (
-            !!spawnConfig.shell
-            || !path.isAbsolute(binaryPath)
-            || isScriptBinary(binaryPath)
-            || !looksLikeMachOOrElf(binaryPath)
-        );
-        // On Windows, .cmd/.bat shims cannot be spawned directly — must go through cmd.exe
-        const isCmdShim = isWin && /\.(cmd|bat)$/i.test(binaryPath);
-        const useShellWin = !!spawnConfig.shell
-            || isCmdShim
-            || !path.isAbsolute(binaryPath)
-            || isScriptBinary(binaryPath);
-        const useShell = isWin ? useShellWin : useShellUnix;
-
-        if (useShell) {
-            if (!spawnConfig.shell && !isWin) {
-                LOG.info('CLI', `[${this.cliType}] Using login shell (script shim or non-native binary)`);
-            }
-            if (isCmdShim) {
-                LOG.info('CLI', `[${this.cliType}] Using cmd.exe shell for .cmd/.bat shim: ${binaryPath}`);
-            } else if (isWin) {
-                LOG.info('CLI', `[${this.cliType}] Using cmd.exe shell on Windows: ${binaryPath}`);
-            }
-            shellCmd = isWin ? 'cmd.exe' : (process.env.SHELL || '/bin/zsh');
-            if (isWin) {
-                // On Windows, pass binaryPath and args as separate items so node-pty's
-                // argvToCommandLine quotes each one individually. Joining them into a
-                // single pre-quoted string causes cmd.exe to receive \"path\" (backslash-
-                // escaped quotes) which it does not recognise as a valid executable name.
-                shellArgs = ['/c', binaryPath, ...allArgs];
-            } else {
-                const fullCmd = [binaryPath, ...allArgs].map(shSingleQuote).join(' ');
-                shellArgs = ['-l', '-c', fullCmd];
-            }
-        } else {
-            if (isWin && spawnConfig.shell) {
-                LOG.info('CLI', `[${this.cliType}] Spawning Windows binary directly without cmd.exe: ${binaryPath}`);
-            }
-            shellCmd = binaryPath;
-            shellArgs = allArgs;
-        }
-
-        const ptyOpts = {
-            cols: 80,
-            rows: 24,
-            cwd: this.workingDir,
-            env: buildCliSpawnEnv(process.env, spawnConfig.env),
-        };
         this.recordTrace('spawn', {
-            shellCommand: shellCmd,
-            shellArgs,
-            cwd: ptyOpts.cwd,
-            cols: ptyOpts.cols,
-            rows: ptyOpts.rows,
+            shellCommand: spawnPlan.shellCmd,
+            shellArgs: spawnPlan.shellArgs,
+            cwd: spawnPlan.ptyOptions.cwd,
+            cols: spawnPlan.ptyOptions.cols,
+            rows: spawnPlan.ptyOptions.rows,
             providerResolution: this.providerResolutionMeta,
         });
 
         try {
-            this.ptyProcess = this.transportFactory.spawn(shellCmd, shellArgs, ptyOpts);
+            this.ptyProcess = this.transportFactory.spawn(
+                spawnPlan.shellCmd,
+                spawnPlan.shellArgs,
+                spawnPlan.ptyOptions,
+            );
         } catch (err: any) {
             const msg = err?.message || String(err);
-            if (!isWin && !useShell && /posix_spawn|spawn/i.test(msg)) {
+            if (!spawnPlan.isWin && !spawnPlan.useShell && /posix_spawn|spawn/i.test(msg)) {
                 LOG.warn('CLI', `[${this.cliType}] Direct spawn failed (${msg}), retrying via login shell`);
-                shellCmd = process.env.SHELL || '/bin/zsh';
-                const fullCmd = [binaryPath, ...allArgs].map(shSingleQuote).join(' ');
-                shellArgs = ['-l', '-c', fullCmd];
-                this.ptyProcess = this.transportFactory.spawn(shellCmd, shellArgs, ptyOpts);
+                const retryPlan = buildCliLoginShellRetry(spawnPlan);
+                this.ptyProcess = this.transportFactory.spawn(
+                    retryPlan.shellCmd,
+                    retryPlan.shellArgs,
+                    spawnPlan.ptyOptions,
+                );
             } else {
-                // Windows native error codes are often cryptic — provide helpful hints
-                if (isWin) {
-                    const hint = /error code 267|ERROR_DIRECTORY/i.test(msg)
-                        ? ' (working directory does not exist or is not a directory)'
-                        : /error code 740|elevation/i.test(msg)
-                        ? ' (requires administrator privileges)'
-                        : /error code 2|ENOENT|not found/i.test(msg)
-                        ? ` (executable not found: ${shellCmd})`
-                        : '';
-                    if (hint) {
-                        throw new Error(`Failed to spawn CLI${hint}: ${msg}`);
-                    }
+                const hint = getCliSpawnErrorHint(msg, spawnPlan.shellCmd, spawnPlan.isWin);
+                if (hint) {
+                    throw new Error(`Failed to spawn CLI${hint}: ${msg}`);
                 }
                 throw err;
             }
@@ -463,7 +407,12 @@ export class ProviderCliAdapter implements CliAdapter {
             if (Date.now() < this.resizeSuppressUntil) return;
 
             if (!this.ptyProcess?.terminalQueriesHandled) {
-                this.respondToTerminalQueries(data);
+                this.pendingTerminalQueryTail = respondToCliTerminalQueries({
+                    ptyProcess: this.ptyProcess,
+                    pendingTail: this.pendingTerminalQueryTail,
+                    data,
+                    terminalScreen: this.terminalScreen,
+                });
             }
 
             this.pendingOutputParseBuffer += data;
@@ -1912,25 +1861,5 @@ export class ProviderCliAdapter implements CliAdapter {
 
     getProviderResolutionMeta(): ProviderResolutionMeta {
         return { ...this.providerResolutionMeta };
-    }
-
-    private respondToTerminalQueries(data: string): void {
-        if (!this.ptyProcess || !data) return;
-
-        const combined = this.pendingTerminalQueryTail + data;
-        const regex = /\x1b\[(\?)?6n/g;
-        let match: RegExpExecArray | null;
-
-        while ((match = regex.exec(combined)) !== null) {
-            const cursor = this.terminalScreen.getCursorPosition();
-            const row = Math.max(1, (cursor.row | 0) + 1);
-            const col = Math.max(1, (cursor.col | 0) + 1);
-            const response = match[1]
-                ? `\x1b[?${row};${col}R`
-                : `\x1b[${row};${col}R`;
-            this.ptyProcess.write(response);
-        }
-
-        this.pendingTerminalQueryTail = computeTerminalQueryTail(combined);
     }
 }
