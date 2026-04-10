@@ -20,7 +20,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import type { ProviderLoader } from '../providers/provider-loader.js';
-import type { ProviderCategory } from '../providers/contracts.js';
+import type { ProviderCategory, ProviderModule, ProviderScripts, ProviderSettingDef } from '../providers/contracts.js';
 import type { ChildProcess } from 'child_process';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
@@ -33,6 +33,64 @@ import { handleCliStatus, handleCliLaunch, handleCliSend, handleCliStop, handleC
 import { handleAutoImplement, handleAutoImplCancel, handleAutoImplSSE } from './dev-auto-implement.js';
 
 export const DEV_SERVER_PORT = 19280;
+
+interface ProviderListEntry {
+  type: string;
+  name: string;
+  category: ProviderCategory;
+  icon: string | null;
+  displayName: string;
+  scripts?: string[];
+  inputMethod?: ProviderModule['inputMethod'] | null;
+  inputSelector?: string | null;
+  extensionId?: string | null;
+  cdpPorts?: [number, number] | [];
+  spawn?: ProviderModule['spawn'] | null;
+  auth?: ProviderModule['auth'] | null;
+  install?: string | null;
+  hasSettings?: boolean;
+  settingsCount?: number;
+}
+
+function getScriptNames(scripts?: ProviderScripts): string[] {
+  if (!scripts) return [];
+  return Object.entries(scripts)
+    .filter(([, value]) => typeof value === 'function')
+    .map(([name]) => name);
+}
+
+function toProviderListEntry(provider: ProviderModule): ProviderListEntry {
+  const base: ProviderListEntry = {
+    type: provider.type,
+    name: provider.name,
+    category: provider.category,
+    icon: provider.icon || null,
+    displayName: provider.displayName || provider.name,
+  };
+
+  if (provider.category === 'ide' || provider.category === 'extension') {
+    base.scripts = getScriptNames(provider.scripts);
+    base.inputMethod = provider.inputMethod || null;
+    base.inputSelector = provider.inputSelector || null;
+    base.extensionId = provider.extensionId || null;
+    base.cdpPorts = provider.cdpPorts || [];
+  }
+
+  if (provider.category === 'acp') {
+    base.spawn = provider.spawn || null;
+    base.auth = provider.auth || null;
+    base.install = provider.install || null;
+    base.hasSettings = !!provider.settings;
+    base.settingsCount = provider.settings ? Object.keys(provider.settings).length : 0;
+  }
+
+  if (provider.category === 'cli') {
+    base.spawn = provider.spawn || null;
+    base.install = provider.install || null;
+  }
+
+  return base;
+}
 
 export class DevServer implements DevServerContext {
   private server: http.Server | null = null;
@@ -212,41 +270,7 @@ export class DevServer implements DevServerContext {
   // ─── Handlers ───
 
   private async handleListProviders(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const providers = this.providerLoader.getAll().map(p => {
-      const base: any = {
-        type: p.type,
-        name: p.name,
-        category: p.category,
-        icon: (p as any).icon || null,
-        displayName: (p as any).displayName || p.name,
-      };
-
-      // IDE/Extension specific
-      if (p.category === 'ide' || p.category === 'extension') {
-        base.scripts = p.scripts ? Object.keys(p.scripts).filter(k => typeof (p.scripts as any)[k] === 'function') : [];
-        base.inputMethod = p.inputMethod || null;
-        base.inputSelector = (p as any).inputSelector || null;
-        base.extensionId = p.extensionId || null;
-        base.cdpPorts = (p as any).cdpPorts || [];
-      }
-
-      // ACP specific
-      if (p.category === 'acp') {
-        base.spawn = (p as any).spawn || null;
-        base.auth = (p as any).auth || null;
-        base.install = (p as any).install || null;
-        base.hasSettings = !!(p as any).settings;
-        base.settingsCount = (p as any).settings ? Object.keys((p as any).settings).length : 0;
-      }
-
-      // CLI specific
-      if (p.category === 'cli') {
-        base.spawn = (p as any).spawn || null;
-        base.install = (p as any).install || null;
-      }
-
-      return base;
-    });
+    const providers = this.providerLoader.getAll().map(toProviderListEntry);
     this.json(res, 200, { providers, count: providers.length });
   }
 
@@ -273,7 +297,7 @@ export class DevServer implements DevServerContext {
       return;
     }
 
-    const spawn = (provider as any).spawn;
+    const spawn = provider.spawn;
     if (!spawn) {
       this.json(res, 400, { error: `Provider ${type} has no spawn config` });
       return;
@@ -330,7 +354,7 @@ export class DevServer implements DevServerContext {
       return;
     }
 
-    const fn = (provider.scripts as any)?.[scriptName];
+    const fn = provider.scripts?.[scriptName];
     if (typeof fn !== 'function') {
       this.json(res, 400, { error: `Script '${scriptName}' not found in provider '${type}'`, available: provider.scripts ? Object.keys(provider.scripts) : [] });
       return;
@@ -446,7 +470,7 @@ export class DevServer implements DevServerContext {
       }));
       for (const cdp of this.cdpManagers.values()) {
         if (!cdp.isConnected) {
-          (cdp as any)._targetId = null;
+          cdp.clearTargetId();
         }
       }
       this.json(res, 200, { reloaded: true, providers });
@@ -569,7 +593,7 @@ export class DevServer implements DevServerContext {
         this.sendSSE({ type: 'watch_error', error: `Provider '${this.watchScriptPath}' not found` });
         return;
       }
-      const fn = (provider.scripts as any)?.[this.watchScriptName!];
+      const fn = provider.scripts?.[this.watchScriptName!];
       if (typeof fn !== 'function') {
         this.sendSSE({ type: 'watch_error', error: `Script '${this.watchScriptName}' not found` });
         return;
@@ -769,7 +793,7 @@ export class DevServer implements DevServerContext {
       // Settings validation
       if (config.settings) {
         for (const [key, val] of Object.entries(config.settings)) {
-          const s = val as any;
+          const s = val as Partial<ProviderSettingDef>;
           if (!s.type) errors.push(`settings.${key}: missing type`);
           else if (!['boolean', 'number', 'string', 'select'].includes(s.type))
             errors.push(`settings.${key}: invalid type '${s.type}'`);
@@ -784,7 +808,7 @@ export class DevServer implements DevServerContext {
       if (config.cdpPorts && Array.isArray(config.cdpPorts)) {
         const allProviders = this.providerLoader.getAll();
         for (const port of config.cdpPorts) {
-          const conflict = allProviders.find(p => p.type !== type && (p as any).cdpPorts?.includes(port));
+          const conflict = allProviders.find(p => p.type !== type && p.cdpPorts?.includes(port));
           if (conflict) warnings.push(`CDP port ${port} conflicts with provider '${conflict.type}'`);
         }
       }
@@ -801,7 +825,7 @@ export class DevServer implements DevServerContext {
     if (!message) { this.json(res, 400, { error: 'message required' }); return; }
     const provider = this.providerLoader.getMeta(type);
     if (!provider) { this.json(res, 404, { error: `Provider not found: ${type}` }); return; }
-    const spawn = (provider as any).spawn;
+    const spawn = provider.spawn;
     if (!spawn) { this.json(res, 400, { error: `Provider ${type} has no spawn config` }); return; }
 
     const { spawn: spawnFn } = await import('child_process');

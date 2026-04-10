@@ -77,6 +77,11 @@ export class DaemonCdpManager {
         this._targetFilter = filter;
     }
 
+    /** Clear a previously pinned target so the next connect can reselect a page. */
+    clearTargetId(): void {
+        this._targetId = null;
+    }
+
     /**
      * Check if a page title should be excluded (non-main page).
      * Uses provider-configured titleExcludes, falls back to default pattern.
