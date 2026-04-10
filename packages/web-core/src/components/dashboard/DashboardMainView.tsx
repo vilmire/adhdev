@@ -427,7 +427,7 @@ export default function DashboardMainView({
     }, [handleCloseShortcutHelp, shortcutHelpOpen, shortcutListening])
 
     React.useEffect(() => {
-        if (!isDesktopDashboard || visibleConversations.length > 0) {
+        if (!isDesktopDashboard) {
             setGuideNudgeVisible(false)
             return
         }
@@ -436,7 +436,7 @@ export default function DashboardMainView({
             setGuideNudgeVisible(false)
         }, 10000)
         return () => window.clearTimeout(timer)
-    }, [isDesktopDashboard, visibleConversations.length])
+    }, [isDesktopDashboard])
 
     return (
         <>
@@ -758,17 +758,17 @@ export default function DashboardMainView({
                     </div>
                 </div>
             )}
-            {!showMobileChatMode && guideNudgeVisible && (
+            {!showMobileChatMode && (
                 <button
                     type="button"
                     onClick={handleOpenShortcutHelp}
-                    className="fixed right-4 bottom-24 z-40 hidden md:inline-flex items-center gap-2 rounded-full border border-border-subtle bg-bg-primary/88 backdrop-blur px-2.5 py-2 text-xs text-text-secondary hover:text-text-primary transition-colors"
+                    className={`fixed right-4 bottom-24 z-40 hidden md:inline-flex items-center rounded-full border border-border-subtle bg-bg-primary/88 backdrop-blur py-2 text-xs text-text-secondary hover:text-text-primary transition-all ${guideNudgeVisible ? 'gap-2 px-2.5' : 'justify-center w-10 px-0'}`}
                     style={{ boxShadow: '0 6px 18px rgba(0,0,0,0.12)' }}
                     title="Dashboard guide"
                     aria-label="Open dashboard guide"
                 >
                     <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-bg-secondary text-[11px] font-semibold text-text-primary shrink-0">?</span>
-                    <span>Guide</span>
+                    {guideNudgeVisible && <span>Guide</span>}
                 </button>
             )}
         </>

@@ -6,7 +6,7 @@
  */
 import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { IconDashboard, IconServer, IconInfo, IconSettings, IconBook } from '@adhdev/web-core'
+import { IconDashboard, IconServer, IconInfo, IconSettings, IconBook, ThemeToggle } from '@adhdev/web-core'
 
 interface LayoutProps {
     children: React.ReactNode
@@ -124,7 +124,7 @@ export default function StandaloneLayout({ children }: LayoutProps) {
                         </div>
                     )}
                     {/* Theme toggle */}
-                    {/* <ThemeToggle collapsed={collapsed} /> */}
+                    <ThemeToggle collapsed={collapsed} />
                     {/* Collapse toggle */}
                     <div
                         className={`nav-item cursor-pointer ${collapsed ? 'justify-center py-2.5 px-0' : 'mt-1'}`}

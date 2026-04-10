@@ -143,9 +143,9 @@ export {
     IconDashboard, IconChevronLeft, IconServer, IconUsers, IconUser, IconCreditCard, IconKey,
     IconBook, IconWebhook, IconClipboard, IconSettings, IconInfo,
     IconLogout, IconShield, IconCpu, IconSun, IconMoon, IconSystem,
-    IconChat, IconMonitor, IconEye, IconRefresh, IconSearch, IconPlug,
+    IconChat, IconMonitor, IconEye, IconEyeOff, IconRefresh, IconSearch, IconPlug,
     IconBarChart, IconScroll, IconFolder, IconWarning, IconClock,
-    IconTerminal, IconPlay, IconRocket, IconBot, IconThought,
+    IconTerminal, IconSplitView, IconPlay, IconX, IconRocket, IconBot, IconThought,
     IconWrench, IconCandle, IconApple, IconLinux, IconWindows, IconBell, IconBuilding,
     IconCheckCircle, IconZap, IconVolume, IconDiscord
 } from './components/Icons'

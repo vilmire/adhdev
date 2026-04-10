@@ -5,6 +5,13 @@ import type { MobileConversationListItem, MobileMachineCard } from './DashboardM
 import { getConversationMachineId } from './conversation-selectors'
 import { getConversationMachineCardPreview } from './conversation-presenters'
 
+export function getMobileMachineConnectionLabel(machineEntry: DaemonData): 'Connected' | 'Connecting' | 'Offline' {
+    const p2pState = machineEntry.p2p?.state || ''
+    if (p2pState === 'connected') return 'Connected'
+    if (p2pState === 'connecting' || p2pState === 'new' || p2pState === 'checking') return 'Connecting'
+    return 'Offline'
+}
+
 export function buildSelectedMachineRecentLaunches(
     selectedMachineEntry: DaemonData | null,
     ides: DaemonData[],
@@ -71,9 +78,7 @@ export function buildMobileMachineCards(
         const latestConversation = latestItem?.conversation || null
         const fallbackActivityAt = getDaemonEntryActivityAt(machineEntry)
         const unread = machineItems.filter(item => item.unread || item.requiresAction).length
-        const statusLabel = machineEntry.status === 'online'
-            ? 'Connected'
-            : machineEntry.status || 'Unknown'
+        const statusLabel = getMobileMachineConnectionLabel(machineEntry)
         const subtitleParts = [
             machineEntry.platform || 'machine',
             statusLabel,

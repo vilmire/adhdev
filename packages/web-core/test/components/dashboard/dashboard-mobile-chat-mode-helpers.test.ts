@@ -5,6 +5,7 @@ import type { ActiveConversation } from '../../../src/components/dashboard/types
 import {
     buildMobileMachineCards,
     buildSelectedMachineRecentLaunches,
+    getMobileMachineConnectionLabel,
 } from '../../../src/components/dashboard/dashboard-mobile-chat-mode-helpers'
 
 function createMachine(overrides: Partial<DaemonData> = {}): DaemonData {
@@ -44,6 +45,12 @@ function createConversation(overrides: Partial<ActiveConversation> = {}): Active
 }
 
 describe('dashboard mobile chat mode helpers', () => {
+    it('treats only p2p connected machines as connected', () => {
+        expect(getMobileMachineConnectionLabel(createMachine({ p2p: { available: true, state: 'connected', peers: 1 } }))).toBe('Connected')
+        expect(getMobileMachineConnectionLabel(createMachine({ p2p: { available: true, state: 'connecting', peers: 0 } }))).toBe('Connecting')
+        expect(getMobileMachineConnectionLabel(createMachine({ status: 'online', p2p: { available: true, state: 'disconnected', peers: 0 } }))).toBe('Offline')
+    })
+
     it('prefers daemon recent launches when available', () => {
         const machine = createMachine({
             recentLaunches: [{
@@ -87,7 +94,7 @@ describe('dashboard mobile chat mode helpers', () => {
         expect(cards[0]).toMatchObject({
             id: 'machine-1',
             label: 'Studio Mac',
-            subtitle: 'darwin · Connected',
+            subtitle: 'darwin · Offline',
             unread: 1,
             total: 1,
             preview: 'repo · Cursor · Codex · Studio Mac',

@@ -20,7 +20,7 @@ function getStoredPreference(): ThemePreference {
         const v = localStorage.getItem('theme')
         if (v === 'dark' || v === 'light' || v === 'system') return v
     } catch { /* noop */ }
-    return 'dark'
+    return 'system'
 }
 
 function resolveTheme(pref: ThemePreference): Theme {

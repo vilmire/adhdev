@@ -8,6 +8,7 @@ import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLau
 import HistoryModal from './HistoryModal'
 import type { ActiveConversation } from './types'
 import DashboardMobileSessionHostSheet from './DashboardMobileSessionHostSheet'
+import { getMobileMachineConnectionLabel } from './dashboard-mobile-chat-mode-helpers'
 
 type LaunchKind = 'ide' | 'cli' | 'acp'
 
@@ -798,7 +799,7 @@ export default function DashboardNewSessionDialog({
                     machineCards={[{
                         id: selectedMachine.id,
                         label: getMachineDisplayName(selectedMachine, { fallbackId: selectedMachine.id }),
-                        subtitle: [selectedMachine.platform || 'machine', selectedMachine.status || 'Connected'].filter(Boolean).join(' · '),
+                        subtitle: [selectedMachine.platform || 'machine', getMobileMachineConnectionLabel(selectedMachine)].filter(Boolean).join(' · '),
                         unread: 0,
                         total: 0,
                         latestConversation: null,

@@ -332,13 +332,15 @@ export default function ChatPane({
                     />
                 );
             })()}
-            <ChatInputBar
-                contextKey={activeConv.tabKey}
-                panelLabel={panelLabel}
-                isSending={isSendingChat}
-                onSend={handleSendChat}
-                isActive={isInputActive}
-            />
+            {!controlsContext.isCliTerminal && (
+                <ChatInputBar
+                    contextKey={activeConv.tabKey}
+                    panelLabel={panelLabel}
+                    isSending={isSendingChat}
+                    onSend={handleSendChat}
+                    isActive={isInputActive}
+                />
+            )}
         </div>
     );
 }

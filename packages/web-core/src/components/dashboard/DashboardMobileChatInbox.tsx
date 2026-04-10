@@ -393,7 +393,7 @@ export default function DashboardMobileChatInbox({
                                         </div>
                                     }
                                     title="No conversations yet"
-                                    subtitle="Your machines are connected. Open the machine screen, choose a workspace, then launch your first IDE, CLI, or ACP session."
+                                    subtitle="Your machines are available. Open a machine, wait for P2P to connect, then launch your first IDE, CLI, or ACP session."
                                 />
                             )
                         ) : (
