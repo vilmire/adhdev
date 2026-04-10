@@ -17,7 +17,10 @@ function byKey(settings: Array<{ key: string } & Record<string, unknown>>) {
 class TestProviderLoader extends ProviderLoader {
   constructor(
     userDir: string,
-    private readonly testConfig: { providerSettings?: Record<string, Record<string, unknown>> },
+    private readonly testConfig: {
+      providerSettings?: Record<string, Record<string, unknown>>;
+      ideSettings?: Record<string, { extensions?: Record<string, { enabled: boolean }> }>;
+    },
   ) {
     super({ userDir, disableUpstream: true });
   }
@@ -33,11 +36,14 @@ class TestProviderLoader extends ProviderLoader {
 
 describe('ProviderLoader settings schema', () => {
   let userDir = '';
-  let testConfig: { providerSettings?: Record<string, Record<string, unknown>> };
+  let testConfig: {
+    providerSettings?: Record<string, Record<string, unknown>>;
+    ideSettings?: Record<string, { extensions?: Record<string, { enabled: boolean }> }>;
+  };
 
   beforeEach(() => {
     userDir = mkdtempSync(join(tmpdir(), 'adhdev-provider-loader-'));
-    testConfig = { providerSettings: {} };
+    testConfig = { providerSettings: {}, ideSettings: {} };
   });
 
   afterEach(() => {
@@ -45,7 +51,7 @@ describe('ProviderLoader settings schema', () => {
       rmSync(userDir, { recursive: true, force: true });
     }
     userDir = '';
-    testConfig = { providerSettings: {} };
+    testConfig = { providerSettings: {}, ideSettings: {} };
   });
 
   it('adds synthetic autoApprove for providers that do not declare it', () => {
@@ -290,5 +296,23 @@ describe('ProviderLoader settings schema', () => {
         }),
       ]),
     );
+  });
+
+  it('normalizes IDE type prefixes when reading and writing extension enabled state', () => {
+    testConfig.ideSettings = {
+      cursor: {
+        extensions: {
+          cline: { enabled: true },
+        },
+      },
+    };
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+
+    expect(loader.getIdeExtensionEnabledState('cursor_12345', 'cline')).toBe(true);
+    expect(loader.getIdeExtensionEnabledState('cursor_12345', 'roo-code')).toBe(false);
+
+    expect(loader.setIdeExtensionEnabled('cursor_12345', 'roo-code', true)).toBe(true);
+    expect(testConfig.ideSettings?.cursor?.extensions?.['roo-code']?.enabled).toBe(true);
   });
 });

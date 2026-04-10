@@ -304,8 +304,8 @@ export class ProviderLoader {
  * that runtime attach/remove uses.
  */
   getIdeExtensionEnabledState(ideType: string, extensionType: string): boolean {
-    const { loadConfig } = require('../config/config.js');
-    const config = loadConfig();
+    const config = this.readConfig();
+    if (!config) return false;
     const baseIdeType = ideType.split('_')[0];
     const val = config.ideSettings?.[baseIdeType]?.extensions?.[extensionType]?.enabled;
     return val === true;
@@ -315,15 +315,16 @@ export class ProviderLoader {
  * Save IDE extension enabled setting
  */
   setIdeExtensionEnabled(ideType: string, extensionType: string, enabled: boolean): boolean {
+    const config = this.readConfig();
+    if (!config) return false;
+
     try {
-      const { loadConfig, saveConfig } = require('../config/config.js');
-      const config = loadConfig();
       const baseIdeType = ideType.split('_')[0];
       if (!config.ideSettings) config.ideSettings = {};
       if (!config.ideSettings[baseIdeType]) config.ideSettings[baseIdeType] = {};
       if (!config.ideSettings[baseIdeType].extensions) config.ideSettings[baseIdeType].extensions = {};
       config.ideSettings[baseIdeType].extensions[extensionType] = { enabled };
-      saveConfig(config);
+      this.writeConfig(config);
       this.log(`IDE extension setting: ${ideType}.${extensionType}.enabled = ${enabled}`);
       return true;
     } catch (e) {
