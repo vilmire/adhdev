@@ -1515,7 +1515,7 @@
         }
     }
 
-    /* Dashboard/page header — 공통 레이아웃 (모바일에서 인라인과 겹침 방지) */
+    /* Dashboard/page header: shared layout that avoids inline overlap on mobile */
     .dashboard-header {
         padding: 10px 20px;
         box-sizing: border-box;
@@ -1976,7 +1976,7 @@
     }
 
 
-    /* 페이지 content 영역 — 통일된 패딩 */
+    /* Page content area with consistent padding */
     .page-content {
         flex: 1;
         overflow-y: auto;
@@ -1999,7 +1999,7 @@
         /* these pages manage their own scroll */
     }
 
-    /* 전체 높이 채우는 페이지(대시보드)는 flex:1로 채우고, 긴 페이지는 이 영역에서 스크롤 */
+    /* Full-height pages use flex: 1; longer pages scroll within this area */
     .main-content-inner {
         flex: 1;
         min-height: 0;

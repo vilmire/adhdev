@@ -59,7 +59,7 @@ export function useIdeCommands({
             }
         } catch (e) {
             console.error('[IDE] Refresh history failed:', e)
-            pushToast('히스토리 새로고침에 실패했습니다.', 'warning')
+            pushToast('Failed to refresh history.', 'warning')
         } finally {
             setIsRefreshingHistory(false)
         }
@@ -79,15 +79,15 @@ export function useIdeCommands({
             if (ok) return
 
             if (scriptResult === false || scriptResult === 'not_found') {
-                pushToast('세션 탭을 찾지 못했습니다. 히스토리를 새로고침해 보세요.', 'warning')
+                pushToast('Session tab not found. Try refreshing history.', 'warning')
             } else if (typeof scriptResult === 'string' && scriptResult.startsWith('error:')) {
-                pushToast(`세션 전환 오류: ${scriptResult}`, 'warning')
+                pushToast(`Session switch error: ${scriptResult}`, 'warning')
             } else {
-                pushToast('세션 전환에 실패했습니다.', 'warning')
+                pushToast('Failed to switch sessions.', 'warning')
             }
         } catch (e: any) {
             console.error('[IDE] Switch session failed:', e)
-            pushToast(`세션 전환 실패: ${e?.message || 'connection error'}`, 'warning')
+            pushToast(`Session switch failed: ${e?.message || 'connection error'}`, 'warning')
         }
     }, [ideId, sendDaemonCommand, activeConv, pushToast])
 
@@ -101,7 +101,7 @@ export function useIdeCommands({
             })
         } catch (e) {
             console.error('[IDE] New chat failed:', e)
-            pushToast('새 채팅 생성에 실패했습니다.', 'warning')
+            pushToast('Failed to create a new chat.', 'warning')
         } finally {
             setIsCreatingChat(false)
         }
