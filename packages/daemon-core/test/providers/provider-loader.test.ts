@@ -10,6 +10,12 @@ function writeProvider(root: string, category: string, type: string, data: Recor
   writeFileSync(join(dir, 'provider.json'), JSON.stringify(data, null, 2), 'utf-8');
 }
 
+function writeScriptsJs(root: string, category: string, type: string, scriptDir: string, source: string) {
+  const dir = join(root, category, type, scriptDir);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'scripts.js'), source, 'utf-8');
+}
+
 function byKey(settings: Array<{ key: string } & Record<string, unknown>>) {
   return Object.fromEntries(settings.map((setting) => [setting.key, setting]));
 }
@@ -314,5 +320,55 @@ describe('ProviderLoader settings schema', () => {
 
     expect(loader.setIdeExtensionEnabled('cursor_12345', 'roo-code', true)).toBe(true);
     expect(testConfig.ideSettings?.cursor?.extensions?.['roo-code']?.enabled).toBe(true);
+  });
+
+  it('resolves compatibility script directories and falls back to defaultScriptDir on version misses', () => {
+    writeProvider(userDir, 'ide', 'cursor', {
+      type: 'cursor',
+      name: 'Cursor',
+      displayName: 'Cursor',
+      category: 'ide',
+      compatibility: [
+        { ideVersion: '>=1.107.0', scriptDir: 'scripts/modern' },
+      ],
+      defaultScriptDir: 'scripts/fallback',
+    });
+    writeScriptsJs(userDir, 'ide', 'cursor', 'scripts/modern', 'module.exports = { readChat: () => "modern-script" };');
+    writeScriptsJs(userDir, 'ide', 'cursor', 'scripts/fallback', 'module.exports = { readChat: () => "fallback-script" };');
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    const modern = loader.resolve('cursor', { version: '1.108.0' });
+    expect(modern?._resolvedScriptDir).toBe('scripts/modern');
+    expect(modern?._resolvedScriptsSource).toBe('compatibility:>=1.107.0');
+    expect(modern?.scripts?.readChat?.({})).toBe('modern-script');
+
+    const fallback = loader.resolve('cursor', { version: '1.100.0' });
+    expect(fallback?._resolvedScriptDir).toBe('scripts/fallback');
+    expect(fallback?._resolvedScriptsSource).toBe('defaultScriptDir:version_miss');
+    expect(fallback?._versionWarning).toContain('not in compatibility matrix');
+    expect(fallback?.scripts?.readChat?.({})).toBe('fallback-script');
+
+    const noVersion = loader.resolve('cursor');
+    expect(noVersion?._resolvedScriptDir).toBe('scripts/fallback');
+    expect(noVersion?._resolvedScriptsSource).toBe('defaultScriptDir:no_version');
+  });
+
+  it('restores extensionIdPattern regex flags from provider JSON metadata', () => {
+    writeProvider(userDir, 'extension', 'test-extension', {
+      type: 'test-extension',
+      name: 'Test Extension',
+      displayName: 'Test Extension',
+      category: 'extension',
+      extensionIdPattern: '^publisher\\.test-extension$',
+      extensionIdPattern_flags: 'i',
+    });
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    const provider = loader.getExtensionProviders().find((entry) => entry.type === 'test-extension');
+    expect(provider?.extensionIdPattern?.test('PUBLISHER.TEST-EXTENSION')).toBe(true);
   });
 });

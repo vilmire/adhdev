@@ -304,6 +304,13 @@ export interface CdpTargetFilter {
   titleExcludes?: string;
 }
 
+export type ProviderVersionCommand = string | Partial<Record<string, string>>;
+
+export interface ProviderCompatibilityEntry {
+  ideVersion: string;
+  scriptDir: string;
+}
+
 export interface ProviderModule {
  /** Unique identifier (e.g. 'cline', 'cursor', 'gemini-cli') */
   type: string;
@@ -328,7 +335,7 @@ export interface ProviderModule {
  /** Install instructions (shown when command is missing) */
   install?: string;
  /** Custom version detection command (e.g. 'cursor --version', 'claude -v') */
-  versionCommand?: string;
+  versionCommand?: ProviderVersionCommand;
  /** Versions tested by provider maintainer (informational) */
   testedVersions?: string[];
   /** Per-OS process names — used by launch.ts to detect/kill IDE processes */
@@ -371,6 +378,9 @@ export interface ProviderModule {
  // ─── Extension category only ───
   extensionId?: string;
   extensionIdPattern?: RegExp;
+  extensionIdPattern_flags?: string;
+  compatibility?: ProviderCompatibilityEntry[];
+  defaultScriptDir?: string;
 
  // ─── CLI category only ───
   binary?: string;

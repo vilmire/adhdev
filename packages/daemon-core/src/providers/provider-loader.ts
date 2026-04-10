@@ -21,6 +21,7 @@ import { registerIDEDefinition } from '../detection/ide-detector.js';
 import { LOG } from '../logging/logger.js';
 import { VersionArchive } from './version-archive.js';
 import type {
+  ProviderCompatibilityEntry,
   ProviderModule,
   ProviderCategory,
   ProviderScripts,
@@ -43,7 +44,7 @@ export class ProviderLoader {
   private watchers: any[] = [];
   private logFn: (msg: string) => void;
   private versionArchive: VersionArchive | null = null;
-  private scriptsCache = new Map<string, Record<string, any>>();
+  private scriptsCache = new Map<string, Partial<ProviderScripts>>();
 
   /** Inject VersionArchive so resolve() can auto-detect installed versions */
   setVersionArchive(archive: VersionArchive): void {
@@ -240,10 +241,7 @@ export class ProviderLoader {
     const result: { id: string; displayName: string; icon: string; command: string; category: string; versionCommand?: string }[] = [];
     for (const p of this.providers.values()) {
       if ((p.category === 'cli' || p.category === 'acp') && p.spawn?.command) {
-        const verCmdConfig = (p as any).versionCommand;
-        const versionCommand = typeof verCmdConfig === 'object' && verCmdConfig !== null
-          ? verCmdConfig[process.platform]
-          : verCmdConfig;
+        const versionCommand = this.getPlatformVersionCommand(p.versionCommand);
         const command = this.getSpawnCommand(p.type, p.spawn.command);
         result.push({
           id: p.type,
@@ -546,8 +544,8 @@ export class ProviderLoader {
       resolved._resolvedVersion = currentVersion;
 
       // --- New format: compatibility array ---
-      if (Array.isArray((base as any).compatibility)) {
-        const compat = (base as any).compatibility as { ideVersion: string; scriptDir: string }[];
+      if (base.compatibility) {
+        const compat = base.compatibility;
         let matched = false;
 
         for (const entry of compat) {
@@ -571,15 +569,15 @@ export class ProviderLoader {
         }
 
         // No compatibility match → defaultScriptDir
-        if (!matched && (base as any).defaultScriptDir) {
-          const loaded = this.loadScriptsFromDir(type, (base as any).defaultScriptDir);
+        if (!matched && base.defaultScriptDir) {
+          const loaded = this.loadScriptsFromDir(type, base.defaultScriptDir);
           if (loaded) {
             resolved.scripts = loaded;
-            this.log(`  [compatibility] ${type} v${currentVersion} → default: ${(base as any).defaultScriptDir}`);
-            resolved._resolvedScriptDir = (base as any).defaultScriptDir;
+            this.log(`  [compatibility] ${type} v${currentVersion} → default: ${base.defaultScriptDir}`);
+            resolved._resolvedScriptDir = base.defaultScriptDir;
             resolved._resolvedScriptsSource = 'defaultScriptDir:version_miss';
             if (providerDir) {
-              const fullDir = path.join(providerDir, (base as any).defaultScriptDir);
+              const fullDir = path.join(providerDir, base.defaultScriptDir);
               resolved._resolvedScriptsPath = fs.existsSync(path.join(fullDir, 'scripts.js'))
                 ? path.join(fullDir, 'scripts.js')
                 : fullDir;
@@ -593,7 +591,7 @@ export class ProviderLoader {
         for (const [range, override] of Object.entries(base.versions)) {
           if (!this.matchesVersion(currentVersion, range)) continue;
 
-          const dirOverride = (override as any).__dir as string | undefined;
+          const dirOverride = override.__dir;
           if (dirOverride) {
             const loaded = this.loadScriptsFromDir(type, dirOverride);
             if (loaded) {
@@ -613,16 +611,16 @@ export class ProviderLoader {
           }
         }
       }
-    } else if (Array.isArray((base as any).compatibility) && (base as any).defaultScriptDir) {
+    } else if (base.compatibility && base.defaultScriptDir) {
       // No version detected but compatibility format → use defaultScriptDir
-      const loaded = this.loadScriptsFromDir(type, (base as any).defaultScriptDir);
+      const loaded = this.loadScriptsFromDir(type, base.defaultScriptDir);
       if (loaded) {
         resolved.scripts = loaded;
-        this.log(`  [compatibility] ${type} no version detected → default: ${(base as any).defaultScriptDir}`);
-        resolved._resolvedScriptDir = (base as any).defaultScriptDir;
+        this.log(`  [compatibility] ${type} no version detected → default: ${base.defaultScriptDir}`);
+        resolved._resolvedScriptDir = base.defaultScriptDir;
         resolved._resolvedScriptsSource = 'defaultScriptDir:no_version';
         if (providerDir) {
-          const fullDir = path.join(providerDir, (base as any).defaultScriptDir);
+          const fullDir = path.join(providerDir, base.defaultScriptDir);
           resolved._resolvedScriptsPath = fs.existsSync(path.join(fullDir, 'scripts.js'))
             ? path.join(fullDir, 'scripts.js')
             : fullDir;
@@ -648,7 +646,7 @@ export class ProviderLoader {
   * Load scripts from a scriptDir within a provider directory.
   * Tries scripts.js first, then individual .js files.
   */
-  private loadScriptsFromDir(type: string, scriptDir: string): Record<string, any> | null {
+  private loadScriptsFromDir(type: string, scriptDir: string): Partial<ProviderScripts> | null {
     const providerDir = this.findProviderDirInternal(type);
     if (!providerDir) {
       this.log(`  [loadScriptsFromDir] ${type}: providerDir not found`);
@@ -680,7 +678,7 @@ export class ProviderLoader {
     }
 
     // Fallback: build from individual .js files
-    const result = this.buildScriptWrappersFromDir(dir) as Record<string, any>;
+    const result = this.buildScriptWrappersFromDir(dir);
     this.scriptsCache.set(dir, result);
     return result;
   }
@@ -974,8 +972,8 @@ export class ProviderLoader {
   getPublicSettings(type: string): ProviderSettingSchema[] {
     const settings = this.getSettingsSchema(type);
     return Object.entries(settings)
-      .filter(([, def]) => (def as any).public === true)
-      .map(([key, def]) => ({ key, ...(def as any) }));
+      .filter(([, def]) => def.public === true)
+      .map(([key, def]) => ({ key, ...def }));
   }
 
  /**
@@ -996,9 +994,9 @@ export class ProviderLoader {
   getSettingValue(type: string, key: string): any {
     const schemaDef = this.getSettingsSchema(type)[key];
     const defaultVal = schemaDef
-      ? (key === 'autoApprove' && (schemaDef as any).type === 'boolean'
+      ? (key === 'autoApprove' && schemaDef.type === 'boolean'
         ? true
-        : (schemaDef as any).default)
+        : schemaDef.default)
       : undefined;
 
     const config = this.readConfig();
@@ -1022,7 +1020,7 @@ export class ProviderLoader {
  * Save provider setting value (writes to config.json)
  */
   setSetting(type: string, key: string, value: any): boolean {
-    const schemaDef = this.getSettingsSchema(type)[key] as any;
+    const schemaDef = this.getSettingsSchema(type)[key];
     if (!schemaDef) return false;
 
  // Non-public settings cannot be modified externally
@@ -1073,6 +1071,23 @@ export class ProviderLoader {
   protected writeConfig(config: any): void {
     const { saveConfig } = require('../config/config.js');
     saveConfig(config);
+  }
+
+  private getPlatformVersionCommand(versionCommand?: ProviderModule['versionCommand']): string | undefined {
+    if (!versionCommand) return undefined;
+    if (typeof versionCommand === 'string') {
+      const trimmed = versionCommand.trim();
+      return trimmed || undefined;
+    }
+    const platformValue = versionCommand[process.platform];
+    if (typeof platformValue === 'string' && platformValue.trim()) {
+      return platformValue.trim();
+    }
+    const defaultValue = versionCommand.default;
+    if (typeof defaultValue === 'string' && defaultValue.trim()) {
+      return defaultValue.trim();
+    }
+    return undefined;
   }
 
   private getSettingsSchema(type: string): Record<string, ProviderSettingDef> {
@@ -1202,7 +1217,7 @@ export class ProviderLoader {
         if (!file.endsWith('.js')) continue;
         const scriptName = toCamel(file.replace('.js', ''));
         const filePath = path.join(dir, file);
-        (result as any)[scriptName] = (...args: any[]): string => {
+        result[scriptName] = (...args: any[]): string => {
           try {
             let content = fs.readFileSync(filePath, 'utf-8');
             if (args[0] && typeof args[0] === 'object') {
@@ -1269,40 +1284,46 @@ export class ProviderLoader {
         const jsonPath = path.join(d, 'provider.json');
         try {
           const raw = fs.readFileSync(jsonPath, 'utf-8');
-          const mod = JSON.parse(raw) as ProviderModule;
+          const mod = JSON.parse(raw) as Omit<ProviderModule, 'extensionIdPattern'> & {
+            extensionIdPattern?: RegExp | string;
+          };
 
           if (!mod.type || !mod.name || !mod.category) {
             this.log(`⚠ Invalid provider at ${jsonPath}: missing type/name/category`);
           } else {
             // Restore RegExp fields from JSON (extensionIdPattern)
-            if ((mod as any).extensionIdPattern && typeof (mod as any).extensionIdPattern === 'string') {
-              const flags = (mod as any).extensionIdPattern_flags || '';
-              (mod as any).extensionIdPattern = new RegExp((mod as any).extensionIdPattern, flags);
-              delete (mod as any).extensionIdPattern_flags;
+            if (typeof mod.extensionIdPattern === 'string') {
+              const flags = mod.extensionIdPattern_flags || '';
+              mod.extensionIdPattern = new RegExp(mod.extensionIdPattern, flags);
             }
+            const { extensionIdPattern_flags, extensionIdPattern, ...providerFields } = mod;
+            const normalizedProvider: ProviderModule = {
+              ...providerFields,
+              ...(extensionIdPattern instanceof RegExp ? { extensionIdPattern } : {}),
+            };
 
             // Load scripts.js if exists (IDE/Extension)
             // Skip for compatibility-format providers — scripts loaded lazily in resolve()
-            const hasCompatibility = Array.isArray((mod as any).compatibility);
+            const hasCompatibility = Array.isArray(normalizedProvider.compatibility);
             const scriptsPath = path.join(d, 'scripts.js');
             if (!hasCompatibility && fs.existsSync(scriptsPath)) {
               try {
                 delete require.cache[require.resolve(scriptsPath)];
-                const scripts = require(scriptsPath);
-                mod.scripts = scripts;
+                const scripts = require(scriptsPath) as Partial<ProviderScripts>;
+                normalizedProvider.scripts = scripts;
               } catch (e) {
                 this.log(`⚠ Failed to load scripts: ${scriptsPath}: ${(e as Error).message}`);
               }
             }
 
-            const existed = this.providers.has(mod.type);
-            this.providers.set(mod.type, mod);
+            const existed = this.providers.has(normalizedProvider.type);
+            this.providers.set(normalizedProvider.type, normalizedProvider);
             count++;
             // Identify source tier for debugging
             const source = d.startsWith(this.userDir) && !d.includes('.upstream')
               ? 'user' : 'upstream';
             const overrideWarning = existed && source === 'user' ? ' ⚠ OVERRIDES upstream' : '';
-            this.log(`  ${existed ? '🔄' : '✅'} ${mod.type} (${mod.category}) — ${mod.name} [${source}]${overrideWarning}`);
+            this.log(`  ${existed ? '🔄' : '✅'} ${normalizedProvider.type} (${normalizedProvider.category}) — ${normalizedProvider.name} [${source}]${overrideWarning}`);
           }
         } catch (e) {
           this.log(`⚠ Failed to load ${jsonPath}: ${(e as Error).message}`);
