@@ -1000,15 +1000,9 @@ export class ProviderLoader {
         : (schemaDef as any).default)
       : undefined;
 
- // Load user-saved value
-    try {
-      const { loadConfig } = require('../config/config.js');
-      const config = loadConfig();
-      const userVal = config.providerSettings?.[type]?.[key];
-      return userVal !== undefined ? userVal : defaultVal;
-    } catch {
-      return defaultVal;
-    }
+    const config = this.readConfig();
+    const userVal = config?.providerSettings?.[type]?.[key];
+    return userVal !== undefined ? userVal : defaultVal;
   }
 
  /**
@@ -1043,13 +1037,14 @@ export class ProviderLoader {
     }
     if (schemaDef.type === 'select' && schemaDef.options && !schemaDef.options.includes(value)) return false;
 
+    const config = this.readConfig();
+    if (!config) return false;
+
     try {
-      const { loadConfig, saveConfig } = require('../config/config.js');
-      const config = loadConfig();
       if (!config.providerSettings) config.providerSettings = {};
       if (!config.providerSettings[type]) config.providerSettings[type] = {};
       config.providerSettings[type][key] = value;
-      saveConfig(config);
+      this.writeConfig(config);
       this.log(`Setting updated: ${type}.${key} = ${JSON.stringify(value)}`);
       return true;
     } catch (e) {
@@ -1063,6 +1058,20 @@ export class ProviderLoader {
     if (typeof value !== 'string') return null;
     const trimmed = value.trim();
     return trimmed ? trimmed : null;
+  }
+
+  protected readConfig(): any | null {
+    try {
+      const { loadConfig } = require('../config/config.js');
+      return loadConfig();
+    } catch {
+      return null;
+    }
+  }
+
+  protected writeConfig(config: any): void {
+    const { saveConfig } = require('../config/config.js');
+    saveConfig(config);
   }
 
   private getSettingsSchema(type: string): Record<string, ProviderSettingDef> {
