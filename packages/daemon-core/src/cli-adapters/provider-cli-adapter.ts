@@ -60,6 +60,10 @@ import {
     summarizeCliTraceText,
     type TurnParseScope,
 } from './provider-cli-parse.js';
+import {
+    resolveCliAdapterConfig,
+    type ProviderResolutionMeta,
+} from './provider-cli-config.js';
 
 export {
     normalizeCliProviderForRuntime,
@@ -86,18 +90,6 @@ interface IdleFinishCandidate {
     lastScreenChangeAt: number;
     responseEpoch: number;
     assistantLength: number;
-}
-
-interface ProviderResolutionMeta {
-    type: string;
-    name: string;
-    resolvedVersion: string | null;
-    resolvedOs: string | null;
-    providerDir: string | null;
-    scriptDir: string | null;
-    scriptsPath: string | null;
-    scriptsSource: string | null;
-    versionWarning: string | null;
 }
 
 // ─── Adapter ────────────────────────────────────────
@@ -304,36 +296,13 @@ export class ProviderCliAdapter implements CliAdapter {
             ? workingDir.replace(/^~/, os.homedir())
             : workingDir;
 
-        const t = provider.timeouts || {};
-        this.timeouts = {
-            ptyFlush: t.ptyFlush ?? 50,
-            dialogAccept: t.dialogAccept ?? 300,
-            approvalCooldown: t.approvalCooldown ?? 3000,
-            generatingIdle: t.generatingIdle ?? 6000,
-            idleFinish: t.idleFinish ?? 5000,
-            maxResponse: t.maxResponse ?? 300000,
-            shutdownGrace: t.shutdownGrace ?? 1000,
-            outputSettle: t.outputSettle ?? 300,
-        };
-
-        const rawKeys = provider.approvalKeys;
-        this.approvalKeys = (rawKeys && typeof rawKeys === 'object') ? rawKeys : {};
-        this.sendDelayMs = typeof provider.sendDelayMs === 'number' ? Math.max(0, provider.sendDelayMs) : 0;
-        this.sendKey = typeof provider.sendKey === 'string' && provider.sendKey.length > 0
-            ? provider.sendKey
-            : '\r';
-        this.submitStrategy = provider.submitStrategy === 'immediate' ? 'immediate' : 'wait_for_echo';
-        this.providerResolutionMeta = {
-            type: provider.type,
-            name: provider.name,
-            resolvedVersion: provider._resolvedVersion || null,
-            resolvedOs: provider._resolvedOs || null,
-            providerDir: provider._resolvedProviderDir || null,
-            scriptDir: provider._resolvedScriptDir || null,
-            scriptsPath: provider._resolvedScriptsPath || null,
-            scriptsSource: provider._resolvedScriptsSource || null,
-            versionWarning: provider._versionWarning || null,
-        };
+        const resolvedConfig = resolveCliAdapterConfig(provider);
+        this.timeouts = resolvedConfig.timeouts;
+        this.approvalKeys = resolvedConfig.approvalKeys;
+        this.sendDelayMs = resolvedConfig.sendDelayMs;
+        this.sendKey = resolvedConfig.sendKey;
+        this.submitStrategy = resolvedConfig.submitStrategy;
+        this.providerResolutionMeta = resolvedConfig.providerResolutionMeta;
 
         // Scripts are required — loaded by ProviderLoader via compatibility array
         this.cliScripts = provider.scripts || {};
