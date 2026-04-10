@@ -3,16 +3,15 @@ import type { DaemonData } from '../../types'
 import { formatRelativeTime, type MobileConversationListItem, type MobileMachineActionState } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
 import type { MachineRecentLaunch, WorkspaceLaunchKind } from '../../pages/machine/types'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo } from 'react'
 import { getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
 import LaunchConfirmDialog from '../machine/LaunchConfirmDialog'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
-import { getDefaultBrowseStartPath } from '../machine/workspaceBrowse'
 import { buildLaunchWorkspaceOptions } from '../machine/launchWorkspaceOptions'
-import type { LaunchWorkspaceOption } from '../../pages/machine/types'
 import { getConversationTitle, getMachineConversationCardSubtitle } from './conversation-presenters'
+import { useDashboardMobileMachineLauncher } from './useDashboardMobileMachineLauncher'
 
 interface LaunchProviderInfo {
     type: string
@@ -69,15 +68,6 @@ export default function DashboardMobileMachineScreen({
     onLaunchWorkspaceProvider,
     onListSavedSessions,
 }: DashboardMobileMachineScreenProps) {
-    const getDefaultLauncherKind = (
-        ideAvailable: boolean,
-        cliCount: number,
-        acpCount: number,
-    ): WorkspaceLaunchKind | null => (
-        ideAvailable ? 'ide' : cliCount > 0 ? 'cli' : acpCount > 0 ? 'acp' : null
-    )
-
-    const [showAllRecent, setShowAllRecent] = useState(false)
     const formatKindLabel = (kind: MachineRecentLaunch['kind']) => {
         if (kind === 'ide') return 'IDE'
         if (kind === 'cli') return 'CLI'
@@ -86,147 +76,14 @@ export default function DashboardMobileMachineScreen({
 
     const topRecentLaunches = selectedMachineRecentLaunches.slice(0, 4)
     const topConversationItems = selectedMachineConversations.slice(0, 3)
-    const hasIdeOptions = (selectedMachineEntry.detectedIdes?.length || 0) > 0
-    const workspaceRows = useMemo(() => (selectedMachineEntry.workspaces || []).map(w => ({ id: w.id, path: w.path, label: w.label })), [selectedMachineEntry])
-    const defaultWorkspaceId = selectedMachineEntry.defaultWorkspaceId || null
-    const [workspaceChoice, setWorkspaceChoice] = useState<string>(defaultWorkspaceId || (workspaceRows[0]?.id || ''))
-    const [customWorkspacePath, setCustomWorkspacePath] = useState('')
-    const [browseCurrentPath, setBrowseCurrentPath] = useState('')
-    const [browseDirectories, setBrowseDirectories] = useState<Array<{ name: string; path: string }>>([])
-    const [browseBusy, setBrowseBusy] = useState(false)
-    const [browseError, setBrowseError] = useState('')
-    const [browseDialogOpen, setBrowseDialogOpen] = useState(false)
-    const [activeLauncherKind, setActiveLauncherKind] = useState<WorkspaceLaunchKind | null>(
-        getDefaultLauncherKind(hasIdeOptions, cliProviders.length, acpProviders.length),
-    )
-    const launchConfirmActionRef = useRef<(() => Promise<void>) | null>(null)
-    const [launchConfirm, setLaunchConfirm] = useState<{
-        title: string
-        description: string
-        details: Array<{ label: string; value: string }>
-        confirmLabel: string
-        workspaceOptions?: LaunchWorkspaceOption[]
-        showArgsInput?: boolean
-        showModelInput?: boolean
-        providerType?: string
-    } | null>(null)
-    const launchConfirmWorkspaceKeyRef = useRef('__home__')
-    const [launchConfirmWorkspaceKey, setLaunchConfirmWorkspaceKey] = useState('__home__')
-    const [launchConfirmArgs, setLaunchConfirmArgs] = useState('')
-    const [launchConfirmModel, setLaunchConfirmModel] = useState('')
-    const [launchConfirmResumeId, setLaunchConfirmResumeId] = useState('')
-    const [launchConfirmSavedSessions, setLaunchConfirmSavedSessions] = useState<any[]>([])
-    const [launchConfirmSessionsLoading, setLaunchConfirmSessionsLoading] = useState(false)
-    const [launchConfirmBusy, setLaunchConfirmBusy] = useState(false)
-    const lastMachineIdRef = useRef<string | null>(null)
-    const resolvedWorkspacePath = workspaceChoice === '__custom__'
-        ? customWorkspacePath.trim()
-        : (workspaceRows.find(workspace => workspace.id === workspaceChoice)?.path || '')
-    const canCreateMissingWorkspace = workspaceChoice === '__custom__'
-        && !!resolvedWorkspacePath
-        && machineAction.state === 'error'
-        && /(Directory path is not valid or does not exist|Path does not exist)/i.test(machineAction.message)
-    const savedWorkspacePath = workspaceChoice !== '__custom__'
-        ? (workspaceRows.find(workspace => workspace.id === workspaceChoice)?.path || '')
-        : ''
-
-    const loadBrowsePath = useCallback(async (path: string) => {
-        setBrowseBusy(true)
-        setBrowseError('')
-        try {
-            const result = await onBrowseDirectory(path)
-            setBrowseCurrentPath(result.path)
-            setCustomWorkspacePath(result.path)
-            setBrowseDirectories(result.directories)
-        } catch (error) {
-            setBrowseError(error instanceof Error ? error.message : 'Could not load folder')
-        } finally {
-            setBrowseBusy(false)
-        }
-    }, [onBrowseDirectory])
-
-    const openBrowseDialog = useCallback(() => {
-        setWorkspaceChoice('__custom__')
-        setBrowseDialogOpen(true)
-        const initialPath = getDefaultBrowseStartPath(selectedMachineEntry.platform, [
-            customWorkspacePath.trim(),
-            savedWorkspacePath,
-            workspaceRows.find(workspace => workspace.id === defaultWorkspaceId)?.path,
-            workspaceRows[0]?.path,
-        ])
-        void loadBrowsePath(initialPath)
-    }, [customWorkspacePath, defaultWorkspaceId, loadBrowsePath, savedWorkspacePath, selectedMachineEntry.platform, workspaceRows])
-
-    const openLaunchConfirm = useCallback((
-        config: {
-            title: string
-            description: string
-            details: Array<{ label: string; value: string }>
-            confirmLabel: string
-            workspaceOptions?: LaunchWorkspaceOption[]
-            selectedWorkspaceKey?: string
-            showArgsInput?: boolean
-            showModelInput?: boolean
-            initialArgs?: string
-            initialModel?: string
-            providerType?: string
-        },
-        action: () => Promise<void>,
-    ) => {
-        launchConfirmActionRef.current = action
-        launchConfirmWorkspaceKeyRef.current = config.selectedWorkspaceKey || '__home__'
-        setLaunchConfirmWorkspaceKey(config.selectedWorkspaceKey || '__home__')
-        setLaunchConfirmArgs(config.initialArgs || '')
-        setLaunchConfirmModel(config.initialModel || '')
-        setLaunchConfirmResumeId('')
-        setLaunchConfirmSavedSessions([])
-        setLaunchConfirm(config)
-        
-        if (config.providerType && onListSavedSessions) {
-            setLaunchConfirmSessionsLoading(true)
-            onListSavedSessions(config.providerType)
-                .then(sessions => setLaunchConfirmSavedSessions(sessions || []))
-                .catch(err => console.warn('Failed to load saved sessions', err))
-                .finally(() => setLaunchConfirmSessionsLoading(false))
-        }
-    }, [onListSavedSessions])
-
-    const handleConfirmLaunch = useCallback(() => {
-        if (!launchConfirmActionRef.current) return
-        setLaunchConfirmBusy(true)
-        void launchConfirmActionRef.current()
-            .finally(() => {
-                launchConfirmActionRef.current = null
-                setLaunchConfirmBusy(false)
-                setLaunchConfirm(null)
-            })
-    }, [])
-
-    useEffect(() => {
-        if (lastMachineIdRef.current !== selectedMachineEntry.id) {
-            lastMachineIdRef.current = selectedMachineEntry.id
-            setWorkspaceChoice(defaultWorkspaceId || (workspaceRows[0]?.id || '__custom__'))
-            setCustomWorkspacePath('')
-            setBrowseCurrentPath('')
-            setBrowseDirectories([])
-            setBrowseError('')
-            setBrowseDialogOpen(false)
-            setActiveLauncherKind(getDefaultLauncherKind(hasIdeOptions, cliProviders.length, acpProviders.length))
-        }
-    }, [acpProviders.length, cliProviders.length, defaultWorkspaceId, hasIdeOptions, selectedMachineEntry.id, workspaceRows])
-
-    useEffect(() => {
-        if (workspaceChoice === '__custom__') return
-        if (workspaceChoice && workspaceRows.some(workspace => workspace.id === workspaceChoice)) return
-        setWorkspaceChoice(defaultWorkspaceId || (workspaceRows[0]?.id || '__custom__'))
-    }, [defaultWorkspaceId, workspaceChoice, workspaceRows])
-
-    useEffect(() => {
-        if (activeLauncherKind === 'ide' && hasIdeOptions) return
-        if (activeLauncherKind === 'cli' && cliProviders.length > 0) return
-        if (activeLauncherKind === 'acp' && acpProviders.length > 0) return
-        setActiveLauncherKind(getDefaultLauncherKind(hasIdeOptions, cliProviders.length, acpProviders.length))
-    }, [activeLauncherKind, acpProviders.length, cliProviders.length, hasIdeOptions])
+    const launcher = useDashboardMobileMachineLauncher({
+        selectedMachineEntry,
+        cliProviders,
+        acpProviders,
+        machineAction,
+        onBrowseDirectory,
+        onListSavedSessions,
+    })
 
     const recentLaunchCards = useMemo(() => topRecentLaunches.map(session => ({
         key: `recent-launch:${session.id}`,
@@ -235,12 +92,12 @@ export default function DashboardMobileMachineScreen({
         onClick: () => {
             const { options, selectedKey } = buildLaunchWorkspaceOptions({
                 machine: {
-                    workspaces: workspaceRows,
-                    defaultWorkspaceId,
+                    workspaces: launcher.workspaceRows,
+                    defaultWorkspaceId: launcher.defaultWorkspaceId,
                 },
                 currentWorkspacePath: session.workspace,
             })
-            openLaunchConfirm({
+            launcher.openLaunchConfirm({
                 title: `Launch ${session.label}?`,
                 description: 'Recent launches require one more confirmation before they run.',
                 confirmLabel: 'Launch',
@@ -251,24 +108,15 @@ export default function DashboardMobileMachineScreen({
                     ...(session.providerType ? [{ label: 'Provider', value: session.providerType }] : []),
                 ],
             }, async () => {
-                const selectedOption = options.find(option => option.key === launchConfirmWorkspaceKeyRef.current)
-                if (selectedOption?.workspaceId) {
-                    setWorkspaceChoice(selectedOption.workspaceId)
-                    setCustomWorkspacePath('')
-                } else if (selectedOption?.workspacePath) {
-                    setWorkspaceChoice('__custom__')
-                    setCustomWorkspacePath(selectedOption.workspacePath)
-                } else {
-                    setWorkspaceChoice('')
-                    setCustomWorkspacePath('')
-                }
+                const selectedOption = options.find(option => option.key === launcher.launchConfirmWorkspaceKeyRef.current)
+                launcher.setWorkspaceSelectionFromOption(selectedOption)
                 await onOpenRecent({
                     ...session,
                     workspace: selectedOption?.workspacePath ?? null,
                 })
             })
         },
-    })), [defaultWorkspaceId, onOpenRecent, openLaunchConfirm, topRecentLaunches, workspaceRows])
+    })), [launcher, onOpenRecent, topRecentLaunches])
     const conversationCards = useMemo(() => topConversationItems.map(item => ({
         key: `recent-chat:${item.conversation.tabKey}`,
         primary: getConversationTitle(item.conversation),
@@ -278,7 +126,7 @@ export default function DashboardMobileMachineScreen({
         unread: item.unread,
         onClick: () => onOpenConversation(item.conversation),
     })), [onOpenConversation, topConversationItems])
-    const visibleRecentLaunchCards = showAllRecent ? recentLaunchCards : recentLaunchCards.slice(0, 4)
+    const visibleRecentLaunchCards = launcher.showAllRecent ? recentLaunchCards : recentLaunchCards.slice(0, 4)
     const hasRecentLaunches = recentLaunchCards.length > 0
     const hasCurrentChats = conversationCards.length > 0
     const headerPaddingClass = isStandalone
@@ -354,16 +202,16 @@ export default function DashboardMobileMachineScreen({
                                 <button
                                     type="button"
                                     className="min-h-[34px] px-3.5 rounded-full border border-border-default/80 bg-surface-primary/90 text-text-secondary text-xs font-bold"
-                                    onClick={() => setShowAllRecent(current => !current)}
+                                    onClick={() => launcher.setShowAllRecent(current => !current)}
                                 >
-                                    {showAllRecent ? 'Show fewer' : `Show ${recentLaunchCards.length - 4} more`}
+                                    {launcher.showAllRecent ? 'Show fewer' : `Show ${recentLaunchCards.length - 4} more`}
                                 </button>
                             </div>
                         )}
                     </section>
                 )}
 
-                {(hasIdeOptions || cliProviders.length > 0 || acpProviders.length > 0) && (
+                {(launcher.hasIdeOptions || cliProviders.length > 0 || acpProviders.length > 0) && (
                     <section className="flex flex-col gap-0">
                         <div className="text-[11px] font-extrabold tracking-[0.08em] uppercase text-text-muted px-4 pb-2">Start</div>
                         <div className="grid grid-cols-1 gap-2.5 px-4">
@@ -373,23 +221,15 @@ export default function DashboardMobileMachineScreen({
                                     Pick a saved workspace or browse folders before choosing IDE, CLI, or ACP.
                                 </div>
                                 <select
-                                    value={workspaceChoice}
-                                    onChange={(event) => {
-                                        const nextValue = event.target.value
-                                        setWorkspaceChoice(nextValue)
-                                        if (nextValue === '__custom__') {
-                                            openBrowseDialog()
-                                            return
-                                        }
-                                        setCustomWorkspacePath('')
-                                    }}
+                                    value={launcher.workspaceChoice}
+                                    onChange={(event) => launcher.handleWorkspaceChoiceChange(event.target.value)}
                                     className="w-full rounded-xl border border-border-default/90 bg-bg-primary/90 text-text-primary px-3 py-3 text-sm"
                                 >
-                                    {workspaceRows.length > 0 ? (
+                                    {launcher.workspaceRows.length > 0 ? (
                                         <>
-                                            {workspaceRows.map(workspace => (
+                                            {launcher.workspaceRows.map(workspace => (
                                                 <option key={workspace.id} value={workspace.id}>
-                                                    {workspace.id === defaultWorkspaceId ? '⭐ ' : ''}
+                                                    {workspace.id === launcher.defaultWorkspaceId ? '⭐ ' : ''}
                                                     {getWorkspaceDisplayLabel(workspace.path, workspace.label) || workspace.path}
                                                 </option>
                                             ))}
@@ -399,7 +239,7 @@ export default function DashboardMobileMachineScreen({
                                         <option value="__custom__">Select workspace…</option>
                                     )}
                                 </select>
-                                {workspaceChoice === '__custom__' && (
+                                {launcher.workspaceChoice === '__custom__' && (
                                     <div className="flex flex-col gap-2.5">
                                         <div className="rounded-2xl border border-border-default/80 bg-bg-primary/80 px-3.5 py-3">
                                             <div className="flex items-start gap-3">
@@ -409,7 +249,7 @@ export default function DashboardMobileMachineScreen({
                                                 <div className="min-w-0 flex-1">
                                                     <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-text-muted mb-1">Selected folder</div>
                                                     <div className="text-[12px] leading-relaxed text-text-primary break-all">
-                                                        {resolvedWorkspacePath || browseCurrentPath || 'No folder selected yet.'}
+                                                        {launcher.resolvedWorkspacePath || launcher.browseCurrentPath || 'No folder selected yet.'}
                                                     </div>
                                                 </div>
                                             </div>
@@ -418,7 +258,7 @@ export default function DashboardMobileMachineScreen({
                                             <button
                                                 type="button"
                                                 className="inline-flex items-center justify-center min-h-[36px] px-3 rounded-xl border border-border-default/90 bg-bg-primary/90 text-text-secondary text-[12px] font-bold"
-                                                onClick={openBrowseDialog}
+                                                onClick={launcher.openBrowseDialog}
                                             >
                                                 Select workspace…
                                             </button>
@@ -426,61 +266,61 @@ export default function DashboardMobileMachineScreen({
                                                 type="button"
                                                 className="inline-flex items-center justify-center min-h-[36px] px-3 rounded-xl border border-accent-primary/30 bg-accent-primary/10 text-text-primary text-[12px] font-bold disabled:opacity-40"
                                                 onClick={() => {
-                                                    if (!resolvedWorkspacePath) return
-                                                    onAddWorkspace(resolvedWorkspacePath)
+                                                    if (!launcher.resolvedWorkspacePath) return
+                                                    onAddWorkspace(launcher.resolvedWorkspacePath)
                                                 }}
-                                                disabled={!resolvedWorkspacePath || browseBusy}
+                                                disabled={!launcher.resolvedWorkspacePath || launcher.browseBusy}
                                             >
                                                 Save as workspace
                                             </button>
                                         </div>
                                     </div>
                                 )}
-                                {resolvedWorkspacePath && (
-                                    <div className="text-[11px] leading-relaxed text-text-muted break-all">{resolvedWorkspacePath}</div>
+                                {launcher.resolvedWorkspacePath && (
+                                    <div className="text-[11px] leading-relaxed text-text-muted break-all">{launcher.resolvedWorkspacePath}</div>
                                 )}
                             </div>
                         </div>
                         <div className="grid grid-cols-3 gap-2 px-4">
-                            {hasIdeOptions && (
+                            {launcher.hasIdeOptions && (
                                 <button
-                                    className={`min-h-[40px] rounded-full border text-xs font-bold ${activeLauncherKind === 'ide' ? 'border-accent-primary/30 bg-accent-primary/10 text-text-primary' : 'border-border-default/80 bg-surface-primary/90 text-text-secondary'}`}
+                                    className={`min-h-[40px] rounded-full border text-xs font-bold ${launcher.activeLauncherKind === 'ide' ? 'border-accent-primary/30 bg-accent-primary/10 text-text-primary' : 'border-border-default/80 bg-surface-primary/90 text-text-secondary'}`}
                                     type="button"
-                                    onClick={() => setActiveLauncherKind('ide')}
+                                    onClick={() => launcher.setActiveLauncherKind('ide')}
                                 >
                                     IDE
                                 </button>
                             )}
                             {cliProviders.length > 0 && (
                                 <button
-                                    className={`min-h-[40px] rounded-full border text-xs font-bold ${activeLauncherKind === 'cli' ? 'border-accent-primary/30 bg-accent-primary/10 text-text-primary' : 'border-border-default/80 bg-surface-primary/90 text-text-secondary'}`}
+                                    className={`min-h-[40px] rounded-full border text-xs font-bold ${launcher.activeLauncherKind === 'cli' ? 'border-accent-primary/30 bg-accent-primary/10 text-text-primary' : 'border-border-default/80 bg-surface-primary/90 text-text-secondary'}`}
                                     type="button"
-                                    onClick={() => setActiveLauncherKind('cli')}
+                                    onClick={() => launcher.setActiveLauncherKind('cli')}
                                 >
                                     CLI
                                 </button>
                             )}
                             {acpProviders.length > 0 && (
                                 <button
-                                    className={`min-h-[40px] rounded-full border text-xs font-bold ${activeLauncherKind === 'acp' ? 'border-accent-primary/30 bg-accent-primary/10 text-text-primary' : 'border-border-default/80 bg-surface-primary/90 text-text-secondary'}`}
+                                    className={`min-h-[40px] rounded-full border text-xs font-bold ${launcher.activeLauncherKind === 'acp' ? 'border-accent-primary/30 bg-accent-primary/10 text-text-primary' : 'border-border-default/80 bg-surface-primary/90 text-text-secondary'}`}
                                     type="button"
-                                    onClick={() => setActiveLauncherKind('acp')}
+                                    onClick={() => launcher.setActiveLauncherKind('acp')}
                                 >
                                     ACP
                                 </button>
                             )}
                         </div>
-                        {activeLauncherKind && (
+                        {launcher.activeLauncherKind && (
                             <div className="flex flex-col gap-2.5 px-4 pt-3">
                                 <div className="text-xs font-bold text-text-secondary">
-                                    {activeLauncherKind === 'ide'
+                                    {launcher.activeLauncherKind === 'ide'
                                         ? 'Choose an IDE'
-                                        : activeLauncherKind === 'cli'
+                                        : launcher.activeLauncherKind === 'cli'
                                             ? 'Choose a CLI provider'
                                             : 'Choose an ACP provider'}
                                 </div>
                                 <div className="grid grid-cols-1 gap-2">
-                                    {activeLauncherKind === 'ide'
+                                    {launcher.activeLauncherKind === 'ide'
                                         ? (selectedMachineEntry.detectedIdes || []).slice(0, 6).map(ide => (
                                             <button
                                                 key={ide.type}
@@ -489,13 +329,13 @@ export default function DashboardMobileMachineScreen({
                                                 onClick={() => {
                                                     const { options, selectedKey } = buildLaunchWorkspaceOptions({
                                                         machine: {
-                                                            workspaces: workspaceRows,
-                                                            defaultWorkspaceId,
+                                                            workspaces: launcher.workspaceRows,
+                                                            defaultWorkspaceId: launcher.defaultWorkspaceId,
                                                         },
-                                                        currentWorkspaceId: workspaceChoice !== '__custom__' ? workspaceChoice : null,
-                                                        currentWorkspacePath: resolvedWorkspacePath,
+                                                        currentWorkspaceId: launcher.workspaceChoice !== '__custom__' ? launcher.workspaceChoice : null,
+                                                        currentWorkspacePath: launcher.resolvedWorkspacePath,
                                                     })
-                                                    openLaunchConfirm({
+                                                    launcher.openLaunchConfirm({
                                                         title: `Launch ${ide.name}?`,
                                                         description: 'Review or change the target folder before opening this IDE.',
                                                         confirmLabel: 'Launch IDE',
@@ -506,17 +346,8 @@ export default function DashboardMobileMachineScreen({
                                                             { label: 'Provider', value: ide.name },
                                                         ],
                                                     }, async () => {
-                                                        const selectedOption = options.find(option => option.key === launchConfirmWorkspaceKeyRef.current)
-                                                        if (selectedOption?.workspaceId) {
-                                                            setWorkspaceChoice(selectedOption.workspaceId)
-                                                            setCustomWorkspacePath('')
-                                                        } else if (selectedOption?.workspacePath) {
-                                                            setWorkspaceChoice('__custom__')
-                                                            setCustomWorkspacePath(selectedOption.workspacePath)
-                                                        } else {
-                                                            setWorkspaceChoice('')
-                                                            setCustomWorkspacePath('')
-                                                        }
+                                                        const selectedOption = options.find(option => option.key === launcher.launchConfirmWorkspaceKeyRef.current)
+                                                        launcher.setWorkspaceSelectionFromOption(selectedOption)
                                                         onLaunchDetectedIde(ide.type, {
                                                             workspacePath: selectedOption?.workspacePath ?? null,
                                                         })
@@ -525,57 +356,49 @@ export default function DashboardMobileMachineScreen({
                                             >
                                                 <span className="text-[13px] font-bold text-text-primary">{ide.name}</span>
                                                 <span className="text-[11px] leading-relaxed text-text-muted break-all">
-                                                    {resolvedWorkspacePath || 'Use selected workspace'}
+                                                    {launcher.resolvedWorkspacePath || 'Use selected workspace'}
                                                 </span>
                                             </button>
                                         ))
-                                        : (activeLauncherKind === 'cli' ? cliProviders : acpProviders).map(provider => (
+                                        : (launcher.activeLauncherKind === 'cli' ? cliProviders : acpProviders).map(provider => (
                                             <button
                                                 key={provider.type}
                                                 type="button"
                                                 className="flex flex-col items-start gap-1 w-full text-left p-3 rounded-2xl border border-border-default/80 bg-surface-primary/90 text-text-primary"
                                                 onClick={() => {
+                                                    const launchKind = launcher.activeLauncherKind === 'cli' ? 'cli' : 'acp'
                                                     const { options, selectedKey } = buildLaunchWorkspaceOptions({
                                                         machine: {
-                                                            workspaces: workspaceRows,
-                                                            defaultWorkspaceId,
+                                                            workspaces: launcher.workspaceRows,
+                                                            defaultWorkspaceId: launcher.defaultWorkspaceId,
                                                         },
-                                                        currentWorkspaceId: workspaceChoice !== '__custom__' ? workspaceChoice : null,
-                                                        currentWorkspacePath: resolvedWorkspacePath,
+                                                        currentWorkspaceId: launcher.workspaceChoice !== '__custom__' ? launcher.workspaceChoice : null,
+                                                        currentWorkspacePath: launcher.resolvedWorkspacePath,
                                                     })
-                                                    openLaunchConfirm({
+                                                    launcher.openLaunchConfirm({
                                                         title: `Launch ${provider.displayName}?`,
                                                         description: 'Review or change the provider workspace before starting this session.',
-                                                        confirmLabel: `Launch ${activeLauncherKind.toUpperCase()}`,
+                                                        confirmLabel: `Launch ${launchKind.toUpperCase()}`,
                                                         workspaceOptions: options,
                                                         selectedWorkspaceKey: selectedKey,
                                                         details: [
-                                                            { label: 'Mode', value: activeLauncherKind.toUpperCase() },
+                                                            { label: 'Mode', value: launchKind.toUpperCase() },
                                                             { label: 'Provider', value: provider.displayName },
                                                         ],
-                                                        showArgsInput: activeLauncherKind === 'cli' || activeLauncherKind === 'acp',
-                                                        showModelInput: activeLauncherKind === 'acp',
+                                                        showArgsInput: true,
+                                                        showModelInput: launchKind === 'acp',
                                                         initialArgs: '',
                                                         initialModel: '',
                                                         providerType: provider.type,
                                                     }, async () => {
-                                                        const selectedOption = options.find(option => option.key === launchConfirmWorkspaceKeyRef.current)
-                                                        if (selectedOption?.workspaceId) {
-                                                            setWorkspaceChoice(selectedOption.workspaceId)
-                                                            setCustomWorkspacePath('')
-                                                        } else if (selectedOption?.workspacePath) {
-                                                            setWorkspaceChoice('__custom__')
-                                                            setCustomWorkspacePath(selectedOption.workspacePath)
-                                                        } else {
-                                                            setWorkspaceChoice('')
-                                                            setCustomWorkspacePath('')
-                                                        }
-                                                        onLaunchWorkspaceProvider(activeLauncherKind, provider.type, {
+                                                        const selectedOption = options.find(option => option.key === launcher.launchConfirmWorkspaceKeyRef.current)
+                                                        launcher.setWorkspaceSelectionFromOption(selectedOption)
+                                                        onLaunchWorkspaceProvider(launchKind, provider.type, {
                                                             workspaceId: selectedOption?.workspaceId ?? null,
                                                             workspacePath: selectedOption?.workspacePath ?? null,
-                                                            args: launchConfirmArgs,
-                                                            model: launchConfirmModel,
-                                                            resumeSessionId: launchConfirmResumeId || null,
+                                                            args: launcher.launchConfirmArgs,
+                                                            model: launcher.launchConfirmModel,
+                                                            resumeSessionId: launcher.launchConfirmResumeId || null,
                                                         })
                                                     })
                                                 }}
@@ -584,7 +407,7 @@ export default function DashboardMobileMachineScreen({
                                                     {provider.icon ? `${provider.icon} ` : ''}{provider.displayName}
                                                 </span>
                                                 <span className="text-[11px] leading-relaxed text-text-muted break-all">
-                                                    {resolvedWorkspacePath || 'Use selected workspace'}
+                                                    {launcher.resolvedWorkspacePath || 'Use selected workspace'}
                                                 </span>
                                             </button>
                                         ))}
@@ -594,12 +417,12 @@ export default function DashboardMobileMachineScreen({
                         {machineAction.message && (
                             <div className={`mx-4 mt-2.5 p-3 rounded-xl text-xs leading-relaxed ${machineAction.state === 'error' ? 'text-status-error bg-status-error/10' : 'text-text-secondary bg-surface-primary/90'}`}>
                                 {machineAction.message}
-                                {canCreateMissingWorkspace && (
+                                {launcher.canCreateMissingWorkspace && (
                                     <div className="mt-2">
                                         <button
                                             type="button"
                                             className="inline-flex items-center justify-center min-h-[34px] px-4 rounded-lg bg-surface-primary text-text-primary font-bold text-xs"
-                                            onClick={() => onAddWorkspace(resolvedWorkspacePath, { createIfMissing: true })}
+                                            onClick={() => onAddWorkspace(launcher.resolvedWorkspacePath, { createIfMissing: true })}
                                         >
                                             Create folder
                                         </button>
@@ -638,58 +461,54 @@ export default function DashboardMobileMachineScreen({
                     </div>
                 </section>
             </div>
-            {browseDialogOpen && (
+            {launcher.browseDialogOpen && (
                 <WorkspaceBrowseDialog
                     title="Select workspace"
                     description="Move through folders like a normal explorer, then use the current folder for this machine."
-                    currentPath={browseCurrentPath}
-                    directories={browseDirectories}
-                    busy={browseBusy}
-                    error={browseError}
+                    currentPath={launcher.browseCurrentPath}
+                    directories={launcher.browseDirectories}
+                    busy={launcher.browseBusy}
+                    error={launcher.browseError}
                     confirmLabel="Use this folder"
-                    onClose={() => setBrowseDialogOpen(false)}
-                    onNavigate={(path) => { void loadBrowsePath(path) }}
+                    onClose={() => launcher.setBrowseDialogOpen(false)}
+                    onNavigate={(path) => { void launcher.loadBrowsePath(path) }}
                     onConfirm={(path) => {
-                        setCustomWorkspacePath(path)
-                        setWorkspaceChoice('__custom__')
-                        setBrowseDialogOpen(false)
+                        launcher.chooseCustomWorkspacePath(path)
+                        launcher.setBrowseDialogOpen(false)
                     }}
                 />
             )}
-            {launchConfirm && (
+            {launcher.launchConfirm && (
                 <LaunchConfirmDialog
-                    title={launchConfirm.title}
-                    description={launchConfirm.description}
-                    details={launchConfirm.details}
-                    workspaceOptions={launchConfirm.workspaceOptions}
-                    selectedWorkspaceKey={launchConfirmWorkspaceKey}
-                    onWorkspaceChange={(key) => {
-                        launchConfirmWorkspaceKeyRef.current = key
-                        setLaunchConfirmWorkspaceKey(key)
-                    }}
-                    confirmLabel={launchConfirm.confirmLabel}
-                    busy={launchConfirmBusy}
-                    showArgsInput={launchConfirm.showArgsInput}
-                    argsValue={launchConfirmArgs}
-                    onArgsChange={setLaunchConfirmArgs}
-                    showModelInput={launchConfirm.showModelInput}
-                    modelValue={launchConfirmModel}
-                    onModelChange={setLaunchConfirmModel}
+                    title={launcher.launchConfirm.title}
+                    description={launcher.launchConfirm.description}
+                    details={launcher.launchConfirm.details}
+                    workspaceOptions={launcher.launchConfirm.workspaceOptions}
+                    selectedWorkspaceKey={launcher.launchConfirmWorkspaceKey}
+                    onWorkspaceChange={launcher.setLaunchConfirmWorkspaceKeyAndSync}
+                    confirmLabel={launcher.launchConfirm.confirmLabel}
+                    busy={launcher.launchConfirmBusy}
+                    showArgsInput={launcher.launchConfirm.showArgsInput}
+                    argsValue={launcher.launchConfirmArgs}
+                    onArgsChange={launcher.setLaunchConfirmArgs}
+                    showModelInput={launcher.launchConfirm.showModelInput}
+                    modelValue={launcher.launchConfirmModel}
+                    onModelChange={launcher.setLaunchConfirmModel}
                     historyProviderNode={
-                        launchConfirm.providerType && (launchConfirmSessionsLoading || launchConfirmSavedSessions.length > 0) && (
+                        launcher.launchConfirm.providerType && (launcher.launchConfirmSessionsLoading || launcher.launchConfirmSavedSessions.length > 0) && (
                             <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
                                 <div className="flex items-center justify-between mb-1">
                                     <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Resume from history</div>
-                                    {launchConfirmSessionsLoading && <div className="text-[10px] text-text-secondary font-medium">Loading...</div>}
+                                    {launcher.launchConfirmSessionsLoading && <div className="text-[10px] text-text-secondary font-medium">Loading...</div>}
                                 </div>
                                 <select
-                                    value={launchConfirmResumeId}
-                                    onChange={(e) => setLaunchConfirmResumeId(e.target.value)}
+                                    value={launcher.launchConfirmResumeId}
+                                    onChange={(e) => launcher.setLaunchConfirmResumeId(e.target.value)}
                                     className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
-                                    disabled={launchConfirmBusy || launchConfirmSessionsLoading}
+                                    disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
                                 >
                                     <option value="">Start a new session</option>
-                                    {launchConfirmSavedSessions.map(sess => (
+                                    {launcher.launchConfirmSavedSessions.map(sess => (
                                         <option key={sess.providerSessionId} value={sess.providerSessionId} disabled={!sess.canResume}>
                                             {sess.title || sess.providerSessionId} {!sess.canResume ? '(workspace missing)' : ''}
                                         </option>
@@ -698,11 +517,8 @@ export default function DashboardMobileMachineScreen({
                             </div>
                         )
                     }
-                    onConfirm={handleConfirmLaunch}
-                    onCancel={() => {
-                        launchConfirmActionRef.current = null
-                        setLaunchConfirm(null)
-                    }}
+                    onConfirm={launcher.handleConfirmLaunch}
+                    onCancel={launcher.closeLaunchConfirm}
                 />
             )}
             {showBottomNav && (
