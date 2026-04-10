@@ -5,11 +5,16 @@
 
 import type { CommandResult, CommandHelpers } from './handler.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
+import type { ProviderInstance } from '../providers/provider-instance.js';
 import { LOG } from '../logging/logger.js';
+
+interface CliPresentationInstance extends ProviderInstance {
+    getPresentationMode?(): 'terminal' | 'chat';
+}
 
 function getCliPresentationMode(h: CommandHelpers, targetSessionId?: string): 'terminal' | 'chat' | null {
     if (!targetSessionId) return null;
-    const instance = h.ctx.instanceManager?.getInstance(targetSessionId) as any;
+    const instance = h.ctx.instanceManager?.getInstance(targetSessionId) as CliPresentationInstance | undefined;
     if (instance?.category !== 'cli') return null;
     const mode = instance.getPresentationMode?.();
     return mode === 'chat' || mode === 'terminal' ? mode : null;
@@ -49,11 +54,12 @@ export function handlePtyResize(h: CommandHelpers, args: any): CommandResult {
     if (!adapter || typeof adapter.resize !== 'function') {
         return { success: false, error: `CLI adapter not found: ${targetSessionId || cliType || 'unknown'}` };
     }
+    const resize = adapter.resize;
     if (force) {
-        adapter.resize(cols - 1, rows);
-        setTimeout(() => adapter.resize(cols, rows), 50);
+        resize(cols - 1, rows);
+        setTimeout(() => resize(cols, rows), 50);
     } else {
-        adapter.resize(cols, rows);
+        resize(cols, rows);
     }
     return { success: true };
 }
@@ -119,7 +125,7 @@ function parseScriptResult(result: unknown): { success: boolean; payload: any } 
             return { success: true, payload: { result } };
         }
     }
-    if (result && typeof result === 'object' && (result as any).success === false) {
+    if (result && typeof result === 'object' && 'success' in result && result.success === false) {
         return { success: false, payload: result };
     }
     return { success: true, payload: result };

@@ -4,12 +4,21 @@
  */
 
 import type { CommandResult, CommandHelpers } from './handler.js';
+import type { CliAdapter } from '../cli-adapter-types.js';
+import type { ProviderModule, ProviderScripts } from '../providers/contracts.js';
+import type { ProviderInstance } from '../providers/provider-instance.js';
 import { readChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import type { SessionTransport } from '../shared-types.js';
 
 const RECENT_SEND_WINDOW_MS = 1200;
 const recentSendByTarget = new Map<string, number>();
+
+interface ApprovalSelectableInstance extends ProviderInstance {
+    recordApprovalSelection?(buttonText: string): void;
+}
+
+type LegacyStringScript = (params?: Record<string, unknown> | string) => string;
 
 function getCurrentProviderType(h: CommandHelpers, fallback = ''): string {
     return h.currentSession?.providerType || h.currentProviderType || fallback;
@@ -19,18 +28,18 @@ function getCurrentManagerKey(h: CommandHelpers): string {
     return h.currentSession?.cdpManagerKey || h.currentManagerKey || '';
 }
 
-function getTargetedCliAdapter(h: CommandHelpers, args: any, providerType?: string) {
+function getTargetedCliAdapter(h: CommandHelpers, args: any, providerType?: string): CliAdapter | null {
     return h.getCliAdapter(args?.targetSessionId || providerType || h.currentSession?.providerType || h.currentManagerKey);
 }
 
-function getTargetInstance(h: CommandHelpers, args: any) {
+function getTargetInstance(h: CommandHelpers, args: any): ApprovalSelectableInstance | null {
     const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     const sessionId = targetSessionId || h.currentSession?.sessionId || '';
     if (!sessionId) return null;
-    return h.ctx.instanceManager?.getInstance(sessionId) as any;
+    return (h.ctx.instanceManager?.getInstance(sessionId) as ApprovalSelectableInstance | undefined) || null;
 }
 
-function getTargetTransport(h: CommandHelpers, provider?: any): SessionTransport | null {
+function getTargetTransport(h: CommandHelpers, provider?: ProviderModule): SessionTransport | null {
     if (h.currentSession?.transport) return h.currentSession.transport;
     switch (provider?.category) {
         case 'cli':
@@ -54,7 +63,7 @@ function isExtensionTransport(transport: SessionTransport | null): boolean {
     return transport === 'cdp-webview';
 }
 
-function buildRecentSendKey(h: CommandHelpers, args: any, provider: any, text: string): string {
+function buildRecentSendKey(h: CommandHelpers, args: any, provider: ProviderModule | undefined, text: string): string {
     const transport = getTargetTransport(h, provider) || 'unknown';
     const target =
         args?.targetSessionId
@@ -73,10 +82,15 @@ function getHistorySessionId(h: CommandHelpers, args: any): string | undefined {
     const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     if (!targetSessionId) return undefined;
 
-    const instance = h.ctx.instanceManager?.getInstance(targetSessionId) as any;
+    const instance = h.ctx.instanceManager?.getInstance(targetSessionId);
     const state = instance?.getState?.();
     const providerSessionId = typeof state?.providerSessionId === 'string' ? state.providerSessionId.trim() : '';
     return providerSessionId || targetSessionId;
+}
+
+function callLegacyTextScript(script: ProviderScripts[keyof ProviderScripts] | undefined, text: string): string | null {
+    if (typeof script !== 'function') return null;
+    return (script as LegacyStringScript)(text);
 }
 
 function isRecentDuplicateSend(key: string): boolean {
@@ -184,8 +198,8 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
     if (isCliLikeTransport(transport)) {
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (adapter) {
-            _log(`${transport} adapter: ${(adapter as any).cliType}`);
-            const status = (adapter as any).getStatus?.();
+            _log(`${transport} adapter: ${adapter.cliType}`);
+            const status = adapter.getStatus();
             if (status) {
                 return {
                     success: true,
@@ -333,10 +347,10 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
     if (isCliLikeTransport(transport)) {
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (adapter) {
-            _log(`${transport} adapter: ${(adapter as any).cliType}`);
+            _log(`${transport} adapter: ${adapter.cliType}`);
             try {
                 await adapter.sendMessage(text);
-                return _logSendSuccess(`${transport}-adapter`, (adapter as any).cliType);
+                return _logSendSuccess(`${transport}-adapter`, adapter.cliType);
             } catch (e: any) {
                 return { success: false, error: `${transport} send failed: ${e.message}` };
             }
@@ -433,7 +447,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
             }
             if (parsed?.needsTypeAndSend && provider?.webviewMatchText && provider?.scripts?.webviewSendMessage) {
                 try {
-                    const webviewScript = (provider.scripts as any).webviewSendMessage(text);
+                    const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text);
                     if (webviewScript && targetCdp.evaluateInWebviewFrame) {
                         const matchText = provider.webviewMatchText;
                         const matchFn = matchText ? (body: string) => body.includes(matchText) : undefined;
@@ -457,7 +471,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
 
     if (provider?.webviewMatchText && provider?.scripts?.webviewSendMessage) {
         try {
-            const webviewScript = (provider.scripts as any).webviewSendMessage(text);
+            const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text);
             if (webviewScript && targetCdp.evaluateInWebviewFrame) {
                 const matchText = provider.webviewMatchText;
                 const matchFn = matchText ? (body: string) => body.includes(matchText) : undefined;
@@ -555,8 +569,8 @@ export async function handleNewChat(h: CommandHelpers, args: any): Promise<Comma
     if (transport === 'pty') {
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (!adapter) return { success: false, error: 'CLI adapter not running' };
-        if (typeof (adapter as any).clearHistory === 'function') {
-            (adapter as any).clearHistory();
+        if (typeof adapter.clearHistory === 'function') {
+            adapter.clearHistory();
             return { success: true, cleared: true };
         }
         return { success: false, error: 'new_chat not supported by this CLI provider' };
@@ -692,12 +706,10 @@ export async function handleSetMode(h: CommandHelpers, args: any): Promise<Comma
     // ACP transport
     if (transport === 'acp') {
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
-        if (adapter) {
-            const acpInstance = (adapter as any)._acpInstance;
-            if (acpInstance && typeof acpInstance.setMode === 'function') {
+        const acpInstance = adapter?._acpInstance;
+        if (acpInstance && typeof acpInstance.setMode === 'function') {
                 await acpInstance.setMode(mode);
                 return { success: true, mode };
-            }
         }
         return { success: false, error: 'ACP adapter not found' };
     }
@@ -748,14 +760,12 @@ export async function handleChangeModel(h: CommandHelpers, args: any): Promise<C
     // ACP transport
     if (transport === 'acp') {
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
-        LOG.info('Command', `[change_model] ACP adapter found: ${!!adapter}, type=${(adapter as any)?.cliType}, hasAcpInstance=${!!(adapter as any)?._acpInstance}`);
-        if (adapter) {
-            const acpInstance = (adapter as any)._acpInstance;
-            if (acpInstance && typeof acpInstance.setConfigOption === 'function') {
+        LOG.info('Command', `[change_model] ACP adapter found: ${!!adapter}, type=${adapter?.cliType}, hasAcpInstance=${!!adapter?._acpInstance}`);
+        const acpInstance = adapter?._acpInstance;
+        if (acpInstance && typeof acpInstance.setConfigOption === 'function') {
                 await acpInstance.setConfigOption('model', model);
                 LOG.info('Command', `[change_model] Updated ACP model to ${model}`);
                 return { success: true, model };
-            }
         }
         return { success: false, error: 'ACP adapter not found' };
     }
@@ -809,6 +819,9 @@ export async function handleSetThoughtLevel(h: CommandHelpers, args: any): Promi
     const adapter = getTargetedCliAdapter(h, args, provider?.type);
     const acpInstance = adapter?._acpInstance;
     if (!acpInstance) return { success: false, error: 'ACP instance not found' };
+    if (typeof acpInstance.setConfigOption !== 'function') {
+        return { success: false, error: 'ACP setConfigOption not available' };
+    }
 
     try {
         await acpInstance.setConfigOption(configId, value);
@@ -834,9 +847,9 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         if (!adapter) return { success: false, error: 'CLI adapter not running' };
 
         // Handle data-driven resolve actions (like from the dashboard 'Fix' button)
-        if (args?.data && typeof (adapter as any).resolveAction === 'function') {
+        if (args?.data && typeof adapter.resolveAction === 'function') {
             try {
-                await (adapter as any).resolveAction(args.data);
+                await adapter.resolveAction(args.data);
                 LOG.info('Command', `[resolveAction] CLI PTY → resolveAction triggered with data payload`);
                 return { success: true, method: 'cli-resolve-action' };
             } catch (e: any) {
@@ -844,7 +857,7 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
             }
         }
 
-        const status = (adapter as any).getStatus?.();
+        const status = adapter.getStatus();
         if (status?.status !== 'waiting_approval') {
             return { success: false, error: 'Not in approval state' };
         }
@@ -866,11 +879,11 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
                 buttonIndex = 0; // approve → first option (default selected)
             }
         }
-        if (typeof (adapter as any).resolveModal === 'function') {
-            (adapter as any).resolveModal(buttonIndex);
+        if (typeof adapter.resolveModal === 'function') {
+            adapter.resolveModal(buttonIndex);
         } else {
             const keys = '\x1B[B'.repeat(Math.max(0, buttonIndex)) + '\r';
-            (adapter as any).writeRaw?.(keys);
+            adapter.writeRaw?.(keys);
         }
         LOG.info('Command', `[resolveAction] CLI PTY → buttonIndex=${buttonIndex} "${buttons[buttonIndex] ?? '?'}"`);
         getTargetInstance(h, args)?.recordApprovalSelection?.(buttons[buttonIndex] ?? button);
@@ -888,6 +901,9 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         const acpInstance = adapter?._acpInstance;
         if (!acpInstance) return { success: false, error: 'ACP instance not found' };
+        if (typeof acpInstance.resolvePermission !== 'function') {
+            return { success: false, error: 'ACP resolvePermission not available' };
+        }
 
         try {
             await acpInstance.resolvePermission(action === 'approve' || action === 'accept' || action === 'always');

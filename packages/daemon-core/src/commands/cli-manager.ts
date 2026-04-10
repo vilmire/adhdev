@@ -10,6 +10,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import chalk from 'chalk';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
+import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { loadConfig } from '../config/config.js';
 import { loadState, saveState } from '../config/state-store.js';
@@ -24,6 +25,7 @@ import type { ProviderModule, ProviderResumeCapability } from '../providers/cont
 import type { CliAdapter } from '../cli-adapter-types.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { SessionRegistry } from '../sessions/registry.js';
+import type { ProviderInstance } from '../providers/provider-instance.js';
 import { LOG } from '../logging/logger.js';
 
 // ─── external dependency interface ──────────────────────────
@@ -67,9 +69,17 @@ export interface HostedCliRuntimeDescriptor {
     providerSessionId?: string;
 }
 
-const chalkApi: any = (chalk as any)?.yellow
-    ? (chalk as any)
-    : (chalk as any)?.default || null;
+type CliPresentationInstance = ProviderInstance & {
+    getPresentationMode?(): 'terminal' | 'chat';
+};
+
+type ChalkColorFn = (text: string) => string;
+type ChalkLike = Partial<Record<'red' | 'green' | 'yellow' | 'cyan', ChalkColorFn>>;
+
+const chalkModule = chalk as unknown as ChalkLike & { default?: ChalkLike };
+const chalkApi: ChalkLike | null = typeof chalkModule.yellow === 'function'
+    ? chalkModule
+    : chalkModule.default || null;
 
 function colorize(color: 'red' | 'green' | 'yellow' | 'cyan', text: string): string {
     const fn = chalkApi?.[color];
@@ -82,6 +92,10 @@ type CliSessionBinding = {
     cliArgs?: string[];
     providerSessionId?: string;
     launchMode: CliLaunchMode;
+};
+
+type CliAdapterWithExtraArgs = CliAdapter & {
+    extraArgs?: string[];
 };
 
 function isUuid(value: string): boolean {
@@ -239,7 +253,7 @@ export class DaemonCliManager {
 
     getSessionPresentationMode(sessionId: string): 'terminal' | 'chat' | null {
         if (!sessionId) return null;
-        const instance = this.deps.getInstanceManager()?.getInstance(sessionId) as any;
+        const instance = this.deps.getInstanceManager()?.getInstance(sessionId) as CliPresentationInstance | undefined;
         const mode = instance?.category === 'cli'
             ? instance.getPresentationMode?.()
             : null;
@@ -321,7 +335,7 @@ export class DaemonCliManager {
                 providerSessionId,
                 attachExisting,
             );
-            return new ProviderCliAdapter(resolvedProvider as any, workingDir, cliArgs, transportFactory);
+            return new ProviderCliAdapter(resolvedProvider as CliProviderModule, workingDir, cliArgs, transportFactory);
         }
 
         throw new Error(`No CLI provider found for '${cliType}'. Create a provider.js in providers/cli/${cliType}/`);
@@ -408,7 +422,7 @@ export class DaemonCliManager {
             throw new Error(`Failed to start ${provider.displayName || provider.name || cliType}: ${spawnErr?.message}`);
         }
 
-        this.adapters.set(key, cliInstance.getAdapter() as any);
+        this.adapters.set(key, cliInstance.getAdapter());
         this.startCliExitMonitor(key, cliType);
     }
 
@@ -475,6 +489,7 @@ export class DaemonCliManager {
  // Register ACP entry in adapter map (getStatus queries from acpInstance in real-time)
             this.adapters.set(key, {
                 cliType: normalizedType,
+                cliName: provider.name,
                 workingDir: resolvedDir,
                 _acpInstance: acpInstance,
                 spawn: async () => {},
@@ -488,9 +503,13 @@ export class DaemonCliManager {
                         activeModal: state.activeChat?.activeModal || null,
                     };
                 },
+                getPartialResponse: () => '',
+                cancel: () => { instanceManager.removeInstance(key); },
+                isProcessing: () => false,
+                isReady: () => true,
                 setOnStatusChange: () => {},
                 setOnPtyData: () => {},
-            } as any);
+            });
 
             console.log(colorize('green', `  ✓ ACP agent started: ${provider.name} in ${resolvedDir}`));
 
@@ -893,7 +912,7 @@ export class DaemonCliManager {
                 const dir = rdir.path;
                 if (!cliType) throw new Error('cliType required');
                 const found = this.findAdapter(cliType, { instanceKey: args?.targetSessionId, dir });
-                const prevCliArgs = found ? (found.adapter as any).extraArgs : undefined;
+                const prevCliArgs = found ? (found.adapter as CliAdapterWithExtraArgs).extraArgs : undefined;
                 if (found) await this.stopSession(found.key);
                 await this.startSession(cliType, dir, args?.cliArgs || prevCliArgs, args?.initialModel);
                 return { success: true, restarted: true };
@@ -916,7 +935,7 @@ export class DaemonCliManager {
                     await adapter.sendMessage(message);
                     return { success: true, status: 'generating' };
                 } else if (action === 'clear_history') {
-                    if (typeof (adapter as any).clearHistory === 'function') (adapter as any).clearHistory();
+                    if (typeof adapter.clearHistory === 'function') adapter.clearHistory();
                     return { success: true, cleared: true };
                 } else if (action === 'stop') {
                     await this.stopSession(key);

@@ -18,6 +18,7 @@ import { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import type { ProviderModule } from '../providers/contracts.js';
 import type { DaemonAgentStreamManager } from '../agent-stream/index.js';
+import type { CliAdapter } from '../cli-adapter-types.js';
 import { loadConfig } from '../config/config.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import type { SessionRegistry, SessionRuntimeTarget } from '../sessions/registry.js';
@@ -39,7 +40,7 @@ export interface CommandResult {
 export interface CommandContext {
     cdpManagers: Map<string, DaemonCdpManager>;
     ideType: string;
-    adapters: Map<string, any>;
+    adapters: Map<string, CliAdapter>;
     providerLoader?: ProviderLoader;
     /** ProviderInstanceManager — for runtime settings propagation */
     instanceManager?: ProviderInstanceManager;
@@ -56,7 +57,7 @@ export interface CommandHelpers {
     getProvider(overrideType?: string): ProviderModule | undefined;
     getProviderScript(scriptName: string, params?: Record<string, string>, ideType?: string): string | null;
     evaluateProviderScript(scriptName: string, params?: Record<string, string>, timeout?: number): Promise<{ result: any; category: string } | null>;
-    getCliAdapter(type?: string): any | null;
+    getCliAdapter(type?: string): CliAdapter | null;
     readonly currentManagerKey: string | undefined;
     readonly currentIdeType: string | undefined;
     readonly currentProviderType: string | undefined;
@@ -290,7 +291,7 @@ export class DaemonCommandHandler implements CommandHelpers {
     }
 
     /** CLI adapter search */
-    getCliAdapter(type?: string): any | null {
+    getCliAdapter(type?: string): CliAdapter | null {
         const target = type || this._currentRoute.session?.sessionId || this._currentRoute.providerType || this._currentRoute.managerKey;
         if (!target || !this._ctx.adapters) return null;
         const session = this._ctx.sessionRegistry?.get(target);
