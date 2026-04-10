@@ -195,4 +195,100 @@ describe('ProviderLoader settings schema', () => {
       executablePath: '/custom/foo',
     });
   });
+
+  it('setSetting persists valid public values and rejects invalid writes', () => {
+    writeProvider(userDir, 'cli', 'foo-cli', {
+      type: 'foo-cli',
+      name: 'Foo CLI',
+      displayName: 'Foo CLI',
+      category: 'cli',
+      spawn: { command: 'foo' },
+      settings: {
+        displayMode: {
+          type: 'select',
+          public: true,
+          default: 'compact',
+          options: ['compact', 'full'],
+        },
+        retries: {
+          type: 'number',
+          public: true,
+          default: 1,
+          min: 0,
+          max: 3,
+        },
+        secretToken: {
+          type: 'string',
+          public: false,
+          default: '',
+        },
+      },
+    });
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    expect(loader.setSetting('foo-cli', 'displayMode', 'full')).toBe(true);
+    expect(loader.setSetting('foo-cli', 'retries', 2)).toBe(true);
+    expect(loader.setSetting('foo-cli', 'retries', 9)).toBe(false);
+    expect(loader.setSetting('foo-cli', 'displayMode', 'invalid')).toBe(false);
+    expect(loader.setSetting('foo-cli', 'secretToken', 'abc')).toBe(false);
+
+    expect(testConfig.providerSettings?.['foo-cli']).toMatchObject({
+      displayMode: 'full',
+      retries: 2,
+    });
+  });
+
+  it('resolves aliases and builds CLI detection entries from providers', () => {
+    writeProvider(userDir, 'cli', 'codex-cli', {
+      type: 'codex-cli',
+      name: 'Codex CLI',
+      displayName: 'Codex CLI',
+      category: 'cli',
+      aliases: ['codex'],
+      icon: '📦',
+      spawn: { command: 'codex' },
+      versionCommand: {
+        darwin: 'codex --version',
+        linux: 'codex version',
+      },
+    });
+    writeProvider(userDir, 'acp', 'agent-acp', {
+      type: 'agent-acp',
+      name: 'Agent ACP',
+      displayName: 'Agent ACP',
+      category: 'acp',
+      spawn: { command: 'agent-acp' },
+    });
+
+    testConfig.providerSettings = {
+      'codex-cli': {
+        executablePath: '/custom/bin/codex',
+      },
+    };
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    expect(loader.resolveAlias('codex')).toBe('codex-cli');
+    expect(loader.getByAlias('codex')?.type).toBe('codex-cli');
+
+    const entries = loader.getCliDetectionList();
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'codex-cli',
+          command: '/custom/bin/codex',
+          category: 'cli',
+          versionCommand: process.platform === 'darwin' ? 'codex --version' : 'codex version',
+        }),
+        expect.objectContaining({
+          id: 'agent-acp',
+          command: 'agent-acp',
+          category: 'acp',
+        }),
+      ]),
+    );
+  });
 });
