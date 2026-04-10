@@ -1,8 +1,9 @@
-import { IconBell, IconSettings, IconMonitor, IconChat } from '../Icons'
+import { IconBell, IconSettings, IconChat } from '../Icons'
 import InstallCommand from '../InstallCommand'
 import { formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
+import { getConversationMetaText, getConversationStatusHint, getConversationTitle } from './conversation-presenters'
 
 interface DashboardMobileChatInboxProps {
     section: DashboardMobileSection
@@ -88,6 +89,9 @@ function DashboardMobileChatItem({
     const isWorking = type === 'working'
     const isEarlier = type === 'earlier'
     const { isReconnecting, isConnecting } = getConversationViewStates(item.conversation)
+    const title = getConversationTitle(item.conversation)
+    const metaText = getConversationMetaText(item.conversation)
+    const statusHint = getConversationStatusHint(item.conversation, { requiresAction: type === 'needs_attention' })
     
     return (
         <button
@@ -112,21 +116,15 @@ function DashboardMobileChatItem({
                 isWorking ? 'bg-[color:color-mix(in_oklab,var(--bg-primary)_82%,var(--accent-primary)_18%)] border border-accent-primary/22 text-accent-primary' :
                 'bg-bg-primary border border-border-subtle text-text-secondary'
             }`} style={isUnread ? { color: 'var(--accent-on-primary)' } : undefined}>
-                {getAvatarText(item.conversation.displayPrimary)}
+                {getAvatarText(title)}
             </span>
             <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                 <div className="flex items-center justify-between gap-2">
-                    <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{item.conversation.displayPrimary}</span>
+                    <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{title}</span>
                     {!isWorking && <span className="text-[11px] font-medium text-text-muted shrink-0">{formatRelativeTime(item.timestamp)}</span>}
                 </div>
                 <div className="text-[12px] font-medium text-text-secondary truncate flex items-center">
-                    {item.conversation.displaySecondary}
-                    {item.conversation.machineName && (
-                        <>
-                            <span className="mx-1 opacity-50">·</span>
-                            <span className="flex items-center gap-1 opacity-80"><IconMonitor size={11} /> {item.conversation.machineName}</span>
-                        </>
-                    )}
+                    {metaText}
                     {isReconnecting ? (
                         <>
                             <span className="mx-1 opacity-50">·</span>
@@ -137,7 +135,7 @@ function DashboardMobileChatItem({
                             <span className="mx-1 opacity-50">·</span>
                             <span className="text-text-muted">Connecting…</span>
                         </>
-                    ) : type === 'needs_attention' && (
+                    ) : statusHint === 'Action needed' && (
                         <>
                             <span className="mx-1 opacity-50">·</span>
                             <span className="text-orange-400">Action needed</span>
@@ -427,22 +425,14 @@ export default function DashboardMobileChatInbox({
                                     type="button"
                                 >
                                     <span className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0 bg-bg-primary border border-border-subtle text-text-secondary">
-                                        {getAvatarText(conversation.displayPrimary)}
+                                        {getAvatarText(getConversationTitle(conversation))}
                                     </span>
                                     <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                                         <div className="flex items-center justify-between gap-2">
-                                            <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{conversation.displayPrimary}</span>
+                                            <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{getConversationTitle(conversation)}</span>
                                             <span className="text-[11px] font-medium text-text-muted shrink-0">Hidden</span>
                                         </div>
-                                        <div className="text-[12px] font-medium text-text-secondary truncate flex items-center">
-                                            {conversation.displaySecondary}
-                                            {conversation.machineName && (
-                                                <>
-                                                    <span className="mx-1 opacity-50">·</span>
-                                                    <span className="flex items-center gap-1 opacity-80"><IconMonitor size={11} /> {conversation.machineName}</span>
-                                                </>
-                                            )}
-                                        </div>
+                                        <div className="text-[12px] font-medium text-text-secondary truncate flex items-center">{getConversationMetaText(conversation)}</div>
                                         <div className="text-[13px] text-text-muted truncate mt-0.5 opacity-90">
                                             Tap to restore and open
                                         </div>

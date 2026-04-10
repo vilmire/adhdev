@@ -13,6 +13,7 @@ import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared';
 import CliViewModeToggle from './CliViewModeToggle';
 import { getConversationDisplayLabel, getConversationMetaParts } from './conversation-selectors';
+import { getConversationMetaText, getConversationTitle } from './conversation-presenters';
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -363,7 +364,7 @@ export default function DashboardHeader({
                                         onClick={() => onHideConversation(activeConv)}
                                     >
                                         <span className="dashboard-header-hidden-current-label">Hide current tab</span>
-                                        <span className="dashboard-header-hidden-current-title">{activeConv.displayPrimary}</span>
+                                        <span className="dashboard-header-hidden-current-title">{getConversationTitle(activeConv)}</span>
                                     </button>
                                 )}
                                 {hiddenConversations.length > 0 ? (
@@ -378,12 +379,12 @@ export default function DashboardHeader({
                                                     onHiddenOpenChange(false);
                                                 }}
                                             >
-                                                <span className="dashboard-header-inbox-item-title">{conversation.displayPrimary}</span>
+                                                <span className="dashboard-header-inbox-item-title">{getConversationTitle(conversation)}</span>
                                                 <span className="dashboard-header-inbox-item-meta">
                                                     {hiddenConversations.indexOf(conversation) < 9 ? (
                                                         <span className="dashboard-header-item-shortcut">⌥{hiddenConversations.indexOf(conversation) + 1}</span>
                                                     ) : null}
-                                                    {[conversation.displaySecondary, conversation.machineName].filter(Boolean).join(' · ')}
+                                                    {getConversationMetaText(conversation)}
                                                 </span>
                                             </button>
                                         ))}

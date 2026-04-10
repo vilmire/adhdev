@@ -12,6 +12,7 @@ import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { getDefaultBrowseStartPath } from '../machine/workspaceBrowse'
 import { buildLaunchWorkspaceOptions } from '../machine/launchWorkspaceOptions'
 import type { LaunchWorkspaceOption } from '../../pages/machine/types'
+import { getConversationTitle, getMachineConversationCardSubtitle } from './conversation-presenters'
 
 interface LaunchProviderInfo {
     type: string
@@ -270,8 +271,10 @@ export default function DashboardMobileMachineScreen({
     })), [defaultWorkspaceId, onOpenRecent, openLaunchConfirm, topRecentLaunches, workspaceRows])
     const conversationCards = useMemo(() => topConversationItems.map(item => ({
         key: `recent-chat:${item.conversation.tabKey}`,
-        primary: item.conversation.displayPrimary,
-        secondary: `Chat${item.conversation.displaySecondary ? ` · ${item.conversation.displaySecondary}` : ''}${item.timestamp ? ` · ${formatRelativeTime(item.timestamp)}` : ''}`,
+        primary: getConversationTitle(item.conversation),
+        secondary: getMachineConversationCardSubtitle(item.conversation, {
+            timestampLabel: item.timestamp ? formatRelativeTime(item.timestamp) : null,
+        }),
         unread: item.unread,
         onClick: () => onOpenConversation(item.conversation),
     })), [onOpenConversation, topConversationItems])
