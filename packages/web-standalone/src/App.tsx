@@ -6,7 +6,7 @@
  */
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { StandaloneDaemonProvider, sendCommandViaWs } from './StandaloneDaemonContext'
-import { TransportProvider, MachineDetail, Dashboard, CapabilitiesPage, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient } from '@adhdev/web-core'
+import { TransportProvider, MachineDetail, Dashboard, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient } from '@adhdev/web-core'
 import StandaloneLayout from './StandaloneLayout'
 import StandaloneAbout from './StandaloneAbout'
 import StandaloneSettings from './StandaloneSettings'
@@ -60,7 +60,6 @@ export default function App() {
                                 <Route path="/machine" element={<SingleMachineRedirect />} />
                                 <Route path="/machines/:id" element={<MachineDetail />} />
                                 <Route path="/machines" element={<SingleMachineRedirect />} />
-                                <Route path="/capabilities" element={<CapabilitiesPage />} />
                                 <Route path="/about" element={<StandaloneAbout />} />
                                 <Route path="/settings" element={<StandaloneSettings />} />
                                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
