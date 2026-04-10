@@ -28,6 +28,7 @@ import { detectIDEs } from '../detection/ide-detector.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 import { logCommand } from '../logging/command-log.js';
+import type { CommandLogEntry } from '../logging/command-log.js';
 import { getRecentLogs, LOG_PATH } from '../logging/logger.js';
 import { buildSessionEntries } from '../status/builders.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
@@ -86,6 +87,19 @@ const CHAT_COMMANDS = [
 ];
 const READ_DEBUG_ENABLED = process.argv.includes('--dev') || process.env.ADHDEV_READ_DEBUG === '1';
 
+function normalizeCommandSource(source: string): CommandLogEntry['source'] {
+    switch (source) {
+        case 'ws':
+        case 'p2p':
+        case 'ext':
+        case 'api':
+        case 'standalone':
+            return source;
+        default:
+            return 'unknown';
+    }
+}
+
 function toHostedCliRuntimeDescriptor(record: any): HostedCliRuntimeDescriptor | null {
     if (!record || typeof record !== 'object') return null;
     const runtimeId = typeof record.sessionId === 'string' ? record.sessionId : '';
@@ -130,18 +144,19 @@ export class DaemonCommandRouter {
      */
     async execute(cmd: string, args: any, source: string = 'unknown'): Promise<CommandRouterResult> {
         const cmdStart = Date.now();
+        const logSource = normalizeCommandSource(source);
 
         try {
             // 1. Try daemon-level command
             const daemonResult = await this.executeDaemonCommand(cmd, args);
             if (daemonResult) {
-                logCommand({ ts: new Date().toISOString(), cmd, source: source as any, args, success: daemonResult.success, durationMs: Date.now() - cmdStart });
+                logCommand({ ts: new Date().toISOString(), cmd, source: logSource, args, success: daemonResult.success, durationMs: Date.now() - cmdStart });
                 return daemonResult;
             }
 
             // 2. Delegate to DaemonCommandHandler
             const handlerResult = await this.deps.commandHandler.handle(cmd, args);
-            logCommand({ ts: new Date().toISOString(), cmd, source: source as any, args, success: handlerResult.success, durationMs: Date.now() - cmdStart });
+            logCommand({ ts: new Date().toISOString(), cmd, source: logSource, args, success: handlerResult.success, durationMs: Date.now() - cmdStart });
 
             // 3. Post-chat command callback
             if (CHAT_COMMANDS.includes(cmd) && this.deps.onPostChatCommand) {
@@ -150,7 +165,7 @@ export class DaemonCommandRouter {
 
             return handlerResult;
         } catch (e: any) {
-            logCommand({ ts: new Date().toISOString(), cmd, source: source as any, args, success: false, error: e.message, durationMs: Date.now() - cmdStart });
+            logCommand({ ts: new Date().toISOString(), cmd, source: logSource, args, success: false, error: e.message, durationMs: Date.now() - cmdStart });
             throw e;
         }
     }
@@ -417,7 +432,7 @@ export class DaemonCommandRouter {
                         ? this.deps.getCdpLogFn(result.ideId)
                         : LOG.forComponent(`CDP:${result.ideId}`).asLogFn();
                     const provider = this.deps.providerLoader.getMeta(result.ideId);
-                    const manager = new DaemonCdpManager(result.port, logFn, undefined, (provider as any)?.targetFilter);
+                    const manager = new DaemonCdpManager(result.port, logFn, undefined, provider?.targetFilter);
                     const connected = await manager.connect();
                     if (connected) {
                         // Register active extension providers for this IDE in CDP manager
@@ -457,7 +472,7 @@ export class DaemonCommandRouter {
                         }));
                     } catch { /* ignore activity persist errors */ }
                 }
-                return { success: result.success, ...result as any };
+                return { ...result };
             }
 
             // ─── Detect IDEs ───
@@ -485,7 +500,7 @@ export class DaemonCommandRouter {
                 const prevSeenAt = currentState.sessionReads?.[sessionId] || 0;
                 const sessionEntries = buildSessionEntries(
                     this.deps.instanceManager.collectAllStates(),
-                    this.deps.cdpManagers as Map<string, any>,
+                    this.deps.cdpManagers,
                 );
                 const targetSession = sessionEntries.find((entry) => entry.id === sessionId);
                 const completionMarker = targetSession ? getSessionCompletionMarker(targetSession) : '';
@@ -606,8 +621,7 @@ export class DaemonCommandRouter {
             }
         }
         for (const instanceKey of keysToRemove) {
-            const ideInstance = this.deps.instanceManager.getInstance(instanceKey) as any;
-            if (ideInstance) {
+            if (this.deps.instanceManager.getInstance(instanceKey)) {
                 this.deps.instanceManager.removeInstance(instanceKey);
                 LOG.info('StopIDE', `Instance removed: ${instanceKey}`);
             }
@@ -615,8 +629,7 @@ export class DaemonCommandRouter {
         // Fallback: single instance key
         if (keysToRemove.length === 0) {
             const instanceKey = `ide:${ideType}`;
-            const ideInstance = this.deps.instanceManager.getInstance(instanceKey) as any;
-            if (ideInstance) {
+            if (this.deps.instanceManager.getInstance(instanceKey)) {
                 this.deps.instanceManager.removeInstance(instanceKey);
                 LOG.info('StopIDE', `Instance removed: ${instanceKey}`);
             }
