@@ -2,6 +2,7 @@
  * ToastContainer — Toast notification container for Dashboard
  */
 import type { Toast } from '../../context/BaseDaemonContext';
+import { IconX } from '../Icons';
 export type { Toast };
 
 export interface ToastContainerProps {
@@ -56,10 +57,10 @@ export default function ToastContainer({ toasts, onDismiss, onClickToast }: Toas
                             style={{ background: `linear-gradient(180deg, ${tone.accent}, color-mix(in srgb, ${tone.accent} 55%, transparent))` }}
                         />
                         <button
-                            className="absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-glass transition-colors text-[13px] leading-none cursor-pointer"
+                            className="absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-glass transition-colors leading-none cursor-pointer"
                             onClick={(e) => { e.stopPropagation(); onDismiss(toast.id); }}
                             aria-label="Dismiss"
-                        >×</button>
+                        ><IconX size={14} /></button>
                         <div className="px-4 py-3.5 pl-5">
                             <div className="flex items-center gap-2 pr-8">
                                 <span

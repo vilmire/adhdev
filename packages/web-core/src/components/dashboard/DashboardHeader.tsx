@@ -229,27 +229,27 @@ export default function DashboardHeader({
                             />
                         </span>
                         </h1>
-                        <div className="header-subtitle">
-                            {onOpenNewSession && (
-                                <button
-                                    type="button"
-                                    onClick={onOpenNewSession}
-                                    className="btn btn-secondary btn-sm"
-                                    title="Start a new session"
-                                    aria-label="Start a new session"
-                                >
-                                    <IconPlus size={14} />
-                                </button>
-                            )}
+                        <div className="header-subtitle flex items-center">
                             <span
                                 title={isConnected ? 'Connected' : wsStatus === 'connected' ? 'Partial' : 'Disconnected'}
                                 className="header-subtitle-dot inline-block w-1.5 h-1.5 rounded-full shrink-0"
                                 style={{ background: dotColor, boxShadow: dotGlow }}
                             />
                             {statusText && (
-                                <span className="header-subtitle-status">
+                                <span className="header-subtitle-status mr-2">
                                     · {statusText}
                                 </span>
+                            )}
+                            {onOpenNewSession && (
+                                <button
+                                    type="button"
+                                    onClick={onOpenNewSession}
+                                    className="btn btn-secondary btn-sm ml-2"
+                                    title="Start a new session"
+                                    aria-label="Start a new session"
+                                >
+                                    <IconPlus size={14} />
+                                </button>
                             )}
                         </div>
                     </div>

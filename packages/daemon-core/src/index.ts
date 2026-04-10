@@ -21,6 +21,8 @@ export type {
 // ── Shared Types (cross-package) ──
 export type {
   SessionEntry,
+  CompactSessionEntry,
+  CompactDaemonEntry,
   SessionTransport,
   SessionKind,
   SessionCapability,

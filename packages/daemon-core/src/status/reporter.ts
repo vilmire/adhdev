@@ -38,6 +38,7 @@ export class DaemonStatusReporter {
     private lastStatusSentAt = 0;
     private statusPendingThrottle = false;
     private lastP2PStatusHash = '';
+    private lastServerStatusHash = '';
     private lastStatusSummary = '';
 
     private statusTimer: NodeJS.Timeout | null = null;
@@ -52,12 +53,12 @@ export class DaemonStatusReporter {
 
     startReporting(): void {
         setTimeout(() => {
-            this.sendUnifiedStatusReport().catch(e => LOG.warn('Status', `Initial report failed: ${e?.message}`));
+            this.sendUnifiedStatusReport({ forceServer: true, reason: 'initial' }).catch(e => LOG.warn('Status', `Initial report failed: ${e?.message}`));
         }, 2000);
 
         const scheduleServerReport = () => {
             this.statusTimer = setTimeout(() => {
-                this.sendUnifiedStatusReport().catch(e => LOG.warn('Status', `Periodic report failed: ${e?.message}`));
+                this.sendUnifiedStatusReport({ forceServer: true, reason: 'periodic' }).catch(e => LOG.warn('Status', `Periodic report failed: ${e?.message}`));
                 scheduleServerReport();
             }, 30_000);
         };
@@ -135,7 +136,7 @@ export class DaemonStatusReporter {
             .join(', ');
     }
 
-    async sendUnifiedStatusReport(opts?: { p2pOnly?: boolean }): Promise<void> {
+    async sendUnifiedStatusReport(opts?: { p2pOnly?: boolean; forceServer?: boolean; reason?: string }): Promise<void> {
         const { serverConn, p2p } = this.deps;
         if (!serverConn?.isConnected()) return;
         this.lastStatusSentAt = Date.now();
@@ -216,6 +217,8 @@ export class DaemonStatusReporter {
 
  // ═══ Server transmit (minimal routing meta only) ═══
         if (opts?.p2pOnly) return;
+        // Server relay only needs compact session metadata for routing, compact status,
+        // initial_state fallback, and lightweight API/session inspection.
         const wsPayload = {
             daemonMode: true,
             sessions: sessions.map((session) => ({
@@ -232,23 +235,23 @@ export class DaemonStatusReporter {
                 currentModel: session.currentModel,
                 currentPlan: session.currentPlan,
                 currentAutoApprove: session.currentAutoApprove,
-                lastUpdated: session.lastUpdated,
-                unread: session.unread,
-                lastSeenAt: session.lastSeenAt,
-                inboxBucket: session.inboxBucket,
-                surfaceHidden: session.surfaceHidden,
-                controlValues: session.controlValues,
-                providerControls: session.providerControls,
-                acpConfigOptions: session.acpConfigOptions,
-                acpModes: session.acpModes,
             })),
             p2p: payload.p2p,
             timestamp: now,
             detectedIdes: payload.detectedIdes,
             availableProviders: payload.availableProviders,
         };
+        const wsHash = this.simpleHash(JSON.stringify({
+            ...wsPayload,
+            timestamp: undefined,
+        }));
+        if (!opts?.forceServer && wsHash === this.lastServerStatusHash) {
+            LOG.debug('Server', `skip duplicate status_report${opts?.reason ? ` (${opts.reason})` : ''}`);
+            return;
+        }
+        this.lastServerStatusHash = wsHash;
         serverConn.sendMessage('status_report', wsPayload);
-        LOG.debug('Server', `sent status_report (${JSON.stringify(wsPayload).length} bytes)`);
+        LOG.debug('Server', `sent status_report (${JSON.stringify(wsPayload).length} bytes)${opts?.reason ? ` [${opts.reason}]` : ''}`);
     }
 
  // ─── P2P ─────────────────────────────────────────

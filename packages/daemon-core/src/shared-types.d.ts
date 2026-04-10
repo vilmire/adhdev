@@ -36,6 +36,8 @@ export interface AgentSessionStream {
 export type SessionTransport = 'cdp-page' | 'cdp-webview' | 'pty' | 'acp';
 export type SessionKind = 'workspace' | 'agent';
 export type SessionCapability = 'read_chat' | 'send_message' | 'new_session' | 'list_sessions' | 'switch_session' | 'resolve_action' | 'terminal_io' | 'resize_terminal' | 'change_model' | 'set_mode' | 'set_thought_level';
+import type { RuntimeWriteOwner, RuntimeAttachedClient, SessionStatus } from './shared-types-extra.js';
+export type { RuntimeWriteOwner, RuntimeAttachedClient, SessionStatus } from './shared-types-extra.js';
 export interface SessionEntry {
     id: string;
     parentId: string | null;
@@ -44,21 +46,16 @@ export interface SessionEntry {
     providerSessionId?: string;
     kind: SessionKind;
     transport: SessionTransport;
-    status: 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting' | 'panel_hidden' | 'not_monitored' | 'disconnected';
+    status: SessionStatus;
     title: string;
     workspace: string | null;
     runtimeKey?: string;
     runtimeDisplayName?: string;
     runtimeWorkspaceLabel?: string;
-    runtimeWriteOwner?: {
-        clientId: string;
-        ownerType: 'agent' | 'user';
-    } | null;
-    runtimeAttachedClients?: {
-        clientId: string;
-        type: 'daemon' | 'web' | 'local-terminal';
-        readOnly: boolean;
-    }[];
+    /** CLI only: active presentation mode */
+    mode?: 'terminal' | 'chat';
+    runtimeWriteOwner?: RuntimeWriteOwner | null;
+    runtimeAttachedClients?: RuntimeAttachedClient[];
     resume?: ProviderResumeCapability;
     activeChat: _ActiveChatData | null;
     capabilities: SessionCapability[];
@@ -68,10 +65,36 @@ export interface SessionEntry {
     currentAutoApprove?: string;
     acpConfigOptions?: AcpConfigOption[];
     acpModes?: AcpMode[];
+    /** Dynamic control current values (generic key-value) */
     controlValues?: Record<string, string | number | boolean>;
+    /** Provider-declared controls schema (transmitted once, cached by frontend) */
     providerControls?: ProviderControlSchema[];
     errorMessage?: string;
     errorReason?: _ProviderErrorReason;
+    lastUpdated?: number;
+    unread?: boolean;
+    lastSeenAt?: number;
+    inboxBucket?: RecentSessionBucket;
+    surfaceHidden?: boolean;
+}
+/**
+ * Compact session metadata stored in UserSessionDO and reused by server-side
+ * status/convenience APIs. This intentionally excludes rich UI-only fields.
+ */
+export interface CompactSessionEntry {
+    id: string;
+    parentId: string | null;
+    providerType: string;
+    providerName: string;
+    kind: SessionKind;
+    transport: SessionTransport;
+    status: SessionStatus;
+    title: string;
+    workspace: string | null;
+    cdpConnected?: boolean;
+    currentModel?: string;
+    currentPlan?: string;
+    currentAutoApprove?: string;
 }
 /** Available provider information */
 export interface AvailableProviderInfo {
@@ -80,6 +103,8 @@ export interface AvailableProviderInfo {
     category: 'ide' | 'extension' | 'cli' | 'acp';
     displayName: string;
     icon: string;
+    installed?: boolean;
+    detectedPath?: string | null;
 }
 /** ACP config option (model/mode/thought_level selection) */
 export interface AcpConfigOption {
@@ -99,24 +124,39 @@ export interface AcpMode {
     name: string;
     description?: string;
 }
-/** Provider control schema (daemon → frontend) */
+/** Provider control schema transmitted to frontend */
 export interface ProviderControlSchema {
     id: string;
-    type: 'select' | 'toggle' | 'cycle' | 'slider' | 'action';
+    type: 'select' | 'toggle' | 'cycle' | 'slider' | 'action' | 'display';
     label: string;
     icon?: string;
     placement: 'bar' | 'header' | 'menu';
-    options?: { value: string; label: string; description?: string; group?: string }[];
+    /** Static options (for select/cycle) */
+    options?: {
+        value: string;
+        label: string;
+        description?: string;
+        group?: string;
+    }[];
+    /** Dynamic options — frontend should call listScript to load */
     dynamic?: boolean;
+    /** Script name to list options */
     listScript?: string;
+    /** Script name to change value (value-based controls) */
     setScript?: string;
+    /** Field name in readChat result for current value */
     readFrom?: string;
+    /** Default value */
     defaultValue?: string | number | boolean;
+    /** Script name to invoke (action type) */
     invokeScript?: string;
+    /** How to display action result */
     resultDisplay?: 'toast' | 'inline' | 'none';
+    /** Slider range */
     min?: number;
     max?: number;
     step?: number;
+    /** Sort order */
     order?: number;
 }
 /** Machine hardware/OS info (reported by daemon, displayed by web) */
@@ -141,13 +181,9 @@ export interface DetectedIdeInfo {
     running: boolean;
     path?: string;
 }
-/** Workspace recent activity */
-export interface WorkspaceActivity {
-    path: string;
-    lastUsedAt: number;
-    kind?: string;
-    agentType?: string;
-}
+export type { RecentSessionBucket, TerminalBackendStatus } from './shared-types-extra.js';
+import type { RecentSessionBucket } from './shared-types-extra.js';
+import type { TerminalBackendStatus } from './shared-types-extra.js';
 export interface RecentLaunchEntry {
     id: string;
     providerType: string;
@@ -159,8 +195,27 @@ export interface RecentLaunchEntry {
     currentModel?: string;
     lastLaunchedAt: number;
 }
+/** Compact machine payload broadcast by UserSessionDO to cloud dashboards. */
+export interface CompactDaemonEntry {
+    id: string;
+    type?: string;
+    machineId?: string;
+    platform?: string;
+    hostname?: string;
+    nickname?: string;
+    p2p?: StatusReportPayload['p2p'];
+    cdpConnected?: boolean;
+    timestamp?: number;
+    version?: string;
+    serverVersion?: string;
+    versionMismatch?: boolean;
+    terminalBackend?: TerminalBackendStatus;
+    detectedIdes?: DetectedIdeInfo[];
+    availableProviders?: AvailableProviderInfo[];
+    sessions?: CompactSessionEntry[];
+}
 export interface StatusReportPayload {
-    /** Daemon instance ID */
+    /** Unique daemon instance identifier */
     instanceId: string;
     /** Daemon version */
     version: string;
@@ -188,6 +243,8 @@ export interface StatusReportPayload {
     defaultWorkspaceId?: string | null;
     defaultWorkspacePath?: string | null;
     terminalSizingMode?: 'measured' | 'fit';
-    workspaceActivity?: WorkspaceActivity[];
     recentLaunches?: RecentLaunchEntry[];
+    terminalBackend?: TerminalBackendStatus;
+    /** Available providers (present in StatusSnapshot, optional in raw payload) */
+    availableProviders?: AvailableProviderInfo[];
 }

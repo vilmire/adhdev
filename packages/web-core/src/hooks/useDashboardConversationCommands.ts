@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
+import { isAcpConv, isCliConv } from '../components/dashboard/types'
 import { getProviderArgs, getRouteTarget } from './dashboardCommandUtils'
 
 interface UseDashboardConversationCommandsOptions {
@@ -73,10 +74,13 @@ export function useDashboardConversationCommands({
 
         const localId = `${now}-${Math.random().toString(36).slice(2, 8)}`
         const userMsg = { role: 'user', content: message, timestamp: now, _localId: localId }
-        setLocalUserMessages(prev => ({
-            ...prev,
-            [tabKey]: [...(prev[tabKey] || []), userMsg],
-        }))
+        const useLocalPendingMessage = !(isCliConv(activeConv) || isAcpConv(activeConv))
+        if (useLocalPendingMessage) {
+            setLocalUserMessages(prev => ({
+                ...prev,
+                [tabKey]: [...(prev[tabKey] || []), userMsg],
+            }))
+        }
 
         try {
             const routeTarget = getRouteTarget(activeConv)
@@ -88,7 +92,7 @@ export function useDashboardConversationCommands({
             })
             const res = unwrapCommandResult(raw)
 
-            if (res?.deduplicated || res?.sent === false) {
+            if (useLocalPendingMessage && (res?.deduplicated || res?.sent === false)) {
                 setLocalUserMessages(prev => ({
                     ...prev,
                     [tabKey]: (prev[tabKey] || []).filter(entry => entry._localId !== localId),
@@ -117,10 +121,12 @@ export function useDashboardConversationCommands({
             } else {
                 console.error('Send failed', e)
             }
-            setLocalUserMessages(prev => ({
-                ...prev,
-                [tabKey]: (prev[tabKey] || []).filter(entry => entry._localId !== localId),
-            }))
+            if (useLocalPendingMessage) {
+                setLocalUserMessages(prev => ({
+                    ...prev,
+                    [tabKey]: (prev[tabKey] || []).filter(entry => entry._localId !== localId),
+                }))
+            }
         } finally {
             sendInFlightRef.current = false
             setIsSendingChat(false)

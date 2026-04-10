@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { IconX } from './Icons'
 
 interface OnboardingModalProps {
   onClose: () => void
@@ -61,12 +62,8 @@ export default function OnboardingModal({ onClose }: OnboardingModalProps) {
         {/* Close */}
         <button
           onClick={onClose}
-          style={{
-            position: 'absolute', top: 12, right: 16,
-            background: 'transparent', border: 'none',
-            color: 'var(--text-muted)', fontSize: '1.2rem', cursor: 'pointer',
-          }}
-        >✕</button>
+          className="absolute top-3 right-4 bg-transparent border-none text-text-muted hover:text-text-primary transition-colors cursor-pointer"
+        ><IconX size={20} /></button>
 
         {/* Step indicator */}
         <div style={{ display: 'flex', justifyContent: 'center', gap: 6, marginBottom: '1.5rem' }}>
@@ -132,25 +129,16 @@ export default function OnboardingModal({ onClose }: OnboardingModalProps) {
         </div>
 
         {/* Actions */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1.5rem' }}>
+        <div className="flex justify-between items-center mt-6">
           <button
             onClick={onClose}
-            style={{
-              background: 'transparent', border: 'none',
-              color: 'var(--text-muted)', fontSize: '0.85rem', cursor: 'pointer',
-            }}
+            className="btn btn-secondary border-none"
           >
             Skip
           </button>
           <button
             onClick={() => isLast ? onClose() : setStep(s => s + 1)}
-            className="transition-opacity hover:opacity-90"
-            style={{
-              background: 'linear-gradient(135deg, #7c3aed, #6366f1)',
-              color: '#fff', border: 'none',
-              borderRadius: '0.5rem', padding: '0.55rem 1.5rem',
-              fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer',
-            }}
+            className="btn btn-primary"
           >
             {isLast ? 'Get Started →' : 'Next →'}
           </button>

@@ -5,7 +5,7 @@
  */
 
 import type { DaemonData } from '../../types';
-import { IconCandle, IconRefresh } from '../Icons';
+import { IconCandle, IconRefresh, IconX } from '../Icons';
 import { isAcpConv, isCliConv, type ActiveConversation } from './types';
 import { createPortal } from 'react-dom';
 import { getConversationHistorySubtitle } from './conversation-presenters';
@@ -74,7 +74,7 @@ export default function HistoryModal({
                         <h3 className="m-0 text-lg font-extrabold">{isSavedSessionMode ? 'Saved Sessions' : 'Chat History'}</h3>
                         <div className="text-xs text-text-muted mt-0.5">{getConversationHistorySubtitle(activeConv)}</div>
                     </div>
-                    <button onClick={onClose} className="bg-transparent border-none text-xl text-text-muted cursor-pointer">✕</button>
+                    <button onClick={onClose} className="btn btn-secondary btn-sm rounded-md px-1.5 py-1.5 border-transparent bg-transparent hover:bg-bg-secondary"><IconX size={16} /></button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-3 bg-bg-primary">

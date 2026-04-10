@@ -4,7 +4,7 @@
  * Shared types referenced by daemon-core, daemon-standalone, and web-core.
  * When modifying this file, also update interface contracts in AGENT_PROTOCOL.md.
  */
-import type { StatusReportPayload } from './shared-types.js';
+import type { StatusReportPayload, AvailableProviderInfo } from './shared-types.js';
 /** Full status response from /api/v1/status and WS events */
 export interface StatusResponse extends StatusReportPayload {
     /** For standalone API compat */
@@ -15,7 +15,7 @@ export interface StatusResponse extends StatusReportPayload {
     /** User display name from config */
     userName?: string;
     /** Available providers */
-    availableProviders: ProviderInfo[];
+    availableProviders: AvailableProviderInfo[];
     /** System info (legacy compat) */
     system?: SystemInfo;
 }
@@ -111,11 +111,7 @@ export interface DetectedIde {
     installed: boolean;
     running: boolean;
 }
-export interface ProviderInfo {
-    type: string;
-    icon: string;
-    displayName: string;
-    category: string;
+export interface ProviderInfo extends AvailableProviderInfo {
 }
 /** Flattened agent entry from /api/v1/agents */
 export interface AgentEntry {

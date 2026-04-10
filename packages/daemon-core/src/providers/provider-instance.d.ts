@@ -8,7 +8,7 @@
  * Each Instance manages its own status.
  */
 import type { ProviderResumeCapability } from './contracts.js';
-import type { AcpConfigOption, AcpMode } from '../shared-types.js';
+import type { AcpConfigOption, AcpMode, ProviderControlSchema } from '../shared-types.js';
 import type { ChatMessage } from '../types.js';
 export type ProviderStatus = 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting';
 export interface ProviderRuntimeWriteOwner {
@@ -68,6 +68,10 @@ interface ProviderStateBase {
     pendingEvents: ProviderEvent[];
     runtime?: ProviderRuntimeInfo;
     resume?: ProviderResumeCapability;
+    /** Dynamic control current values */
+    controlValues?: Record<string, string | number | boolean>;
+    /** Provider-declared controls schema (from provider.controls) */
+    providerControls?: ProviderControlSchema[];
 }
 /** IDE provider state */
 export interface IdeProviderState extends ProviderStateBase {
@@ -111,6 +115,8 @@ export interface InstanceContext {
         evaluate(script: string, timeout?: number): Promise<unknown>;
         evaluateInWebviewFrame?(expression: string, matchFn?: (bodyPreview: string) => boolean): Promise<string | null>;
         discoverAgentWebviews?(): Promise<any[]>;
+        /** Low-level CDP protocol method (e.g. Input.dispatchMouseEvent) */
+        send?(method: string, params?: Record<string, unknown>): Promise<unknown>;
     };
     /** Server log transmit */
     serverConn?: {

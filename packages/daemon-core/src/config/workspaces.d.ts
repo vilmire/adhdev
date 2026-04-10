@@ -17,7 +17,6 @@ export declare function validateWorkspacePath(absPath: string): {
 };
 /** Default workspace label from path */
 export declare function defaultWorkspaceLabel(absPath: string): string;
-
 export declare function getDefaultWorkspacePath(config: ADHDevConfig): string | null;
 export declare function getWorkspaceState(config: ADHDevConfig): {
     workspaces: WorkspaceEntry[];

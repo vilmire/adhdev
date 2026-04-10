@@ -1,5 +1,5 @@
 import type { DaemonData } from '../../types'
-import { IconRefresh } from '../Icons'
+import { IconRefresh, IconX } from '../Icons'
 import { getMachineDisplayName } from '../../utils/daemon-utils'
 
 interface DashboardVersionBannerProps {
@@ -67,10 +67,10 @@ export default function DashboardVersionBanner({
                 })}
             </span>
             <button
-                className="text-text-muted hover:text-text-primary transition-colors text-sm px-1 shrink-0"
+                className="text-text-muted hover:text-text-primary transition-colors shrink-0"
                 onClick={onDismiss}
                 title="Dismiss"
-            >✕</button>
+            ><IconX size={16} /></button>
         </div>
     )
 }

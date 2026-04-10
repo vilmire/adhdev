@@ -10,7 +10,7 @@
  *   // cloud: receive data from CF WS + P2P and call injectEntries
  */
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
-import type { DaemonData, SessionEntry, SessionTransport, RuntimeWriteOwner, RuntimeAttachedClient } from '../types'
+import type { DaemonData, SessionEntry } from '../types'
 
 // ─── Types ────────────────────────────────────────────
 
@@ -296,9 +296,26 @@ function daemonArraysEqual(prev: DaemonData[], next: DaemonData[]): boolean {
  * expandCompactDaemons — server compact format → flat DaemonData[]
  * standalone/cloud shared
  */
+interface CompactSessionEntry {
+    id: string
+    parentId?: string | null
+    providerType: string
+    providerName?: string
+    kind: 'workspace' | 'agent'
+    transport: SessionEntry['transport']
+    status?: SessionEntry['status'] | 'online'
+    title?: string
+    workspace?: string | null
+    cdpConnected?: boolean
+    currentModel?: string
+    currentPlan?: string
+    currentAutoApprove?: string
+}
+
 export interface CompactDaemon {
     id: string
     type?: string
+    machineId?: string
     platform?: string
     hostname?: string
     nickname?: string
@@ -310,36 +327,17 @@ export interface CompactDaemon {
     version?: string
     serverVersion?: string
     versionMismatch?: boolean
+    terminalBackend?: DaemonData['terminalBackend']
     detectedIdes?: DaemonData['detectedIdes']
     availableProviders?: DaemonData['availableProviders']
-    sessions?: {
-        id: string
-        parentId?: string | null
-        providerType: string
-        providerName?: string
-        kind: 'workspace' | 'agent'
-        transport: SessionTransport
-        status?: SessionEntry['status'] | 'online'
-        workspace?: string | null
-        runtimeKey?: string
-        runtimeDisplayName?: string
-        runtimeWorkspaceLabel?: string
-        runtimeWriteOwner?: RuntimeWriteOwner | null
-        runtimeAttachedClients?: RuntimeAttachedClient[]
-        title?: string
-        cdpConnected?: boolean
-        activeChat?: DaemonData['activeChat']
-        capabilities?: SessionEntry['capabilities']
-        currentModel?: string
-        currentPlan?: string
-        currentAutoApprove?: string
-    }[]
+    sessions?: CompactSessionEntry[]
 }
 
-function normalizeCompactSession(session: NonNullable<CompactDaemon['sessions']>[number]): SessionEntry {
-    const normalizedStatus: SessionEntry['status'] = !session.status || session.status === 'online'
+function normalizeCompactSession(session: CompactSessionEntry): SessionEntry {
+    const rawStatus = session.status
+    const normalizedStatus: SessionEntry['status'] = !rawStatus || rawStatus === 'online'
         ? 'idle'
-        : session.status
+        : rawStatus
 
     return {
         id: session.id,
@@ -351,13 +349,8 @@ function normalizeCompactSession(session: NonNullable<CompactDaemon['sessions']>
         status: normalizedStatus,
         title: session.title || session.providerName || session.providerType,
         workspace: session.workspace ?? null,
-        runtimeKey: session.runtimeKey,
-        runtimeDisplayName: session.runtimeDisplayName,
-        runtimeWorkspaceLabel: session.runtimeWorkspaceLabel,
-        runtimeWriteOwner: session.runtimeWriteOwner,
-        runtimeAttachedClients: session.runtimeAttachedClients,
-        activeChat: session.activeChat ?? null,
-        capabilities: session.capabilities || [],
+        activeChat: null,
+        capabilities: [],
         cdpConnected: session.cdpConnected,
         currentModel: session.currentModel,
         currentPlan: session.currentPlan,
@@ -365,8 +358,13 @@ function normalizeCompactSession(session: NonNullable<CompactDaemon['sessions']>
     }
 }
 
+export type CompactDaemonCompat = CompactDaemon & {
+    cdp?: boolean
+    ts?: number
+}
+
 export function expandCompactDaemons(
-    compactDaemons: CompactDaemon[],
+    compactDaemons: CompactDaemonCompat[],
     options?: {
         skipDaemonId?: (id: string) => boolean
         /** Keep daemon-level metadata but strip all session expansion for matching daemons. */
@@ -440,12 +438,6 @@ export function expandCompactDaemons(
                 daemonId: d.id,
                 cliName: cli.providerName,
                 workspace: cli.workspace || '',
-                activeChat: cli.activeChat || null,
-                runtimeKey: cli.runtimeKey,
-                runtimeDisplayName: cli.runtimeDisplayName,
-                runtimeWorkspaceLabel: cli.runtimeWorkspaceLabel,
-                runtimeWriteOwner: cli.runtimeWriteOwner || null,
-                runtimeAttachedClients: cli.runtimeAttachedClients || [],
                 timestamp: ts,
             })
         }

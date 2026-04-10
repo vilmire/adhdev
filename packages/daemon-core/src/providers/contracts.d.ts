@@ -23,6 +23,10 @@ export interface ReadChatResult {
     inputContent?: string;
     model?: string;
     autoApprove?: string;
+    /** Explicit dynamic control values returned by the provider */
+    controlValues?: Record<string, string | number | boolean>;
+    /** Provider-driven UI effects derived from chat state */
+    effects?: ProviderEffect[];
 }
 import type { ChatMessage } from '../types.js';
 export type { ChatMessage };
@@ -32,6 +36,38 @@ export interface ModalInfo {
     buttons: string[];
     width?: number;
     height?: number;
+}
+export interface ProviderEffectMessage {
+    role?: 'system' | 'assistant' | 'user';
+    content: string | ContentBlock[];
+    kind?: string;
+    senderName?: string;
+}
+export interface ProviderEffectToast {
+    level?: 'info' | 'success' | 'warning';
+    message: string;
+}
+export type ProviderNotificationPreferenceKey = 'disconnect' | 'completion' | 'approval' | 'browser';
+export type ProviderNotificationChannel = 'bubble' | 'toast' | 'browser';
+export interface ProviderEffectNotification {
+    title?: string;
+    body: string;
+    level?: 'info' | 'success' | 'warning';
+    channels?: ProviderNotificationChannel[];
+    preferenceKey?: ProviderNotificationPreferenceKey;
+    bubbleContent?: string | ContentBlock[];
+}
+export interface ProviderEffect {
+    type: 'message' | 'toast' | 'notification';
+    /** Stable dedup key; falls back to a content hash when omitted */
+    id?: string;
+    /** Default immediate. turn_completed fires only on generating/waiting -> idle transitions. */
+    when?: 'immediate' | 'turn_completed';
+    /** Default true. False keeps the effect UI-only. */
+    persist?: boolean;
+    message?: ProviderEffectMessage;
+    toast?: ProviderEffectToast;
+    notification?: ProviderEffectNotification;
 }
 /**
  * ContentBlock — ACP ContentBlock union type
@@ -197,6 +233,11 @@ export interface CdpTargetFilter {
     /** Page title regex pattern for titles to EXCLUDE (e.g. 'Debug Console|Output') */
     titleExcludes?: string;
 }
+export type ProviderVersionCommand = string | Partial<Record<string, string>>;
+export interface ProviderCompatibilityEntry {
+    ideVersion: string;
+    scriptDir: string;
+}
 export interface ProviderModule {
     /** Unique identifier (e.g. 'cline', 'cursor', 'gemini-cli') */
     type: string;
@@ -219,7 +260,7 @@ export interface ProviderModule {
     /** Install instructions (shown when command is missing) */
     install?: string;
     /** Custom version detection command (e.g. 'cursor --version', 'claude -v') */
-    versionCommand?: string;
+    versionCommand?: ProviderVersionCommand;
     /** Versions tested by provider maintainer (informational) */
     testedVersions?: string[];
     /** Per-OS process names — used by launch.ts to detect/kill IDE processes */
@@ -228,6 +269,28 @@ export interface ProviderModule {
         win32?: string[];
         linux?: string[];
         [key: string]: string | string[] | undefined;
+    };
+    /**
+     * IDE launch preferences.
+     * Lets each provider choose how its GUI app should be started per platform.
+     */
+    launch?: {
+        /**
+         * Preferred launch method by platform.
+         * - 'cli': use the IDE CLI wrapper/binary
+         * - 'app': use platform app launcher (e.g. `open -a` on macOS)
+         * - 'auto': let core choose a sensible default
+         */
+        prefer?: {
+            darwin?: 'auto' | 'cli' | 'app';
+            win32?: 'auto' | 'cli' | 'app';
+            linux?: 'auto' | 'cli' | 'app';
+            [key: string]: 'auto' | 'cli' | 'app' | undefined;
+        };
+        /**
+         * Override how long core waits for CDP to come up after launch.
+         */
+        cdpStartupTimeoutMs?: number;
     };
     /** Per-OS install paths — used by detector.ts to detect IDE installation */
     paths?: {
@@ -238,6 +301,9 @@ export interface ProviderModule {
     };
     extensionId?: string;
     extensionIdPattern?: RegExp;
+    extensionIdPattern_flags?: string;
+    compatibility?: ProviderCompatibilityEntry[];
+    defaultScriptDir?: string;
     binary?: string;
     spawn?: {
         command: string;
@@ -245,6 +311,7 @@ export interface ProviderModule {
         shell?: boolean;
         env?: Record<string, string>;
     };
+    approvalKeys?: Record<number, string>;
     patterns?: {
         prompt?: RegExp[];
         generating?: RegExp[];
@@ -253,6 +320,9 @@ export interface ProviderModule {
     };
     cleanOutput?: (raw: string, lastUserInput?: string) => string;
     resume?: ProviderResumeCapability;
+    /** Session ID probe config — auto-discovers provider session ID from local SQLite DB */
+    sessionProbe?: ProviderSessionProbe;
+    /** Approval button priority hints used when auto-approve must pick a positive action */
     approvalPositiveHints?: string[];
     scripts?: ProviderScripts;
     vscodeCommands?: {
@@ -288,6 +358,8 @@ export interface ProviderModule {
         __dir?: string;
     }>;
     settings?: Record<string, ProviderSettingDef>;
+    /** Dynamic controls declared by provider — rendered in chat panel bar/header */
+    controls?: ProviderControlDef[];
     /** Static options used when agent does not provide configOptions */
     staticConfigOptions?: Array<{
         category: 'model' | 'mode' | 'thought_level' | 'other';
@@ -310,7 +382,46 @@ export interface ProviderResumeCapability {
     stopStrategy?: 'command' | 'ctrl_c';
     stopCommand?: string;
     shutdownGraceMs?: number;
+    /** Delay (ms) between Ctrl+C interrupt and stop command (default 500ms) */
+    interruptGraceMs?: number;
     resumeArgs?: string[];
+    resumeSessionArgs?: string[];
+    newSessionArgs?: string[];
+    sessionIdFormat?: 'uuid' | 'string';
+}
+/**
+ * Declarative session ID probe config for CLI providers.
+ * Instead of hardcoded probe functions, providers declare their SQLite schema.
+ *
+ * Example (OpenCode):
+ * ```
+ * sessionProbe: {
+ *   dbPath: '~/.local/share/opencode/opencode.db',
+ *   query: 'SELECT id FROM session WHERE directory IN ({dirs}) AND time_created >= ? AND time_archived IS NULL ORDER BY time_updated DESC LIMIT 1',
+ *   timestampFormat: 'unix_ms',
+ * }
+ * ```
+ */
+export interface ProviderSessionProbe {
+    /**
+     * Path to SQLite database. Supports ~ for home directory.
+     * Supports platform-specific paths via {platform} placeholder.
+     */
+    dbPath: string;
+    /**
+     * SQL query to find the session ID.
+     * Use {dirs} placeholder for the directory IN-clause parameters.
+     * The query must SELECT a column named 'id'.
+     * A '?' placeholder after {dirs} receives the min-created-at timestamp.
+     */
+    query: string;
+    /**
+     * How the provider stores timestamps.
+     * - 'unix_ms': milliseconds since epoch (default)
+     * - 'unix_s': seconds since epoch
+     * - 'iso': ISO 8601 string (YYYY-MM-DD HH:MM:SS)
+     */
+    timestampFormat?: 'unix_ms' | 'unix_s' | 'iso';
 }
 /** ACP auth method — based on ACP official spec */
 export type AcpAuthMethod = AcpAuthEnvVar | AcpAuthAgent | AcpAuthTerminal;
@@ -385,6 +496,14 @@ export interface ResolvedProvider extends ProviderModule {
     _resolvedVersion?: string;
     /** Warning when detected version is not in compatibility matrix */
     _versionWarning?: string;
+    /** On-disk provider directory selected by ProviderLoader */
+    _resolvedProviderDir?: string;
+    /** Script directory selected by compatibility/default resolution */
+    _resolvedScriptDir?: string;
+    /** scripts.js path or fallback script directory used to build runtime scripts */
+    _resolvedScriptsPath?: string;
+    /** Why this script selection was chosen */
+    _resolvedScriptsSource?: string;
 }
 /** Setting variable definition declared by provider */
 export interface ProviderSettingDef {
@@ -406,4 +525,77 @@ export interface ProviderSettingDef {
 /** Public settings schema (for dashboard transmission) */
 export interface ProviderSettingSchema extends ProviderSettingDef {
     key: string;
+}
+/**
+ * Control types:
+ * - 'select'  — dropdown list (model picker, mode picker)
+ * - 'toggle'  — on/off switch (compact mode, auto-approve)
+ * - 'cycle'   — click-to-cycle through options (thinking level: low→med→high)
+ * - 'slider'  — numeric range (temperature: 0–2)
+ * - 'action'  — one-shot button (show usage, restart, clear context)
+ */
+export type ProviderControlType = 'select' | 'toggle' | 'cycle' | 'slider' | 'action' | 'display';
+/**
+ * Where the control appears in the chat UI:
+ * - 'bar'    — thin strip below/above the chat input (always visible)
+ * - 'header' — in the agent header area
+ * - 'menu'   — inside a ⋯ overflow menu
+ */
+export type ProviderControlPlacement = 'bar' | 'header' | 'menu';
+/** Static option for select/cycle controls */
+export interface ProviderControlOption {
+    value: string;
+    label: string;
+    description?: string;
+    group?: string;
+}
+/**
+ * ProviderControlDef — A single interactive control declared by a provider.
+ *
+ * Controls are different from Settings:
+ * - Settings: background config, infrequently changed, managed in settings page
+ * - Controls: interactive, changed during chat, rendered inside chat panel
+ *
+ * Each control maps to provider scripts for get/set operations.
+ * The frontend renders controls automatically based on this schema —
+ * no hardcoded model/mode assumptions needed.
+ *
+ * For 'action' type:
+ * - Renders as a button. On click → calls invokeScript.
+ * - No value state. Optionally shows result via toast/inline.
+ */
+export interface ProviderControlDef {
+    /** Unique identifier (e.g. 'model', 'mode', 'thinking', 'usage') */
+    id: string;
+    /** Control type */
+    type: ProviderControlType;
+    /** Display label */
+    label: string;
+    /** Icon (emoji or icon name) */
+    icon?: string;
+    /** Where to show this control in the UI */
+    placement: ProviderControlPlacement;
+    /** Static options — used when the list is known at definition time */
+    options?: ProviderControlOption[];
+    /** Dynamic options — load via script at runtime */
+    dynamic?: boolean;
+    /** Script name to list options (e.g. 'listModels') — required when dynamic=true */
+    listScript?: string;
+    /** Script name to change value (e.g. 'setModel') — required for value-based controls */
+    setScript?: string;
+    /** Field name in readChat() result to read current value (e.g. 'model', 'mode') */
+    readFrom?: string;
+    /** Default value */
+    defaultValue?: string | number | boolean;
+    /** Script name to invoke (one-shot call, no value) */
+    invokeScript?: string;
+    /** How to display action result: 'toast' = notification, 'inline' = show in bar, 'none' = silent */
+    resultDisplay?: 'toast' | 'inline' | 'none';
+    min?: number;
+    max?: number;
+    step?: number;
+    /** Sort order within placement group (lower = first) */
+    order?: number;
+    /** Hide this control when condition not met */
+    hidden?: boolean;
 }

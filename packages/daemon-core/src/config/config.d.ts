@@ -29,6 +29,15 @@ export interface ADHDevConfig {
      */
     machineId?: string;
     machineSecret?: string | null;
+    /**
+     * Server-side D1 `machines.id` — the row ID assigned when daemon registers via
+     * `POST /cli/complete`. This remains useful for account-side machine actions
+     * that target the registered machine row directly (for example cloud rename).
+     *
+     * Machine auth itself uses `machineSecret` (adm_) and no longer falls back
+     * to `registeredMachineId`.
+     */
+    registeredMachineId?: string;
     providerSettings: Record<string, Record<string, any>>;
     ideSettings: Record<string, {
         extensions?: Record<string, {
@@ -37,6 +46,11 @@ export interface ADHDevConfig {
     }>;
     disableUpstream?: boolean;
     providerDir?: string;
+    /**
+     * Browser terminal sizing behavior for dashboard CLI panes.
+     * Default `measured` keeps terminal size daemon-authoritative.
+     * `fit` opt-in restores xterm fit-based sizing for advanced users.
+     */
     terminalSizingMode?: 'measured' | 'fit';
 }
 export declare function generateMachineId(): string;

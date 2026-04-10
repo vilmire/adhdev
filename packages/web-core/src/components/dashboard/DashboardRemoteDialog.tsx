@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, MouseEvent as ReactMouseEvent, SetStateAction } from 'react'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
@@ -53,6 +53,7 @@ export default function DashboardRemoteDialog({
     const [dialogChatTab, setDialogChatTab] = useState<string>(() => (
         isNativeConversation(activeConv) ? 'native' : activeConv.tabKey
     ))
+    const lastExternalConversationRef = useRef<{ ideId: string; tabKey: string; streamSource: ActiveConversation['streamSource'] } | null>(null)
     const activeIdeEntry = useMemo(
         () => ideEntry || ides.find(ide => ide.id === activeConv.ideId),
         [activeConv.ideId, ideEntry, ides],
@@ -79,16 +80,48 @@ export default function DashboardRemoteDialog({
     )
 
     useEffect(() => {
+        const previous = lastExternalConversationRef.current
+        const next = {
+            ideId: activeConv.ideId,
+            tabKey: activeConv.tabKey,
+            streamSource: activeConv.streamSource,
+        }
+        lastExternalConversationRef.current = next
+
+        if (
+            previous
+            && previous.ideId === next.ideId
+            && previous.tabKey === next.tabKey
+            && previous.streamSource === next.streamSource
+        ) {
+            return
+        }
+
         if (isNativeConversation(activeConv)) {
-            setDialogChatTab(
-                preferredConversation?.streamSource === 'agent-stream'
-                    ? preferredConversation.tabKey
-                    : 'native',
-            )
+            setDialogChatTab('native')
             return
         }
         setDialogChatTab(activeConv.tabKey)
-    }, [activeConv.streamSource, activeConv.tabKey, preferredConversation])
+    }, [activeConv.ideId, activeConv.streamSource, activeConv.tabKey])
+
+    useEffect(() => {
+        if (dialogChatTab === 'native') {
+            if (conversations.some(conversation => conversation.streamSource === 'native')) return
+            if (preferredConversation?.streamSource === 'agent-stream') {
+                setDialogChatTab(preferredConversation.tabKey)
+            }
+            return
+        }
+
+        if (conversations.some(conversation => conversation.tabKey === dialogChatTab)) return
+
+        if (preferredConversation?.streamSource === 'agent-stream') {
+            setDialogChatTab(preferredConversation.tabKey)
+            return
+        }
+
+        setDialogChatTab('native')
+    }, [conversations, dialogChatTab, preferredConversation])
 
     const effectiveConv = useMemo(() => {
         if (dialogChatTab === 'native') {

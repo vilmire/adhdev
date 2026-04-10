@@ -1428,8 +1428,6 @@ export class ProviderCliAdapter implements CliAdapter {
             throw new Error(`${this.cliName} is awaiting confirmation before it can accept a prompt`);
         }
 
-        this.committedMessages.push({ role: 'user', content: text, timestamp: Date.now() });
-        this.syncMessageViews();
         this.isWaitingForResponse = true;
         this.responseBuffer = '';
         this.finishRetryCount = 0;
@@ -1458,6 +1456,13 @@ export class ProviderCliAdapter implements CliAdapter {
         const submitDelayMs = this.sendDelayMs + Math.min(2000, Math.max(0, estimatedLines - 1) * 350);
         const maxEchoWaitMs = submitDelayMs + Math.max(1500, Math.min(5000, estimatedLines * 500));
         const retryDelayMs = Math.max(350, Math.min(1500, Math.max(this.sendDelayMs, submitDelayMs)));
+        let didCommitUserTurn = false;
+        const commitUserTurn = () => {
+            if (didCommitUserTurn) return;
+            didCommitUserTurn = true;
+            this.committedMessages.push({ role: 'user', content: text, timestamp: Date.now() });
+            this.syncMessageViews();
+        };
         if (this.settleTimer) {
             clearTimeout(this.settleTimer);
             this.settleTimer = null;
@@ -1470,115 +1475,134 @@ export class ProviderCliAdapter implements CliAdapter {
                 if (this.isWaitingForResponse) this.finishResponse();
             }, this.timeouts.maxResponse);
         };
+        await new Promise<void>((resolve) => {
+            let resolved = false;
+            const resolveOnce = () => {
+                if (resolved) return;
+                resolved = true;
+                resolve();
+            };
 
-        const submit = () => {
-            if (!this.ptyProcess) return;
-            this.submitPendingUntil = 0;
-            this.recordTrace('submit_write', {
-                mode: 'submit_key',
-                sendKey: this.sendKey,
-                screenText: summarizeCliTraceText(this.terminalScreen.getText(), 500),
-            });
-            this.ptyProcess.write(this.sendKey);
-            const retrySubmitIfStuck = (attempt: number) => {
-                this.submitRetryTimer = null;
-                if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
-                if (this.currentStatus === 'waiting_approval') return;
-                if ((this.responseBuffer || '').trim()) return;
+            const submit = () => {
+                if (!this.ptyProcess) {
+                    resolveOnce();
+                    return;
+                }
+                commitUserTurn();
+                this.submitPendingUntil = 0;
                 const screenText = this.terminalScreen.getText();
-                if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
-                if (/Esc to interrupt|Do you want to proceed|This command requires approval|Allow Codex to|Approve and run now|Always approve this session|Running…|Running\.\.\./i.test(screenText)) return;
-                this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
-                LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt ${attempt})`);
                 this.recordTrace('submit_write', {
-                    mode: 'submit_retry',
-                    attempt,
+                    mode: 'submit_key',
                     sendKey: this.sendKey,
                     screenText: summarizeCliTraceText(screenText, 500),
                 });
-                this.ptyProcess.write(this.sendKey);
-                if (attempt >= 3) {
-                    this.submitRetryUsed = true;
-                    return;
-                }
-                this.submitRetryTimer = setTimeout(() => retrySubmitIfStuck(attempt + 1), retryDelayMs);
+                this.ptyProcess!.write(this.sendKey);
+                const retrySubmitIfStuck = (attempt: number) => {
+                    this.submitRetryTimer = null;
+                    if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
+                    if (this.currentStatus === 'waiting_approval') return;
+                    if ((this.responseBuffer || '').trim()) return;
+                    const screenText = this.terminalScreen.getText();
+                    if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
+                    if (/Esc to interrupt|Do you want to proceed|This command requires approval|Allow Codex to|Approve and run now|Always approve this session|Running…|Running\.\.\./i.test(screenText)) return;
+                    this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
+                    LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt ${attempt})`);
+                    this.recordTrace('submit_write', {
+                        mode: 'submit_retry',
+                        attempt,
+                        sendKey: this.sendKey,
+                        screenText: summarizeCliTraceText(screenText, 500),
+                    });
+                    this.ptyProcess.write(this.sendKey);
+                    if (attempt >= 3) {
+                        this.submitRetryUsed = true;
+                        return;
+                    }
+                    this.submitRetryTimer = setTimeout(() => retrySubmitIfStuck(attempt + 1), retryDelayMs);
+                };
+                this.submitRetryTimer = setTimeout(() => retrySubmitIfStuck(1), retryDelayMs);
+                startResponseTimeout();
+                resolveOnce();
             };
-            this.submitRetryTimer = setTimeout(() => retrySubmitIfStuck(1), retryDelayMs);
-            startResponseTimeout();
-        };
 
-        if (this.submitStrategy === 'immediate') {
-            this.submitPendingUntil = 0;
+            if (this.submitStrategy === 'immediate') {
+                commitUserTurn();
+                this.submitPendingUntil = 0;
+                this.recordTrace('submit_write', {
+                    mode: 'immediate',
+                    text: summarizeCliTraceText(text, 500),
+                    sendKey: this.sendKey,
+                    screenText: summarizeCliTraceText(this.terminalScreen.getText(), 500),
+                });
+                this.ptyProcess!.write(text + this.sendKey);
+                this.submitRetryTimer = setTimeout(() => {
+                    this.submitRetryTimer = null;
+                    if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
+                    if (this.currentStatus === 'waiting_approval') return;
+                    if ((this.responseBuffer || '').trim()) return;
+                    const screenText = this.terminalScreen.getText();
+                    if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
+                    LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt 1)`);
+                    this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
+                    this.recordTrace('submit_write', {
+                        mode: 'immediate_retry',
+                        attempt: 1,
+                        sendKey: this.sendKey,
+                        screenText: summarizeCliTraceText(screenText, 500),
+                    });
+                    this.ptyProcess.write(this.sendKey);
+                    this.submitRetryUsed = true;
+                }, retryDelayMs);
+                startResponseTimeout();
+                resolveOnce();
+                return;
+            }
+
+            if (submitDelayMs > 0) {
+                this.submitPendingUntil = Date.now() + submitDelayMs;
+            }
+            this.ptyProcess!.write(text);
             this.recordTrace('submit_write', {
-                mode: 'immediate',
+                mode: 'type_then_submit',
                 text: summarizeCliTraceText(text, 500),
                 sendKey: this.sendKey,
                 screenText: summarizeCliTraceText(this.terminalScreen.getText(), 500),
             });
-            this.ptyProcess.write(text + this.sendKey);
-            this.submitRetryTimer = setTimeout(() => {
-                this.submitRetryTimer = null;
-                if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
-                if (this.currentStatus === 'waiting_approval') return;
-                if ((this.responseBuffer || '').trim()) return;
+            const submitStartedAt = Date.now();
+            let lastNormalizedScreen = '';
+            let lastScreenChangeAt = submitStartedAt;
+            const waitForEchoAndSubmit = () => {
+                if (!this.ptyProcess) {
+                    resolveOnce();
+                    return;
+                }
+                const now = Date.now();
+                const elapsed = now - submitStartedAt;
                 const screenText = this.terminalScreen.getText();
-                if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
-                LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt 1)`);
-                this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
-                this.recordTrace('submit_write', {
-                    mode: 'immediate_retry',
-                    attempt: 1,
-                    sendKey: this.sendKey,
-                    screenText: summarizeCliTraceText(screenText, 500),
-                });
-                this.ptyProcess.write(this.sendKey);
-                this.submitRetryUsed = true;
-            }, retryDelayMs);
-            startResponseTimeout();
-            return;
-        }
+                const normalizedScreen = normalizePromptText(screenText);
+                if (normalizedScreen !== lastNormalizedScreen) {
+                    lastNormalizedScreen = normalizedScreen;
+                    lastScreenChangeAt = now;
+                }
+                const echoVisible = !normalizedPromptSnippet || promptLikelyVisible(screenText, normalizedPromptSnippet);
 
-        if (submitDelayMs > 0) {
-            this.submitPendingUntil = Date.now() + submitDelayMs;
-        }
-        this.ptyProcess.write(text);
-        this.recordTrace('submit_write', {
-            mode: 'type_then_submit',
-            text: summarizeCliTraceText(text, 500),
-            sendKey: this.sendKey,
-            screenText: summarizeCliTraceText(this.terminalScreen.getText(), 500),
-        });
-        const submitStartedAt = Date.now();
-        let lastNormalizedScreen = '';
-        let lastScreenChangeAt = submitStartedAt;
-        const waitForEchoAndSubmit = () => {
-            if (!this.ptyProcess) return;
-            const now = Date.now();
-            const elapsed = now - submitStartedAt;
-            const screenText = this.terminalScreen.getText();
-            const normalizedScreen = normalizePromptText(screenText);
-            if (normalizedScreen !== lastNormalizedScreen) {
-                lastNormalizedScreen = normalizedScreen;
-                lastScreenChangeAt = now;
-            }
-            const echoVisible = !normalizedPromptSnippet || promptLikelyVisible(screenText, normalizedPromptSnippet);
+                if (echoVisible) {
+                    const screenSettled = (now - lastScreenChangeAt) >= 500;
+                    if (elapsed >= submitDelayMs && screenSettled) {
+                        submit();
+                        return;
+                    }
+                }
 
-            if (echoVisible) {
-                const screenSettled = (now - lastScreenChangeAt) >= 500;
-                if (elapsed >= submitDelayMs && screenSettled) {
+                if (elapsed >= maxEchoWaitMs) {
                     submit();
                     return;
                 }
-            }
 
-            if (elapsed >= maxEchoWaitMs) {
-                submit();
-                return;
-            }
-
-            setTimeout(waitForEchoAndSubmit, 50);
-        };
-        waitForEchoAndSubmit();
+                setTimeout(waitForEchoAndSubmit, 50);
+            };
+            waitForEchoAndSubmit();
+        });
     }
 
     getPartialResponse(): string {

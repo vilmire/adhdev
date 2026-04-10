@@ -129,6 +129,26 @@ export interface SessionEntry {
     surfaceHidden?: boolean;
 }
 
+/**
+ * Compact session metadata stored in UserSessionDO and reused by server-side
+ * status/convenience APIs. This intentionally excludes rich UI-only fields.
+ */
+export interface CompactSessionEntry {
+    id: string;
+    parentId: string | null;
+    providerType: string;
+    providerName: string;
+    kind: SessionKind;
+    transport: SessionTransport;
+    status: SessionStatus;
+    title: string;
+    workspace: string | null;
+    cdpConnected?: boolean;
+    currentModel?: string;
+    currentPlan?: string;
+    currentAutoApprove?: string;
+}
+
 /** Available provider information */
 export interface AvailableProviderInfo {
     type: string;
@@ -229,6 +249,26 @@ export interface RecentLaunchEntry {
     workspace?: string | null;
     currentModel?: string;
     lastLaunchedAt: number;
+}
+
+/** Compact machine payload broadcast by UserSessionDO to cloud dashboards. */
+export interface CompactDaemonEntry {
+    id: string;
+    type?: string;
+    machineId?: string;
+    platform?: string;
+    hostname?: string;
+    nickname?: string;
+    p2p?: StatusReportPayload['p2p'];
+    cdpConnected?: boolean;
+    timestamp?: number;
+    version?: string;
+    serverVersion?: string;
+    versionMismatch?: boolean;
+    terminalBackend?: TerminalBackendStatus;
+    detectedIdes?: DetectedIdeInfo[];
+    availableProviders?: AvailableProviderInfo[];
+    sessions?: CompactSessionEntry[];
 }
 
 // ─── Status Report Payload (daemon → server) ────────────────────────
