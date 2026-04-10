@@ -14,6 +14,7 @@ import { getWorkspaceState } from '../config/workspaces.js';
 import { getHostMemorySnapshot } from '../system/host-memory.js';
 import { getTerminalBackendRuntimeStatus } from '../cli-adapters/terminal-screen.js';
 import { LOG } from '../logging/logger.js';
+import type { DaemonCdpManager } from '../cdp/manager.js';
 import { buildSessionEntries, isCdpConnected } from './builders.js';
 import type { ProviderState } from '../providers/provider-instance.js';
 import type {
@@ -27,7 +28,7 @@ import type {
 
 export interface StatusSnapshotOptions {
     allStates: ProviderState[];
-    cdpManagers: Map<string, unknown>;
+    cdpManagers: Map<string, DaemonCdpManager>;
     providerLoader: {
         getAll(): Array<{
             type: string;
@@ -75,7 +76,7 @@ function buildDetectedIdeInfos(
             id: ide.id,
             type: ide.id,
             name: ide.displayName || ide.name || ide.id,
-            running: isCdpConnected(cdpManagers as Map<string, any>, ide.id),
+            running: isCdpConnected(cdpManagers, ide.id),
             ...(ide.path ? { path: ide.path } : {}),
         }));
 }
@@ -132,7 +133,7 @@ export function getSessionCompletionMarker(session: {
         }> | null
     } | null
 }) {
-    const lastMessage = session.activeChat?.messages?.at?.(-1) as any;
+    const lastMessage = session.activeChat?.messages?.at?.(-1);
     if (!lastMessage) return '';
     const role = typeof lastMessage.role === 'string' ? lastMessage.role : '';
     if (role === 'user' || role === 'human' || role === 'system') return '';
@@ -213,7 +214,7 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
     const recentActivity = getRecentActivity(state, 20);
     const sessions = buildSessionEntries(
         options.allStates,
-        options.cdpManagers as Map<string, any>,
+        options.cdpManagers,
     );
     for (const session of sessions) {
         const lastSeenAt = getSessionSeenAt(state, session.id);

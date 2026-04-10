@@ -711,7 +711,7 @@ class StandaloneServer {
 
     return buildStatusSnapshot({
       allStates,
-      cdpManagers: this.components!.cdpManagers as Map<string, unknown>,
+      cdpManagers: this.components!.cdpManagers,
       providerLoader: this.components!.providerLoader,
       detectedIdes: this.components!.detectedIdes.value,
       instanceId: `standalone_${machineId}`,

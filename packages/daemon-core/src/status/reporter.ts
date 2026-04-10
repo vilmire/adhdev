@@ -6,6 +6,8 @@
  */
 
 import { LOG } from '../logging/logger.js';
+import type { DaemonCdpManager } from '../cdp/manager.js';
+import type { MachineInfo } from '../shared-types.js';
 import { buildSessionEntries } from './builders.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import type {
@@ -19,7 +21,7 @@ import type {
 
 export interface StatusReporterDeps {
     serverConn: { isConnected(): boolean; sendMessage(type: string, data: any): void; getUserPlan(): string } | null;
-    cdpManagers: Map<string, { isConnected: boolean }>;
+    cdpManagers: Map<string, DaemonCdpManager>;
     p2p: { isConnected: boolean; isAvailable: boolean; connectionState: string; connectedPeerCount: number; screenshotActive: boolean; sendStatus(data: any): void } | null;
     providerLoader: { resolve(type: string): any; getAll(): any[] };
     detectedIdes: any[];
@@ -65,7 +67,7 @@ export class DaemonStatusReporter {
             if (this.deps.p2p?.isConnected) {
                 this.sendUnifiedStatusReport({ p2pOnly: true }).catch(e => LOG.warn('Status', `P2P status send failed: ${e?.message}`));
             }
-        }, 5_000) as any;
+        }, 5_000);
     }
 
     stopReporting(): void {
@@ -174,14 +176,14 @@ export class DaemonStatusReporter {
  // IDE/CLI/ACP states → managed entries (shared builder)
         const sessions = buildSessionEntries(
             allStates,
-            this.deps.cdpManagers as Map<string, any>,
+            this.deps.cdpManagers,
         );
 
  // ═══ Assemble payload (P2P — required data only) ═══
         const payload: Record<string, any> = {
             ...buildStatusSnapshot({
                 allStates,
-                cdpManagers: this.deps.cdpManagers as Map<string, unknown>,
+                cdpManagers: this.deps.cdpManagers,
                 providerLoader: this.deps.providerLoader,
                 detectedIdes: this.deps.detectedIdes || [],
                 instanceId: this.deps.instanceId,
@@ -231,10 +233,10 @@ export class DaemonStatusReporter {
                 currentPlan: session.currentPlan,
                 currentAutoApprove: session.currentAutoApprove,
                 lastUpdated: session.lastUpdated,
-                unread: (session as any).unread,
-                lastSeenAt: (session as any).lastSeenAt,
-                inboxBucket: (session as any).inboxBucket,
-                surfaceHidden: (session as any).surfaceHidden,
+                unread: session.unread,
+                lastSeenAt: session.lastSeenAt,
+                inboxBucket: session.inboxBucket,
+                surfaceHidden: session.surfaceHidden,
                 controlValues: session.controlValues,
                 providerControls: session.providerControls,
                 acpConfigOptions: session.acpConfigOptions,
@@ -251,13 +253,15 @@ export class DaemonStatusReporter {
 
  // ─── P2P ─────────────────────────────────────────
 
-    private sendP2PPayload(payload: Record<string, any>): boolean {
+    private sendP2PPayload(payload: { timestamp?: number; system?: unknown; machine?: MachineInfo; [key: string]: unknown }): boolean {
         const { timestamp: _ts, system: _sys, ...hashTarget } = payload;
-        if (hashTarget.machine) {
-            const { freeMem: _f, availableMem: _a, loadavg: _l, uptime: _u, ...stableMachine } = hashTarget.machine as any;
-            hashTarget.machine = stableMachine;
-        }
-        const h = this.simpleHash(JSON.stringify(hashTarget));
+        const hashPayload = hashTarget.machine
+            ? (() => {
+                const { freeMem: _f, availableMem: _a, loadavg: _l, uptime: _u, ...stableMachine } = hashTarget.machine;
+                return { ...hashTarget, machine: stableMachine };
+            })()
+            : hashTarget;
+        const h = this.simpleHash(JSON.stringify(hashPayload));
         if (h !== this.lastP2PStatusHash) {
             this.lastP2PStatusHash = h;
             this.deps.p2p?.sendStatus(payload);
