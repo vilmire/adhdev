@@ -12,6 +12,7 @@ import { IconBell, IconChat, IconScroll, IconMonitor, IconEyeOff, IconX, IconPlu
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared';
 import CliViewModeToggle from './CliViewModeToggle';
+import { getConversationDisplayLabel, getConversationMetaParts } from './conversation-selectors';
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -49,7 +50,7 @@ function DashboardHeaderInboxItem({
     shortcutIndex?: number;
     onClick: () => void;
 }) {
-    const metaParts = [conversation.displaySecondary, conversation.machineName].filter(Boolean);
+    const metaParts = getConversationMetaParts(conversation);
 
     return (
         <button
@@ -57,7 +58,7 @@ function DashboardHeaderInboxItem({
             className={`dashboard-header-inbox-item ${isAttention ? 'is-attention' : ''}`.trim()}
             onClick={onClick}
         >
-            <span className="dashboard-header-inbox-item-title">{conversation.displayPrimary}</span>
+            <span className="dashboard-header-inbox-item-title">{getConversationDisplayLabel(conversation)}</span>
             {(shortcutIndex || metaParts.length > 0) && (
                 <span className="dashboard-header-inbox-item-meta">
                     {shortcutIndex ? <span className="dashboard-header-item-shortcut">⌥{shortcutIndex}</span> : null}

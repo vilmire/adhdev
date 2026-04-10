@@ -2,7 +2,12 @@ import { useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ActiveConversation } from './types'
 import { IconMonitor, IconPlug, IconServer } from '../Icons'
-import { formatIdeType } from '../../utils/daemon-utils'
+import {
+    getConversationIdeChipLabel,
+    getConversationMachineId,
+    getConversationNativeTargetSessionId,
+    getConversationProviderLabel,
+} from './conversation-selectors'
 
 interface ConversationMetaChipsProps {
     conversation: ActiveConversation
@@ -20,18 +25,12 @@ export default function ConversationMetaChips({
     interactive = true,
 }: ConversationMetaChipsProps) {
     const navigate = useNavigate()
-    const machineId = conversation.daemonId || conversation.ideId?.split(':')[0] || conversation.ideId
+    const machineId = getConversationMachineId(conversation)
     const showIdeChip = conversation.transport === 'cdp-page' || conversation.transport === 'cdp-webview'
     const showExtensionChip = conversation.streamSource === 'agent-stream' && !!conversation.agentName
     const showProviderChip = !showExtensionChip && (conversation.transport === 'pty' || conversation.transport === 'acp')
-    const providerChipLabel = conversation.agentName || formatIdeType(conversation.agentType || conversation.ideType || '')
-    const ideChipLabel = (() => {
-        if (conversation.streamSource === 'agent-stream') {
-            const parentIdeLabel = conversation.displaySecondary?.split('·')[0]?.trim()
-            if (parentIdeLabel) return parentIdeLabel
-        }
-        return formatIdeType(conversation.ideType || '')
-    })()
+    const providerChipLabel = getConversationProviderLabel(conversation)
+    const ideChipLabel = getConversationIdeChipLabel(conversation)
 
     const handleOpenMachine = useCallback(() => {
         if (onOpenMachine) {
@@ -47,12 +46,10 @@ export default function ConversationMetaChips({
             onOpenNativeConversation()
             return
         }
-        const targetSessionId = conversation.streamSource === 'agent-stream'
-            ? conversation.nativeSessionId
-            : conversation.sessionId
+        const targetSessionId = getConversationNativeTargetSessionId(conversation)
         if (!targetSessionId) return
         navigate(`/dashboard?activeTab=${encodeURIComponent(targetSessionId)}`)
-    }, [conversation.nativeSessionId, conversation.sessionId, conversation.streamSource, navigate, onOpenNativeConversation])
+    }, [conversation, navigate, onOpenNativeConversation])
 
     return (
         <div className={`conversation-meta-chips ${className}`.trim()}>

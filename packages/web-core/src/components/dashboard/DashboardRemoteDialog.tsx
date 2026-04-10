@@ -12,6 +12,7 @@ import { useIdeConversations } from '../../hooks/useIdeConversations'
 import { getPreferredConversationForIde } from './conversation-sort'
 import { IconMonitor, IconScroll, IconSplitView } from '../Icons'
 import { formatIdeType } from '../../utils/daemon-utils'
+import { getConversationDaemonRouteId, getConversationDisplayLabel, isNativeConversation } from './conversation-selectors'
 
 type RemoteDialogViewMode = 'split' | 'remote'
 
@@ -50,7 +51,7 @@ export default function DashboardRemoteDialog({
 }: DashboardRemoteDialogProps) {
     const [viewMode, setViewMode] = useState<RemoteDialogViewMode>('split')
     const [dialogChatTab, setDialogChatTab] = useState<string>(() => (
-        activeConv.streamSource === 'native' ? 'native' : activeConv.tabKey
+        isNativeConversation(activeConv) ? 'native' : activeConv.tabKey
     ))
     const activeIdeEntry = useMemo(
         () => ideEntry || ides.find(ide => ide.id === activeConv.ideId),
@@ -70,7 +71,7 @@ export default function DashboardRemoteDialog({
         connectionStates,
         localUserMessages,
         ideName: ideDisplayName || 'IDE',
-        preferredTabKey: activeConv.streamSource === 'native' ? undefined : activeConv.tabKey,
+        preferredTabKey: isNativeConversation(activeConv) ? undefined : activeConv.tabKey,
     })
     const preferredConversation = useMemo(
         () => activeIdeEntry ? getPreferredConversationForIde(conversations, activeIdeEntry.id) : null,
@@ -78,7 +79,7 @@ export default function DashboardRemoteDialog({
     )
 
     useEffect(() => {
-        if (activeConv.streamSource === 'native') {
+        if (isNativeConversation(activeConv)) {
             setDialogChatTab(
                 preferredConversation?.streamSource === 'agent-stream'
                     ? preferredConversation.tabKey
@@ -97,7 +98,7 @@ export default function DashboardRemoteDialog({
             || activeConv
     }, [activeConv, conversations, dialogChatTab])
 
-    const daemonRouteId = effectiveConv.daemonId || effectiveConv.ideId?.split(':')[0] || effectiveConv.ideId
+    const daemonRouteId = getConversationDaemonRouteId(effectiveConv)
     const cmds = useDashboardConversationCommands({
         sendDaemonCommand,
         activeConv: effectiveConv,
@@ -149,7 +150,7 @@ export default function DashboardRemoteDialog({
                                 <span className="w-7 h-7 flex items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary shrink-0">
                                     <IconMonitor size={16} />
                                 </span>
-                                <span className="truncate">{effectiveConv.displayPrimary || effectiveConv.agentName || 'Remote'}</span>
+                                <span className="truncate">{getConversationDisplayLabel(effectiveConv) || 'Remote'}</span>
                             </div>
                         </div>
                         <button className="btn btn-primary btn-sm h-8 px-4 rounded-lg font-bold md:hidden shrink-0" onClick={onClose}>

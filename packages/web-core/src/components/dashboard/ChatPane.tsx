@@ -8,11 +8,9 @@ import ControlsBar from './ControlsBar';
 import ChatInputBar from './ChatInputBar';
 import ConversationMetaChips from './ConversationMetaChips';
 import { getConversationViewStates } from './DashboardMobileChatShared';
-import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
 import type { ActiveConversation, DashboardMessage } from './types';
 import type { DaemonData } from '../../types';
 import { useTransport } from '../../context/TransportContext';
-import { formatIdeType } from '../../utils/daemon-utils';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
 import { IconPlug, IconEye, IconFolder } from '../Icons';
 import {
@@ -21,6 +19,12 @@ import {
     getMessageTimestamp,
     sortMessagesChronologically,
 } from './message-utils';
+import {
+    getConversationControlsContext,
+    getConversationDaemonRouteId,
+    getConversationDisplayLabel,
+    getConversationProviderType,
+} from './conversation-selectors';
 
 interface ChatHistoryResult {
     messages?: DashboardMessage[];
@@ -131,13 +135,13 @@ export default function ChatPane({
         setIsLoadingMore(true);
         updateTabHistory(tk, { error: null });
         try {
-            const daemonId = ideEntry?.daemonId || activeConv.ideId?.split(':')[0] || '';
+            const daemonId = getConversationDaemonRouteId(activeConv);
             if (!daemonId) {
                 updateTabHistory(tk, { hasMore: false });
                 return;
             }
 
-            const agentType = activeConv.ideType || activeConv.agentType || '';
+            const agentType = getConversationProviderType(activeConv);
 
             const raw = await sendCommand(daemonId, 'chat_history', {
                 agentType,
@@ -218,7 +222,11 @@ export default function ChatPane({
             .sort((a, b) => a.timestamp - b.timestamp),
         [actionLogs, activeConv.tabKey],
     );
-    const panelLabel = activeConv.displayPrimary || activeConv.agentName || 'Agent'
+    const panelLabel = getConversationDisplayLabel(activeConv)
+    const controlsContext = useMemo(
+        () => getConversationControlsContext(activeConv, ideEntry),
+        [activeConv, ideEntry],
+    )
     const emptyState = useMemo(() => {
         if (activeConv.messages.length !== 0) return undefined;
         if (activeConv.connectionState === 'connecting' || activeConv.connectionState === 'new') {
@@ -289,9 +297,9 @@ export default function ChatPane({
             <ChatMessageList
                 messages={allMessages}
                 actionLogs={visibleActionLogs}
-                agentName={activeConv.agentName || activeConv.displayPrimary || 'Agent'}
+                agentName={activeConv.agentName || panelLabel || 'Agent'}
                 userName={userName}
-                isCliMode={isCliConv(activeConv) || isAcpConv(activeConv)}
+                isCliMode={controlsContext.isCli || controlsContext.isAcp}
                 isWorking={viewStates.isGenerating}
                 contextKey={activeConv.tabKey}
                 receivedAtMap={receivedAtMap}
@@ -305,36 +313,20 @@ export default function ChatPane({
             />
 
             {/* Controls Bar (dynamic or legacy fallback) */}
-            {isInputActive && !isCliTerminalConv(activeConv) && (() => {
-                const isNativeConversation = activeConv.streamSource !== 'agent-stream'
-                const modelBarAgentType = isNativeConversation
-                    ? activeConv.ideType
-                    : activeConv.agentType
-                const modelBarLabel = isNativeConversation
-                    ? (ideEntry?.type ? formatIdeType(ideEntry.type) : formatIdeType(activeConv.ideType || ''))
-                    : (activeConv.agentName || formatIdeType(activeConv.agentType || ''))
-
-                const targetEntry = (!isNativeConversation && ideEntry?.childSessions)
-                    ? (ideEntry.childSessions.find(s => s.id === activeConv.sessionId || s.providerType === activeConv.agentType) || ideEntry)
-                    : ideEntry;
-
-                // Use new ControlsBar (schema-driven) when providerControls are available
-                const providerControls = targetEntry?.providerControls;
-                const controlValues = targetEntry?.controlValues;
-
+            {isInputActive && !controlsContext.isCliTerminal && (() => {
                 return (
                     <ControlsBar
                         ideId={activeConv.ideId}
                         sessionId={activeConv.sessionId}
                         ideType={activeConv.ideType}
-                        providerType={modelBarAgentType}
-                        displayLabel={modelBarLabel}
-                        controls={providerControls}
-                        controlValues={controlValues}
-                        serverModel={targetEntry?.currentModel || undefined}
-                        serverMode={targetEntry?.currentPlan || undefined}
-                        acpConfigOptions={isAcpConv(activeConv) ? targetEntry?.acpConfigOptions : undefined}
-                        acpModes={isAcpConv(activeConv) ? targetEntry?.acpModes : undefined}
+                        providerType={controlsContext.providerType}
+                        displayLabel={controlsContext.displayLabel}
+                        controls={controlsContext.targetEntry?.providerControls}
+                        controlValues={controlsContext.targetEntry?.controlValues}
+                        serverModel={controlsContext.targetEntry?.currentModel || undefined}
+                        serverMode={controlsContext.targetEntry?.currentPlan || undefined}
+                        acpConfigOptions={controlsContext.isAcp ? controlsContext.targetEntry?.acpConfigOptions : undefined}
+                        acpModes={controlsContext.isAcp ? controlsContext.targetEntry?.acpModes : undefined}
                     />
                 );
             })()}
