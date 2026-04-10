@@ -121,6 +121,12 @@ export class DaemonAgentStreamManager {
         return child?.sessionId || null;
     }
 
+    private getStateError(state: AgentStreamState): string {
+        if (typeof state.error === 'string' && state.error.trim()) return state.error.trim();
+        if (typeof state._error === 'string' && state._error.trim()) return state._error.trim();
+        return 'unknown';
+    }
+
     private async connectManagedSession(
         cdp: DaemonCdpManager,
         parentSessionId: string,
@@ -194,8 +200,8 @@ export class DaemonAgentStreamManager {
             const evaluate: AgentEvaluateFn = (expr, timeout) =>
                 cdp.evaluateInSessionFrame(agent.cdpSessionId, expr, timeout);
             const state = await agent.adapter.readChat(evaluate);
-            LOG.debug('AgentStream', `[AgentStream] readChat(${type}) result: status=${state.status} msgs=${state.messages?.length || 0} model=${state.model || ''}${state.status === 'error' ? ' error=' + JSON.stringify((state as any).error || (state as any)._error || 'unknown') : ''}`);
-            const stateError = String((state as any).error || (state as any)._error || '');
+            const stateError = this.getStateError(state);
+            LOG.debug('AgentStream', `[AgentStream] readChat(${type}) result: status=${state.status} msgs=${state.messages?.length || 0} model=${state.model || ''}${state.status === 'error' ? ' error=' + JSON.stringify(stateError) : ''}`);
             if (state.status === 'error' && this.isRecoverableSessionError(stateError)) {
                 throw new Error(stateError);
             }

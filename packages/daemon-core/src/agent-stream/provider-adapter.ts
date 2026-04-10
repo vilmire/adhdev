@@ -11,7 +11,7 @@ import type {
     AgentChatListItem,
     AgentEvaluateFn,
 } from './types.js';
-import type { ProviderModule } from '../providers/contracts.js';
+import type { ProviderModule, ProviderScripts } from '../providers/contracts.js';
 import { extractProviderControlValues, normalizeProviderEffects } from '../providers/control-effects.js';
 
 export class ProviderStreamAdapter implements IAgentStreamAdapter {
@@ -32,13 +32,17 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
     }
 
     private callScript(name: string, ...args: any[]): string | null {
-        const fn = (this.provider.scripts as any)?.[name];
+        const fn = this.provider.scripts?.[name];
         if (typeof fn !== 'function') return null;
         return fn(...args) || null;
     }
 
     private hasScript(name: string): boolean {
-        return typeof (this.provider.scripts as any)?.[name] === 'function';
+        return typeof this.provider.scripts?.[name] === 'function';
+    }
+
+    private getStateTitle(state: AgentStreamState): string {
+        return typeof state.title === 'string' ? state.title : '';
     }
 
     private parseMaybeJson(raw: unknown): any {
@@ -83,7 +87,7 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
 
     private lastMessageSignature(state: AgentStreamState | null | undefined): string {
         const messages = Array.isArray(state?.messages) ? state!.messages : [];
-        const last = messages[messages.length - 1] as any;
+        const last = messages[messages.length - 1];
         if (!last) return '';
         return `${last.role || ''}:${String(last.content || '').replace(/\s+/g, ' ').trim()}`;
     }
@@ -155,7 +159,7 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
                 activeModal: data.activeModal,
             };
             if (typeof data.title === 'string' && data.title.trim()) {
-                (state as any).title = data.title.trim();
+                state.title = data.title.trim();
             }
             const controlValues = extractProviderControlValues(this.provider.controls, data);
             if (controlValues) state.controlValues = controlValues;
@@ -282,7 +286,7 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
         for (let attempt = 0; attempt < 6; attempt += 1) {
             await new Promise((resolve) => setTimeout(resolve, 250));
             const state = await this.readChat(evaluate);
-            const title = typeof (state as any).title === 'string' ? (state as any).title : '';
+            const title = this.getStateTitle(state);
             if (this.titlesMatch(title, sessionId)) return true;
         }
         return false;
@@ -303,6 +307,6 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
             messages: [],
             inputContent: '',
             _error: message,
-        } as any;
+        };
     }
 }
