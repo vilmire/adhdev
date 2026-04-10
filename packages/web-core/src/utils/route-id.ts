@@ -32,8 +32,10 @@ export function applyRouteTarget(
     }
 }
 
-export function extractDaemonId(entry: Pick<DaemonData, 'id'> & Partial<DaemonData>): string {
-    return (entry as any).doId || parseDaemonRouteId(entry.id).daemonId || entry.id
+type DaemonRouteEntry = Pick<DaemonData, 'id'> & Partial<DaemonData> & { doId?: string | null }
+
+export function extractDaemonId(entry: DaemonRouteEntry): string {
+    return entry.doId || parseDaemonRouteId(entry.id).daemonId || entry.id
 }
 
 export function collectDaemonIds(ides: DaemonData[]): Set<string> {

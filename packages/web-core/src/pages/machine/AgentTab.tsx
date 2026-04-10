@@ -913,7 +913,7 @@ export default function AgentTab({
                                                 {ide?.version && <span className="text-[10px] text-text-muted ml-1.5">v{ide.version}</span>}
                                             </div>
                                             <div className="text-[11px] text-text-muted flex gap-2">
-                                                <span>{(entry as any).workspace || '—'}</span>
+                                                <span>{entry.workspace || '—'}</span>
                                                 {acp?.currentModel && <span className="text-cyan-500">🤖 {acp.currentModel}</span>}
                                                 {acp?.currentPlan && <span style={{ color: 'var(--status-warning)' }}>📋 {acp.currentPlan}</span>}
                                                 {cli?.mode && (
@@ -1054,7 +1054,7 @@ export default function AgentTab({
                                         {normalizedStatus === 'stopped' ? (
                                             <button
                                                 onClick={() => {
-                                                    const workspacePath = (entry as any).workspace || ''
+                                                    const workspacePath = entry.workspace || ''
                                                     const providerName = isIde
                                                         ? formatIdeType(entry.type)
                                                         : getName(entry)
