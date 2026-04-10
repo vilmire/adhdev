@@ -15,6 +15,7 @@ import * as os from 'os';
 import { execSync } from 'child_process';
 import { platform } from 'os';
 import type { ProviderLoader } from './provider-loader.js';
+import type { ProviderModule } from './contracts.js';
 
 // ─── Types ──────────────────────────────────────
 
@@ -141,6 +142,26 @@ function parseVersion(raw: string): string {
   return match ? match[1] : raw.split('\n')[0].substring(0, 100);
 }
 
+function getPlatformVersionCommand(
+  versionCommand: ProviderModule['versionCommand'],
+  currentOs: string,
+): string | undefined {
+  if (!versionCommand) return undefined;
+  if (typeof versionCommand === 'string') {
+    const trimmed = versionCommand.trim();
+    return trimmed || undefined;
+  }
+  const platformValue = versionCommand[currentOs];
+  if (typeof platformValue === 'string' && platformValue.trim()) {
+    return platformValue.trim();
+  }
+  const defaultValue = versionCommand.default;
+  if (typeof defaultValue === 'string' && defaultValue.trim()) {
+    return defaultValue.trim();
+  }
+  return undefined;
+}
+
 function getVersion(binary: string, versionCommand?: string): string | null {
   // Custom version command from provider.json
   if (versionCommand) {
@@ -200,10 +221,7 @@ export async function detectAllVersions(
       detectedAt: new Date().toISOString(),
     };
 
-    const verCmdConfig = (provider as any).versionCommand;
-    const versionCommand = typeof verCmdConfig === 'object' && verCmdConfig !== null 
-      ? verCmdConfig[currentOs] 
-      : verCmdConfig;
+    const versionCommand = getPlatformVersionCommand(provider.versionCommand, currentOs);
 
     if (provider.category === 'ide') {
       // IDE: check app path + CLI
@@ -256,7 +274,7 @@ export async function detectAllVersions(
 
     // Check testedVersions — warn if installed version is not documented
     if (info.version && info.installed) {
-      const testedVersions: string[] = (provider as any).testedVersions || [];
+      const testedVersions = provider.testedVersions || [];
       if (testedVersions.length > 0 && !testedVersions.includes(info.version)) {
         info.warning = `Version ${info.version} is not in testedVersions [${testedVersions.join(', ')}]. Scripts may not work correctly.`;
       }
