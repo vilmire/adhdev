@@ -10,11 +10,14 @@ export function getProviderArgs(conv: ActiveConversation | undefined) {
     if (!conv) return {}
 
     const targetSessionId = conv.sessionId ? { targetSessionId: conv.sessionId } : {}
+    if (conv.sessionId) {
+        return targetSessionId
+    }
     if (isCliConv(conv) || isAcpConv(conv)) {
-        return { ...targetSessionId, agentType: getConversationProviderType(conv) }
+        return { agentType: getConversationProviderType(conv) }
     }
     if (conv.streamSource === 'agent-stream') {
-        return { ...targetSessionId, agentType: getConversationProviderType(conv) }
+        return { agentType: getConversationProviderType(conv) }
     }
     return targetSessionId
 }

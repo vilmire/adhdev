@@ -26,11 +26,11 @@ export interface PaneGroupProps {
     clearedTabs: Record<string, number>;
     ides: DaemonData[];
     /** Shared state refs */
-    actionLogs: { ideId: string; text: string; timestamp: number }[];
+    actionLogs: { routeId: string; text: string; timestamp: number }[];
     /** Dashboard-level state setters */
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>;
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>;
-    setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>;
+    setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>;
     isStandalone: boolean;
     hasRegisteredMachines?: boolean;
     userName?: string;
@@ -132,12 +132,12 @@ export default function PaneGroup({
         && !isAcpConv(activeConv)
         && getCliConversationViewMode(activeConv) === 'terminal'
     const activeIdeEntry = useMemo(
-        () => activeConv ? ides.find(ide => ide.id === activeConv.ideId) : undefined,
+        () => activeConv ? ides.find(ide => ide.id === activeConv.routeId) : undefined,
         [ides, activeConv],
     )
     const activeActionLogs = useMemo(() => {
         if (!activeConv) return []
-        return actionLogs.filter(log => log.ideId === activeConv.tabKey)
+        return actionLogs.filter(log => log.routeId === activeConv.tabKey)
     }, [actionLogs, activeConv])
     const liveSessionInboxState = useMemo(
         () => buildLiveSessionInboxStateMap(ides),
@@ -162,7 +162,7 @@ export default function PaneGroup({
 
     const handleConversationActivated = useCallback((conv: ActiveConversation) => {
         if (conv.streamSource === 'agent-stream' && conv.agentType) {
-            sendCommand(conv.ideId, 'focus_session', {
+            sendCommand(conv.routeId, 'focus_session', {
                 agentType: conv.agentType,
                 ...(conv.sessionId && { targetSessionId: conv.sessionId }),
             }).catch(() => {})

@@ -1,22 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { connectionManager } from '../compat'
 
 interface UseIdeRemoteStreamOptions {
     doId: string
-    ideId: string
-    ideType: string | undefined
+    targetSessionId?: string
     connState: string
     viewMode: 'split' | 'remote' | 'chat'
-    instanceId?: string
 }
 
 export function useIdeRemoteStream({
     doId,
-    ideId,
-    ideType,
+    targetSessionId,
     connState,
     viewMode,
-    instanceId,
 }: UseIdeRemoteStreamOptions) {
     const [connScreenshot, setConnScreenshot] = useState<string | null>(null)
     const [screenshotUsage, setScreenshotUsage] = useState<{
@@ -24,13 +20,6 @@ export function useIdeRemoteStream({
         dailyBudgetMinutes: number
         budgetExhausted: boolean
     } | null>(null)
-
-    const screenshotTarget = useMemo(() => {
-        if (!ideId) return ideType
-        const parts = ideId.split(':')
-        if (parts.length >= 3 && parts[1] === 'ide') return parts.slice(2).join(':')
-        return ideType
-    }, [ideId, ideType])
 
     useEffect(() => {
         if (!doId) return
@@ -62,20 +51,20 @@ export function useIdeRemoteStream({
 
     useEffect(() => {
         setConnScreenshot(null)
-    }, [doId, ideId, screenshotTarget])
+    }, [doId, targetSessionId])
 
     useEffect(() => {
         const conn = doId ? connectionManager.get(doId) : null
         if (!conn || connState !== 'connected') return
-        if (viewMode !== 'chat' && screenshotTarget) {
-            conn.startScreenshots(screenshotTarget)
+        if (viewMode !== 'chat' && targetSessionId) {
+            conn.startScreenshots(targetSessionId)
         } else {
-            conn.stopScreenshots(screenshotTarget)
+            conn.stopScreenshots(targetSessionId)
         }
         return () => {
-            conn.stopScreenshots(screenshotTarget)
+            conn.stopScreenshots(targetSessionId)
         }
-    }, [viewMode, connState, screenshotTarget, doId])
+    }, [viewMode, connState, targetSessionId, doId])
 
     const handleRemoteAction = useCallback(async (action: string, params: any) => {
         const conn = doId ? connectionManager.get(doId) : null
@@ -84,8 +73,8 @@ export function useIdeRemoteStream({
             return { success: false, error: 'P2P not connected' }
         }
 
-        return conn.sendInput(action, params, instanceId || screenshotTarget)
-    }, [doId, connState, instanceId, screenshotTarget])
+        return conn.sendInput(action, params, targetSessionId)
+    }, [doId, connState, targetSessionId])
 
     return {
         connScreenshot,

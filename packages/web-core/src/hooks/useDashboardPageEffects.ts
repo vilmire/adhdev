@@ -133,7 +133,7 @@ export function useDashboardPageEffects({
         }
         if (!activeConv || historyRefreshedRef.current || isRefreshingHistory) return
 
-        const ide = ides.find(entry => entry.id === activeConv.ideId)
+        const ide = ides.find(entry => entry.id === activeConv.routeId)
         if (ide && (!ide.chats || ide.chats.length === 0 || isLikelyCollapsedHistoryResult(ide.chats, activeConv))) {
             historyRefreshedRef.current = true
             void handleRefreshHistory()

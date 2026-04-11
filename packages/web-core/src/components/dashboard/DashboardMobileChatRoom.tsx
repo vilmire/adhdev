@@ -14,7 +14,7 @@ interface DashboardMobileChatRoomProps {
     isAcp: boolean
     isStandalone: boolean
     selectedIdeEntry?: DaemonData
-    actionLogs: { ideId: string; text: string; timestamp: number }[]
+    actionLogs: { routeId: string; text: string; timestamp: number }[]
     userName?: string
     isSendingChat: boolean
     isFocusingAgent: boolean

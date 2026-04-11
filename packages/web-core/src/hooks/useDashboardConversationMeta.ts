@@ -7,7 +7,7 @@ interface UseDashboardConversationMetaOptions {
     visibleConversations: ActiveConversation[]
     clearedTabs: Record<string, number>
     setClearedTabs: Dispatch<SetStateAction<Record<string, number>>>
-    setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
+    setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
 }
 
 export function useDashboardConversationMeta({

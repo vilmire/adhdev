@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { SessionHostDiagnosticsSnapshot } from '@adhdev/daemon-core'
 import type { DaemonData } from '../../types'
 import { eventManager } from '../../managers/EventManager'
+import { useSessionHostDiagnosticsSubscription } from '../../hooks/useSessionHostDiagnosticsSubscription'
 import { IconRefresh, IconServer, IconTerminal, IconUsers, IconWarning, IconX } from '../Icons'
 import type { MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
@@ -163,10 +165,9 @@ export default function DashboardMobileSessionHostSheet({
     onClose,
 }: DashboardMobileSessionHostSheetProps) {
     const [activeMachineId, setActiveMachineId] = useState<string | null>(initialMachineId || machineCards[0]?.id || null)
-    const [diagnostics, setDiagnostics] = useState<SessionHostDiagnosticsView | null>(null)
-    const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [busyActionKey, setBusyActionKey] = useState<string | null>(null)
+    const [refreshing, setRefreshing] = useState(false)
 
     useEffect(() => {
         setActiveMachineId(initialMachineId || machineCards[0]?.id || null)
@@ -179,7 +180,7 @@ export default function DashboardMobileSessionHostSheet({
 
     const activeCliEntries = useMemo(
         () => ides.filter(entry => {
-            if (entry.daemonMode) return false
+            if (entry.type === 'adhdev-daemon') return false
             if (entry.transport !== 'pty') return false
             const entryMachineId = getRouteMachineId(entry.daemonId || entry.id)
             return !!activeMachine?.id && entryMachineId === activeMachine.id
@@ -187,21 +188,31 @@ export default function DashboardMobileSessionHostSheet({
         [activeMachine?.id, ides],
     )
 
+    const sessionHostSubscription = useSessionHostDiagnosticsSubscription(activeMachine?.id, {
+        enabled: !!activeMachine?.id,
+        includeSessions: true,
+        limit: 6,
+        intervalMs: 10000,
+    })
+    const diagnostics = sessionHostSubscription.diagnostics as SessionHostDiagnosticsView | null
+    const loading = sessionHostSubscription.loading
+    const applyDiagnostics = sessionHostSubscription.applyDiagnostics
+
     const linkedConversationBySessionId = useMemo(() => {
         const map = new Map<string, ActiveConversation>()
         for (const entry of activeCliEntries) {
             const conversation = conversations.find((candidate) => (
                 candidate.sessionId === entry.sessionId
-                || candidate.ideId === entry.id
+                || candidate.routeId === entry.id
             ))
             if (entry.sessionId && conversation) map.set(entry.sessionId, conversation)
         }
         return map
     }, [activeCliEntries, conversations])
 
-    const loadDiagnostics = useCallback(async (opts?: { silent?: boolean }) => {
+    const refreshDiagnostics = useCallback(async () => {
         if (!activeMachine?.id) return
-        if (!opts?.silent) setLoading(true)
+        setRefreshing(true)
         try {
             const raw = await sendDaemonCommand(activeMachine.id, 'session_host_get_diagnostics', {
                 includeSessions: true,
@@ -209,23 +220,15 @@ export default function DashboardMobileSessionHostSheet({
             })
             const envelope = unwrapCommandEnvelope(raw)
             if (!envelope?.success) throw new Error(envelope?.error || 'Could not load session host diagnostics')
-            setDiagnostics((envelope.diagnostics || envelope.result || null) as SessionHostDiagnosticsView | null)
+            applyDiagnostics((envelope.diagnostics || envelope.result || null) as SessionHostDiagnosticsSnapshot | null)
             setError('')
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : 'Could not load session host diagnostics'
             setError(message)
         } finally {
-            if (!opts?.silent) setLoading(false)
+            setRefreshing(false)
         }
-    }, [activeMachine?.id, sendDaemonCommand])
-
-    useEffect(() => {
-        void loadDiagnostics()
-        const timer = window.setInterval(() => {
-            void loadDiagnostics({ silent: true })
-        }, 10000)
-        return () => window.clearInterval(timer)
-    }, [loadDiagnostics])
+    }, [activeMachine?.id, applyDiagnostics, sendDaemonCommand])
 
     const runSessionAction = useCallback(async (
         action: 'session_host_resume_session' | 'session_host_restart_session' | 'session_host_stop_session',
@@ -249,7 +252,7 @@ export default function DashboardMobileSessionHostSheet({
                     ? 'restarted'
                     : 'stopped'
             eventManager.showToast(`Session host ${verb}: ${session.displayName}`, 'success')
-            await loadDiagnostics({ silent: true })
+            await refreshDiagnostics()
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : 'Session host action failed'
             setError(message)
@@ -257,7 +260,7 @@ export default function DashboardMobileSessionHostSheet({
         } finally {
             setBusyActionKey((current) => (current === actionKey ? null : current))
         }
-    }, [activeMachine?.id, loadDiagnostics, sendDaemonCommand])
+    }, [activeMachine?.id, refreshDiagnostics, sendDaemonCommand])
 
     const runPruneDuplicates = useCallback(async () => {
         if (!activeMachine?.id) return
@@ -273,7 +276,7 @@ export default function DashboardMobileSessionHostSheet({
             const prunedCount = Array.isArray(result.prunedSessionIds) ? result.prunedSessionIds.length : 0
             const groupCount = typeof result.duplicateGroupCount === 'number' ? result.duplicateGroupCount : 0
             eventManager.showToast(`Pruned ${prunedCount} duplicate runtime(s) across ${groupCount} group(s)`, 'success')
-            await loadDiagnostics({ silent: true })
+            await refreshDiagnostics()
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : 'Duplicate prune failed'
             setError(message)
@@ -281,7 +284,7 @@ export default function DashboardMobileSessionHostSheet({
         } finally {
             setBusyActionKey((current) => (current === 'session_host_prune_duplicate_sessions' ? null : current))
         }
-    }, [activeMachine?.id, loadDiagnostics, sendDaemonCommand])
+    }, [activeMachine?.id, refreshDiagnostics, sendDaemonCommand])
 
     const sessions = useMemo(
         () => [...(diagnostics?.sessions || [])].sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0)),
@@ -331,8 +334,8 @@ export default function DashboardMobileSessionHostSheet({
                         <button
                             type="button"
                             className="flex h-9 w-9 items-center justify-center rounded-full border border-border-subtle bg-bg-secondary text-text-secondary"
-                            onClick={() => { void loadDiagnostics() }}
-                            disabled={loading}
+                            onClick={() => { void refreshDiagnostics() }}
+                            disabled={loading || refreshing}
                             aria-label="Refresh session host"
                         >
                             <IconRefresh size={16} />

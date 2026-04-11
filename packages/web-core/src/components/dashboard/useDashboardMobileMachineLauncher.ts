@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DaemonData } from '../../types'
+import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader'
 import type { LaunchWorkspaceOption, WorkspaceLaunchKind } from '../../pages/machine/types'
 import type { MobileMachineActionState } from './DashboardMobileChatShared'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
@@ -47,6 +48,7 @@ export function useDashboardMobileMachineLauncher({
     onBrowseDirectory,
     onListSavedSessions,
 }: UseDashboardMobileMachineLauncherOptions) {
+    const loadDaemonMetadata = useDaemonMetadataLoader()
     const [showAllRecent, setShowAllRecent] = useState(false)
     const hasIdeOptions = (selectedMachineEntry.detectedIdes?.length || 0) > 0
     const workspaceRows = useMemo(
@@ -77,6 +79,15 @@ export function useDashboardMobileMachineLauncher({
     const [launchConfirmSessionsLoading, setLaunchConfirmSessionsLoading] = useState(false)
     const [launchConfirmBusy, setLaunchConfirmBusy] = useState(false)
     const lastMachineIdRef = useRef<string | null>(null)
+
+    useEffect(() => {
+        const needsMetadata = !selectedMachineEntry.workspaces
+            || !selectedMachineEntry.availableProviders
+            || !selectedMachineEntry.detectedIdes
+            || !selectedMachineEntry.recentLaunches
+        if (!needsMetadata) return
+        void loadDaemonMetadata(selectedMachineEntry.id, { minFreshMs: 30_000 }).catch(() => {})
+    }, [loadDaemonMetadata, selectedMachineEntry])
 
     const resolvedWorkspacePath = workspaceChoice === '__custom__'
         ? customWorkspacePath.trim()

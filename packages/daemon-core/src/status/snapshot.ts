@@ -15,11 +15,12 @@ import { getHostMemorySnapshot } from '../system/host-memory.js';
 import { getTerminalBackendRuntimeStatus } from '../cli-adapters/terminal-screen.js';
 import { LOG } from '../logging/logger.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
-import { buildSessionEntries, isCdpConnected } from './builders.js';
+import { buildSessionEntries, isCdpConnected, type SessionEntryProfile } from './builders.js';
 import type { ProviderState } from '../providers/provider-instance.js';
 import type {
     AvailableProviderInfo,
     DetectedIdeInfo,
+    MachineInfo,
     RecentLaunchEntry,
     RecentSessionBucket,
     SessionEntry,
@@ -54,15 +55,13 @@ export interface StatusSnapshotOptions {
     }>;
     instanceId: string;
     version: string;
-    daemonMode: boolean;
     timestamp?: number;
     p2p?: StatusReportPayload['p2p'];
     machineNickname?: string | null;
+    profile?: SessionEntryProfile;
 }
 
-export interface StatusSnapshot extends StatusReportPayload {
-    availableProviders: AvailableProviderInfo[];
-}
+export type StatusSnapshot = StatusReportPayload;
 
 const READ_DEBUG_ENABLED = process.argv.includes('--dev') || process.env.ADHDEV_READ_DEBUG === '1';
 
@@ -101,6 +100,41 @@ function buildAvailableProviders(
         ...(provider.installed !== undefined ? { installed: provider.installed } : {}),
         ...(provider.detectedPath !== undefined ? { detectedPath: provider.detectedPath } : {}),
     }));
+}
+
+export function buildMachineInfo(profile: 'full' | 'live' | 'metadata' = 'full'): MachineInfo {
+    const base: MachineInfo = {
+        hostname: os.hostname(),
+        platform: os.platform(),
+    };
+
+    if (profile === 'live') {
+        return base;
+    }
+
+    if (profile === 'metadata') {
+        const memSnap = getHostMemorySnapshot();
+        return {
+            ...base,
+            arch: os.arch(),
+            cpus: os.cpus().length,
+            totalMem: memSnap.totalMem,
+            release: os.release(),
+        };
+    }
+
+    const memSnap = getHostMemorySnapshot();
+    return {
+        ...base,
+        arch: os.arch(),
+        cpus: os.cpus().length,
+        totalMem: memSnap.totalMem,
+        freeMem: memSnap.freeMem,
+        availableMem: memSnap.availableMem,
+        loadavg: os.loadavg(),
+        uptime: os.uptime(),
+        release: os.release(),
+    };
 }
 
 function parseMessageTime(value: unknown): number {
@@ -207,28 +241,39 @@ function buildRecentLaunches(
 }
 
 export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnapshot {
+    const profile = options.profile || 'full';
     const cfg = loadConfig();
     const state = loadState();
     const wsState = getWorkspaceState(cfg);
-    const memSnap = getHostMemorySnapshot();
     const recentActivity = getRecentActivity(state, 20);
-    const sessions = buildSessionEntries(
+    const unreadSourceSessions = buildSessionEntries(
         options.allStates,
         options.cdpManagers,
+        { profile: 'full' },
     );
-    for (const session of sessions) {
-        const lastSeenAt = getSessionSeenAt(state, session.id);
-        const seenCompletionMarker = getSessionSeenMarker(state, session.id);
-        const lastUsedAt = getSessionLastUsedAt(session);
-        const completionMarker = getSessionCompletionMarker(session);
-        const { unread, inboxBucket } = session.surfaceHidden
+    const sessions = profile === 'full'
+        ? unreadSourceSessions
+        : buildSessionEntries(
+            options.allStates,
+            options.cdpManagers,
+            { profile },
+        );
+    const sessionsById = new Map(sessions.map((session) => [session.id, session]));
+    for (const sourceSession of unreadSourceSessions) {
+        const session = sessionsById.get(sourceSession.id);
+        if (!session) continue;
+        const lastSeenAt = getSessionSeenAt(state, sourceSession.id);
+        const seenCompletionMarker = getSessionSeenMarker(state, sourceSession.id);
+        const lastUsedAt = getSessionLastUsedAt(sourceSession);
+        const completionMarker = getSessionCompletionMarker(sourceSession);
+        const { unread, inboxBucket } = sourceSession.surfaceHidden
             ? { unread: false, inboxBucket: 'idle' as RecentSessionBucket }
             : getUnreadState(
-                getSessionMessageUpdatedAt(session) > 0,
-                session.status,
+                getSessionMessageUpdatedAt(sourceSession) > 0,
+                sourceSession.status,
                 lastUsedAt,
                 lastSeenAt,
-                getLastMessageRole(session),
+                getLastMessageRole(sourceSession),
                 completionMarker,
                 seenCompletionMarker,
             );
@@ -238,39 +283,32 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
         if (READ_DEBUG_ENABLED && (session.unread || session.inboxBucket !== 'idle' || session.providerType.includes('codex'))) {
             LOG.info(
                 'RecentRead',
-                `snapshot session id=${session.id} provider=${session.providerType} status=${String(session.status || '')} bucket=${inboxBucket} unread=${String(unread)} lastSeenAt=${lastSeenAt} completionMarker=${completionMarker || '-'} seenMarker=${seenCompletionMarker || '-'} lastUpdated=${String(session.lastUpdated || 0)} lastUsedAt=${lastUsedAt} lastRole=${getLastMessageRole(session)} msgUpdatedAt=${getSessionMessageUpdatedAt(session)}`,
+                `snapshot session id=${session.id} provider=${session.providerType} status=${String(session.status || '')} bucket=${inboxBucket} unread=${String(unread)} lastSeenAt=${lastSeenAt} completionMarker=${completionMarker || '-'} seenMarker=${seenCompletionMarker || '-'} lastUpdated=${String(session.lastUpdated || 0)} lastUsedAt=${lastUsedAt} lastRole=${getLastMessageRole(sourceSession)} msgUpdatedAt=${getSessionMessageUpdatedAt(sourceSession)}`,
             );
         }
     }
-    const terminalBackend = getTerminalBackendRuntimeStatus();
+    const includeMachineMetadata = profile !== 'live';
+    const terminalBackend = includeMachineMetadata
+        ? getTerminalBackendRuntimeStatus()
+        : undefined;
 
     return {
         instanceId: options.instanceId,
-        version: options.version,
-        daemonMode: options.daemonMode,
-        machine: {
-            hostname: os.hostname(),
-            platform: os.platform(),
-            arch: os.arch(),
-            cpus: os.cpus().length,
-            totalMem: memSnap.totalMem,
-            freeMem: memSnap.freeMem,
-            availableMem: memSnap.availableMem,
-            loadavg: os.loadavg(),
-            uptime: os.uptime(),
-            release: os.release(),
-        },
-        machineNickname: options.machineNickname ?? cfg.machineNickname ?? null,
+        ...(includeMachineMetadata ? { version: options.version } : {}),
+        machine: buildMachineInfo(profile),
+        ...(includeMachineMetadata ? { machineNickname: options.machineNickname ?? cfg.machineNickname ?? null } : {}),
         timestamp: options.timestamp ?? Date.now(),
-        detectedIdes: buildDetectedIdeInfos(options.detectedIdes, options.cdpManagers),
         ...(options.p2p ? { p2p: options.p2p } : {}),
         sessions,
-        workspaces: wsState.workspaces,
-        defaultWorkspaceId: wsState.defaultWorkspaceId,
-        defaultWorkspacePath: wsState.defaultWorkspacePath,
-        terminalSizingMode: cfg.terminalSizingMode || 'measured',
-        recentLaunches: buildRecentLaunches(recentActivity),
-        terminalBackend,
-        availableProviders: buildAvailableProviders(options.providerLoader),
+        ...(terminalBackend ? { terminalBackend } : {}),
+        ...(includeMachineMetadata && {
+            detectedIdes: buildDetectedIdeInfos(options.detectedIdes, options.cdpManagers),
+            workspaces: wsState.workspaces,
+            defaultWorkspaceId: wsState.defaultWorkspaceId,
+            defaultWorkspacePath: wsState.defaultWorkspacePath,
+            terminalSizingMode: cfg.terminalSizingMode || 'measured',
+            recentLaunches: buildRecentLaunches(recentActivity),
+            availableProviders: buildAvailableProviders(options.providerLoader),
+        }),
     };
 }

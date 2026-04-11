@@ -18,7 +18,7 @@ export interface StatusResponse extends StatusReportPayload {
   /** User display name from config */
   userName?: string;
   /** Available providers */
-  availableProviders: AvailableProviderInfo[];
+  availableProviders?: AvailableProviderInfo[];
   /** System info (legacy compat) */
   system?: SystemInfo;
 }

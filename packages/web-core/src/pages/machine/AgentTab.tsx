@@ -282,7 +282,7 @@ export default function AgentTab({
         if (category !== 'cli' || !selectedType) return null
         const providerLabel = providerLabelMap.get(selectedType) || selectedType
         return {
-            ideId: machineId,
+            routeId: machineId,
             daemonId: machineId,
             providerSessionId: selectedResumeSessionId || undefined,
             transport: 'pty',

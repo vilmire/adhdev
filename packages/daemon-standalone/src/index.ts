@@ -30,8 +30,26 @@ import {
   maybeRunDaemonUpgradeHelperFromEnv,
   type DaemonComponents,
   type HostedCliRuntimeDescriptor,
+  type CliTransportFactoryParams,
   type StatusResponse,
+  type StandaloneWsStatusPayload,
   type AgentEntry,
+  type SessionChatTailSubscriptionParams,
+  type SessionChatTailUpdate,
+  type MachineRuntimeSubscriptionParams,
+  type MachineRuntimeUpdate,
+  type SessionHostDiagnosticsSnapshot,
+  type SessionHostDiagnosticsSubscriptionParams,
+  type SessionHostDiagnosticsUpdate,
+  type SessionModalSubscriptionParams,
+  type SessionModalUpdate,
+  type DaemonMetadataSubscriptionParams,
+  type DaemonMetadataUpdate,
+  type ProviderState,
+  type SubscribeRequest,
+  type TopicUpdateEnvelope,
+  type UnsubscribeRequest,
+  buildMachineInfo,
 } from '@adhdev/daemon-core';
 import {
   ensureSessionHostReady,
@@ -95,6 +113,46 @@ interface WsMessage {
   type: string;
   requestId?: string;
   data?: Record<string, any>;
+  topic?: string;
+  key?: string;
+  params?: Record<string, any>;
+  update?: TopicUpdateEnvelope;
+}
+
+interface ChatTailSubscriptionState {
+  request: SubscribeRequest & { topic: 'session.chat_tail'; params: SessionChatTailSubscriptionParams };
+  seq: number;
+  cursor: {
+    knownMessageCount: number;
+    lastMessageSignature: string;
+    tailLimit: number;
+  };
+  lastDeliveredSignature: string;
+}
+
+interface MachineRuntimeSubscriptionState {
+  request: SubscribeRequest & { topic: 'machine.runtime'; params: MachineRuntimeSubscriptionParams };
+  seq: number;
+  lastSentAt: number;
+}
+
+interface SessionHostDiagnosticsSubscriptionState {
+  request: SubscribeRequest & { topic: 'session_host.diagnostics'; params: SessionHostDiagnosticsSubscriptionParams };
+  seq: number;
+  lastSentAt: number;
+}
+
+interface SessionModalSubscriptionState {
+  request: SubscribeRequest & { topic: 'session.modal'; params: SessionModalSubscriptionParams };
+  seq: number;
+  lastSentAt: number;
+  lastDeliveredSignature: string;
+}
+
+interface DaemonMetadataSubscriptionState {
+  request: SubscribeRequest & { topic: 'daemon.metadata'; params: DaemonMetadataSubscriptionParams };
+  seq: number;
+  lastSentAt: number;
 }
 
 const SESSION_TARGET_COMMANDS = new Set([
@@ -108,6 +166,74 @@ const SESSION_TARGET_COMMANDS = new Set([
   'agent_command',
 ]);
 
+const ACTIVE_CHAT_POLL_STATUSES = new Set([
+  'generating',
+  'waiting_approval',
+  'starting',
+]);
+
+function hashSignatureParts(parts: string[]): string {
+  let hash = 0x811c9dc5;
+  for (const part of parts) {
+    const text = String(part || '');
+    for (let i = 0; i < text.length; i += 1) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    hash ^= 0xff;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+function buildChatTailDeliverySignature(payload: {
+  sessionId: string;
+  historySessionId?: string;
+  messages: unknown[];
+  status: string;
+  title?: string;
+  activeModal?: { message: string; buttons: string[] } | null;
+  syncMode: string;
+  replaceFrom: number;
+  totalMessages: number;
+  lastMessageSignature: string;
+}): string {
+  let messages = '';
+  try {
+    messages = JSON.stringify(payload.messages);
+  } catch {
+    messages = String(payload.messages.length);
+  }
+  return hashSignatureParts([
+    payload.sessionId,
+    payload.historySessionId || '',
+    payload.status,
+    payload.title || '',
+    payload.syncMode,
+    String(payload.replaceFrom),
+    String(payload.totalMessages),
+    payload.lastMessageSignature,
+    payload.activeModal ? `${payload.activeModal.message}|${payload.activeModal.buttons.join('\u001f')}` : '',
+    messages,
+  ]);
+}
+
+function buildSessionModalDeliverySignature(payload: {
+  sessionId: string;
+  status: string;
+  title?: string;
+  modalMessage?: string;
+  modalButtons?: string[];
+}): string {
+  return hashSignatureParts([
+    payload.sessionId,
+    payload.status,
+    payload.title || '',
+    payload.modalMessage || '',
+    Array.isArray(payload.modalButtons) ? payload.modalButtons.join('\u001f') : '',
+  ]);
+}
+
 
 // ─── Standalone Server ───
 
@@ -115,14 +241,24 @@ class StandaloneServer {
   private httpServer: ReturnType<typeof createServer> | null = null;
   private wss: WebSocketServer | null = null;
   private clients = new Set<WebSocket>();
+  private wsSubscriptions = new Map<WebSocket, Map<string, ChatTailSubscriptionState>>();
+  private wsMachineRuntimeSubscriptions = new Map<WebSocket, Map<string, MachineRuntimeSubscriptionState>>();
+  private wsSessionHostDiagnosticsSubscriptions = new Map<WebSocket, Map<string, SessionHostDiagnosticsSubscriptionState>>();
+  private wsSessionModalSubscriptions = new Map<WebSocket, Map<string, SessionModalSubscriptionState>>();
+  private wsDaemonMetadataSubscriptions = new Map<WebSocket, Map<string, DaemonMetadataSubscriptionState>>();
   private authToken: string | null = null;
   private statusTimer: NodeJS.Timeout | null = null;
   private lastStatusBroadcastAt = 0;
   private statusBroadcastPending = false;
+  private lastWsStatusSignature: string | null = null;
+  private wsChatFlushInFlight = false;
+  private pendingWsChatFlush: { targetWs?: WebSocket; onlyActive: boolean } | null = null;
+  private hotWsChatSessionIds = new Set<string>();
   private running = false;
   private components: DaemonComponents | null = null;
   private devServer: Awaited<ReturnType<typeof startDaemonDevSupport>> | null = null;
   private sessionHostEndpoint: SessionHostEndpoint | null = null;
+  private sessionHostControl: StandaloneSessionHostControlPlane | null = null;
 
   private isRecoverableSessionHostError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
@@ -182,14 +318,17 @@ class StandaloneServer {
   async start(options: StandaloneOptions = {}): Promise<void> {
     const port = options.port || DEFAULT_PORT;
     const host = options.host || '127.0.0.1';
+    const cfg = loadConfig();
     const sessionHostEndpoint = await ensureSessionHostReady();
     this.sessionHostEndpoint = sessionHostEndpoint;
     const sessionHostControl = new StandaloneSessionHostControlPlane(
       async () => this.ensureActiveSessionHostEndpoint(),
     );
+    this.sessionHostControl = sessionHostControl;
 
     // Auth token setup (opt-in only)
     this.authToken = options.token || process.env.ADHDEV_TOKEN || null;
+    const statusInstanceId = `standalone_${cfg.machineId || 'mach_unknown'}`;
 
     // Initialize all core components via daemon-core bootstrapper
     this.components = await initDaemonComponents({
@@ -208,7 +347,7 @@ class StandaloneServer {
         }),
         onStatusChange: () => this.scheduleBroadcastStatus(),
         removeAgentTracking: () => {},
-        createPtyTransportFactory: ({ runtimeId, providerType, workspace, cliArgs, providerSessionId, attachExisting }) => (
+        createPtyTransportFactory: ({ runtimeId, providerType, workspace, cliArgs, providerSessionId, attachExisting }: CliTransportFactoryParams) => (
                         new SessionHostPtyTransportFactory({
                             endpoint: sessionHostEndpoint,
                             ensureReady: async () => {
@@ -231,6 +370,9 @@ class StandaloneServer {
           listHostedCliRuntimes(sessionHostEndpoint)
         ),
       },
+      statusInstanceId,
+      statusVersion: pkgVersion,
+      statusDaemonMode: false,
       onStatusChange: () => this.scheduleBroadcastStatus(),
       sessionHostControl,
       onStreamsUpdated: (ideType: string, streams: any[]) => {
@@ -282,6 +424,10 @@ class StandaloneServer {
     // 7. Status broadcast timer
     this.statusTimer = setInterval(() => {
       this.scheduleBroadcastStatus();
+      void this.flushWsChatSubscriptions(undefined, { onlyActive: true });
+      void this.flushWsMachineRuntimeSubscriptions();
+      void this.flushWsSessionHostDiagnosticsSubscriptions();
+      void this.flushWsSessionModalSubscriptions();
     }, STATUS_INTERVAL);
 
     // 8. Start listening
@@ -664,16 +810,30 @@ class StandaloneServer {
       }
     }
     this.clients.add(ws);
+    this.wsSubscriptions.set(ws, new Map());
+    this.wsMachineRuntimeSubscriptions.set(ws, new Map());
+    this.wsSessionHostDiagnosticsSubscriptions.set(ws, new Map());
+    this.wsSessionModalSubscriptions.set(ws, new Map());
+    this.wsDaemonMetadataSubscriptions.set(ws, new Map());
     console.log(`[WS] Client connected (total: ${this.clients.size})`);
 
     // Send initial status immediately
-    const status = this.getStatus();
+    const status = this.getWsStatus(this.buildSharedSnapshot('live'));
+    this.lastWsStatusSignature = this.buildWsStatusSignature(status);
     ws.send(JSON.stringify({ type: 'status', data: status }));
     void this.pushWsRuntimeSnapshots(ws);
 
     ws.on('message', async (raw) => {
       try {
         const msg: WsMessage = JSON.parse(raw.toString());
+        if (msg.type === 'subscribe') {
+          await this.handleWsSubscribe(ws, msg as WsMessage & SubscribeRequest);
+          return;
+        }
+        if (msg.type === 'unsubscribe') {
+          this.handleWsUnsubscribe(ws, msg as WsMessage & UnsubscribeRequest);
+          return;
+        }
         if (msg.type === 'command') {
           const envelope = msg.data && typeof msg.data === 'object'
             ? {
@@ -694,17 +854,449 @@ class StandaloneServer {
 
     ws.on('close', () => {
       this.clients.delete(ws);
+      this.wsSubscriptions.delete(ws);
+      this.wsMachineRuntimeSubscriptions.delete(ws);
+      this.wsSessionHostDiagnosticsSubscriptions.delete(ws);
+      this.wsSessionModalSubscriptions.delete(ws);
+      this.wsDaemonMetadataSubscriptions.delete(ws);
       console.log(`[WS] Client disconnected (total: ${this.clients.size})`);
     });
 
     ws.on('error', () => {
       this.clients.delete(ws);
+      this.wsSubscriptions.delete(ws);
+      this.wsMachineRuntimeSubscriptions.delete(ws);
+      this.wsSessionHostDiagnosticsSubscriptions.delete(ws);
+      this.wsSessionModalSubscriptions.delete(ws);
+      this.wsDaemonMetadataSubscriptions.delete(ws);
     });
+  }
+
+  private async handleWsSubscribe(ws: WebSocket, msg: SubscribeRequest): Promise<void> {
+    if (msg.topic === 'session.chat_tail') {
+      const params = msg.params as SessionChatTailSubscriptionParams;
+      if (!params?.targetSessionId) return;
+      const subs = this.wsSubscriptions.get(ws) || new Map<string, ChatTailSubscriptionState>();
+      this.wsSubscriptions.set(ws, subs);
+      subs.set(msg.key, {
+        request: {
+          ...msg,
+          topic: 'session.chat_tail',
+          params,
+        },
+        seq: 0,
+        cursor: {
+          knownMessageCount: Math.max(0, Number(params.knownMessageCount || 0)),
+          lastMessageSignature: typeof params.lastMessageSignature === 'string' ? params.lastMessageSignature : '',
+          tailLimit: Math.max(0, Number(params.tailLimit || 0)),
+        },
+        lastDeliveredSignature: '',
+      });
+      await this.flushWsChatSubscriptions(ws);
+      return;
+    }
+    if (msg.topic === 'machine.runtime') {
+      const params = msg.params as MachineRuntimeSubscriptionParams;
+      const subs = this.wsMachineRuntimeSubscriptions.get(ws) || new Map<string, MachineRuntimeSubscriptionState>();
+      this.wsMachineRuntimeSubscriptions.set(ws, subs);
+      subs.set(msg.key, {
+        request: {
+          ...msg,
+          topic: 'machine.runtime',
+          params,
+        },
+        seq: 0,
+        lastSentAt: 0,
+      });
+      await this.flushWsMachineRuntimeSubscriptions(ws);
+      return;
+    }
+    if (msg.topic === 'session_host.diagnostics') {
+      const params = msg.params as SessionHostDiagnosticsSubscriptionParams;
+      const subs = this.wsSessionHostDiagnosticsSubscriptions.get(ws) || new Map<string, SessionHostDiagnosticsSubscriptionState>();
+      this.wsSessionHostDiagnosticsSubscriptions.set(ws, subs);
+      subs.set(msg.key, {
+        request: {
+          ...msg,
+          topic: 'session_host.diagnostics',
+          params,
+        },
+        seq: 0,
+        lastSentAt: 0,
+      });
+      await this.flushWsSessionHostDiagnosticsSubscriptions(ws);
+      return;
+    }
+    if (msg.topic === 'session.modal') {
+      const params = msg.params as SessionModalSubscriptionParams;
+      if (!params?.targetSessionId) return;
+      const subs = this.wsSessionModalSubscriptions.get(ws) || new Map<string, SessionModalSubscriptionState>();
+      this.wsSessionModalSubscriptions.set(ws, subs);
+      subs.set(msg.key, {
+        request: {
+          ...msg,
+          topic: 'session.modal',
+          params,
+        },
+        seq: 0,
+        lastSentAt: 0,
+        lastDeliveredSignature: '',
+      });
+      await this.flushWsSessionModalSubscriptions(ws);
+      return;
+    }
+    if (msg.topic === 'daemon.metadata') {
+      const params = msg.params as DaemonMetadataSubscriptionParams;
+      const subs = this.wsDaemonMetadataSubscriptions.get(ws) || new Map<string, DaemonMetadataSubscriptionState>();
+      this.wsDaemonMetadataSubscriptions.set(ws, subs);
+      subs.set(msg.key, {
+        request: {
+          ...msg,
+          topic: 'daemon.metadata',
+          params,
+        },
+        seq: 0,
+        lastSentAt: 0,
+      });
+      await this.flushWsDaemonMetadataSubscriptions(ws);
+    }
+  }
+
+  private handleWsUnsubscribe(ws: WebSocket, msg: UnsubscribeRequest): void {
+    if (msg.topic === 'session.chat_tail') {
+      this.wsSubscriptions.get(ws)?.delete(msg.key);
+      return;
+    }
+    if (msg.topic === 'machine.runtime') {
+      this.wsMachineRuntimeSubscriptions.get(ws)?.delete(msg.key);
+      return;
+    }
+    if (msg.topic === 'session_host.diagnostics') {
+      this.wsSessionHostDiagnosticsSubscriptions.get(ws)?.delete(msg.key);
+      return;
+    }
+    if (msg.topic === 'session.modal') {
+      this.wsSessionModalSubscriptions.get(ws)?.delete(msg.key);
+      return;
+    }
+    if (msg.topic === 'daemon.metadata') {
+      this.wsDaemonMetadataSubscriptions.get(ws)?.delete(msg.key);
+    }
+  }
+
+  private async buildChatTailUpdate(
+    request: SessionChatTailSubscriptionParams,
+    state: ChatTailSubscriptionState,
+    key: string,
+  ): Promise<SessionChatTailUpdate | null> {
+    const result = await this.executeCommand('read_chat', {
+      targetSessionId: request.targetSessionId,
+      ...(request.historySessionId ? { historySessionId: request.historySessionId } : {}),
+      knownMessageCount: state.cursor.knownMessageCount,
+      lastMessageSignature: state.cursor.lastMessageSignature,
+      ...(state.cursor.tailLimit > 0 ? { tailLimit: state.cursor.tailLimit } : {}),
+    });
+    if (!result?.success || result.syncMode === 'noop') {
+      if (result?.success) {
+        state.cursor = {
+          knownMessageCount: Math.max(0, Number(result.totalMessages || state.cursor.knownMessageCount)),
+          lastMessageSignature: typeof result.lastMessageSignature === 'string' ? result.lastMessageSignature : state.cursor.lastMessageSignature,
+          tailLimit: state.cursor.tailLimit,
+        };
+      }
+      return null;
+    }
+    state.seq += 1;
+    const syncMode = result.syncMode === 'append'
+      || result.syncMode === 'replace_tail'
+      || result.syncMode === 'noop'
+      || result.syncMode === 'full'
+      ? result.syncMode
+      : 'full';
+    state.cursor = {
+      knownMessageCount: Math.max(0, Number(result.totalMessages || 0)),
+      lastMessageSignature: typeof result.lastMessageSignature === 'string' ? result.lastMessageSignature : '',
+      tailLimit: state.cursor.tailLimit,
+    };
+    const activeModal = result.activeModal
+      && typeof result.activeModal === 'object'
+      && typeof (result.activeModal as { message?: unknown }).message === 'string'
+      && Array.isArray((result.activeModal as { buttons?: unknown[] }).buttons)
+            ? {
+                message: (result.activeModal as { message: string }).message,
+                buttons: (result.activeModal as { buttons: unknown[] }).buttons.filter((button): button is string => typeof button === 'string'),
+            }
+            : null;
+    const deliverySignature = buildChatTailDeliverySignature({
+      sessionId: request.targetSessionId,
+      ...(request.historySessionId ? { historySessionId: request.historySessionId } : {}),
+      messages: Array.isArray(result.messages) ? result.messages : [],
+      status: typeof result.status === 'string' ? result.status : 'idle',
+      ...(typeof result.title === 'string' ? { title: result.title } : {}),
+      ...(activeModal ? { activeModal } : {}),
+      syncMode,
+      replaceFrom: Number(result.replaceFrom || 0),
+      totalMessages: Number(result.totalMessages || 0),
+      lastMessageSignature: typeof result.lastMessageSignature === 'string' ? result.lastMessageSignature : '',
+    });
+    if (deliverySignature === state.lastDeliveredSignature) {
+      return null;
+    }
+    state.lastDeliveredSignature = deliverySignature;
+    return {
+      topic: 'session.chat_tail',
+      key,
+      sessionId: request.targetSessionId,
+      ...(request.historySessionId ? { historySessionId: request.historySessionId } : {}),
+      seq: state.seq,
+      timestamp: Date.now(),
+      messages: Array.isArray(result.messages) ? result.messages : [],
+      status: typeof result.status === 'string' ? result.status : 'idle',
+      ...(typeof result.title === 'string' ? { title: result.title } : {}),
+      ...(activeModal ? { activeModal } : {}),
+      syncMode,
+      replaceFrom: Number(result.replaceFrom || 0),
+      totalMessages: Number(result.totalMessages || 0),
+      lastMessageSignature: typeof result.lastMessageSignature === 'string' ? result.lastMessageSignature : '',
+    };
+  }
+
+  private getHotChatSessionIdsForWsFlush(): { active: Set<string>; finalizing: Set<string> } {
+    const snapshot = this.buildSharedSnapshot('live');
+    const active = new Set<string>(
+      snapshot.sessions
+        .filter((session: { status?: unknown }) => ACTIVE_CHAT_POLL_STATUSES.has(String(session.status || '').toLowerCase()))
+        .map((session: { id: string }) => session.id),
+    );
+    const finalizing = new Set<string>(
+      Array.from(this.hotWsChatSessionIds).filter((sessionId) => !active.has(sessionId)),
+    );
+    this.hotWsChatSessionIds = active;
+    return { active, finalizing };
+  }
+
+  private async flushWsChatSubscriptions(
+    targetWs?: WebSocket,
+    options: { onlyActive?: boolean } = {},
+  ): Promise<void> {
+    if (this.wsChatFlushInFlight) {
+      const nextOnlyActive = options.onlyActive === true;
+      const pending = this.pendingWsChatFlush;
+      this.pendingWsChatFlush = {
+        targetWs: pending?.targetWs === undefined || targetWs === undefined ? undefined : targetWs,
+        onlyActive: pending ? (pending.onlyActive && nextOnlyActive) : nextOnlyActive,
+      };
+      return;
+    }
+
+    this.wsChatFlushInFlight = true;
+    try {
+      const targets = targetWs ? [targetWs] : Array.from(this.clients);
+      const hotSessionIds = options.onlyActive ? this.getHotChatSessionIdsForWsFlush() : null;
+      for (const ws of targets) {
+        if (ws.readyState !== WebSocket.OPEN) continue;
+        const subs = this.wsSubscriptions.get(ws);
+        if (!subs || subs.size === 0) continue;
+        for (const [key, sub] of subs.entries()) {
+          const targetSessionId = sub.request.params.targetSessionId;
+          if (
+            hotSessionIds
+            && !hotSessionIds.active.has(targetSessionId)
+            && !hotSessionIds.finalizing.has(targetSessionId)
+          ) {
+            continue;
+          }
+          const update = await this.buildChatTailUpdate(sub.request.params, sub, key);
+          if (!update || ws.readyState !== WebSocket.OPEN) continue;
+          ws.send(JSON.stringify({ type: 'topic_update', update }));
+        }
+      }
+    } finally {
+      this.wsChatFlushInFlight = false;
+      if (this.pendingWsChatFlush) {
+        const pending = this.pendingWsChatFlush;
+        this.pendingWsChatFlush = null;
+        void this.flushWsChatSubscriptions(pending.targetWs, { onlyActive: pending.onlyActive });
+      }
+    }
+  }
+
+  private buildMachineRuntimeUpdate(
+    state: MachineRuntimeSubscriptionState,
+    key: string,
+  ): MachineRuntimeUpdate | null {
+    const intervalMs = Math.max(5_000, Number(state.request.params.intervalMs || 15_000));
+    const now = Date.now();
+    if (state.lastSentAt > 0 && (now - state.lastSentAt) < intervalMs) {
+      return null;
+    }
+    state.seq += 1;
+    state.lastSentAt = now;
+    return {
+      topic: 'machine.runtime',
+      key,
+      machine: buildMachineInfo('full'),
+      seq: state.seq,
+      timestamp: now,
+    };
+  }
+
+  private async flushWsMachineRuntimeSubscriptions(targetWs?: WebSocket): Promise<void> {
+    const targets = targetWs ? [targetWs] : Array.from(this.clients);
+    for (const ws of targets) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      const subs = this.wsMachineRuntimeSubscriptions.get(ws);
+      if (!subs || subs.size === 0) continue;
+      for (const [key, sub] of subs.entries()) {
+        const update = this.buildMachineRuntimeUpdate(sub, key);
+        if (!update || ws.readyState !== WebSocket.OPEN) continue;
+        ws.send(JSON.stringify({ type: 'topic_update', update }));
+      }
+    }
+  }
+
+  private async buildSessionHostDiagnosticsUpdate(
+    state: SessionHostDiagnosticsSubscriptionState,
+    key: string,
+  ): Promise<SessionHostDiagnosticsUpdate | null> {
+    if (!this.sessionHostControl) return null;
+    const intervalMs = Math.max(5_000, Number(state.request.params.intervalMs || 10_000));
+    const now = Date.now();
+    if (state.lastSentAt > 0 && (now - state.lastSentAt) < intervalMs) {
+      return null;
+    }
+    const diagnostics = await this.sessionHostControl.getDiagnostics({
+      includeSessions: state.request.params.includeSessions !== false,
+      limit: Number(state.request.params.limit) || undefined,
+    }) as SessionHostDiagnosticsSnapshot;
+    state.seq += 1;
+    state.lastSentAt = now;
+    return {
+      topic: 'session_host.diagnostics',
+      key,
+      diagnostics,
+      seq: state.seq,
+      timestamp: now,
+    };
+  }
+
+  private async flushWsSessionHostDiagnosticsSubscriptions(targetWs?: WebSocket): Promise<void> {
+    const targets = targetWs ? [targetWs] : Array.from(this.clients);
+    for (const ws of targets) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      const subs = this.wsSessionHostDiagnosticsSubscriptions.get(ws);
+      if (!subs || subs.size === 0) continue;
+      for (const [key, sub] of subs.entries()) {
+        const update = await this.buildSessionHostDiagnosticsUpdate(sub, key);
+        if (!update || ws.readyState !== WebSocket.OPEN) continue;
+        ws.send(JSON.stringify({ type: 'topic_update', update }));
+      }
+    }
+  }
+
+  private findProviderStateBySessionId(sessionId: string): ProviderState | null {
+    if (!this.components || !sessionId) return null;
+    const states = this.components.instanceManager.collectAllStates();
+    for (const state of states) {
+      if (state.instanceId === sessionId) return state;
+      if (state.category === 'ide') {
+        const child = state.extensions.find((entry: { instanceId?: string }) => entry.instanceId === sessionId);
+        if (child) return child;
+      }
+    }
+    return null;
+  }
+
+  private buildSessionModalUpdate(
+    state: SessionModalSubscriptionState,
+    key: string,
+  ): SessionModalUpdate | null {
+    const providerState = this.findProviderStateBySessionId(state.request.params.targetSessionId);
+    if (!providerState) return null;
+    const now = Date.now();
+    state.seq += 1;
+    state.lastSentAt = now;
+    const activeModal = providerState.activeChat?.activeModal;
+    const modalButtons = Array.isArray(activeModal?.buttons)
+      ? activeModal.buttons.filter((button: unknown): button is string => typeof button === 'string')
+      : [];
+    const status = String(providerState.activeChat?.status || providerState.status || 'idle');
+    const title = typeof providerState.activeChat?.title === 'string' ? providerState.activeChat.title : undefined;
+    const modalMessage = typeof activeModal?.message === 'string' ? activeModal.message : undefined;
+    const deliverySignature = buildSessionModalDeliverySignature({
+      sessionId: state.request.params.targetSessionId,
+      status,
+      ...(title ? { title } : {}),
+      ...(modalMessage ? { modalMessage } : {}),
+      ...(modalButtons.length > 0 ? { modalButtons } : {}),
+    });
+    if (deliverySignature === state.lastDeliveredSignature) {
+      return null;
+    }
+    state.lastDeliveredSignature = deliverySignature;
+    return {
+      topic: 'session.modal',
+      key,
+      sessionId: state.request.params.targetSessionId,
+      status,
+      ...(title ? { title } : {}),
+      ...(modalMessage ? { modalMessage } : {}),
+      ...(modalButtons.length > 0 ? { modalButtons } : {}),
+      seq: state.seq,
+      timestamp: now,
+    };
+  }
+
+  private async flushWsSessionModalSubscriptions(targetWs?: WebSocket): Promise<void> {
+    const targets = targetWs ? [targetWs] : Array.from(this.clients);
+    for (const ws of targets) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      const subs = this.wsSessionModalSubscriptions.get(ws);
+      if (!subs || subs.size === 0) continue;
+      for (const [key, sub] of subs.entries()) {
+        const update = this.buildSessionModalUpdate(sub, key);
+        if (!update || ws.readyState !== WebSocket.OPEN) continue;
+        ws.send(JSON.stringify({ type: 'topic_update', update }));
+      }
+    }
+  }
+
+  private buildDaemonMetadataUpdate(
+    state: DaemonMetadataSubscriptionState,
+    key: string,
+  ): DaemonMetadataUpdate {
+    const now = Date.now();
+    state.seq += 1;
+    state.lastSentAt = now;
+    const cfgSnap = loadConfig();
+    return {
+      topic: 'daemon.metadata',
+      key,
+      daemonId: `standalone_${cfgSnap.machineId || 'standalone'}`,
+      status: this.buildSharedSnapshot('metadata'),
+      userName: cfgSnap.userName || undefined,
+      seq: state.seq,
+      timestamp: now,
+    };
+  }
+
+  private async flushWsDaemonMetadataSubscriptions(targetWs?: WebSocket): Promise<void> {
+    const targets = targetWs ? [targetWs] : Array.from(this.clients);
+    for (const ws of targets) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      const subs = this.wsDaemonMetadataSubscriptions.get(ws);
+      if (!subs || subs.size === 0) continue;
+      for (const [key, sub] of subs.entries()) {
+        const update = this.buildDaemonMetadataUpdate(sub, key);
+        if (ws.readyState !== WebSocket.OPEN) continue;
+        ws.send(JSON.stringify({ type: 'topic_update', update }));
+      }
+    }
   }
 
   // ─── Core Logic ───
 
-  private buildSharedSnapshot() {
+  private buildSharedSnapshot(profile: 'full' | 'live' | 'metadata' = 'full') {
     const cfgSnap = loadConfig();
     const machineId = cfgSnap.machineId || 'mach_unknown';
     const allStates = this.components!.instanceManager.collectAllStates();
@@ -713,13 +1305,19 @@ class StandaloneServer {
       allStates,
       cdpManagers: this.components!.cdpManagers,
       providerLoader: this.components!.providerLoader,
-      detectedIdes: this.components!.detectedIdes.value.map((ide) => ({
+      detectedIdes: this.components!.detectedIdes.value.map((ide: {
+        id: string;
+        name?: string;
+        displayName?: string;
+        installed?: boolean;
+        path?: string | null;
+      }) => ({
         ...ide,
         path: ide.path ?? undefined,
       })),
       instanceId: `standalone_${machineId}`,
       version: pkgVersion,
-      daemonMode: false,
+      profile,
     });
   }
 
@@ -751,27 +1349,64 @@ class StandaloneServer {
     }
   }
 
-  private getStatus(snapshot: ReturnType<StandaloneServer['buildSharedSnapshot']> = this.buildSharedSnapshot()): StatusResponse {
+  private getStatus(snapshot: ReturnType<StandaloneServer['buildSharedSnapshot']> = this.buildSharedSnapshot('full')): StatusResponse {
     const cfgSnap = loadConfig();
+    const machineRuntime = buildMachineInfo('full');
 
     return {
       ...snapshot,
       id: snapshot.instanceId,
-      daemonMode: false,
       type: 'standalone',
       platform: snapshot.machine.platform,
       hostname: snapshot.machine.hostname,
       userName: cfgSnap.userName || undefined,
       system: {
-        cpus: snapshot.machine.cpus,
-        totalMem: snapshot.machine.totalMem,
-        freeMem: snapshot.machine.freeMem,
-        availableMem: snapshot.machine.availableMem,
-        loadavg: snapshot.machine.loadavg,
-        uptime: snapshot.machine.uptime,
-        arch: snapshot.machine.arch,
+        cpus: snapshot.machine.cpus ?? machineRuntime.cpus ?? 0,
+        totalMem: snapshot.machine.totalMem ?? machineRuntime.totalMem ?? 0,
+        freeMem: snapshot.machine.freeMem ?? machineRuntime.freeMem ?? 0,
+        availableMem: snapshot.machine.availableMem ?? machineRuntime.availableMem ?? 0,
+        loadavg: snapshot.machine.loadavg ?? machineRuntime.loadavg ?? [],
+        uptime: snapshot.machine.uptime ?? machineRuntime.uptime ?? 0,
+        arch: snapshot.machine.arch ?? machineRuntime.arch ?? os.arch(),
       },
     };
+  }
+
+  private getWsStatus(snapshot: ReturnType<StandaloneServer['buildSharedSnapshot']> = this.buildSharedSnapshot('live')): StandaloneWsStatusPayload {
+    return {
+      instanceId: snapshot.instanceId,
+      machine: snapshot.machine,
+      timestamp: snapshot.timestamp,
+      sessions: snapshot.sessions,
+      terminalBackend: snapshot.terminalBackend,
+    };
+  }
+
+  private buildWsStatusSignature(status: StandaloneWsStatusPayload): string {
+    return JSON.stringify({
+      instanceId: status.instanceId,
+      machine: {
+        hostname: status.machine.hostname,
+        platform: status.machine.platform,
+      },
+      sessions: status.sessions.map((session: typeof status.sessions[number]) => ({
+        id: session.id,
+        parentId: session.parentId,
+        providerType: session.providerType,
+        kind: session.kind,
+        transport: session.transport,
+        status: session.status,
+        title: session.title,
+        cdpConnected: session.cdpConnected,
+        currentModel: session.currentModel,
+        currentPlan: session.currentPlan,
+        currentAutoApprove: session.currentAutoApprove,
+        lastSeenAt: session.lastSeenAt,
+        unread: session.unread,
+        inboxBucket: session.inboxBucket,
+        surfaceHidden: session.surfaceHidden,
+      })),
+    });
   }
 
   private normalizeCommandEnvelope(input: Record<string, any> | null | undefined): { type: string; payload: Record<string, any> } {
@@ -829,6 +1464,11 @@ class StandaloneServer {
     }
     const result = await this.components.router.execute(type, args, 'standalone');
     if (type.startsWith('workspace_') || type.startsWith('session_host_')) this.scheduleBroadcastStatus();
+    if (type === 'get_status_metadata' || type === 'set_user_name' || type === 'set_machine_nickname' || type.startsWith('workspace_') || type.startsWith('session_host_')) {
+      void this.flushWsDaemonMetadataSubscriptions();
+    }
+    if (type.startsWith('session_host_')) void this.flushWsSessionHostDiagnosticsSubscriptions();
+    if (type === 'resolve_action' || type === 'send_chat' || type === 'read_chat') void this.flushWsSessionModalSubscriptions();
     return result;
   }
 
@@ -850,8 +1490,11 @@ class StandaloneServer {
 
   private broadcastStatus(): void {
     if (this.clients.size === 0) return;
+    const status = this.getWsStatus(this.buildSharedSnapshot('live'));
+    const signature = this.buildWsStatusSignature(status);
+    if (signature === this.lastWsStatusSignature) return;
+    this.lastWsStatusSignature = signature;
     this.lastStatusBroadcastAt = Date.now();
-    const status = this.getStatus();
     const msg = JSON.stringify({ type: 'status', data: status });
     const cdpCount = [...this.components!.cdpManagers.values()].filter(m => m.isConnected).length;
     LOG.debug('Broadcast', `status → ${this.clients.size} client(s), ${(status as any).sessions?.length || 0} session(s), ${cdpCount} CDP`);
@@ -896,6 +1539,12 @@ class StandaloneServer {
       try { ws.close(); } catch { /* noop */ }
     }
     this.clients.clear();
+    this.wsSubscriptions.clear();
+    this.wsMachineRuntimeSubscriptions.clear();
+    this.wsSessionHostDiagnosticsSubscriptions.clear();
+    this.wsSessionModalSubscriptions.clear();
+    this.wsDaemonMetadataSubscriptions.clear();
+    this.lastWsStatusSignature = null;
 
     // Close WSS
     if (this.wss) {
@@ -907,6 +1556,7 @@ class StandaloneServer {
     if (this.components) {
       await shutdownDaemonComponents(this.components);
     }
+    this.sessionHostControl = null;
 
     // HTTP server
     if (this.httpServer) {

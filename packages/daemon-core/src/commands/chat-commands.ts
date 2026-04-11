@@ -5,14 +5,29 @@
 
 import type { CommandResult, CommandHelpers } from './handler.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
-import type { ProviderModule, ProviderScripts } from '../providers/contracts.js';
+import { flattenContent, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { readChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
-import type { SessionTransport } from '../shared-types.js';
+import type { ChatMessage } from '../types.js';
+import type { ReadChatCursor, ReadChatSyncMode, SessionTransport } from '../shared-types.js';
 
 const RECENT_SEND_WINDOW_MS = 1200;
 const recentSendByTarget = new Map<string, number>();
+
+function hashSignatureParts(parts: string[]): string {
+    let hash = 0x811c9dc5;
+    for (const part of parts) {
+        const text = String(part || '');
+        for (let i = 0; i < text.length; i += 1) {
+            hash ^= text.charCodeAt(i);
+            hash = Math.imul(hash, 0x01000193) >>> 0;
+        }
+        hash ^= 0xff;
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(16).padStart(8, '0');
+}
 
 interface ApprovalSelectableInstance extends ProviderInstance {
     recordApprovalSelection?(buttonText: string): void;
@@ -113,6 +128,163 @@ function parseMaybeJson(value: any): any {
     }
 }
 
+function getChatMessageSignature(message: ChatMessage | null | undefined): string {
+    if (!message) return '';
+    let content = '';
+    try {
+        content = JSON.stringify(message.content ?? '');
+    } catch {
+        content = String(message.content ?? '');
+    }
+    return hashSignatureParts([
+        String(message.id || ''),
+        String(message.index ?? ''),
+        String(message.role || ''),
+        String(message.receivedAt ?? message.timestamp ?? ''),
+        content,
+    ]);
+}
+
+function normalizeReadChatCursor(args: any): Required<ReadChatCursor> {
+    const knownMessageCount = Math.max(0, Number(args?.knownMessageCount || 0));
+    const lastMessageSignature = typeof args?.lastMessageSignature === 'string'
+        ? args.lastMessageSignature
+        : '';
+    const tailLimit = Math.max(0, Number(args?.tailLimit || 0));
+    return { knownMessageCount, lastMessageSignature, tailLimit };
+}
+
+function normalizeReadChatMessages(payload: Record<string, any>): ChatMessage[] {
+    const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
+    return messages;
+}
+
+function deriveHistoryDedupKey(message: ChatMessage & { _unitKey?: string; _turnKey?: string }): string | undefined {
+    const unitKey = typeof message._unitKey === 'string' ? message._unitKey.trim() : '';
+    if (unitKey) return `read_chat:${unitKey}`;
+
+    const turnKey = typeof message._turnKey === 'string' ? message._turnKey.trim() : '';
+    if (!turnKey) return undefined;
+
+    let content = '';
+    try {
+        content = JSON.stringify(message.content ?? '');
+    } catch {
+        content = String(message.content ?? '');
+    }
+    return `read_chat:${turnKey}:${String(message.role || '').toLowerCase()}:${content}`;
+}
+
+function toHistoryPersistedMessages(messages: ChatMessage[]): Array<{
+    role: string;
+    content: string;
+    receivedAt?: number;
+    kind?: string;
+    senderName?: string;
+    historyDedupKey?: string;
+}> {
+    return messages.map((message) => ({
+        role: message.role,
+        content: flattenContent(message.content),
+        receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : undefined,
+        kind: typeof message.kind === 'string' ? message.kind : undefined,
+        senderName: typeof message.senderName === 'string' ? message.senderName : undefined,
+        historyDedupKey: deriveHistoryDedupKey(message as ChatMessage & { _unitKey?: string; _turnKey?: string }),
+    }));
+}
+
+function computeReadChatSync(messages: ChatMessage[], cursor: Required<ReadChatCursor>): {
+    syncMode: ReadChatSyncMode;
+    replaceFrom: number;
+    messages: ChatMessage[];
+    totalMessages: number;
+    lastMessageSignature: string;
+} {
+    const totalMessages = messages.length;
+    const lastMessageSignature = getChatMessageSignature(messages[totalMessages - 1]);
+    const { knownMessageCount, lastMessageSignature: knownSignature } = cursor;
+
+    if (!knownMessageCount || !knownSignature) {
+        return {
+            syncMode: 'full',
+            replaceFrom: 0,
+            messages,
+            totalMessages,
+            lastMessageSignature,
+        };
+    }
+
+    if (knownMessageCount > totalMessages) {
+        return {
+            syncMode: 'full',
+            replaceFrom: 0,
+            messages,
+            totalMessages,
+            lastMessageSignature,
+        };
+    }
+
+    if (knownMessageCount === totalMessages && knownSignature === lastMessageSignature) {
+        return {
+            syncMode: 'noop',
+            replaceFrom: totalMessages,
+            messages: [],
+            totalMessages,
+            lastMessageSignature,
+        };
+    }
+
+    if (knownMessageCount < totalMessages) {
+        const anchorSignature = getChatMessageSignature(messages[knownMessageCount - 1]);
+        if (anchorSignature === knownSignature) {
+            return {
+                syncMode: 'append',
+                replaceFrom: knownMessageCount,
+                messages: messages.slice(knownMessageCount),
+                totalMessages,
+                lastMessageSignature,
+            };
+        }
+    }
+
+    const replaceFrom = Math.max(0, Math.min(knownMessageCount - 1, totalMessages));
+    return {
+        syncMode: replaceFrom === 0 ? 'full' : 'replace_tail',
+        replaceFrom,
+        messages: replaceFrom === 0 ? messages : messages.slice(replaceFrom),
+        totalMessages,
+        lastMessageSignature,
+    };
+}
+
+function buildReadChatCommandResult(payload: Record<string, any>, args: any): CommandResult {
+    const messages = normalizeReadChatMessages(payload);
+    const cursor = normalizeReadChatCursor(args);
+    if (!cursor.knownMessageCount && !cursor.lastMessageSignature && cursor.tailLimit > 0 && messages.length > cursor.tailLimit) {
+        const tailMessages = messages.slice(-cursor.tailLimit);
+        const lastMessageSignature = getChatMessageSignature(tailMessages[tailMessages.length - 1]);
+        return {
+            success: true,
+            ...payload,
+            messages: tailMessages,
+            syncMode: 'full',
+            replaceFrom: 0,
+            totalMessages: messages.length,
+            lastMessageSignature,
+        };
+    }
+    const sync = computeReadChatSync(messages, cursor);
+    return {
+        success: true,
+        ...payload,
+        messages: sync.messages,
+        syncMode: sync.syncMode,
+        replaceFrom: sync.replaceFrom,
+        totalMessages: sync.totalMessages,
+        lastMessageSignature: sync.lastMessageSignature,
+    };
+}
+
 function didProviderConfirmSend(result: any): boolean {
     const parsed = parseMaybeJson(result);
     if (parsed === true) return true;
@@ -201,12 +373,11 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             _log(`${transport} adapter: ${adapter.cliType}`);
             const status = adapter.getStatus();
             if (status) {
-                return {
-                    success: true,
+                return buildReadChatCommandResult({
                     messages: status.messages || [],
                     status: status.status,
                     activeModal: status.activeModal,
-                };
+                }, args);
             }
         }
         return { success: false, error: `${transport} adapter not found` };
@@ -223,12 +394,12 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     _log(`Extension OK: ${parsed.messages?.length || 0} msgs`);
                     h.historyWriter.appendNewMessages(
                         provider?.type || 'unknown_extension',
-                        parsed.messages || [],
+                        toHistoryPersistedMessages(normalizeReadChatMessages(parsed)),
                         parsed.title,
                         args?.targetSessionId,
                         historySessionId,
                     );
-                    return { success: true, ...parsed };
+                    return buildReadChatCommandResult(parsed, args);
                 }
             }
         } catch (e: any) {
@@ -241,21 +412,25 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             if (cdp && parentSessionId) {
                 const stream = await h.agentStream.collectActiveSession(cdp, parentSessionId);
                 if (stream?.agentType !== provider?.type) {
-                    return { success: true, messages: [], status: 'idle' };
+                    return buildReadChatCommandResult({ messages: [], status: 'idle' }, args);
                 }
                 if (stream) {
                     h.historyWriter.appendNewMessages(
                         stream.agentType,
-                        stream.messages || [],
+                        toHistoryPersistedMessages(stream.messages || []),
                         undefined,
                         args?.targetSessionId,
                         historySessionId,
                     );
-                    return { success: true, messages: stream.messages || [], status: stream.status, agentType: stream.agentType };
+                    return buildReadChatCommandResult({
+                        messages: stream.messages || [],
+                        status: stream.status,
+                        agentType: stream.agentType,
+                    }, args);
                 }
             }
         }
-        return { success: true, messages: [], status: 'idle' };
+        return buildReadChatCommandResult({ messages: [], status: 'idle' }, args);
     }
 
     // IDE category (default): cdp.evaluate
@@ -278,18 +453,18 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     _log(`Webview OK: ${parsed.messages?.length || 0} msgs`);
                 h.historyWriter.appendNewMessages(
                     provider?.type || getCurrentProviderType(h, 'unknown_webview'),
-                    parsed.messages || [],
+                    toHistoryPersistedMessages(normalizeReadChatMessages(parsed)),
                     parsed.title,
                     args?.targetSessionId,
                     historySessionId,
                 );
-                    return { success: true, ...parsed };
+                    return buildReadChatCommandResult(parsed, args);
                 }
             }
         } catch (e: any) {
             _log(`Webview readChat error: ${e.message}`);
         }
-        return { success: true, messages: [], status: 'idle' };
+        return buildReadChatCommandResult({ messages: [], status: 'idle' }, args);
     }
 
     // Regular IDE (Cursor, Windsurf, Trae etc) → main DOM evaluate
@@ -303,19 +478,19 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 _log(`OK: ${parsed.messages?.length} msgs`);
                 h.historyWriter.appendNewMessages(
                     provider?.type || getCurrentProviderType(h, 'unknown_ide'),
-                    parsed.messages || [],
+                    toHistoryPersistedMessages(normalizeReadChatMessages(parsed)),
                     parsed.title,
                     args?.targetSessionId,
                     historySessionId,
                 );
-                return { success: true, ...parsed };
+                return buildReadChatCommandResult(parsed, args);
             }
         } catch (e: any) {
             LOG.info('Command', `[read_chat] Script error: ${e.message}`);
         }
     }
 
-    return { success: true, messages: [], status: 'idle' };
+    return buildReadChatCommandResult({ messages: [], status: 'idle' }, args);
 }
 
 export async function handleSendChat(h: CommandHelpers, args: any): Promise<CommandResult> {

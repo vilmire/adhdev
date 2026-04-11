@@ -7,7 +7,7 @@ interface UseDashboardConversationCommandsOptions {
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     activeConv: ActiveConversation | undefined
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
-    setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
+    setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
 }
 
@@ -137,8 +137,9 @@ export function useDashboardConversationCommands({
         if (!activeConv) return
 
         try {
-            await sendDaemonCommand(activeConv.ideId, 'launch_ide', {
-                ideType: activeConv.ideType,
+            if (!activeConv.hostIdeType) return
+            await sendDaemonCommand(activeConv.routeId, 'launch_ide', {
+                ideType: activeConv.hostIdeType,
                 enableCdp: true,
             })
         } catch (e) {
@@ -167,7 +168,7 @@ export function useDashboardConversationCommands({
 
             if (!res.success) {
                 setActionLogs(prev => [...prev, {
-                    ideId: activeConv.tabKey,
+                    routeId: activeConv.tabKey,
                     text: getActionFailureText(buttonText, res?.error),
                     timestamp: Date.now(),
                 }])
@@ -177,7 +178,7 @@ export function useDashboardConversationCommands({
                 console.error('[ModalButton] Error:', e)
             }
             setActionLogs(prev => [...prev, {
-                ideId: activeConv.tabKey,
+                routeId: activeConv.tabKey,
                 text: isExpectedActionResolutionError(e)
                     ? getActionFailureText(buttonText, e)
                     : `❌ **${buttonText}** error`,
@@ -191,8 +192,7 @@ export function useDashboardConversationCommands({
 
         setIsFocusingAgent(true)
         try {
-            await sendDaemonCommand(activeConv.ideId, 'focus_session', {
-                agentType: activeConv.agentType,
+            await sendDaemonCommand(activeConv.routeId, 'focus_session', {
                 ...(activeConv.sessionId && { targetSessionId: activeConv.sessionId }),
             })
         } catch (e) {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DaemonData } from '../../types'
+import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader'
 import { compareMachineEntries, getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import { IconFolder, IconPlay, IconServer, IconX } from '../Icons'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
@@ -84,6 +85,7 @@ export default function DashboardNewSessionDialog({
     sendDaemonCommand,
     onOpenConversation,
 }: DashboardNewSessionDialogProps) {
+    const loadDaemonMetadata = useDaemonMetadataLoader()
     const sortedMachines = useMemo(
         () => [...machines].sort(compareMachineEntries),
         [machines],
@@ -127,6 +129,16 @@ export default function DashboardNewSessionDialog({
             setSelectedMachineId(sortedMachines[0].id)
         }
     }, [selectedMachineId, sortedMachines])
+
+    useEffect(() => {
+        if (!selectedMachine) return
+        const needsMetadata = !selectedMachine.workspaces
+            || !selectedMachine.availableProviders
+            || !selectedMachine.detectedIdes
+            || !selectedMachine.recentLaunches
+        if (!needsMetadata) return
+        void loadDaemonMetadata(selectedMachine.id, { minFreshMs: 30_000 }).catch(() => {})
+    }, [loadDaemonMetadata, selectedMachine])
 
     const cliProviders = useMemo(
         () => ((selectedMachine?.availableProviders || []).filter(provider => provider.category === 'cli' && provider.installed !== false)),
@@ -288,7 +300,7 @@ export default function DashboardNewSessionDialog({
         if (activeKind !== 'cli' || !selectedMachine || !selectedTarget) return null
         const providerLabel = cliProviders.find(provider => provider.type === selectedTarget)?.displayName || selectedTarget
         return {
-            ideId: selectedMachine.id,
+            routeId: selectedMachine.id,
             daemonId: selectedMachine.id,
             providerSessionId: selectedResumeSessionId || undefined,
             transport: 'pty',

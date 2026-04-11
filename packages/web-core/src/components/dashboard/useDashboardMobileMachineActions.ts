@@ -211,7 +211,7 @@ export function useDashboardMobileMachineActions({
 
         const normalizedTargetWorkspace = normalizeWorkspacePath(pendingWorkspaceLaunch.workspacePath)
         const matchingEntry = ides.find(entry => {
-            if (!entry || entry.type === 'adhdev-daemon' || entry.daemonMode) return false
+            if (!entry || entry.type === 'adhdev-daemon') return false
             const entryMachineId = getRouteMachineId(entry.daemonId || entry.id)
             if (entryMachineId !== pendingWorkspaceLaunch.machineId) return false
 
@@ -222,7 +222,7 @@ export function useDashboardMobileMachineActions({
                     : null
             if (entryKind !== pendingWorkspaceLaunch.kind) return false
 
-            const entryProviderType = String(entry.agentType || entry.ideType || entry.type || '')
+            const entryProviderType = String(entry.agentType || entry.type || '')
             if (entryProviderType !== pendingWorkspaceLaunch.providerType) return false
 
             const entryProviderSessionId = String(entry.providerSessionId || '')
@@ -252,7 +252,7 @@ export function useDashboardMobileMachineActions({
             ? matchingEntry.sessionId
             : typeof matchingEntry.instanceId === 'string' && matchingEntry.instanceId
                 ? matchingEntry.instanceId
-                : conversations.find((conversation) => conversation.ideId === matchingEntry.id)?.sessionId
+                : conversations.find((conversation) => conversation.routeId === matchingEntry.id)?.sessionId
 
         if (!targetSessionId) return
 

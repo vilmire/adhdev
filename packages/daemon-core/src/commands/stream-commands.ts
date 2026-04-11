@@ -164,13 +164,17 @@ function applyProviderPatch(h: CommandHelpers, args: any, payload: any): void {
 }
 
 async function executeProviderScript(h: CommandHelpers, args: any, scriptName: string): Promise<CommandResult> {
-    const { agentType, ideType } = args || {};
-    if (!agentType) return { success: false, error: 'agentType is required' };
+    const resolvedProviderType =
+        h.currentSession?.providerType
+        || h.currentProviderType
+        || args?.agentType
+        || args?.providerType;
+    if (!resolvedProviderType) return { success: false, error: 'targetSessionId or providerType is required' };
 
     const loader = h.ctx.providerLoader;
     if (!loader) return { success: false, error: 'ProviderLoader not initialized' };
-    const provider = loader.resolve(agentType);
-    if (!provider) return { success: false, error: `Provider not found: ${agentType}` };
+    const provider = loader.resolve(resolvedProviderType);
+    if (!provider) return { success: false, error: `Provider not found: ${resolvedProviderType}` };
 
     const webviewScriptName = `webview${scriptName.charAt(0).toUpperCase() + scriptName.slice(1)}`;
     const hasWebviewScript = provider.category === 'ide' &&
@@ -179,13 +183,13 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
     const actualScriptName = hasWebviewScript ? webviewScriptName : scriptName;
 
     if (!provider.scripts?.[actualScriptName as keyof typeof provider.scripts]) {
-        return { success: false, error: `Script '${actualScriptName}' not available for ${agentType}` };
+        return { success: false, error: `Script '${actualScriptName}' not available for ${resolvedProviderType}` };
     }
 
     const normalizedArgs = normalizeProviderScriptArgs(args);
 
     if (provider.category === 'cli') {
-        const adapter = h.getCliAdapter(args?.targetSessionId || agentType);
+        const adapter = h.getCliAdapter(args?.targetSessionId || resolvedProviderType);
         if (!adapter?.invokeScript) {
             return { success: false, error: `CLI adapter does not support script '${actualScriptName}'` };
         }
@@ -213,8 +217,8 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
     if (!scriptCode) return { success: false, error: `Script '${actualScriptName}' returned null` };
 
     const cdpKey = provider.category === 'ide'
-        ? (h.currentSession?.cdpManagerKey || h.currentManagerKey || agentType)
-        : (h.currentSession?.cdpManagerKey || h.currentManagerKey || ideType);
+        ? (h.currentSession?.cdpManagerKey || h.currentManagerKey || resolvedProviderType)
+        : (h.currentSession?.cdpManagerKey || h.currentManagerKey);
     LOG.info('Command', `[ExtScript] provider=${provider.type} category=${provider.category} cdpKey=${cdpKey}`);
     const cdp = h.getCdp(cdpKey);
     if (!cdp?.isConnected) return { success: false, error: `No CDP connection for ${cdpKey || 'any'}` };
@@ -224,7 +228,7 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
 
         if (provider.category === 'extension') {
             const runtimeSessionId = h.currentSession?.sessionId || args?.targetSessionId;
-            if (!runtimeSessionId) return { success: false, error: `No target session found for ${agentType}` };
+            if (!runtimeSessionId) return { success: false, error: `No target session found for ${resolvedProviderType}` };
             const parentSessionId = h.currentSession?.parentSessionId;
             if (parentSessionId) {
                 await h.agentStream?.setActiveSession(cdp, parentSessionId, runtimeSessionId);
@@ -257,7 +261,7 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
                 }
             } else {
                 if (!targetSessionId) {
-                    return { success: false, error: `No active session found for ${agentType}` };
+                    return { success: false, error: `No active session found for ${resolvedProviderType}` };
                 }
                 result = await cdp.evaluateInSessionFrame(targetSessionId, scriptCode);
             }

@@ -33,7 +33,7 @@ export function buildSelectedMachineRecentLaunches(
     }
 
     return ides
-        .filter(entry => !entry.daemonMode && entry.daemonId === selectedMachineEntry.id)
+        .filter(entry => entry.type !== 'adhdev-daemon' && entry.daemonId === selectedMachineEntry.id)
         .map(entry => {
             const kind: MachineRecentLaunch['kind'] = isCliEntry(entry) ? 'cli' : isAcpEntry(entry) ? 'acp' : 'ide'
             return {

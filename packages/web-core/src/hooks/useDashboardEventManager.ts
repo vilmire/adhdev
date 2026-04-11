@@ -90,9 +90,8 @@ export function useDashboardEventManager({
     }, [setToasts, setLocalUserMessages])
 
     useEffect(() => {
-        const unsubWS = dashboardWS.on('status_event', (payload: unknown) => {
-            if (!payload || typeof payload !== 'object' || typeof (payload as { event?: unknown }).event !== 'string') return
-            eventManager.handleRawEvent(payload as StatusEventPayload, 'ws')
+        const unsubWS = dashboardWS.on('status_event', (payload: StatusEventPayload) => {
+            eventManager.handleRawEvent(payload, 'ws')
         })
         return () => { unsubWS() }
     }, [])
@@ -101,11 +100,11 @@ export function useDashboardEventManager({
         const handler = (event: MessageEvent) => {
             const data = event.data
             if (data?.type !== 'notification_action' || typeof data.action !== 'string' || !data.action.startsWith('approval_')) return
-            if (!(data.ideId || data.targetSessionId || data.targetKey)) return
+            if (!(data.daemonId || data.targetSessionId || data.targetKey)) return
 
-            const targetKey = data.targetSessionId || data.targetKey || data.ideId
+            const targetKey = data.targetSessionId || data.targetKey || data.daemonId
             const matchedConv = resolveConversationByTarget(targetKey)
-            const routeId = matchedConv?.ideId || data.ideId
+            const routeId = matchedConv?.routeId || data.daemonId
             if (!routeId) return
             const buttonIndex = Number(data.buttonIndex)
             const buttonText = data.button || matchedConv?.modalButtons?.[buttonIndex] || 'Approve'

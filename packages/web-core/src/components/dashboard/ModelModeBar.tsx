@@ -13,9 +13,9 @@ import { useTransport } from '../../context/TransportContext';
 const _modelModeCache = new Map<string, { models: string[]; modes: string[] }>();
 
 export interface ModelModeBarProps {
-    ideId: string;
+    routeId: string;
     sessionId?: string;
-    ideType: string;
+    hostIdeType?: string;
     providerType: string;
     displayLabel: string;
     /** Current model from daemon status report */
@@ -28,10 +28,10 @@ export interface ModelModeBarProps {
     acpModes?: { id: string; name: string; description?: string }[];
 }
 
-export default function DashboardModelModeBar({ ideId, sessionId, ideType, providerType, displayLabel, serverModel, serverMode, acpConfigOptions, acpModes }: ModelModeBarProps) {
+export default function DashboardModelModeBar({ routeId, sessionId, hostIdeType, providerType, displayLabel, serverModel, serverMode, acpConfigOptions, acpModes }: ModelModeBarProps) {
     const { sendCommand } = useTransport();
     const isAcp = !!(acpConfigOptions || acpModes);
-    const cacheKey = `${ideId}:${sessionId || providerType}`;
+    const cacheKey = `${routeId}:${sessionId || providerType}`;
     const cached = _modelModeCache.get(cacheKey);
 
     const [modelOpen, setModelOpen] = useState(false);
@@ -99,7 +99,7 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, provi
         } else {
             setModels([]); setModes([]);
         }
-    }, [ideId, providerType, sessionId]);
+    }, [routeId, providerType, sessionId]);
 
     // Reflect real-time server value updates (ignore for 5s after local changes)
     useEffect(() => {
@@ -114,15 +114,15 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, provi
             ...data,
             ...(sessionId && { targetSessionId: sessionId }),
         };
-        return await sendCommand(ideId, cmd, enriched);
-    }, [ideId, sessionId, sendCommand]);
+        return await sendCommand(routeId, cmd, enriched);
+    }, [routeId, sessionId, sendCommand]);
 
     const fetchModels = async () => {
         if (models.length > 0) { setModelOpen(!modelOpen); return; }
         if (isAcp) { setModelOpen(true); return; } // ACP: already configured
         setLoadingModels(true);
         try {
-            const res: any = await exec('list_extension_models', { agentType: providerType, ideType });
+            const res: any = await exec('list_extension_models', sessionId ? {} : { agentType: providerType, ...(hostIdeType ? { ideType: hostIdeType } : {}) });
             const rawList = res?.models || res?.result?.models || [];
             const list = normalizeList(rawList);
             setModels(list);
@@ -141,7 +141,7 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, provi
         if (isAcp) { setModeOpen(true); return; } // ACP: already configured
         setLoadingModes(true);
         try {
-            const res: any = await exec('list_extension_modes', { agentType: providerType, ideType });
+            const res: any = await exec('list_extension_modes', sessionId ? {} : { agentType: providerType, ...(hostIdeType ? { ideType: hostIdeType } : {}) });
             const rawList = res?.modes || res?.result?.modes || [];
             const list = normalizeList(rawList);
             setModes(list);
@@ -162,8 +162,8 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, provi
         localOverrideUntil.current = Date.now() + 5000; // 5s ignore server values
         try {
             const res: any = isAcp
-                ? await exec('change_model', { agentType: providerType, ideType, model })
-                : await exec('set_extension_model', { agentType: providerType, ideType, model });
+                ? await exec('change_model', { ...(sessionId ? {} : { agentType: providerType, ...(hostIdeType ? { ideType: hostIdeType } : {}) }), model })
+                : await exec('set_extension_model', { ...(sessionId ? {} : { agentType: providerType, ...(hostIdeType ? { ideType: hostIdeType } : {}) }), model });
             if (res?.success === false) {
                 throw new Error(res?.error || 'Could not change model');
             }
@@ -186,11 +186,11 @@ export default function DashboardModelModeBar({ ideId, sessionId, ideType, provi
         try {
             let res: any;
             if (isAcp && isThoughtLevel && thoughtConfigId) {
-                res = await exec('set_thought_level', { agentType: providerType, ideType, configId: thoughtConfigId, value: mode });
+                res = await exec('set_thought_level', { ...(sessionId ? {} : { agentType: providerType, ...(hostIdeType ? { ideType: hostIdeType } : {}) }), configId: thoughtConfigId, value: mode });
             } else if (isAcp) {
-                res = await exec('set_mode', { agentType: providerType, ideType, mode });
+                res = await exec('set_mode', { ...(sessionId ? {} : { agentType: providerType, ...(hostIdeType ? { ideType: hostIdeType } : {}) }), mode });
             } else {
-                res = await exec('set_extension_mode', { agentType: providerType, ideType, mode });
+                res = await exec('set_extension_mode', { ...(sessionId ? {} : { agentType: providerType, ...(hostIdeType ? { ideType: hostIdeType } : {}) }), mode });
             }
             if (res?.success === false) {
                 throw new Error(res?.error || 'Could not change mode');

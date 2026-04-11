@@ -10,18 +10,22 @@ import {
     useBaseDaemonActions,
     useBaseDaemons,
     applyRouteTarget,
+    subscriptionManager,
     statusPayloadToEntries,
 } from '@adhdev/web-core'
 import type { ConnectionStatus } from '@adhdev/web-core'
-import type { StatusResponse } from '@adhdev/daemon-core'
+import type { StandaloneWsStatusPayload, SubscribeRequest, TopicUpdateEnvelope, UnsubscribeRequest } from '@adhdev/daemon-core'
 import { standaloneConnectionManager } from './connection-manager'
 
 // dev: vite proxy (ws://localhost:3000/ws → ws://localhost:3847/ws)
 // prod: same origin (daemon-standalone serves both HTTP + WS)
 function getWsUrl(): string {
     if (typeof window === 'undefined') return 'ws://localhost:3847/ws'
+    const isDevServer = (import.meta as any).env?.DEV && window.location.port === '3000'
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const base = `${proto}://${window.location.host}/ws`
+    const base = isDevServer
+        ? `${proto}://127.0.0.1:3847/ws`
+        : `${proto}://${window.location.host}/ws`
     // Pass token from URL if present (e.g. ?token=abc123)
     const params = new URLSearchParams(window.location.search)
     const token = params.get('token')
@@ -44,6 +48,17 @@ function logStandaloneStatusDebug(event: string, payload: Record<string, unknown
         const debugEnabled = (import.meta as any).env?.DEV || window.localStorage.getItem('adhdev_mobile_debug') === '1'
         if (!debugEnabled) return
         console.debug(`[standalone-status] ${event}`, payload)
+    } catch {
+        // noop
+    }
+}
+
+function logStandaloneWsDebug(event: string, payload: Record<string, unknown>) {
+    if (typeof window === 'undefined') return
+    try {
+        const debugEnabled = (import.meta as any).env?.DEV || window.localStorage.getItem('adhdev_mobile_debug') === '1'
+        if (!debugEnabled) return
+        console.debug(`[standalone-ws] ${event}`, payload)
     } catch {
         // noop
     }
@@ -78,6 +93,17 @@ export async function sendCommandViaWs(
         })
     }
     throw new Error(`WS command channel unavailable: ${command}`)
+}
+
+export function sendDataViaWs(_daemonId: string, data: SubscribeRequest | UnsubscribeRequest): boolean {
+    const ws = _wsInstance
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false
+    try {
+        ws.send(JSON.stringify(data))
+        return true
+    } catch {
+        return false
+    }
 }
 
 /**
@@ -158,6 +184,8 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
     const { setUserName } = useBaseDaemons()
     const setUserNameRef = useRef(setUserName)
     setUserNameRef.current = setUserName
+    const daemonMetadataUnsubscribeRef = useRef<(() => void) | null>(null)
+    const subscribedMetadataDaemonIdRef = useRef<string | null>(null)
 
     const [, setWsStatus] = useState<ConnectionStatus>('disconnected')
     // Propagate WS status to parent provider
@@ -170,6 +198,7 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
     const reconnectDelay = useRef(RECONNECT_INTERVAL)
     const mountedRef = useRef(true)
     const cleaningUpRef = useRef(false)
+    const reconnectReasonRef = useRef<string>('initial_connect')
 
     useEffect(() => {
         mountedRef.current = true
@@ -182,6 +211,11 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
 
             updateWsStatus('connecting')
             console.log(`[Standalone WS] Connecting to ${WS_URL}...`)
+            logStandaloneWsDebug('connect_attempt', {
+                url: WS_URL,
+                reason: reconnectReasonRef.current,
+                delayMs: reconnectDelay.current,
+            })
 
             let ws: WebSocket
             try {
@@ -197,6 +231,11 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                 if (!mountedRef.current) { ws.close(); return }
                 updateWsStatus('connected')
                 reconnectDelay.current = RECONNECT_INTERVAL // Reset backoff
+                logStandaloneWsDebug('open', {
+                    url: WS_URL,
+                    reason: reconnectReasonRef.current,
+                })
+                subscriptionManager.resubscribeAll({ sendData: sendDataViaWs })
                 console.log('[Standalone WS] Connected')
             }
 
@@ -243,12 +282,19 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                         return
                     }
 
+                    if (msg.type === 'topic_update') {
+                        const update = msg.update as TopicUpdateEnvelope | undefined
+                        if (update) subscriptionManager.publish(update)
+                        return
+                    }
+
                     if (msg.type === 'status' || msg.type === 'initial_state') {
-                        const statusData = msg.data as StatusResponse
+                        const statusData = msg.data as StandaloneWsStatusPayload
                         if (!statusData) return
 
-                        const { injectEntries, markLoaded } = actionsRef.current
-                        const daemonId = statusData.id || 'standalone'
+                        const { injectEntries, markLoaded, getIdes } = actionsRef.current
+                        const daemonId = statusData.instanceId || 'standalone'
+                        const existingDaemon = getIdes().find(entry => entry.id === daemonId)
 
                         const adapter = getOrCreateWsAdapter(daemonId)
                         standaloneConnectionManager.register(daemonId, adapter)
@@ -258,7 +304,11 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                         standaloneConnectionManager.emitStatus(daemonId, statusData)
 
                         // Convert StatusResponse → DaemonData[] using shared utility
-                        const entries = statusPayloadToEntries(statusData, { daemonId })
+                        const entries = statusPayloadToEntries(statusData, {
+                            daemonId,
+                            existingDaemon,
+                            existingEntries: getIdes(),
+                        })
 
                         logStandaloneStatusDebug('ws_status', {
                             type: msg.type,
@@ -303,9 +353,38 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                         }
                         markLoaded()
 
-                        // Inject userName from daemon config
-                        if (statusData.userName && setUserNameRef.current) {
-                            setUserNameRef.current(statusData.userName)
+                        if (subscribedMetadataDaemonIdRef.current !== daemonId) {
+                            daemonMetadataUnsubscribeRef.current?.()
+                            subscribedMetadataDaemonIdRef.current = daemonId
+                            daemonMetadataUnsubscribeRef.current = subscriptionManager.subscribe(
+                                { sendData: sendDataViaWs },
+                                daemonId,
+                                {
+                                    type: 'subscribe',
+                                    topic: 'daemon.metadata',
+                                    key: `daemon:metadata:${daemonId}`,
+                                    params: {
+                                        includeSessions: true,
+                                    },
+                                },
+                                (update) => {
+                                    if (update.topic !== 'daemon.metadata') return
+                                    const currentEntries = actionsRef.current.getIdes()
+                                    const currentDaemon = currentEntries.find(entry => entry.id === daemonId)
+                                    const metadataEntries = statusPayloadToEntries(update.status, {
+                                        daemonId,
+                                        existingDaemon: currentDaemon,
+                                        existingEntries: currentEntries,
+                                        timestamp: update.timestamp,
+                                    })
+                                    if (metadataEntries.length > 0) {
+                                        actionsRef.current.injectEntries(metadataEntries)
+                                    }
+                                    if (update.userName && setUserNameRef.current) {
+                                        setUserNameRef.current(update.userName)
+                                    }
+                                },
+                            )
                         }
                     }
                 } catch (e) {
@@ -313,7 +392,7 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                 }
             }
 
-            ws.onclose = () => {
+            ws.onclose = (event) => {
                 if (!mountedRef.current) return
                 _wsAdapter?.stopScreenshots()
                 if (_wsAdapter) {
@@ -321,11 +400,22 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                 }
                 updateWsStatus('disconnected')
                 wsRef.current = null
+                reconnectReasonRef.current = `close:${event.code}${event.wasClean ? ':clean' : ':unclean'}`
+                logStandaloneWsDebug('close', {
+                    code: event.code,
+                    reason: event.reason || '',
+                    wasClean: event.wasClean,
+                })
                 scheduleReconnect()
             }
 
             ws.onerror = (err) => {
                 if (cleaningUpRef.current || !mountedRef.current) return
+                reconnectReasonRef.current = 'error'
+                logStandaloneWsDebug('error', {
+                    message: err instanceof Event ? 'event' : String(err),
+                    readyState: ws.readyState,
+                })
                 console.warn('[Standalone WS] Error, will reconnect:', err)
                 // Don't close here — onclose will fire automatically
             }
@@ -336,6 +426,10 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
             clearTimeout(reconnectTimer.current)
             const delay = reconnectDelay.current
             console.log(`[Standalone WS] Reconnecting in ${delay}ms...`)
+            logStandaloneWsDebug('schedule_reconnect', {
+                reason: reconnectReasonRef.current,
+                delayMs: delay,
+            })
             reconnectTimer.current = setTimeout(() => {
                 // Exponential backoff
                 reconnectDelay.current = Math.min(reconnectDelay.current * 1.5, MAX_RECONNECT_INTERVAL)
@@ -348,6 +442,9 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
         return () => {
             mountedRef.current = false
             cleaningUpRef.current = true
+            daemonMetadataUnsubscribeRef.current?.()
+            daemonMetadataUnsubscribeRef.current = null
+            subscribedMetadataDaemonIdRef.current = null
             clearTimeout(reconnectTimer.current)
             if (wsRef.current) {
                 wsRef.current.onerror = null

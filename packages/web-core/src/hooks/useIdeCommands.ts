@@ -3,12 +3,12 @@ import type { ActiveConversation } from '../components/dashboard/types'
 import { getProviderArgs } from './dashboardCommandUtils'
 
 interface UseIdeCommandsOptions {
-    ideId: string
+    routeId: string
     activeConv: ActiveConversation | undefined
     historyModalOpen: boolean
     chats: unknown[] | undefined
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
-    updateIdeChats: (ideId: string, chats: any) => void
+    updateRouteChats: (routeId: string, chats: any) => void
     pushToast: (message: string, type?: 'success' | 'info' | 'warning') => void
 }
 
@@ -29,12 +29,12 @@ function isLikelyCollapsedHistoryResult(
 }
 
 export function useIdeCommands({
-    ideId,
+    routeId,
     activeConv,
     historyModalOpen,
     chats,
     sendDaemonCommand,
-    updateIdeChats,
+    updateRouteChats,
     pushToast,
 }: UseIdeCommandsOptions) {
     const [isCreatingChat, setIsCreatingChat] = useState(false)
@@ -44,11 +44,11 @@ export function useIdeCommands({
 
     const handleSendAgent = useCallback(async (rawMessage: string) => {
         const message = rawMessage.trim()
-        if (!message || !ideId || isSendingChat || !activeConv) return
+        if (!message || !routeId || isSendingChat || !activeConv) return
 
         setIsSendingChat(true)
         try {
-            await sendDaemonCommand(ideId, 'send_chat', {
+            await sendDaemonCommand(routeId, 'send_chat', {
                 message,
                 waitForResponse: true,
                 ...getProviderArgs(activeConv),
@@ -58,14 +58,14 @@ export function useIdeCommands({
         } finally {
             setIsSendingChat(false)
         }
-    }, [ideId, isSendingChat, sendDaemonCommand, activeConv])
+    }, [routeId, isSendingChat, sendDaemonCommand, activeConv])
 
     const handleRefreshHistory = useCallback(async () => {
-        if (!ideId || isRefreshingHistory || !activeConv) return
+        if (!routeId || isRefreshingHistory || !activeConv) return
 
         setIsRefreshingHistory(true)
         try {
-            const loadChats = async () => sendDaemonCommand(ideId, 'list_chats', {
+            const loadChats = async () => sendDaemonCommand(routeId, 'list_chats', {
                 forceExpand: true,
                 ...getProviderArgs(activeConv),
             })
@@ -77,7 +77,7 @@ export function useIdeCommands({
                 nextChats = res?.chats || res?.result?.chats
             }
             if (res?.success && Array.isArray(nextChats)) {
-                updateIdeChats(ideId, nextChats)
+                updateRouteChats(routeId, nextChats)
             }
         } catch (e) {
             console.error('[IDE] Refresh history failed:', e)
@@ -85,13 +85,13 @@ export function useIdeCommands({
         } finally {
             setIsRefreshingHistory(false)
         }
-    }, [ideId, isRefreshingHistory, sendDaemonCommand, activeConv, updateIdeChats, pushToast])
+    }, [routeId, isRefreshingHistory, sendDaemonCommand, activeConv, updateRouteChats, pushToast])
 
     const handleSwitchSession = useCallback(async (_targetIdeId: string, sessionId: string) => {
-        if (!ideId || !activeConv) return
+        if (!routeId || !activeConv) return
 
         try {
-            const res: any = await sendDaemonCommand(ideId, 'switch_chat', {
+            const res: any = await sendDaemonCommand(routeId, 'switch_chat', {
                 id: sessionId,
                 sessionId,
                 ...getProviderArgs(activeConv),
@@ -111,14 +111,14 @@ export function useIdeCommands({
             console.error('[IDE] Switch session failed:', e)
             pushToast(`Session switch failed: ${e?.message || 'connection error'}`, 'warning')
         }
-    }, [ideId, sendDaemonCommand, activeConv, pushToast])
+    }, [routeId, sendDaemonCommand, activeConv, pushToast])
 
     const handleNewChat = useCallback(async () => {
-        if (!ideId || isCreatingChat || !activeConv) return
+        if (!routeId || isCreatingChat || !activeConv) return
 
         setIsCreatingChat(true)
         try {
-            await sendDaemonCommand(ideId, 'new_chat', {
+            await sendDaemonCommand(routeId, 'new_chat', {
                 ...getProviderArgs(activeConv),
             })
         } catch (e) {
@@ -127,7 +127,7 @@ export function useIdeCommands({
         } finally {
             setIsCreatingChat(false)
         }
-    }, [ideId, isCreatingChat, sendDaemonCommand, activeConv, pushToast])
+    }, [routeId, isCreatingChat, sendDaemonCommand, activeConv, pushToast])
 
     useEffect(() => {
         if (!historyModalOpen) {

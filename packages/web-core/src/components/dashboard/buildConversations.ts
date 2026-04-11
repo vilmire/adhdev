@@ -73,7 +73,7 @@ function getLocalMessages(
 export function buildMachineNameMap(allIdes: DaemonData[] = []): Record<string, string> {
     const machineNames: Record<string, string> = {};
     for (const daemon of allIdes) {
-        if (daemon.type === 'adhdev-daemon' || daemon.daemonMode) {
+        if (daemon.type === 'adhdev-daemon') {
             machineNames[daemon.id] = getMachineDisplayName(daemon, { fallbackId: daemon.id });
         }
     }
@@ -138,7 +138,7 @@ export function buildIdeConversations(
             providerSessionId: child.providerSessionId,
             transport: child.transport,
             agentType: child.providerType,
-            agentName: child.providerName,
+            agentName: child.providerName || formatIdeType(child.providerType),
             status: child.status,
             title: child.title,
             messages: child.activeChat?.messages || [],
@@ -184,7 +184,7 @@ export function buildIdeConversations(
         const nativeLocalMsgs = getLocalMessages(localUserMessages, [ide.id, nativeSessionId]);
         const nativePendingLocal = filterUnconfirmedLocalMessages(nativeServerMsgs, nativeLocalMsgs);
         results.push({
-            ideId: ide.id,
+            routeId: ide.id,
             sessionId: nativeSessionId,
             providerSessionId: ide.providerSessionId,
             nativeSessionId,
@@ -197,7 +197,7 @@ export function buildIdeConversations(
             title: effectiveNativeTitle,
             messages: [...nativeServerMsgs, ...nativePendingLocal],
             resume: ide.resume,
-            ideType: nativeProviderType,
+            hostIdeType: !isCliConv(ide) && !isAcpConv(ide) ? ide.type : undefined,
             workspaceName,
             displayPrimary: workspaceName
                 || effectiveNativeTitle
@@ -206,6 +206,7 @@ export function buildIdeConversations(
                     : agentName),
             displaySecondary: ideLabel,
             cdpConnected: ide.cdpConnected,
+            lastUpdated: ide.lastUpdated,
             modalButtons: hasRealModal ? modal.buttons : undefined,
             modalMessage: hasRealModal ? modal.message : undefined,
             streamSource: 'native',
@@ -240,7 +241,7 @@ export function buildIdeConversations(
             || !['idle', 'panel_hidden', 'disconnected', 'not_monitored'].includes(streamStatus);
         if (!hasMeaningfulStream) continue;
         results.push({
-            ideId: ide.id,
+            routeId: ide.id,
             sessionId: stream.sessionId || stream.instanceId,
             providerSessionId: stream.providerSessionId,
             nativeSessionId: ide.sessionId || ide.instanceId,
@@ -252,11 +253,12 @@ export function buildIdeConversations(
             status: streamStatus,
             title: effectiveStreamTitle,
             messages: [...serverMsgs, ...pendingLocal],
-            ideType: stream.agentType,
+            hostIdeType: ide.type,
             workspaceName,
             displayPrimary: workspaceName || parentTitle || effectiveStreamTitle || ideLabel,
             displaySecondary: `${ideLabel} · ${stream.agentName}`,
             cdpConnected: ide.cdpConnected,
+            lastUpdated: stream.lastUpdated || ide.lastUpdated,
             modalButtons: hasModal ? stream.activeModal!.buttons : undefined,
             modalMessage: hasModal ? stream.activeModal!.message : undefined,
             streamSource: 'agent-stream',
@@ -269,7 +271,7 @@ export function buildIdeConversations(
     // 3) IDE with neither native nor agent stream → empty tab
     if (results.length === 0) {
         results.push({
-            ideId: ide.id,
+            routeId: ide.id,
             sessionId: ide.sessionId || ide.instanceId,
             providerSessionId: ide.providerSessionId,
             nativeSessionId: ide.sessionId || ide.instanceId,
@@ -281,11 +283,12 @@ export function buildIdeConversations(
             status: 'idle',
             title: '',
             messages: [],
-            ideType: ide.type,
+            hostIdeType: ide.type,
             workspaceName,
             displayPrimary: workspaceName || ideLabel,
             displaySecondary: ideLabel,
             cdpConnected: ide.cdpConnected,
+            lastUpdated: ide.lastUpdated,
             streamSource: 'native',
             tabKey: getConversationTabKey(ide.sessionId || ide.instanceId, ide.id),
             connectionState,

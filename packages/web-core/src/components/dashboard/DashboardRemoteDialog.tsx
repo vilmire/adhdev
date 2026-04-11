@@ -9,10 +9,16 @@ import IDEChatTabs from '../ide/IDEChatTabs'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 import { useIdeRemoteStream } from '../../hooks/useIdeRemoteStream'
 import { useIdeConversations } from '../../hooks/useIdeConversations'
+import { useSessionModalSubscription } from '../../hooks/useSessionModalSubscription'
 import { getPreferredConversationForIde } from './conversation-sort'
 import { IconMonitor, IconScroll, IconSplitView } from '../Icons'
 import { formatIdeType } from '../../utils/daemon-utils'
-import { getConversationDaemonRouteId, getConversationDisplayLabel, isNativeConversation } from './conversation-selectors'
+import {
+    getConversationDaemonRouteId,
+    getConversationDisplayLabel,
+    getConversationNativeTargetSessionId,
+    isNativeConversation,
+} from './conversation-selectors'
 
 type RemoteDialogViewMode = 'split' | 'remote'
 
@@ -21,11 +27,11 @@ interface DashboardRemoteDialogProps {
     ideEntry?: DaemonData
     ides: DaemonData[]
     connectionStates: Record<string, string>
-    actionLogs: { ideId: string; text: string; timestamp: number }[]
+    actionLogs: { routeId: string; text: string; timestamp: number }[]
     localUserMessages: Record<string, any[]>
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
-    setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
+    setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
     userName?: string
     onOpenHistory: (conversation?: ActiveConversation) => void
@@ -53,10 +59,10 @@ export default function DashboardRemoteDialog({
     const [dialogChatTab, setDialogChatTab] = useState<string>(() => (
         isNativeConversation(activeConv) ? 'native' : activeConv.tabKey
     ))
-    const lastExternalConversationRef = useRef<{ ideId: string; tabKey: string; streamSource: ActiveConversation['streamSource'] } | null>(null)
+    const lastExternalConversationRef = useRef<{ routeId: string; tabKey: string; streamSource: ActiveConversation['streamSource'] } | null>(null)
     const activeIdeEntry = useMemo(
-        () => ideEntry || ides.find(ide => ide.id === activeConv.ideId),
-        [activeConv.ideId, ideEntry, ides],
+        () => ideEntry || ides.find(ide => ide.id === activeConv.routeId),
+        [activeConv.routeId, ideEntry, ides],
     )
     const ideDisplayName = useMemo(
         () => formatIdeType(activeIdeEntry?.type || ''),
@@ -82,7 +88,7 @@ export default function DashboardRemoteDialog({
     useEffect(() => {
         const previous = lastExternalConversationRef.current
         const next = {
-            ideId: activeConv.ideId,
+            routeId: activeConv.routeId,
             tabKey: activeConv.tabKey,
             streamSource: activeConv.streamSource,
         }
@@ -90,7 +96,7 @@ export default function DashboardRemoteDialog({
 
         if (
             previous
-            && previous.ideId === next.ideId
+            && previous.routeId === next.routeId
             && previous.tabKey === next.tabKey
             && previous.streamSource === next.streamSource
         ) {
@@ -102,7 +108,7 @@ export default function DashboardRemoteDialog({
             return
         }
         setDialogChatTab(activeConv.tabKey)
-    }, [activeConv.ideId, activeConv.streamSource, activeConv.tabKey])
+    }, [activeConv.routeId, activeConv.streamSource, activeConv.tabKey])
 
     useEffect(() => {
         if (dialogChatTab === 'native') {
@@ -130,31 +136,40 @@ export default function DashboardRemoteDialog({
         return conversations.find(conversation => conversation.tabKey === dialogChatTab)
             || activeConv
     }, [activeConv, conversations, dialogChatTab])
+    const modalState = useSessionModalSubscription(effectiveConv)
+    const modalAwareConv = useMemo(() => (
+        modalState.status || modalState.modalMessage || modalState.modalButtons
+            ? {
+                ...effectiveConv,
+                ...(modalState.status ? { status: modalState.status } : {}),
+                ...(modalState.modalMessage !== undefined ? { modalMessage: modalState.modalMessage } : {}),
+                ...(modalState.modalButtons !== undefined ? { modalButtons: modalState.modalButtons } : {}),
+            }
+            : effectiveConv
+    ), [effectiveConv, modalState])
 
-    const daemonRouteId = getConversationDaemonRouteId(effectiveConv)
+    const daemonRouteId = getConversationDaemonRouteId(modalAwareConv)
     const cmds = useDashboardConversationCommands({
         sendDaemonCommand,
-        activeConv: effectiveConv,
+        activeConv: modalAwareConv,
         setLocalUserMessages,
         setActionLogs,
         isStandalone,
     })
     const { connScreenshot, screenshotUsage, handleRemoteAction } = useIdeRemoteStream({
         doId: daemonRouteId,
-        ideId: effectiveConv.ideId,
-        ideType: effectiveConv.ideType,
-        connState: effectiveConv.connectionState || 'new',
+        targetSessionId: getConversationNativeTargetSessionId(modalAwareConv),
+        connState: modalAwareConv.connectionState || 'new',
         viewMode,
-        instanceId: activeIdeEntry?.instanceId,
     })
     const visibleActionLogs = useMemo(
-        () => actionLogs.filter(log => log.ideId === effectiveConv.tabKey),
-        [actionLogs, effectiveConv.tabKey],
+        () => actionLogs.filter(log => log.routeId === modalAwareConv.tabKey),
+        [actionLogs, modalAwareConv.tabKey],
     )
 
     useEffect(() => {
-        onConversationChange?.(effectiveConv)
-    }, [effectiveConv, onConversationChange])
+        onConversationChange?.(modalAwareConv)
+    }, [modalAwareConv, onConversationChange])
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -240,9 +255,9 @@ export default function DashboardRemoteDialog({
                                 extensionTabs={extensionTabs}
                                 onSelectTab={setDialogChatTab}
                             />
-                            <ApprovalBanner activeConv={effectiveConv} onModalButton={cmds.handleModalButton} />
+                            <ApprovalBanner activeConv={modalAwareConv} onModalButton={cmds.handleModalButton} />
                             <ChatPane
-                                activeConv={effectiveConv}
+                                activeConv={modalAwareConv}
                                 ideEntry={activeIdeEntry}
                                 showMetaChips={false}
                                 handleSendChat={cmds.handleSendChat}
@@ -258,10 +273,10 @@ export default function DashboardRemoteDialog({
                     <div className={`flex flex-col min-w-0 min-h-0 bg-black ${viewMode === 'split' ? 'order-1 md:order-2' : ''}`}>
                         <RemoteView
                             addLog={() => {}}
-                            connState={(effectiveConv.connectionState || 'new') as 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed'}
+                            connState={(modalAwareConv.connectionState || 'new') as 'new' | 'connecting' | 'connected' | 'disconnected' | 'failed'}
                             connScreenshot={connScreenshot}
                             screenshotUsage={screenshotUsage}
-                            transportType={effectiveConv.transport}
+                            transportType={modalAwareConv.transport}
                             onAction={handleRemoteAction}
                         />
                     </div>

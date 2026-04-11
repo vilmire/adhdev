@@ -14,7 +14,7 @@
 import { formatIdeType, getMachineDisplayName } from '../utils/daemon-utils'
 import { shouldNotify } from '../hooks/useNotificationPrefs'
 import { notify } from '../hooks/useBrowserNotifications'
-import type { DaemonData } from '../types'
+import type { DaemonData, DashboardStatusEventPayload } from '../types'
 import {
     buildApprovalToastDescriptors,
     buildViewRequestToastActions,
@@ -24,36 +24,7 @@ import {
 
 // ─── Types ────────────────────────────────────────
 
-export interface StatusEventPayload {
-    ideId?: string
-    ideType?: string
-    ideName?: string
-    agentType?: string
-    targetSessionId?: string
-    instanceId?: string
-    providerType?: string
-    event: string
-    chatTitle?: string
-    duration?: number
-    elapsedSec?: number
-    modalMessage?: string
-    modalButtons?: string[]
-    timestamp?: number
-    content?: string
-    message?: string
-    title?: string
-    level?: 'info' | 'success' | 'warning'
-    role?: 'system' | 'assistant' | 'user'
-    kind?: string
-    senderName?: string
-    effectId?: string
-    channels?: Array<'bubble' | 'toast' | 'browser'>
-    preferenceKey?: 'disconnect' | 'completion' | 'approval' | 'browser'
-    requesterName?: string
-    requestId?: string
-    orgId?: string
-    targetName?: string
-}
+export type StatusEventPayload = DashboardStatusEventPayload
 
 export interface ToastAction {
     label: string
@@ -188,31 +159,19 @@ class EventManager {
     /**
      * Find the adhdev-daemon entry that owns the IDE which fired this event.
      * Strategy:
-     *   1. If ideId is resolved, find its IDE entry → follow daemonId → find the daemon entry
-     *   2. If instanceId matches an IDE, same lookup
+     *   1. If daemonId is present, resolve directly
+     *   2. If targetSessionId is present, resolve owning session → daemon
      *   3. Fallback: if only one daemon exists, use it (single-machine case)
      */
     private resolveOwningDaemon(payload: StatusEventPayload): typeof this.ides[number] | null {
-        // Direct match: if ideType is adhdev-daemon, the event IS from a daemon
-        if (payload.ideType === 'adhdev-daemon' && payload.ideId) {
-            const directDaemon = this.ides.find(i => i.id === payload.ideId && i.type === 'adhdev-daemon')
-            if (directDaemon) return directDaemon
+        if (payload.daemonId) {
+            const daemon = this.ides.find(i => i.id === payload.daemonId && i.type === 'adhdev-daemon')
+            if (daemon) return daemon
         }
 
-        // Find the IDE entry this event belongs to
-        let matchedIde: typeof this.ides[number] | undefined
-        if (payload.targetSessionId) {
-            matchedIde = this.findOwningSession(payload.targetSessionId) || undefined
-        }
-        if (payload.ideId) {
-            matchedIde = matchedIde || this.ides.find(i => i.id === payload.ideId)
-        }
-        if (!matchedIde && payload.instanceId) {
-            matchedIde = this.ides.find(i =>
-                i.id.endsWith(`:ide:${payload.instanceId}`) ||
-                i.id.endsWith(`:cli:${payload.instanceId}`)
-            )
-        }
+        const matchedIde = payload.targetSessionId
+            ? this.findOwningSession(payload.targetSessionId) || undefined
+            : undefined
 
         // Follow daemonId to find the owning daemon
         if (matchedIde) {
@@ -232,15 +191,6 @@ class EventManager {
 
     // ─── Route ID resolution ──────────────────────
 
-    private resolveRouteId(rawIdeId: string, agentType: string): string {
-        for (const ide of this.ides) {
-            if (ide.id.startsWith(rawIdeId) && (!agentType || agentType === ide.type)) {
-                return ide.id
-            }
-        }
-        return rawIdeId
-    }
-
     private findOwningSession(targetSessionId: string): typeof this.ides[number] | null {
         for (const ide of this.ides) {
             if (ide.id === targetSessionId || ide.sessionId === targetSessionId) {
@@ -255,106 +205,47 @@ class EventManager {
     }
 
     private resolveActionRouteTarget(payload: StatusEventPayload): string | null {
-        if (payload.ideId) {
-            const agentType = payload.agentType || payload.ideType || ''
-            return this.resolveRouteId(payload.ideId, agentType)
-        }
         if (payload.targetSessionId) {
             const owner = this.findOwningSession(payload.targetSessionId)
             return owner?.id || owner?.daemonId || null
         }
-        return null
+        return payload.daemonId || null
     }
 
     private resolveConversationKey(payload: StatusEventPayload): string | null {
         if (payload.targetSessionId) return payload.targetSessionId
-        if (!payload.ideId) return null
-        return payload.ideId
+        if (payload.daemonId) return payload.daemonId
+        return null
     }
 
     // ─── Main entry point ─────────────────────────
 
     handleRawEvent(payload: StatusEventPayload, _source: 'ws' | 'p2p'): void {
-        // Resolve ideId from instanceId if not present
-        // instanceId from daemon is like 'antigravity' or 'cursor_remote_vs'
-        // Frontend ideId is like '{doId}:ide:{instanceId}'
-        if (!payload.ideId && payload.instanceId) {
-            for (const ide of this.ides) {
-                if (ide.id.endsWith(`:ide:${payload.instanceId}`) || ide.id.endsWith(`:cli:${payload.instanceId}`)) {
-                    payload.ideId = ide.id
-                    break
-                }
-            }
-        }
-
         const conversationKey = this.resolveConversationKey(payload)
-        const dedupTarget = conversationKey || payload.instanceId || payload.ideType || payload.providerType || ''
-        const dedupDetail = payload.effectId || payload.message || payload.content || payload.chatTitle || ''
+        const eventTimestamp = Number.isFinite(payload.timestamp) ? Number(payload.timestamp) : Date.now()
+        const dedupTarget = conversationKey || payload.daemonId || ''
+        const dedupDetail = payload.requestId || payload.targetName || payload.requesterName || payload.modalMessage || String(eventTimestamp)
         const dedupKey = `${dedupTarget}:${payload.event}:${dedupDetail}`
         if (this.isDuplicate(dedupKey)) return
 
-        // Resolve ideLabel: find the owning daemon for this event's IDE
-        let ideLabel = formatIdeType(payload.ideType || '')
+        const owningEntry = payload.targetSessionId
+            ? this.findOwningSession(payload.targetSessionId)
+            : null
+        const entryType = owningEntry?.type || ''
+        let ideLabel = formatIdeType(entryType)
         const owningDaemon = this.resolveOwningDaemon(payload)
         if (owningDaemon) {
             const machineName = getMachineDisplayName(owningDaemon, { fallbackId: owningDaemon.id })
             if (machineName) {
-                ideLabel = payload.ideType === 'adhdev-daemon'
-                    ? machineName                         // daemon event → show machine name only
-                    : `${machineName}/${ideLabel}`         // IDE event → "MachineName/Cursor" for clarity
+                ideLabel = !entryType || entryType === 'adhdev-daemon'
+                    ? machineName
+                    : `${machineName}/${ideLabel}`
             }
         }
-        const eventTimestamp = Number.isFinite(payload.timestamp) ? Number(payload.timestamp) : Date.now()
         let msg = ''
         let type: 'success' | 'info' | 'warning' = 'info'
 
-        // ── provider:message ──
-        if (payload.event === 'provider:message') {
-            if (conversationKey && payload.content) {
-                this.emitSystemMessage(conversationKey, {
-                    role: 'system',
-                    timestamp: eventTimestamp,
-                    content: payload.content,
-                    _localId: `sys_provider_${eventTimestamp}_${(payload.content || '').slice(0, 24)}`,
-                })
-            }
-            return
-
-        // ── provider:toast ──
-        } else if (payload.event === 'provider:toast') {
-            msg = payload.message || ''
-            type = payload.level || 'info'
-
-        // ── provider:notification ──
-        } else if (payload.event === 'provider:notification') {
-            const channels = payload.channels?.length ? payload.channels : ['toast']
-            const prefKey = payload.preferenceKey
-            const allowBrowser = shouldNotify('browser') && (!prefKey || prefKey === 'browser' || shouldNotify(prefKey))
-
-            if (channels.includes('bubble') && conversationKey && payload.content) {
-                this.emitSystemMessage(conversationKey, {
-                    role: 'system',
-                    timestamp: eventTimestamp,
-                    content: payload.content,
-                    _localId: `sys_provider_notification_${payload.effectId || eventTimestamp}`,
-                })
-            }
-
-            if (channels.includes('browser') && payload.title && payload.message && allowBrowser && !document.hasFocus()) {
-                notify(
-                    payload.title,
-                    payload.message,
-                    `provider-${payload.effectId || eventTimestamp}`,
-                )
-            }
-
-            if (channels.includes('toast')) {
-                msg = payload.message || payload.title || ''
-                type = payload.level || 'info'
-            }
-
-        // ── agent:generating_completed ──
-        } else if (payload.event === 'agent:generating_completed') {
+        if (payload.event === 'agent:generating_completed') {
             const dur = payload.duration ? ` (${payload.duration}s)` : ''
             msg = `✅ ${ideLabel} agent task completed${dur}`
             type = 'success'
@@ -366,7 +257,6 @@ class EventManager {
 
         // ── agent:generating_started ──
         } else if (payload.event === 'agent:generating_started') {
-        // ── agent:waiting_approval ──
         } else if (payload.event === 'agent:waiting_approval') {
             msg = `⚡ ${ideLabel} approval needed`
             type = 'warning'
@@ -386,8 +276,6 @@ class EventManager {
             if (payload.modalButtons?.length && this.resolveActionFn) {
                 const routeId = this.resolveActionRouteTarget(payload)
                 if (!routeId) return
-                const agentType = payload.agentType || payload.ideType || ''
-                const ideType = payload.ideType || ''
                 const resolveAction = this.resolveActionFn
                 const actions: ToastAction[] = buildApprovalToastDescriptors(payload.modalButtons).map((descriptor) => ({
                     label: descriptor.label,
@@ -397,8 +285,6 @@ class EventManager {
                             action: descriptor.action,
                             button: descriptor.button,
                             buttonIndex: descriptor.buttonIndex,
-                            agentType,
-                            ideType,
                             ...(payload.targetSessionId && { targetSessionId: payload.targetSessionId }),
                         })
                     },
@@ -425,7 +311,7 @@ class EventManager {
                 notify(
                     `⚠️ ${ideLabel} — Long Running`,
                     `Agent has been generating for over ${dur.replace(/[()]/g, '')}`,
-                    `long-${payload.ideId || payload.agentType}`,
+                    `long-${payload.targetSessionId || payload.daemonId || 'daemon'}`,
                 )
             }
 
@@ -480,7 +366,7 @@ class EventManager {
             const toastId = Date.now()
             this.emitToast({
                 id: toastId, message: msg, type, timestamp: toastId,
-                targetKey: conversationKey || payload.ideId, duration: 5000,
+                targetKey: conversationKey || payload.daemonId, duration: 5000,
             })
         }
     }

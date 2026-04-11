@@ -8,6 +8,7 @@
 import { LOG } from '../logging/logger.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { MachineInfo } from '../shared-types.js';
+import type { CloudStatusReportPayload, DaemonStatusEventPayload } from '../shared-types.js';
 import { buildSessionEntries } from './builders.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import type {
@@ -22,7 +23,15 @@ import type {
 export interface StatusReporterDeps {
     serverConn: { isConnected(): boolean; sendMessage(type: string, data: any): void; getUserPlan(): string } | null;
     cdpManagers: Map<string, DaemonCdpManager>;
-    p2p: { isConnected: boolean; isAvailable: boolean; connectionState: string; connectedPeerCount: number; screenshotActive: boolean; sendStatus(data: any): void } | null;
+    p2p: {
+        isConnected: boolean;
+        isAvailable: boolean;
+        connectionState: string;
+        connectedPeerCount: number;
+        screenshotActive: boolean;
+        sendStatus(data: any): void;
+        sendStatusEvent(event: DaemonStatusEventPayload): void;
+    } | null;
     providerLoader: { resolve(type: string): any; getAll(): any[] };
     detectedIdes: any[];
     instanceId: string;
@@ -94,10 +103,73 @@ export class DaemonStatusReporter {
         }
     }
 
+    private toDaemonStatusEventName(value: unknown): DaemonStatusEventPayload['event'] | null {
+        switch (value) {
+            case 'agent:generating_started':
+            case 'agent:waiting_approval':
+            case 'agent:generating_completed':
+            case 'agent:stopped':
+            case 'monitor:long_generating':
+                return value;
+            default:
+                return null;
+        }
+    }
+
+    private buildServerStatusEvent(event: Record<string, unknown>): DaemonStatusEventPayload | null {
+        const eventName = this.toDaemonStatusEventName(event.event);
+        if (!eventName) return null;
+
+        // Provider UI effects can carry arbitrary text content and are not required
+        // for server-side routing, push, or dashboard session targeting.
+        if (eventName.startsWith('provider:')) {
+            return null;
+        }
+
+        const payload: DaemonStatusEventPayload = {
+            event: eventName,
+            timestamp: typeof event.timestamp === 'number' && Number.isFinite(event.timestamp)
+                ? event.timestamp
+                : Date.now(),
+        };
+
+        if (typeof event.targetSessionId === 'string' && event.targetSessionId.trim()) {
+            payload.targetSessionId = event.targetSessionId.trim();
+        }
+        const providerType = typeof event.providerType === 'string' && event.providerType.trim()
+            ? event.providerType.trim()
+            : (typeof event.ideType === 'string' && event.ideType.trim() ? event.ideType.trim() : '');
+        if (providerType) {
+            payload.providerType = providerType;
+        }
+        if (typeof event.duration === 'number' && Number.isFinite(event.duration)) {
+            payload.duration = event.duration;
+        }
+        if (typeof event.elapsedSec === 'number' && Number.isFinite(event.elapsedSec)) {
+            payload.elapsedSec = event.elapsedSec;
+        }
+        if (typeof event.modalMessage === 'string' && event.modalMessage.trim()) {
+            payload.modalMessage = event.modalMessage;
+        }
+        if (Array.isArray(event.modalButtons)) {
+            const modalButtons = event.modalButtons
+                .filter((button): button is string => typeof button === 'string' && button.trim().length > 0);
+            if (modalButtons.length > 0) {
+                payload.modalButtons = modalButtons;
+            }
+        }
+
+        return payload;
+    }
+
     emitStatusEvent(event: Record<string, unknown>): void {
         LOG.info('StatusEvent', `${event.event} (${event.providerType || event.ideType || ''})`);
-        // Send via WS (server relay → dashboard + push notifications)
-        this.deps.serverConn?.sendMessage('status_event', event);
+        const serverEvent = this.buildServerStatusEvent(event);
+        if (!serverEvent) return;
+        // Dashboard delivery is P2P-only, but the server still receives the event
+        // for push notifications, webhook dispatch, and audit-side effects.
+        this.deps.p2p?.sendStatusEvent(serverEvent);
+        this.deps.serverConn?.sendMessage('status_event', serverEvent);
     }
 
     removeAgentTracking(_key: string): void { /* Managed by Instance itself */ }
@@ -189,7 +261,6 @@ export class DaemonStatusReporter {
                 detectedIdes: this.deps.detectedIdes || [],
                 instanceId: this.deps.instanceId,
                 version: this.deps.daemonVersion || 'unknown',
-                daemonMode: true,
                 timestamp: now,
                 p2p: {
                     available: p2p?.isAvailable || false,
@@ -197,9 +268,9 @@ export class DaemonStatusReporter {
                     peers: p2p?.connectedPeerCount || 0,
                     screenshotActive: p2p?.screenshotActive || false,
                 },
+                profile: 'live',
             }),
             screenshotUsage: this.deps.getScreenshotUsage?.() || null,
-            connectedExtensions: [],
         };
 
 // ═══ P2P transmit ═══
@@ -219,17 +290,16 @@ export class DaemonStatusReporter {
         if (opts?.p2pOnly) return;
         // Server relay only needs compact session metadata for routing, compact status,
         // initial_state fallback, and lightweight API/session inspection.
-        const wsPayload = {
-            daemonMode: true,
+        const wsPayload: CloudStatusReportPayload = {
             sessions: sessions.map((session) => ({
                 id: session.id,
                 parentId: session.parentId,
                 providerType: session.providerType,
-                providerName: session.providerName,
+                providerName: session.providerName || session.providerType,
                 kind: session.kind,
                 transport: session.transport,
                 status: session.status,
-                workspace: session.workspace,
+                workspace: session.workspace ?? null,
                 title: session.title,
                 cdpConnected: session.cdpConnected,
                 currentModel: session.currentModel,
@@ -238,8 +308,6 @@ export class DaemonStatusReporter {
             })),
             p2p: payload.p2p,
             timestamp: now,
-            detectedIdes: payload.detectedIdes,
-            availableProviders: payload.availableProviders,
         };
         const wsHash = this.simpleHash(JSON.stringify({
             ...wsPayload,
@@ -258,12 +326,19 @@ export class DaemonStatusReporter {
 
     private sendP2PPayload(payload: { timestamp?: number; system?: unknown; machine?: MachineInfo; [key: string]: unknown }): boolean {
         const { timestamp: _ts, system: _sys, ...hashTarget } = payload;
+        const sessions = Array.isArray(hashTarget.sessions)
+            ? hashTarget.sessions.map((session) => {
+                if (!session || typeof session !== 'object') return session;
+                const { lastUpdated: _lu, ...stableSession } = session as Record<string, unknown>;
+                return stableSession;
+            })
+            : hashTarget.sessions;
         const hashPayload = hashTarget.machine
             ? (() => {
                 const { freeMem: _f, availableMem: _a, loadavg: _l, uptime: _u, ...stableMachine } = hashTarget.machine;
-                return { ...hashTarget, machine: stableMachine };
+                return { ...hashTarget, sessions, machine: stableMachine };
             })()
-            : hashTarget;
+            : { ...hashTarget, sessions };
         const h = this.simpleHash(JSON.stringify(hashPayload));
         if (h !== this.lastP2PStatusHash) {
             this.lastP2PStatusHash = h;
