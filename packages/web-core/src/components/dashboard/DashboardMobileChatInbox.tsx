@@ -88,47 +88,58 @@ function DashboardMobileChatItem({
     const isUnread = type === 'needs_attention' || type === 'task_complete'
     const isWorking = type === 'working'
     const isEarlier = type === 'earlier'
+    const isTaskComplete = type === 'task_complete'
     const { isReconnecting, isConnecting } = getConversationViewStates(item.conversation)
     const title = getConversationTitle(item.conversation)
     const metaText = getConversationMetaText(item.conversation)
     const statusHint = getConversationStatusHint(item.conversation, { requiresAction: type === 'needs_attention' })
+    const rowClassName = isUnread
+        ? 'bg-[color:color-mix(in_oklab,var(--bg-secondary)_92%,var(--accent-primary)_8%)]'
+        : isWorking
+            ? 'bg-[color:color-mix(in_oklab,var(--bg-secondary)_94%,var(--accent-primary)_6%)]'
+            : isEarlier
+                ? 'bg-[color:color-mix(in_oklab,var(--bg-secondary)_97%,var(--text-muted)_3%)]'
+                : 'bg-transparent'
+    const avatarClassName = isUnread
+        ? 'bg-accent-primary shadow-glow'
+        : isWorking
+            ? 'bg-[color:color-mix(in_oklab,var(--bg-primary)_82%,var(--accent-primary)_18%)] border border-accent-primary/22 text-accent-primary'
+            : isEarlier
+                ? 'bg-[color:color-mix(in_oklab,var(--bg-primary)_95%,var(--text-muted)_5%)] border border-border-subtle/80 text-text-muted'
+                : 'bg-bg-primary border border-border-subtle text-text-secondary'
+    const titleClassName = isEarlier ? 'text-text-secondary' : 'text-text-primary'
+    const metaClassName = isEarlier ? 'text-text-muted' : 'text-text-secondary'
+    const previewClassName = isEarlier ? 'text-text-secondary opacity-80' : 'text-text-muted'
+    const timestampClassName = isEarlier ? 'text-text-muted opacity-80' : 'text-text-muted'
+    const warningTextClassName = 'text-[color:var(--status-warning)]'
     
     return (
         <button
             key={item.conversation.tabKey}
-            className={`group flex items-start gap-3.5 px-4 py-3.5 w-full text-left relative overflow-hidden transition-colors active:scale-[0.995] ${
-                isUnread
-                    ? 'bg-[color:color-mix(in_oklab,var(--bg-secondary)_92%,var(--accent-primary)_8%)]'
-                    : isWorking
-                        ? 'bg-[color:color-mix(in_oklab,var(--bg-secondary)_94%,var(--accent-primary)_6%)]'
-                        : 'bg-transparent'
-            } ${
-                isEarlier ? 'opacity-70 saturate-50' : ''
-            }`}
+            className={`group flex items-start gap-3.5 px-4 py-3.5 w-full text-left relative overflow-hidden transition-colors active:scale-[0.995] ${rowClassName}`}
             onClick={() => onOpenConversation(item.conversation)}
             type="button"
         >
             {(isUnread || isWorking) ? (
                 <span className="pointer-events-none absolute left-0 top-3 bottom-3 w-[3px] rounded-r-full bg-accent-primary/80" />
             ) : null}
-            <span className={`w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${
-                isUnread ? 'bg-accent-primary shadow-glow' :
-                isWorking ? 'bg-[color:color-mix(in_oklab,var(--bg-primary)_82%,var(--accent-primary)_18%)] border border-accent-primary/22 text-accent-primary' :
-                'bg-bg-primary border border-border-subtle text-text-secondary'
-            }`} style={isUnread ? { color: 'var(--accent-on-primary)' } : undefined}>
+            <span
+                className={`w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${avatarClassName}`}
+                style={isUnread ? { color: 'var(--accent-on-primary)' } : undefined}
+            >
                 {getAvatarText(title)}
             </span>
             <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                 <div className="flex items-center justify-between gap-2">
-                    <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{title}</span>
-                    {!isWorking && <span className="text-[11px] font-medium text-text-muted shrink-0">{formatRelativeTime(item.timestamp)}</span>}
+                    <span className={`text-[15px] font-bold truncate tracking-tight ${titleClassName}`}>{title}</span>
+                    {!isWorking && <span className={`text-[11px] font-medium shrink-0 ${timestampClassName}`}>{formatRelativeTime(item.timestamp)}</span>}
                 </div>
-                <div className="text-[12px] font-medium text-text-secondary truncate flex items-center">
+                <div className={`text-[12px] font-medium truncate flex items-center ${metaClassName}`}>
                     {metaText}
                     {isReconnecting ? (
                         <>
                             <span className="mx-1 opacity-50">·</span>
-                            <span className="text-orange-400 animate-pulse">Reconnecting…</span>
+                            <span className={`${warningTextClassName} animate-pulse`}>Reconnecting…</span>
                         </>
                     ) : isConnecting ? (
                         <>
@@ -138,13 +149,20 @@ function DashboardMobileChatItem({
                     ) : statusHint === 'Action needed' && (
                         <>
                             <span className="mx-1 opacity-50">·</span>
-                            <span className="text-orange-400">Action needed</span>
+                            <span className={warningTextClassName}>Action needed</span>
                         </>
                     )}
                 </div>
-                <div className="text-[13px] text-text-muted truncate mt-0.5 opacity-90">{item.preview}</div>
+                <div className={`mt-0.5 truncate text-[13px] ${previewClassName}`}>
+                    {item.preview}
+                </div>
             </div>
-            {isUnread && <span className="absolute top-5 right-4 w-2 h-2 rounded-full bg-accent-primary shadow-glow" />}
+            {isUnread && !isTaskComplete && <span className="absolute top-5 right-4 w-2 h-2 rounded-full bg-accent-primary shadow-glow" />}
+            {isTaskComplete && (
+                <span className="absolute top-4 right-4 rounded-full border border-accent-primary/16 bg-accent-primary/10 px-2 py-0.5 text-[10px] font-bold text-accent-primary">
+                    Done
+                </span>
+            )}
             {isWorking && <span className="absolute top-4 right-4 rounded-full bg-accent-primary/10 px-2 py-0.5 text-[10px] font-bold text-accent-primary">Live</span>}
         </button>
     )
