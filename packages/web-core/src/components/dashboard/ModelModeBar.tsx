@@ -204,6 +204,7 @@ export default function DashboardModelModeBar({ routeId, sessionId, hostIdeType,
 
     const AGENT_COLORS: Record<string, string> = {
         'cline': '#22d3ee', 'roo-code': '#a78bfa', 'cursor': '#60a5fa',
+        'claude-code-vscode': '#ea580c', 'codex': '#10b981',
         'antigravity': '#f97316', 'windsurf': '#34d399',
     };
     const accent = AGENT_COLORS[providerType] || '#94a3b8';

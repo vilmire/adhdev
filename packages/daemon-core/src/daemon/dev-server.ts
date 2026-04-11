@@ -28,6 +28,7 @@ import type { DaemonCliManager } from '../commands/cli-manager.js';
 import { generateTemplate as genScaffoldTemplate, generateFiles as genScaffoldFiles } from './scaffold-template.js';
 import { VersionArchive, detectAllVersions } from '../providers/version-archive.js';
 import { LOG } from '../logging/logger.js';
+import { findCdpManager } from '../status/builders.js';
 import { handleCdpEvaluate, handleCdpClick, handleCdpDomQuery, handleScreenshot, handleScriptsRun, handleTypeAndSend, handleTypeAndSendAt, handleScriptHints, handleCdpTargets, handleDomInspect, handleDomChildren, handleDomAnalyze, handleFindCommon, handleFindByText, handleDomContext } from './dev-cdp-handlers.js';
 import { handleCliStatus, handleCliLaunch, handleCliSend, handleCliStop, handleCliDebug, handleCliTrace, handleCliExercise, handleCliFixtureCapture, handleCliFixtureList, handleCliFixtureReplay, handleCliResolve, handleCliRaw, handleCliSSE } from './dev-cli-debug.js';
 import { handleAutoImplement, handleAutoImplCancel, handleAutoImplSSE } from './dev-auto-implement.js';
@@ -1590,24 +1591,29 @@ export class DevServer implements DevServerContext {
     }
   }
 
-  /** Get CDP manager — matching IDE when ideType specified, first connected one otherwise.
-   *  DevServer is a debugging tool so first-connected fallback is acceptable,
-   *  but callers should pass ideType when possible. */
+  /**
+   * Resolve a CDP manager for DevServer APIs.
+   * - Pass full **managerKey** from `GET /api/cdp/targets` when multiple Cursor/VS Code windows are open
+   *   (e.g. `cursor_0006DE34…`); short `cursor` only works when it maps to exactly one connected manager.
+   * - With `ideType` omitted: only succeeds when exactly one connected manager exists.
+   */
   public getCdp(ideType?: string): DaemonCdpManager | null {
     if (ideType) {
-      const cdp = this.cdpManagers.get(ideType);
-      if (cdp?.isConnected) return cdp;
-      // Prefix match for multi-window keys
-      for (const [k, m] of this.cdpManagers.entries()) {
-        if (k.startsWith(ideType + '_') && m.isConnected) return m;
-      }
-      LOG.warn('DevServer', `getCdp: no manager found for ideType '${ideType}', available: [${[...this.cdpManagers.keys()].join(', ')}]`);
+      const cdp = findCdpManager(this.cdpManagers, ideType);
+      if (cdp) return cdp;
+      LOG.warn(
+        'DevServer',
+        `getCdp: no unique match for '${ideType}', available: [${[...this.cdpManagers.keys()].join(', ')}] — use managerKey from GET /api/cdp/targets`,
+      );
       return null;
     }
-    // No ideType — return first connected (dev convenience)
-    for (const cdp of this.cdpManagers.values()) {
-      if (cdp.isConnected) return cdp;
-    }
+    const connected = [...this.cdpManagers.entries()].filter(([, m]) => m.isConnected);
+    if (connected.length === 1) return connected[0][1];
+    if (connected.length === 0) return null;
+    LOG.warn(
+      'DevServer',
+      `getCdp: ideType omitted but ${connected.length} CDP windows — pass managerKey from GET /api/cdp/targets`,
+    );
     return null;
   }
 

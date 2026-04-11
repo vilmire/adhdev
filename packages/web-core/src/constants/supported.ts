@@ -142,6 +142,11 @@ export const BUILTIN_EXTENSIONS: readonly SupportedEntry[] = [
     "id": "roo-code",
     "name": "Roo Code",
     "icon": "🦘"
+  },
+  {
+    "id": "claude-code-vscode",
+    "name": "Claude Code (VS Code)",
+    "icon": "🟠"
   }
 ]
 
@@ -413,6 +418,17 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "roo-code": {
+    "status": "unverified",
+    "testedOn": [],
+    "testedVersions": [],
+    "validatedFlows": [],
+    "lastValidated": null,
+    "notes": "",
+    "evidence": "",
+    "owner": "community",
+    "source": "docs/site/data/provider-catalog.mjs"
+  },
+  "claude-code-vscode": {
     "status": "unverified",
     "testedOn": [],
     "testedVersions": [],
@@ -844,6 +860,7 @@ export const PROVIDER_VERIFICATION_STATUS: Record<string, ProviderVerificationSt
   "cline": "unverified",
   "codex": "partial",
   "roo-code": "unverified",
+  "claude-code-vscode": "unverified",
   "agentpool-acp": "unverified",
   "amp-acp": "unverified",
   "auggie-acp": "unverified",
@@ -942,6 +959,25 @@ export const VERIFICATION_CANDIDATES: readonly VerificationCandidate[] = [
       "resolve_action"
     ],
     "notes": "Promotion should wait until the provider exposes session history and switching in a first-class way instead of relying on empty extension history responses."
+  },
+  {
+    "id": "claude-code-vscode",
+    "name": "Claude Code (VS Code)",
+    "category": "extension",
+    "targetStatus": "partial",
+    "priority": 4,
+    "rationale": "Official Anthropic VS Code extension; cloud dashboards should surface it alongside other extension agents once CDP webview flows are validated.",
+    "requiredFlows": [
+      "read_chat",
+      "new_session",
+      "send_chat",
+      "list_sessions",
+      "switch_session"
+    ],
+    "optionalFlows": [
+      "resolve_action"
+    ],
+    "notes": "Validate with DevServer and explicit managerKey when multiple IDE windows are attached."
   }
 ]
 

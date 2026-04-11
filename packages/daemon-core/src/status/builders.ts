@@ -50,30 +50,26 @@ function shouldIncludeRuntimeMetadata(profile: SessionEntryProfile): boolean {
 // ─── CDP Manager lookup helpers ──────────────────────
 
 /**
- * Find a CDP manager by key, with prefix matching for multi-window support.
+ * Find a CDP manager by key. Supports single-window (`cursor`) and full multi-window keys (`cursor_<targetId>`).
  *
  * Lookup order:
- *   1. Exact match: cdpManagers.get(key)
- *   2. Prefix match: key starts with `${ideType}_` (multi-window: "cursor_remote_vs")
- *   3. null
- *
- * This replaces raw `cdpManagers.get(ideType)` calls that broke when
- * multi-window keys like "cursor_remote_vs" were used.
+ *   1. Exact match when connected
+ *   2. If key has no multi-window suffix: at most **one** connected manager whose key starts with `key_`
+ *   3. If two or more windows share that prefix → **null** (ambiguous — pass full managerKey from `GET /api/cdp/targets`)
  */
 export function findCdpManager(
     cdpManagers: Map<string, DaemonCdpManager>,
     key: string,
 ): DaemonCdpManager | null {
-    // 1. Exact match (single-window: "cursor", or full managerKey: "cursor_remote_vs")
+    // 1. Exact match (single-window: "cursor", or full managerKey: "cursor_<targetId>")
     const exact = cdpManagers.get(key);
-    if (exact) return exact;
+    if (exact) return exact.isConnected ? exact : null;
 
-    // 2. Prefix match (key = ideType like "cursor", managerKey = "cursor_remote_vs")
+    // 2. Prefix match only when it resolves to exactly one connected manager
     const prefix = key + '_';
-    for (const [k, m] of cdpManagers.entries()) {
-        if (k.startsWith(prefix) && m.isConnected) return m;
-    }
-
+    const matches = [...cdpManagers.entries()].filter(([k, m]) => m.isConnected && k.startsWith(prefix));
+    if (matches.length === 1) return matches[0][1];
+    // 0 matches → null; 2+ → ambiguous — caller must pass full managerKey (e.g. from /api/cdp/targets)
     return null;
 }
 
@@ -99,8 +95,13 @@ export function isCdpConnected(
     cdpManagers: Map<string, DaemonCdpManager>,
     key: string,
 ): boolean {
-    const m = findCdpManager(cdpManagers, key);
-    return m?.isConnected ?? false;
+    const exact = cdpManagers.get(key);
+    if (exact?.isConnected) return true;
+    const prefix = key + '_';
+    for (const [k, m] of cdpManagers.entries()) {
+        if (m.isConnected && k.startsWith(prefix)) return true;
+    }
+    return false;
 }
 
 /**

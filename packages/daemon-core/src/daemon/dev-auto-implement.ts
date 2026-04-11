@@ -71,6 +71,16 @@ export function getDefaultAutoImplReference(ctx: DevServerContext, category: str
   if (category === 'cli') {
     return type === 'codex-cli' ? 'claude-cli' : 'codex-cli';
   }
+  if (category === 'extension') {
+    const preferred = ['claude-code-vscode', 'codex', 'cline', 'roo-code'];
+    for (const ref of preferred) {
+      if (ref === type) continue;
+      if (ctx.providerLoader.resolve(ref) || ctx.providerLoader.getMeta(ref)) return ref;
+    }
+    const all = ctx.providerLoader.getAll();
+    const fb = all.find((p: any) => p.category === 'extension' && p.type !== type);
+    if (fb?.type) return fb.type;
+  }
   return 'antigravity';
 }
 
@@ -725,6 +735,9 @@ export function buildAutoImplPrompt(ctx: DevServerContext,
 
   const lines: string[] = [];
 
+  /** CDP connection key: extension scripts use host IDE (default Cursor), not the extension id. */
+  const cdpIdeType = provider.category === 'extension' ? 'cursor' : type;
+
   // ── System instructions ──
   lines.push('You are implementing browser automation scripts for an IDE provider.');
   lines.push('Be concise. Do NOT explain your reasoning. Just edit files directly.');
@@ -734,6 +747,19 @@ export function buildAutoImplPrompt(ctx: DevServerContext,
   lines.push(`# Target: ${provider.name || type} (${type})`);
   lines.push(`Provider directory: \`${providerDir}\``);
   lines.push('');
+  if (provider.category === 'extension') {
+    lines.push('## CDP host (extension providers)');
+    lines.push(
+      `Extension **${type}** runs inside a host IDE. For \`/api/scripts/run\` and \`/api/cdp/evaluate\`, keep \`"type": "${type}"\` (which provider scripts run) but set \`"ideType"\` to the DevServer CDP **managerKey** for that window.`,
+    );
+    lines.push(
+      `Examples use \`"ideType": "${cdpIdeType}"\` (Cursor). If **multiple** IDE windows are connected, run \`GET /api/cdp/targets\` and use the correct \`managerKey\` / \`pageTitle\` — short \`cursor\` or \`vscode\` only works when it uniquely identifies one window.`,
+    );
+    lines.push(
+      'For VS Code hosts, use `vscode` or full `vscode_<targetId>` managerKey in every curl below.',
+    );
+    lines.push('');
+  }
 
   // ── funcToFile mapping (needed early for file classification) ──
   const funcToFile: Record<string, string> = {
@@ -932,14 +958,14 @@ export function buildAutoImplPrompt(ctx: DevServerContext,
   lines.push('```bash');
   lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/cdp/evaluate \\`);
   lines.push(`  -H "Content-Type: application/json" \\`);
-  lines.push(`  -d '{"expression": "document.body.innerHTML.substring(0, 1000)", "ideType": "${type}"}'`);
+  lines.push(`  -d '{"expression": "document.body.innerHTML.substring(0, 1000)", "ideType": "${cdpIdeType}"}'`);
   lines.push('```');
   lines.push('');
   lines.push('### 2. Test your generated function');
   lines.push('Once you save the file, test it by running:');
   lines.push('```bash');
   lines.push(`curl -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/providers/reload`);
-  lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "readChat", "type": "${type}", "ideType": "${type}"}'`);
+  lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "readChat", "type": "${type}", "ideType": "${cdpIdeType}"}'`);
   lines.push('```');
   lines.push('');
   lines.push('### Task Workflow');
@@ -949,10 +975,12 @@ export function buildAutoImplPrompt(ctx: DevServerContext,
   lines.push('4. Reload providers and TEST your script via the API.');
   lines.push('');
   lines.push('### 🔥 Advanced UI Parsing (CRUCIAL for `readChat`)');
-  lines.push('Your `readChat` must flawlessly parse complex UI elements (tables, code blocks, tool calls, and AI thoughts). The quality must match the `antigravity` reference.');
+  lines.push(
+    `Your \`readChat\` must flawlessly parse complex UI elements (tables, code blocks, tool calls, and AI thoughts). Match the depth of the **${referenceType || 'reference'}** scripts above (patterns and structure, not necessarily the same DOM).`,
+  );
   lines.push('To achieve this, you MUST generate a live test scenario:');
   lines.push(`1. Early in your process, send a rich prompt to the IDE using the API:`);
-  lines.push(`   \`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "sendMessage", "type": "${type}", "ideType": "${type}", "args": {"message": "Write a python script, draw a markdown table, use a tool, and show your reasoning/thought process"}}'\``);
+  lines.push(`   \`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "sendMessage", "type": "${type}", "ideType": "${cdpIdeType}", "args": {"message": "Write a python script, draw a markdown table, use a tool, and show your reasoning/thought process"}}'\``);
   lines.push('2. Wait a few seconds for the IDE AI to generate these elements in the UI.');
   lines.push('3. Use CDP evaluate to deeply inspect the DOM structure of the newly generated tables, code blocks, thought blocks, and tool calls.');
   lines.push('4. Ensure `readChat` extracts `content` with precise markdown formatting (especially for tables/code) and assigns correct `kind` tags (`thought`, `tool`, `terminal`).');
@@ -965,27 +993,27 @@ export function buildAutoImplPrompt(ctx: DevServerContext,
   lines.push('### Step 1: Baseline — confirm idle');
   lines.push('```bash');
   lines.push(`curl -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/providers/reload`);
-  lines.push(`RESULT=$(curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "readChat", "type": "${type}", "ideType": "${type}"}')`);
+  lines.push(`RESULT=$(curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "readChat", "type": "${type}", "ideType": "${cdpIdeType}"}')`);
   lines.push(`echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',d); r=json.loads(r) if isinstance(r,str) else r; assert r.get('status')=='idle', f'Expected idle, got {r.get(chr(34)+chr(115)+chr(116)+chr(97)+chr(116)+chr(117)+chr(115)+chr(34))}'; print('Step 1 PASS: status=idle')"`);
   lines.push('```');
   lines.push('');
   lines.push('### Step 2: Send a LONG message that triggers extended generation (10+ seconds)');
   lines.push('```bash');
-  lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "sendMessage", "type": "${type}", "ideType": "${type}", "args": {"message": "Write an extremely detailed 5000-word essay about the history of artificial intelligence from Alan Turing to 2025. Be very thorough and verbose."}}'`);
+  lines.push(`curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "sendMessage", "type": "${type}", "ideType": "${cdpIdeType}", "args": {"message": "Write an extremely detailed 5000-word essay about the history of artificial intelligence from Alan Turing to 2025. Be very thorough and verbose."}}'`);
   lines.push('sleep 3');
   lines.push('```');
   lines.push('');
   lines.push('### Step 3: Check generating OR completed');
   lines.push('The AI may still be generating OR may have finished already. Either generating or idle is acceptable:');
   lines.push('```bash');
-  lines.push(`RESULT=$(curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "readChat", "type": "${type}", "ideType": "${type}"}')`);
+  lines.push(`RESULT=$(curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "readChat", "type": "${type}", "ideType": "${cdpIdeType}"}')`);
   lines.push(`echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',d); r=json.loads(r) if isinstance(r,str) else r; s=r.get('status'); assert s in ('generating','idle','waiting_approval'), f'Unexpected: {s}'; print(f'Step 3 PASS: status={s}')"`);
   lines.push('```');
   lines.push('');
   lines.push('### Step 4: Wait for completion and verify new message');
   lines.push('```bash');
   lines.push('sleep 10');
-  lines.push(`RESULT=$(curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "readChat", "type": "${type}", "ideType": "${type}"}')`);
+  lines.push(`RESULT=$(curl -sS -X POST http://127.0.0.1:${DEV_SERVER_PORT}/api/scripts/run -H "Content-Type: application/json" -d '{"script": "readChat", "type": "${type}", "ideType": "${cdpIdeType}"}')`);
   lines.push(`echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('result',d); r=json.loads(r) if isinstance(r,str) else r; s=r.get('status'); msgs=r.get('messages',[]); assert s=='idle', f'Expected idle, got {s}'; assert len(msgs)>0, 'No messages'; print(f'Step 4 PASS: status={s}, messages={len(msgs)}')"`);
   lines.push('```');
   lines.push('');

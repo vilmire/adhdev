@@ -58,6 +58,7 @@ export interface ControlsBarProps {
 
 const AGENT_COLORS: Record<string, string> = {
     'cline': '#22d3ee', 'roo-code': '#a78bfa', 'cursor': '#60a5fa',
+    'claude-code-vscode': '#ea580c', 'codex': '#10b981',
     'antigravity': '#f97316', 'windsurf': '#34d399',
 };
 

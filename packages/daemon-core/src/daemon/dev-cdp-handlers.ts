@@ -295,9 +295,28 @@ export async function handleScriptHints(ctx: DevServerContext, type: string, _re
 }
 
 export async function handleCdpTargets(ctx: DevServerContext, _req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-  const targets: { ide: string; connected: boolean; port: number }[] = [];
-  for (const [ide, cdp] of ctx.cdpManagers.entries()) {
-    targets.push({ ide, connected: cdp.isConnected, port: cdp.getPort() });
+  const targets: Array<{
+    managerKey: string;
+    /** @deprecated same as managerKey — kept for older clients */
+    ide: string;
+    ideBase: string;
+    pageTitle: string;
+    targetId: string | null;
+    connected: boolean;
+    port: number;
+  }> = [];
+  for (const [managerKey, cdp] of ctx.cdpManagers.entries()) {
+    const underscore = managerKey.indexOf('_');
+    const ideBase = underscore === -1 ? managerKey : managerKey.slice(0, underscore);
+    targets.push({
+      managerKey,
+      ide: managerKey,
+      ideBase,
+      pageTitle: cdp.pageTitle,
+      targetId: cdp.targetId,
+      connected: cdp.isConnected,
+      port: cdp.getPort(),
+    });
   }
   ctx.json(res, 200, { targets });
 }
