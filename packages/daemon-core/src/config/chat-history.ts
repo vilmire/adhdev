@@ -217,9 +217,11 @@ export class ChatHistoryWriter {
             const lines = newMessages.map(m => JSON.stringify(m)).join('\n') + '\n';
             fs.appendFileSync(filePath, lines, 'utf-8');
 
- // Detect session switch — reset hash if message count decreases
+ // Detect session switch — only for unstable runtime-only histories.
+ // When we have a persistent history session key, replayed read_chat payloads
+ // must not clear dedupe state or old turns can be appended again.
             const prevCount = this.lastSeenCounts.get(dedupKey) || 0;
-            if (messages.length < prevCount * 0.5 && prevCount > 3) {
+            if (!historySessionId && messages.length < prevCount * 0.5 && prevCount > 3) {
                 seenHashes.clear();
                 this.lastSeenSignatures.delete(dedupKey);
                 this.lastSeenTurnSignatures.delete(dedupKey);

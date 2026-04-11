@@ -500,16 +500,11 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
     const provider = h.getProvider(args?.agentType);
     const transport = getTargetTransport(h, provider);
     const dedupeKey = buildRecentSendKey(h, args, provider, text);
-    const historySessionId = getHistorySessionId(h, args);
 
     const _logSendSuccess = (method: string, targetAgent?: string) => {
-        h.historyWriter.appendNewMessages(
-            targetAgent || provider?.type || getCurrentProviderType(h, 'unknown_agent'),
-            [{ role: 'user', content: text, receivedAt: Date.now() }],
-            undefined, // title
-            args?.targetSessionId,
-            historySessionId,
-        );
+        // Sending and transcript persistence are intentionally decoupled.
+        // User turns should reach history through read_chat/runtime transcript sync,
+        // not by eagerly appending the outgoing input here.
         return { success: true, sent: true, method, targetAgent };
     };
 
