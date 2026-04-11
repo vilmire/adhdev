@@ -68,6 +68,14 @@ export class SessionHostServer extends EventEmitter {
       socket.on('close', () => {
         this.sockets.delete(socket);
       });
+      socket.on('error', () => {
+        this.sockets.delete(socket);
+        try {
+          socket.destroy();
+        } catch {
+          // noop
+        }
+      });
       socket.on('data', createLineParser((envelope) => {
         if (envelope.kind !== 'request') return;
         void this.handleIncomingRequest(socket, envelope);
@@ -307,8 +315,8 @@ export class SessionHostServer extends EventEmitter {
   }
 
   private emitEvent(event: SessionHostEvent): void {
-    for (const socket of this.sockets) {
-      writeEnvelope(socket, {
+    for (const socket of [...this.sockets]) {
+      this.writeEnvelopeSafely(socket, {
         kind: 'event',
         event,
       });
@@ -329,7 +337,24 @@ export class SessionHostServer extends EventEmitter {
       durationMs: Math.max(0, Date.now() - startedAt),
       error: response.success ? undefined : response.error,
     });
-    writeEnvelope(socket, createResponseEnvelope(envelope.requestId, response));
+    this.writeEnvelopeSafely(socket, createResponseEnvelope(envelope.requestId, response));
+  }
+
+  private writeEnvelopeSafely(socket: net.Socket, envelope: SessionHostRequestEnvelope | ReturnType<typeof createResponseEnvelope> | { kind: 'event'; event: SessionHostEvent }): void {
+    if (socket.destroyed || !socket.writable || socket.writableEnded) {
+      this.sockets.delete(socket);
+      return;
+    }
+    try {
+      writeEnvelope(socket, envelope);
+    } catch {
+      this.sockets.delete(socket);
+      try {
+        socket.destroy();
+      } catch {
+        // noop
+      }
+    }
   }
 
   private schedulePersist(sessionId: string): void {
