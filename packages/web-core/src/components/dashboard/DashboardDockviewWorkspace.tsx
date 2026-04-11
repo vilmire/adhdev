@@ -38,15 +38,16 @@ import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
 import { useTabShortcuts } from '../../hooks/useTabShortcuts'
 import { getConversationTabMetaText, getConversationTitle, getRemotePanelTitle } from './conversation-presenters'
+import { getConversationNativeTargetSessionId } from './conversation-selectors'
 
 interface DashboardDockviewWorkspaceProps {
     visibleConversations: ActiveConversation[]
     clearedTabs: Record<string, number>
     ides: DaemonData[]
-    actionLogs: { ideId: string; text: string; timestamp: number }[]
+    actionLogs: { routeId: string; text: string; timestamp: number }[]
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
-    setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
+    setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
     hasRegisteredMachines: boolean
     initialDataLoaded: boolean
@@ -77,7 +78,7 @@ interface DashboardDockviewWorkspaceProps {
 }
 
 interface DashboardDockviewContextValue {
-    actionLogs: { ideId: string; text: string; timestamp: number }[]
+    actionLogs: { routeId: string; text: string; timestamp: number }[]
     clearedTabs: Record<string, number>
     conversationsByTabKey: Map<string, ActiveConversation>
     detectedIdes?: { type: string; name: string; running: boolean; id?: string }[]
@@ -87,7 +88,7 @@ interface DashboardDockviewContextValue {
     hasRegisteredMachines: boolean
     liveSessionInboxState: Map<string, LiveSessionInboxState>
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
-    setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
+    setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
     toggleHiddenTab: (tabKey: string) => void
     userName?: string
@@ -103,7 +104,7 @@ interface DashboardDockviewPanelParams {
 
 interface DashboardDockviewRemotePanelParams {
     kind: 'remote'
-    ideId: string
+    routeId: string
 }
 
 type DockviewPaneDirection = 'left' | 'right' | 'above' | 'below'
@@ -120,8 +121,8 @@ function getDockviewTitle(conversation: ActiveConversation) {
     return getConversationTitle(conversation) || conversation.tabKey
 }
 
-function getRemotePanelId(ideId: string) {
-    return `remote:${ideId}`
+function getRemotePanelId(routeId: string) {
+    return `remote:${routeId}`
 }
 
 function isRemotePanelId(panelId: string) {
@@ -250,7 +251,7 @@ function syncRemotePanels(
         id: desiredPanelId,
         component: 'remote',
         title: nextTitle,
-        params: { kind: 'remote', ideId: requestedRemoteIdeId },
+        params: { kind: 'remote', routeId: requestedRemoteIdeId },
         ...(referencePanelId
             ? { position: { referencePanel: referencePanelId, direction: 'right' as const }, inactive: true }
             : {}),
@@ -288,12 +289,12 @@ function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDo
     }, [api])
 
     const activeIdeEntry = useMemo(
-        () => activeConv ? ctx.ides.find(ide => ide.id === activeConv.ideId) : undefined,
+        () => activeConv ? ctx.ides.find(ide => ide.id === activeConv.routeId) : undefined,
         [ctx.ides, activeConv],
     )
     const activeActionLogs = useMemo(() => {
         if (!activeConv) return []
-        return ctx.actionLogs.filter(log => log.ideId === activeConv.tabKey)
+        return ctx.actionLogs.filter(log => log.routeId === activeConv.tabKey)
     }, [ctx.actionLogs, activeConv])
 
     if (!activeConv) {
@@ -340,21 +341,19 @@ function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDo
 function DashboardDockviewRemotePanel({ params }: IDockviewPanelProps<DashboardDockviewRemotePanelParams>) {
     const ctx = useDashboardDockviewContext()
     const activeConv = useMemo(
-        () => getPreferredConversationForIde([...ctx.conversationsByTabKey.values()], params.ideId),
-        [ctx.conversationsByTabKey, params.ideId],
+        () => getPreferredConversationForIde([...ctx.conversationsByTabKey.values()], params.routeId),
+        [ctx.conversationsByTabKey, params.routeId],
     )
     const ideEntry = useMemo(
-        () => ctx.ides.find(ide => ide.id === params.ideId),
-        [ctx.ides, params.ideId],
+        () => ctx.ides.find(ide => ide.id === params.routeId),
+        [ctx.ides, params.routeId],
     )
-    const daemonRouteId = activeConv?.daemonId || activeConv?.ideId?.split(':')[0] || params.ideId.split(':')[0] || params.ideId
+    const daemonRouteId = activeConv?.daemonId || activeConv?.routeId?.split(':')[0] || params.routeId.split(':')[0] || params.routeId
     const { connScreenshot, screenshotUsage, handleRemoteAction } = useIdeRemoteStream({
         doId: daemonRouteId,
-        ideId: params.ideId,
-        ideType: activeConv?.ideType || ideEntry?.type,
+        targetSessionId: activeConv ? getConversationNativeTargetSessionId(activeConv) : (ideEntry?.sessionId || ideEntry?.instanceId),
         connState: activeConv?.connectionState || 'new',
         viewMode: 'remote',
-        instanceId: ideEntry?.instanceId,
     })
 
     if (!activeConv) {
@@ -404,7 +403,7 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
     }, [props.api])
 
     if (props.params.kind === 'remote') {
-        const remoteConversation = getPreferredConversationForIde([...ctx.conversationsByTabKey.values()], props.params.ideId)
+        const remoteConversation = getPreferredConversationForIde([...ctx.conversationsByTabKey.values()], props.params.routeId)
         const isActive = props.api.group.activePanel?.id === props.api.id
         const isGroupActive = props.api.isGroupActive
         return (
@@ -697,7 +696,7 @@ export default function DashboardDockviewWorkspace({
         const activePanel = api.activePanel
         if (!activePanel) return
         if (isRemotePanelId(activePanel.id)) {
-            const remoteIdeId = (activePanel.params as DashboardDockviewRemotePanelParams | undefined)?.ideId || activePanel.id.slice('remote:'.length)
+            const remoteIdeId = (activePanel.params as DashboardDockviewRemotePanelParams | undefined)?.routeId || activePanel.id.slice('remote:'.length)
             const relatedConversation = getPreferredConversationForIde(visibleConversations, remoteIdeId)
             if (relatedConversation?.tabKey) {
                 setShortcutListening(relatedConversation.tabKey)
@@ -891,7 +890,7 @@ export default function DashboardDockviewWorkspace({
             storedActiveTabIdRef.current = panel?.id ?? null
             hasRestoredStoredActiveTabRef.current = true
             if (panel && isRemotePanelId(panel.id)) {
-                const remoteIdeId = (panel.params as DashboardDockviewRemotePanelParams | undefined)?.ideId || panel.id.slice('remote:'.length)
+                const remoteIdeId = (panel.params as DashboardDockviewRemotePanelParams | undefined)?.routeId || panel.id.slice('remote:'.length)
                 const relatedConversation = getPreferredConversationForIde(visibleConversations, remoteIdeId)
                 onActiveTabChange(relatedConversation?.tabKey ?? null)
                 persistDockviewLayout()
@@ -902,7 +901,7 @@ export default function DashboardDockviewWorkspace({
             if (!panel) return
             const conversation = conversationsByTabKey.get(panel.id)
             if (conversation?.streamSource === 'agent-stream' && conversation.agentType) {
-                sendCommand(conversation.ideId, 'focus_session', {
+                sendCommand(conversation.routeId, 'focus_session', {
                     agentType: conversation.agentType,
                     ...(conversation.sessionId && { targetSessionId: conversation.sessionId }),
                 }).catch(() => {})

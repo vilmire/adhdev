@@ -82,7 +82,7 @@ export function useDashboardMobileChatEffects({
             activityAt: getConversationTimestamp(conversation),
             readAt,
         })
-        void sendDaemonCommand(getConversationMachineId(conversation) || conversation.ideId, 'mark_session_seen', {
+        void sendDaemonCommand(getConversationMachineId(conversation) || conversation.routeId, 'mark_session_seen', {
             sessionId: conversation.sessionId,
             seenAt: readAt,
         }).then((result) => {

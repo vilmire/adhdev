@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
+import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import type { DaemonData } from '../types'
 import { isCliConv, isAcpConv, getCliConversationViewMode } from '../components/dashboard/types'
 import { useHiddenTabs } from '../hooks/useHiddenTabs'
@@ -72,6 +73,7 @@ function isExpectedCliViewModeError(error: unknown) {
 
 export default function Dashboard() {
     const { sendCommand: sendDaemonCommand } = useTransport()
+    const loadDaemonMetadata = useDaemonMetadataLoader()
     const location = useLocation()
     const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
@@ -83,7 +85,7 @@ export default function Dashboard() {
     const daemonCtx = useDaemons()
     const ides: DaemonData[] = daemonCtx.ides || []
     const initialLoaded: boolean = daemonCtx.initialLoaded ?? true
-    const { updateIdeChats, setToasts } = daemonCtx
+    const { updateRouteChats, setToasts } = daemonCtx
     const [showOnboarding, setShowOnboarding] = useState(() => {
         try { return !localStorage.getItem('adhdev_onboarding_v1') } catch { return false }
     })
@@ -116,7 +118,7 @@ export default function Dashboard() {
     const [isSavedHistoryLoading, setIsSavedHistoryLoading] = useState(false)
     const [resumingSavedHistorySessionId, setResumingSavedHistorySessionId] = useState<string | null>(null)
     const [mobileViewMode] = useState<'chat' | 'workspace'>(() => getMobileDashboardMode())
-    const [actionLogs, setActionLogs] = useState<{ ideId: string; text: string; timestamp: number }[]>([])
+    const [actionLogs, setActionLogs] = useState<{ routeId: string; text: string; timestamp: number }[]>([])
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
     const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
     const [desktopActiveTabKey, setDesktopActiveTabKey] = useState<string | null>(null)
@@ -137,11 +139,20 @@ export default function Dashboard() {
     const detectedIdes: { type: string; name: string; running: boolean; id?: string }[] = daemonEntry?.detectedIdes || []
     const machineEntries = useMemo(
         () => ides
-            .filter((entry) => entry.type === 'adhdev-daemon' || entry.daemonMode)
+            .filter((entry) => entry.type === 'adhdev-daemon')
             .sort(compareMachineEntries),
         [ides],
     )
     const isStandalone = !!daemonEntry
+    useEffect(() => {
+        if (!daemonEntry) return
+        const needsMetadata = !daemonEntry.detectedIdes
+            || !daemonEntry.availableProviders
+            || !daemonEntry.recentLaunches
+            || !daemonEntry.workspaces
+        if (!needsMetadata) return
+        void loadDaemonMetadata(daemonEntry.id, { minFreshMs: 30_000 }).catch(() => {})
+    }, [daemonEntry, loadDaemonMetadata])
     const terminalBackend = daemonEntry?.terminalBackend || null
     const terminalBackendMachineLabel = daemonEntry
         ? getMachineDisplayName(daemonEntry, { fallbackId: daemonEntry.id })
@@ -236,7 +247,7 @@ export default function Dashboard() {
             const liveState = getConversationLiveInboxState(activeConv, liveSessionInboxState)
             const readAt = Math.max(Date.now(), getConversationTimestamp(activeConv), liveState.lastUpdated || 0)
 
-            void sendDaemonCommand(activeConv.daemonId || activeConv.ideId, 'mark_session_seen', {
+            void sendDaemonCommand(activeConv.daemonId || activeConv.routeId, 'mark_session_seen', {
                 sessionId: activeConv.sessionId,
                 seenAt: readAt,
             }).catch(() => {})
@@ -295,8 +306,8 @@ export default function Dashboard() {
     const isSavedSessionHistoryTarget = !!historyTargetConv && isCliConv(historyTargetConv) && !isAcpConv(historyTargetConv)
     const savedHistoryRefreshKey = useMemo(() => {
         if (!historyTargetConv || !isSavedSessionHistoryTarget) return null
-        const routeTarget = historyTargetConv.daemonId || historyTargetConv.ideId || ''
-        const providerType = historyTargetConv.agentType || historyTargetConv.ideType || ''
+        const routeTarget = historyTargetConv.daemonId || historyTargetConv.routeId || ''
+        const providerType = getConversationProviderType(historyTargetConv)
         return `${routeTarget}:${providerType}`
     }, [historyTargetConv, isSavedSessionHistoryTarget])
     const mobileChatConversations = useMemo(
@@ -430,7 +441,7 @@ export default function Dashboard() {
 
         const normalizedTargetWorkspace = normalizeWorkspacePath(pendingDashboardLaunch.workspacePath)
         const matchingEntry = ides.find((entry) => {
-            if (!entry || entry.type === 'adhdev-daemon' || entry.daemonMode) return false
+            if (!entry || entry.type === 'adhdev-daemon') return false
             const entryMachineId = getRouteMachineId(entry.daemonId || entry.id)
             if (entryMachineId !== pendingDashboardLaunch.machineId) return false
 
@@ -441,7 +452,7 @@ export default function Dashboard() {
                     : 'ide'
             if (entryKind !== pendingDashboardLaunch.kind) return false
 
-            const entryProviderType = String(entry.agentType || entry.ideType || entry.type || '')
+            const entryProviderType = String(entry.agentType || entry.type || '')
             if (entryProviderType !== pendingDashboardLaunch.providerType) return false
 
             if (pendingDashboardLaunch.resumeSessionId) {
@@ -471,7 +482,7 @@ export default function Dashboard() {
             ? matchingEntry.sessionId
             : typeof matchingEntry.instanceId === 'string' && matchingEntry.instanceId
                 ? matchingEntry.instanceId
-                : conversations.find((conversation) => conversation.ideId === matchingEntry.id)?.sessionId
+                : conversations.find((conversation) => conversation.routeId === matchingEntry.id)?.sessionId
 
         if (!targetSessionId) return
 
@@ -513,8 +524,8 @@ export default function Dashboard() {
     } = useDashboardSessionCommands({
         sendDaemonCommand,
         activeConv,
-        chats: ides.find(entry => entry.id === activeConv?.ideId)?.chats,
-        updateIdeChats,
+        chats: ides.find(entry => entry.id === activeConv?.routeId)?.chats,
+        updateRouteChats,
         setToasts,
         setLocalUserMessages,
         setClearedTabs,
@@ -529,8 +540,8 @@ export default function Dashboard() {
     } = useDashboardSessionCommands({
         sendDaemonCommand,
         activeConv: historyTargetConv,
-        chats: ides.find(entry => entry.id === historyTargetConv?.ideId)?.chats,
-        updateIdeChats,
+        chats: ides.find(entry => entry.id === historyTargetConv?.routeId)?.chats,
+        updateRouteChats,
         setToasts,
         setLocalUserMessages,
         setClearedTabs,
@@ -540,8 +551,8 @@ export default function Dashboard() {
         if (!historyTargetConv || !isSavedSessionHistoryTarget || isSavedHistoryLoading) return
         setIsSavedHistoryLoading(true)
         try {
-            const routeTarget = historyTargetConv.daemonId || historyTargetConv.ideId
-            const providerType = historyTargetConv.agentType || historyTargetConv.ideType
+            const routeTarget = historyTargetConv.daemonId || historyTargetConv.routeId
+            const providerType = getConversationProviderType(historyTargetConv)
             const raw: any = await sendDaemonCommand(routeTarget, 'list_saved_sessions', {
                 agentType: providerType,
                 providerType,
@@ -578,8 +589,8 @@ export default function Dashboard() {
     const handleResumeSavedHistorySession = useCallback(async (session: SavedSessionHistoryEntry) => {
         if (!historyTargetConv || !isSavedSessionHistoryTarget) return
         if (!session.providerSessionId || !session.workspace) return
-        const routeTarget = historyTargetConv.daemonId || historyTargetConv.ideId
-        const cliType = historyTargetConv.agentType || historyTargetConv.ideType
+        const routeTarget = historyTargetConv.daemonId || historyTargetConv.routeId
+        const cliType = getConversationProviderType(historyTargetConv)
         try {
             setResumingSavedHistorySessionId(session.providerSessionId)
             const raw: any = await sendDaemonCommand(routeTarget, 'launch_cli', {
@@ -628,8 +639,8 @@ export default function Dashboard() {
     ) => {
         const targetConv = conversation || cliStopTargetConv || activeConv
         if (!targetConv || (!isCliConv(targetConv) && !isAcpConv(targetConv))) return
-        const cliType = targetConv.ideType || targetConv.agentType || ''
-        const daemonId = targetConv.ideId || targetConv.daemonId || ''
+        const cliType = getConversationProviderType(targetConv)
+        const daemonId = targetConv.routeId || targetConv.daemonId || ''
         try {
             await sendDaemonCommand(daemonId, 'stop_cli', {
                 cliType,
@@ -658,7 +669,7 @@ export default function Dashboard() {
         const currentMode = getCliConversationViewMode(activeConv)
         if (currentMode === mode) return
         try {
-            await sendDaemonCommand(getConversationMachineId(activeConv) || activeConv.ideId, 'set_cli_view_mode', {
+            await sendDaemonCommand(getConversationMachineId(activeConv) || activeConv.routeId, 'set_cli_view_mode', {
                 targetSessionId: activeConv.sessionId,
                 cliType: getConversationProviderType(activeConv),
                 mode,

@@ -96,10 +96,8 @@ export function useIdeConversations({
         if (!target) return undefined
         return conversations.find(conversation =>
             conversation.sessionId === target
-            || conversation.ideId === target
+            || conversation.routeId === target
             || conversation.tabKey === target
-            || conversation.ideType === target
-            || conversation.agentType === target,
         )
     }, [conversations])
 

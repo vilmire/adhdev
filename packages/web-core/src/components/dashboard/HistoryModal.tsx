@@ -50,7 +50,7 @@ export interface HistoryModalProps {
     isResumingSavedSessionId?: string | null;
     onClose: () => void;
     onNewChat: () => void;
-    onSwitchSession: (ideId: string, sessionId: string) => void;
+    onSwitchSession: (routeId: string, sessionId: string) => void;
     onRefreshHistory: () => void;
     onResumeSavedSession?: (session: SavedSessionHistoryEntry) => void;
 }
@@ -60,7 +60,7 @@ export default function HistoryModal({
     savedSessions = [], isSavedSessionsLoading = false, isResumingSavedSessionId = null,
     onClose, onNewChat, onSwitchSession, onRefreshHistory, onResumeSavedSession,
 }: HistoryModalProps) {
-    const ideEntry = ides.find(i => i.id === activeConv.ideId);
+    const ideEntry = ides.find(i => i.id === activeConv.routeId);
     const chats = ideEntry?.chats || [];
     const activeChatId = ideEntry?.activeChat?.id;
     const isSavedSessionMode = isCliConv(activeConv) && !isAcpConv(activeConv);
@@ -149,7 +149,7 @@ export default function HistoryModal({
                     ) : chats.map((chat: any) => (
                         <div
                             key={chat.id}
-                            onClick={() => { onSwitchSession(activeConv.ideId, chat.id); onClose(); }}
+                            onClick={() => { onSwitchSession(activeConv.routeId, chat.id); onClose(); }}
                             className={`p-4 rounded-xl mb-2 cursor-pointer border transition-all ${
                                 activeChatId === chat.id
                                     ? 'bg-[var(--bg-glass-hover)] border-accent'

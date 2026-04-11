@@ -15,7 +15,7 @@ export function isNativeConversation(conversation: ActiveConversation): boolean 
 }
 
 export function getConversationMachineId(conversation: ActiveConversation): string {
-    return conversation.daemonId || conversation.ideId?.split(':')[0] || conversation.ideId || ''
+    return conversation.daemonId || conversation.routeId?.split(':')[0] || conversation.routeId || ''
 }
 
 export function getConversationMachineLabel(conversation: ActiveConversation): string {
@@ -27,9 +27,11 @@ export function getConversationDaemonRouteId(conversation: ActiveConversation): 
 }
 
 export function getConversationProviderType(conversation: ActiveConversation): string {
-    return isNativeConversation(conversation)
-        ? (conversation.ideType || conversation.agentType || '')
-        : (conversation.agentType || conversation.ideType || '')
+    return conversation.agentType || ''
+}
+
+export function getConversationHostIdeType(conversation: ActiveConversation): string {
+    return conversation.hostIdeType || ''
 }
 
 export function getConversationDisplayLabel(conversation: ActiveConversation): string {
@@ -49,7 +51,7 @@ export function getConversationIdeChipLabel(conversation: ActiveConversation): s
         const parentIdeLabel = conversation.displaySecondary?.split('·')[0]?.trim()
         if (parentIdeLabel) return parentIdeLabel
     }
-    return formatIdeType(conversation.ideType || '')
+    return formatIdeType(getConversationHostIdeType(conversation) || getConversationProviderType(conversation))
 }
 
 export function getConversationNativeTargetSessionId(conversation: ActiveConversation): string | undefined {
@@ -84,7 +86,7 @@ export function getConversationControlsContext(
 ) {
     const providerType = getConversationProviderType(conversation)
     const displayLabel = isNativeConversation(conversation)
-        ? (ideEntry?.type ? formatIdeType(ideEntry.type) : formatIdeType(conversation.ideType || ''))
+        ? (ideEntry?.type ? formatIdeType(ideEntry.type) : formatIdeType(getConversationHostIdeType(conversation) || providerType))
         : getConversationProviderLabel(conversation)
 
     return {

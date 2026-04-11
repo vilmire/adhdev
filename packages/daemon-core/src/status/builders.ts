@@ -17,7 +17,35 @@ import type {
     ExtensionProviderState,
     ProviderState,
 } from '../providers/provider-instance.js';
-import { normalizeActiveChatData, normalizeManagedStatus } from './normalize.js';
+import {
+    LIVE_STATUS_ACTIVE_CHAT_OPTIONS,
+    normalizeActiveChatData,
+    normalizeManagedStatus,
+    type NormalizeActiveChatOptions,
+} from './normalize.js';
+
+export type SessionEntryProfile = 'full' | 'live' | 'metadata';
+
+export interface SessionEntryBuildOptions {
+    profile?: SessionEntryProfile;
+}
+
+function getActiveChatOptions(profile: SessionEntryProfile): NormalizeActiveChatOptions {
+    if (profile === 'full') return {};
+    return LIVE_STATUS_ACTIVE_CHAT_OPTIONS;
+}
+
+function shouldIncludeSessionControls(profile: SessionEntryProfile): boolean {
+    return profile !== 'live';
+}
+
+function shouldIncludeSessionMetadata(profile: SessionEntryProfile): boolean {
+    return profile !== 'live';
+}
+
+function shouldIncludeRuntimeMetadata(profile: SessionEntryProfile): boolean {
+    return profile !== 'live';
+}
 
 // ─── CDP Manager lookup helpers ──────────────────────
 
@@ -186,33 +214,39 @@ const ACP_SESSION_CAPABILITIES: SessionCapability[] = [
 function buildIdeWorkspaceSession(
     state: IdeProviderState,
     cdpManagers: Map<string, DaemonCdpManager>,
+    options: SessionEntryBuildOptions,
 ): SessionEntry {
-    const activeChat = normalizeActiveChatData(state.activeChat);
+    const profile = options.profile || 'full';
+    const activeChat = normalizeActiveChatData(state.activeChat, getActiveChatOptions(profile));
+    const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
+    const includeSessionControls = shouldIncludeSessionControls(profile);
     const title = activeChat?.title || state.name;
     return {
         id: state.instanceId || state.type,
         parentId: null,
         providerType: state.type,
-        providerName: state.name,
+        ...(includeSessionMetadata && { providerName: state.name }),
         kind: 'workspace',
         transport: 'cdp-page',
         status: normalizeManagedStatus(activeChat?.status || state.status, {
             activeModal: activeChat?.activeModal || null,
         }),
         title,
-        workspace: state.workspace || null,
+        ...(includeSessionMetadata && { workspace: state.workspace || null }),
         activeChat,
-        capabilities: IDE_SESSION_CAPABILITIES,
+        ...(includeSessionMetadata && { capabilities: IDE_SESSION_CAPABILITIES }),
         cdpConnected: state.cdpConnected ?? isCdpConnected(cdpManagers, state.type),
         currentModel: state.currentModel,
         currentPlan: state.currentPlan,
         currentAutoApprove: state.currentAutoApprove,
-        controlValues: state.controlValues,
-        providerControls: buildFallbackControls(
-            state.providerControls,
-            state.currentModel,
-            state.currentPlan
-        ),
+        ...(includeSessionControls && {
+            controlValues: state.controlValues,
+            providerControls: buildFallbackControls(
+                state.providerControls,
+                state.currentModel,
+                state.currentPlan
+            ),
+        }),
         errorMessage: state.errorMessage,
         errorReason: state.errorReason,
         lastUpdated: state.lastUpdated,
@@ -222,43 +256,53 @@ function buildIdeWorkspaceSession(
 function buildExtensionAgentSession(
     parent: IdeProviderState,
     ext: ExtensionProviderState,
+    options: SessionEntryBuildOptions,
 ): SessionEntry {
-    const activeChat = normalizeActiveChatData(ext.activeChat);
+    const profile = options.profile || 'full';
+    const activeChat = normalizeActiveChatData(ext.activeChat, getActiveChatOptions(profile));
+    const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
+    const includeSessionControls = shouldIncludeSessionControls(profile);
     return {
         id: ext.instanceId || `${parent.instanceId}:${ext.type}`,
         parentId: parent.instanceId || parent.type,
         providerType: ext.type,
-        providerName: ext.name,
+        ...(includeSessionMetadata && { providerName: ext.name }),
         kind: 'agent',
         transport: 'cdp-webview',
         status: normalizeManagedStatus(activeChat?.status || ext.status, {
             activeModal: activeChat?.activeModal || null,
         }),
         title: activeChat?.title || ext.name,
-        workspace: parent.workspace || null,
+        ...(includeSessionMetadata && { workspace: parent.workspace || null }),
         activeChat,
-        capabilities: EXTENSION_SESSION_CAPABILITIES,
+        ...(includeSessionMetadata && { capabilities: EXTENSION_SESSION_CAPABILITIES }),
         currentModel: ext.currentModel,
         currentPlan: ext.currentPlan,
-        controlValues: ext.controlValues,
-        providerControls: buildFallbackControls(
-            ext.providerControls,
-            ext.currentModel,
-            ext.currentPlan
-        ),
+        ...(includeSessionControls && {
+            controlValues: ext.controlValues,
+            providerControls: buildFallbackControls(
+                ext.providerControls,
+                ext.currentModel,
+                ext.currentPlan
+            ),
+        }),
         errorMessage: ext.errorMessage,
         errorReason: ext.errorReason,
         lastUpdated: ext.lastUpdated,
     };
 }
 
-function buildCliSession(state: CliProviderState): SessionEntry {
-    const activeChat = normalizeActiveChatData(state.activeChat);
+function buildCliSession(state: CliProviderState, options: SessionEntryBuildOptions): SessionEntry {
+    const profile = options.profile || 'full';
+    const activeChat = normalizeActiveChatData(state.activeChat, getActiveChatOptions(profile));
+    const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
+    const includeRuntimeMetadata = shouldIncludeRuntimeMetadata(profile);
+    const includeSessionControls = shouldIncludeSessionControls(profile);
     return {
         id: state.instanceId,
         parentId: null,
         providerType: state.type,
-        providerName: state.name,
+        ...(includeSessionMetadata && { providerName: state.name }),
         providerSessionId: state.providerSessionId,
         kind: 'agent',
         transport: 'pty',
@@ -266,54 +310,65 @@ function buildCliSession(state: CliProviderState): SessionEntry {
             activeModal: activeChat?.activeModal || null,
         }),
         title: activeChat?.title || state.name,
-        workspace: state.workspace || null,
-        runtimeKey: state.runtime?.runtimeKey,
-        runtimeDisplayName: state.runtime?.displayName,
-        runtimeWorkspaceLabel: state.runtime?.workspaceLabel,
-        runtimeWriteOwner: state.runtime?.writeOwner || null,
-        runtimeAttachedClients: state.runtime?.attachedClients || [],
+        ...(includeSessionMetadata && { workspace: state.workspace || null }),
+        ...(includeRuntimeMetadata && {
+            runtimeKey: state.runtime?.runtimeKey,
+            runtimeDisplayName: state.runtime?.displayName,
+            runtimeWorkspaceLabel: state.runtime?.workspaceLabel,
+            runtimeWriteOwner: state.runtime?.writeOwner || null,
+            runtimeAttachedClients: state.runtime?.attachedClients || [],
+        }),
         mode: state.mode,
         resume: state.resume,
         activeChat,
-        capabilities: state.mode === 'terminal' ? PTY_SESSION_CAPABILITIES : CLI_CHAT_SESSION_CAPABILITIES,
-        controlValues: state.controlValues,
-        providerControls: buildFallbackControls(
-            state.providerControls
-        ),
+        ...(includeSessionMetadata && {
+            capabilities: state.mode === 'terminal' ? PTY_SESSION_CAPABILITIES : CLI_CHAT_SESSION_CAPABILITIES,
+        }),
+        ...(includeSessionControls && {
+            controlValues: state.controlValues,
+            providerControls: buildFallbackControls(
+                state.providerControls
+            ),
+        }),
         errorMessage: state.errorMessage,
         errorReason: state.errorReason,
         lastUpdated: state.lastUpdated,
     };
 }
 
-function buildAcpSession(state: AcpProviderState): SessionEntry {
-    const activeChat = normalizeActiveChatData(state.activeChat);
+function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOptions): SessionEntry {
+    const profile = options.profile || 'full';
+    const activeChat = normalizeActiveChatData(state.activeChat, getActiveChatOptions(profile));
+    const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
+    const includeSessionControls = shouldIncludeSessionControls(profile);
     return {
         id: state.instanceId,
         parentId: null,
         providerType: state.type,
-        providerName: state.name,
+        ...(includeSessionMetadata && { providerName: state.name }),
         kind: 'agent',
         transport: 'acp',
         status: normalizeManagedStatus(activeChat?.status || state.status, {
             activeModal: activeChat?.activeModal || null,
         }),
         title: activeChat?.title || state.name,
-        workspace: state.workspace || null,
+        ...(includeSessionMetadata && { workspace: state.workspace || null }),
         activeChat,
-        capabilities: ACP_SESSION_CAPABILITIES,
+        ...(includeSessionMetadata && { capabilities: ACP_SESSION_CAPABILITIES }),
         currentModel: state.currentModel,
         currentPlan: state.currentPlan,
-        acpConfigOptions: state.acpConfigOptions,
-        acpModes: state.acpModes,
-        controlValues: state.controlValues,
-        providerControls: buildFallbackControls(
-            state.providerControls,
-            state.currentModel,
-            state.currentPlan,
-            state.acpConfigOptions,
-            state.acpModes
-        ),
+        ...(includeSessionControls && {
+            acpConfigOptions: state.acpConfigOptions,
+            acpModes: state.acpModes,
+            controlValues: state.controlValues,
+            providerControls: buildFallbackControls(
+                state.providerControls,
+                state.currentModel,
+                state.currentPlan,
+                state.acpConfigOptions,
+                state.acpModes
+            ),
+        }),
         errorMessage: state.errorMessage,
         errorReason: state.errorReason,
         lastUpdated: state.lastUpdated,
@@ -323,6 +378,7 @@ function buildAcpSession(state: AcpProviderState): SessionEntry {
 export function buildSessionEntries(
     allStates: ProviderState[],
     cdpManagers: Map<string, DaemonCdpManager>,
+    options: SessionEntryBuildOptions = {},
 ): SessionEntry[] {
     const sessions: SessionEntry[] = [];
 
@@ -331,18 +387,18 @@ export function buildSessionEntries(
     const acpStates = allStates.filter((s): s is AcpProviderState => s.category === 'acp');
 
     for (const state of ideStates) {
-        sessions.push(buildIdeWorkspaceSession(state, cdpManagers));
+        sessions.push(buildIdeWorkspaceSession(state, cdpManagers, options));
         for (const ext of state.extensions as ExtensionProviderState[]) {
-            sessions.push(buildExtensionAgentSession(state, ext));
+            sessions.push(buildExtensionAgentSession(state, ext, options));
         }
     }
 
     for (const state of cliStates) {
-        sessions.push(buildCliSession(state));
+        sessions.push(buildCliSession(state, options));
     }
 
     for (const state of acpStates) {
-        sessions.push(buildAcpSession(state));
+        sessions.push(buildAcpSession(state, options));
     }
 
     // Hide native IDE parent rows from inbox/recent surfaces when extension tabs exist.

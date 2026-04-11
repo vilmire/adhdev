@@ -34,8 +34,8 @@ export interface WorkspaceRow { id: string; path: string; label?: string; addedA
 
 export interface MachineData {
     id: string; hostname: string; platform: string; arch: string
-    cpus: number; totalMem: number; freeMem: number; availableMem?: number; loadavg: number[]
-    uptime: number; release: string; cdpConnected: boolean; machineNickname: string | null
+    cpus: number; totalMem: number; freeMem?: number; availableMem?: number; loadavg?: number[]
+    uptime?: number; release: string; cdpConnected: boolean; machineNickname: string | null
     p2p: { available: boolean; state: string; peers: number; screenshotActive: boolean }
     detectedIdes: { type: string; id?: string; name: string; running: boolean; path?: string }[]
     workspaces: WorkspaceRow[]

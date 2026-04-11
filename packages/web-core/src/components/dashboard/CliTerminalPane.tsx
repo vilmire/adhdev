@@ -42,8 +42,8 @@ export default function CliTerminalPane({
 
     const tabKey = activeConv.tabKey;
     const sessionId = activeConv.sessionId || '';
-    const daemonRouteId = activeConv.daemonId || activeConv.ideId?.split(':')[0] || activeConv.ideId || '';
-    const daemonEntry = ides.find(entry => entry.id === daemonRouteId && entry.daemonMode);
+    const daemonRouteId = activeConv.daemonId || activeConv.routeId?.split(':')[0] || activeConv.routeId || '';
+    const daemonEntry = ides.find(entry => entry.id === daemonRouteId && entry.type === 'adhdev-daemon');
     const terminalSizingMode = daemonEntry?.terminalSizingMode === 'fit' ? 'fit' : 'measured';
     const MIN_TERMINAL_SCALE = 0.6;
     const MAX_TERMINAL_SCALE = 1.15;

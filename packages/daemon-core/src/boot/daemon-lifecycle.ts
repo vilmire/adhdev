@@ -68,6 +68,11 @@ export interface DaemonInitConfig {
 
     /** CDP scan interval (ms), default 30000 */
     cdpScanIntervalMs?: number;
+
+    /** Canonical status identity used by on-demand snapshot commands */
+    statusInstanceId?: string;
+    statusVersion?: string;
+    statusDaemonMode?: boolean;
 }
 
 // ─── Result ───
@@ -276,6 +281,8 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         onStatusChange: config.onStatusChange,
         onPostChatCommand: config.onPostChatCommand,
         sessionHostControl: config.sessionHostControl,
+        statusInstanceId: config.statusInstanceId,
+        statusVersion: config.statusVersion,
         getCdpLogFn: config.getCdpLogFn || ((ideType: string) => LOG.forComponent(`CDP:${ideType}`).asLogFn()),
     });
 

@@ -210,10 +210,10 @@ export function useDashboardConversations({
     }, [baseConversations, clearedTabs])
     const preferredConversationByIdeId = useMemo(() => {
         const map = new Map<string, ActiveConversation>()
-        const ideIds = Array.from(new Set(conversations.map(conversation => conversation.ideId)))
-        for (const ideId of ideIds) {
-            const preferred = getPreferredConversationForIde(conversations, ideId)
-            if (preferred) map.set(ideId, preferred)
+        const routeIds = Array.from(new Set(conversations.map(conversation => conversation.routeId)))
+        for (const routeId of routeIds) {
+            const preferred = getPreferredConversationForIde(conversations, routeId)
+            if (preferred) map.set(routeId, preferred)
         }
         return map
     }, [conversations])
@@ -222,7 +222,7 @@ export function useDashboardConversations({
         for (const conversation of conversations) {
             if (conversation.sessionId) map.set(conversation.sessionId, conversation)
             if (conversation.streamSource === 'native' && conversation.sessionId) {
-                const preferred = preferredConversationByIdeId.get(conversation.ideId)
+                const preferred = preferredConversationByIdeId.get(conversation.routeId)
                 if (preferred) {
                     map.set(conversation.sessionId, preferred)
                 }
@@ -234,7 +234,7 @@ export function useDashboardConversations({
         const map = new Map<string, ActiveConversation>()
         for (const conversation of conversations) {
             if (conversation.sessionId) map.set(conversation.sessionId, conversation)
-            map.set(conversation.ideId, preferredConversationByIdeId.get(conversation.ideId) || conversation)
+            map.set(conversation.routeId, preferredConversationByIdeId.get(conversation.routeId) || conversation)
             map.set(conversation.tabKey, conversation)
         }
         return map

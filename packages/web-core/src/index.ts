@@ -5,7 +5,15 @@
  */
 
 // ── Types ──
-export type { DaemonData, BaseDaemonData, ChatMessage, ConnectionStatus } from './types'
+export type {
+    DaemonData,
+    BaseDaemonData,
+    ChatMessage,
+    ConnectionStatus,
+    DashboardBootstrapDaemonEntry,
+    DashboardStatusEventPayload,
+    DaemonStatusEventPayload,
+} from './types'
 
 // ── Context: Daemon State ──
 export {
@@ -108,6 +116,8 @@ export type { SupportedEntry, ProviderVerification, ProviderVerificationStatus, 
 // ── Managers ──
 export { eventManager } from './managers/EventManager'
 export type { StatusEventPayload, ToastConfig, SystemMessage, ToastAction, ViewRequestRespondFn } from './managers/EventManager'
+export { subscriptionManager } from './managers/SubscriptionManager'
+export type { SubscriptionTransport } from './managers/SubscriptionManager'
 // Re-export daemon-core shared types for downstream consumers
 export type { AcpConfigOption, AcpMode, StatusReportPayload } from './types'
 export { cn } from './lib/utils'
@@ -153,6 +163,11 @@ export {
 // ── Hooks ──
 export { useTheme, initTheme } from './hooks/useTheme'
 export type { Theme, ThemePreference } from './hooks/useTheme'
+export { useDaemonMetadataLoader } from './hooks/useDaemonMetadataLoader'
+export { useDaemonMachineRuntimeLoader } from './hooks/useDaemonMachineRuntimeLoader'
+export { useDaemonMachineRuntimeSubscription } from './hooks/useDaemonMachineRuntimeSubscription'
+export { useSessionHostDiagnosticsSubscription } from './hooks/useSessionHostDiagnosticsSubscription'
+export { useSessionModalSubscription } from './hooks/useSessionModalSubscription'
 export { useNotificationPrefs, shouldNotify, getNotificationPrefs, setNotificationPrefs } from './hooks/useNotificationPrefs'
 export type { NotificationPrefs } from './hooks/useNotificationPrefs'
 export { useBrowserNotifications, requestNotificationPermission } from './hooks/useBrowserNotifications'

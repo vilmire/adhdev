@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
+import type { SessionHostDiagnosticsSnapshot } from '@adhdev/daemon-core'
 import { IconRefresh, IconServer, IconTerminal, IconUsers, IconWarning } from '../../components/Icons'
 import { eventManager } from '../../managers/EventManager'
+import { useSessionHostDiagnosticsSubscription } from '../../hooks/useSessionHostDiagnosticsSubscription'
 import type { CliSessionEntry } from './types'
 
 interface SessionHostAttachedClient {
@@ -161,18 +163,26 @@ export default function SessionHostPanel({
     cliSessions,
     sendDaemonCommand,
 }: SessionHostPanelProps) {
-    const [diagnostics, setDiagnostics] = useState<SessionHostDiagnosticsView | null>(null)
-    const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [busyActionKey, setBusyActionKey] = useState<string | null>(null)
+    const [refreshing, setRefreshing] = useState(false)
+    const sessionHostSubscription = useSessionHostDiagnosticsSubscription(machineId, {
+        enabled: !!machineId,
+        includeSessions: true,
+        limit: 12,
+        intervalMs: 8000,
+    })
+    const diagnostics = sessionHostSubscription.diagnostics as SessionHostDiagnosticsView | null
+    const loading = sessionHostSubscription.loading
+    const applyDiagnostics = sessionHostSubscription.applyDiagnostics
     const cliBySessionId = useMemo(
         () => new Map(cliSessions.map((session) => [session.sessionId || session.id, session])),
         [cliSessions],
     )
 
-    const loadDiagnostics = useCallback(async (opts?: { silent?: boolean }) => {
+    const refreshDiagnostics = useCallback(async () => {
         if (!machineId) return
-        if (!opts?.silent) setLoading(true)
+        setRefreshing(true)
         try {
             const raw = await sendDaemonCommand(machineId, 'session_host_get_diagnostics', {
                 includeSessions: true,
@@ -182,23 +192,15 @@ export default function SessionHostPanel({
             if (!envelope?.success) {
                 throw new Error(envelope?.error || 'Could not load session host diagnostics')
             }
-            setDiagnostics((envelope.diagnostics || envelope.result || null) as SessionHostDiagnosticsView | null)
+            applyDiagnostics((envelope.diagnostics || envelope.result || null) as SessionHostDiagnosticsSnapshot | null)
             setError('')
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : 'Could not load session host diagnostics'
             setError(message)
         } finally {
-            if (!opts?.silent) setLoading(false)
+            setRefreshing(false)
         }
-    }, [machineId, sendDaemonCommand])
-
-    useEffect(() => {
-        void loadDiagnostics()
-        const timer = window.setInterval(() => {
-            void loadDiagnostics({ silent: true })
-        }, 8000)
-        return () => window.clearInterval(timer)
-    }, [loadDiagnostics])
+    }, [applyDiagnostics, machineId, sendDaemonCommand])
 
     const runSessionAction = useCallback(async (
         action: 'session_host_resume_session' | 'session_host_restart_session' | 'session_host_stop_session',
@@ -223,7 +225,7 @@ export default function SessionHostPanel({
                     ? 'restarted'
                     : 'stopped'
             eventManager.showToast(`Session host ${verb}: ${session.displayName}`, 'success')
-            await loadDiagnostics({ silent: true })
+            await refreshDiagnostics()
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : 'Session host action failed'
             eventManager.showToast(message, 'warning')
@@ -231,7 +233,7 @@ export default function SessionHostPanel({
         } finally {
             setBusyActionKey((current) => (current === actionKey ? null : current))
         }
-    }, [loadDiagnostics, machineId, sendDaemonCommand])
+    }, [machineId, refreshDiagnostics, sendDaemonCommand])
 
     const runPruneDuplicates = useCallback(async () => {
         const confirmed = window.confirm('Prune duplicate hosted runtimes?\nThe newest runtime for each provider session will be kept and older duplicates will be stopped and removed.')
@@ -248,7 +250,7 @@ export default function SessionHostPanel({
             const prunedCount = Array.isArray(result.prunedSessionIds) ? result.prunedSessionIds.length : 0
             const groupCount = typeof result.duplicateGroupCount === 'number' ? result.duplicateGroupCount : 0
             eventManager.showToast(`Pruned ${prunedCount} duplicate runtime(s) across ${groupCount} group(s)`, 'success')
-            await loadDiagnostics({ silent: true })
+            await refreshDiagnostics()
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : 'Duplicate prune failed'
             eventManager.showToast(message, 'warning')
@@ -256,7 +258,7 @@ export default function SessionHostPanel({
         } finally {
             setBusyActionKey((current) => (current === 'session_host_prune_duplicate_sessions' ? null : current))
         }
-    }, [loadDiagnostics, machineId, sendDaemonCommand])
+    }, [machineId, refreshDiagnostics, sendDaemonCommand])
 
     const sessions = useMemo(
         () => [...(diagnostics?.sessions || [])].sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0)),
@@ -311,11 +313,11 @@ export default function SessionHostPanel({
                     <button
                         type="button"
                         className="machine-btn flex items-center gap-1"
-                        onClick={() => { void loadDiagnostics() }}
-                        disabled={loading}
+                        onClick={() => { void refreshDiagnostics() }}
+                        disabled={loading || refreshing}
                     >
                         <IconRefresh size={13} />
-                        {loading ? 'Refreshing…' : 'Refresh'}
+                        {loading || refreshing ? 'Refreshing…' : 'Refresh'}
                     </button>
                 </div>
             </div>

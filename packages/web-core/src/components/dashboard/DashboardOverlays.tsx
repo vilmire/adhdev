@@ -20,17 +20,17 @@ interface DashboardOverlaysProps {
     isResumingSavedHistorySessionId: string | null
     onCloseHistory: () => void
     onNewHistoryChat: () => void
-    onSwitchHistorySession: (ideId: string, sessionId: string) => void
+    onSwitchHistorySession: (routeId: string, sessionId: string) => void
     onRefreshHistory: () => void
     onResumeSavedHistorySession: (session: SavedSessionHistoryEntry) => void
     remoteDialogConv: ActiveConversation | null
     remoteDialogIdeEntry?: DaemonData
     connectionStates: Record<string, any>
-    actionLogs: { ideId: string; text: string; timestamp: number }[]
+    actionLogs: { routeId: string; text: string; timestamp: number }[]
     localUserMessages: Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     setLocalUserMessages: React.Dispatch<React.SetStateAction<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>>
-    setActionLogs: React.Dispatch<React.SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
+    setActionLogs: React.Dispatch<React.SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
     userName?: string
     onOpenRemoteHistory: (conversation?: ActiveConversation) => void

@@ -26,7 +26,7 @@ export interface Toast {
 
 export interface BaseDaemonContextValue {
     ides: DaemonData[]
-    updateIdeChats: (ideId: string, chats: DaemonData['chats']) => void
+    updateRouteChats: (routeId: string, chats: DaemonData['chats']) => void
     initialLoaded: boolean
     toasts: Toast[]
     setToasts: React.Dispatch<React.SetStateAction<Toast[]>>
@@ -61,7 +61,7 @@ export interface BaseDaemonActions {
 
 const BaseDaemonCtx = createContext<BaseDaemonContextValue>({
     ides: [],
-    updateIdeChats: () => {},
+    updateRouteChats: () => {},
     initialLoaded: false,
     toasts: [],
     setToasts: () => {},
@@ -391,7 +391,6 @@ export function expandCompactDaemons(
             id: d.id,
             type: d.type || 'adhdev-daemon',
             status: 'online',
-            daemonMode: true,
             machineNickname: d.nickname,
             hostname: d.hostname,
             p2p: d.p2p,
@@ -495,11 +494,11 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
         idesRef.current = ides
     }, [ides])
 
-    const updateIdeChats = useCallback((ideId: string, chats: DaemonData['chats']) => {
+    const updateRouteChats = useCallback((routeId: string, chats: DaemonData['chats']) => {
         setIdes(prev => {
             let changed = false
             const next = prev.map(ide => {
-                if (ide.id !== ideId) return ide
+                if (ide.id !== routeId) return ide
                 if (ide.chats === chats) return ide
                 changed = true
                 return { ...ide, chats }
@@ -525,7 +524,7 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
 
     const co = connectionOverrides
     const contextValue = useMemo<BaseDaemonContextValue>(() => ({
-        ides, updateIdeChats,
+        ides, updateRouteChats,
         initialLoaded,
         toasts, setToasts,
         // Connection state — overrides from platform or defaults for standalone
@@ -543,7 +542,7 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
         setUserName,
     }), [
         ides,
-        updateIdeChats,
+        updateRouteChats,
         initialLoaded,
         toasts,
         co?.wsStatus,

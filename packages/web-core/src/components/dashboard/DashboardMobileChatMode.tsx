@@ -27,10 +27,10 @@ interface DashboardMobileChatModeProps {
     conversations: ActiveConversation[]
     hiddenConversations: ActiveConversation[]
     ides: DaemonData[]
-    actionLogs: { ideId: string; text: string; timestamp: number }[]
+    actionLogs: { routeId: string; text: string; timestamp: number }[]
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
-    setActionLogs: Dispatch<SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
+    setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
     userName?: string
     requestedActiveTabKey?: string | null
@@ -103,7 +103,7 @@ export default function DashboardMobileChatMode({
         [conversations, selectedTabKey],
     )
     const selectedIdeEntry = useMemo(
-        () => selectedConversation ? ides.find(ide => ide.id === selectedConversation.ideId) : undefined,
+        () => selectedConversation ? ides.find(ide => ide.id === selectedConversation.routeId) : undefined,
         [ides, selectedConversation],
     )
     const selectedCliViewMode = useMemo(() => {
@@ -112,7 +112,7 @@ export default function DashboardMobileChatMode({
     }, [selectedConversation])
     const machineEntries = useMemo(
         () => ides
-            .filter(entry => entry.type === 'adhdev-daemon' || entry.daemonMode)
+            .filter(entry => entry.type === 'adhdev-daemon')
             .sort(compareMachineEntries),
         [ides],
     )
@@ -281,7 +281,7 @@ export default function DashboardMobileChatMode({
                         if (!selectedConversation) return
                         if (selectedCliViewMode === mode) return
                         try {
-                            await sendDaemonCommand(getConversationMachineId(selectedConversation) || selectedConversation.ideId, 'set_cli_view_mode', {
+                            await sendDaemonCommand(getConversationMachineId(selectedConversation) || selectedConversation.routeId, 'set_cli_view_mode', {
                                 targetSessionId: selectedConversation.sessionId,
                                 cliType: getConversationProviderType(selectedConversation),
                                 mode,

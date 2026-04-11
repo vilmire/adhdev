@@ -4,7 +4,7 @@
  * Core logic for daemon: CDP, Provider, IDE detection, CLI/ACP adapters and more.
  */
 export type { ChatMessage, ExtensionInfo, CommandResult as CoreCommandResult, ProviderConfig, DaemonEvent, StatusResponse, SystemInfo, DetectedIde, ProviderInfo, AgentEntry, } from './types.js';
-export type { SessionEntry, CompactSessionEntry, CompactDaemonEntry, SessionTransport, SessionKind, SessionCapability, AgentSessionStream, AvailableProviderInfo, AcpConfigOption, AcpMode, ProviderControlSchema, StatusReportPayload, MachineInfo, DetectedIdeInfo, WorkspaceEntry, ProviderStatus, ProviderErrorReason, ActiveChatData, IdeProviderState, CliProviderState, AcpProviderState, ExtensionProviderState, } from './shared-types.js';
+export type { SessionEntry, CompactSessionEntry, CompactDaemonEntry, SessionTransport, SessionKind, SessionCapability, AgentSessionStream, ReadChatCursor, ReadChatSyncMode, ReadChatSyncResult, TransportTopic, SessionChatTailSubscriptionParams, MachineRuntimeSubscriptionParams, SessionHostDiagnosticsSubscriptionParams, SessionModalSubscriptionParams, DaemonMetadataSubscriptionParams, SessionChatTailUpdate, MachineRuntimeUpdate, SessionHostDiagnosticsUpdate, SessionModalUpdate, DaemonMetadataUpdate, TopicUpdateEnvelope, SubscribeRequest, UnsubscribeRequest, StandaloneWsStatusPayload, AvailableProviderInfo, AcpConfigOption, AcpMode, ProviderControlSchema, StatusReportPayload, MachineInfo, SessionHostDiagnosticsSnapshot, SessionHostRecord, SessionHostWriteOwner, SessionHostAttachedClient, SessionHostLogEntry, SessionHostRequestTrace, SessionHostRuntimeTransition, DetectedIdeInfo, WorkspaceEntry, ProviderState, ProviderStatus, ProviderErrorReason, ActiveChatData, IdeProviderState, CliProviderState, AcpProviderState, ExtensionProviderState, } from './shared-types.js';
 import type { RuntimeWriteOwner as _RuntimeWriteOwner } from './shared-types-extra.js';
 import type { RuntimeAttachedClient as _RuntimeAttachedClient } from './shared-types-extra.js';
 import type { RecentLaunchEntry as _RecentLaunchEntry } from './shared-types.js';
@@ -45,7 +45,7 @@ export { maybeRunDaemonUpgradeHelperFromEnv, spawnDetachedDaemonUpgradeHelper } 
 export type { DaemonUpgradeHelperPayload } from './commands/upgrade-helper.js';
 export { DaemonStatusReporter } from './status/reporter.js';
 export { buildSessionEntries, findCdpManager, hasCdpManager, isCdpConnected } from './status/builders.js';
-export { buildStatusSnapshot } from './status/snapshot.js';
+export { buildStatusSnapshot, buildMachineInfo } from './status/snapshot.js';
 export { normalizeManagedStatus, isManagedStatusWorking, isManagedStatusWaiting, normalizeActiveChatData } from './status/normalize.js';
 export type { ManagedStatus } from './status/normalize.js';
 export type { StatusSnapshotOptions, StatusSnapshot } from './status/snapshot.js';

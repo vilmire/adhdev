@@ -29,6 +29,9 @@ export type {
     RecentSessionBucket,
     TerminalBackendStatus,
     AgentSessionStream,
+    ReadChatCursor,
+    ReadChatSyncMode,
+    ReadChatSyncResult,
     AcpConfigOption,
     AcpMode,
     StatusReportPayload,
@@ -38,6 +41,9 @@ export type {
     ActiveChatData,
     ChatMessage,
     AvailableProviderInfo,
+    DashboardBootstrapDaemonEntry,
+    DashboardStatusEventPayload,
+    DaemonStatusEventPayload,
     ProviderResumeCapability,
 } from '@adhdev/daemon-core';
 
@@ -79,8 +85,6 @@ export interface BaseDaemonData {
     providerSessionId?: string;
     parentSessionId?: string | null;
     type: string;
-    /** Provider type alias used for IDE sessions */
-    ideType?: string;
     /** Provider type alias used for CLI/ACP sessions */
     agentType?: string;
     sessionKind?: 'workspace' | 'agent';
@@ -127,7 +131,6 @@ export interface BaseDaemonData {
     childSessions?: SessionEntry[];
     agentStreams?: AgentSessionStream[];
     availableProviders?: AvailableProviderInfo[];
-    daemonMode?: boolean;
     machine?: MachineInfo;
     system?: Partial<MachineInfo>;
     p2p?: {

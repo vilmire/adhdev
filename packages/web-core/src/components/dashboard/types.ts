@@ -9,7 +9,7 @@ export type CliConversationViewMode = 'terminal' | 'chat';
 export type DashboardMessage = ChatMessage & { _localId?: string; _turnKey?: string };
 
 export interface ActiveConversation {
-    ideId: string;
+    routeId: string;
     sessionId?: string;
     providerSessionId?: string;
     nativeSessionId?: string;
@@ -23,11 +23,12 @@ export interface ActiveConversation {
     title: string;
     messages: DashboardMessage[];
     resume?: import('../../types').ProviderResumeCapability;
-    ideType: string;
+    hostIdeType?: string;
     workspaceName: string;
     displayPrimary: string;
     displaySecondary: string;
     cdpConnected?: boolean;
+    lastUpdated?: number;
     modalButtons?: string[];
     modalMessage?: string;
     streamSource: 'native' | 'agent-stream';

@@ -64,10 +64,10 @@ interface DashboardMainViewProps {
     mobileChatConversations: ActiveConversation[]
     hiddenConversations: ActiveConversation[]
     ides: DaemonData[]
-    actionLogs: { ideId: string; text: string; timestamp: number }[]
+    actionLogs: { routeId: string; text: string; timestamp: number }[]
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     setLocalUserMessages: React.Dispatch<React.SetStateAction<Record<string, any[]>>>
-    setActionLogs: React.Dispatch<React.SetStateAction<{ ideId: string; text: string; timestamp: number }[]>>
+    setActionLogs: React.Dispatch<React.SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
     initialDataLoaded: boolean
     userName?: string

@@ -31,6 +31,7 @@ import { logCommand } from '../logging/command-log.js';
 import type { CommandLogEntry } from '../logging/command-log.js';
 import { getRecentLogs, LOG_PATH } from '../logging/logger.js';
 import { buildSessionEntries } from '../status/builders.js';
+import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
 import * as fs from 'fs';
@@ -71,6 +72,9 @@ export interface CommandRouterDeps {
     getCdpLogFn?: (ideType: string) => (msg: string) => void;
     /** Package name for upgrade detection ('adhdev' or '@adhdev/daemon-standalone') */
     packageName?: string;
+    /** Canonical daemon status identity used by snapshot commands */
+    statusInstanceId?: string;
+    statusVersion?: string;
     /** Session host control plane */
     sessionHostControl?: SessionHostControlPlane | null;
 }
@@ -489,6 +493,27 @@ export class DaemonCommandRouter {
                 if (!name || typeof name !== 'string') throw new Error('userName required');
                 updateConfig({ userName: name });
                 return { success: true, userName: name };
+            }
+
+            case 'get_status_metadata': {
+                const snapshot = buildStatusSnapshot({
+                    allStates: this.deps.instanceManager.collectAllStates(),
+                    cdpManagers: this.deps.cdpManagers,
+                    providerLoader: this.deps.providerLoader,
+                    detectedIdes: this.deps.detectedIdes.value,
+                    instanceId: this.deps.statusInstanceId || loadConfig().machineId || 'daemon',
+                    version: this.deps.statusVersion || 'unknown',
+                    profile: 'metadata',
+                });
+                return { success: true, status: snapshot };
+            }
+
+            case 'get_machine_runtime_stats': {
+                return {
+                    success: true,
+                    machine: buildMachineInfo('full'),
+                    timestamp: Date.now(),
+                };
             }
 
             case 'mark_session_seen': {

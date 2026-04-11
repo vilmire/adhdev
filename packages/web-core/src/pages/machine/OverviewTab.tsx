@@ -61,16 +61,20 @@ export default function OverviewTab({
         void loadBrowsePath(initialPath)
     }, [loadBrowsePath, machine.defaultWorkspacePath, machine.platform, machine.workspaces])
 
-    const memAvail = machine.availableMem ?? machine.freeMem
-    const memUsedPct = machine.totalMem > 0
+    const hasRuntimeStats = typeof machine.uptime === 'number'
+        || typeof machine.freeMem === 'number'
+        || typeof machine.availableMem === 'number'
+        || (Array.isArray(machine.loadavg) && machine.loadavg.length > 0)
+    const memAvail = machine.availableMem ?? machine.freeMem ?? machine.totalMem
+    const memUsedPct = hasRuntimeStats && machine.totalMem > 0
         ? Math.min(100, Math.max(0, Math.round(((machine.totalMem - memAvail) / machine.totalMem) * 100)))
         : 0
-    const loadAvg1m = machine.loadavg[0] || 0
+    const loadAvg1m = machine.loadavg?.[0] || 0
     return (
         <div>
             {/* System Stats */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-5">
-                <StatCard icon={<IconClock size={16} />} label="Uptime" value={formatUptime(machine.uptime)} />
+                <StatCard icon={<IconClock size={16} />} label="Uptime" value={typeof machine.uptime === 'number' ? formatUptime(machine.uptime) : 'Waiting…'} />
                 <StatCard icon={<IconMonitor size={16} />} label="IDEs" value={`${ideSessions.length}`} />
                 <StatCard icon={<IconTerminal size={16} />} label="CLIs" value={`${cliSessions.length}`} />
                 <StatCard icon={<IconBot size={16} />} label="ACPs" value={`${acpSessions.length}`} />
@@ -82,8 +86,8 @@ export default function OverviewTab({
                     Resource Usage
                 </div>
                 <div className="flex gap-6">
-                    <ProgressBar value={Math.min(Math.round(loadAvg1m / machine.cpus * 100), 100)} max={100} label="CPU Load" color="#8b5cf6" detail={`${loadAvg1m.toFixed(2)} avg / ${machine.cpus} cores`} />
-                    <ProgressBar value={memUsedPct} max={100} label="Memory" color="#3b82f6" detail={`${formatBytes(machine.totalMem - memAvail)} / ${formatBytes(machine.totalMem)}${machine.platform === 'darwin' ? ' (approx.)' : ''}`} />
+                    <ProgressBar value={hasRuntimeStats ? Math.min(Math.round(loadAvg1m / machine.cpus * 100), 100) : 0} max={100} label="CPU Load" color="#8b5cf6" detail={hasRuntimeStats ? `${loadAvg1m.toFixed(2)} avg / ${machine.cpus} cores` : 'Polled from machine page'} />
+                    <ProgressBar value={memUsedPct} max={100} label="Memory" color="#3b82f6" detail={hasRuntimeStats ? `${formatBytes(machine.totalMem - memAvail)} / ${formatBytes(machine.totalMem)}${machine.platform === 'darwin' ? ' (approx.)' : ''}` : `Polled from machine page · ${formatBytes(machine.totalMem)} total`} />
                 </div>
             </div>
 

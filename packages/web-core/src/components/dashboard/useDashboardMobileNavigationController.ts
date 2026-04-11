@@ -38,7 +38,7 @@ export function useDashboardMobileNavigationController({
 
     const openNativeConversation = useCallback((conversation: ActiveConversation) => {
         const nativeConversation = conversations.find(candidate => (
-            candidate.ideId === conversation.ideId
+            candidate.routeId === conversation.routeId
             && candidate.streamSource === 'native'
         ))
         if (!nativeConversation) return

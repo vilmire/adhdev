@@ -2,16 +2,19 @@
 /**
  * ChatPane — Chat view for IDE, ACP, and CLI chat-mode sessions.
  */
-import React, { useRef, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import ControlsBar from './ControlsBar';
 import ChatInputBar from './ChatInputBar';
 import ConversationMetaChips from './ConversationMetaChips';
 import { getConversationViewStates } from './DashboardMobileChatShared';
+import type { ReadChatCursor, ReadChatSyncResult, SessionChatTailUpdate } from '@adhdev/daemon-core';
 import type { ActiveConversation, DashboardMessage } from './types';
 import type { DaemonData } from '../../types';
 import { useTransport } from '../../context/TransportContext';
+import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
+import { subscriptionManager } from '../../managers/SubscriptionManager';
 import { IconPlug, IconEye, IconFolder } from '../Icons';
 import {
     dedupeOptimisticMessages,
@@ -40,6 +43,88 @@ function unwrapChatHistoryResult(raw: unknown): ChatHistoryResult {
     return raw as ChatHistoryResult;
 }
 
+function hashSignatureParts(parts: string[]): string {
+    let hash = 0x811c9dc5;
+    for (const part of parts) {
+        const text = String(part || '');
+        for (let i = 0; i < text.length; i += 1) {
+            hash ^= text.charCodeAt(i);
+            hash = Math.imul(hash, 0x01000193) >>> 0;
+        }
+        hash ^= 0xff;
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(16).padStart(8, '0');
+}
+
+function buildChatSnapshotSignature(messages: DashboardMessage[], status?: string): string {
+    const lastMessage = messages[messages.length - 1];
+    if (!lastMessage) return `empty:${status || ''}`;
+
+    let content = '';
+    try {
+        content = JSON.stringify(lastMessage.content ?? '');
+    } catch {
+        content = String(lastMessage.content ?? '');
+    }
+
+    return [
+        status || '',
+        messages.length,
+        String(lastMessage.id || ''),
+        String(lastMessage.index ?? ''),
+        String(lastMessage.receivedAt ?? lastMessage.timestamp ?? ''),
+        content,
+    ].join('|');
+}
+
+function buildLastMessageSignature(message: DashboardMessage | null | undefined): string {
+    if (!message) return '';
+    let content = '';
+    try {
+        content = JSON.stringify(message.content ?? '');
+    } catch {
+        content = String(message.content ?? '');
+    }
+    return hashSignatureParts([
+        String(message.id || ''),
+        String(message.index ?? ''),
+        String(message.role || ''),
+        String(message.receivedAt ?? message.timestamp ?? ''),
+        content,
+    ]);
+}
+
+function buildReadChatCursor(messages: DashboardMessage[]): ReadChatCursor {
+    return {
+        knownMessageCount: messages.length,
+        lastMessageSignature: buildLastMessageSignature(messages[messages.length - 1]),
+    };
+}
+
+function applyReadChatSync(
+    previousMessages: DashboardMessage[],
+    result: Partial<ReadChatSyncResult>,
+): DashboardMessage[] {
+    const incomingMessages = Array.isArray(result.messages) ? result.messages as DashboardMessage[] : [];
+    switch (result.syncMode) {
+        case 'noop':
+            return previousMessages;
+        case 'append':
+            return dedupeOptimisticMessages([...previousMessages, ...incomingMessages]);
+        case 'replace_tail': {
+            const replaceFrom = Math.max(0, Math.min(Number(result.replaceFrom ?? previousMessages.length), previousMessages.length));
+            return dedupeOptimisticMessages([
+                ...previousMessages.slice(0, replaceFrom),
+                ...incomingMessages,
+            ]);
+        }
+        case 'full':
+        default:
+            return incomingMessages;
+    }
+}
+
 export interface ChatPaneProps {
     activeConv: ActiveConversation;
     ideEntry?: DaemonData;
@@ -47,7 +132,7 @@ export interface ChatPaneProps {
     isSendingChat?: boolean;
     handleFocusAgent: () => void;
     isFocusingAgent: boolean;
-    actionLogs: { ideId: string; text: string; timestamp: number }[];
+    actionLogs: { routeId: string; text: string; timestamp: number }[];
     /** Display name for user messages */
     userName?: string;
     showMetaChips?: boolean;
@@ -67,7 +152,10 @@ export default function ChatPane({
     isInputActive = true,
 }: ChatPaneProps) {
     const receivedAtCache = useRef<Map<string, number>>(new Map());
-    const { sendCommand } = useTransport();
+    const liveChatCache = useRef<Map<string, DashboardMessage[]>>(new Map());
+    const liveChatCursorCache = useRef<Map<string, ReadChatCursor>>(new Map());
+    const { sendCommand, sendData } = useTransport();
+    const loadDaemonMetadata = useDaemonMetadataLoader();
     useDevRenderTrace('ChatPane', {
         tabKey: activeConv.tabKey,
         messageCount: activeConv.messages.length,
@@ -115,18 +203,99 @@ export default function ChatPane({
     const historyMessages = tabHistory.messages;
     const hasMoreHistory = tabHistory.hasMore;
     const loadError = tabHistory.error;
-    const hiddenLiveCount = Math.max(0, activeConv.messages.length - tabHistory.visibleLiveCount);
+    const cachedLiveMessages = liveChatCache.current.get(tabKey);
+    const optimisticMessages = activeConv.messages.filter(message => !!message?._localId);
+    const liveMessages = cachedLiveMessages
+        ? dedupeOptimisticMessages([...cachedLiveMessages, ...optimisticMessages])
+        : activeConv.messages;
+    const hiddenLiveCount = Math.max(0, liveMessages.length - tabHistory.visibleLiveCount);
+    const panelLabel = getConversationDisplayLabel(activeConv)
+    const daemonId = getConversationDaemonRouteId(activeConv);
+    const sessionId = activeConv.sessionId || '';
+    const historySessionId = activeConv.providerSessionId || sessionId;
+    const controlsContext = useMemo(
+        () => getConversationControlsContext(activeConv, ideEntry),
+        [activeConv, ideEntry],
+    )
 
     const [isLoadingMore, setIsLoadingMore] = useState(false);
+    useEffect(() => {
+        const targetEntry = controlsContext.targetEntry;
+        const needsMetadata = !!daemonId && (
+            !targetEntry
+            || targetEntry.providerControls === undefined
+            || targetEntry.controlValues === undefined
+            || (controlsContext.isAcp && (targetEntry.acpConfigOptions === undefined || targetEntry.acpModes === undefined))
+        );
+
+        if (!needsMetadata) return;
+        void loadDaemonMetadata(daemonId, { minFreshMs: 30_000 }).catch(() => {});
+    }, [
+        daemonId,
+        controlsContext.isAcp,
+        controlsContext.targetEntry?.providerControls,
+        controlsContext.targetEntry?.controlValues,
+        controlsContext.targetEntry?.acpConfigOptions,
+        controlsContext.targetEntry?.acpModes,
+        loadDaemonMetadata,
+    ]);
+
+    useEffect(() => {
+        if (!daemonId || !sessionId || !sendData) return;
+
+        const previousMessages = liveChatCache.current.get(tabKey) || [];
+        const cachedCursor = liveChatCursorCache.current.get(tabKey);
+        const cursor = cachedCursor && cachedCursor.knownMessageCount
+            ? cachedCursor
+            : buildReadChatCursor(previousMessages);
+        const subscriptionKey = `daemon:${daemonId}:session:${sessionId}`;
+        const unsubscribe = subscriptionManager.subscribe(
+            { sendData },
+            daemonId,
+            {
+                type: 'subscribe',
+                topic: 'session.chat_tail',
+                key: subscriptionKey,
+                params: {
+                    targetSessionId: sessionId,
+                    historySessionId,
+                    knownMessageCount: cursor.knownMessageCount,
+                    lastMessageSignature: cursor.lastMessageSignature,
+                    ...(cursor.knownMessageCount ? {} : { tailLimit: LIVE_MESSAGE_PAGE_SIZE }),
+                },
+            },
+            (update: SessionChatTailUpdate) => {
+                const currentMessages = liveChatCache.current.get(tabKey) || [];
+                const nextMessages = applyReadChatSync(currentMessages, update);
+                const totalMessages = Math.max(
+                    nextMessages.length,
+                    Number(update.totalMessages || 0),
+                );
+                liveChatCursorCache.current.set(tabKey, {
+                    knownMessageCount: totalMessages,
+                    lastMessageSignature: typeof update.lastMessageSignature === 'string'
+                        ? update.lastMessageSignature
+                        : buildLastMessageSignature(nextMessages[nextMessages.length - 1]),
+                });
+                const unchanged = buildChatSnapshotSignature(currentMessages)
+                    === buildChatSnapshotSignature(nextMessages);
+                if (unchanged) return;
+                liveChatCache.current.set(tabKey, nextMessages);
+                setHistoryTick(t => t + 1);
+            },
+        );
+
+        return unsubscribe;
+    }, [daemonId, historySessionId, sendData, sessionId, tabKey]);
 
     const handleLoadMore = useCallback(async () => {
         if (isLoadingMore) return;
         const tk = activeConv.tabKey;
         const currentState = getTabHistory(tk);
-        if (activeConv.messages.length > currentState.visibleLiveCount) {
+        if (liveMessages.length > currentState.visibleLiveCount) {
             updateTabHistory(tk, {
                 visibleLiveCount: Math.min(
-                    activeConv.messages.length,
+                    liveMessages.length,
                     currentState.visibleLiveCount + LIVE_MESSAGE_PAGE_SIZE,
                 ),
                 error: null,
@@ -180,14 +349,14 @@ export default function ChatPane({
         } finally {
             setIsLoadingMore(false);
         }
-    }, [isLoadingMore, ideEntry, activeConv, sendCommand, getTabHistory, updateTabHistory]);
+    }, [isLoadingMore, activeConv, liveMessages.length, sendCommand, getTabHistory, updateTabHistory]);
 
     const { allMessages, receivedAtMap } = useMemo(() => {
-        const liveMessages = hiddenLiveCount > 0
-            ? activeConv.messages.slice(-tabHistory.visibleLiveCount)
-            : activeConv.messages;
+        const visibleLiveMessages = hiddenLiveCount > 0
+            ? liveMessages.slice(-tabHistory.visibleLiveCount)
+            : liveMessages;
         if (historyMessages.length === 0) {
-            const dedupedLiveMessages = sortMessagesChronologically(dedupeOptimisticMessages(liveMessages));
+            const dedupedLiveMessages = sortMessagesChronologically(dedupeOptimisticMessages(visibleLiveMessages));
             const liveReceivedAtMap: Record<string, number> = {};
             dedupedLiveMessages.forEach((message, index: number) => {
                 const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;
@@ -202,9 +371,9 @@ export default function ChatPane({
         }
 
         // Dedup: exclude history messages already visible in live feed
-        const uniqueHistory = excludeMessagesPresentInLiveFeed(historyMessages, liveMessages);
+        const uniqueHistory = excludeMessagesPresentInLiveFeed(historyMessages, visibleLiveMessages);
         const mergedMessages = sortMessagesChronologically(
-            dedupeOptimisticMessages([...uniqueHistory, ...liveMessages]),
+            dedupeOptimisticMessages([...uniqueHistory, ...visibleLiveMessages]),
         );
         const nextReceivedAtMap: Record<string, number> = {};
         mergedMessages.forEach((message, index: number) => {
@@ -217,20 +386,15 @@ export default function ChatPane({
             nextReceivedAtMap[getChatMessageStableKey(message, index)] = receivedAt;
         });
         return { allMessages: mergedMessages, receivedAtMap: nextReceivedAtMap };
-    }, [activeConv.messages, activeConv.tabKey, hiddenLiveCount, historyMessages, tabHistory.visibleLiveCount]);
+    }, [activeConv.tabKey, hiddenLiveCount, historyMessages, liveMessages, tabHistory.visibleLiveCount]);
     const visibleActionLogs = useMemo(
         () => actionLogs
-            .filter(l => l.ideId === activeConv.tabKey)
+            .filter(l => l.routeId === activeConv.tabKey)
             .sort((a, b) => a.timestamp - b.timestamp),
         [actionLogs, activeConv.tabKey],
     );
-    const panelLabel = getConversationDisplayLabel(activeConv)
-    const controlsContext = useMemo(
-        () => getConversationControlsContext(activeConv, ideEntry),
-        [activeConv, ideEntry],
-    )
     const emptyState = useMemo(() => {
-        if (activeConv.messages.length !== 0) return undefined;
+        if (liveMessages.length !== 0) return undefined;
         if (activeConv.connectionState === 'connecting' || activeConv.connectionState === 'new') {
             return (
                 <div className="text-center mt-16 flex flex-col items-center gap-4">
@@ -287,7 +451,7 @@ export default function ChatPane({
             );
         }
         return undefined;
-    }, [activeConv.messages.length, activeConv.connectionState, activeConv.status, handleFocusAgent, isFocusingAgent, isLoadingMore, panelLabel, viewStates.isGenerating]);
+    }, [activeConv.connectionState, activeConv.status, handleFocusAgent, isFocusingAgent, isLoadingMore, liveMessages.length, panelLabel, viewStates.isGenerating]);
 
     return (
         <div className="flex-1 min-h-0 w-full flex flex-col">
@@ -318,9 +482,9 @@ export default function ChatPane({
             {isInputActive && !controlsContext.isCliTerminal && (() => {
                 return (
                     <ControlsBar
-                        ideId={activeConv.ideId}
+                        routeId={activeConv.routeId}
                         sessionId={activeConv.sessionId}
-                        ideType={activeConv.ideType}
+                        hostIdeType={activeConv.hostIdeType}
                         providerType={controlsContext.providerType}
                         displayLabel={controlsContext.displayLabel}
                         controls={controlsContext.targetEntry?.providerControls}

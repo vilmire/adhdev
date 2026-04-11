@@ -18,6 +18,12 @@ export interface ADHDevConfig {
  // Server connection
     serverUrl: string;
 
+    /**
+     * Allow server-relayed REST/API commands to reach the daemon.
+     * Disabled by default so cloud dashboard traffic stays P2P-only.
+     */
+    allowServerApiProxy?: boolean;
+
  // Selected IDE (primary)
     selectedIde: string | null;
 
@@ -90,6 +96,7 @@ export interface ADHDevConfig {
 
 const DEFAULT_CONFIG: ADHDevConfig = {
     serverUrl: 'https://api.adhf.dev',
+    allowServerApiProxy: false,
     selectedIde: null,
     configuredIdes: [],
     installedExtensions: [],
@@ -140,6 +147,7 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
         serverUrl: typeof parsed.serverUrl === 'string' && parsed.serverUrl.trim()
             ? parsed.serverUrl
             : DEFAULT_CONFIG.serverUrl,
+        allowServerApiProxy: asBoolean(parsed.allowServerApiProxy, DEFAULT_CONFIG.allowServerApiProxy ?? false),
         selectedIde: asNullableString(parsed.selectedIde),
         configuredIdes: asStringArray(parsed.configuredIdes),
         installedExtensions: asStringArray(parsed.installedExtensions),

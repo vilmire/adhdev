@@ -27,7 +27,7 @@ export function useDashboardRemoteDialogState({
     ides,
     resolveConversationByTarget,
 }: UseDashboardRemoteDialogStateOptions) {
-    const [remoteDialogState, setRemoteDialogState] = useState<{ ideId: string; tabKey: string } | null>(null)
+    const [remoteDialogState, setRemoteDialogState] = useState<{ routeId: string; tabKey: string } | null>(null)
     const [remoteDialogActiveConv, setRemoteDialogActiveConv] = useState<ActiveConversation | null>(null)
 
     const requestedRemoteConversation = useMemo(() => {
@@ -37,26 +37,26 @@ export function useDashboardRemoteDialogState({
     }, [isMobile, requestedRemoteTabTarget, resolveConversationByTarget])
 
     const remoteDialogConv = useMemo(() => {
-        const targetIdeId = remoteDialogState?.ideId
+        const targetIdeId = remoteDialogState?.routeId
         if (!targetIdeId) return null
         const requestedConversation = remoteDialogState?.tabKey
             ? conversations.find(conversation => conversation.tabKey === remoteDialogState.tabKey)
             : requestedDesktopTabKey
                 ? conversations.find(conversation => conversation.tabKey === requestedDesktopTabKey)
                 : null
-        if (requestedConversation?.ideId === targetIdeId) return requestedConversation
+        if (requestedConversation?.routeId === targetIdeId) return requestedConversation
         return getPreferredConversationForIde(conversations, targetIdeId)
     }, [conversations, remoteDialogState, requestedDesktopTabKey])
 
     const remoteDialogIdeEntry = useMemo(() => {
         if (!remoteDialogConv) return undefined
-        return ides.find(ide => ide.id === remoteDialogConv.ideId)
+        return ides.find(ide => ide.id === remoteDialogConv.routeId)
     }, [ides, remoteDialogConv])
 
     useEffect(() => {
         if (!requestedRemoteConversation) return
         setRemoteDialogState({
-            ideId: requestedRemoteConversation.ideId,
+            routeId: requestedRemoteConversation.routeId,
             tabKey: getConversationRemoteTabKey(requestedRemoteConversation),
         })
         setRemoteDialogActiveConv(requestedRemoteConversation)
@@ -75,7 +75,7 @@ export function useDashboardRemoteDialogState({
     const openRemoteDialog = useCallback((conversation: ActiveConversation | null | undefined) => {
         if (!conversation) return
         setRemoteDialogState({
-            ideId: conversation.ideId,
+            routeId: conversation.routeId,
             tabKey: getConversationRemoteTabKey(conversation),
         })
         setRemoteDialogActiveConv(conversation)

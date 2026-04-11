@@ -2,7 +2,13 @@ import { formatIdeType } from '../../utils/daemon-utils'
 import { normalizeTextContent } from '../../utils/text'
 import type { ActiveConversation } from './types'
 import { getConversationViewStates } from './DashboardMobileChatShared'
-import { getConversationDisplayLabel, getConversationMetaParts, getConversationProviderLabel } from './conversation-selectors'
+import {
+    getConversationDisplayLabel,
+    getConversationHostIdeType,
+    getConversationMetaParts,
+    getConversationProviderLabel,
+    getConversationProviderType,
+} from './conversation-selectors'
 
 export function getConversationTitle(conversation: ActiveConversation): string {
     return getConversationDisplayLabel(conversation)
@@ -50,7 +56,8 @@ export function getConversationMachineCardPreview(conversation: ActiveConversati
 }
 
 export function getConversationHistorySubtitle(conversation: ActiveConversation): string {
-    return `${getConversationTitle(conversation)} — ${formatIdeType(conversation.ideType)}`
+    const labelType = getConversationHostIdeType(conversation) || getConversationProviderType(conversation)
+    return `${getConversationTitle(conversation)} — ${formatIdeType(labelType)}`
 }
 
 export function getConversationStopDialogLabel(conversation: ActiveConversation): string {
@@ -58,7 +65,7 @@ export function getConversationStopDialogLabel(conversation: ActiveConversation)
 }
 
 export function getConversationNotificationLabel(conversation: ActiveConversation): string {
-    return conversation.title || getConversationProviderLabel(conversation) || conversation.ideId
+    return conversation.title || getConversationProviderLabel(conversation) || conversation.routeId
 }
 
 export function getRemotePanelTitle(conversation: ActiveConversation | null | undefined): string {

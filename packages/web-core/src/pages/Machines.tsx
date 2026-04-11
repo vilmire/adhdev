@@ -1,6 +1,9 @@
+import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { useDaemons } from '../compat'
+import { useDaemonMachineRuntimeSubscription } from '../hooks/useDaemonMachineRuntimeSubscription'
+import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import {
     buildProviderMaps, PLATFORM_ICONS,
     formatUptime, formatBytes,
@@ -61,12 +64,41 @@ export default function MachinesPage() {
     const navigate = useNavigate()
     const daemonCtx = useDaemons()
     const { ides: daemons } = daemonCtx
+    const loadDaemonMetadata = useDaemonMetadataLoader()
     const connectionStates = daemonCtx.connectionStates || {}
     const connectionTransports = daemonCtx.connectionTransports || {}
     const { icons: providerIcons, labels: providerLabels } = buildProviderMaps(daemons)
     const getIcon = (type: string) => providerIcons[type] || ''
     const machines = groupByMachine(daemons, providerLabels)
+    const machineIdsKey = Array.from(new Set(machines.map((machine) => machine.machineId).filter(Boolean))).join('|')
     const onlineCount = machines.filter(m => m.daemonIde.status === 'online').length
+
+    useEffect(() => {
+        const targets = machines
+            .map((machine) => machine.daemonIde)
+            .filter((entry) => {
+                const info = entry.machine
+                return !entry.detectedIdes
+                    || !entry.availableProviders
+                    || !entry.recentLaunches
+                    || !entry.workspaces
+                    || typeof info?.cpus !== 'number'
+                    || typeof info?.totalMem !== 'number'
+                    || typeof info?.arch !== 'string'
+                    || typeof info?.release !== 'string'
+            })
+            .map((entry) => entry.id)
+
+        for (const daemonId of targets) {
+            void loadDaemonMetadata(daemonId, { minFreshMs: 30_000 }).catch(() => {})
+        }
+    }, [loadDaemonMetadata, machines])
+
+    useDaemonMachineRuntimeSubscription(
+        machineIdsKey ? machineIdsKey.split('|') : [],
+        { enabled: true, intervalMs: 20_000 },
+    )
+
     const openDashboardSession = (sessionId?: string | null, fallbackMachineId?: string | null) => {
         if (sessionId) {
             navigate(`/dashboard?activeTab=${encodeURIComponent(sessionId)}`)
@@ -178,6 +210,10 @@ export default function MachinesPage() {
                 >
                     {machines.map((machine) => {
                         const isOnline = machine.daemonIde.status === 'online'
+                        const hasRuntimeStats = typeof machine.system?.uptime === 'number'
+                            || typeof machine.system?.freeMem === 'number'
+                            || typeof machine.system?.availableMem === 'number'
+                            || Array.isArray(machine.system?.loadavg)
                         const memAvail = machine.system?.availableMem ?? machine.system?.freeMem ?? 0
                         const memUsedFrac = machine.system?.totalMem
                             ? Math.min(1, Math.max(0, 1 - memAvail / machine.system.totalMem))
@@ -238,14 +274,18 @@ export default function MachinesPage() {
                                             >
                                                 {PLATFORM_ICONS[machine.platform] || <IconMonitor size={20} />}
                                             </div>
-                                            <div className="overflow-hidden min-w-0">
-                                                <div className="font-bold text-sm text-text-primary tracking-tight overflow-hidden text-ellipsis whitespace-nowrap">
-                                                    {machine.nickname || machine.hostname}
-                                                </div>
-                                                <div className="text-[10px] text-text-muted flex gap-1 items-center">
-                                                    {machine.system && <span>{machine.system.cpus ?? 0} cores · {formatBytes(machine.system.totalMem ?? 0)}</span>}
-                                                    {machine.system && <span className="opacity-30">·</span>}
-                                                    {machine.system && <span>{formatUptime(machine.system.uptime ?? 0)}</span>}
+                                                <div className="overflow-hidden min-w-0">
+                                                    <div className="font-bold text-sm text-text-primary tracking-tight overflow-hidden text-ellipsis whitespace-nowrap">
+                                                        {machine.nickname || machine.hostname}
+                                                    </div>
+                                                    <div className="text-[10px] text-text-muted flex gap-1 items-center">
+                                                    {typeof machine.system?.cpus === 'number' && typeof machine.system?.totalMem === 'number' && (
+                                                        <span>{machine.system.cpus} cores · {formatBytes(machine.system.totalMem)}</span>
+                                                    )}
+                                                    {typeof machine.system?.cpus === 'number' && typeof machine.system?.totalMem === 'number' && (
+                                                        <span className="opacity-30">·</span>
+                                                    )}
+                                                    {machine.system && <span>{typeof machine.system.uptime === 'number' ? formatUptime(machine.system.uptime) : 'Runtime polling'}</span>}
                                                 </div>
                                             </div>
                                         </div>
@@ -283,8 +323,8 @@ export default function MachinesPage() {
 
                                     {/* System Stats (mini bars) — always shown for consistent card height */}
                                     <div className="flex gap-3 mb-3.5">
-                                        <ProgressBar value={machine.system && isOnline ? cpuPct : 0} max={100} color="#8b5cf6" label="CPU" compact />
-                                        <ProgressBar value={machine.system && isOnline ? Math.round(memUsedFrac * 100) : 0} max={100} color="#3b82f6" label="MEM" compact />
+                                        <ProgressBar value={machine.system && isOnline && hasRuntimeStats ? cpuPct : 0} max={100} color="#8b5cf6" label="CPU" compact />
+                                        <ProgressBar value={machine.system && isOnline && hasRuntimeStats ? Math.round(memUsedFrac * 100) : 0} max={100} color="#3b82f6" label="MEM" compact />
                                     </div>
 
                                     {/* Compact Agent List — IDEs */}

@@ -390,17 +390,25 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
 
     // 1st pass: daemon entry → create machine group
     for (const daemon of daemons) {
-        if (daemon.type === 'adhdev-daemon' || daemon.daemonMode) {
+        if (daemon.type === 'adhdev-daemon') {
             const machineInfo = daemon.machine
             const hostname = getMachineHostnameLabel(daemon, {
                 fallbackId: daemon.id,
             })
 
-            const system = daemon.system || (machineInfo?.hostname ? {
-                arch: machineInfo.arch, cpus: machineInfo.cpus,
-                totalMem: machineInfo.totalMem, freeMem: machineInfo.freeMem,
-                availableMem: machineInfo.availableMem,
-                loadavg: machineInfo.loadavg, uptime: machineInfo.uptime, release: machineInfo.release,
+            const hasStaticMachineDetails = typeof machineInfo?.cpus === 'number'
+                || typeof machineInfo?.totalMem === 'number'
+                || typeof machineInfo?.arch === 'string'
+                || typeof machineInfo?.release === 'string'
+                || typeof machineInfo?.uptime === 'number'
+                || typeof machineInfo?.freeMem === 'number'
+                || typeof machineInfo?.availableMem === 'number'
+                || Array.isArray(machineInfo?.loadavg)
+            const system = daemon.system || (hasStaticMachineDetails ? {
+                arch: machineInfo?.arch, cpus: machineInfo?.cpus,
+                totalMem: machineInfo?.totalMem, freeMem: machineInfo?.freeMem,
+                availableMem: machineInfo?.availableMem,
+                loadavg: machineInfo?.loadavg, uptime: machineInfo?.uptime, release: machineInfo?.release,
             } : undefined)
 
             machines.push({
@@ -421,7 +429,7 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
 
     // 2nd pass: managed IDEs/CLIs → assign to parent machine
     for (const daemon of daemons) {
-        if (!daemon.daemonId || daemon.type === 'adhdev-daemon' || daemon.daemonMode) continue
+        if (!daemon.daemonId || daemon.type === 'adhdev-daemon') continue
         const parent = machines.find(m => m.machineId === daemon.daemonId)
         if (!parent) continue
 

@@ -7,7 +7,7 @@ interface UseDashboardSessionCommandsOptions {
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     activeConv: ActiveConversation | undefined
     chats?: DaemonData['chats']
-    updateIdeChats: (ideId: string, chats: DaemonData['chats']) => void
+    updateRouteChats: (routeId: string, chats: DaemonData['chats']) => void
     setToasts: DashboardToastSetter
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
     setClearedTabs: Dispatch<SetStateAction<Record<string, number>>>
@@ -33,7 +33,7 @@ export function useDashboardSessionCommands({
     sendDaemonCommand,
     activeConv,
     chats,
-    updateIdeChats,
+    updateRouteChats,
     setToasts,
     setLocalUserMessages,
     setClearedTabs,
@@ -52,9 +52,9 @@ export function useDashboardSessionCommands({
         }
     }, [sendDaemonCommand])
 
-    const handleSwitchSession = useCallback(async (ideId: string, sessionId: string) => {
+    const handleSwitchSession = useCallback(async (routeId: string, sessionId: string) => {
         try {
-            const routeTarget = ideId || activeConv?.daemonId || ''
+            const routeTarget = routeId || activeConv?.daemonId || ''
             const res: any = await sendDaemonCommand(routeTarget, 'switch_chat', {
                 id: sessionId,
                 sessionId,
@@ -114,7 +114,7 @@ export function useDashboardSessionCommands({
                 nextChats = res?.chats || res?.result?.chats
             }
             if (res?.success && Array.isArray(nextChats)) {
-                updateIdeChats(activeConv.ideId, nextChats)
+                updateRouteChats(activeConv.routeId, nextChats)
                 if (isLikelyCollapsedHistoryResult(nextChats, activeConv) && !isLikelyCollapsedHistoryResult(chats, activeConv)) {
                     appendWarningToast(setToasts, '⚠️ History dialog did not fully open — try once more')
                 }
@@ -124,7 +124,7 @@ export function useDashboardSessionCommands({
         } finally {
             setIsRefreshingHistory(false)
         }
-    }, [activeConv, chats, isRefreshingHistory, sendDaemonCommand, updateIdeChats, setToasts])
+    }, [activeConv, chats, isRefreshingHistory, sendDaemonCommand, updateRouteChats, setToasts])
 
     return {
         isCreatingChat,

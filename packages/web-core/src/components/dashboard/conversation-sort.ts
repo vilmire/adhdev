@@ -20,11 +20,11 @@ export function getConversationTimestamp(conversation: ActiveConversation): numb
 }
 
 export function getConversationActivityAt(conversation: ActiveConversation, lastUpdated = 0): number {
-    return getConversationTimestamp(conversation) || lastUpdated || 0
+    return getConversationTimestamp(conversation) || conversation.lastUpdated || lastUpdated || 0
 }
 
 export function getConversationSortTimestamp(conversation: ActiveConversation): number {
-    return getConversationTimestamp(conversation)
+    return getConversationTimestamp(conversation) || conversation.lastUpdated || 0
 }
 
 export function compareConversationRecency(
@@ -78,9 +78,9 @@ function getPreferredStreamConversation(streams: ActiveConversation[]): ActiveCo
 
 export function getPreferredConversationForIde(
     conversations: ActiveConversation[],
-    ideId: string,
+    routeId: string,
 ): ActiveConversation | null {
-    const ideConversations = conversations.filter(conversation => conversation.ideId === ideId)
+    const ideConversations = conversations.filter(conversation => conversation.routeId === routeId)
     if (ideConversations.length === 0) return null
 
     const nativeConversation = ideConversations.find(conversation => conversation.streamSource === 'native') || null

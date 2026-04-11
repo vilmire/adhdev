@@ -5,7 +5,7 @@
  * wraps them with StandaloneDaemonContext + TransportContext.
  */
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { StandaloneDaemonProvider, sendCommandViaWs } from './StandaloneDaemonContext'
+import { StandaloneDaemonProvider, sendCommandViaWs, sendDataViaWs } from './StandaloneDaemonContext'
 import { TransportProvider, MachineDetail, Dashboard, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient } from '@adhdev/web-core'
 import StandaloneLayout from './StandaloneLayout'
 import StandaloneAbout from './StandaloneAbout'
@@ -17,7 +17,7 @@ initTheme()
 initChatTheme()
 
 const standaloneApiClient = createApiClient({
-    baseUrl: '',
+    baseUrl: (import.meta as any).env?.DEV ? 'http://127.0.0.1:3847' : '',
 })
 
 /**
@@ -52,7 +52,7 @@ export default function App() {
                 <StandaloneDaemonProvider>
                     <TransportProvider value={{
                         sendCommand: sendCommandViaWs,
-                        sendData: () => false,
+                        sendData: sendDataViaWs,
                     }}>
                         <StandaloneLayout>
                             <Routes>

@@ -16,6 +16,8 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
+import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
+import { useDaemonMachineRuntimeSubscription } from '../hooks/useDaemonMachineRuntimeSubscription'
 import type { DaemonData } from '../types'
 import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel } from '../utils/daemon-utils'
 import { IconBarChart, IconMonitor, IconSettings, IconClipboard, IconServer } from '../components/Icons'
@@ -46,7 +48,7 @@ interface MachineDetailProps {
 }
 
 type MachineDaemonEntry = DaemonData & {
-    daemonMode: true
+    type: 'adhdev-daemon'
     activeWorkspaceId?: string | null
     activeWorkspacePath?: string | null
 }
@@ -56,10 +58,11 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const navigate = useNavigate()
     const location = useLocation()
     const { sendCommand: sendDaemonCommand } = useTransport()
+    const loadDaemonMetadata = useDaemonMetadataLoader()
     const daemonCtx = useDaemons()
     const allIdes: DaemonData[] = daemonCtx.ides || []
     const initialLoaded: boolean = daemonCtx.initialLoaded ?? true
-    const machineEntry = allIdes.find((entry): entry is MachineDaemonEntry => entry.id === machineId && entry.daemonMode === true)
+    const machineEntry = allIdes.find((entry): entry is MachineDaemonEntry => entry.id === machineId && entry.type === 'adhdev-daemon')
     const isStandalone = allIdes.some(entry => entry.type === 'adhdev-daemon')
     const [activeTab, setActiveTab] = useState<TabId>('workspace')
     const [workspaceCategoryHint, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
@@ -75,6 +78,21 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const [recentLaunchWorkspaceKey, setRecentLaunchWorkspaceKey] = useState('__home__')
     const [recentLaunchBusy, setRecentLaunchBusy] = useState(false)
     const logsEndRef = useRef<HTMLDivElement>(null)
+
+    useEffect(() => {
+        if (!machineId || !machineEntry) return
+        const needsMetadata = !machineEntry.workspaces
+            || !machineEntry.availableProviders
+            || !machineEntry.detectedIdes
+            || !machineEntry.recentLaunches
+        if (!needsMetadata) return
+        void loadDaemonMetadata(machineId, { minFreshMs: 30_000 }).catch(() => {})
+    }, [loadDaemonMetadata, machineEntry, machineId])
+
+    useDaemonMachineRuntimeSubscription(
+        machineId && activeTab === 'overview' ? [machineId] : [],
+        { enabled: activeTab === 'overview', intervalMs: 15_000 },
+    )
 
     const handleBack = () => {
         if (isStandalone) {
@@ -129,10 +147,10 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         arch: machineEntry.machine?.arch || '',
         cpus: machineEntry.machine?.cpus || 0,
         totalMem: machineEntry.machine?.totalMem || 0,
-        freeMem: machineEntry.machine?.freeMem || 0,
+        freeMem: machineEntry.machine?.freeMem,
         availableMem: machineEntry.machine?.availableMem,
-        loadavg: machineEntry.machine?.loadavg || [],
-        uptime: machineEntry.machine?.uptime || 0,
+        loadavg: machineEntry.machine?.loadavg,
+        uptime: machineEntry.machine?.uptime,
         release: machineEntry.machine?.release || '',
         cdpConnected: !!machineEntry.cdpConnected,
         machineNickname: machineEntry.machineNickname || null,
@@ -146,7 +164,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     } : null
 
     const ideSessions: IdeSessionEntry[] = allIdes
-        .filter(i => i.daemonId === machineId && !i.daemonMode)
+        .filter(i => i.daemonId === machineId && i.type !== 'adhdev-daemon')
         .filter(i => !isCliEntry(i) && !isAcpEntry(i))
         .map(i => ({
             id: i.id, sessionId: i.sessionId, type: i.type, version: i.version || '',
@@ -270,7 +288,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const currentConversations = useMemo<ActiveConversation[]>(() => {
         const connectionState = daemonCtx.connectionStates?.[machineId || ''] || undefined
         return allIdes
-            .filter(entry => entry.daemonId === machineId && !entry.daemonMode)
+            .filter(entry => entry.daemonId === machineId && entry.type !== 'adhdev-daemon')
             .flatMap(entry => buildScopedIdeConversations(entry, {}, {
                 connectionStates: machineId && connectionState ? { [machineId]: connectionState } : undefined,
                 defaultConnectionState: connectionState,

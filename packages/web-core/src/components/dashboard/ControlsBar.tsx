@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTransport } from '../../context/TransportContext';
+import DashboardModelModeBar from './ModelModeBar';
 // Inline type (mirrors ProviderControlSchema from @adhdev/daemon-core/shared-types)
 // Avoids build dependency on daemon-core re-export timing
 interface ProviderControlSchema {
@@ -37,9 +38,9 @@ interface ProviderControlSchema {
 const _optionsCache = new Map<string, Record<string, string[]>>();
 
 export interface ControlsBarProps {
-    ideId: string;
+    routeId: string;
     sessionId?: string;
-    ideType: string;
+    hostIdeType?: string;
     providerType: string;
     displayLabel: string;
     /** Provider-declared controls schema */
@@ -61,11 +62,11 @@ const AGENT_COLORS: Record<string, string> = {
 };
 
 export default function ControlsBar({
-    ideId, sessionId, ideType, providerType, displayLabel,
-    controls, controlValues, serverModel, serverMode,
+    routeId, sessionId, hostIdeType, providerType, displayLabel,
+    controls, controlValues, serverModel, serverMode, acpConfigOptions, acpModes,
 }: ControlsBarProps) {
     const { sendCommand } = useTransport();
-    const cacheKey = `${ideId}:${sessionId || providerType}`;
+    const cacheKey = `${routeId}:${sessionId || providerType}`;
     const accent = AGENT_COLORS[providerType] || '#94a3b8';
 
     // Local state for optimistic updates
@@ -99,25 +100,26 @@ export default function ControlsBar({
             ...data,
             ...(sessionId && { targetSessionId: sessionId }),
         };
-        return await sendCommand(ideId, cmd, enriched);
-    }, [ideId, sessionId, sendCommand]);
+        return await sendCommand(routeId, cmd, enriched);
+    }, [routeId, sessionId, sendCommand]);
 
     const invokeProviderScript = useCallback(async (
         scriptName: string,
         payload: Record<string, unknown> = {},
         fallbackCmd?: string,
     ) => {
+        const scope = sessionId
+            ? { targetSessionId: sessionId }
+            : { agentType: providerType, ...(hostIdeType ? { ideType: hostIdeType } : {}) };
         try {
             const res = await exec('invoke_provider_script', {
-                agentType: providerType,
-                ideType,
+                ...scope,
                 scriptName,
                 ...payload,
             });
             if (res?.success === false && fallbackCmd) {
                 return await exec(fallbackCmd, {
-                    agentType: providerType,
-                    ideType,
+                    ...scope,
                     ...payload,
                 });
             }
@@ -125,20 +127,47 @@ export default function ControlsBar({
         } catch (error) {
             if (!fallbackCmd) throw error;
             return await exec(fallbackCmd, {
-                agentType: providerType,
-                ideType,
+                ...scope,
                 ...payload,
             });
         }
-    }, [exec, providerType, ideType]);
+    }, [exec, providerType, hostIdeType]);
 
-    if (!controls || controls.length === 0) return null;
+    if (!controls || controls.length === 0) {
+        return (
+            <DashboardModelModeBar
+                routeId={routeId}
+                sessionId={sessionId}
+                hostIdeType={hostIdeType}
+                providerType={providerType}
+                displayLabel={displayLabel}
+                serverModel={serverModel}
+                serverMode={serverMode}
+                acpConfigOptions={acpConfigOptions}
+                acpModes={acpModes}
+            />
+        );
+    }
 
     const barControls = controls
         .filter(c => c.placement === 'bar')
         .sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
 
-    if (barControls.length === 0) return null;
+    if (barControls.length === 0) {
+        return (
+            <DashboardModelModeBar
+                routeId={routeId}
+                sessionId={sessionId}
+                hostIdeType={hostIdeType}
+                providerType={providerType}
+                displayLabel={displayLabel}
+                serverModel={serverModel}
+                serverMode={serverMode}
+                acpConfigOptions={acpConfigOptions}
+                acpModes={acpModes}
+            />
+        );
+    }
 
     const handleSelectToggle = async (ctrl: ProviderControlSchema) => {
         if (openDropdown === ctrl.id) {

@@ -7,6 +7,7 @@ import ApprovalBanner from './ApprovalBanner'
 import CliTerminalPane from './CliTerminalPane'
 import ChatPane from './ChatPane'
 import { IconWarning } from '../Icons'
+import { useSessionModalSubscription } from '../../hooks/useSessionModalSubscription'
 
 interface PaneGroupContentProps {
     activeConv: ActiveConversation
@@ -20,7 +21,7 @@ interface PaneGroupContentProps {
     isSendingChat: boolean
     handleFocusAgent: () => void
     isFocusingAgent: boolean
-    actionLogs: { ideId: string; text: string; timestamp: number }[]
+    actionLogs: { routeId: string; text: string; timestamp: number }[]
     userName?: string
     scrollToBottomRequestNonce?: number
     isInputActive?: boolean
@@ -43,11 +44,22 @@ const PaneGroupContent = memo(function PaneGroupContent({
     scrollToBottomRequestNonce,
     isInputActive = true,
 }: PaneGroupContentProps) {
+    const modalState = useSessionModalSubscription(activeConv)
+    const effectiveConv: ActiveConversation = (
+        modalState.status || modalState.modalMessage || modalState.modalButtons
+            ? {
+                ...activeConv,
+                ...(modalState.status ? { status: modalState.status } : {}),
+                ...(modalState.modalMessage !== undefined ? { modalMessage: modalState.modalMessage } : {}),
+                ...(modalState.modalButtons !== undefined ? { modalButtons: modalState.modalButtons } : {}),
+            }
+            : activeConv
+    )
     return (
         <>
-            <ApprovalBanner activeConv={activeConv} onModalButton={handleModalButton} />
+            <ApprovalBanner activeConv={effectiveConv} onModalButton={handleModalButton} />
 
-            {(activeConv.transport !== 'pty' && activeConv.transport !== 'acp' && activeConv.cdpConnected === false) ? (
+            {(effectiveConv.transport !== 'pty' && effectiveConv.transport !== 'acp' && effectiveConv.cdpConnected === false) ? (
                 <div className="desktop-only px-3 pt-1 pb-2">
                     <div className="flex items-center gap-2.5 px-3.5 py-2 bg-yellow-500/[0.08] border border-yellow-500/20 rounded-lg text-xs text-text-secondary">
                         <span className="text-sm"><IconWarning size={14} /></span>
@@ -60,11 +72,11 @@ const PaneGroupContent = memo(function PaneGroupContent({
                 </div>
             ) : null}
 
-            {activeConv.transport === 'pty' ? (
+            {effectiveConv.transport === 'pty' ? (
                 <>
                     <div style={{ display: isCliTerminal ? 'flex' : 'none', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
                         <CliTerminalPane
-                            activeConv={activeConv}
+                            activeConv={effectiveConv}
                             clearToken={clearToken}
                             terminalRef={terminalRef}
                             handleSendChat={handleSendChat}
@@ -75,7 +87,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
                     {!isCliTerminal && (
                         <div style={{ display: 'flex', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
                             <ChatPane
-                                activeConv={activeConv}
+                                activeConv={effectiveConv}
                                 ideEntry={ideEntry}
                                 handleSendChat={handleSendChat}
                                 isSendingChat={isSendingChat}
@@ -91,7 +103,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
                 </>
             ) : (
                 <ChatPane
-                    activeConv={activeConv}
+                    activeConv={effectiveConv}
                     ideEntry={ideEntry}
                     handleSendChat={handleSendChat}
                     isSendingChat={isSendingChat}

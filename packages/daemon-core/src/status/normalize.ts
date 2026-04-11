@@ -20,13 +20,39 @@ const WORKING_STATUSES = new Set([
     'active',
 ]);
 
-// Status snapshots are sent over P2P every 5s, so keep only a recent live window here.
-// Older history is fetched on demand via `chat_history`, and CLI terminals stream via runtime events.
-const STATUS_ACTIVE_CHAT_MESSAGE_LIMIT = 60;
-const STATUS_ACTIVE_CHAT_TOTAL_BYTES_LIMIT = 96 * 1024;
-const STATUS_ACTIVE_CHAT_STRING_LIMIT = 4 * 1024;
-const STATUS_ACTIVE_CHAT_FALLBACK_STRING_LIMIT = 1024;
-const STATUS_INPUT_CONTENT_LIMIT = 2 * 1024;
+export interface NormalizeActiveChatOptions {
+    includeMessages?: boolean;
+    includeInputContent?: boolean;
+    includeActiveModal?: boolean;
+    messageLimit?: number;
+    totalBytesLimit?: number;
+    stringLimit?: number;
+    fallbackStringLimit?: number;
+}
+
+// Full snapshots are still capped, but can carry recent chat context for API/inspection use.
+const FULL_STATUS_ACTIVE_CHAT_OPTIONS: Required<NormalizeActiveChatOptions> = {
+    includeMessages: true,
+    includeInputContent: true,
+    includeActiveModal: true,
+    messageLimit: 60,
+    totalBytesLimit: 96 * 1024,
+    stringLimit: 4 * 1024,
+    fallbackStringLimit: 1024,
+};
+
+// Live/metadata snapshots only need routing + UI summary. Current chat text is loaded
+// on demand via `read_chat`, and older history via `chat_history`.
+export const LIVE_STATUS_ACTIVE_CHAT_OPTIONS: Required<NormalizeActiveChatOptions> = {
+    includeMessages: false,
+    includeInputContent: false,
+    includeActiveModal: false,
+    messageLimit: 0,
+    totalBytesLimit: 0,
+    stringLimit: 512,
+    fallbackStringLimit: 256,
+};
+
 const STATUS_MODAL_MESSAGE_LIMIT = 2 * 1024;
 const STATUS_MODAL_BUTTON_LIMIT = 120;
 
@@ -81,23 +107,27 @@ function normalizeMessageTime(message: unknown): unknown {
     return msg;
 }
 
-function trimMessagesForStatus(messages: unknown[] | null | undefined): unknown[] {
+function trimMessagesForStatus(
+    messages: unknown[] | null | undefined,
+    options: Required<NormalizeActiveChatOptions>,
+): unknown[] {
+    if (!options.includeMessages || options.messageLimit <= 0 || options.totalBytesLimit <= 0) return [];
     if (!Array.isArray(messages) || messages.length === 0) return [];
 
-    const recent = messages.slice(-STATUS_ACTIVE_CHAT_MESSAGE_LIMIT);
+    const recent = messages.slice(-options.messageLimit);
     const kept: unknown[] = [];
     let totalBytes = 0;
 
     for (let i = recent.length - 1; i >= 0; i -= 1) {
-        let normalized = normalizeMessageTime(trimMessageForStatus(recent[i], STATUS_ACTIVE_CHAT_STRING_LIMIT));
+        let normalized = normalizeMessageTime(trimMessageForStatus(recent[i], options.stringLimit));
         let size = estimateBytes(normalized);
 
-        if (size > STATUS_ACTIVE_CHAT_TOTAL_BYTES_LIMIT) {
-            normalized = normalizeMessageTime(trimMessageForStatus(recent[i], STATUS_ACTIVE_CHAT_FALLBACK_STRING_LIMIT));
+        if (size > options.totalBytesLimit) {
+            normalized = normalizeMessageTime(trimMessageForStatus(recent[i], options.fallbackStringLimit));
             size = estimateBytes(normalized);
         }
 
-        if (kept.length > 0 && (totalBytes + size) > STATUS_ACTIVE_CHAT_TOTAL_BYTES_LIMIT) {
+        if (kept.length > 0 && (totalBytes + size) > options.totalBytesLimit) {
             continue;
         }
 
@@ -143,20 +173,25 @@ export function isManagedStatusWaiting(
 
 export function normalizeActiveChatData<T extends ActiveChatData | null | undefined>(
     activeChat: T,
+    options: NormalizeActiveChatOptions = FULL_STATUS_ACTIVE_CHAT_OPTIONS,
 ): T {
     if (!activeChat) return activeChat;
+    const resolvedOptions: Required<NormalizeActiveChatOptions> = {
+        ...FULL_STATUS_ACTIVE_CHAT_OPTIONS,
+        ...options,
+    };
     return {
         ...activeChat,
         status: normalizeManagedStatus(activeChat.status, { activeModal: activeChat.activeModal }),
-        messages: trimMessagesForStatus(activeChat.messages) as T extends { messages: infer M } ? M : never,
-        activeModal: activeChat.activeModal ? {
+        messages: trimMessagesForStatus(activeChat.messages, resolvedOptions) as T extends { messages: infer M } ? M : never,
+        activeModal: resolvedOptions.includeActiveModal && activeChat.activeModal ? {
             message: truncateString(activeChat.activeModal.message || '', STATUS_MODAL_MESSAGE_LIMIT),
             buttons: (activeChat.activeModal.buttons || []).map((button) =>
                 truncateString(String(button || ''), STATUS_MODAL_BUTTON_LIMIT)
             ),
-        } : activeChat.activeModal,
-        inputContent: activeChat.inputContent
-            ? truncateString(activeChat.inputContent, STATUS_INPUT_CONTENT_LIMIT)
-            : activeChat.inputContent,
+        } : null,
+        inputContent: resolvedOptions.includeInputContent && activeChat.inputContent
+            ? truncateString(activeChat.inputContent, 2 * 1024)
+            : undefined,
     } as T;
 }

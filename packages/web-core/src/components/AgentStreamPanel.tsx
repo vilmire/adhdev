@@ -20,7 +20,7 @@ type StreamTab = AgentSessionStream & {
 };
 
 interface Props {
-    ideId: string;
+    routeId: string;
     agentStreams: StreamTab[];
     sendCommand: (commandType: string, data?: any) => Promise<void>;
 }
@@ -29,7 +29,7 @@ function getStreamKey(stream: StreamTab): string {
     return stream.sessionId || stream.instanceId || stream.agentType;
 }
 
-export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: Props) {
+export default function AgentStreamPanel({ routeId, agentStreams, sendCommand }: Props) {
     const [activeAgent, setActiveAgent] = useState<string | null>(null);
     const [isSending, setIsSending] = useState(false);
 
@@ -56,7 +56,7 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
             ? ''
             : streamTitle;
         return {
-            ideId,
+            routeId,
             agentName: activeStream.agentName,
             agentType: activeStream.agentType,
             status: derivedStatus,
@@ -78,7 +78,7 @@ export default function AgentStreamPanel({ ideId, agentStreams, sendCommand }: P
             streamSource: 'agent-stream' as const,
             tabKey: `agent-stream-${getStreamKey(activeStream)}`,
         };
-    }, [activeStream, ideId, derivedStatus]);
+    }, [activeStream, routeId, derivedStatus]);
 
     const handleSendChat = useCallback(async (rawMessage: string) => {
         const message = rawMessage.trim();
