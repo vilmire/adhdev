@@ -146,6 +146,71 @@ function parseMessageTime(value: unknown): number {
     return 0;
 }
 
+function stringifyPreviewContent(content: unknown): string {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+        return content.map((block) => {
+            if (typeof block === 'string') return block;
+            if (block && typeof block === 'object' && 'text' in block) {
+                return String((block as { text?: unknown }).text || '');
+            }
+            return '';
+        }).join(' ');
+    }
+    if (content && typeof content === 'object' && 'text' in content) {
+        return String((content as { text?: unknown }).text || '');
+    }
+    return String(content || '');
+}
+
+function normalizePreviewText(content: unknown): string {
+    return stringifyPreviewContent(content)
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function clampPreviewText(value: string, maxChars = 120): string {
+    if (value.length <= maxChars) return value;
+    if (maxChars <= 1) return value.slice(0, maxChars);
+    return `${value.slice(0, maxChars - 1)}…`;
+}
+
+function simplePreviewHash(value: string): string {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < value.length; i += 1) {
+        h ^= value.charCodeAt(i);
+        h = (h * 0x01000193) >>> 0;
+    }
+    return h.toString(16);
+}
+
+function getLastDisplayMessage(session: {
+    activeChat?: {
+        messages?: Array<{
+            role?: string;
+            content?: unknown;
+            receivedAt?: number | string;
+        }> | null
+    } | null
+}) {
+    const messages = session.activeChat?.messages;
+    if (!Array.isArray(messages) || messages.length === 0) return null;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const candidate = messages[i];
+        const role = typeof candidate?.role === 'string' ? candidate.role : '';
+        if (role === 'system') continue;
+        const preview = clampPreviewText(normalizePreviewText(candidate?.content));
+        if (!preview) continue;
+        return {
+            role,
+            preview,
+            receivedAt: parseMessageTime(candidate?.receivedAt),
+            hash: simplePreviewHash(`${role}:${preview}`),
+        };
+    }
+    return null;
+}
+
 function getSessionMessageUpdatedAt(session: {
     activeChat?: {
         messages?: Array<{ receivedAt?: number | string }> | null
@@ -196,8 +261,7 @@ function getSessionKind(session: SessionEntry): RecentLaunchEntry['kind'] {
 }
 
 function getLastMessageRole(session: { activeChat?: { messages?: Array<{ role?: string }> | null } | null }): string {
-    const role = session.activeChat?.messages?.at?.(-1)?.role;
-    return typeof role === 'string' ? role : '';
+    return getLastDisplayMessage(session)?.role || '';
 }
 
 function getUnreadState(
@@ -285,6 +349,13 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
                 'RecentRead',
                 `snapshot session id=${session.id} provider=${session.providerType} status=${String(session.status || '')} bucket=${inboxBucket} unread=${String(unread)} lastSeenAt=${lastSeenAt} completionMarker=${completionMarker || '-'} seenMarker=${seenCompletionMarker || '-'} lastUpdated=${String(session.lastUpdated || 0)} lastUsedAt=${lastUsedAt} lastRole=${getLastMessageRole(sourceSession)} msgUpdatedAt=${getSessionMessageUpdatedAt(sourceSession)}`,
             );
+        }
+        const lastDisplayMessage = getLastDisplayMessage(sourceSession);
+        if (lastDisplayMessage) {
+            session.lastMessagePreview = lastDisplayMessage.preview;
+            session.lastMessageRole = lastDisplayMessage.role;
+            if (lastDisplayMessage.receivedAt > 0) session.lastMessageAt = lastDisplayMessage.receivedAt;
+            session.lastMessageHash = lastDisplayMessage.hash;
         }
     }
     const includeMachineMetadata = profile !== 'live';

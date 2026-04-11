@@ -28,6 +28,10 @@ export interface ActiveConversation {
     displayPrimary: string;
     displaySecondary: string;
     cdpConnected?: boolean;
+    lastMessagePreview?: string;
+    lastMessageRole?: string;
+    lastMessageAt?: number;
+    lastMessageHash?: string;
     lastUpdated?: number;
     modalButtons?: string[];
     modalMessage?: string;

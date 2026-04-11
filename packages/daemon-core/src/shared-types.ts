@@ -308,6 +308,10 @@ export interface SessionEntry {
     providerControls?: ProviderControlSchema[];
     errorMessage?: string;
     errorReason?: _ProviderErrorReason;
+    lastMessagePreview?: string;
+    lastMessageRole?: string;
+    lastMessageAt?: number;
+    lastMessageHash?: string;
     lastUpdated?: number;
     unread?: boolean;
     lastSeenAt?: number;

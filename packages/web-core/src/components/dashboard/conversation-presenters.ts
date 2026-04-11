@@ -19,6 +19,7 @@ export function getConversationMetaText(conversation: ActiveConversation): strin
 }
 
 export function getConversationPreviewText(conversation: ActiveConversation): string {
+    if (conversation.lastMessagePreview) return conversation.lastMessagePreview
     const lastMessage = [...conversation.messages].reverse().find((message) => !message?._localId)
         || conversation.messages[conversation.messages.length - 1]
     const preview = normalizeTextContent(lastMessage?.content)

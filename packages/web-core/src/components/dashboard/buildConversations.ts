@@ -124,6 +124,10 @@ export function buildIdeConversations(
         agentName: string;
         status: string;
         title?: string;
+        lastMessagePreview?: string;
+        lastMessageRole?: string;
+        lastMessageAt?: number;
+        lastMessageHash?: string;
         messages: DashboardMessage[];
         activeModal?: { message: string; buttons: string[] };
         unread?: boolean;
@@ -141,6 +145,10 @@ export function buildIdeConversations(
             agentName: child.providerName || formatIdeType(child.providerType),
             status: child.status,
             title: child.title,
+            lastMessagePreview: child.lastMessagePreview,
+            lastMessageRole: child.lastMessageRole,
+            lastMessageAt: child.lastMessageAt,
+            lastMessageHash: child.lastMessageHash,
             messages: child.activeChat?.messages || [],
             activeModal: child.activeChat?.activeModal || undefined,
             unread: child.unread,
@@ -206,6 +214,10 @@ export function buildIdeConversations(
                     : agentName),
             displaySecondary: ideLabel,
             cdpConnected: ide.cdpConnected,
+            lastMessagePreview: ide.lastMessagePreview,
+            lastMessageRole: ide.lastMessageRole,
+            lastMessageAt: ide.lastMessageAt,
+            lastMessageHash: ide.lastMessageHash,
             lastUpdated: ide.lastUpdated,
             modalButtons: hasRealModal ? modal.buttons : undefined,
             modalMessage: hasRealModal ? modal.message : undefined,
@@ -258,6 +270,10 @@ export function buildIdeConversations(
             displayPrimary: workspaceName || parentTitle || effectiveStreamTitle || ideLabel,
             displaySecondary: `${ideLabel} · ${stream.agentName}`,
             cdpConnected: ide.cdpConnected,
+            lastMessagePreview: stream.lastMessagePreview,
+            lastMessageRole: stream.lastMessageRole,
+            lastMessageAt: stream.lastMessageAt,
+            lastMessageHash: stream.lastMessageHash,
             lastUpdated: stream.lastUpdated || ide.lastUpdated,
             modalButtons: hasModal ? stream.activeModal!.buttons : undefined,
             modalMessage: hasModal ? stream.activeModal!.message : undefined,

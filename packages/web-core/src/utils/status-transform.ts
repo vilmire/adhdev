@@ -53,6 +53,10 @@ function buildExistingSessionMap(entries: DaemonData[] | undefined, daemonId: st
             cliName: entry.cliName,
             type: entry.type,
             status: entry.status as SessionEntry['status'],
+            lastMessagePreview: entry.lastMessagePreview,
+            lastMessageRole: entry.lastMessageRole,
+            lastMessageAt: entry.lastMessageAt,
+            lastMessageHash: entry.lastMessageHash,
         })
 
         for (const child of entry.childSessions || []) {
@@ -78,6 +82,10 @@ function mergeSessionSummary(
         workspace: session.workspace ?? existingEntry?.workspace ?? null,
         capabilities: session.capabilities ?? (existingEntry?.sessionCapabilities as SessionEntry['capabilities']) ?? [],
         cdpConnected: session.cdpConnected ?? existingEntry?.cdpConnected,
+        lastMessagePreview: session.lastMessagePreview ?? existingEntry?.lastMessagePreview,
+        lastMessageRole: session.lastMessageRole ?? existingEntry?.lastMessageRole,
+        lastMessageAt: session.lastMessageAt ?? existingEntry?.lastMessageAt,
+        lastMessageHash: session.lastMessageHash ?? existingEntry?.lastMessageHash,
     }
 }
 
@@ -186,6 +194,10 @@ export function statusPayloadToEntries(
             ...(mergedSession.currentModel !== undefined && { currentModel: mergedSession.currentModel }),
             ...(mergedSession.currentPlan !== undefined && { currentPlan: mergedSession.currentPlan }),
             ...(mergedSession.currentAutoApprove !== undefined && { currentAutoApprove: mergedSession.currentAutoApprove }),
+            ...(mergedSession.lastMessagePreview !== undefined && { lastMessagePreview: mergedSession.lastMessagePreview }),
+            ...(mergedSession.lastMessageRole !== undefined && { lastMessageRole: mergedSession.lastMessageRole }),
+            ...(mergedSession.lastMessageAt !== undefined && { lastMessageAt: mergedSession.lastMessageAt }),
+            ...(mergedSession.lastMessageHash !== undefined && { lastMessageHash: mergedSession.lastMessageHash }),
             lastUpdated: mergedSession.lastUpdated,
             unread: mergedSession.unread,
             lastSeenAt: mergedSession.lastSeenAt,
@@ -224,6 +236,10 @@ export function statusPayloadToEntries(
             ...(mergedSession.runtimeWorkspaceLabel !== undefined && { runtimeWorkspaceLabel: mergedSession.runtimeWorkspaceLabel }),
             ...(mergedSession.runtimeWriteOwner !== undefined && { runtimeWriteOwner: mergedSession.runtimeWriteOwner }),
             ...(mergedSession.runtimeAttachedClients !== undefined && { runtimeAttachedClients: mergedSession.runtimeAttachedClients }),
+            ...(mergedSession.lastMessagePreview !== undefined && { lastMessagePreview: mergedSession.lastMessagePreview }),
+            ...(mergedSession.lastMessageRole !== undefined && { lastMessageRole: mergedSession.lastMessageRole }),
+            ...(mergedSession.lastMessageAt !== undefined && { lastMessageAt: mergedSession.lastMessageAt }),
+            ...(mergedSession.lastMessageHash !== undefined && { lastMessageHash: mergedSession.lastMessageHash }),
             lastUpdated: mergedSession.lastUpdated,
             unread: mergedSession.unread,
             lastSeenAt: mergedSession.lastSeenAt,
@@ -264,6 +280,10 @@ export function statusPayloadToEntries(
             ...(mergedSession.runtimeAttachedClients !== undefined && { runtimeAttachedClients: mergedSession.runtimeAttachedClients }),
             ...(mergedSession.currentModel !== undefined && { currentModel: mergedSession.currentModel }),
             ...(mergedSession.currentPlan !== undefined && { currentPlan: mergedSession.currentPlan }),
+            ...(mergedSession.lastMessagePreview !== undefined && { lastMessagePreview: mergedSession.lastMessagePreview }),
+            ...(mergedSession.lastMessageRole !== undefined && { lastMessageRole: mergedSession.lastMessageRole }),
+            ...(mergedSession.lastMessageAt !== undefined && { lastMessageAt: mergedSession.lastMessageAt }),
+            ...(mergedSession.lastMessageHash !== undefined && { lastMessageHash: mergedSession.lastMessageHash }),
             lastUpdated: mergedSession.lastUpdated,
             unread: mergedSession.unread,
             lastSeenAt: mergedSession.lastSeenAt,

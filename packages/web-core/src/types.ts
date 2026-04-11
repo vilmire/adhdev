@@ -160,6 +160,10 @@ export interface BaseDaemonData {
     /** Inbox categorization bucket */
     inboxBucket?: import('@adhdev/daemon-core').RecentSessionBucket;
     surfaceHidden?: boolean;
+    lastMessagePreview?: string;
+    lastMessageRole?: string;
+    lastMessageAt?: number;
+    lastMessageHash?: string;
     /** Provider control current values */
     controlValues?: Record<string, string | number | boolean>;
     /** Provider-declared controls schema */
