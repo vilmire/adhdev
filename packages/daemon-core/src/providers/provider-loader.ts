@@ -40,6 +40,7 @@ export class ProviderLoader {
   private providerAvailability = new Map<string, ProviderAvailabilityState>();
   private userDir: string;
   private upstreamDir: string;
+  private builtinDir: string | null = null;
   private disableUpstream: boolean;
   private watchers: any[] = [];
   private logFn: (msg: string) => void;
@@ -83,6 +84,19 @@ export class ProviderLoader {
     // Upstream auto-download directory is always in the default location
     this.upstreamDir = path.join(defaultProvidersDir, '.upstream');
     this.disableUpstream = options?.disableUpstream ?? false;
+
+    // Builtin providers bundled in vendor/ (npm package fallback for fresh installs)
+    const builtinCandidates = [
+      path.resolve(__dirname, '../../vendor/builtin-providers'),
+      path.resolve(__dirname, '../../../vendor/builtin-providers'),
+    ];
+    for (const candidate of builtinCandidates) {
+      if (fs.existsSync(candidate)) {
+        this.builtinDir = candidate;
+        this.log(`Builtin providers found: ${candidate}`);
+        break;
+      }
+    }
   }
 
   private log(msg: string): void {
@@ -110,7 +124,9 @@ export class ProviderLoader {
    * Highest-priority editable overrides come first.
    */
   getProviderRoots(): string[] {
-    return [this.userDir, this.upstreamDir];
+    const roots = [this.userDir, this.upstreamDir];
+    if (this.builtinDir) roots.push(this.builtinDir);
+    return roots;
   }
 
  /**
@@ -193,12 +209,23 @@ export class ProviderLoader {
   * Check if upstream directory exists and has providers.
   */
   hasUpstream(): boolean {
-    if (!fs.existsSync(this.upstreamDir)) return false;
-    try {
-      return fs.readdirSync(this.upstreamDir).some(d =>
-        fs.statSync(path.join(this.upstreamDir, d)).isDirectory()
-      );
-    } catch { return false; }
+    // Check downloaded upstream first
+    if (fs.existsSync(this.upstreamDir)) {
+      try {
+        if (fs.readdirSync(this.upstreamDir).some(d =>
+          fs.statSync(path.join(this.upstreamDir, d)).isDirectory()
+        )) return true;
+      } catch { /* fallthrough */ }
+    }
+    // Fallback: vendor-bundled builtin providers (fresh install)
+    if (this.builtinDir && fs.existsSync(this.builtinDir)) {
+      try {
+        return fs.readdirSync(this.builtinDir).some(d =>
+          fs.statSync(path.join(this.builtinDir!, d)).isDirectory()
+        );
+      } catch { /* noop */ }
+    }
+    return false;
   }
 
  /**
