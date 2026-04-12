@@ -179,6 +179,17 @@ function applyDockviewThemeClass(target: HTMLElement, theme: 'light' | 'dark') {
     target.classList.add(theme === 'light' ? themeLight.className : themeDark.className)
 }
 
+function getDistinctPopoutWindows(api: DockviewApi | null): Array<Window & typeof globalThis> {
+    if (!api) return []
+    return Array.from(
+        new Set(
+            api.groups
+                .map(group => group.element?.ownerDocument?.defaultView)
+                .filter((popup): popup is Window & typeof globalThis => !!popup && popup !== window),
+        ),
+    )
+}
+
 function useDockviewHeaderRenderTick(props: Pick<IDockviewPanelHeaderProps, 'api' | 'containerApi'>) {
     const [, setTick] = useState(0)
 
@@ -1678,16 +1689,7 @@ export default function DashboardDockviewWorkspace({
             }
         }
         window.addEventListener('dragstart', handleDragStart)
-        const api = apiRef.current
-        const popoutWindows = api
-            ? Array.from(
-                new Set(
-                    api.groups
-                        .map(group => group.element?.ownerDocument?.defaultView)
-                        .filter(popup => popup && popup !== window),
-                ),
-            )
-            : []
+        const popoutWindows = getDistinctPopoutWindows(apiRef.current)
 
         for (const popup of popoutWindows) {
             popup.addEventListener('dragstart', handleDragStart)
@@ -1737,16 +1739,7 @@ export default function DashboardDockviewWorkspace({
     }, [encodeShortcut, isMac, shortcutListening, startShortcutListeningForActiveTab])
 
     useEffect(() => {
-        const api = apiRef.current
-        if (!api) return
-
-        const popoutWindows = Array.from(
-            new Set(
-                api.groups
-                    .map(group => group.element?.ownerDocument?.defaultView)
-                    .filter(popup => popup && popup !== window),
-            ),
-        )
+        const popoutWindows = getDistinctPopoutWindows(apiRef.current)
         if (popoutWindows.length === 0) return
 
         const cleanups = popoutWindows.map(popup => {
