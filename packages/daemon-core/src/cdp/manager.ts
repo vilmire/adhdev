@@ -775,6 +775,8 @@ export class DaemonCdpManager {
             }
 
             const pageWebviewUrls = await this.getCurrentPageWebviewUrls();
+            const pageWebviewOrder = new Map<string, number>();
+            Array.from(pageWebviewUrls).forEach((url, index) => pageWebviewOrder.set(url, index));
 
             const iframes = allTargets.filter((t: any) => t.type === 'iframe');
             const typeMap = new Map<string, number>();
@@ -821,7 +823,16 @@ export class DaemonCdpManager {
                     }
                 }
             }
-            
+
+            agents.sort((lhs, rhs) => {
+                const leftOrder = pageWebviewOrder.get(lhs.url);
+                const rightOrder = pageWebviewOrder.get(rhs.url);
+                if (leftOrder != null && rightOrder != null) return leftOrder - rightOrder;
+                if (leftOrder != null) return -1;
+                if (rightOrder != null) return 1;
+                return lhs.url.localeCompare(rhs.url);
+            });
+
             this._lastDiscoveredTargets = new Set(agents.map(a => a.targetId));
             return agents;
         } catch (e) {
@@ -981,6 +992,26 @@ export class DaemonCdpManager {
         if (!this.isConnected) return new Set();
 
         try {
+            const raw = await this.evaluate(
+                `JSON.stringify(Array.from(document.querySelectorAll('iframe,webview'))
+                    .filter((el) => {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width <= 8 || rect.height <= 8) return false;
+                        const style = window.getComputedStyle(el);
+                        return style.display !== 'none' && style.visibility !== 'hidden';
+                    })
+                    .map((el) => el.src || el.getAttribute('src') || '')
+                    .filter((src) => typeof src === 'string' && src.includes('vscode-webview')))`,
+                5000,
+            );
+            const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            if (Array.isArray(parsed)) {
+                const urls = parsed.filter((src: unknown): src is string => typeof src === 'string' && src.length > 0);
+                if (urls.length > 0) return new Set(urls);
+            }
+        } catch { /* fall through to frame tree */ }
+
+        try {
             const urls = new Set<string>();
             const { frameTree } = await this.sendInternal('Page.getFrameTree', {}, 5000);
             const visit = (node: any) => {
@@ -991,19 +1022,7 @@ export class DaemonCdpManager {
                 for (const child of node?.childFrames || []) visit(child);
             };
             if (frameTree) visit(frameTree);
-            if (urls.size > 0) return urls;
-        } catch { /* fall through to DOM scan */ }
-
-        try {
-            const raw = await this.evaluate(
-                `JSON.stringify(Array.from(document.querySelectorAll('iframe,webview'))
-                    .map((el) => el.src || el.getAttribute('src') || '')
-                    .filter((src) => typeof src === 'string' && src.includes('vscode-webview')))`,
-                5000,
-            );
-            const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-            if (!Array.isArray(parsed)) return new Set();
-            return new Set(parsed.filter((src: unknown): src is string => typeof src === 'string' && src.length > 0));
+            return urls;
         } catch {
             return new Set();
         }

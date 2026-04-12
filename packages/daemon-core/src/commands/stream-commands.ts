@@ -238,7 +238,9 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
             const targetSessionId = managed?.cdpSessionId || null;
 
             // IDE-level scripts (model/mode) — try session frame first, fallback to main page
-            const IDE_LEVEL_SCRIPTS = ['listModes', 'setMode', 'listModels', 'setModel'];
+            const IDE_LEVEL_SCRIPTS = provider.type === 'claude-code-vscode'
+                ? ['listModes', 'setMode']
+                : ['listModes', 'setMode', 'listModels', 'setModel'];
             if (IDE_LEVEL_SCRIPTS.includes(scriptName)) {
                 // Try session frame first (some extensions embed mode selector in their webview)
                 if (targetSessionId) {
