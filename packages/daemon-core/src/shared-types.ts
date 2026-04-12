@@ -397,6 +397,12 @@ export interface ProviderControlSchema {
     invokeScript?: string;
     /** How to display action result */
     resultDisplay?: 'toast' | 'inline' | 'none';
+    /** Optional confirmation title shown before invoking the action */
+    confirmTitle?: string;
+    /** Optional confirmation message shown before invoking the action */
+    confirmMessage?: string;
+    /** Optional confirmation button label */
+    confirmLabel?: string;
     /** Slider range */
     min?: number;
     max?: number;

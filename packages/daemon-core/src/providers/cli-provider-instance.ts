@@ -260,14 +260,30 @@ export class CliProviderInstance implements ProviderInstance {
         }
         const runtime = this.adapter.getRuntimeMetadata();
         this.maybeAppendRuntimeRecoveryMessage(runtime);
-        const parsedMessages = Array.isArray(parsedStatus?.messages) ? parsedStatus.messages : [];
+        let parsedMessages = Array.isArray(parsedStatus?.messages) ? parsedStatus.messages : [];
+        const historyMessageCount = Number.isFinite(parsedStatus?.historyMessageCount)
+            ? Math.max(0, Number(parsedStatus.historyMessageCount))
+            : null;
+        if (historyMessageCount !== null) {
+            parsedMessages = historyMessageCount > 0
+                ? parsedMessages.slice(-historyMessageCount)
+                : [];
+        }
         const controlValues = extractProviderControlValues(this.provider.controls, parsedStatus);
         if (controlValues) {
-            this.controlValues = controlValues;
-        } else if (Object.keys(this.controlValues).length > 0) {
-            this.controlValues = {};
+            this.controlValues = { ...this.controlValues, ...controlValues };
         }
         const mergedMessages = this.mergeConversationMessages(parsedMessages);
+        const currentModel = typeof parsedStatus?.model === 'string' && parsedStatus.model.trim()
+            ? parsedStatus.model.trim()
+            : (typeof this.controlValues.model === 'string' && this.controlValues.model.trim()
+                ? this.controlValues.model.trim()
+                : undefined);
+        const currentPlan = typeof parsedStatus?.mode === 'string' && parsedStatus.mode.trim()
+            ? parsedStatus.mode.trim()
+            : (typeof this.controlValues.mode === 'string' && this.controlValues.mode.trim()
+                ? this.controlValues.mode.trim()
+                : undefined);
 
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
 
@@ -313,6 +329,8 @@ export class CliProviderInstance implements ProviderInstance {
                 inputContent: '',
             },
             workspace: this.workingDir,
+            currentModel,
+            currentPlan,
             instanceId: this.instanceId,
             providerSessionId: this.providerSessionId,
             lastUpdated: Date.now(),
@@ -512,6 +530,19 @@ export class CliProviderInstance implements ProviderInstance {
 
     private applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void {
         if (!data || typeof data !== 'object') return;
+
+        const patchedProviderSessionId = typeof data.providerSessionId === 'string'
+            ? data.providerSessionId.trim()
+            : '';
+        if (patchedProviderSessionId) {
+            this.promoteProviderSessionId(patchedProviderSessionId);
+        }
+
+        if (data.sessionEvent === 'new_session') {
+            this.runtimeMessages = [];
+            this.suppressIdleHistoryReplay = false;
+            this.adapter.clearHistory();
+        }
 
         const controlValues = extractProviderControlValues(this.provider.controls, data);
         if (controlValues) {

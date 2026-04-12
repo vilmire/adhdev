@@ -28,6 +28,9 @@ interface ProviderControlSchema {
     defaultValue?: string | number | boolean;
     invokeScript?: string;
     resultDisplay?: 'toast' | 'inline' | 'none';
+    confirmTitle?: string;
+    confirmMessage?: string;
+    confirmLabel?: string;
     min?: number;
     max?: number;
     step?: number;
@@ -73,9 +76,16 @@ export default function ControlsBar({
     // Local state for optimistic updates
     const [localValues, setLocalValues] = useState<Record<string, string | number | boolean>>({});
     const localOverrideUntil = useRef<number>(0);
+    const defaultValues: Record<string, string | number | boolean> = {};
+    for (const ctrl of controls || []) {
+        if (ctrl.defaultValue !== undefined) {
+            defaultValues[ctrl.id] = ctrl.defaultValue;
+        }
+    }
 
     // Merge server values with local overrides
     const effectiveValues: Record<string, string | number | boolean> = {
+        ...defaultValues,
         ...(serverModel ? { model: serverModel } : {}),
         ...(serverMode ? { mode: serverMode } : {}),
         ...(controlValues || {}),
@@ -252,6 +262,12 @@ export default function ControlsBar({
 
     const handleActionClick = async (ctrl: ProviderControlSchema) => {
         if (!ctrl.invokeScript) return;
+        if (ctrl.confirmMessage) {
+            const confirmLines = [ctrl.confirmTitle, ctrl.confirmMessage, ctrl.confirmLabel]
+                .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+            const confirmed = window.confirm(confirmLines.join('\n\n'));
+            if (!confirmed) return;
+        }
         try {
             await invokeProviderScript(ctrl.invokeScript);
         } catch { /* silent */ }

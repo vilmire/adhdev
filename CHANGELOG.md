@@ -2,6 +2,14 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.48] - 2026-04-13
+
+### Added
+- Added Hermes CLI provider control confirmations and session-reset handling so dashboard actions can safely trigger `new`, `retry`, and `undo`-style commands.
+
+### Fixed
+- Preserved CLI provider session metadata and cleared dashboard transcript state correctly when providers signal a fresh session.
+
 ## [0.8.47] - 2026-04-12
 
 ### Fixed

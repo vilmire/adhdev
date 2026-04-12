@@ -722,6 +722,12 @@ export interface ProviderControlDef {
   invokeScript?: string;
  /** How to display action result: 'toast' = notification, 'inline' = show in bar, 'none' = silent */
   resultDisplay?: 'toast' | 'inline' | 'none';
+ /** Optional confirmation title shown before invoking a destructive or disruptive action */
+  confirmTitle?: string;
+ /** Optional confirmation message shown before invoking a destructive or disruptive action */
+  confirmMessage?: string;
+ /** Optional confirmation button label */
+  confirmLabel?: string;
 
  // ─── Slider-specific ───
   min?: number;
