@@ -230,6 +230,11 @@ export default function DashboardMobileSessionHostSheet({
         }
     }, [activeMachine?.id, applyDiagnostics, sendDaemonCommand])
 
+    useEffect(() => {
+        if (!activeMachine?.id || diagnostics || loading || refreshing) return
+        void refreshDiagnostics()
+    }, [activeMachine?.id, diagnostics, loading, refreshDiagnostics, refreshing])
+
     const runSessionAction = useCallback(async (
         action: 'session_host_resume_session' | 'session_host_restart_session' | 'session_host_stop_session',
         session: SessionHostRecordView,

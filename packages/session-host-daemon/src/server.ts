@@ -626,78 +626,36 @@ export class SessionHostServer extends EventEmitter {
 
   private restorePersistedRuntimes(): void {
     const states = this.storage.loadAll();
-    const runtimesToResume: Array<{
-      persisted: PersistedRuntimeState;
-      recoveredRecord: SessionHostRecord;
-    }> = [];
-    let skippedOrphanLiveSessions = 0;
+    let skippedAutoResumeSessions = 0;
     for (const persisted of states) {
       const wasLiveRuntime = !['stopped', 'failed'].includes(persisted.record.lifecycle);
       const hadAttachedClients = Array.isArray(persisted.record.attachedClients) && persisted.record.attachedClients.length > 0;
       const hadWriteOwner = !!persisted.record.writeOwner;
-      const shouldAutoResume = wasLiveRuntime && (hadAttachedClients || hadWriteOwner);
+      const hadRecoveryInterest = hadAttachedClients || hadWriteOwner;
       const recoveredRecord: SessionHostRecord = {
         ...persisted.record,
         attachedClients: [],
         writeOwner: null,
-        lifecycle: shouldAutoResume ? 'interrupted' : (wasLiveRuntime ? 'stopped' : persisted.record.lifecycle),
+        lifecycle: wasLiveRuntime ? 'stopped' : persisted.record.lifecycle,
         lastActivityAt: Date.now(),
         meta: {
           ...(persisted.record.meta || {}),
           restoredFromStorage: true,
-          runtimeRecoveryState: shouldAutoResume
-            ? 'host_restart_interrupted'
-            : (wasLiveRuntime ? 'orphan_snapshot' : 'snapshot'),
+          runtimeRecoveryState: wasLiveRuntime ? 'orphan_snapshot' : 'snapshot',
           runtimeHadAttachedClientsAtCrash: hadAttachedClients,
           runtimeHadWriteOwnerAtCrash: hadWriteOwner,
+          runtimeAutoResumeSkipped: wasLiveRuntime && hadRecoveryInterest,
         },
       };
       this.registry.restoreSession(recoveredRecord, persisted.snapshot);
       this.storage.save(recoveredRecord, persisted.snapshot);
-      if (shouldAutoResume) {
-        runtimesToResume.push({ persisted, recoveredRecord });
-      } else if (wasLiveRuntime) {
-        skippedOrphanLiveSessions += 1;
+      if (wasLiveRuntime && hadRecoveryInterest) {
+        skippedAutoResumeSessions += 1;
       }
     }
 
-    if (skippedOrphanLiveSessions > 0) {
-      this.recordHostLog('warn', `session host skipped ${skippedOrphanLiveSessions} orphan live runtime(s) during restore`);
-    }
-
-    for (const { persisted, recoveredRecord } of runtimesToResume) {
-      try {
-        const resumed = this.startRuntime(
-          recoveredRecord,
-          this.buildPayloadFromRecord(recoveredRecord),
-          'session_resumed',
-        );
-        const resumedMeta = {
-          ...(resumed.meta || {}),
-          restoredFromStorage: true,
-          runtimeRecoveryState: 'auto_resumed',
-        };
-        this.registry.restoreSession(
-          { ...resumed, meta: resumedMeta },
-          this.registry.getSnapshot(resumed.sessionId),
-        );
-        this.persistNow(resumed.sessionId);
-        this.recordRuntimeTransition(resumed.sessionId, 'restore_auto_resumed', resumed.lifecycle, undefined, true);
-      } catch (error: any) {
-        const interrupted = this.registry.setLifecycle(recoveredRecord.sessionId, 'interrupted');
-        this.registry.restoreSession({
-          ...interrupted,
-          meta: {
-            ...(interrupted.meta || {}),
-            restoredFromStorage: true,
-            runtimeRecoveryState: 'resume_failed',
-            runtimeRecoveryError: error?.message || String(error),
-          },
-        }, persisted.snapshot);
-        this.persistNow(recoveredRecord.sessionId);
-        this.recordRuntimeTransition(recoveredRecord.sessionId, 'restore_resume_failed', 'interrupted', undefined, false, error?.message || String(error));
-        this.recordHostLog('error', `restore resume failed for ${recoveredRecord.sessionId}: ${error?.message || String(error)}`, recoveredRecord.sessionId);
-      }
+    if (skippedAutoResumeSessions > 0) {
+      this.recordHostLog('warn', `session host restored ${skippedAutoResumeSessions} live runtime snapshot(s) without auto-resume`);
     }
   }
 

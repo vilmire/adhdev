@@ -5,6 +5,7 @@
  * wraps them with StandaloneDaemonContext + TransportContext.
  */
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { useMemo } from 'react'
 import { StandaloneDaemonProvider, sendCommandViaWs, sendDataViaWs } from './StandaloneDaemonContext'
 import { TransportProvider, MachineDetail, Dashboard, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient } from '@adhdev/web-core'
 import StandaloneLayout from './StandaloneLayout'
@@ -41,6 +42,11 @@ function SingleMachineRedirect() {
 }
 
 export default function App() {
+    const transportValue = useMemo(() => ({
+        sendCommand: sendCommandViaWs,
+        sendData: sendDataViaWs,
+    }), [])
+
     return (
         <BrowserRouter
             future={{
@@ -50,10 +56,7 @@ export default function App() {
         >
             <ApiProvider client={standaloneApiClient}>
                 <StandaloneDaemonProvider>
-                    <TransportProvider value={{
-                        sendCommand: sendCommandViaWs,
-                        sendData: sendDataViaWs,
-                    }}>
+                    <TransportProvider value={transportValue}>
                         <StandaloneLayout>
                             <Routes>
                                 <Route path="/dashboard" element={<Dashboard />} />

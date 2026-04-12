@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { SessionHostDiagnosticsSnapshot } from '@adhdev/daemon-core'
 import { IconRefresh, IconServer, IconTerminal, IconUsers, IconWarning } from '../../components/Icons'
 import { eventManager } from '../../managers/EventManager'
@@ -201,6 +201,11 @@ export default function SessionHostPanel({
             setRefreshing(false)
         }
     }, [applyDiagnostics, machineId, sendDaemonCommand])
+
+    useEffect(() => {
+        if (!machineId || diagnostics || loading || refreshing) return
+        void refreshDiagnostics()
+    }, [diagnostics, loading, machineId, refreshDiagnostics, refreshing])
 
     const runSessionAction = useCallback(async (
         action: 'session_host_resume_session' | 'session_host_restart_session' | 'session_host_stop_session',
