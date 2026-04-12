@@ -14,6 +14,7 @@ import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, isHidd
 import CliViewModeToggle from './CliViewModeToggle';
 import { getConversationDisplayLabel, getConversationMetaParts } from './conversation-selectors';
 import { getConversationMetaText, getConversationTitle } from './conversation-presenters';
+import type { DashboardActionShortcutId } from '../../hooks/useActionShortcuts';
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -32,12 +33,19 @@ export interface DashboardHeaderProps {
     hiddenConversations?: ActiveConversation[];
     onShowConversation?: (conversation: ActiveConversation) => void;
     onShowAllHidden?: () => void;
+    onResetPanelsToMain?: () => void;
     onClearDevHistory?: () => void;
     inboxOpen: boolean;
     onInboxOpenChange: (next: boolean) => void;
     hiddenOpen: boolean;
     onHiddenOpenChange: (next: boolean) => void;
     onOpenNewSession?: () => void;
+    actionShortcuts?: Partial<Record<DashboardActionShortcutId, string>>;
+}
+
+function ShortcutPill({ value }: { value?: string }) {
+    if (!value) return null;
+    return <span className="dashboard-header-shortcut-pill">{value}</span>;
 }
 
 function DashboardHeaderInboxItem({
@@ -86,11 +94,13 @@ export default function DashboardHeader({
     hiddenConversations = [],
     onShowConversation,
     onShowAllHidden,
+    onResetPanelsToMain,
     inboxOpen,
     onInboxOpenChange,
     hiddenOpen,
     onHiddenOpenChange,
     onOpenNewSession,
+    actionShortcuts,
 }: DashboardHeaderProps) {
     const { ides, p2pStates = {} } = useBaseDaemons();
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
@@ -335,7 +345,7 @@ export default function DashboardHeader({
                             type="button"
                             onClick={() => onHiddenOpenChange(!hiddenOpen)}
                             className="btn btn-secondary btn-sm dashboard-header-hidden-button"
-                            title="Hidden tabs. Drag a tab here to hide it."
+                            title={`Hidden tabs${actionShortcuts?.toggleHiddenTabs ? ` (${actionShortcuts.toggleHiddenTabs})` : ''}. Drag a tab here to hide it.`}
                         >
                             <IconEyeOff size={16} />
                             {hiddenConversations.length > 0 && <span className="dashboard-header-hidden-badge">{hiddenConversations.length}</span>}
@@ -343,19 +353,33 @@ export default function DashboardHeader({
                         {hiddenOpen && (
                             <div className="dashboard-header-hidden-popover">
                                 <div className="dashboard-header-hidden-topbar">
-                                    <div className="dashboard-header-inbox-section-title mb-0">Hidden tabs</div>
-                                    {hiddenConversations.length > 0 && onShowAllHidden && (
-                                        <button
-                                            type="button"
-                                            className="dashboard-header-hidden-restore-all"
-                                            onClick={() => {
-                                                onShowAllHidden();
-                                                onHiddenOpenChange(false);
-                                            }}
-                                        >
-                                            Restore all
-                                        </button>
-                                    )}
+                                    <div className="flex items-center gap-2 min-w-0">
+                                        <div className="dashboard-header-inbox-section-title mb-0">Hidden tabs</div>
+                                        <ShortcutPill value={actionShortcuts?.toggleHiddenTabs} />
+                                    </div>
+                                    <div className="dashboard-header-hidden-actions">
+                                        {onResetPanelsToMain && (
+                                            <button
+                                                type="button"
+                                                className="dashboard-header-hidden-secondary"
+                                                onClick={onResetPanelsToMain}
+                                            >
+                                                Reset panels
+                                            </button>
+                                        )}
+                                        {hiddenConversations.length > 0 && onShowAllHidden && (
+                                            <button
+                                                type="button"
+                                                className="dashboard-header-hidden-restore-all"
+                                                onClick={() => {
+                                                    onShowAllHidden();
+                                                    onHiddenOpenChange(false);
+                                                }}
+                                            >
+                                                Restore all
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
                                 {activeConv && onHideConversation && (
                                     <button
@@ -363,7 +387,10 @@ export default function DashboardHeader({
                                         className="dashboard-header-hidden-current"
                                         onClick={() => onHideConversation(activeConv)}
                                     >
-                                        <span className="dashboard-header-hidden-current-label">Hide current tab</span>
+                                        <span className="dashboard-header-hidden-current-leading">
+                                            <span className="dashboard-header-hidden-current-label">Hide current tab</span>
+                                            <ShortcutPill value={actionShortcuts?.hideCurrentTab} />
+                                        </span>
                                         <span className="dashboard-header-hidden-current-title">{getConversationTitle(activeConv)}</span>
                                     </button>
                                 )}

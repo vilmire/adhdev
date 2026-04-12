@@ -204,6 +204,7 @@ export default function DashboardMainView({
     const dockviewActionHandlersRef = React.useRef<{
         setShortcutForActiveTab: () => void
         restoreHiddenTabToSavedLocation: (tabKey: string) => void
+        resetAllPanelsToMain: () => void
         activatePreviousTabInGroup: () => void
         activateNextTabInGroup: () => void
         floatActiveTab: () => void
@@ -244,6 +245,13 @@ export default function DashboardMainView({
     const handleHiddenOpenChange = React.useCallback((next: boolean) => {
         setHiddenOpen(next)
         if (next) setInboxOpen(false)
+    }, [])
+
+    const handleResetAllPanelsToMain = React.useCallback(() => {
+        const confirmed = window.confirm('Move every floating or popout panel back into the main dashboard grid?')
+        if (!confirmed) return
+        dockviewActionHandlersRef.current?.resetAllPanelsToMain()
+        setHiddenOpen(false)
     }, [])
 
     const handleOpenShortcutHelp = React.useCallback(() => {
@@ -478,11 +486,13 @@ export default function DashboardMainView({
                     onHideConversation={onHideConversation}
                     onShowConversation={handleShowHiddenConversationWithRestore}
                     onShowAllHidden={onShowAllHiddenConversations}
+                    onResetPanelsToMain={handleResetAllPanelsToMain}
                     inboxOpen={inboxOpen}
                     onInboxOpenChange={handleInboxOpenChange}
                     hiddenOpen={hiddenOpen}
                     onHiddenOpenChange={handleHiddenOpenChange}
                     onOpenNewSession={!isMobile ? () => setNewSessionOpen(true) : undefined}
+                    actionShortcuts={actionShortcuts}
                     onOpenRemote={() => {
                         if (!activeConv || isCliConv(activeConv) || isAcpConv(activeConv)) return
                         onOpenRemote(activeConv)
@@ -566,6 +576,7 @@ export default function DashboardMainView({
                     detectedIdes={detectedIdes}
                     handleLaunchIde={handleLaunchIde}
                     toggleHiddenTab={toggleHiddenTab}
+                    actionShortcuts={actionShortcuts}
                     registerActionHandlers={handlers => {
                         dockviewActionHandlersRef.current = handlers
                     }}

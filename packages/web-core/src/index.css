@@ -242,7 +242,7 @@
         --dv-tabs-container-scrollbar-color: color-mix(in srgb, var(--text-muted) 60%, transparent);
         --dv-scrollbar-background-color: color-mix(in srgb, var(--text-muted) 28%, transparent);
         --dv-icon-hover-background-color: var(--bg-glass-hover);
-        --dv-floating-box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+        --dv-floating-box-shadow: 0 8px 20px rgba(0, 0, 0, 0.16);
         --dv-sash-color: color-mix(in srgb, var(--border-default) 65%, transparent);
         --dv-active-sash-color: color-mix(in srgb, var(--accent-primary) 38%, transparent);
         --dv-active-sash-transition-duration: 0.12s;
@@ -270,7 +270,7 @@
         --dv-tabs-container-scrollbar-color: color-mix(in srgb, var(--text-secondary) 40%, transparent);
         --dv-scrollbar-background-color: color-mix(in srgb, var(--text-secondary) 18%, transparent);
         --dv-icon-hover-background-color: color-mix(in srgb, var(--accent-primary) 10%, transparent);
-        --dv-floating-box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+        --dv-floating-box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
         --dv-sash-color: color-mix(in srgb, var(--border-default) 80%, transparent);
         --dv-active-sash-color: color-mix(in srgb, var(--accent-primary) 34%, transparent);
         --dv-drag-over-background-color: color-mix(in srgb, var(--accent-primary) 14%, transparent);
@@ -1857,6 +1857,12 @@
         margin-bottom: 8px;
     }
 
+    .dashboard-header-hidden-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+    }
+
     .dashboard-header-hidden-restore-all {
         border: none;
         background: transparent;
@@ -1868,6 +1874,21 @@
     }
 
     .dashboard-header-hidden-restore-all:hover {
+        text-decoration: underline;
+    }
+
+    .dashboard-header-hidden-secondary {
+        border: none;
+        background: transparent;
+        padding: 0;
+        color: var(--text-secondary);
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+    }
+
+    .dashboard-header-hidden-secondary:hover {
+        color: var(--text-primary);
         text-decoration: underline;
     }
 
@@ -1906,6 +1927,13 @@
         white-space: nowrap;
     }
 
+    .dashboard-header-hidden-current-leading {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+    }
+
     .dashboard-header-hidden-current-title {
         min-width: 0;
         overflow: hidden;
@@ -1914,6 +1942,27 @@
         font-size: 12px;
         font-weight: 600;
         color: var(--text-secondary);
+    }
+
+    .dashboard-header-shortcut-pill,
+    .dashboard-dockview-menu-shortcut {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 0;
+        padding: 2px 6px;
+        border-radius: 999px;
+        border: 1px solid var(--border-subtle);
+        background: color-mix(in srgb, var(--surface-secondary) 82%, transparent);
+        color: var(--text-muted);
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1;
+        white-space: nowrap;
+    }
+
+    .dashboard-dockview-menu-shortcut {
+        margin-left: auto;
     }
 
     .dashboard-header-inbox-section + .dashboard-header-inbox-section {

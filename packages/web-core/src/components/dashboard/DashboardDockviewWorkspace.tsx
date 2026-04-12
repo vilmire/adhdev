@@ -62,9 +62,11 @@ interface DashboardDockviewWorkspaceProps {
     detectedIdes?: { type: string; name: string; running: boolean; id?: string }[]
     handleLaunchIde?: (ideType: string) => void
     toggleHiddenTab: (tabKey: string) => void
+    actionShortcuts: Partial<Record<DashboardActionShortcutId, string>>
     registerActionHandlers?: (handlers: {
         setShortcutForActiveTab: () => void
         restoreHiddenTabToSavedLocation: (tabKey: string) => void
+        resetAllPanelsToMain: () => void
         activatePreviousTabInGroup: () => void
         activateNextTabInGroup: () => void
         floatActiveTab: () => void
@@ -595,6 +597,7 @@ export default function DashboardDockviewWorkspace({
     detectedIdes,
     handleLaunchIde,
     toggleHiddenTab,
+    actionShortcuts,
     registerActionHandlers,
     onActiveTabChange,
     requestedActiveTabKey,
@@ -827,6 +830,41 @@ export default function DashboardDockviewWorkspace({
             panel.api.moveTo({ position: 'center' })
         }
         panel.api.setActive()
+    }, [])
+
+    const resetAllPanelsToMain = useCallback(() => {
+        const api = apiRef.current
+        if (!api) return
+
+        const mainGridGroups = api.groups.filter(group => {
+            try {
+                return group.element?.ownerDocument === document && group.model.location.type === 'grid'
+            } catch {
+                return false
+            }
+        })
+
+        const fallbackGroup = mainGridGroups[0] || null
+        const panels = [...api.panels]
+
+        for (const panel of panels) {
+            const ownerDoc = panel.group.element?.ownerDocument
+            const locationType = panel.group.model.location.type
+            if (ownerDoc === document && locationType === 'grid') continue
+
+            if (fallbackGroup && fallbackGroup.id !== panel.group.id) {
+                panel.api.moveTo({ group: fallbackGroup, position: 'center' })
+            } else {
+                panel.api.moveTo({ position: 'center' })
+            }
+        }
+
+        const activePanel = api.activePanel
+        if (activePanel) {
+            activePanel.group.model.openPanel(activePanel)
+            activePanel.api.setActive()
+        }
+        focusOwnerWindow(document)
     }, [])
 
     const syncPopoutChrome = useCallback(() => {
@@ -1343,6 +1381,7 @@ export default function DashboardDockviewWorkspace({
         registerActionHandlers?.({
             setShortcutForActiveTab: startShortcutListeningForActiveTab,
             restoreHiddenTabToSavedLocation,
+            resetAllPanelsToMain,
             activatePreviousTabInGroup: () => activateRelativeTabInGroup(-1),
             activateNextTabInGroup: () => activateRelativeTabInGroup(1),
             floatActiveTab: () => {
@@ -1386,6 +1425,7 @@ export default function DashboardDockviewWorkspace({
         moveTabBackToMain,
         popoutTab,
         registerActionHandlers,
+        resetAllPanelsToMain,
         restoreHiddenTabToSavedLocation,
         startShortcutListeningForActiveTab,
     ])
@@ -1899,44 +1939,52 @@ export default function DashboardDockviewWorkspace({
                             {isTabFloating(ctxMenu.tabKey) && (
                                 <button
                                     className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
-                                    onClick={() => {
-                                        dockTabToWorkspaceGrid(ctxMenu.tabKey)
-                                        setCtxMenu(null)
-                                    }}
-                                >
-                                    <IconDock size={13} className="shrink-0 opacity-70" /> Dock in window
-                                </button>
-                            )}
-                            <button
-                                className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
                                 onClick={() => {
-                                    moveTabBackToMain(ctxMenu.tabKey)
+                                    dockTabToWorkspaceGrid(ctxMenu.tabKey)
                                     setCtxMenu(null)
                                 }}
                             >
-                                <IconArrowBack size={13} className="shrink-0 opacity-70" /> Move back to main window
+                                <IconDock size={13} className="shrink-0 opacity-70" />
+                                <span className="flex-1 min-w-0">Dock in window</span>
+                                <span className="dashboard-dockview-menu-shortcut">{actionShortcuts.dockActiveTab || ''}</span>
                             </button>
-                        </>
-                    ) : isTabFloating(ctxMenu.tabKey) ? (
+                        )}
                         <button
                             className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
                             onClick={() => {
-                                dockTabToWorkspaceGrid(ctxMenu.tabKey)
+                                moveTabBackToMain(ctxMenu.tabKey)
                                 setCtxMenu(null)
                             }}
                         >
-                            <IconDock size={13} className="shrink-0 opacity-70" /> Dock back to grid
+                            <IconArrowBack size={13} className="shrink-0 opacity-70" />
+                            <span className="flex-1 min-w-0">Move back to main window</span>
+                            <span className="dashboard-dockview-menu-shortcut">{actionShortcuts.dockActiveTab || ''}</span>
                         </button>
-                    ) : (
-                        <>
-                            <button
-                                className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
+                    </>
+                ) : isTabFloating(ctxMenu.tabKey) ? (
+                    <button
+                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
+                            onClick={() => {
+                            dockTabToWorkspaceGrid(ctxMenu.tabKey)
+                            setCtxMenu(null)
+                        }}
+                    >
+                        <IconDock size={13} className="shrink-0 opacity-70" />
+                        <span className="flex-1 min-w-0">Dock back to grid</span>
+                        <span className="dashboard-dockview-menu-shortcut">{actionShortcuts.dockActiveTab || ''}</span>
+                    </button>
+                ) : (
+                    <>
+                        <button
+                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
                                 onClick={() => {
                                     floatTab(ctxMenu.tabKey)
                                     setCtxMenu(null)
                                 }}
                             >
-                                <IconFloat size={13} className="shrink-0 opacity-70" /> Float as panel
+                                <IconFloat size={13} className="shrink-0 opacity-70" />
+                                <span className="flex-1 min-w-0">Float as panel</span>
+                                <span className="dashboard-dockview-menu-shortcut">{actionShortcuts.floatActiveTab || ''}</span>
                             </button>
                             <button
                                 className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
@@ -1945,7 +1993,9 @@ export default function DashboardDockviewWorkspace({
                                     setCtxMenu(null)
                                 }}
                             >
-                                <IconExternalWindow size={13} className="shrink-0 opacity-70" /> Open in new window
+                                <IconExternalWindow size={13} className="shrink-0 opacity-70" />
+                                <span className="flex-1 min-w-0">Open in new window</span>
+                                <span className="dashboard-dockview-menu-shortcut">{actionShortcuts.popoutActiveTab || ''}</span>
                             </button>
                         </>
                     )}
