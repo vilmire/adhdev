@@ -47,7 +47,7 @@ describe('build conversations shared context', () => {
 
         expect(conversations).toHaveLength(1)
         expect(conversations[0]).toMatchObject({
-            ideId: 'machine-1:ide:cursor-1',
+            routeId: 'machine-1:ide:cursor-1',
             machineName: 'Studio Mac',
             connectionState: 'connected',
             tabKey: 'cursor-1',

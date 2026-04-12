@@ -16,19 +16,19 @@ import type { ActiveConversation } from '../../../src/components/dashboard/types
 
 function createConversation(overrides: Partial<ActiveConversation> = {}): ActiveConversation {
     return {
-        ideId: 'machine-1:ide:cursor-1',
+        routeId: 'machine-1:ide:cursor-1',
         sessionId: 'cursor-1',
         transport: 'cdp-page',
         daemonId: 'machine-1',
-        agentName: 'Codex',
-        agentType: 'codex',
+        agentName: 'Cursor',
+        agentType: 'cursor',
         status: 'idle',
-        title: '',
+        title: 'Cursor Chat',
         messages: [],
-        ideType: 'cursor',
+        hostIdeType: 'cursor',
         workspaceName: 'repo',
         displayPrimary: 'repo',
-        displaySecondary: 'Cursor · Codex',
+        displaySecondary: 'Cursor',
         streamSource: 'native',
         tabKey: 'cursor-1',
         machineName: 'Studio Mac',
@@ -41,15 +41,15 @@ describe('conversation presenters', () => {
     it('formats title and meta text consistently', () => {
         const conversation = createConversation()
         expect(getConversationTitle(conversation)).toBe('repo')
-        expect(getConversationMetaText(conversation)).toBe('Cursor · Codex · Studio Mac')
-        expect(getConversationPreviewText(conversation)).toBe('Cursor · Codex · Studio Mac')
-        expect(getConversationTabMetaText(conversation)).toBe('Cursor · Codex · Studio Mac')
-        expect(getConversationMachineCardPreview(conversation)).toBe('repo · Cursor · Codex · Studio Mac')
+        expect(getConversationMetaText(conversation)).toBe('Cursor · Studio Mac')
+        expect(getConversationPreviewText(conversation)).toBe('Cursor Chat')
+        expect(getConversationTabMetaText(conversation)).toBe('Cursor · Studio Mac')
+        expect(getConversationMachineCardPreview(conversation)).toBe('repo · Cursor Chat')
         expect(getMachineConversationCardSubtitle(conversation, { timestampLabel: '2m ago' }))
-            .toBe('Chat · Cursor · Codex · Studio Mac · 2m ago')
+            .toBe('Chat · Cursor · Studio Mac · 2m ago')
         expect(getConversationHistorySubtitle(conversation)).toBe('repo — Cursor')
-        expect(getConversationStopDialogLabel(conversation)).toBe('Codex')
-        expect(getConversationNotificationLabel(conversation)).toBe('Codex')
+        expect(getConversationStopDialogLabel(conversation)).toBe('Cursor')
+        expect(getConversationNotificationLabel(conversation)).toBe('Cursor Chat')
         expect(getRemotePanelTitle(conversation)).toBe('Remote · repo')
     })
 

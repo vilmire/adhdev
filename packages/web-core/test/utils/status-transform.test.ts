@@ -108,7 +108,6 @@ describe('statusPayloadToEntries', () => {
             id: 'machine-1',
             type: 'adhdev-daemon',
             status: 'online',
-            daemonMode: true,
             timestamp: 999,
             machineNickname: 'Studio',
             cdpConnected: true,
@@ -122,7 +121,6 @@ describe('statusPayloadToEntries', () => {
             id: 'machine-1:ide:ide-1',
             sessionId: 'ide-1',
             type: 'cursor',
-            ideType: 'cursor',
             status: 'online',
             workspace: '/repo',
             cdpConnected: true,
@@ -201,15 +199,15 @@ describe('statusPayloadToEntries', () => {
             id: 'machine-2:cli:cli-2',
             status: 'running',
             workspace: '',
-            runtimeWriteOwner: null,
-            runtimeAttachedClients: [],
         });
+        expect(entries[2].runtimeWriteOwner ?? null).toBe(null);
+        expect(entries[2].runtimeAttachedClients ?? []).toEqual([]);
         expect(entries[3]).toMatchObject({
             id: 'machine-2:acp:acp-2',
             status: 'running',
             workspace: '',
-            runtimeWriteOwner: null,
-            runtimeAttachedClients: [],
         });
+        expect(entries[3].runtimeWriteOwner ?? null).toBe(null);
+        expect(entries[3].runtimeAttachedClients ?? []).toEqual([]);
     });
 });
