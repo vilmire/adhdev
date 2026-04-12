@@ -2,116 +2,63 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.47] - 2026-04-12
+
+### Fixed
+- Stabilized Claude Code VS Code webview targeting and preserved more live session control metadata across status refreshes.
+
+### Changed
+- Refreshed OSS and standalone documentation to match the current self-hosted runtime, session-host, mux, and local API surfaces.
+
 ## [0.8.46] - 2026-04-12
 
-### Added
-- 
-
-### Fixed
-- 
-
 ### Changed
-- 
+- Refined dockview workspace controls and recovery behavior so dashboard layouts restore more cleanly after panel and reconnect churn.
 ## [0.8.45] - 2026-04-12
 
-### Added
-- 
-
-### Fixed
-- 
-
 ### Changed
-- 
+- Version-only release to keep published OSS packages aligned. No standalone surface changes landed in this tag.
 ## [0.8.44] - 2026-04-12
 
-### Added
-- 
-
 ### Fixed
-- 
-
-### Changed
-- 
+- Narrowed dockview popout window typing to prevent popout-specific web-core regressions in dashboard and standalone builds.
 ## [0.8.43] - 2026-04-12
 
-### Added
-- 
-
-### Fixed
-- 
-
 ### Changed
-- 
+- Refined dockview popout behavior, layout persistence, and related dashboard workspace interactions.
 ## [0.8.42] - 2026-04-12
 
-### Added
-- 
-
-### Fixed
-- 
-
 ### Changed
-- 
+- Version-only release to keep published OSS packages aligned. No standalone surface changes landed in this tag.
 ## [0.8.41] - 2026-04-12
 
 ### Added
-- 
-
-### Fixed
-- 
-
-### Changed
-- 
+- Dashboard and standalone surfaces now enforce the version update policy and expose version update state more consistently.
 ## [0.8.40] - 2026-04-12
 
-### Added
-- 
-
-### Fixed
-- 
-
 ### Changed
-- 
+- Version-only release to keep published OSS packages aligned. No standalone surface changes landed in this tag.
 ## [0.8.39] - 2026-04-11
 
-### Added
-- 
-
-### Fixed
-- 
-
 ### Changed
-- 
+- Version-only release to keep published OSS packages aligned. No standalone surface changes landed in this tag.
 ## [0.8.38] - 2026-04-11
 
 ### Added
-- 
-
-### Fixed
-- 
-
-### Changed
-- 
+- Live last-message previews in dashboard conversation lists.
+- CDP multi-window handling in `daemon-core` plus the Claude Code VS Code catalog entry used by the launcher inventory.
 ## [0.8.37] - 2026-04-11
 
-### Added
-- 
-
-### Fixed
-- 
-
 ### Changed
-- 
+- Version-only release to keep published OSS packages aligned. No standalone surface changes landed in this tag.
 ## [0.8.36] - 2026-04-11
 
-### Added
-- 
-
 ### Fixed
-- 
+- Improved completed-state contrast in mobile inbox views.
 
 ### Changed
-- 
+- Backfilled recent changelog entries.
+- Reverted an experimental builtin vendor provider-loader fallback before release, so this version does not introduce a new fallback contract.
 ## [0.8.35] - 2026-04-10
 
 ### Fixed
