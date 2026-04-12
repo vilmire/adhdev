@@ -1,4 +1,5 @@
 import React from 'react'
+import { flushSync } from 'react-dom'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation, CliConversationViewMode } from './types'
 import { isAcpConv, isCliConv } from './types'
@@ -11,6 +12,7 @@ import type { DashboardMobileSection } from './DashboardMobileBottomNav'
 import { useActionShortcuts, type DashboardActionShortcutDefinition } from '../../hooks/useActionShortcuts'
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
+import { IconX } from '../Icons'
 
 type GuideTabId = 'overview' | 'quickstart' | 'shortcuts'
 type ShortcutSectionId = 'all' | 'workspace' | 'panes' | 'approvals'
@@ -201,8 +203,12 @@ export default function DashboardMainView({
 }: DashboardMainViewProps) {
     const dockviewActionHandlersRef = React.useRef<{
         setShortcutForActiveTab: () => void
+        restoreHiddenTabToSavedLocation: (tabKey: string) => void
         activatePreviousTabInGroup: () => void
         activateNextTabInGroup: () => void
+        floatActiveTab: () => void
+        popoutActiveTab: () => void
+        dockActiveTab: () => void
         splitActiveTabRight: () => void
         splitActiveTabDown: () => void
         focusLeftPane: () => void
@@ -218,6 +224,13 @@ export default function DashboardMainView({
     const [hiddenOpen, setHiddenOpen] = React.useState(false)
     const [shortcutHelpOpen, setShortcutHelpOpen] = React.useState(false)
     const [newSessionOpen, setNewSessionOpen] = React.useState(false)
+
+    const handleShowHiddenConversationWithRestore = React.useCallback((conversation: ActiveConversation) => {
+        flushSync(() => {
+            onShowHiddenConversation(conversation)
+        })
+        dockviewActionHandlersRef.current?.restoreHiddenTabToSavedLocation(conversation.tabKey)
+    }, [onShowHiddenConversation])
     const [guideNudgeVisible, setGuideNudgeVisible] = React.useState(false)
     const [guideTab, setGuideTab] = React.useState<GuideTabId>('quickstart')
     const [shortcutSection, setShortcutSection] = React.useState<ShortcutSectionId>('workspace')
@@ -302,6 +315,18 @@ export default function DashboardMainView({
             }
             if (actionId === 'splitActiveTabDown') {
                 dockviewActionHandlersRef.current?.splitActiveTabDown()
+                return
+            }
+            if (actionId === 'floatActiveTab') {
+                dockviewActionHandlersRef.current?.floatActiveTab()
+                return
+            }
+            if (actionId === 'popoutActiveTab') {
+                dockviewActionHandlersRef.current?.popoutActiveTab()
+                return
+            }
+            if (actionId === 'dockActiveTab') {
+                dockviewActionHandlersRef.current?.dockActiveTab()
                 return
             }
             if (actionId === 'focusLeftPane') {
@@ -449,9 +474,9 @@ export default function DashboardMainView({
                     conversations={visibleConversations}
                     hiddenConversations={hiddenConversations}
                     onOpenHistory={onOpenHistory}
-                    onOpenConversation={onShowHiddenConversation}
+                    onOpenConversation={handleShowHiddenConversationWithRestore}
                     onHideConversation={onHideConversation}
-                    onShowConversation={onShowHiddenConversation}
+                    onShowConversation={handleShowHiddenConversationWithRestore}
                     onShowAllHidden={onShowAllHiddenConversations}
                     inboxOpen={inboxOpen}
                     onInboxOpenChange={handleInboxOpenChange}
@@ -490,7 +515,7 @@ export default function DashboardMainView({
                     onStopCli={onStopCli}
                     wsStatus={wsStatus}
                     isConnected={isConnected}
-                    onShowHiddenConversation={onShowHiddenConversation}
+                    onShowHiddenConversation={handleShowHiddenConversationWithRestore}
                     onShowAllHiddenConversations={onShowAllHiddenConversations}
                     onOpenNewSession={() => setNewSessionOpen(true)}
                 />
@@ -583,15 +608,16 @@ export default function DashboardMainView({
                             <div>
                                 <div className="text-sm font-bold text-text-primary">Dashboard guide</div>
                                 <div className="text-xs text-text-secondary mt-1">
-                                    A quick guide to the dashboard flow, plus grouped shortcuts you can tune.
+                                    A quick guide to the dashboard flow, floating and popout tabs, plus grouped shortcuts you can tune.
                                 </div>
                             </div>
                             <button
                                 type="button"
-                                className="btn btn-secondary btn-sm"
+                                className="btn btn-secondary btn-sm inline-flex items-center justify-center w-8 px-0"
                                 onClick={handleCloseShortcutHelp}
+                                aria-label="Close dashboard guide"
                             >
-                                Close
+                                <IconX size={14} />
                             </button>
                         </div>
 
@@ -630,6 +656,8 @@ export default function DashboardMainView({
                                         <div><span className="font-semibold text-text-primary">Review notifications:</span> open the inbox, jump to the session, then use the conversation or approval controls directly from the active pane.</div>
                                         <div><span className="font-semibold text-text-primary">Reduce clutter:</span> hide less important sessions instead of closing them, then restore from hidden tabs when needed.</div>
                                         <div><span className="font-semibold text-text-primary">Split work:</span> keep one pane active for input and let secondary panes stay read-only until you focus them.</div>
+                                        <div><span className="font-semibold text-text-primary">Detached views:</span> float a tab for quick side-by-side work, or pop it into a new window when you want a separate monitor.</div>
+                                        <div><span className="font-semibold text-text-primary">Docking:</span> use Dock to bring a floating tab back into the grid, or move a popped out tab back to the main dashboard.</div>
                                         <div><span className="font-semibold text-text-primary">Per-tab shortcuts:</span> right-click a Dockview tab to assign a direct shortcut for that specific session.</div>
                                         <div><span className="font-semibold text-text-primary">Approval buttons:</span> use {isMac ? '⌥J / ⌥K / ⌥L' : 'Ctrl+Alt+J / K / L'} for the first three visible approval actions on the active session.</div>
                                     </div>
@@ -645,7 +673,7 @@ export default function DashboardMainView({
                                         <div><span className="font-semibold text-text-primary">1.</span> Start from the machine or workspace flow first. Pick or save a workspace before launching CLI or ACP sessions.</div>
                                         <div><span className="font-semibold text-text-primary">2.</span> Keep the main strip focused on active work and push overflow into Hidden tabs.</div>
                                         <div><span className="font-semibold text-text-primary">3.</span> Use the inbox for approval-required or completed sessions instead of scanning every tab.</div>
-                                        <div><span className="font-semibold text-text-primary">4.</span> Split only when you need parallel reading; one active pane is usually the cleanest default.</div>
+                                        <div><span className="font-semibold text-text-primary">4.</span> Split only when you need parallel reading; float or pop out a tab when you want to detach it without losing the main layout.</div>
                                     </div>
                                 </div>
 

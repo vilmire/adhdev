@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 
-const SHORTCUTS_KEY = 'adhdev-tab-shortcuts'
+export const TAB_SHORTCUTS_KEY = 'adhdev-tab-shortcuts'
 
-function readTabShortcuts() {
+export function readTabShortcuts() {
     try {
-        return JSON.parse(localStorage.getItem(SHORTCUTS_KEY) || '{}') as Record<string, string>
+        return JSON.parse(localStorage.getItem(TAB_SHORTCUTS_KEY) || '{}') as Record<string, string>
     } catch {
         return {}
     }
@@ -36,7 +36,7 @@ export function useTabShortcuts({ enabled = true, sortedTabKeys, onFocus, onSele
     const saveShortcuts = useCallback((next: Record<string, string>) => {
         setTabShortcuts(next)
         try {
-            localStorage.setItem(SHORTCUTS_KEY, JSON.stringify(next))
+            localStorage.setItem(TAB_SHORTCUTS_KEY, JSON.stringify(next))
         } catch { /* noop */ }
     }, [])
 

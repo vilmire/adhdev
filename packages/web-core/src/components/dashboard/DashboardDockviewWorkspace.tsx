@@ -3,12 +3,14 @@ import {
     useCallback,
     useContext,
     useEffect,
+    useLayoutEffect,
     useMemo,
     useRef,
     useState,
     type Dispatch,
     type SetStateAction,
 } from 'react'
+import { createPortal } from 'react-dom'
 import {
     DockviewReact,
     themeDark,
@@ -28,18 +30,22 @@ import { useDashboardConversationCommands } from '../../hooks/useDashboardConver
 import { useIdeRemoteStream } from '../../hooks/useIdeRemoteStream'
 import {
     getDashboardLayoutProfile,
+    readDashboardDockviewHiddenRestoreState,
     readDashboardDockviewStoredLayout,
+    writeDashboardDockviewHiddenRestoreState,
     writeDashboardDockviewStoredLayout,
+    type DashboardStoredHiddenTabLocation,
 } from '../../utils/dashboardLayoutStorage'
 import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, type LiveSessionInboxState } from './DashboardMobileChatShared'
 import { getPreferredConversationForIde } from './conversation-sort'
 import { getCliConversationViewMode, isAcpConv } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
-import { useTabShortcuts } from '../../hooks/useTabShortcuts'
+import { useTabShortcuts, readTabShortcuts } from '../../hooks/useTabShortcuts'
+import { isEditableTarget, normalizeKey, readActionShortcuts, type DashboardActionShortcutId } from '../../hooks/useActionShortcuts'
 import { getConversationTabMetaText, getConversationTitle, getRemotePanelTitle } from './conversation-presenters'
 import { getConversationNativeTargetSessionId } from './conversation-selectors'
-import { IconExternalWindow, IconArrowBack, IconKeyboard, IconX, IconEyeOff } from '../Icons'
+import { IconExternalWindow, IconArrowBack, IconKeyboard, IconX, IconEyeOff, IconFloat, IconDock } from '../Icons'
 
 interface DashboardDockviewWorkspaceProps {
     visibleConversations: ActiveConversation[]
@@ -58,8 +64,12 @@ interface DashboardDockviewWorkspaceProps {
     toggleHiddenTab: (tabKey: string) => void
     registerActionHandlers?: (handlers: {
         setShortcutForActiveTab: () => void
+        restoreHiddenTabToSavedLocation: (tabKey: string) => void
         activatePreviousTabInGroup: () => void
         activateNextTabInGroup: () => void
+        floatActiveTab: () => void
+        popoutActiveTab: () => void
+        dockActiveTab: () => void
         splitActiveTabRight: () => void
         splitActiveTabDown: () => void
         focusLeftPane: () => void
@@ -95,10 +105,12 @@ interface DashboardDockviewContextValue {
     userName?: string
     scrollToBottomRequest?: { tabKey: string; nonce: number } | null
     tabShortcuts: Record<string, string>
-    openTabContextMenu: (args: { x: number; y: number; tabKey: string }) => void
+    openTabContextMenu: (args: { x: number; y: number; tabKey: string; sourceDocument?: Document }) => void
     popoutTab: (tabKey: string) => void
     moveTabBackToMain: (tabKey: string) => void
     isTabInPopout: (tabKey: string) => boolean
+    floatTab: (tabKey: string) => void
+    isTabFloating: (tabKey: string) => boolean
 }
 
 interface DashboardDockviewPanelParams {
@@ -131,6 +143,40 @@ function getRemotePanelId(routeId: string) {
 
 function isRemotePanelId(panelId: string) {
     return panelId.startsWith('remote:')
+}
+
+function escapeHtml(value: string) {
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+}
+
+function focusOwnerWindow(ownerDoc: Document | null | undefined) {
+    const ownerWindow = ownerDoc?.defaultView
+    if (!ownerWindow) return
+    try {
+        ownerWindow.focus()
+        ownerDoc?.body?.focus?.()
+        ownerDoc?.documentElement?.focus?.()
+        ownerWindow.requestAnimationFrame?.(() => {
+            try {
+                ownerWindow.focus()
+                ownerDoc?.body?.focus?.()
+            } catch {
+                // noop
+            }
+        })
+    } catch {
+        // noop
+    }
+}
+
+function applyDockviewThemeClass(target: HTMLElement, theme: 'light' | 'dark') {
+    target.classList.remove(themeLight.className, themeDark.className)
+    target.classList.add(theme === 'light' ? themeLight.className : themeDark.className)
 }
 
 function useDockviewHeaderRenderTick(props: Pick<IDockviewPanelHeaderProps, 'api' | 'containerApi'>) {
@@ -482,6 +528,7 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
                     x: event.clientX,
                     y: event.clientY,
                     tabKey: conversation.tabKey,
+                    sourceDocument: (event.target as HTMLElement)?.ownerDocument ?? document,
                 })
             }}
         >
@@ -552,13 +599,18 @@ export default function DashboardDockviewWorkspace({
     const awaitingInitialLayoutHydrationRef = useRef(false)
     const hasRestoredStoredActiveTabRef = useRef(false)
     const storedActiveTabIdRef = useRef<string | null>(null)
-    const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabKey: string } | null>(null)
+    const previousVisibleTabKeysRef = useRef<string[]>([])
+    const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabKey: string; sourceDocument: Document } | null>(null)
     const [isDraggingDockview, setIsDraggingDockview] = useState(false)
     const [isShowingDockviewOverlay, setIsShowingDockviewOverlay] = useState(false)
+    const [popoutWindowRevision, setPopoutWindowRevision] = useState(0)
     const overlayCleanupTimeoutRef = useRef<number | null>(null)
     const layoutProfile = useMemo(
         () => getDashboardLayoutProfile(typeof window !== 'undefined' ? window.innerWidth : 1280),
         [],
+    )
+    const hiddenRestoreStateRef = useRef<Record<string, DashboardStoredHiddenTabLocation>>(
+        typeof window === 'undefined' ? {} : readDashboardDockviewHiddenRestoreState(layoutProfile),
     )
     const conversationsByTabKey = useMemo(
         () => new Map(visibleConversations.map(conversation => [conversation.tabKey, conversation])),
@@ -575,11 +627,9 @@ export default function DashboardDockviewWorkspace({
     // ─── Popout Window (tear-off to separate browser window) ─────
 
     const injectThemeIntoPopoutWindow = useCallback((popoutWindow: Window) => {
-        // Copy all stylesheets from parent to popout window
         const parentDoc = document
         const popoutDoc = popoutWindow.document
 
-        // Copy <link rel="stylesheet"> tags
         for (const link of parentDoc.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')) {
             const clone = popoutDoc.createElement('link')
             clone.rel = 'stylesheet'
@@ -588,14 +638,12 @@ export default function DashboardDockviewWorkspace({
             popoutDoc.head.appendChild(clone)
         }
 
-        // Copy inline <style> tags
         for (const style of parentDoc.querySelectorAll<HTMLStyleElement>('style')) {
             const clone = popoutDoc.createElement('style')
             clone.textContent = style.textContent
             popoutDoc.head.appendChild(clone)
         }
 
-        // Copy CSS custom properties from :root / html
         const cssVars: string[] = []
         for (const sheet of parentDoc.styleSheets) {
             try {
@@ -612,16 +660,20 @@ export default function DashboardDockviewWorkspace({
             popoutDoc.head.appendChild(varStyle)
         }
 
-        // Propagate data-theme attribute and body classes
         const htmlTheme = parentDoc.documentElement.getAttribute('data-theme')
         if (htmlTheme) popoutDoc.documentElement.setAttribute('data-theme', htmlTheme)
         popoutDoc.documentElement.style.colorScheme = htmlTheme === 'light' ? 'light' : 'dark'
         popoutDoc.body.className = parentDoc.body.className
 
-        // Copy inline styles from :root (captures runtime theme variable overrides)
         const inlineRootStyle = parentDoc.documentElement.getAttribute('style')
         if (inlineRootStyle) popoutDoc.documentElement.setAttribute('style', inlineRootStyle)
-    }, [])
+
+        const mount = popoutDoc.getElementById('dv-popout-window')
+        if (mount instanceof HTMLElement) {
+            mount.classList.add('adhdev-dockview')
+            applyDockviewThemeClass(mount, theme)
+        }
+    }, [theme])
 
     const syncThemeToOpenPopouts = useCallback(() => {
         const api = apiRef.current
@@ -630,6 +682,11 @@ export default function DashboardDockviewWorkspace({
             try {
                 const ownerDoc = group.element?.ownerDocument
                 if (!ownerDoc || ownerDoc === document) continue
+                const mount = ownerDoc.getElementById('dv-popout-window')
+                if (mount instanceof HTMLElement) {
+                    mount.classList.add('adhdev-dockview')
+                    applyDockviewThemeClass(mount, theme)
+                }
                 const htmlTheme = document.documentElement.getAttribute('data-theme')
                 if (htmlTheme) ownerDoc.documentElement.setAttribute('data-theme', htmlTheme)
                 ownerDoc.documentElement.style.colorScheme = htmlTheme === 'light' ? 'light' : 'dark'
@@ -641,7 +698,26 @@ export default function DashboardDockviewWorkspace({
                 // ignore detached popout docs
             }
         }
-    }, [])
+    }, [theme])
+
+    const syncPopoutContainerClasses = useCallback(() => {
+        const api = apiRef.current
+        if (!api) return
+        for (const group of api.groups) {
+            try {
+                const ownerDoc = group.element?.ownerDocument
+                if (!ownerDoc || ownerDoc === document) continue
+                const mount = ownerDoc.getElementById('dv-popout-window')
+                if (!(mount instanceof HTMLElement)) continue
+                mount.classList.add('adhdev-dockview')
+                applyDockviewThemeClass(mount, theme)
+                mount.classList.toggle('is-showing-dockview-overlay', isShowingDockviewOverlay)
+                mount.classList.toggle('is-dragging-dockview', isDraggingDockview)
+            } catch {
+                // ignore detached popout docs
+            }
+        }
+    }, [isDraggingDockview, isShowingDockviewOverlay, theme])
 
     const popoutTab = useCallback((tabKey: string) => {
         const api = apiRef.current
@@ -653,23 +729,20 @@ export default function DashboardDockviewWorkspace({
             popoutUrl: '/popout.html',
             onDidOpen: ({ window: popoutWin }) => {
                 injectThemeIntoPopoutWindow(popoutWin)
-                // Set popout window title
+                syncPopoutChrome()
                 const conv = conversationsByTabKey.get(tabKey)
-                if (conv) {
-                    popoutWin.document.title = `${getConversationTitle(conv)} — ADHDev`
-                } else {
-                    popoutWin.document.title = 'ADHDev — Popout'
-                }
+                popoutWin.document.title = conv
+                    ? `${getConversationTitle(conv)} — ADHDev`
+                    : 'ADHDev — Popout'
             },
         })
     }, [conversationsByTabKey, injectThemeIntoPopoutWindow])
 
     const moveTabBackToMain = useCallback((tabKey: string) => {
         const api = apiRef.current
-        if (!api) return
-        const panel = api.getPanel(tabKey)
-        if (!panel) return
-        // Move to the first existing group in main grid (not in a popout window), or create one
+        const panel = api?.getPanel(tabKey)
+        if (!api || !panel) return
+
         const mainGroups = api.groups.filter(g => {
             try { return g.element?.ownerDocument === document } catch { return true }
         })
@@ -686,21 +759,170 @@ export default function DashboardDockviewWorkspace({
         if (!api) return false
         const panel = api.getPanel(tabKey)
         if (!panel) return false
-        // Check if the panel's group is in a popout window
         try {
-            const groupEl = panel.group.element
-            return groupEl?.ownerDocument !== document
+            return panel.group.element?.ownerDocument !== document
         } catch {
             return false
         }
     }, [])
-    const selectTabByShortcut = useCallback((tabKey: string) => {
+
+    const hideConversationTab = useCallback((tabKey: string) => {
+        if (isTabInPopout(tabKey)) {
+            moveTabBackToMain(tabKey)
+        }
+        toggleHiddenTab(tabKey)
+    }, [isTabInPopout, moveTabBackToMain, toggleHiddenTab])
+
+    const floatTab = useCallback((tabKey: string) => {
+        const api = apiRef.current
+        const panel = api?.getPanel(tabKey)
+        if (!api || !panel) return
+        api.addFloatingGroup(panel, {
+            width: 600,
+            height: 500,
+        })
+    }, [])
+
+    const isTabFloating = useCallback((tabKey: string) => {
+        const panel = apiRef.current?.getPanel(tabKey)
+        if (!panel) return false
+        try {
+            return panel.group.model.location.type === 'floating'
+        } catch {
+            return false
+        }
+    }, [])
+
+    const getActiveConversationTabKey = useCallback(() => {
+        const activePanelId = apiRef.current?.activePanel?.id
+        if (!activePanelId || isRemotePanelId(activePanelId)) return null
+        return conversationsByTabKey.has(activePanelId) ? activePanelId : null
+    }, [conversationsByTabKey])
+
+    const dockTabToWorkspaceGrid = useCallback((tabKey: string) => {
+        const api = apiRef.current
+        const panel = api?.getPanel(tabKey)
+        if (!api || !panel) return
+        const gridGroups = api.groups.filter(group => {
+            try {
+                return group.model.location.type === 'grid'
+            } catch {
+                return true
+            }
+        })
+        if (gridGroups.length > 0) {
+            panel.api.moveTo({ group: gridGroups[0], position: 'center' })
+        } else {
+            panel.api.moveTo({ position: 'center' })
+        }
+        panel.api.setActive()
+    }, [])
+
+    const syncPopoutChrome = useCallback(() => {
         const api = apiRef.current
         if (!api) return
-        const panel = api.getPanel(tabKey)
-        if (!panel) return
+
+        for (const group of api.groups) {
+            const ownerDoc = group.element?.ownerDocument
+            if (!ownerDoc || ownerDoc === document) continue
+
+            const mount = ownerDoc.getElementById('dv-popout-window')
+            if (!(mount instanceof HTMLElement)) continue
+
+            let activePanelId: string | null = null
+            let title = ownerDoc.title || 'ADHDev'
+            let meta = 'Popout workspace'
+
+            const activePanel = group.activePanel
+            if (activePanel) {
+                activePanelId = activePanel.id
+                if (isRemotePanelId(activePanel.id)) {
+                    const routeId = (activePanel.params as DashboardDockviewRemotePanelParams | undefined)?.routeId || activePanel.id.slice('remote:'.length)
+                    const conversation = getPreferredConversationForIde([...conversationsByTabKey.values()], routeId)
+                    title = getRemotePanelTitle(conversation)
+                    meta = conversation?.machineName ? `Remote view · ${conversation.machineName}` : 'Remote view'
+                } else {
+                    const conversation = conversationsByTabKey.get(activePanel.id)
+                    title = conversation ? getConversationTitle(conversation) : (activePanel.title || activePanel.id)
+                    meta = conversation ? getConversationTabMetaText(conversation) : 'Dockview panel'
+                }
+            }
+
+            ownerDoc.title = `${title} — ADHDev`
+
+            let header = ownerDoc.getElementById('adhdev-popout-header')
+            if (!(header instanceof HTMLElement)) {
+                header = ownerDoc.createElement('div')
+                header.id = 'adhdev-popout-header'
+                ownerDoc.body.appendChild(header)
+            }
+
+            header.setAttribute('style', [
+                'position:absolute',
+                'top:0',
+                'left:0',
+                'right:0',
+                'height:52px',
+                'display:flex',
+                'align-items:center',
+                'justify-content:space-between',
+                'gap:12px',
+                'padding:0 14px',
+                'box-sizing:border-box',
+                'background:var(--surface-secondary)',
+                'border-bottom:1px solid var(--border-subtle)',
+                'z-index:5',
+                'backdrop-filter:blur(14px)',
+            ].join(';'))
+
+            header.innerHTML = `
+                <div style="min-width:0;display:flex;flex-direction:column;gap:2px;">
+                    <div style="font-size:10px;line-height:1;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;">ADHDev</div>
+                    <div style="min-width:0;font-size:13px;font-weight:700;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(title)}</div>
+                    <div style="min-width:0;font-size:10px;line-height:1.1;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(meta)}</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex:0 0 auto;">
+                    <button type="button" data-adhdev-popout-focus style="height:30px;padding:0 10px;border-radius:9px;background:var(--bg-glass);color:var(--text-secondary);font-size:11px;font-weight:600;">Dashboard</button>
+                    <button type="button" data-adhdev-popout-dock style="height:30px;padding:0 10px;border-radius:9px;background:var(--surface-primary);color:var(--text-primary);font-size:11px;font-weight:700;">Dock</button>
+                </div>
+            `
+
+            mount.style.top = '52px'
+            mount.style.height = 'calc(100% - 52px)'
+
+            const focusBtn = header.querySelector<HTMLButtonElement>('[data-adhdev-popout-focus]')
+            if (focusBtn) {
+                focusBtn.onclick = () => {
+                    window.focus()
+                }
+            }
+
+            const dockBtn = header.querySelector<HTMLButtonElement>('[data-adhdev-popout-dock]')
+            if (dockBtn) {
+                dockBtn.disabled = !activePanelId
+                dockBtn.style.opacity = activePanelId ? '1' : '0.5'
+                dockBtn.style.cursor = activePanelId ? 'pointer' : 'default'
+                dockBtn.onclick = () => {
+                    if (activePanelId) moveTabBackToMain(activePanelId)
+                    ownerDoc.defaultView?.focus()
+                }
+            }
+        }
+    }, [conversationsByTabKey, moveTabBackToMain])
+    const selectTabByShortcut = useCallback((tabKey: string) => {
+        const api = apiRef.current
+        const panel = api?.getPanel(tabKey)
+        if (!api || !panel) return
         panel.group.model.openPanel(panel)
         panel.api.setActive()
+        try {
+            const location = panel.group.model.location
+            if (location.type === 'popout') {
+                location.getWindow().focus()
+            } else {
+                focusOwnerWindow(panel.group.element?.ownerDocument)
+            }
+        } catch { /* ignore */ }
     }, [])
     const activateRelativeTabInGroup = useCallback((direction: -1 | 1) => {
         const api = apiRef.current
@@ -788,6 +1010,7 @@ export default function DashboardDockviewWorkspace({
         if (!nextPanel) return
         nextGroup.model.openPanel(nextPanel)
         nextPanel.api.setActive()
+        focusOwnerWindow(nextGroup.element?.ownerDocument)
     }, [getAdjacentGroup])
     const moveActivePanelToDirection = useCallback((direction: DockviewPaneDirection, options?: { createGroupIfMissing?: boolean }) => {
         const api = apiRef.current
@@ -832,36 +1055,125 @@ export default function DashboardDockviewWorkspace({
         }
         if (!conversationsByTabKey.has(activePanel.id)) return
         setShortcutListening(activePanel.id)
-    }, [conversationsByTabKey, setShortcutListening, visibleConversations])
+    }, [conversationsByTabKey, selectTabByShortcut, setShortcutListening, visibleConversations])
 
-    useEffect(() => {
-        registerActionHandlers?.({
-            setShortcutForActiveTab: startShortcutListeningForActiveTab,
-            activatePreviousTabInGroup: () => activateRelativeTabInGroup(-1),
-            activateNextTabInGroup: () => activateRelativeTabInGroup(1),
-            splitActiveTabRight: () => moveActivePanelToDirection('right', { createGroupIfMissing: true }),
-            splitActiveTabDown: () => moveActivePanelToDirection('below', { createGroupIfMissing: true }),
-            focusLeftPane: () => focusAdjacentGroup('left'),
-            focusRightPane: () => focusAdjacentGroup('right'),
-            focusUpPane: () => focusAdjacentGroup('above'),
-            focusDownPane: () => focusAdjacentGroup('below'),
-            moveActiveTabToLeftPane: () => moveActivePanelToDirection('left'),
-            moveActiveTabToRightPane: () => moveActivePanelToDirection('right'),
-            moveActiveTabToUpPane: () => moveActivePanelToDirection('above'),
-            moveActiveTabToDownPane: () => moveActivePanelToDirection('below'),
-        })
-        return () => registerActionHandlers?.(null)
-    }, [activateRelativeTabInGroup, focusAdjacentGroup, moveActivePanelToDirection, registerActionHandlers, startShortcutListeningForActiveTab])
+    const encodeShortcut = useCallback((event: KeyboardEvent): string | null => {
+        const parts: string[] = []
+        if (event.metaKey) parts.push(isMac ? '⌘' : 'Meta')
+        if (event.ctrlKey) parts.push('Ctrl')
+        if (event.altKey) parts.push(isMac ? '⌥' : 'Alt')
+        if (event.shiftKey && event.key.length !== 1) parts.push(isMac ? '⇧' : 'Shift')
+        if (['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return null
+        parts.push(normalizeKey(event.key))
+        return parts.join('+')
+    }, [isMac])
+
+    const triggerPopoutActionShortcut = useCallback((actionId: DashboardActionShortcutId) => {
+        switch (actionId) {
+            case 'splitActiveTabRight':
+                moveActivePanelToDirection('right', { createGroupIfMissing: true })
+                return
+            case 'splitActiveTabDown':
+                moveActivePanelToDirection('below', { createGroupIfMissing: true })
+                return
+            case 'floatActiveTab': {
+                const tabKey = getActiveConversationTabKey()
+                if (tabKey) floatTab(tabKey)
+                return
+            }
+            case 'popoutActiveTab': {
+                const tabKey = getActiveConversationTabKey()
+                if (tabKey) popoutTab(tabKey)
+                return
+            }
+            case 'dockActiveTab': {
+                const tabKey = getActiveConversationTabKey()
+                if (!tabKey) return
+                if (isTabInPopout(tabKey)) {
+                    moveTabBackToMain(tabKey)
+                } else if (isTabFloating(tabKey)) {
+                    dockTabToWorkspaceGrid(tabKey)
+                }
+                return
+            }
+            case 'focusLeftPane':
+                focusAdjacentGroup('left')
+                return
+            case 'focusRightPane':
+                focusAdjacentGroup('right')
+                return
+            case 'focusUpPane':
+                focusAdjacentGroup('above')
+                return
+            case 'focusDownPane':
+                focusAdjacentGroup('below')
+                return
+            case 'moveActiveTabToLeftPane':
+                moveActivePanelToDirection('left')
+                return
+            case 'moveActiveTabToRightPane':
+                moveActivePanelToDirection('right')
+                return
+            case 'moveActiveTabToUpPane':
+                moveActivePanelToDirection('above')
+                return
+            case 'moveActiveTabToDownPane':
+                moveActivePanelToDirection('below')
+                return
+            case 'selectPreviousGroupTab':
+                activateRelativeTabInGroup(-1)
+                return
+            case 'selectNextGroupTab':
+                activateRelativeTabInGroup(1)
+                return
+            case 'setActiveTabShortcut':
+                startShortcutListeningForActiveTab()
+                return
+            case 'hideCurrentTab': {
+                const panelId = apiRef.current?.activePanel?.id
+                if (panelId && !isRemotePanelId(panelId)) {
+                    hideConversationTab(panelId)
+                }
+                return
+            }
+            default:
+                return
+        }
+    }, [
+        activateRelativeTabInGroup,
+        dockTabToWorkspaceGrid,
+        focusAdjacentGroup,
+        floatTab,
+        getActiveConversationTabKey,
+        hideConversationTab,
+        isTabFloating,
+        isTabInPopout,
+        moveTabBackToMain,
+        moveActivePanelToDirection,
+        popoutTab,
+        startShortcutListeningForActiveTab,
+    ])
 
     useEffect(() => {
         if (!ctxMenu) return
+        const targetDoc = ctxMenu.sourceDocument
+        const targetWin = targetDoc.defaultView ?? window
         const close = (event: MouseEvent) => {
-            const menu = document.querySelector('[data-dockview-tab-context-menu]')
+            const menu = targetDoc.querySelector('[data-dockview-tab-context-menu]')
             if (menu && menu.contains(event.target as Node)) return
             setCtxMenu(null)
         }
-        window.addEventListener('mousedown', close, true)
-        return () => window.removeEventListener('mousedown', close, true)
+        targetWin.addEventListener('mousedown', close, true)
+        // Also close if main window is clicked when menu is in popout
+        if (targetWin !== window) {
+            window.addEventListener('mousedown', () => setCtxMenu(null), true)
+        }
+        return () => {
+            targetWin.removeEventListener('mousedown', close, true)
+            if (targetWin !== window) {
+                window.removeEventListener('mousedown', () => setCtxMenu(null), true)
+            }
+        }
     }, [ctxMenu])
     const contextValue = useMemo<DashboardDockviewContextValue>(() => ({
         actionLogs,
@@ -876,14 +1188,16 @@ export default function DashboardDockviewWorkspace({
         sendDaemonCommand,
         setActionLogs,
         setLocalUserMessages,
-        toggleHiddenTab,
+        toggleHiddenTab: hideConversationTab,
         userName,
         scrollToBottomRequest,
         tabShortcuts,
-        openTabContextMenu: ({ x, y, tabKey }) => setCtxMenu({ x, y, tabKey }),
+        openTabContextMenu: ({ x, y, tabKey, sourceDocument: srcDoc }) => setCtxMenu({ x, y, tabKey, sourceDocument: srcDoc ?? document }),
         popoutTab,
         moveTabBackToMain,
         isTabInPopout,
+        floatTab,
+        isTabFloating,
     }), [
         actionLogs,
         clearedTabs,
@@ -897,13 +1211,15 @@ export default function DashboardDockviewWorkspace({
         sendDaemonCommand,
         setActionLogs,
         setLocalUserMessages,
-        toggleHiddenTab,
+        hideConversationTab,
         userName,
         scrollToBottomRequest,
         tabShortcuts,
         popoutTab,
         moveTabBackToMain,
         isTabInPopout,
+        floatTab,
+        isTabFloating,
     ])
 
     const activateRequestedTab = useCallback((tabKey: string | null | undefined) => {
@@ -934,11 +1250,140 @@ export default function DashboardDockviewWorkspace({
         })
     }, [layoutProfile])
 
+    const persistHiddenRestoreState = useCallback(() => {
+        writeDashboardDockviewHiddenRestoreState(layoutProfile, hiddenRestoreStateRef.current)
+    }, [layoutProfile])
+
+    const readHiddenRestoreStateFromLayout = useCallback((tabKey: string): DashboardStoredHiddenTabLocation => {
+        const api = apiRef.current
+        if (!api) return { kind: 'grid' }
+
+        const serialized = api.toJSON() as {
+            floatingGroups?: Array<{
+                data?: { views?: string[] }
+                position?: {
+                    left?: number
+                    right?: number
+                    top?: number
+                    bottom?: number
+                    width: number
+                    height: number
+                }
+            }>
+            popoutGroups?: Array<{
+                data?: { views?: string[] }
+                position?: { left: number, top: number, width: number, height: number }
+                url?: string
+            }>
+        }
+
+        for (const group of serialized.floatingGroups || []) {
+            if (group.data?.views?.includes(tabKey) && group.position) {
+                return { kind: 'floating', position: group.position }
+            }
+        }
+
+        for (const group of serialized.popoutGroups || []) {
+            if (group.data?.views?.includes(tabKey)) {
+                return {
+                    kind: 'popout',
+                    position: group.position,
+                    popoutUrl: group.url,
+                }
+            }
+        }
+
+        return { kind: 'grid' }
+    }, [])
+
+    const restoreHiddenTabToSavedLocation = useCallback((tabKey: string) => {
+        const api = apiRef.current
+        if (!api) return
+        const panel = api.getPanel(tabKey)
+        const savedLocation = hiddenRestoreStateRef.current[tabKey]
+        if (!panel || !savedLocation || savedLocation.kind === 'grid') return
+
+        const currentLocation = panel.group.model.location.type
+        if (currentLocation === savedLocation.kind) {
+            delete hiddenRestoreStateRef.current[tabKey]
+            persistHiddenRestoreState()
+            return
+        }
+
+        if (savedLocation.kind === 'floating') {
+            api.addFloatingGroup(panel, {
+                x: savedLocation.position.left ?? 24,
+                y: savedLocation.position.top ?? 24,
+                width: savedLocation.position.width,
+                height: savedLocation.position.height,
+            })
+            delete hiddenRestoreStateRef.current[tabKey]
+            persistHiddenRestoreState()
+            return
+        }
+        // Popout restoration is intentionally not automatic.
+        // Browser popup restrictions make hidden-tab restore unreliable, so
+        // popout tabs come back docked in the main grid.
+        delete hiddenRestoreStateRef.current[tabKey]
+        persistHiddenRestoreState()
+    }, [persistHiddenRestoreState])
+
+    useEffect(() => {
+        registerActionHandlers?.({
+            setShortcutForActiveTab: startShortcutListeningForActiveTab,
+            restoreHiddenTabToSavedLocation,
+            activatePreviousTabInGroup: () => activateRelativeTabInGroup(-1),
+            activateNextTabInGroup: () => activateRelativeTabInGroup(1),
+            floatActiveTab: () => {
+                const tabKey = getActiveConversationTabKey()
+                if (tabKey) floatTab(tabKey)
+            },
+            popoutActiveTab: () => {
+                const tabKey = getActiveConversationTabKey()
+                if (tabKey) popoutTab(tabKey)
+            },
+            dockActiveTab: () => {
+                const tabKey = getActiveConversationTabKey()
+                if (!tabKey) return
+                if (isTabInPopout(tabKey)) {
+                    moveTabBackToMain(tabKey)
+                } else if (isTabFloating(tabKey)) {
+                    dockTabToWorkspaceGrid(tabKey)
+                }
+            },
+            splitActiveTabRight: () => moveActivePanelToDirection('right', { createGroupIfMissing: true }),
+            splitActiveTabDown: () => moveActivePanelToDirection('below', { createGroupIfMissing: true }),
+            focusLeftPane: () => focusAdjacentGroup('left'),
+            focusRightPane: () => focusAdjacentGroup('right'),
+            focusUpPane: () => focusAdjacentGroup('above'),
+            focusDownPane: () => focusAdjacentGroup('below'),
+            moveActiveTabToLeftPane: () => moveActivePanelToDirection('left'),
+            moveActiveTabToRightPane: () => moveActivePanelToDirection('right'),
+            moveActiveTabToUpPane: () => moveActivePanelToDirection('above'),
+            moveActiveTabToDownPane: () => moveActivePanelToDirection('below'),
+        })
+        return () => registerActionHandlers?.(null)
+    }, [
+        activateRelativeTabInGroup,
+        dockTabToWorkspaceGrid,
+        floatTab,
+        focusAdjacentGroup,
+        getActiveConversationTabKey,
+        isTabFloating,
+        isTabInPopout,
+        moveActivePanelToDirection,
+        moveTabBackToMain,
+        popoutTab,
+        registerActionHandlers,
+        restoreHiddenTabToSavedLocation,
+        startShortcutListeningForActiveTab,
+    ])
+
     const markDockviewOverlaysHidden = useCallback(() => {
         const root = dockviewContainerRef.current
         if (!root) return
         const nodes = root.querySelectorAll<HTMLElement>(
-            '.dv-drop-target-container, .dv-drop-target-anchor, .dv-drop-target-dropzone, .dv-drop-target-selection, .dv-render-overlay',
+            '.dv-drop-target-container, .dv-drop-target-anchor, .dv-drop-target-dropzone, .dv-drop-target-selection',
         )
         for (const node of nodes) {
             node.setAttribute('data-adhdev-force-hidden', 'true')
@@ -1022,6 +1467,7 @@ export default function DashboardDockviewWorkspace({
         event.api.onDidActivePanelChange(panel => {
             storedActiveTabIdRef.current = panel?.id ?? null
             hasRestoredStoredActiveTabRef.current = true
+            syncPopoutChrome()
             if (panel && isRemotePanelId(panel.id)) {
                 const remoteIdeId = (panel.params as DashboardDockviewRemotePanelParams | undefined)?.routeId || panel.id.slice('remote:'.length)
                 const relatedConversation = getPreferredConversationForIde(visibleConversations, remoteIdeId)
@@ -1043,6 +1489,8 @@ export default function DashboardDockviewWorkspace({
 
         event.api.onDidLayoutChange(() => {
             persistDockviewLayout()
+            syncPopoutChrome()
+            setPopoutWindowRevision(value => value + 1)
         })
 
         event.api.onWillDragPanel(() => {
@@ -1071,6 +1519,7 @@ export default function DashboardDockviewWorkspace({
                 try {
                     const ownerDoc = group.element?.ownerDocument
                     if (!ownerDoc || ownerDoc === document) return
+                    ownerDoc.getElementById('dv-popout-window')?.classList.add('adhdev-dockview')
                     // This group is in a popout window — inject theme attributes
                     const htmlTheme = document.documentElement.getAttribute('data-theme')
                     if (htmlTheme) ownerDoc.documentElement.setAttribute('data-theme', htmlTheme)
@@ -1078,6 +1527,8 @@ export default function DashboardDockviewWorkspace({
                     const inlineRootStyle = document.documentElement.getAttribute('style')
                     if (inlineRootStyle) ownerDoc.documentElement.setAttribute('style', inlineRootStyle)
                 } catch { /* ignore */ }
+                syncPopoutChrome()
+                setPopoutWindowRevision(value => value + 1)
             })
         })
 
@@ -1096,10 +1547,11 @@ export default function DashboardDockviewWorkspace({
         requestedActiveTabKey,
         requestedRemoteIdeId,
         sendCommand,
+        syncPopoutChrome,
         visibleConversations,
     ])
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const api = apiRef.current
         if (!api || !hasInitializedRef.current) return
 
@@ -1108,8 +1560,56 @@ export default function DashboardDockviewWorkspace({
             awaitingInitialLayoutHydrationRef.current = false
         }
 
+        const previousVisibleTabKeys = previousVisibleTabKeysRef.current
+        const previousVisibleTabKeySet = new Set(previousVisibleTabKeys)
+        const nextVisibleTabKeys = visibleConversations.map(conversation => conversation.tabKey)
+        const nextVisibleTabKeySet = new Set(nextVisibleTabKeys)
+
+        let hiddenStateChanged = false
+        for (const tabKey of previousVisibleTabKeys) {
+            if (nextVisibleTabKeySet.has(tabKey)) continue
+            hiddenRestoreStateRef.current[tabKey] = readHiddenRestoreStateFromLayout(tabKey)
+            hiddenStateChanged = true
+        }
+        if (hiddenStateChanged) {
+            persistHiddenRestoreState()
+        }
+
         syncDockviewPanels(api, visibleConversations)
         syncRemotePanels(api, visibleConversations, requestedRemoteIdeId)
+
+        const restoredTabKeys = nextVisibleTabKeys.filter(tabKey => !previousVisibleTabKeySet.has(tabKey))
+        let restoredStateConsumed = false
+        for (const tabKey of restoredTabKeys) {
+            const panel = api.getPanel(tabKey)
+            const savedLocation = hiddenRestoreStateRef.current[tabKey]
+            if (!panel || !savedLocation || savedLocation.kind === 'grid') continue
+
+            const currentLocation = panel.group.model.location.type
+            if (currentLocation === savedLocation.kind) {
+                delete hiddenRestoreStateRef.current[tabKey]
+                restoredStateConsumed = true
+                continue
+            }
+
+            if (savedLocation.kind === 'floating') {
+                api.addFloatingGroup(panel, {
+                    x: savedLocation.position.left ?? 24,
+                    y: savedLocation.position.top ?? 24,
+                    width: savedLocation.position.width,
+                    height: savedLocation.position.height,
+                })
+                delete hiddenRestoreStateRef.current[tabKey]
+                restoredStateConsumed = true
+                continue
+            }
+        }
+
+        if (restoredStateConsumed) {
+            persistHiddenRestoreState()
+        }
+
+        previousVisibleTabKeysRef.current = nextVisibleTabKeys
 
         if (requestedActiveTabKey && activateRequestedTab(requestedActiveTabKey)) {
             return
@@ -1124,7 +1624,7 @@ export default function DashboardDockviewWorkspace({
         if (!activePanelStillExists) {
             activateStoredActiveTab()
         }
-    }, [activateRequestedTab, activateStoredActiveTab, initialDataLoaded, requestedActiveTabKey, requestedRemoteIdeId, visibleConversations])
+    }, [activateRequestedTab, activateStoredActiveTab, initialDataLoaded, persistHiddenRestoreState, readHiddenRestoreStateFromLayout, requestedActiveTabKey, requestedRemoteIdeId, visibleConversations])
 
     useEffect(() => {
         if (!hasInitializedRef.current) return
@@ -1161,19 +1661,224 @@ export default function DashboardDockviewWorkspace({
             if (tabNode) {
                 const tabKey = tabNode.getAttribute('data-tab-key')
                 if (tabKey && e.dataTransfer) {
+                    const dragPreview =
+                        target.closest('.dv-tab') ||
+                        tabNode.closest('.dv-tab') ||
+                        (tabNode as HTMLElement)
+                    e.dataTransfer.effectAllowed = 'move'
                     e.dataTransfer.setData('text/tab-key', tabKey)
+                    if (dragPreview instanceof HTMLElement) {
+                        e.dataTransfer.setDragImage(
+                            dragPreview,
+                            Math.max(12, Math.round(dragPreview.clientWidth / 2)),
+                            Math.max(10, Math.round(dragPreview.clientHeight / 2)),
+                        )
+                    }
                 }
             }
         }
         window.addEventListener('dragstart', handleDragStart)
-        return () => window.removeEventListener('dragstart', handleDragStart)
-    }, [])
+        const api = apiRef.current
+        const popoutWindows = api
+            ? Array.from(
+                new Set(
+                    api.groups
+                        .map(group => group.element?.ownerDocument?.defaultView)
+                        .filter(popup => popup && popup !== window),
+                ),
+            )
+            : []
+
+        for (const popup of popoutWindows) {
+            popup.addEventListener('dragstart', handleDragStart)
+        }
+
+        return () => {
+            window.removeEventListener('dragstart', handleDragStart)
+            for (const popup of popoutWindows) {
+                popup.removeEventListener('dragstart', handleDragStart)
+            }
+        }
+    }, [popoutWindowRevision])
 
     useEffect(() => {
+        const root = dockviewContainerRef.current?.querySelector('.adhdev-dockview')
+        if (root instanceof HTMLElement) {
+            applyDockviewThemeClass(root, theme)
+        }
         syncThemeToOpenPopouts()
-    }, [syncThemeToOpenPopouts, theme])
+        syncPopoutChrome()
+        syncPopoutContainerClasses()
+    }, [syncPopoutChrome, syncPopoutContainerClasses, syncThemeToOpenPopouts, theme])
+
+    useEffect(() => {
+        syncPopoutChrome()
+        syncPopoutContainerClasses()
+    }, [syncPopoutChrome, syncPopoutContainerClasses])
+
+    useEffect(() => {
+        const handler = (event: KeyboardEvent) => {
+            if (event.defaultPrevented || shortcutListening) return
+            const combo = encodeShortcut(event)
+            if (!combo) return
+            const hasModifier = event.metaKey || event.ctrlKey || event.altKey
+            if (isEditableTarget(event.target) && !hasModifier) return
+
+            const actionShortcuts = readActionShortcuts(isMac)
+            if (actionShortcuts.setActiveTabShortcut !== combo) return
+
+            event.preventDefault()
+            event.stopPropagation()
+            startShortcutListeningForActiveTab()
+        }
+
+        window.addEventListener('keydown', handler, true)
+        return () => window.removeEventListener('keydown', handler, true)
+    }, [encodeShortcut, isMac, shortcutListening, startShortcutListeningForActiveTab])
+
+    useEffect(() => {
+        const api = apiRef.current
+        if (!api) return
+
+        const popoutWindows = Array.from(
+            new Set(
+                api.groups
+                    .map(group => group.element?.ownerDocument?.defaultView)
+                    .filter(popup => popup && popup !== window),
+            ),
+        )
+        if (popoutWindows.length === 0) return
+
+        const cleanups = popoutWindows.map(popup => {
+            let sequenceParts: string[] = []
+            let sequenceTimer: number | null = null
+
+            const resetSequence = () => {
+                if (sequenceTimer != null) popup.clearTimeout(sequenceTimer)
+                sequenceTimer = null
+                sequenceParts = []
+            }
+
+            const armSequenceTimeout = () => {
+                if (sequenceTimer != null) popup.clearTimeout(sequenceTimer)
+                sequenceTimer = popup.setTimeout(() => {
+                    sequenceTimer = null
+                    sequenceParts = []
+                }, 1200)
+            }
+
+            const handleTabShortcut = (event: KeyboardEvent) => {
+                if (!event.ctrlKey && !event.metaKey && !event.altKey) return
+                const combo = encodeShortcut(event)
+                if (!combo) return
+
+                const tabShortcuts = readTabShortcuts()
+                for (const [tabKey, shortcut] of Object.entries(tabShortcuts)) {
+                    if (!visibleConversations.some(conversation => conversation.tabKey === tabKey)) continue
+                    if (shortcut !== combo) continue
+                    event.preventDefault()
+                    selectTabByShortcut(tabKey)
+                    return
+                }
+            }
+
+            const handleActionShortcut = (event: KeyboardEvent) => {
+                if (event.defaultPrevented || shortcutListening) return
+
+                const combo = encodeShortcut(event)
+                if (!combo) return
+
+                const hasModifier = event.metaKey || event.ctrlKey || event.altKey
+                if (isEditableTarget(event.target) && !hasModifier) return
+
+                const actionShortcuts = readActionShortcuts(isMac)
+                const supportedEntries = (Object.entries(actionShortcuts) as [DashboardActionShortcutId, string][])
+                    .filter(([actionId, shortcut]) => !!shortcut && (
+                        actionId === 'splitActiveTabRight'
+                        || actionId === 'splitActiveTabDown'
+                        || actionId === 'floatActiveTab'
+                        || actionId === 'popoutActiveTab'
+                        || actionId === 'dockActiveTab'
+                        || actionId === 'focusLeftPane'
+                        || actionId === 'focusRightPane'
+                        || actionId === 'focusUpPane'
+                        || actionId === 'focusDownPane'
+                        || actionId === 'moveActiveTabToLeftPane'
+                        || actionId === 'moveActiveTabToRightPane'
+                        || actionId === 'moveActiveTabToUpPane'
+                        || actionId === 'moveActiveTabToDownPane'
+                        || actionId === 'selectPreviousGroupTab'
+                        || actionId === 'selectNextGroupTab'
+                        || actionId === 'setActiveTabShortcut'
+                        || actionId === 'hideCurrentTab'
+                    ))
+
+                const nextParts = hasModifier
+                    ? [combo]
+                    : [...sequenceParts.slice(-1), combo].slice(-2)
+                const fullCandidate = nextParts.join(' ')
+                const singleCandidate = nextParts[nextParts.length - 1]
+
+                const exactFullMatch = supportedEntries.find(([, shortcut]) => shortcut === fullCandidate)
+                if (exactFullMatch) {
+                    event.preventDefault()
+                    resetSequence()
+                    triggerPopoutActionShortcut(exactFullMatch[0])
+                    return
+                }
+
+                const fullPrefixMatch = supportedEntries.some(([, shortcut]) => shortcut.startsWith(`${fullCandidate} `))
+                if (fullPrefixMatch) {
+                    event.preventDefault()
+                    sequenceParts = nextParts
+                    armSequenceTimeout()
+                    return
+                }
+
+                const exactSingleMatch = supportedEntries.find(([, shortcut]) => shortcut === singleCandidate)
+                if (exactSingleMatch) {
+                    event.preventDefault()
+                    resetSequence()
+                    triggerPopoutActionShortcut(exactSingleMatch[0])
+                    return
+                }
+
+                const singlePrefixMatch = supportedEntries.some(([, shortcut]) => shortcut.startsWith(`${singleCandidate} `))
+                if (singlePrefixMatch) {
+                    event.preventDefault()
+                    sequenceParts = [singleCandidate]
+                    armSequenceTimeout()
+                    return
+                }
+
+                resetSequence()
+            }
+
+            popup.addEventListener('keydown', handleTabShortcut)
+            popup.addEventListener('keydown', handleActionShortcut)
+
+            return () => {
+                resetSequence()
+                popup.removeEventListener('keydown', handleTabShortcut)
+                popup.removeEventListener('keydown', handleActionShortcut)
+            }
+        })
+
+        return () => {
+            for (const cleanup of cleanups) cleanup()
+        }
+    }, [
+        encodeShortcut,
+        isMac,
+        popoutWindowRevision,
+        selectTabByShortcut,
+        shortcutListening,
+        triggerPopoutActionShortcut,
+        visibleConversations,
+    ])
 
     const dockviewTheme = theme === 'light' ? themeLight : themeDark
+    const shortcutOverlayDocument = apiRef.current?.activePanel?.group.element?.ownerDocument ?? document
 
     return (
         <DashboardDockviewContext.Provider value={contextValue}>
@@ -1190,32 +1895,66 @@ export default function DashboardDockviewWorkspace({
                     popoutUrl="/popout.html"
                 />
             </div>
-            {ctxMenu && (
+            {ctxMenu && createPortal(
                 <div
                     data-dockview-tab-context-menu
                     className="fixed z-50 bg-bg-primary border border-border-subtle rounded-lg shadow-lg py-1 min-w-[180px]"
                     style={{ left: ctxMenu.x, top: ctxMenu.y }}
                 >
                     {isTabInPopout(ctxMenu.tabKey) ? (
+                        <>
+                            {isTabFloating(ctxMenu.tabKey) && (
+                                <button
+                                    className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
+                                    onClick={() => {
+                                        dockTabToWorkspaceGrid(ctxMenu.tabKey)
+                                        setCtxMenu(null)
+                                    }}
+                                >
+                                    <IconDock size={13} className="shrink-0 opacity-70" /> Dock in window
+                                </button>
+                            )}
+                            <button
+                                className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
+                                onClick={() => {
+                                    moveTabBackToMain(ctxMenu.tabKey)
+                                    setCtxMenu(null)
+                                }}
+                            >
+                                <IconArrowBack size={13} className="shrink-0 opacity-70" /> Move back to main window
+                            </button>
+                        </>
+                    ) : isTabFloating(ctxMenu.tabKey) ? (
                         <button
                             className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
                             onClick={() => {
-                                moveTabBackToMain(ctxMenu.tabKey)
+                                dockTabToWorkspaceGrid(ctxMenu.tabKey)
                                 setCtxMenu(null)
                             }}
                         >
-                            <IconArrowBack size={13} className="shrink-0 opacity-70" /> Move back to main window
+                            <IconDock size={13} className="shrink-0 opacity-70" /> Dock back to grid
                         </button>
                     ) : (
-                        <button
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
-                            onClick={() => {
-                                popoutTab(ctxMenu.tabKey)
-                                setCtxMenu(null)
-                            }}
-                        >
-                            <IconExternalWindow size={13} className="shrink-0 opacity-70" /> Open in new window
-                        </button>
+                        <>
+                            <button
+                                className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
+                                onClick={() => {
+                                    floatTab(ctxMenu.tabKey)
+                                    setCtxMenu(null)
+                                }}
+                            >
+                                <IconFloat size={13} className="shrink-0 opacity-70" /> Float as panel
+                            </button>
+                            <button
+                                className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
+                                onClick={() => {
+                                    popoutTab(ctxMenu.tabKey)
+                                    setCtxMenu(null)
+                                }}
+                            >
+                                <IconExternalWindow size={13} className="shrink-0 opacity-70" /> Open in new window
+                            </button>
+                        </>
                     )}
                     <div className="border-t border-border-subtle my-1" />
                     <button
@@ -1245,32 +1984,36 @@ export default function DashboardDockviewWorkspace({
                     <button
                         className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors text-text-muted flex items-center gap-2"
                         onClick={() => {
-                            toggleHiddenTab(ctxMenu.tabKey)
+                            hideConversationTab(ctxMenu.tabKey)
                             setCtxMenu(null)
                         }}
                     >
                         <IconEyeOff size={13} className="shrink-0 opacity-70" /> Hide tab
                     </button>
-                </div>
+                </div>,
+                ctxMenu.sourceDocument.body,
             )}
             {shortcutListening && (
-                <div
-                    className="fixed inset-0 z-[60] flex items-center justify-center"
-                    style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)' }}
-                    onClick={() => setShortcutListening(null)}
-                >
+                createPortal(
                     <div
-                        className="bg-bg-primary border border-border-subtle rounded-xl px-8 py-6 text-center shadow-xl"
-                        onClick={event => event.stopPropagation()}
+                        className="fixed inset-0 z-[60] flex items-center justify-center"
+                        style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)' }}
+                        onClick={() => setShortcutListening(null)}
                     >
-                        <div className="text-sm font-bold text-text-primary mb-2">⌨ Set shortcut</div>
-                        <div className="text-xs text-text-secondary mb-4">
-                            Press a key combo (e.g. {isMac ? '⌘+1' : 'Ctrl+1'}, {isMac ? '⌥+A' : 'Alt+A'})
+                        <div
+                            className="bg-bg-primary border border-border-subtle rounded-xl px-8 py-6 text-center shadow-xl"
+                            onClick={event => event.stopPropagation()}
+                        >
+                            <div className="text-sm font-bold text-text-primary mb-2">⌨ Set shortcut</div>
+                            <div className="text-xs text-text-secondary mb-4">
+                                Press a key combo (e.g. {isMac ? '⌘+1' : 'Ctrl+1'}, {isMac ? '⌥+A' : 'Alt+A'})
+                            </div>
+                            <div className="text-lg font-mono text-accent animate-pulse">Listening...</div>
+                            <div className="text-[10px] text-text-muted mt-3">Press Esc to cancel</div>
                         </div>
-                        <div className="text-lg font-mono text-accent animate-pulse">Listening...</div>
-                        <div className="text-[10px] text-text-muted mt-3">Press Esc to cancel</div>
-                    </div>
-                </div>
+                    </div>,
+                    shortcutOverlayDocument.body,
+                )
             )}
         </DashboardDockviewContext.Provider>
     )

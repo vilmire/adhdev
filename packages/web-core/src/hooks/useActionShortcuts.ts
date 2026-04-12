@@ -6,6 +6,9 @@ export type DashboardActionShortcutId =
     | 'toggleHiddenTabs'
     | 'openHistoryForActiveTab'
     | 'openRemoteForActiveTab'
+    | 'floatActiveTab'
+    | 'popoutActiveTab'
+    | 'dockActiveTab'
     | 'splitActiveTabRight'
     | 'splitActiveTabDown'
     | 'focusLeftPane'
@@ -31,7 +34,7 @@ export interface DashboardActionShortcutDefinition {
     defaultShortcut: string
 }
 
-const ACTION_SHORTCUTS_KEY = 'adhdev-dashboard-action-shortcuts'
+export const ACTION_SHORTCUTS_KEY = 'adhdev-dashboard-action-shortcuts'
 const SEQUENCE_TIMEOUT_MS = 1200
 const LEGACY_ACTION_SHORTCUTS: Partial<Record<DashboardActionShortcutId, string>> = {
     toggleHiddenTabs: 'G H',
@@ -48,11 +51,11 @@ const LEGACY_ACTION_SHORTCUTS: Partial<Record<DashboardActionShortcutId, string>
     toggleCliView: 'T',
 }
 
-function isMacPlatform() {
+export function isMacPlatform() {
     return typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent)
 }
 
-function getDefaultShortcut(actionId: DashboardActionShortcutId, isMac: boolean) {
+export function getDefaultShortcut(actionId: DashboardActionShortcutId, isMac: boolean) {
     switch (actionId) {
         case 'openShortcutHelp':
             return '?'
@@ -64,6 +67,12 @@ function getDefaultShortcut(actionId: DashboardActionShortcutId, isMac: boolean)
             return isMac ? '⌥+Y' : 'Ctrl+Alt+Y'
         case 'openRemoteForActiveTab':
             return isMac ? '⌥+R' : 'Ctrl+Alt+R'
+        case 'floatActiveTab':
+            return isMac ? '⌥+F' : 'Ctrl+Alt+F'
+        case 'popoutActiveTab':
+            return isMac ? '⌥+P' : 'Ctrl+Alt+P'
+        case 'dockActiveTab':
+            return isMac ? '⌥+D' : 'Ctrl+Alt+D'
         case 'splitActiveTabRight':
             return isMac ? '⌘+⌥+=' : 'Ctrl+Alt+\\'
         case 'splitActiveTabDown':
@@ -101,7 +110,7 @@ function getDefaultShortcut(actionId: DashboardActionShortcutId, isMac: boolean)
     }
 }
 
-function getActionShortcutDefinitions(isMac: boolean): DashboardActionShortcutDefinition[] {
+export function getActionShortcutDefinitions(isMac: boolean): DashboardActionShortcutDefinition[] {
     return [
         {
             id: 'openShortcutHelp',
@@ -132,6 +141,24 @@ function getActionShortcutDefinitions(isMac: boolean): DashboardActionShortcutDe
             label: 'Open remote',
             description: 'Open remote control for the active session when available.',
             defaultShortcut: getDefaultShortcut('openRemoteForActiveTab', isMac),
+        },
+        {
+            id: 'floatActiveTab',
+            label: 'Float active tab',
+            description: 'Move the active tab into a floating panel.',
+            defaultShortcut: getDefaultShortcut('floatActiveTab', isMac),
+        },
+        {
+            id: 'popoutActiveTab',
+            label: 'Open active tab in new window',
+            description: 'Move the active tab into a detached popout window.',
+            defaultShortcut: getDefaultShortcut('popoutActiveTab', isMac),
+        },
+        {
+            id: 'dockActiveTab',
+            label: 'Dock active tab',
+            description: 'Dock a floating tab back into the grid, or move a popout tab back to the main window.',
+            defaultShortcut: getDefaultShortcut('dockActiveTab', isMac),
         },
         {
             id: 'splitActiveTabRight',
@@ -238,14 +265,14 @@ function getActionShortcutDefinitions(isMac: boolean): DashboardActionShortcutDe
     ]
 }
 
-function isEditableTarget(target: EventTarget | null) {
+export function isEditableTarget(target: EventTarget | null) {
     if (!(target instanceof HTMLElement)) return false
     if (target.isContentEditable) return true
     const tagName = target.tagName
     return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT'
 }
 
-function readActionShortcuts(isMac: boolean) {
+export function readActionShortcuts(isMac: boolean) {
     const defaults = Object.fromEntries(
         getActionShortcutDefinitions(isMac).map(action => [action.id, action.defaultShortcut]),
     ) as Record<DashboardActionShortcutId, string>
@@ -264,7 +291,7 @@ function readActionShortcuts(isMac: boolean) {
     }
 }
 
-function normalizeKey(key: string) {
+export function normalizeKey(key: string) {
     if (key === ' ') return 'Space'
     if (key === 'Escape') return 'Esc'
     if (key === 'ArrowLeft') return '←'

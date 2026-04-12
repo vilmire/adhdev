@@ -242,7 +242,7 @@
         --dv-tabs-container-scrollbar-color: color-mix(in srgb, var(--text-muted) 60%, transparent);
         --dv-scrollbar-background-color: color-mix(in srgb, var(--text-muted) 28%, transparent);
         --dv-icon-hover-background-color: var(--bg-glass-hover);
-        --dv-floating-box-shadow: 0 18px 40px rgba(0, 0, 0, 0.34);
+        --dv-floating-box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
         --dv-sash-color: color-mix(in srgb, var(--border-default) 65%, transparent);
         --dv-active-sash-color: color-mix(in srgb, var(--accent-primary) 38%, transparent);
         --dv-active-sash-transition-duration: 0.12s;
@@ -270,7 +270,7 @@
         --dv-tabs-container-scrollbar-color: color-mix(in srgb, var(--text-secondary) 40%, transparent);
         --dv-scrollbar-background-color: color-mix(in srgb, var(--text-secondary) 18%, transparent);
         --dv-icon-hover-background-color: color-mix(in srgb, var(--accent-primary) 10%, transparent);
-        --dv-floating-box-shadow: 0 16px 32px rgba(15, 23, 42, 0.10);
+        --dv-floating-box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
         --dv-sash-color: color-mix(in srgb, var(--border-default) 80%, transparent);
         --dv-active-sash-color: color-mix(in srgb, var(--accent-primary) 34%, transparent);
         --dv-drag-over-background-color: color-mix(in srgb, var(--accent-primary) 14%, transparent);
@@ -289,6 +289,52 @@
 
     .adhdev-dockview .dv-tabs-container {
         gap: 6px;
+        min-width: 0;
+    }
+
+    .adhdev-dockview .dv-left-actions-container,
+    .adhdev-dockview .dv-right-actions-container,
+    .adhdev-dockview .dv-pre-actions-container {
+        display: flex;
+        align-items: center;
+    }
+
+    .adhdev-dockview .dv-void-container {
+        min-width: 18px;
+    }
+
+    .adhdev-dockview .dv-groupview.dv-groupview-floating > .dv-tabs-and-actions-container .dv-void-container,
+    .adhdev-dockview .dv-groupview.dv-groupview-floating > .dv-tabs-and-actions-container.dv-single-tab .dv-void-container {
+        flex: 1 1 auto !important;
+        width: auto !important;
+        min-width: 72px !important;
+        max-width: none !important;
+        align-self: stretch !important;
+        height: 100% !important;
+        min-height: 100% !important;
+    }
+
+    .adhdev-dockview .dv-groupview.dv-groupview-floating > .dv-tabs-and-actions-container .dv-scrollable,
+    .adhdev-dockview .dv-groupview.dv-groupview-floating > .dv-tabs-and-actions-container.dv-single-tab .dv-scrollable {
+        flex: 0 1 auto !important;
+        width: auto !important;
+        max-width: calc(100% - 72px) !important;
+        min-width: 0 !important;
+        align-self: stretch !important;
+    }
+
+    .adhdev-dockview .dv-groupview.dv-groupview-floating > .dv-tabs-and-actions-container .dv-tabs-container,
+    .adhdev-dockview .dv-groupview.dv-groupview-floating > .dv-tabs-and-actions-container.dv-single-tab .dv-tabs-container,
+    .adhdev-dockview .dv-groupview.dv-groupview-floating > .dv-tabs-and-actions-container .dv-tab,
+    .adhdev-dockview .dv-groupview.dv-groupview-floating > .dv-tabs-and-actions-container.dv-single-tab .dv-tab {
+        flex: 0 1 auto !important;
+        width: auto !important;
+        max-width: none !important;
+    }
+
+    .adhdev-dockview .dv-groupview.dv-groupview-floating > .dv-tabs-and-actions-container,
+    .adhdev-dockview .dv-groupview.dv-groupview-floating > .dv-tabs-and-actions-container.dv-single-tab {
+        align-items: stretch !important;
     }
 
     .adhdev-dockview .dv-tab {
@@ -350,19 +396,13 @@
         transition: none !important;
     }
 
-    .adhdev-dockview .dv-drop-target-container .dv-drop-target-anchor.dv-drop-target-anchor-container-changed {
-        opacity: 0 !important;
-    }
-
     .adhdev-dockview:not(.is-showing-dockview-overlay) .dv-drop-target-container,
-    .adhdev-dockview:not(.is-showing-dockview-overlay) .dv-drop-target>.dv-drop-target-dropzone,
-    .adhdev-dockview:not(.is-showing-dockview-overlay) .dv-render-overlay {
+    .adhdev-dockview:not(.is-showing-dockview-overlay) .dv-drop-target>.dv-drop-target-dropzone {
         opacity: 0 !important;
     }
 
     .adhdev-dockview:not(.is-showing-dockview-overlay) .dv-drop-target-container .dv-drop-target-anchor,
-    .adhdev-dockview:not(.is-showing-dockview-overlay) .dv-drop-target>.dv-drop-target-dropzone>.dv-drop-target-selection,
-    .adhdev-dockview:not(.is-showing-dockview-overlay) .dv-render-overlay {
+    .adhdev-dockview:not(.is-showing-dockview-overlay) .dv-drop-target>.dv-drop-target-dropzone>.dv-drop-target-selection {
         background: transparent !important;
         border-color: transparent !important;
         opacity: 0 !important;

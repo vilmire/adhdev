@@ -55,6 +55,13 @@ export interface ChatMessageListRef {
     scrollToBottom: (behavior?: ScrollBehavior) => void;
 }
 
+type ChatScrollSnapshot = {
+    top: number;
+    fromBottom: number;
+}
+
+const chatScrollSnapshotCache = new Map<string, ChatScrollSnapshot>();
+
 // ─── Helpers ──────────────────────────────────
 
 type MessageMeta = NonNullable<ChatMessage['meta']> & { renderMode?: unknown };
@@ -256,6 +263,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     const [expandedTexts, setExpandedTexts] = useState<Set<string>>(new Set());
 
     const userScrolledUp = useRef(false);
+    const restoredInitialScrollRef = useRef(false);
 
     /** Check if user is near bottom of scroll */
     const isNearBottom = () => {
@@ -269,6 +277,15 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         if (!el) return;
         el.scrollTo({ top: el.scrollHeight, behavior });
     }, []);
+
+    const saveScrollSnapshot = useCallback(() => {
+        const el = containerRef.current;
+        if (!el || !contextKey) return;
+        chatScrollSnapshotCache.set(contextKey, {
+            top: el.scrollTop,
+            fromBottom: Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight),
+        });
+    }, [contextKey]);
 
     const updateSelectionState = useCallback(() => {
         const container = containerRef.current;
@@ -312,7 +329,20 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             mountedRef.current = true;
             userScrolledUp.current = false;
             contextAutoScrollRef.current = true;
-            if (!hasSelectionRef.current) scheduleScrollToBottom('auto');
+            if (!hasSelectionRef.current) {
+                const snapshot = contextKey ? chatScrollSnapshotCache.get(contextKey) : null;
+                if (snapshot) {
+                    requestAnimationFrame(() => {
+                        const el = containerRef.current;
+                        if (!el) return;
+                        const nextTop = Math.max(0, el.scrollHeight - el.clientHeight - snapshot.fromBottom);
+                        el.scrollTop = Number.isFinite(nextTop) ? nextTop : snapshot.top;
+                        restoredInitialScrollRef.current = true;
+                    });
+                } else {
+                    scheduleScrollToBottom('auto');
+                }
+            }
             prevCountRef.current = messages.length;
             return;
         }
@@ -333,6 +363,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         if (!scrollToBottomRequestNonce) return;
         userScrolledUp.current = false;
         contextAutoScrollRef.current = true;
+        restoredInitialScrollRef.current = true;
         if (contextAutoScrollTimerRef.current != null) {
             window.clearTimeout(contextAutoScrollTimerRef.current);
         }
@@ -346,13 +377,14 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     }, [scheduleScrollToBottom, scrollToBottomRequestNonce]);
 
     useEffect(() => () => {
+        saveScrollSnapshot();
         if (scrollFrameRef.current != null) {
             cancelAnimationFrame(scrollFrameRef.current);
         }
         if (contextAutoScrollTimerRef.current != null) {
             window.clearTimeout(contextAutoScrollTimerRef.current);
         }
-    }, []);
+    }, [saveScrollSnapshot]);
 
     useEffect(() => {
         const contentEl = contentRef.current;
@@ -401,11 +433,12 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             scrollTimer = setTimeout(() => {
                 // If 200px+ from bottom, user has scrolled up
                 userScrolledUp.current = !isNearBottom();
+                saveScrollSnapshot();
             }, 50);
         };
         el.addEventListener('scroll', onScroll, { passive: true });
         return () => { el.removeEventListener('scroll', onScroll); clearTimeout(scrollTimer); };
-    }, []);
+    }, [saveScrollSnapshot]);
 
     useEffect(() => {
         document.addEventListener('selectionchange', updateSelectionState);
@@ -421,9 +454,21 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         if (!el || !isHistoryLoading.current || prevScrollHeight.current === 0) return;
         const addedHeight = el.scrollHeight - prevScrollHeight.current;
         if (addedHeight > 0) el.scrollTop = addedHeight;
+        saveScrollSnapshot();
         prevScrollHeight.current = 0;
         isHistoryLoading.current = false;
-    }, [messages.length]);
+    }, [messages.length, saveScrollSnapshot]);
+
+    useEffect(() => {
+        if (restoredInitialScrollRef.current) return;
+        if (!contextKey) return;
+        const snapshot = chatScrollSnapshotCache.get(contextKey);
+        const el = containerRef.current;
+        if (!snapshot || !el) return;
+        const nextTop = Math.max(0, el.scrollHeight - el.clientHeight - snapshot.fromBottom);
+        el.scrollTop = Number.isFinite(nextTop) ? nextTop : snapshot.top;
+        restoredInitialScrollRef.current = true;
+    }, [contextKey, messages.length]);
 
     // Track when load starts so we can restore scroll after
     const handleLoadMoreClick = () => {
