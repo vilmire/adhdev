@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/session-host-core",
-  "version": "0.8.44",
+  "version": "0.8.45",
   "description": "ADHDev local session host core — session registry, protocol, buffers",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
