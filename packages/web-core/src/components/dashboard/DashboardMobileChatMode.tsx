@@ -64,6 +64,14 @@ function isExpectedCliViewModeError(error: unknown) {
         || message.includes('CLI_SESSION_NOT_FOUND')
 }
 
+function sortInboxItems(items: MobileConversationListItem[]) {
+    return [...items].sort((left, right) => {
+        const timestampDiff = right.timestamp - left.timestamp
+        if (timestampDiff !== 0) return timestampDiff
+        return left.conversation.tabKey.localeCompare(right.conversation.tabKey)
+    })
+}
+
 export default function DashboardMobileChatMode({
     conversations,
     hiddenConversations,
@@ -192,20 +200,20 @@ export default function DashboardMobileChatMode({
     })
 
     const attentionItems = useMemo(
-        () => items.filter(item => item.requiresAction),
+        () => sortInboxItems(items.filter(item => item.requiresAction)),
         [items],
     )
 
     const unreadItems = useMemo(
-        () => items.filter(item => item.unread && !item.requiresAction),
+        () => sortInboxItems(items.filter(item => item.unread && !item.requiresAction)),
         [items],
     )
     const workingItems = useMemo(
-        () => items.filter(item => !item.unread && !item.requiresAction && item.isWorking),
+        () => sortInboxItems(items.filter(item => !item.unread && !item.requiresAction && item.isWorking)),
         [items],
     )
     const completedItems = useMemo(
-        () => items.filter(item => !item.unread && !item.requiresAction && !item.isWorking),
+        () => sortInboxItems(items.filter(item => !item.unread && !item.requiresAction && !item.isWorking)),
         [items],
     )
     const selectedMachineConversations = useMemo(

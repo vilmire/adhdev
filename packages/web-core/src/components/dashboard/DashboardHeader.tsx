@@ -15,6 +15,8 @@ import CliViewModeToggle from './CliViewModeToggle';
 import { getConversationDisplayLabel, getConversationMetaParts } from './conversation-selectors';
 import { getConversationMetaText, getConversationTitle } from './conversation-presenters';
 import type { DashboardActionShortcutId } from '../../hooks/useActionShortcuts';
+import { compareConversationRecency, getConversationTimestamp } from './conversation-sort';
+import { formatRelativeTime } from '../../utils/time';
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -60,6 +62,8 @@ function DashboardHeaderInboxItem({
     onClick: () => void;
 }) {
     const metaParts = getConversationMetaParts(conversation);
+    const timeLabel = formatRelativeTime(getConversationTimestamp(conversation))
+    const infoParts = [...metaParts, timeLabel].filter(Boolean)
 
     return (
         <button
@@ -68,10 +72,10 @@ function DashboardHeaderInboxItem({
             onClick={onClick}
         >
             <span className="dashboard-header-inbox-item-title">{getConversationDisplayLabel(conversation)}</span>
-            {(shortcutIndex || metaParts.length > 0) && (
+            {(shortcutIndex || infoParts.length > 0) && (
                 <span className="dashboard-header-inbox-item-meta">
                     {shortcutIndex ? <span className="dashboard-header-item-shortcut">⌥{shortcutIndex}</span> : null}
-                    {metaParts.join(' · ')}
+                    {infoParts.join(' · ')}
                 </span>
             )}
         </button>
@@ -137,17 +141,21 @@ export default function DashboardHeader({
         [conversations, liveSessionInboxState],
     );
     const inboxAttention = useMemo(
-        () => desktopInboxConversations.filter(conversation => getConversationInboxSurfaceState(conversation, liveSessionInboxState).requiresAction),
+        () => desktopInboxConversations
+            .filter(conversation => getConversationInboxSurfaceState(conversation, liveSessionInboxState).requiresAction)
+            .sort(compareConversationRecency),
         [desktopInboxConversations, liveSessionInboxState],
     );
     const inboxUnread = useMemo(
-        () => desktopInboxConversations.filter(conversation => {
-            const isOpenConversation = activeConv?.tabKey === conversation.tabKey;
-            return getConversationInboxSurfaceState(conversation, liveSessionInboxState, {
-                hideOpenTaskCompleteUnread: true,
-                isOpenConversation,
-            }).unread;
-        }),
+        () => desktopInboxConversations
+            .filter(conversation => {
+                const isOpenConversation = activeConv?.tabKey === conversation.tabKey;
+                return getConversationInboxSurfaceState(conversation, liveSessionInboxState, {
+                    hideOpenTaskCompleteUnread: true,
+                    isOpenConversation,
+                }).unread;
+            })
+            .sort(compareConversationRecency),
         [activeConv, desktopInboxConversations, liveSessionInboxState],
     );
     const inboxShortcutTargets = useMemo(
