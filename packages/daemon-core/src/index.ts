@@ -25,6 +25,7 @@ export type {
   CompactDaemonEntry,
   CloudDaemonSummaryEntry,
   DashboardBootstrapDaemonEntry,
+  VersionUpdateReason,
   CloudStatusReportPayload,
   DaemonStatusEventPayload,
   DashboardStatusEventPayload,

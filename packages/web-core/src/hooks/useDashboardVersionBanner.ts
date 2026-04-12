@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import type { DaemonData } from '../types'
+import { isVersionMismatch, isVersionUpdateRequired } from '../utils/version-update'
 
 declare const __APP_VERSION__: string
 
@@ -14,13 +15,17 @@ export function useDashboardVersionBanner({
 }: UseDashboardVersionBannerOptions) {
     const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
     const versionMismatchDaemons = useMemo(
-        () => ides.filter((daemon: any) => {
+        () => ides
+            .filter((daemon: any) => {
             if (daemon.type !== 'adhdev-daemon') return false
-            const daemonVersion = daemon.version || daemon.daemonVersion || null
-            if (!daemonVersion || !appVersion) return false
-            return daemonVersion !== appVersion
-        }),
+            return isVersionMismatch(daemon, appVersion)
+        })
+            .sort((a, b) => Number(isVersionUpdateRequired(b, appVersion)) - Number(isVersionUpdateRequired(a, appVersion))),
         [appVersion, ides],
+    )
+    const hasRequiredVersionDaemons = useMemo(
+        () => versionMismatchDaemons.some((daemon) => isVersionUpdateRequired(daemon, appVersion)),
+        [appVersion, versionMismatchDaemons],
     )
     const [versionBannerDismissed, setVersionBannerDismissed] = useState(false)
     const [upgradingDaemons, setUpgradingDaemons] = useState<Record<string, 'upgrading' | 'done' | 'error'>>({})
@@ -41,6 +46,7 @@ export function useDashboardVersionBanner({
 
     return {
         versionMismatchDaemons,
+        hasRequiredVersionDaemons,
         appVersion,
         versionBannerDismissed,
         setVersionBannerDismissed,

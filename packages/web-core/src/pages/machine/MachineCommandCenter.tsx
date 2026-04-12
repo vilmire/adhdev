@@ -2,11 +2,14 @@ import type { ReactNode } from 'react'
 
 import type { DaemonData } from '../../types'
 import { formatRelativeTime } from '../../utils/time'
+import { isVersionUpdateRequired } from '../../utils/version-update'
 import { IconChat, IconClock, IconRefresh, IconWarning } from '../../components/Icons'
 import type { ActiveConversation } from '../../components/dashboard/types'
 import type { MachineRecentLaunch, ProviderInfo } from './types'
 import { getConversationActivityAt } from '../../components/dashboard/conversation-sort'
 import { getConversationMetaText, getConversationTitle } from '../../components/dashboard/conversation-presenters'
+
+declare const __APP_VERSION__: string
 
 interface MachineCommandCenterProps {
     machineEntry: DaemonData
@@ -46,6 +49,8 @@ export default function MachineCommandCenter({
 }: MachineCommandCenterProps) {
     const topCurrentConversations = currentConversations.slice(0, 6)
     const topRecentLaunches = recentLaunches.slice(0, 4)
+    const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
+    const requiresUpdate = isVersionUpdateRequired(machineEntry, appVersion)
 
     const formatKindLabel = (kind: MachineRecentLaunch['kind']) => {
         if (kind === 'ide') return 'IDE'
@@ -121,9 +126,13 @@ export default function MachineCommandCenter({
                     <SectionTitle icon={<IconWarning size={13} />}>Daemon Update</SectionTitle>
                     <SectionCard className="border-amber-500/20 bg-amber-500/5">
                         <div className="flex flex-col gap-3">
-                            <div className="text-sm font-semibold text-text-primary">Version mismatch detected</div>
+                            <div className="text-sm font-semibold text-text-primary">
+                                {requiresUpdate ? 'Daemon update required' : 'Version mismatch detected'}
+                            </div>
                             <div className="text-xs text-text-secondary leading-relaxed">
-                                This machine is running a different daemon version than the current app. Update it before starting more sessions.
+                                {requiresUpdate
+                                    ? 'This machine is on an incompatible daemon version. Update it before starting more sessions.'
+                                    : 'This machine is running a different daemon version than the current app. Update it before starting more sessions.'}
                             </div>
                             <button
                                 type="button"

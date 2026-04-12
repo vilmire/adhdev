@@ -8,6 +8,7 @@ import type { DaemonData } from '../../types'
 import { EmptyState } from '../ui/EmptyState'
 import { StatusBadge } from '../ui/StatusBadge'
 import { getMachineDisplayName } from '../../utils/daemon-utils'
+import { isVersionMismatch, isVersionUpdateRequired } from '../../utils/version-update'
 
 declare const __APP_VERSION__: string
 
@@ -218,7 +219,8 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
 
     // Compare daemon version with dashboard version — hide update if already latest
     const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
-    const isOutdated = !version || (appVersion && version !== appVersion)
+    const isOutdated = isVersionMismatch(ide, appVersion)
+    const requiresUpdate = isVersionUpdateRequired(ide, appVersion)
 
     const totalInstances = connectedIdes.length + connectedClis.length + connectedAcps.length
 
@@ -260,7 +262,7 @@ function MachineCard({ ide, allIdes, sendDaemonCommand, onDisconnect, onRevokeTo
                                 ) : upgradeState === 'done' ? (
                                     '✓ Updated'
                                 ) : (
-                                    `↑ Update${appVersion ? ` to v${appVersion}` : ''}`
+                                    `${requiresUpdate ? '↑ Update now' : `↑ Update${appVersion ? ` to v${appVersion}` : ''}`}`
                                 )}
                             </button>
                         )}

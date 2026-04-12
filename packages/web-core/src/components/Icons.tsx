@@ -549,3 +549,42 @@ export function IconDiscord({ size = defaults.size, className }: IconProps) {
     </svg>
   );
 }
+
+// External window / popout
+export function IconExternalWindow({ size = defaults.size, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="2" y="7" width="15" height="14" rx="2" />
+      <path d="M13 2h9v9" />
+      <path d="M22 2L13 11" />
+    </svg>
+  );
+}
+
+// Arrow back / return to main
+export function IconArrowBack({ size = defaults.size, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <polyline points="9 14 4 9 9 4" />
+      <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
+    </svg>
+  );
+}
+
+// Keyboard / shortcut
+export function IconKeyboard({ size = defaults.size, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <line x1="6" y1="8" x2="6.01" y2="8" />
+      <line x1="10" y1="8" x2="10.01" y2="8" />
+      <line x1="14" y1="8" x2="14.01" y2="8" />
+      <line x1="18" y1="8" x2="18.01" y2="8" />
+      <line x1="6" y1="12" x2="6.01" y2="12" />
+      <line x1="10" y1="12" x2="10.01" y2="12" />
+      <line x1="14" y1="12" x2="14.01" y2="12" />
+      <line x1="18" y1="12" x2="18.01" y2="12" />
+      <line x1="7" y1="16" x2="17" y2="16" />
+    </svg>
+  );
+}

@@ -339,6 +339,12 @@ export interface CompactSessionEntry {
     currentAutoApprove?: string;
 }
 
+export type VersionUpdateReason =
+    | 'force_update_below'
+    | 'major_minor_mismatch'
+    | 'patch_mismatch'
+    | 'daemon_ahead';
+
 /** Available provider information */
 export interface AvailableProviderInfo {
     type: string;
@@ -455,6 +461,8 @@ export interface CompactDaemonEntry {
     version?: string;
     serverVersion?: string;
     versionMismatch?: boolean;
+    versionUpdateRequired?: boolean;
+    versionUpdateReason?: VersionUpdateReason;
     terminalBackend?: TerminalBackendStatus;
     detectedIdes?: DetectedIdeInfo[];
     availableProviders?: AvailableProviderInfo[];
@@ -475,6 +483,8 @@ export interface CloudDaemonSummaryEntry {
     version?: string;
     serverVersion?: string;
     versionMismatch?: boolean;
+    versionUpdateRequired?: boolean;
+    versionUpdateReason?: VersionUpdateReason;
     terminalBackend?: TerminalBackendStatus;
 }
 

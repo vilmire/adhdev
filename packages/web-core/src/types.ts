@@ -79,6 +79,12 @@ export interface WebAiAgentInfo {
     version?: string;
 }
 
+export type WebVersionUpdateReason =
+    | 'force_update_below'
+    | 'major_minor_mismatch'
+    | 'patch_mismatch'
+    | 'daemon_ahead';
+
 export interface BaseDaemonData {
     id: string;
     sessionId?: string;
@@ -93,6 +99,8 @@ export interface BaseDaemonData {
     version?: string;
     serverVersion?: string;
     versionMismatch?: boolean;
+    versionUpdateRequired?: boolean;
+    versionUpdateReason?: WebVersionUpdateReason;
     platform?: string;
     hostname?: string;
     nickname?: string;

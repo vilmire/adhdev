@@ -39,6 +39,7 @@ import { useTheme } from '../../hooks/useTheme'
 import { useTabShortcuts } from '../../hooks/useTabShortcuts'
 import { getConversationTabMetaText, getConversationTitle, getRemotePanelTitle } from './conversation-presenters'
 import { getConversationNativeTargetSessionId } from './conversation-selectors'
+import { IconExternalWindow, IconArrowBack, IconKeyboard, IconX, IconEyeOff } from '../Icons'
 
 interface DashboardDockviewWorkspaceProps {
     visibleConversations: ActiveConversation[]
@@ -95,6 +96,9 @@ interface DashboardDockviewContextValue {
     scrollToBottomRequest?: { tabKey: string; nonce: number } | null
     tabShortcuts: Record<string, string>
     openTabContextMenu: (args: { x: number; y: number; tabKey: string }) => void
+    popoutTab: (tabKey: string) => void
+    moveTabBackToMain: (tabKey: string) => void
+    isTabInPopout: (tabKey: string) => boolean
 }
 
 interface DashboardDockviewPanelParams {
@@ -567,6 +571,129 @@ export default function DashboardDockviewWorkspace({
     const focusDockview = useCallback(() => {
         apiRef.current?.focus()
     }, [])
+
+    // ─── Popout Window (tear-off to separate browser window) ─────
+
+    const injectThemeIntoPopoutWindow = useCallback((popoutWindow: Window) => {
+        // Copy all stylesheets from parent to popout window
+        const parentDoc = document
+        const popoutDoc = popoutWindow.document
+
+        // Copy <link rel="stylesheet"> tags
+        for (const link of parentDoc.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')) {
+            const clone = popoutDoc.createElement('link')
+            clone.rel = 'stylesheet'
+            clone.href = link.href
+            if (link.crossOrigin) clone.crossOrigin = link.crossOrigin
+            popoutDoc.head.appendChild(clone)
+        }
+
+        // Copy inline <style> tags
+        for (const style of parentDoc.querySelectorAll<HTMLStyleElement>('style')) {
+            const clone = popoutDoc.createElement('style')
+            clone.textContent = style.textContent
+            popoutDoc.head.appendChild(clone)
+        }
+
+        // Copy CSS custom properties from :root / html
+        const cssVars: string[] = []
+        for (const sheet of parentDoc.styleSheets) {
+            try {
+                for (const rule of sheet.cssRules) {
+                    if (rule instanceof CSSStyleRule && (rule.selectorText === ':root' || rule.selectorText === 'html')) {
+                        cssVars.push(rule.cssText)
+                    }
+                }
+            } catch { /* cross-origin sheet, skip */ }
+        }
+        if (cssVars.length > 0) {
+            const varStyle = popoutDoc.createElement('style')
+            varStyle.textContent = cssVars.join('\n')
+            popoutDoc.head.appendChild(varStyle)
+        }
+
+        // Propagate data-theme attribute and body classes
+        const htmlTheme = parentDoc.documentElement.getAttribute('data-theme')
+        if (htmlTheme) popoutDoc.documentElement.setAttribute('data-theme', htmlTheme)
+        popoutDoc.documentElement.style.colorScheme = htmlTheme === 'light' ? 'light' : 'dark'
+        popoutDoc.body.className = parentDoc.body.className
+
+        // Copy inline styles from :root (captures runtime theme variable overrides)
+        const inlineRootStyle = parentDoc.documentElement.getAttribute('style')
+        if (inlineRootStyle) popoutDoc.documentElement.setAttribute('style', inlineRootStyle)
+    }, [])
+
+    const syncThemeToOpenPopouts = useCallback(() => {
+        const api = apiRef.current
+        if (!api) return
+        for (const group of api.groups) {
+            try {
+                const ownerDoc = group.element?.ownerDocument
+                if (!ownerDoc || ownerDoc === document) continue
+                const htmlTheme = document.documentElement.getAttribute('data-theme')
+                if (htmlTheme) ownerDoc.documentElement.setAttribute('data-theme', htmlTheme)
+                ownerDoc.documentElement.style.colorScheme = htmlTheme === 'light' ? 'light' : 'dark'
+                ownerDoc.body.className = document.body.className
+                const inlineRootStyle = document.documentElement.getAttribute('style')
+                if (inlineRootStyle) ownerDoc.documentElement.setAttribute('style', inlineRootStyle)
+                else ownerDoc.documentElement.removeAttribute('style')
+            } catch {
+                // ignore detached popout docs
+            }
+        }
+    }, [])
+
+    const popoutTab = useCallback((tabKey: string) => {
+        const api = apiRef.current
+        if (!api) return
+        const panel = api.getPanel(tabKey)
+        if (!panel) return
+
+        void api.addPopoutGroup(panel, {
+            popoutUrl: '/popout.html',
+            onDidOpen: ({ window: popoutWin }) => {
+                injectThemeIntoPopoutWindow(popoutWin)
+                // Set popout window title
+                const conv = conversationsByTabKey.get(tabKey)
+                if (conv) {
+                    popoutWin.document.title = `${getConversationTitle(conv)} — ADHDev`
+                } else {
+                    popoutWin.document.title = 'ADHDev — Popout'
+                }
+            },
+        })
+    }, [conversationsByTabKey, injectThemeIntoPopoutWindow])
+
+    const moveTabBackToMain = useCallback((tabKey: string) => {
+        const api = apiRef.current
+        if (!api) return
+        const panel = api.getPanel(tabKey)
+        if (!panel) return
+        // Move to the first existing group in main grid (not in a popout window), or create one
+        const mainGroups = api.groups.filter(g => {
+            try { return g.element?.ownerDocument === document } catch { return true }
+        })
+        if (mainGroups.length > 0) {
+            panel.api.moveTo({ group: mainGroups[0], position: 'center' })
+        } else {
+            panel.api.moveTo({ position: 'center' })
+        }
+        panel.api.setActive()
+    }, [])
+
+    const isTabInPopout = useCallback((tabKey: string) => {
+        const api = apiRef.current
+        if (!api) return false
+        const panel = api.getPanel(tabKey)
+        if (!panel) return false
+        // Check if the panel's group is in a popout window
+        try {
+            const groupEl = panel.group.element
+            return groupEl?.ownerDocument !== document
+        } catch {
+            return false
+        }
+    }, [])
     const selectTabByShortcut = useCallback((tabKey: string) => {
         const api = apiRef.current
         if (!api) return
@@ -754,6 +881,9 @@ export default function DashboardDockviewWorkspace({
         scrollToBottomRequest,
         tabShortcuts,
         openTabContextMenu: ({ x, y, tabKey }) => setCtxMenu({ x, y, tabKey }),
+        popoutTab,
+        moveTabBackToMain,
+        isTabInPopout,
     }), [
         actionLogs,
         clearedTabs,
@@ -771,6 +901,9 @@ export default function DashboardDockviewWorkspace({
         userName,
         scrollToBottomRequest,
         tabShortcuts,
+        popoutTab,
+        moveTabBackToMain,
+        isTabInPopout,
     ])
 
     const activateRequestedTab = useCallback((tabKey: string | null | undefined) => {
@@ -929,6 +1062,25 @@ export default function DashboardDockviewWorkspace({
         event.api.onDidMovePanel(cleanupDockviewOverlays)
         event.api.onDidDrop(cleanupDockviewOverlays)
 
+        // Inject theme attributes into popout windows created by drag-to-popout.
+        // Note: dockview already copies stylesheets (addStyles), but data-theme
+        // attribute and inline :root style overrides need manual propagation.
+        event.api.onDidAddGroup((group) => {
+            // Defer check so the group has time to be placed in a popout window
+            requestAnimationFrame(() => {
+                try {
+                    const ownerDoc = group.element?.ownerDocument
+                    if (!ownerDoc || ownerDoc === document) return
+                    // This group is in a popout window — inject theme attributes
+                    const htmlTheme = document.documentElement.getAttribute('data-theme')
+                    if (htmlTheme) ownerDoc.documentElement.setAttribute('data-theme', htmlTheme)
+                    ownerDoc.body.className = document.body.className
+                    const inlineRootStyle = document.documentElement.getAttribute('style')
+                    if (inlineRootStyle) ownerDoc.documentElement.setAttribute('style', inlineRootStyle)
+                } catch { /* ignore */ }
+            })
+        })
+
         onActiveTabChange(event.api.activePanel?.id ?? null)
     }, [
         activateRequestedTab,
@@ -1017,6 +1169,10 @@ export default function DashboardDockviewWorkspace({
         return () => window.removeEventListener('dragstart', handleDragStart)
     }, [])
 
+    useEffect(() => {
+        syncThemeToOpenPopouts()
+    }, [syncThemeToOpenPopouts, theme])
+
     const dockviewTheme = theme === 'light' ? themeLight : themeDark
 
     return (
@@ -1031,27 +1187,50 @@ export default function DashboardDockviewWorkspace({
                     singleTabMode="default"
                     tabAnimation="smooth"
                     theme={dockviewTheme}
+                    popoutUrl="/popout.html"
                 />
             </div>
             {ctxMenu && (
                 <div
                     data-dockview-tab-context-menu
-                    className="fixed z-50 bg-bg-primary border border-border-subtle rounded-lg shadow-lg py-1 min-w-[160px]"
+                    className="fixed z-50 bg-bg-primary border border-border-subtle rounded-lg shadow-lg py-1 min-w-[180px]"
                     style={{ left: ctxMenu.x, top: ctxMenu.y }}
                 >
+                    {isTabInPopout(ctxMenu.tabKey) ? (
+                        <button
+                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
+                            onClick={() => {
+                                moveTabBackToMain(ctxMenu.tabKey)
+                                setCtxMenu(null)
+                            }}
+                        >
+                            <IconArrowBack size={13} className="shrink-0 opacity-70" /> Move back to main window
+                        </button>
+                    ) : (
+                        <button
+                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
+                            onClick={() => {
+                                popoutTab(ctxMenu.tabKey)
+                                setCtxMenu(null)
+                            }}
+                        >
+                            <IconExternalWindow size={13} className="shrink-0 opacity-70" /> Open in new window
+                        </button>
+                    )}
+                    <div className="border-t border-border-subtle my-1" />
                     <button
-                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors"
+                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
                         onClick={(event) => {
                             event.stopPropagation()
                             setShortcutListening(ctxMenu.tabKey)
                             setCtxMenu(null)
                         }}
                     >
-                        ⌨ {tabShortcuts[ctxMenu.tabKey] ? `Change shortcut (${tabShortcuts[ctxMenu.tabKey]})` : 'Set shortcut'}
+                        <IconKeyboard size={13} className="shrink-0 opacity-70" /> {tabShortcuts[ctxMenu.tabKey] ? `Change shortcut (${tabShortcuts[ctxMenu.tabKey]})` : 'Set shortcut'}
                     </button>
                     {tabShortcuts[ctxMenu.tabKey] && (
                         <button
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors text-text-muted"
+                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors text-text-muted flex items-center gap-2"
                             onClick={() => {
                                 const next = { ...tabShortcuts }
                                 delete next[ctxMenu.tabKey]
@@ -1059,9 +1238,19 @@ export default function DashboardDockviewWorkspace({
                                 setCtxMenu(null)
                             }}
                         >
-                            ✕ Remove shortcut
+                            <IconX size={13} className="shrink-0 opacity-70" /> Remove shortcut
                         </button>
                     )}
+                    <div className="border-t border-border-subtle my-1" />
+                    <button
+                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors text-text-muted flex items-center gap-2"
+                        onClick={() => {
+                            toggleHiddenTab(ctxMenu.tabKey)
+                            setCtxMenu(null)
+                        }}
+                    >
+                        <IconEyeOff size={13} className="shrink-0 opacity-70" /> Hide tab
+                    </button>
                 </div>
             )}
             {shortcutListening && (

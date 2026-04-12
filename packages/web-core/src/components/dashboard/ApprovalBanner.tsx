@@ -63,11 +63,22 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
                                 onClick={() => handleClick(btnText)}
                                 disabled={isDisabled}
                                 className={`btn btn-sm border-none rounded-md text-xs px-3 py-1 ${
-                                    isPrimary ? 'bg-white font-extrabold'
+                                    isPrimary ? 'font-extrabold'
                                     : isDanger ? 'bg-red-500/30 text-white font-semibold'
-                                    : 'bg-white/15 text-white font-semibold'
+                                    : 'text-white font-semibold'
                                 } ${isDisabled && !isThisPending ? 'opacity-40' : 'opacity-100'} ${isDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-                                style={isPrimary ? { color: 'var(--status-warning)' } : undefined}
+                                style={isPrimary
+                                    ? {
+                                        color: 'var(--status-warning)',
+                                        background: 'var(--surface-primary)',
+                                        boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--status-warning) 18%, transparent)',
+                                    }
+                                    : !isDanger
+                                        ? {
+                                            background: 'color-mix(in srgb, var(--surface-primary) 82%, transparent)',
+                                            boxShadow: 'inset 0 0 0 1px color-mix(in srgb, white 10%, transparent)',
+                                        }
+                                        : undefined}
                             >
                                 {isThisPending ? '⏳ ...' : cleanBtnText(btnText)}
                             </button>

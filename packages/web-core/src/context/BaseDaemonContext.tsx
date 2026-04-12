@@ -10,7 +10,7 @@
  *   // cloud: receive data from CF WS + P2P and call injectEntries
  */
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
-import type { DaemonData, SessionEntry } from '../types'
+import type { DaemonData, SessionEntry, WebVersionUpdateReason } from '../types'
 
 // ─── Types ────────────────────────────────────────────
 
@@ -110,19 +110,25 @@ function mergeDaemonVersionFlags(existing: DaemonData, incoming: DaemonData, mer
     const daemonVersion = incoming.version ?? merged.version ?? existing.version
     const serverVersion = incoming.serverVersion ?? existing.serverVersion ?? merged.serverVersion
     const hasMismatchFlag = incoming.versionMismatch === true || existing.versionMismatch === true
+    const requiredUpdate = incoming.versionUpdateRequired === true || existing.versionUpdateRequired === true
+    const updateReason = incoming.versionUpdateReason ?? existing.versionUpdateReason ?? merged.versionUpdateReason
 
     if (daemonVersion) next.version = daemonVersion
     if (serverVersion) next.serverVersion = serverVersion
+    if (updateReason) next.versionUpdateReason = updateReason
 
     if (daemonVersion && serverVersion && daemonVersion === serverVersion) {
         delete next.versionMismatch
         delete next.serverVersion
+        delete next.versionUpdateRequired
+        delete next.versionUpdateReason
         return next
     }
 
     if (incoming.versionMismatch === true || (hasMismatchFlag && daemonVersion && serverVersion && daemonVersion !== serverVersion)) {
         next.versionMismatch = true
     }
+    if (requiredUpdate) next.versionUpdateRequired = true
 
     return next
 }
@@ -327,6 +333,8 @@ export interface CompactDaemon {
     version?: string
     serverVersion?: string
     versionMismatch?: boolean
+    versionUpdateRequired?: boolean
+    versionUpdateReason?: WebVersionUpdateReason
     terminalBackend?: DaemonData['terminalBackend']
     detectedIdes?: DaemonData['detectedIdes']
     availableProviders?: DaemonData['availableProviders']
@@ -401,6 +409,8 @@ export function expandCompactDaemons(
                 versionMismatch: true,
                 version: d.version,
                 serverVersion: d.serverVersion,
+                ...(d.versionUpdateRequired && { versionUpdateRequired: true }),
+                ...(d.versionUpdateReason && { versionUpdateReason: d.versionUpdateReason }),
             }),
             ...(d.detectedIdes && { detectedIdes: d.detectedIdes }),
             ...(d.availableProviders && { availableProviders: d.availableProviders }),
