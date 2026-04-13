@@ -754,7 +754,7 @@ export default function DashboardNewSessionDialog({
                                 )}
                                 {!savedSessionsLoading && !savedSessionsError && savedSessions.length === 0 && (
                                     <div className="mt-2 text-[11px] text-text-muted">
-                                        No saved sessions found for this provider yet.
+                                        No saved history found for this provider yet.
                                     </div>
                                 )}
                             </div>
