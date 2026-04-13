@@ -41,6 +41,16 @@ import type { LaunchWorkspaceOption } from './machine/types'
 import { buildScopedIdeConversations } from '../components/dashboard/buildConversations'
 import { getConversationActivityAt } from '../components/dashboard/conversation-sort'
 import type { ActiveConversation } from '../components/dashboard/types'
+import {
+    getCliLaunchBusyLabel,
+    getCliLaunchPrimaryActionLabel,
+    getMachineLaunchBusyLabel,
+    getMachineLaunchConfirmDescription,
+    getMachineLaunchConfirmLabel,
+    getMachineLaunchConfirmTitle,
+    getRecentHistoryResumeConfirmDescription,
+    getRecentHistoryResumeConfirmTitle,
+} from '../utils/dashboard-launch-copy'
 
 // ─── Component ───────────────────────────────────────
 interface MachineDetailProps {
@@ -72,6 +82,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         description: string
         details: Array<{ label: string; value: string }>
         confirmLabel: string
+        busyLabel?: string
         workspaceOptions: LaunchWorkspaceOption[]
     } | null>(null)
     const recentLaunchWorkspaceKeyRef = useRef('__home__')
@@ -350,9 +361,26 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         recentLaunchWorkspaceKeyRef.current = selectedKey
         setRecentLaunchWorkspaceKey(selectedKey)
         setRecentLaunchConfirm({
-            title: `Launch ${session.label}?`,
-            description: 'Recent launches now require one more confirmation before they start.',
-            confirmLabel: 'Launch',
+            title: session.kind === 'ide'
+                ? getMachineLaunchConfirmTitle('restart-ide', session.label)
+                : session.providerSessionId
+                    ? getRecentHistoryResumeConfirmTitle(session.label)
+                    : getMachineLaunchConfirmTitle('start-fresh', session.label),
+            description: session.kind === 'ide'
+                ? getMachineLaunchConfirmDescription('restart-ide')
+                : session.providerSessionId
+                    ? getRecentHistoryResumeConfirmDescription()
+                    : getMachineLaunchConfirmDescription('start-fresh'),
+            confirmLabel: session.kind === 'ide'
+                ? getMachineLaunchConfirmLabel('restart-ide')
+                : session.providerSessionId
+                    ? getCliLaunchPrimaryActionLabel(true)
+                    : getMachineLaunchConfirmLabel('start-fresh'),
+            busyLabel: session.kind === 'ide'
+                ? getMachineLaunchBusyLabel('restart-ide')
+                : session.providerSessionId
+                    ? getCliLaunchBusyLabel(true)
+                    : getMachineLaunchBusyLabel('start-fresh'),
             workspaceOptions: options,
             details: [
                 { label: 'Mode', value: session.kind.toUpperCase() },
@@ -561,6 +589,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                         setRecentLaunchWorkspaceKey(key)
                     }}
                     confirmLabel={recentLaunchConfirm.confirmLabel}
+                    busyLabel={recentLaunchConfirm.busyLabel}
                     busy={recentLaunchBusy}
                     onConfirm={handleConfirmRecentLaunch}
                     onCancel={() => {

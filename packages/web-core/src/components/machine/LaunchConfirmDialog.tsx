@@ -9,6 +9,7 @@ interface LaunchConfirmDialogProps {
     selectedWorkspaceKey?: string
     onWorkspaceChange?: (key: string) => void
     confirmLabel?: string
+    busyLabel?: string
     busy?: boolean
     showArgsInput?: boolean
     argsValue?: string
@@ -29,6 +30,7 @@ export default function LaunchConfirmDialog({
     selectedWorkspaceKey,
     onWorkspaceChange,
     confirmLabel = 'Launch',
+    busyLabel = 'Launching…',
     busy = false,
     showArgsInput,
     argsValue,
@@ -153,7 +155,7 @@ export default function LaunchConfirmDialog({
                         disabled={busy}
                     >
                         <IconPlay size={14} />
-                        {busy ? 'Launching…' : confirmLabel}
+                        {busy ? busyLabel : confirmLabel}
                     </button>
                 </div>
             </div>

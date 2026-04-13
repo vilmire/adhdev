@@ -4,7 +4,13 @@ import {
   getCliLaunchBusyLabel,
   getCliResumeSelectPlaceholder,
   getHostedRuntimeReviewButtonLabel,
+  getMachineLaunchBusyLabel,
+  getMachineLaunchConfirmDescription,
+  getMachineLaunchConfirmLabel,
+  getMachineLaunchConfirmTitle,
   getOpenHistoryLabel,
+  getRecentHistoryResumeConfirmDescription,
+  getRecentHistoryResumeConfirmTitle,
   getRefreshSavedHistoryLabel,
   getRefreshingSavedHistoryLabel,
   getSavedHistoryEmptyStateLabel,
@@ -39,5 +45,25 @@ describe('dashboard launch copy helpers', () => {
     expect(getSavedHistoryEmptyStateLabel()).toBe('No saved history found yet.')
     expect(getRefreshSavedHistoryLabel()).toBe('Refresh saved history')
     expect(getRefreshingSavedHistoryLabel()).toBe('Refreshing saved history…')
+  })
+
+  it('uses explicit machine launch-confirm wording for start-fresh and restart flows', () => {
+    expect(getMachineLaunchConfirmTitle('start-fresh', 'Claude Code')).toBe('Start fresh with Claude Code?')
+    expect(getMachineLaunchConfirmDescription('start-fresh')).toBe('Review the provider and target folder before starting fresh.')
+    expect(getMachineLaunchConfirmLabel('start-fresh')).toBe('Start fresh')
+    expect(getMachineLaunchBusyLabel('start-fresh')).toBe('Starting fresh…')
+
+    expect(getMachineLaunchConfirmTitle('restart-ide', 'Cursor')).toBe('Restart Cursor?')
+    expect(getMachineLaunchConfirmDescription('restart-ide')).toBe('Review or change the target workspace before restarting this IDE.')
+    expect(getMachineLaunchConfirmLabel('restart-ide')).toBe('Restart')
+    expect(getMachineLaunchBusyLabel('restart-ide')).toBe('Restarting…')
+
+    expect(getMachineLaunchConfirmTitle('restart-stopped', 'Claude Code')).toBe('Restart Claude Code?')
+    expect(getMachineLaunchConfirmDescription('restart-stopped')).toBe('Review or change the target workspace before restarting this stopped session.')
+  })
+
+  it('uses saved-history resume wording for recent launch entries with provider history', () => {
+    expect(getRecentHistoryResumeConfirmTitle('Claude Code')).toBe('Resume saved history with Claude Code?')
+    expect(getRecentHistoryResumeConfirmDescription()).toBe('Review or change the target workspace before resuming saved history.')
   })
 })

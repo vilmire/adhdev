@@ -6,8 +6,15 @@ import type { MachineRecentLaunch, WorkspaceLaunchKind } from '../../pages/machi
 import { useMemo } from 'react'
 import { getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import {
+    getCliLaunchBusyLabel,
     getCliLaunchPrimaryActionLabel,
     getCliResumeSelectPlaceholder,
+    getMachineLaunchBusyLabel,
+    getMachineLaunchConfirmDescription,
+    getMachineLaunchConfirmLabel,
+    getMachineLaunchConfirmTitle,
+    getRecentHistoryResumeConfirmDescription,
+    getRecentHistoryResumeConfirmTitle,
 } from '../../utils/dashboard-launch-copy'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
@@ -102,9 +109,26 @@ export default function DashboardMobileMachineScreen({
                 currentWorkspacePath: session.workspace,
             })
             launcher.openLaunchConfirm({
-                title: `Launch ${session.label}?`,
-                description: 'Recent launches require one more confirmation before they run.',
-                confirmLabel: 'Launch',
+                title: session.kind === 'ide'
+                    ? getMachineLaunchConfirmTitle('restart-ide', session.label)
+                    : session.providerSessionId
+                        ? getRecentHistoryResumeConfirmTitle(session.label)
+                        : getMachineLaunchConfirmTitle('start-fresh', session.label),
+                description: session.kind === 'ide'
+                    ? getMachineLaunchConfirmDescription('restart-ide')
+                    : session.providerSessionId
+                        ? getRecentHistoryResumeConfirmDescription()
+                        : getMachineLaunchConfirmDescription('start-fresh'),
+                confirmLabel: session.kind === 'ide'
+                    ? getMachineLaunchConfirmLabel('restart-ide')
+                    : session.providerSessionId
+                        ? getCliLaunchPrimaryActionLabel(true)
+                        : getMachineLaunchConfirmLabel('start-fresh'),
+                busyLabel: session.kind === 'ide'
+                    ? getMachineLaunchBusyLabel('restart-ide')
+                    : session.providerSessionId
+                        ? getCliLaunchBusyLabel(true)
+                        : getMachineLaunchBusyLabel('start-fresh'),
                 workspaceOptions: options,
                 selectedWorkspaceKey: selectedKey,
                 details: [
@@ -493,6 +517,9 @@ export default function DashboardMobileMachineScreen({
                     confirmLabel={launcher.launchConfirm.providerType
                         ? getCliLaunchPrimaryActionLabel(!!launcher.launchConfirmResumeId)
                         : launcher.launchConfirm.confirmLabel}
+                    busyLabel={launcher.launchConfirm.providerType
+                        ? undefined
+                        : launcher.launchConfirm.busyLabel}
                     busy={launcher.launchConfirmBusy}
                     showArgsInput={launcher.launchConfirm.showArgsInput}
                     argsValue={launcher.launchConfirmArgs}

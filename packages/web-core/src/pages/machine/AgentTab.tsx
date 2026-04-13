@@ -16,6 +16,10 @@ import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { formatIdeType, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import {
+    getMachineLaunchBusyLabel,
+    getMachineLaunchConfirmDescription,
+    getMachineLaunchConfirmLabel,
+    getMachineLaunchConfirmTitle,
     getOpenHistoryLabel,
 } from '../../utils/dashboard-launch-copy'
 import { IconChat, IconMonitor, IconSearch, IconPlay, IconRefresh, IconX } from '../../components/Icons'
@@ -136,6 +140,7 @@ export default function AgentTab({
         description: string
         details: Array<{ label: string; value: string }>
         confirmLabel: string
+        busyLabel?: string
         workspaceOptions?: LaunchWorkspaceOption[]
     } | null>(null)
     const launchConfirmWorkspaceKeyRef = useRef('__home__')
@@ -343,6 +348,7 @@ export default function AgentTab({
             description: string
             details: Array<{ label: string; value: string }>
             confirmLabel: string
+            busyLabel?: string
             workspaceOptions?: LaunchWorkspaceOption[]
             selectedWorkspaceKey?: string
         },
@@ -490,9 +496,10 @@ export default function AgentTab({
             currentWorkspacePath: resolvedWorkspacePath,
         })
         openLaunchConfirm({
-            title: `Launch ${providerName}?`,
-            description: 'Review the provider and target folder before starting fresh.',
-            confirmLabel: 'Start fresh',
+            title: getMachineLaunchConfirmTitle('start-fresh', providerName),
+            description: getMachineLaunchConfirmDescription('start-fresh'),
+            confirmLabel: getMachineLaunchConfirmLabel('start-fresh'),
+            busyLabel: getMachineLaunchBusyLabel('start-fresh'),
             workspaceOptions: options,
             selectedWorkspaceKey: selectedKey,
             details: [
@@ -996,9 +1003,10 @@ export default function AgentTab({
                                                             currentWorkspacePath: restartWorkspace,
                                                         })
                                                         openLaunchConfirm({
-                                                            title: `Restart ${formatIdeType(entry.type)}?`,
-                                                            description: 'Review or change the target workspace before restarting this IDE.',
-                                                            confirmLabel: 'Restart',
+                                                            title: getMachineLaunchConfirmTitle('restart-ide', formatIdeType(entry.type)),
+                                                            description: getMachineLaunchConfirmDescription('restart-ide'),
+                                                            confirmLabel: getMachineLaunchConfirmLabel('restart-ide'),
+                                                            busyLabel: getMachineLaunchBusyLabel('restart-ide'),
                                                             workspaceOptions: options,
                                                             selectedWorkspaceKey: selectedKey,
                                                             details: [
@@ -1072,9 +1080,10 @@ export default function AgentTab({
                                                         currentWorkspacePath: workspacePath,
                                                     })
                                                     openLaunchConfirm({
-                                                        title: `Launch ${providerName}?`,
-                                                        description: 'Review or change the target workspace before launching this stopped session again.',
-                                                        confirmLabel: 'Launch',
+                                                        title: getMachineLaunchConfirmTitle('restart-stopped', providerName),
+                                                        description: getMachineLaunchConfirmDescription('restart-stopped'),
+                                                        confirmLabel: getMachineLaunchConfirmLabel('restart-stopped'),
+                                                        busyLabel: getMachineLaunchBusyLabel('restart-stopped'),
                                                         workspaceOptions: options,
                                                         selectedWorkspaceKey: selectedKey,
                                                         details: [
@@ -1198,6 +1207,7 @@ export default function AgentTab({
                         setLaunchConfirmWorkspaceKey(key)
                     }}
                     confirmLabel={launchConfirm.confirmLabel}
+                    busyLabel={launchConfirm.busyLabel}
                     busy={launchConfirmBusy}
                     onConfirm={handleConfirmLaunch}
                     onCancel={() => {

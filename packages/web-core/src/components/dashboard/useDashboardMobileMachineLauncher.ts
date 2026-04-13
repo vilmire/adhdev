@@ -17,6 +17,7 @@ interface LaunchConfirmState {
     description: string
     details: Array<{ label: string; value: string }>
     confirmLabel: string
+    busyLabel?: string
     workspaceOptions?: LaunchWorkspaceOption[]
     showArgsInput?: boolean
     showModelInput?: boolean

@@ -33,3 +33,36 @@ export function getRefreshSavedHistoryLabel(): string {
 export function getRefreshingSavedHistoryLabel(): string {
   return 'Refreshing saved history…'
 }
+
+export type MachineLaunchConfirmScenario = 'start-fresh' | 'restart-ide' | 'restart-stopped'
+
+export function getMachineLaunchConfirmTitle(scenario: MachineLaunchConfirmScenario, label: string): string {
+  if (scenario === 'start-fresh') return `Start fresh with ${label}?`
+  return `Restart ${label}?`
+}
+
+export function getMachineLaunchConfirmDescription(scenario: MachineLaunchConfirmScenario): string {
+  if (scenario === 'start-fresh') {
+    return 'Review the provider and target folder before starting fresh.'
+  }
+  if (scenario === 'restart-ide') {
+    return 'Review or change the target workspace before restarting this IDE.'
+  }
+  return 'Review or change the target workspace before restarting this stopped session.'
+}
+
+export function getMachineLaunchConfirmLabel(scenario: MachineLaunchConfirmScenario): string {
+  return scenario === 'start-fresh' ? 'Start fresh' : 'Restart'
+}
+
+export function getMachineLaunchBusyLabel(scenario: MachineLaunchConfirmScenario): string {
+  return scenario === 'start-fresh' ? 'Starting fresh…' : 'Restarting…'
+}
+
+export function getRecentHistoryResumeConfirmTitle(label: string): string {
+  return `Resume saved history with ${label}?`
+}
+
+export function getRecentHistoryResumeConfirmDescription(): string {
+  return 'Review or change the target workspace before resuming saved history.'
+}
