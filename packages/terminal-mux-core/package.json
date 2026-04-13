@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/terminal-mux-core",
-  "version": "0.8.49",
+  "version": "0.8.50",
   "description": "ADHDev terminal mux core built on session-host and libghostty",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

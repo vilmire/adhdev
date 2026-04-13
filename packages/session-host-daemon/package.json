@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/session-host-daemon",
-  "version": "0.8.49",
+  "version": "0.8.50",
   "description": "ADHDev local session host daemon — long-lived session runtime",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
