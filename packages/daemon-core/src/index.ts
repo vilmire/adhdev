@@ -194,7 +194,8 @@ export { ProviderInstanceManager } from './providers/provider-instance-manager.j
 export { IdeProviderInstance } from './providers/ide-provider-instance.js';
 export { CliProviderInstance } from './providers/cli-provider-instance.js';
 export { AcpProviderInstance } from './providers/acp-provider-instance.js';
-export type { ProviderModule, CdpTargetFilter, ProviderResumeCapability } from './providers/contracts.js';
+export type { ProviderModule, CdpTargetFilter, ProviderResumeCapability, InputEnvelope, InputPart, MessagePart, ControlListResult, ControlSetResult, ControlInvokeResult } from './providers/contracts.js';
+export { normalizeInputEnvelope, normalizeMessageParts, flattenMessageParts } from './providers/io-contracts.js';
 export { VersionArchive, detectAllVersions } from './providers/version-archive.js';
 export type { ProviderVersionInfo, VersionHistory } from './providers/version-archive.js';
 
@@ -214,6 +215,16 @@ export {
   resolveSessionHostAppName,
 } from './session-host/app-name.js';
 export { ensureSessionHostReady, listHostedCliRuntimes } from './session-host/runtime-support.js';
+export {
+  getSessionHostRecoveryLabel,
+  getSessionHostSurfaceKind,
+  isSessionHostLiveRuntime,
+  isSessionHostRecoverySnapshot,
+  partitionSessionHostDiagnosticsSessions,
+  partitionSessionHostRecords,
+} from './session-host/runtime-surface.js';
+export type { SessionHostSurfaceKind, SessionHostSurfaceRecordLike } from './session-host/runtime-surface.js';
+export { shouldAutoRestoreHostedSessionsOnStartup } from './session-host/startup-restore-policy.js';
 export type { SessionHostEndpoint } from '@adhdev/session-host-core';
 
 // ── Installer ──

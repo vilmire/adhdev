@@ -24,7 +24,7 @@ import { describeMuxOwner } from '../../utils/mux-ui'
 import CliViewModeToggle from '../../components/dashboard/CliViewModeToggle'
 import WorkspaceBrowseDialog from '../../components/machine/WorkspaceBrowseDialog'
 import LaunchConfirmDialog from '../../components/machine/LaunchConfirmDialog'
-import { browseMachineDirectories, getDefaultBrowseStartPath, type BrowseDirectoryEntry } from '../../components/machine/workspaceBrowse'
+import { browseMachineDirectories, collectBrowsePathCandidates, getDefaultBrowseStartPath, type BrowseDirectoryEntry } from '../../components/machine/workspaceBrowse'
 import { buildLaunchWorkspaceOptions } from '../../components/machine/launchWorkspaceOptions'
 import type { LaunchWorkspaceOption } from './types'
 import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
@@ -213,14 +213,20 @@ export default function AgentTab({
         if (!sendDaemonCommand) return
         setSelectedWorkspace('__custom__')
         setBrowseDialogOpen(true)
-        const initialPath = getDefaultBrowseStartPath(machine.platform, [
-            customPath.trim(),
-            resolvedWorkspacePath,
-            machine.defaultWorkspacePath,
-            machine.workspaces[0]?.path,
-        ])
+        const activeWorkspacePaths = managedEntries.map(entry => entry.workspace)
+        const initialPath = getDefaultBrowseStartPath(
+            machine.platform,
+            collectBrowsePathCandidates(
+                customPath.trim(),
+                resolvedWorkspacePath,
+                initialWorkspacePath,
+                activeWorkspacePaths,
+                machine.defaultWorkspacePath,
+                (machine.workspaces || []).map(workspace => workspace.path),
+            ),
+        )
         void loadBrowsePath(initialPath)
-    }, [customPath, loadBrowsePath, machine.defaultWorkspacePath, machine.platform, machine.workspaces, resolvedWorkspacePath, sendDaemonCommand])
+    }, [customPath, initialWorkspacePath, loadBrowsePath, machine.defaultWorkspacePath, machine.platform, machine.workspaces, managedEntries, resolvedWorkspacePath, sendDaemonCommand])
 
     const applySavedSessionWorkspace = useCallback((session: SavedSessionOption) => {
         const workspacePath = String(session.workspace || '').trim()
@@ -482,8 +488,8 @@ export default function AgentTab({
         })
         openLaunchConfirm({
             title: `Launch ${providerName}?`,
-            description: 'Review the provider and target folder before starting this session.',
-            confirmLabel: 'Launch',
+            description: 'Review the provider and target folder before starting fresh.',
+            confirmLabel: 'Start fresh',
             workspaceOptions: options,
             selectedWorkspaceKey: selectedKey,
             details: [

@@ -373,13 +373,51 @@ export class SessionHostServer extends EventEmitter {
     this.storage.save(record, snapshot);
   }
 
+  private getSessionHostRecoveryLabel(record: SessionHostRecord): string | null {
+    const recoveryState = typeof record.meta?.runtimeRecoveryState === 'string'
+      ? String(record.meta.runtimeRecoveryState).trim()
+      : '';
+    if (!recoveryState) return null;
+    if (recoveryState === 'auto_resumed') return 'restored after restart';
+    if (recoveryState === 'resume_failed') return 'restore failed';
+    if (recoveryState === 'host_restart_interrupted') return 'host restart interrupted';
+    if (recoveryState === 'orphan_snapshot') return 'snapshot recovered';
+    return recoveryState.replace(/_/g, ' ');
+  }
+
+  private getSessionSurfaceKind(record: SessionHostRecord): 'live_runtime' | 'recovery_snapshot' | 'inactive_record' {
+    if (['starting', 'running', 'stopping', 'interrupted'].includes(record.lifecycle)) {
+      return 'live_runtime';
+    }
+    if ((record.lifecycle === 'stopped' || record.lifecycle === 'failed') && (record.meta?.restoredFromStorage === true || this.getSessionHostRecoveryLabel(record))) {
+      return 'recovery_snapshot';
+    }
+    return 'inactive_record';
+  }
+
+  private annotateSessionSurface(record: SessionHostRecord): SessionHostRecord {
+    return {
+      ...record,
+      surfaceKind: this.getSessionSurfaceKind(record),
+    };
+  }
+
   private getHostDiagnostics(payload?: { includeSessions?: boolean; limit?: number }): SessionHostDiagnostics {
     const limit = Math.max(1, Math.min(200, Number(payload?.limit) || 50));
+    const sessions = payload?.includeSessions === false
+      ? undefined
+      : this.registry.listSessions().map((record) => this.annotateSessionSurface(record));
+    const liveRuntimes = sessions?.filter((record) => record.surfaceKind === 'live_runtime');
+    const recoverySnapshots = sessions?.filter((record) => record.surfaceKind === 'recovery_snapshot');
+    const inactiveRecords = sessions?.filter((record) => record.surfaceKind === 'inactive_record');
     return {
       hostStartedAt: this.startedAt,
       endpoint: this.endpoint.path,
       runtimeCount: this.runtimes.size,
-      sessions: payload?.includeSessions === false ? undefined : this.registry.listSessions(),
+      sessions,
+      liveRuntimes,
+      recoverySnapshots,
+      inactiveRecords,
       recentLogs: this.recentLogs.slice(-limit),
       recentRequests: this.recentRequests.slice(-limit),
       recentTransitions: this.recentTransitions.slice(-limit),

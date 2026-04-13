@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { SessionHostDiagnosticsSnapshot } from '@adhdev/daemon-core'
+import {
+    getSessionHostRecoveryLabel,
+    partitionSessionHostRecords,
+} from '../../utils/session-host-surface'
 import { IconRefresh, IconServer, IconTerminal, IconUsers, IconWarning } from '../../components/Icons'
 import { eventManager } from '../../managers/EventManager'
 import { useSessionHostDiagnosticsSubscription } from '../../hooks/useSessionHostDiagnosticsSubscription'
@@ -27,6 +31,7 @@ interface SessionHostRecordView {
     providerType: string
     workspace: string
     lifecycle: 'starting' | 'running' | 'stopping' | 'stopped' | 'failed' | 'interrupted'
+    surfaceKind?: 'live_runtime' | 'recovery_snapshot' | 'inactive_record'
     writeOwner: SessionHostWriteOwner | null
     attachedClients: SessionHostAttachedClient[]
     osPid?: number
@@ -69,6 +74,9 @@ interface SessionHostDiagnosticsView {
     endpoint: string
     runtimeCount: number
     sessions?: SessionHostRecordView[]
+    liveRuntimes?: SessionHostRecordView[]
+    recoverySnapshots?: SessionHostRecordView[]
+    inactiveRecords?: SessionHostRecordView[]
     recentLogs: SessionHostLogEntryView[]
     recentRequests: SessionHostRequestTraceView[]
     recentTransitions: SessionHostRuntimeTransitionView[]
@@ -113,18 +121,6 @@ function describeOwner(owner: SessionHostWriteOwner | null | undefined): string 
     if (!owner) return 'view only'
     if (owner.ownerType === 'user') return `user control · ${owner.clientId}`
     return `agent control · ${owner.clientId}`
-}
-
-function describeRecoveryState(meta: Record<string, unknown> | undefined): string | null {
-    const recoveryState = typeof meta?.runtimeRecoveryState === 'string'
-        ? String(meta.runtimeRecoveryState)
-        : ''
-    if (!recoveryState) return null
-    if (recoveryState === 'auto_resumed') return 'restored after restart'
-    if (recoveryState === 'resume_failed') return 'restore failed'
-    if (recoveryState === 'host_restart_interrupted') return 'host restart interrupted'
-    if (recoveryState === 'orphan_snapshot') return 'snapshot recovered'
-    return recoveryState.replace(/_/g, ' ')
 }
 
 function lifecyclePillClass(lifecycle: string): string {
@@ -190,12 +186,12 @@ export default function SessionHostPanel({
             })
             const envelope = unwrapCommandEnvelope(raw)
             if (!envelope?.success) {
-                throw new Error(envelope?.error || 'Could not load session host diagnostics')
+                throw new Error(envelope?.error || 'Could not load hosted runtime diagnostics')
             }
             applyDiagnostics((envelope.diagnostics || envelope.result || null) as SessionHostDiagnosticsSnapshot | null)
             setError('')
         } catch (cause) {
-            const message = cause instanceof Error ? cause.message : 'Could not load session host diagnostics'
+            const message = cause instanceof Error ? cause.message : 'Could not load hosted runtime diagnostics'
             setError(message)
         } finally {
             setRefreshing(false)
@@ -269,13 +265,25 @@ export default function SessionHostPanel({
         () => [...(diagnostics?.sessions || [])].sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0)),
         [diagnostics?.sessions],
     )
-    const duplicateGroupCount = useMemo(
-        () => countDuplicateSessionGroups(sessions),
-        [sessions],
+    const sessionGroups = useMemo(
+        () => {
+            if (diagnostics?.liveRuntimes || diagnostics?.recoverySnapshots || diagnostics?.inactiveRecords) {
+                return {
+                    liveRuntimes: diagnostics?.liveRuntimes || [],
+                    recoverySnapshots: diagnostics?.recoverySnapshots || [],
+                    inactiveRecords: diagnostics?.inactiveRecords || [],
+                }
+            }
+            return partitionSessionHostRecords(sessions)
+        },
+        [diagnostics?.inactiveRecords, diagnostics?.liveRuntimes, diagnostics?.recoverySnapshots, sessions],
     )
-    const totalAttachedClients = useMemo(
-        () => sessions.reduce((sum, session) => sum + (session.attachedClients?.length || 0), 0),
-        [sessions],
+    const liveSessions = sessionGroups.liveRuntimes
+    const recoverySessions = sessionGroups.recoverySnapshots
+    const inactiveSessions = sessionGroups.inactiveRecords
+    const duplicateGroupCount = useMemo(
+        () => countDuplicateSessionGroups(liveSessions),
+        [liveSessions],
     )
     const recentTransitions = useMemo(
         () => [...(diagnostics?.recentTransitions || [])].slice(-6).reverse(),
@@ -286,15 +294,100 @@ export default function SessionHostPanel({
         [diagnostics?.recentLogs],
     )
 
+    const renderSessionCard = (session: SessionHostRecordView, section: 'live' | 'recovery' | 'inactive') => {
+        const busyResume = busyActionKey === `session_host_resume_session:${session.sessionId}`
+        const busyRestart = busyActionKey === `session_host_restart_session:${session.sessionId}`
+        const busyStop = busyActionKey === `session_host_stop_session:${session.sessionId}`
+        const recoveryLabel = getSessionHostRecoveryLabel(session.meta)
+        const linkedCli = cliBySessionId.get(session.sessionId)
+        const clientsLabel = session.attachedClients.length === 1
+            ? '1 client'
+            : `${session.attachedClients.length} clients`
+        const recoveryActionLabel = section === 'recovery' ? 'Recover' : 'Resume'
+        return (
+            <div key={session.sessionId} className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
+                <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <div className="font-medium text-[13px] text-text-primary">
+                                {session.displayName || linkedCli?.cliName || session.providerType}
+                            </div>
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${lifecyclePillClass(session.lifecycle)}`}>
+                                {session.lifecycle}
+                            </span>
+                            {recoveryLabel && (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-sky-500/[0.08] text-sky-300">
+                                    {recoveryLabel}
+                                </span>
+                            )}
+                        </div>
+                        <div className="text-[11px] text-text-secondary mt-1 flex flex-wrap gap-2">
+                            <span className="text-text-primary/90">{session.workspaceLabel || linkedCli?.runtimeWorkspaceLabel || session.workspace || 'No workspace'}</span>
+                            <span className="text-text-muted">·</span>
+                            <span className="font-mono text-text-primary">{session.runtimeKey}</span>
+                            {session.osPid ? (
+                                <>
+                                    <span className="text-text-muted">·</span>
+                                    <span className="text-text-primary/90">pid {session.osPid}</span>
+                                </>
+                            ) : null}
+                        </div>
+                        <div className="text-[10px] text-text-secondary mt-1 flex flex-wrap gap-2">
+                            <span className={session.writeOwner?.ownerType === 'user' ? 'text-amber-200' : 'text-text-primary/85'}>
+                                {describeOwner(session.writeOwner)}
+                            </span>
+                            <span className="text-text-muted">·</span>
+                            <span className="flex items-center gap-1 text-text-primary/85">
+                                <IconUsers size={11} /> {clientsLabel}
+                            </span>
+                            <span className="text-text-muted">·</span>
+                            <span className="text-text-primary/85">active {formatRelativeTime(session.lastActivityAt)}</span>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                        {section === 'recovery' && (session.lifecycle === 'interrupted' || session.lifecycle === 'failed' || session.lifecycle === 'stopped') && (
+                            <button
+                                type="button"
+                                className="machine-btn text-[10px] px-2 py-1"
+                                disabled={!!busyActionKey}
+                                onClick={() => { void runSessionAction('session_host_resume_session', session) }}
+                            >
+                                {busyResume ? `${recoveryActionLabel}ing…` : recoveryActionLabel}
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            className="machine-btn text-[10px] px-2 py-1"
+                            disabled={!!busyActionKey}
+                            onClick={() => { void runSessionAction('session_host_restart_session', session) }}
+                        >
+                            {busyRestart ? 'Restarting…' : 'Restart'}
+                        </button>
+                        {section === 'live' && (session.lifecycle === 'running' || session.lifecycle === 'starting' || session.lifecycle === 'interrupted') && (
+                            <button
+                                type="button"
+                                className="machine-btn text-[10px] px-2 py-1 border-red-500/20 text-red-300 hover:text-red-200"
+                                disabled={!!busyActionKey}
+                                onClick={() => { void runSessionAction('session_host_stop_session', session) }}
+                            >
+                                {busyStop ? 'Stopping…' : 'Stop'}
+                            </button>
+                        )}
+                    </div>
+                </div>
+            </div>
+        )
+    }
+
     return (
         <div className="px-5 py-4 rounded-xl mb-5 bg-bg-secondary border border-border-subtle">
             <div className="flex items-center justify-between gap-3 mb-3">
                 <div>
                     <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5">
-                        <IconServer size={14} /> Session Host
+                        <IconServer size={14} /> Hosted Runtime Recovery
                     </div>
                     <div className="text-[12px] text-text-secondary mt-1">
-                        Hosted CLI runtime diagnostics and recovery controls.
+                        Live runtime status plus advanced recover/restart controls for hosted CLI sessions.
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -332,7 +425,7 @@ export default function SessionHostPanel({
                     <div className="flex items-start gap-2">
                         <IconWarning size={14} className="mt-0.5 text-amber-300 shrink-0" />
                         <div>
-                            <div className="font-medium text-amber-100">Session host diagnostics unavailable</div>
+                            <div className="font-medium text-amber-100">Hosted runtime diagnostics unavailable</div>
                             <div className="text-amber-200/90 mt-1">{error}</div>
                         </div>
                     </div>
@@ -343,12 +436,12 @@ export default function SessionHostPanel({
                 <>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-4">
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
-                            <div className="text-[10px] uppercase tracking-wider text-text-secondary">Runtimes</div>
+                            <div className="text-[10px] uppercase tracking-wider text-text-secondary">Live runtimes</div>
                             <div className="text-[18px] font-semibold text-text-primary mt-1">{diagnostics.runtimeCount}</div>
                         </div>
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
-                            <div className="text-[10px] uppercase tracking-wider text-text-secondary">Clients</div>
-                            <div className="text-[18px] font-semibold text-text-primary mt-1">{totalAttachedClients}</div>
+                            <div className="text-[10px] uppercase tracking-wider text-text-secondary">Recovery</div>
+                            <div className="text-[18px] font-semibold text-text-primary mt-1">{recoverySessions.length}</div>
                         </div>
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5">
                             <div className="text-[10px] uppercase tracking-wider text-text-secondary">Requests</div>
@@ -374,99 +467,48 @@ export default function SessionHostPanel({
                         </div>
                     )}
 
-                    <div className="mb-4">
-                        <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5 mb-2.5">
-                            <IconTerminal size={14} /> Hosted Runtimes
-                        </div>
-                        {sessions.length === 0 ? (
-                            <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-4 text-[12px] text-text-secondary">
-                                No hosted runtimes on this machine yet.
+                    <div className="mb-4 space-y-4">
+                        <div>
+                            <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5 mb-2.5">
+                                <IconTerminal size={14} /> Live Hosted Runtimes
                             </div>
-                        ) : (
-                            <div className="space-y-2">
-                                {sessions.map((session) => {
-                                    const busyResume = busyActionKey === `session_host_resume_session:${session.sessionId}`
-                                    const busyRestart = busyActionKey === `session_host_restart_session:${session.sessionId}`
-                                    const busyStop = busyActionKey === `session_host_stop_session:${session.sessionId}`
-                                    const recoveryLabel = describeRecoveryState(session.meta)
-                                    const linkedCli = cliBySessionId.get(session.sessionId)
-                                    const clientsLabel = session.attachedClients.length === 1
-                                        ? '1 client'
-                                        : `${session.attachedClients.length} clients`
-                                    return (
-                                        <div key={session.sessionId} className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
-                                            <div className="flex items-start justify-between gap-3">
-                                                <div className="min-w-0">
-                                                    <div className="flex items-center gap-2 flex-wrap">
-                                                        <div className="font-medium text-[13px] text-text-primary">
-                                                            {session.displayName || linkedCli?.cliName || session.providerType}
-                                                        </div>
-                                                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-semibold ${lifecyclePillClass(session.lifecycle)}`}>
-                                                            {session.lifecycle}
-                                                        </span>
-                                                        {recoveryLabel && (
-                                                            <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-sky-500/[0.08] text-sky-300">
-                                                                {recoveryLabel}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                    <div className="text-[11px] text-text-secondary mt-1 flex flex-wrap gap-2">
-                                                        <span className="text-text-primary/90">{session.workspaceLabel || linkedCli?.runtimeWorkspaceLabel || session.workspace || 'No workspace'}</span>
-                                                        <span className="text-text-muted">·</span>
-                                                        <span className="font-mono text-text-primary">{session.runtimeKey}</span>
-                                                        {session.osPid ? (
-                                                            <>
-                                                                <span className="text-text-muted">·</span>
-                                                                <span className="text-text-primary/90">pid {session.osPid}</span>
-                                                            </>
-                                                        ) : null}
-                                                    </div>
-                                                    <div className="text-[10px] text-text-secondary mt-1 flex flex-wrap gap-2">
-                                                        <span className={session.writeOwner?.ownerType === 'user' ? 'text-amber-200' : 'text-text-primary/85'}>
-                                                            {describeOwner(session.writeOwner)}
-                                                        </span>
-                                                        <span className="text-text-muted">·</span>
-                                                        <span className="flex items-center gap-1 text-text-primary/85">
-                                                            <IconUsers size={11} /> {clientsLabel}
-                                                        </span>
-                                                        <span className="text-text-muted">·</span>
-                                                        <span className="text-text-primary/85">active {formatRelativeTime(session.lastActivityAt)}</span>
-                                                    </div>
-                                                </div>
-                                                <div className="flex items-center gap-1.5 shrink-0">
-                                                    {(session.lifecycle === 'interrupted' || session.lifecycle === 'failed' || session.lifecycle === 'stopped') && (
-                                                        <button
-                                                            type="button"
-                                                            className="machine-btn text-[10px] px-2 py-1"
-                                                            disabled={!!busyActionKey}
-                                                            onClick={() => { void runSessionAction('session_host_resume_session', session) }}
-                                                        >
-                                                            {busyResume ? 'Resuming…' : 'Resume'}
-                                                        </button>
-                                                    )}
-                                                    <button
-                                                        type="button"
-                                                        className="machine-btn text-[10px] px-2 py-1"
-                                                        disabled={!!busyActionKey}
-                                                        onClick={() => { void runSessionAction('session_host_restart_session', session) }}
-                                                    >
-                                                        {busyRestart ? 'Restarting…' : 'Restart'}
-                                                    </button>
-                                                    {(session.lifecycle === 'running' || session.lifecycle === 'starting' || session.lifecycle === 'interrupted') && (
-                                                        <button
-                                                            type="button"
-                                                            className="machine-btn text-[10px] px-2 py-1 border-red-500/20 text-red-300 hover:text-red-200"
-                                                            disabled={!!busyActionKey}
-                                                            onClick={() => { void runSessionAction('session_host_stop_session', session) }}
-                                                        >
-                                                            {busyStop ? 'Stopping…' : 'Stop'}
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )
-                                })}
+                            {liveSessions.length === 0 ? (
+                                <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-4 text-[12px] text-text-secondary">
+                                    No live hosted runtimes on this machine right now.
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {liveSessions.map((session) => renderSessionCard(session, 'live'))}
+                                </div>
+                            )}
+                        </div>
+
+                        <div>
+                            <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5 mb-2.5">
+                                <IconServer size={14} /> Recovery Snapshots
+                            </div>
+                            <div className="text-[11px] text-text-secondary mb-2.5">
+                                These records were recovered from session-host state and are not live attach targets until you explicitly recover or restart them.
+                            </div>
+                            {recoverySessions.length === 0 ? (
+                                <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-4 text-[12px] text-text-secondary">
+                                    No recovery snapshots currently need attention.
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {recoverySessions.map((session) => renderSessionCard(session, 'recovery'))}
+                                </div>
+                            )}
+                        </div>
+
+                        {inactiveSessions.length > 0 && (
+                            <div>
+                                <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-wider mb-2.5">
+                                    Inactive Records
+                                </div>
+                                <div className="space-y-2 opacity-85">
+                                    {inactiveSessions.map((session) => renderSessionCard(session, 'inactive'))}
+                                </div>
                             </div>
                         )}
                     </div>

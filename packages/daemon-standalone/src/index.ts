@@ -58,6 +58,7 @@ import {
   proxySessionHostAttach,
   proxySessionHostList,
 } from './session-host.js';
+import { shouldAutoRestoreHostedSessionsOnStartup } from './startup-restore-policy.js';
 import { StandaloneSessionHostControlPlane } from './session-host-control.js';
 import { SessionHostClient, type SessionHostEndpoint, type SessionHostEvent } from '@adhdev/session-host-core';
 import {
@@ -386,7 +387,9 @@ class StandaloneServer {
       cdpScanIntervalMs: 15_000,
     });
 
-    await this.components.cliManager.restoreHostedSessions();
+    if (shouldAutoRestoreHostedSessionsOnStartup(process.env)) {
+      await this.components.cliManager.restoreHostedSessions();
+    }
 
     // DevServer (optional)
     if (options.dev) {
@@ -1585,7 +1588,7 @@ async function main(): Promise<void> {
   if (primaryCommand === 'attach') {
     const target = args[1];
     if (!target) {
-      console.error('Usage: adhdev attach <sessionId> [--read-only|--takeover]');
+      console.error('Usage: adhdev-standalone attach <sessionId> [--read-only|--takeover]');
       process.exit(1);
     }
     const readOnly = args.includes('--read-only');

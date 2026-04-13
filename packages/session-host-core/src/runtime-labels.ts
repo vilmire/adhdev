@@ -1,5 +1,5 @@
 import * as path from 'path';
-import type { CreateSessionPayload, SessionHostRecord } from './types.js';
+import type { CreateSessionPayload, SessionHostRecord, SessionHostSurfaceKind } from './types.js';
 
 function normalizeSlug(input: string): string {
   return input
@@ -47,6 +47,71 @@ export function buildRuntimeKey(
     candidate = `${baseKey}-${suffix}`;
   }
   return candidate;
+}
+
+export interface SessionHostSurfaceRecordLike {
+  lifecycle?: string | null;
+  surfaceKind?: SessionHostSurfaceKind | null;
+  meta?: Record<string, unknown> | null;
+}
+
+const LIVE_LIFECYCLES = new Set(['starting', 'running', 'stopping', 'interrupted']);
+
+export function isSessionHostLiveRuntime(record: SessionHostSurfaceRecordLike | null | undefined): boolean {
+  if (!record) return false;
+  if (record.surfaceKind === 'live_runtime') return true;
+  if (record.surfaceKind === 'recovery_snapshot' || record.surfaceKind === 'inactive_record') return false;
+  const lifecycle = String(record.lifecycle || '').trim();
+  return LIVE_LIFECYCLES.has(lifecycle);
+}
+
+export function getSessionHostRecoveryLabel(meta: Record<string, unknown> | null | undefined): string | null {
+  const recoveryState = typeof meta?.runtimeRecoveryState === 'string'
+    ? String(meta.runtimeRecoveryState).trim()
+    : '';
+  if (!recoveryState) return null;
+  if (recoveryState === 'auto_resumed') return 'restored after restart';
+  if (recoveryState === 'resume_failed') return 'restore failed';
+  if (recoveryState === 'host_restart_interrupted') return 'host restart interrupted';
+  if (recoveryState === 'orphan_snapshot') return 'snapshot recovered';
+  return recoveryState.replace(/_/g, ' ');
+}
+
+export function isSessionHostRecoverySnapshot(record: SessionHostSurfaceRecordLike | null | undefined): boolean {
+  if (!record) return false;
+  if (record.surfaceKind === 'recovery_snapshot') return true;
+  if (record.surfaceKind === 'live_runtime' || record.surfaceKind === 'inactive_record') return false;
+  if (isSessionHostLiveRuntime(record)) return false;
+
+  const lifecycle = String(record.lifecycle || '').trim();
+  if (lifecycle && lifecycle !== 'stopped' && lifecycle !== 'failed') {
+    return false;
+  }
+
+  const meta = record.meta || undefined;
+  if (meta?.restoredFromStorage === true) return true;
+  return getSessionHostRecoveryLabel(meta) !== null;
+}
+
+export function getSessionHostSurfaceKind(record: SessionHostSurfaceRecordLike | null | undefined): SessionHostSurfaceKind {
+  if (record?.surfaceKind === 'live_runtime' || record?.surfaceKind === 'recovery_snapshot' || record?.surfaceKind === 'inactive_record') {
+    return record.surfaceKind;
+  }
+  if (isSessionHostLiveRuntime(record)) return 'live_runtime';
+  if (isSessionHostRecoverySnapshot(record)) return 'recovery_snapshot';
+  return 'inactive_record';
+}
+
+export function resolveAttachableRuntimeRecord(records: SessionHostRecord[], identifier: string): SessionHostRecord {
+  const record = resolveRuntimeRecord(records, identifier);
+  const surfaceKind = getSessionHostSurfaceKind(record);
+  if (surfaceKind === 'live_runtime') {
+    return record;
+  }
+  if (surfaceKind === 'recovery_snapshot') {
+    throw new Error(`Runtime ${record.runtimeKey} is a recovery snapshot, not a live attach target. Resume or recover it first.`);
+  }
+  throw new Error(`Runtime ${record.runtimeKey} is ${record.lifecycle}, not a live attach target.`);
 }
 
 function uniqueMatch(records: SessionHostRecord[], predicate: (record: SessionHostRecord) => boolean): SessionHostRecord | null {

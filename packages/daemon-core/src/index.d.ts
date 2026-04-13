@@ -76,6 +76,9 @@ export type { PtyRuntimeTransport, PtyTransportFactory, PtySpawnOptions } from '
 export { SessionHostPtyTransportFactory } from './cli-adapters/session-host-transport.js';
 export type { HostedCliRuntimeDescriptor, CliTransportFactoryParams } from './commands/cli-manager.js';
 export { ensureSessionHostReady, listHostedCliRuntimes } from './session-host/runtime-support.js';
+export { getSessionHostRecoveryLabel, getSessionHostSurfaceKind, isSessionHostLiveRuntime, isSessionHostRecoverySnapshot, partitionSessionHostDiagnosticsSessions, partitionSessionHostRecords, } from './session-host/runtime-surface.js';
+export type { SessionHostSurfaceKind, SessionHostSurfaceRecordLike } from './session-host/runtime-surface.js';
+export { shouldAutoRestoreHostedSessionsOnStartup } from './session-host/startup-restore-policy.js';
 export type { SessionHostEndpoint } from '@adhdev/session-host-core';
 export { getAIExtensions, installExtensions, launchIDE, isExtensionInstalled } from './installer.js';
 export type { ExtensionInfo as InstallerExtensionInfo } from './installer.js';

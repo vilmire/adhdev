@@ -8,6 +8,7 @@ import {
   SessionHostClient,
   formatRuntimeOwner,
   getDefaultSessionHostEndpoint,
+  resolveAttachableRuntimeRecord,
   resolveRuntimeRecord,
   type SessionHostEvent,
   type SessionHostRecord,
@@ -210,7 +211,7 @@ async function attachRuntime(target: string, readOnly = false, takeover = false)
     if (!listResponse.success || !listResponse.result) {
       throw new Error(listResponse.error || 'Failed to list runtimes');
     }
-    let runtimeRecord = resolveRuntimeRecord(listResponse.result, target);
+    let runtimeRecord = resolveAttachableRuntimeRecord(listResponse.result, target);
     runtimeId = runtimeRecord.sessionId;
 
     if (runtimeRecord.lifecycle === 'interrupted' && !readOnly) {

@@ -28,5 +28,6 @@ export {
 
 export { GhosttyTerminalSurface } from './ghostty-terminal-surface.js';
 export type { GhosttyTerminalSurfaceOptions } from './ghostty-terminal-surface.js';
+export { resolveMuxOpenRuntimeRecord } from './runtime-targeting.js';
 export { SessionHostMuxClient } from './session-host-mux-client.js';
 export { serializeWorkspace } from './workspace-persistence.js';

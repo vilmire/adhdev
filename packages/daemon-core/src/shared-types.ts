@@ -110,6 +110,7 @@ export interface SessionHostRecord {
     providerType: string;
     workspace: string;
     lifecycle: 'starting' | 'running' | 'stopping' | 'stopped' | 'failed' | 'interrupted';
+    surfaceKind?: 'live_runtime' | 'recovery_snapshot' | 'inactive_record';
     writeOwner: SessionHostWriteOwner | null;
     attachedClients: SessionHostAttachedClient[];
     osPid?: number;
@@ -152,6 +153,9 @@ export interface SessionHostDiagnosticsSnapshot {
     endpoint: string;
     runtimeCount: number;
     sessions?: SessionHostRecord[];
+    liveRuntimes?: SessionHostRecord[];
+    recoverySnapshots?: SessionHostRecord[];
+    inactiveRecords?: SessionHostRecord[];
     recentLogs: SessionHostLogEntry[];
     recentRequests: SessionHostRequestTrace[];
     recentTransitions: SessionHostRuntimeTransition[];

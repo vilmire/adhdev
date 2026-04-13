@@ -21,7 +21,7 @@ import { CliProviderInstance } from '../providers/cli-provider-instance.js';
 import { AcpProviderInstance } from '../providers/acp-provider-instance.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
-import type { ProviderModule, ProviderResumeCapability } from '../providers/contracts.js';
+import { normalizeInputEnvelope, type ProviderModule, type ProviderResumeCapability } from '../providers/contracts.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { SessionRegistry } from '../sessions/registry.js';
@@ -186,7 +186,7 @@ function supportsExplicitSessionStart(resume?: ProviderResumeCapability): boolea
     return !!(resume?.supported && Array.isArray(resume.newSessionArgs) && resume.newSessionArgs.length > 0);
 }
 
-function resolveCliSessionBinding(
+export function resolveCliSessionBinding(
     provider: ProviderModule | undefined,
     normalizedType: string,
     cliArgs?: string[],
@@ -223,7 +223,7 @@ function resolveCliSessionBinding(
     }
 
     if (!supportsExplicitSessionStart(resume)) {
-        return { cliArgs: baseArgs, launchMode: 'manual' };
+        return { cliArgs: baseArgs, launchMode: 'new' };
     }
 
     const providerSessionId = crypto.randomUUID();
@@ -497,7 +497,10 @@ export class DaemonCliManager {
                 _acpInstance: acpInstance,
                 spawn: async () => {},
                 shutdown: () => { instanceManager.removeInstance(key); },
-                sendMessage: async (text: string) => { acpInstance.onEvent('send_message', { text }); },
+                sendMessage: async (text: string) => {
+                    const input = normalizeInputEnvelope(text);
+                    acpInstance.onEvent('send_message', { input });
+                },
                 getStatus: () => {
                     const state = acpInstance.getState();
                     return {
@@ -941,7 +944,8 @@ export class DaemonCliManager {
                 const { adapter, key } = found;
 
                 if (action === 'send_chat') {
-                    const message = args.message || args.text;
+                    const input = normalizeInputEnvelope(args?.input ? { input: args.input } : args);
+                    const message = input.textFallback;
                     if (!message) throw new Error('message required for send_chat');
                     await adapter.sendMessage(message);
                     return { success: true, status: 'generating' };

@@ -41,6 +41,8 @@ export interface SessionBufferState {
   snapshotSeq: number;
 }
 
+export type SessionHostSurfaceKind = 'live_runtime' | 'recovery_snapshot' | 'inactive_record';
+
 export interface SessionHostRecord {
   sessionId: string;
   runtimeKey: string;
@@ -56,6 +58,7 @@ export interface SessionHostRecord {
   startedAt?: number;
   lastActivityAt: number;
   lifecycle: SessionLifecycle;
+  surfaceKind?: SessionHostSurfaceKind;
   writeOwner: SessionWriteOwner | null;
   attachedClients: SessionAttachedClient[];
   buffer: SessionBufferState;
@@ -211,6 +214,9 @@ export interface SessionHostDiagnostics {
   endpoint: string;
   runtimeCount: number;
   sessions?: SessionHostRecord[];
+  liveRuntimes?: SessionHostRecord[];
+  recoverySnapshots?: SessionHostRecord[];
+  inactiveRecords?: SessionHostRecord[];
   recentLogs: SessionHostLogEntry[];
   recentRequests: SessionHostRequestTrace[];
   recentTransitions: SessionHostRuntimeTransition[];

@@ -263,8 +263,8 @@ export default function DashboardHeader({
                                     type="button"
                                     onClick={onOpenNewSession}
                                     className="btn btn-secondary btn-sm ml-2"
-                                    title="Start a new session"
-                                    aria-label="Start a new session"
+                                    title="Start or recover a session"
+                                    aria-label="Start or recover a session"
                                 >
                                     <IconPlus size={14} />
                                 </button>

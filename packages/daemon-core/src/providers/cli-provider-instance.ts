@@ -10,7 +10,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { createRequire } from 'node:module';
-import type { ProviderModule } from './contracts.js';
+import { normalizeInputEnvelope, type ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
@@ -21,6 +21,7 @@ import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
 import { extractProviderControlValues, normalizeProviderEffects } from './control-effects.js';
 import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
+import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 
 let CachedDatabaseSync: (new (path: string, options?: { readOnly?: boolean }) => {
     prepare(sql: string): { get(...params: Array<string | number>): unknown };
@@ -40,6 +41,29 @@ function getDatabaseSync() {
         throw new Error('node:sqlite DatabaseSync unavailable');
     }
     return CachedDatabaseSync;
+}
+
+export function getForcedNewSessionScriptName(
+    provider: ProviderModule | undefined,
+    launchMode: 'new' | 'resume' | 'manual',
+): string | null {
+    if (!provider || launchMode !== 'new') return null;
+    const resume = provider.resume;
+    if (!resume?.supported) return null;
+    if (Array.isArray(resume.newSessionArgs) && resume.newSessionArgs.length > 0) return null;
+
+    const controls = Array.isArray((provider as any).controls) ? (provider as any).controls : [];
+    for (const control of controls) {
+        if (control?.type !== 'action') continue;
+        const invokeScript = typeof control?.invokeScript === 'string' ? control.invokeScript.trim() : '';
+        if (!invokeScript) continue;
+        const controlId = typeof control?.id === 'string' ? control.id.trim() : '';
+        if (controlId === 'new_session' || /^new.?session$/i.test(invokeScript)) {
+            return invokeScript;
+        }
+    }
+
+    return null;
 }
 
 export class CliProviderInstance implements ProviderInstance {
@@ -135,6 +159,7 @@ export class CliProviderInstance implements ProviderInstance {
 
  // PTY spawn
         await this.adapter.spawn();
+        await this.enforceFreshSessionLaunchIfNeeded();
         this.maybeAppendRuntimeRecoveryMessage(this.adapter.getRuntimeMetadata());
         if (this.providerSessionId) {
             this.historyWriter.compactHistorySession(this.type, this.providerSessionId);
@@ -370,10 +395,13 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     onEvent(event: string, data?: any): void {
-        if (event === 'send_message' && data?.text) {
-            void this.adapter.sendMessage(data.text).catch((e: any) => {
-                LOG.warn('CLI', `[${this.type}] send_message failed: ${e?.message || e}`);
-            });
+        if (event === 'send_message') {
+            const input = normalizeInputEnvelope(data);
+            if (input.textFallback) {
+                void this.adapter.sendMessage(input.textFallback).catch((e: any) => {
+                    LOG.warn('CLI', `[${this.type}] send_message failed: ${e?.message || e}`);
+                });
+            }
         } else if (event === 'server_connected' && data?.serverConn) {
             this.adapter.setServerConn(data.serverConn);
         } else if (event === 'resolve_action' && data) {
@@ -393,6 +421,27 @@ export class CliProviderInstance implements ProviderInstance {
 
     private completedDebounceTimer: NodeJS.Timeout | null = null;
     private completedDebouncePending: { chatTitle: string; duration: number; timestamp: number } | null = null;
+
+    private async enforceFreshSessionLaunchIfNeeded(): Promise<void> {
+        const scriptName = getForcedNewSessionScriptName(this.provider, this.launchMode);
+        if (!scriptName) return;
+
+        LOG.info('CLI', `[${this.type}] forcing fresh session launch via script: ${scriptName}`);
+        const raw = await this.adapter.invokeScript(scriptName, {});
+        const parsed = parseCliScriptResult(raw);
+        if (!parsed.success) {
+            throw new Error(parsed.payload?.error || `Failed to invoke fresh-session script '${scriptName}'`);
+        }
+
+        const cliCommand = getCliScriptCommand(parsed.payload);
+        if (cliCommand?.type === 'send_message' && cliCommand.text) {
+            await this.adapter.sendMessage(cliCommand.text);
+        } else if (cliCommand?.type === 'pty_write' && cliCommand.text) {
+            this.adapter.writeRaw(cliCommand.text + '\r');
+        }
+
+        this.applyProviderResponse(parsed.payload, { phase: 'immediate' });
+    }
 
     private detectStatusTransition(): void {
         const now = Date.now();

@@ -4,7 +4,7 @@ import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader'
 import { compareMachineEntries, getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import { IconFolder, IconPlay, IconServer, IconX } from '../Icons'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
-import { getDefaultBrowseStartPath, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
+import { collectBrowsePathCandidates, getDefaultBrowseStartPath, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
 import HistoryModal from './HistoryModal'
 import type { ActiveConversation } from './types'
@@ -271,6 +271,21 @@ export default function DashboardNewSessionDialog({
             ? ''
             : (workspaceRows.find(workspace => workspace.id === workspaceChoice)?.path || '')
 
+    const machineSessionWorkspaceCandidates = useMemo(
+        () => {
+            if (!selectedMachine) return []
+            return ides
+                .filter(entry => entry.id !== selectedMachine.id && entry.daemonId === selectedMachine.id)
+                .map(entry => entry.workspace)
+        },
+        [ides, selectedMachine],
+    )
+
+    const machineRecentWorkspaceCandidates = useMemo(
+        () => (selectedMachine?.recentLaunches || []).map(launch => launch.workspace),
+        [selectedMachine],
+    )
+
     const applySavedSessionWorkspace = useCallback((session: SavedSessionOption) => {
         const sessionWorkspace = String(session.workspace || '').trim()
         if (!sessionWorkspace) return
@@ -325,12 +340,18 @@ export default function DashboardNewSessionDialog({
         setWorkspaceChoice('__custom__')
         setBrowseDialogOpen(true)
         setBrowseError('')
-        const initialPath = getDefaultBrowseStartPath(selectedMachine.platform, [
-            customWorkspacePath.trim(),
-            resolvedWorkspacePath,
-            workspaceRows.find(workspace => workspace.id === defaultWorkspaceId)?.path,
-            workspaceRows[0]?.path,
-        ])
+        const initialPath = getDefaultBrowseStartPath(
+            selectedMachine.platform,
+            collectBrowsePathCandidates(
+                customWorkspacePath.trim(),
+                resolvedWorkspacePath,
+                machineSessionWorkspaceCandidates,
+                machineRecentWorkspaceCandidates,
+                selectedMachine.defaultWorkspacePath,
+                workspaceRows.find(workspace => workspace.id === defaultWorkspaceId)?.path,
+                workspaceRows.map(workspace => workspace.path),
+            ),
+        )
         setBrowseBusy(true)
         void onBrowseDirectory(selectedMachine.id, initialPath)
             .then(result => {
@@ -342,7 +363,16 @@ export default function DashboardNewSessionDialog({
                 setBrowseError(error instanceof Error ? error.message : 'Could not load folder')
             })
             .finally(() => setBrowseBusy(false))
-    }, [customWorkspacePath, defaultWorkspaceId, onBrowseDirectory, resolvedWorkspacePath, selectedMachine, workspaceRows])
+    }, [
+        customWorkspacePath,
+        defaultWorkspaceId,
+        machineRecentWorkspaceCandidates,
+        machineSessionWorkspaceCandidates,
+        onBrowseDirectory,
+        resolvedWorkspacePath,
+        selectedMachine,
+        workspaceRows,
+    ])
 
     const navigateBrowsePath = useCallback((path: string) => {
         if (!selectedMachine) return
@@ -414,6 +444,17 @@ export default function DashboardNewSessionDialog({
         workspaceChoice,
     ])
 
+    const primaryActionLabel = activeKind === 'cli'
+        ? (selectedResumeSessionId ? 'Resume saved session' : 'Start fresh')
+        : activeKind === 'ide'
+            ? 'Start IDE'
+            : activeKind === 'acp'
+                ? 'Start ACP session'
+                : 'Start'
+    const primaryBusyLabel = activeKind === 'cli'
+        ? (selectedResumeSessionId ? 'Resuming…' : 'Starting fresh…')
+        : 'Starting…'
+
     if (!selectedMachine) {
         return null
     }
@@ -430,10 +471,10 @@ export default function DashboardNewSessionDialog({
                     <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-border-subtle">
                         <div className="min-w-0">
                             <h2 id="dashboard-new-title" className="m-0 text-base font-semibold text-text-primary">
-                                New session
+                                Start or recover session
                             </h2>
                             <p className="m-0 mt-1 text-xs leading-relaxed text-text-muted">
-                                Pick a machine, choose a workspace, then start IDE, CLI, or ACP without leaving the dashboard.
+                                Pick a machine and workspace, then choose whether to start fresh, resume saved history, or recover a hosted runtime.
                             </p>
                         </div>
                         <button
@@ -467,9 +508,9 @@ export default function DashboardNewSessionDialog({
                             <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
                                 <div className="flex items-start justify-between gap-3">
                                     <div>
-                                        <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Session Host</div>
+                                        <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Hosted runtimes</div>
                                         <div className="text-xs text-text-secondary mt-1">
-                                            Inspect hosted runtimes first, then resume or restart without leaving this flow.
+                                            Review live runtimes, recovery snapshots, and restart options without leaving this launch flow.
                                         </div>
                                     </div>
                                     <button
@@ -479,7 +520,7 @@ export default function DashboardNewSessionDialog({
                                         onClick={() => setSessionHostOpen(true)}
                                     >
                                         <IconServer size={14} />
-                                        Open
+                                        Review
                                     </button>
                                 </div>
                             </div>
@@ -630,8 +671,8 @@ export default function DashboardNewSessionDialog({
                             <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
                                 <div className="flex items-start justify-between gap-3">
                                     <div>
-                                        <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Resume from history</div>
-                                        <div className="text-xs text-text-secondary mt-1">Pick a saved CLI session, then launch with optional args.</div>
+                                        <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Resume saved history</div>
+                                        <div className="text-xs text-text-secondary mt-1">Pick a saved CLI session when you want continuity. Leave this empty to start fresh.</div>
                                     </div>
                                     <div className="flex items-center gap-2">
                                         <button
@@ -673,7 +714,7 @@ export default function DashboardNewSessionDialog({
                                         className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
                                         disabled={busy || savedSessionsLoading}
                                     >
-                                        <option value="">Start a new CLI session</option>
+                                        <option value="">Start fresh CLI session</option>
                                         {savedSessions.map(session => (
                                             <option
                                                 key={session.providerSessionId}
@@ -735,7 +776,7 @@ export default function DashboardNewSessionDialog({
                             disabled={busy || !activeKind || !selectedTarget || (workspaceChoice === '__custom__' && !resolvedWorkspacePath)}
                         >
                             <IconPlay size={14} />
-                            {busy ? 'Starting…' : 'Start session'}
+                            {busy ? primaryBusyLabel : primaryActionLabel}
                         </button>
                     </div>
                 </div>

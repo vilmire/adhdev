@@ -68,11 +68,25 @@ const SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev';
 const CONTROL_SOCKET_TIMEOUT_MS = 4000;
 const CONTROL_SOCKET_POLL_MS = 150;
 
-function usage(): never {
-  console.error(
-    'Usage: adhmux <list|sessions|workspaces|windows|last-session|tree|state|socket-info|events|control|snapshot|open|rename-workspace|delete-workspace|new-session|attach-session|kill-session|rename-session|has-session|new-window|select-window|rename-window|kill-window|ls|list-panes|capture-pane|copy-pane|search-pane|select-pane|replace-pane|split-window|resize-pane|select-layout|swap-pane|zoom-pane|kill-pane|send-keys> [options] [runtimeKey...]',
-  );
-  process.exit(1);
+function usage(exitCode = 1): never {
+  const stream = exitCode === 0 ? process.stdout : process.stderr;
+  stream.write('adhmux — power-user terminal mux for self-hosted ADHDev runtimes\n\n');
+  stream.write('Use this when you explicitly want local pane/workspace control around already-live hosted runtimes.\n');
+  stream.write('For ordinary runtime supervision, recovery, and direct attach flows, start with `adhdev runtime ...`.\n\n');
+  stream.write('Usage:\n');
+  stream.write('  adhmux <command> [options] [runtimeKey...]\n\n');
+  stream.write('Core commands:\n');
+  stream.write('  list               List hosted runtimes visible to session host\n');
+  stream.write('  open <runtimeKey>  Open a mux workspace for a live runtime\n');
+  stream.write('  snapshot <id>      Print the latest terminal snapshot for a runtime\n');
+  stream.write('  sessions           List saved mux sessions\n');
+  stream.write('  workspaces         List saved mux workspaces\n');
+  stream.write('  attach-session     Reattach a previously saved mux workspace/session\n\n');
+  stream.write('Notes:\n');
+  stream.write('  - `open` only accepts live runtimes. Recover or restart snapshots first.\n');
+  stream.write('  - `adhmux` is an expert/self-hosted surface, not the primary cloud runtime workflow.\n');
+  stream.write('  - Run `adhdev runtime --help` for the main user-facing runtime commands.\n');
+  process.exit(exitCode);
 }
 
 function normalizeLayoutPreset(layoutName: string): LayoutPreset | 'balanced' {
@@ -146,7 +160,7 @@ async function waitForWorkspaceControlReady(workspaceName: string, timeoutMs = C
 
 async function listRuntimes(flags: CommandFlags = { json: false }): Promise<void> {
   await ensureSessionHostReady();
-  const client = new SessionHostClient({ appName: 'adhdev' });
+  const client = new SessionHostClient({ appName: SESSION_HOST_APP_NAME });
   const result = await client.request<SessionHostRecord[]>({ type: 'list_sessions' });
   if (!result.success || !result.result) {
     throw new Error(result.error || 'Failed to list runtimes');
@@ -437,7 +451,7 @@ async function killWindow(sessionName: string, windowName: string): Promise<void
 
 async function snapshotRuntime(target: string): Promise<void> {
   await ensureSessionHostReady();
-  const client = new SessionHostClient({ appName: 'adhdev' });
+  const client = new SessionHostClient({ appName: SESSION_HOST_APP_NAME });
   const list = await client.request<SessionHostRecord[]>({ type: 'list_sessions' });
   if (!list.success || !list.result) throw new Error(list.error || 'Failed to list runtimes');
   const record = resolveRuntimeRecord(list.result, target);
@@ -552,7 +566,7 @@ async function withWorkspace<T>(
   if (!savedWorkspace) {
     throw new Error(`Workspace not found: ${workspaceName}`);
   }
-  const mux = new SessionHostMuxClient({ appName: 'adhdev' });
+  const mux = new SessionHostMuxClient({ appName: SESSION_HOST_APP_NAME });
   await mux.connect();
   let workspace = await mux.restoreWorkspace(savedWorkspace);
   const save = () => {
@@ -986,7 +1000,7 @@ function buildPaneIndicators(activityByPaneId: Map<string, PaneActivityState>): 
 
 async function openWorkspace(options: OpenCommandOptions): Promise<void> {
   const storage = new TerminalMuxStorage();
-  const mux = new SessionHostMuxClient({ appName: 'adhdev' });
+  const mux = new SessionHostMuxClient({ appName: SESSION_HOST_APP_NAME });
   await mux.connect();
 
   const savedWorkspace = options.workspaceName ? storage.loadWorkspace(options.workspaceName) : null;
@@ -1770,7 +1784,7 @@ async function openWorkspace(options: OpenCommandOptions): Promise<void> {
 
 async function main(): Promise<void> {
   const [, , command, ...args] = process.argv;
-  if (!command) usage();
+  if (!command || command === '--help' || command === '-h' || command === 'help') usage(0);
   const { flags, rest } = parseCommandFlags(args);
 
   if (command === 'list' || command === 'list-runtimes') {

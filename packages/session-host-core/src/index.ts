@@ -21,6 +21,7 @@ export type {
   SessionHostDiagnostics,
   SessionHostDuplicateSessionGroup,
   SessionHostCategory,
+  SessionHostSurfaceKind,
   SessionHostEvent,
   SessionHostEventEnvelope,
   SessionHostLogEntry,
@@ -48,7 +49,12 @@ export {
   buildRuntimeDisplayName,
   buildRuntimeKey,
   formatRuntimeOwner,
+  getSessionHostRecoveryLabel,
+  getSessionHostSurfaceKind,
   getWorkspaceLabel,
+  isSessionHostLiveRuntime,
+  isSessionHostRecoverySnapshot,
+  resolveAttachableRuntimeRecord,
   resolveRuntimeRecord,
 } from './runtime-labels.js';
 export {

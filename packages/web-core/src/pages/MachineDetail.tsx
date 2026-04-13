@@ -387,7 +387,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
 
     const TABS: { id: TabId; label: string | ReactNode; count?: number }[] = [
         { id: 'workspace', label: <span className="flex items-center gap-1.5"><IconMonitor size={14} /> Workspace</span>, count: ideSessions.length + cliSessions.length + acpSessions.length },
-        { id: 'session-host', label: <span className="flex items-center gap-1.5"><IconServer size={14} /> Session Host</span> },
+        { id: 'session-host', label: <span className="flex items-center gap-1.5"><IconServer size={14} /> Hosted Runtimes</span> },
         { id: 'providers', label: <span className="flex items-center gap-1.5"><IconSettings size={14} /> Providers</span> },
         { id: 'overview', label: <span className="flex items-center gap-1.5"><IconBarChart size={14} /> System</span> },
         { id: 'logs', label: <span className="flex items-center gap-1.5"><IconClipboard size={14} /> Logs</span> },

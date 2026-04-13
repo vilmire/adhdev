@@ -7,6 +7,7 @@ import {
   type SessionHostRecord,
 } from '@adhdev/session-host-core';
 import { GhosttyTerminalSurface } from './ghostty-terminal-surface.js';
+import { resolveMuxOpenRuntimeRecord } from './runtime-targeting.js';
 import {
   applyMuxLayoutPreset,
   createMuxWorkspace,
@@ -475,7 +476,7 @@ export class SessionHostMuxClient {
 
   private async openRuntime(target: string, options: OpenRuntimeOptions): Promise<RuntimePaneState> {
     await this.connect();
-    let record = resolveRuntimeRecord(await this.listRuntimes(), target);
+    let record = resolveMuxOpenRuntimeRecord(await this.listRuntimes(), target);
     if (record.lifecycle === 'interrupted') {
       try {
         record = await this.resumeRuntime(target);

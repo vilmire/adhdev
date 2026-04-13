@@ -486,7 +486,9 @@ export default function DashboardMobileMachineScreen({
                     workspaceOptions={launcher.launchConfirm.workspaceOptions}
                     selectedWorkspaceKey={launcher.launchConfirmWorkspaceKey}
                     onWorkspaceChange={launcher.setLaunchConfirmWorkspaceKeyAndSync}
-                    confirmLabel={launcher.launchConfirm.confirmLabel}
+                    confirmLabel={launcher.launchConfirm.providerType
+                        ? (launcher.launchConfirmResumeId ? 'Resume saved session' : 'Start fresh')
+                        : launcher.launchConfirm.confirmLabel}
                     busy={launcher.launchConfirmBusy}
                     showArgsInput={launcher.launchConfirm.showArgsInput}
                     argsValue={launcher.launchConfirmArgs}
@@ -498,7 +500,7 @@ export default function DashboardMobileMachineScreen({
                         launcher.launchConfirm.providerType && (launcher.launchConfirmSessionsLoading || launcher.launchConfirmSavedSessions.length > 0) && (
                             <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
                                 <div className="flex items-center justify-between mb-1">
-                                    <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Resume from history</div>
+                                    <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Resume saved history</div>
                                     {launcher.launchConfirmSessionsLoading && <div className="text-[10px] text-text-secondary font-medium">Loading...</div>}
                                 </div>
                                 <select
@@ -507,7 +509,7 @@ export default function DashboardMobileMachineScreen({
                                     className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
                                     disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
                                 >
-                                    <option value="">Start a new session</option>
+                                    <option value="">Start fresh</option>
                                     {launcher.launchConfirmSavedSessions.map(sess => (
                                         <option key={sess.providerSessionId} value={sess.providerSessionId} disabled={!sess.canResume}>
                                             {sess.title || sess.providerSessionId} {!sess.canResume ? '(workspace missing)' : ''}
