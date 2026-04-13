@@ -4,7 +4,7 @@ import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader'
 import type { LaunchWorkspaceOption, WorkspaceLaunchKind } from '../../pages/machine/types'
 import type { MobileMachineActionState } from './DashboardMobileChatShared'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
-import { getDefaultBrowseStartPath } from '../machine/workspaceBrowse'
+import { collectBrowsePathCandidates, getDefaultBrowseStartPath } from '../machine/workspaceBrowse'
 
 interface LaunchProviderInfo {
     type: string
@@ -99,6 +99,10 @@ export function useDashboardMobileMachineLauncher({
     const savedWorkspacePath = workspaceChoice !== '__custom__'
         ? (workspaceRows.find(workspace => workspace.id === workspaceChoice)?.path || '')
         : ''
+    const recentWorkspaceCandidates = useMemo(
+        () => (selectedMachineEntry.recentLaunches || []).map(launch => launch.workspace),
+        [selectedMachineEntry],
+    )
 
     const loadBrowsePath = useCallback(async (path: string) => {
         setBrowseBusy(true)
@@ -118,14 +122,27 @@ export function useDashboardMobileMachineLauncher({
     const openBrowseDialog = useCallback(() => {
         setWorkspaceChoice('__custom__')
         setBrowseDialogOpen(true)
-        const initialPath = getDefaultBrowseStartPath(selectedMachineEntry.platform, [
-            customWorkspacePath.trim(),
-            savedWorkspacePath,
-            workspaceRows.find(workspace => workspace.id === defaultWorkspaceId)?.path,
-            workspaceRows[0]?.path,
-        ])
+        const initialPath = getDefaultBrowseStartPath(
+            selectedMachineEntry.platform,
+            collectBrowsePathCandidates(
+                customWorkspacePath.trim(),
+                savedWorkspacePath,
+                recentWorkspaceCandidates,
+                selectedMachineEntry.defaultWorkspacePath,
+                workspaceRows.find(workspace => workspace.id === defaultWorkspaceId)?.path,
+                workspaceRows.map(workspace => workspace.path),
+            ),
+        )
         void loadBrowsePath(initialPath)
-    }, [customWorkspacePath, defaultWorkspaceId, loadBrowsePath, savedWorkspacePath, selectedMachineEntry.platform, workspaceRows])
+    }, [
+        customWorkspacePath,
+        defaultWorkspaceId,
+        loadBrowsePath,
+        recentWorkspaceCandidates,
+        savedWorkspacePath,
+        selectedMachineEntry.platform,
+        workspaceRows,
+    ])
 
     const setWorkspaceSelectionFromOption = useCallback((selectedOption?: LaunchWorkspaceOption) => {
         if (selectedOption?.workspaceId) {

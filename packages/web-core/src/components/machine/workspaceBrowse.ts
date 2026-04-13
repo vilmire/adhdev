@@ -8,6 +8,32 @@ export interface BrowseDirectoryResult {
     directories: BrowseDirectoryEntry[]
 }
 
+export function collectBrowsePathCandidates(
+    ...groups: Array<Array<string | null | undefined> | string | null | undefined>
+): string[] {
+    const seen = new Set<string>()
+    const result: string[] = []
+
+    const push = (value: string | null | undefined) => {
+        const trimmed = typeof value === 'string' ? value.trim() : ''
+        if (!trimmed) return
+        const key = trimmed.toLowerCase()
+        if (seen.has(key)) return
+        seen.add(key)
+        result.push(trimmed)
+    }
+
+    for (const group of groups) {
+        if (Array.isArray(group)) {
+            for (const value of group) push(value)
+            continue
+        }
+        push(group)
+    }
+
+    return result
+}
+
 function normalizeWindowsBrowseCandidate(candidate: string): string | null {
     const value = candidate.trim()
     if (!value) return null
@@ -90,7 +116,9 @@ export async function browseMachineDirectories(
             .filter((entry: any) => entry?.type === 'directory' && typeof entry?.name === 'string')
             .map((entry: any) => ({
                 name: entry.name as string,
-                path: joinPath(currentPath, entry.name as string),
+                path: typeof entry?.path === 'string' && entry.path.trim()
+                    ? entry.path
+                    : joinPath(currentPath, entry.name as string),
             }))
             .sort((a: BrowseDirectoryEntry, b: BrowseDirectoryEntry) => a.name.localeCompare(b.name))
         : []

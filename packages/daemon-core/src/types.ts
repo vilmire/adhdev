@@ -27,8 +27,8 @@ export interface StatusResponse extends StatusReportPayload {
 
 export interface ChatMessage {
   role: string;       // 'user' | 'assistant' | 'system' | 'human'
-  /** Plain text (legacy) or rich content blocks (ACP standard) */
-  content: string | ContentBlock[];
+  /** Plain text (legacy) or canonical message parts */
+  content: string | MessagePart[];
   kind?: string;      // 'standard' | 'thought' | 'tool' | 'terminal' | 'system'
   id?: string;
   index?: number;
@@ -46,7 +46,7 @@ export interface ChatMessage {
 }
 
 // Re-export from contracts for convenience
-import type { ContentBlock, ToolCallInfo } from './providers/contracts.js';
+import type { MessagePart, ToolCallInfo } from './providers/contracts.js';
 
 // ── Extension Info ──
 

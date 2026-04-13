@@ -6,6 +6,12 @@
 import type { CommandResult, CommandHelpers } from './handler.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
+import { getCliScriptCommand, parseCliScriptResult } from '../providers/cli-script-results.js';
+import {
+    normalizeControlInvokeResult,
+    normalizeControlListResult,
+    normalizeControlSetResult,
+} from '../providers/control-effects.js';
 import { LOG } from '../logging/logger.js';
 
 interface CliPresentationInstance extends ProviderInstance {
@@ -113,42 +119,22 @@ function normalizeProviderScriptArgs(args: any): Record<string, any> {
     return normalizedArgs;
 }
 
-function parseScriptResult(result: unknown): { success: boolean; payload: any } {
-    if (typeof result === 'string') {
-        try {
-            const parsed = JSON.parse(result);
-            if (parsed && typeof parsed === 'object' && parsed.success === false) {
-                return { success: false, payload: parsed };
-            }
-            return { success: true, payload: parsed };
-        } catch {
-            return { success: true, payload: { result } };
-        }
-    }
-    if (result && typeof result === 'object' && 'success' in result && result.success === false) {
-        return { success: false, payload: result };
-    }
-    return { success: true, payload: result };
-}
-
-function getCliScriptCommand(payload: any): { type: string; text?: string } | null {
-    if (!payload || typeof payload !== 'object') return null;
-
-    if (typeof payload.sendMessage === 'string' && payload.sendMessage.trim()) {
-        return { type: 'send_message', text: payload.sendMessage.trim() };
+function buildControlScriptResult(scriptName: string, payload: any): Record<string, unknown> {
+    if (!payload || typeof payload !== 'object') return {};
+    if (Array.isArray(payload.options) || Array.isArray(payload.models) || Array.isArray(payload.modes)) {
+        return { controlResult: normalizeControlListResult(payload) };
     }
 
-    const command = payload.command;
-    if (!command || typeof command !== 'object') return null;
-    if (command.type !== 'send_message' && command.type !== 'pty_write') return null;
-
-    const text = typeof command.text === 'string'
-        ? command.text.trim()
-        : typeof command.message === 'string'
-            ? command.message.trim()
-            : '';
-    if (!text) return null;
-    return { type: command.type, text };
+    const looksLikeValueMutation = /^set|^change/i.test(scriptName)
+        || payload.currentValue !== undefined
+        || payload.value !== undefined;
+    if (looksLikeValueMutation) {
+        return { controlResult: normalizeControlSetResult(payload) };
+    }
+    if (payload.ok !== undefined || payload.success !== undefined || Array.isArray(payload.effects)) {
+        return { controlResult: normalizeControlInvokeResult(payload) };
+    }
+    return {};
 }
 
 function applyProviderPatch(h: CommandHelpers, args: any, payload: any): void {
@@ -195,7 +181,7 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
         }
         try {
             const raw = await adapter.invokeScript(actualScriptName, normalizedArgs);
-            const parsed = parseScriptResult(raw);
+            const parsed = parseCliScriptResult(raw);
             if (!parsed.success) {
                 return { success: false, ...(parsed.payload || {}) };
             }
@@ -206,7 +192,11 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
                 adapter.writeRaw(cliCommand.text + '\r');
             }
             applyProviderPatch(h, args, parsed.payload);
-            return { success: true, ...(parsed.payload && typeof parsed.payload === 'object' ? parsed.payload : { result: parsed.payload }) };
+            return {
+                success: true,
+                ...(parsed.payload && typeof parsed.payload === 'object' ? parsed.payload : { result: parsed.payload }),
+                ...buildControlScriptResult(scriptName, parsed.payload),
+            };
         } catch (e: any) {
             return { success: false, error: `Script execution failed: ${e.message}` };
         }
@@ -282,7 +272,7 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
                 if (parsed && typeof parsed === 'object' && parsed.success === false) {
                     return { success: false, ...parsed };
                 }
-                return { success: true, ...parsed };
+                return { success: true, ...parsed, ...buildControlScriptResult(scriptName, parsed) };
             } catch {
                 return { success: true, result };
             }

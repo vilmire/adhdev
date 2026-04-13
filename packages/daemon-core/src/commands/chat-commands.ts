@@ -5,7 +5,7 @@
 
 import type { CommandResult, CommandHelpers } from './handler.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
-import { flattenContent, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
+import { flattenContent, normalizeInputEnvelope, type InputEnvelope, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { readChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
@@ -89,6 +89,10 @@ function buildRecentSendKey(h: CommandHelpers, args: any, provider: ProviderModu
         || h.currentManagerKey
         || 'unknown';
     return `${transport}:${target}:${text.trim()}`;
+}
+
+function getSendChatInputEnvelope(args: any): InputEnvelope {
+    return normalizeInputEnvelope(args?.input ? { input: args.input } : args);
 }
 
 function getHistorySessionId(h: CommandHelpers, args: any): string | undefined {
@@ -557,7 +561,8 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
 }
 
 export async function handleSendChat(h: CommandHelpers, args: any): Promise<CommandResult> {
-    const text = args?.text || args?.message;
+    const input = getSendChatInputEnvelope(args);
+    const text = input.textFallback;
     if (!text) return { success: false, error: 'text required' };
     const _log = (msg: string) => LOG.debug('Command', `[send_chat] ${msg}`);
     const provider = h.getProvider(args?.agentType);

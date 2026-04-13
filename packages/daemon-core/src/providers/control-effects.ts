@@ -1,4 +1,11 @@
-import type { ProviderControlDef, ProviderEffect } from './contracts.js';
+import type {
+    ControlInvokeResult,
+    ControlListResult,
+    ControlSetResult,
+    ProviderControlDef,
+    ProviderControlOption,
+    ProviderEffect,
+} from './contracts.js';
 
 export type ProviderControlValue = string | number | boolean;
 
@@ -99,6 +106,84 @@ export function normalizeProviderEffects(data: any): ProviderEffect[] {
     }
 
     return effects;
+}
+
+export function normalizeControlListResult(data: any): ControlListResult {
+    if (data && typeof data === 'object' && Array.isArray(data.options)) {
+        return {
+            options: normalizeControlOptions(data.options),
+            ...(isScalarControlValue(data.currentValue) ? { currentValue: data.currentValue } : {}),
+            ...(typeof data.error === 'string' ? { error: data.error } : {}),
+        };
+    }
+
+    const rawOptions = Array.isArray(data?.models)
+        ? data.models
+        : Array.isArray(data?.modes)
+            ? data.modes
+            : Array.isArray(data?.options)
+                ? data.options
+                : [];
+    const options = normalizeControlOptions(rawOptions);
+    return {
+        options,
+        ...(isScalarControlValue(data?.current) ? { currentValue: data.current } : {}),
+        ...(isScalarControlValue(data?.currentValue) ? { currentValue: data.currentValue } : {}),
+        ...(typeof data?.error === 'string' ? { error: data.error } : {}),
+    };
+}
+
+export function normalizeControlSetResult(data: any): ControlSetResult {
+    const currentValue = isScalarControlValue(data?.currentValue)
+        ? data.currentValue
+        : (isScalarControlValue(data?.value) ? data.value : undefined);
+    return {
+        ok: data?.ok === true || data?.success === true,
+        ...(currentValue !== undefined ? { currentValue } : {}),
+        ...(Array.isArray(data?.effects) ? { effects: normalizeProviderEffects(data) } : {}),
+        ...(typeof data?.error === 'string' ? { error: data.error } : {}),
+    };
+}
+
+export function normalizeControlInvokeResult(data: any): ControlInvokeResult {
+    const currentValue = isScalarControlValue(data?.currentValue)
+        ? data.currentValue
+        : (isScalarControlValue(data?.value) ? data.value : undefined);
+    return {
+        ok: data?.ok === true || data?.success === true,
+        ...(currentValue !== undefined ? { currentValue } : {}),
+        ...(Array.isArray(data?.effects) ? { effects: normalizeProviderEffects(data) } : {}),
+        ...(typeof data?.error === 'string' ? { error: data.error } : {}),
+    };
+}
+
+function normalizeControlOptions(options: unknown[]): ProviderControlOption[] {
+    return options
+        .map((option) => normalizeControlOption(option))
+        .filter((option): option is ProviderControlOption => !!option);
+}
+
+function normalizeControlOption(option: unknown): ProviderControlOption | null {
+    if (typeof option === 'string') {
+        return { value: option, label: option };
+    }
+    if (!option || typeof option !== 'object') return null;
+    const record = option as Record<string, unknown>;
+    const value = typeof record.value === 'string'
+        ? record.value
+        : (typeof record.id === 'string' ? record.id : null);
+    if (!value) return null;
+    const label = typeof record.label === 'string'
+        ? record.label
+        : (typeof record.name === 'string' ? record.name : value);
+    const normalized: ProviderControlOption = { value, label };
+    if (typeof record.description === 'string') normalized.description = record.description;
+    if (typeof record.group === 'string') normalized.group = record.group;
+    return normalized;
+}
+
+function isScalarControlValue(value: unknown): value is ProviderControlValue {
+    return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 }
 
 function normalizeControlValue(value: any): ProviderControlValue {

@@ -84,6 +84,144 @@ function likelyNeedsMarkdownRender(content: string): boolean {
     return /[`*_#[\]()>-]|https?:\/\/|\n\s*[-*]\s|\n\s*\d+\.\s|\|/.test(content);
 }
 
+type StructuredMessagePart = {
+    type: string;
+    text?: string;
+    uri?: string;
+    data?: string;
+    mimeType?: string;
+    name?: string;
+    posterUri?: string;
+    resource?: {
+        uri?: string;
+        text?: string;
+        blob?: string;
+        mimeType?: string | null;
+    };
+};
+
+function isStructuredMessagePartArray(content: unknown): content is StructuredMessagePart[] {
+    return Array.isArray(content) && content.some((part) => !!part && typeof part === 'object' && 'type' in part);
+}
+
+function getResourceDisplayName(uri: string | undefined, fallback: string): string {
+    if (!uri) return fallback;
+    try {
+        const withoutScheme = uri.startsWith('file://') ? new URL(uri).pathname : uri;
+        const normalized = withoutScheme.split(/[\\/]/).filter(Boolean).pop();
+        return normalized || fallback;
+    } catch {
+        const normalized = uri.split(/[\\/]/).filter(Boolean).pop();
+        return normalized || fallback;
+    }
+}
+
+function buildMediaSrc(part: StructuredMessagePart): string | undefined {
+    if (typeof part.uri === 'string' && part.uri) return part.uri;
+    if (typeof part.data === 'string' && part.data && typeof part.mimeType === 'string' && part.mimeType) {
+        return `data:${part.mimeType};base64,${part.data}`;
+    }
+    return undefined;
+}
+
+function renderTextLikeContent(content: string, renderAsPreformatted: boolean): React.ReactNode {
+    if (!content) return null;
+    if (renderAsPreformatted) {
+        return <pre className="chat-preformatted">{content}</pre>;
+    }
+    if (likelyNeedsMarkdownRender(content)) {
+        return (
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkAlert, remarkBreaks]}>
+                {content}
+            </ReactMarkdown>
+        );
+    }
+    return <div style={{ whiteSpace: 'pre-wrap' }}>{content}</div>;
+}
+
+function MessagePartsRenderer({ parts, renderAsPreformatted }: { parts: StructuredMessagePart[]; renderAsPreformatted: boolean }): React.ReactNode {
+    return (
+        <div className="flex flex-col gap-2">
+            {parts.map((part, index) => {
+                if (part.type === 'text') {
+                    return <div key={`text-${index}`}>{renderTextLikeContent(String(part.text || ''), renderAsPreformatted)}</div>;
+                }
+
+                if (part.type === 'image') {
+                    const src = buildMediaSrc(part);
+                    if (!src) return null;
+                    return (
+                        <img
+                            key={`image-${index}`}
+                            src={src}
+                            alt={getResourceDisplayName(part.uri, 'image')}
+                            className="max-w-full rounded-md border border-border-subtle"
+                        />
+                    );
+                }
+
+                if (part.type === 'audio') {
+                    const src = buildMediaSrc(part);
+                    return src ? <audio key={`audio-${index}`} controls src={src} className="max-w-full" /> : null;
+                }
+
+                if (part.type === 'video') {
+                    const src = buildMediaSrc(part);
+                    if (src) {
+                        return (
+                            <video
+                                key={`video-${index}`}
+                                controls
+                                src={src}
+                                poster={part.posterUri}
+                                className="max-w-full rounded-md border border-border-subtle"
+                            />
+                        );
+                    }
+                    if (part.uri) {
+                        return (
+                            <a key={`video-link-${index}`} href={part.uri} target="_blank" rel="noreferrer" className="underline break-all">
+                                {getResourceDisplayName(part.uri, 'video')}
+                            </a>
+                        );
+                    }
+                    return null;
+                }
+
+                if (part.type === 'resource_link') {
+                    if (!part.uri) return null;
+                    return (
+                        <a key={`resource-link-${index}`} href={part.uri} target="_blank" rel="noreferrer" className="underline break-all">
+                            {part.name || getResourceDisplayName(part.uri, 'resource')}
+                        </a>
+                    );
+                }
+
+                if (part.type === 'resource' && part.resource) {
+                    const label = getResourceDisplayName(part.resource.uri, 'resource');
+                    if (part.resource.text) {
+                        return (
+                            <div key={`resource-${index}`} className="rounded-md border border-border-subtle p-2">
+                                <div className="text-[11px] opacity-70 mb-1">{label}</div>
+                                {renderTextLikeContent(part.resource.text, true)}
+                            </div>
+                        );
+                    }
+                    if (part.resource.uri) {
+                        return (
+                            <a key={`resource-uri-${index}`} href={part.resource.uri} target="_blank" rel="noreferrer" className="underline break-all">
+                                {label}
+                            </a>
+                        );
+                    }
+                }
+
+                return null;
+            })}
+        </div>
+    );
+}
+
 export function getChatMessageStableKey(message: ChatMessage, index: number): string {
     const dashboardMessage = message as ChatMessage & { _localId?: string; _turnKey?: string }
     const content = stringifyTextContent(message.content, { joiner: '\n' });
@@ -135,6 +273,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
     const role = (message.role || '').toLowerCase();
     const isUser = role === 'user' || role === 'human';
     const kind = message.kind || (role === 'tool' ? 'tool' : 'standard');
+    const structuredParts = isStructuredMessagePartArray(message.content) ? message.content : null;
+    const hasStructuredRenderer = !!structuredParts?.some((part) => part.type !== 'text');
     const contentStr = stringifyTextContent(message.content, { joiner: '\n' });
 
     if (kind === 'thought') {
@@ -156,7 +296,13 @@ const ChatMessageRow = memo(function ChatMessageRow({
         return (
             <div className="self-start chat-msg-tool">
                 <span className="tool-icon">⏺</span>
-                <span className="tool-text">{contentStr.split('\n')[0].slice(0, 80)}</span>
+                {hasStructuredRenderer && structuredParts ? (
+                    <div className="tool-text w-full">
+                        <MessagePartsRenderer parts={structuredParts} renderAsPreformatted={false} />
+                    </div>
+                ) : (
+                    <span className="tool-text">{contentStr.split('\n')[0].slice(0, 80)}</span>
+                )}
             </div>
         );
     }
@@ -170,9 +316,15 @@ const ChatMessageRow = memo(function ChatMessageRow({
                     <span>{icon}</span>
                     <span>{label}</span>
                 </div>
-                <pre className="chat-msg-body">
-                    {contentStr}
-                </pre>
+                {hasStructuredRenderer && structuredParts ? (
+                    <div className="chat-msg-body">
+                        <MessagePartsRenderer parts={structuredParts} renderAsPreformatted={true} />
+                    </div>
+                ) : (
+                    <pre className="chat-msg-body">
+                        {contentStr}
+                    </pre>
+                )}
             </div>
         );
     }
@@ -180,7 +332,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
     if (kind === 'system') {
         return (
             <div className="self-center chat-msg-system">
-                {contentStr.slice(0, 100)}
+                {hasStructuredRenderer && structuredParts ? (
+                    <MessagePartsRenderer parts={structuredParts} renderAsPreformatted={false} />
+                ) : (
+                    contentStr.slice(0, 100)
+                )}
             </div>
         );
     }
@@ -189,7 +345,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
     const renderMode = typeof meta?.renderMode === 'string' ? meta.renderMode.trim() : '';
     const contentLooksPreformatted = renderMode === 'preformatted';
     const displayContent = contentStr;
-    const showExpandBtn = isCliMode && !isUser && !contentLooksPreformatted && displayContent.length > CLI_TRUNCATE;
+    const showExpandBtn = !hasStructuredRenderer && isCliMode && !isUser && !contentLooksPreformatted && displayContent.length > CLI_TRUNCATE;
     const visibleContent = (showExpandBtn && !isTextExpanded)
         ? displayContent.slice(0, CLI_TRUNCATE)
         : displayContent;
@@ -198,9 +354,9 @@ const ChatMessageRow = memo(function ChatMessageRow({
 
     return (
         <div className={`max-w-[88%] min-w-0 flex flex-col gap-1 ${isUser ? 'self-end' : 'self-start'}`}>
-            {(displayContent || isUser) && (
+            {(displayContent || hasStructuredRenderer || isUser) && (
                 <div className={`chat-bubble ${isUser ? 'chat-bubble-user' : 'chat-bubble-assistant'}`}>
-                    <div className={`chat-bubble-header ${displayContent ? 'mb-1.5' : 'mb-0'}`}>
+                    <div className={`chat-bubble-header ${(displayContent || hasStructuredRenderer) ? 'mb-1.5' : 'mb-0'}`}>
                         <span className="chat-sender">
                             {isUser ? (userName || 'You') : (message.senderName || agentName)}
                         </span>
@@ -208,9 +364,11 @@ const ChatMessageRow = memo(function ChatMessageRow({
                             <span className="chat-time">{formatTime(receivedAt)}</span>
                         )}
                     </div>
-                    {displayContent && (
+                    {(displayContent || hasStructuredRenderer) && (
                         <div className="chat-markdown">
-                            {renderAsPreformatted ? (
+                            {hasStructuredRenderer && structuredParts ? (
+                                <MessagePartsRenderer parts={structuredParts} renderAsPreformatted={renderAsPreformatted} />
+                            ) : renderAsPreformatted ? (
                                 <pre className="chat-preformatted">{visibleContent}</pre>
                             ) : renderAsMarkdown ? (
                                 <ReactMarkdown remarkPlugins={[remarkGfm, remarkAlert, remarkBreaks]}>

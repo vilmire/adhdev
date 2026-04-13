@@ -21,6 +21,7 @@ import * as path from 'path';
 import * as os from 'os';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderCategory, ProviderModule, ProviderScripts, ProviderSettingDef } from '../providers/contracts.js';
+import { validateProviderDefinition } from '../providers/provider-schema.js';
 import type { ChildProcess } from 'child_process';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
@@ -773,24 +774,9 @@ export class DevServer implements DevServerContext {
     const warnings: string[] = [];
     try {
       const config = typeof content === 'string' ? JSON.parse(content) : content;
-      // Required fields
-      if (!config.type) errors.push('Missing required field: type');
-      if (!config.name) errors.push('Missing required field: name');
-      if (!config.category) errors.push('Missing required field: category');
-      else if (!['ide', 'extension', 'cli', 'acp'].includes(config.category)) errors.push(`Invalid category: ${config.category}`);
-      // Category-specific
-      if (config.category === 'ide' || config.category === 'extension') {
-        if (!config.cdpPorts || !Array.isArray(config.cdpPorts) || config.cdpPorts.length === 0)
-          warnings.push('IDE/Extension providers should have cdpPorts');
-        if (config.category === 'extension' && !config.extensionId)
-          warnings.push('Extension providers should have extensionId');
-      }
-      if (config.category === 'acp' || config.category === 'cli') {
-        if (!config.spawn) errors.push('ACP/CLI providers must have spawn config');
-        else {
-          if (!config.spawn.command) errors.push('spawn.command is required');
-        }
-      }
+      const validation = validateProviderDefinition(config);
+      errors.push(...validation.errors);
+      warnings.push(...validation.warnings);
       // Settings validation
       if (config.settings) {
         for (const [key, val] of Object.entries(config.settings)) {

@@ -29,6 +29,7 @@ import type {
   ProviderSettingSchema,
   ResolvedProvider,
 } from './contracts.js';
+import { validateProviderDefinition } from './provider-schema.js';
 
 interface ProviderAvailabilityState {
   installed: boolean;
@@ -1288,20 +1289,24 @@ export class ProviderLoader {
             extensionIdPattern?: RegExp | string;
           };
 
-          if (!mod.type || !mod.name || !mod.category) {
-            this.log(`⚠ Invalid provider at ${jsonPath}: missing type/name/category`);
-          } else {
-            // Restore RegExp fields from JSON (extensionIdPattern)
-            if (typeof mod.extensionIdPattern === 'string') {
-              const flags = mod.extensionIdPattern_flags || '';
-              mod.extensionIdPattern = new RegExp(mod.extensionIdPattern, flags);
-            }
-            const { extensionIdPattern_flags, extensionIdPattern, ...providerFields } = mod;
-            const normalizedProvider: ProviderModule = {
-              ...providerFields,
-              ...(extensionIdPattern instanceof RegExp ? { extensionIdPattern } : {}),
-            };
+          // Restore RegExp fields from JSON (extensionIdPattern)
+          if (typeof mod.extensionIdPattern === 'string') {
+            const flags = mod.extensionIdPattern_flags || '';
+            mod.extensionIdPattern = new RegExp(mod.extensionIdPattern, flags);
+          }
+          const { extensionIdPattern_flags, extensionIdPattern, ...providerFields } = mod;
+          const normalizedProvider: ProviderModule = {
+            ...providerFields,
+            ...(extensionIdPattern instanceof RegExp ? { extensionIdPattern } : {}),
+          };
 
+          const validation = validateProviderDefinition(normalizedProvider);
+          for (const warning of validation.warnings) {
+            this.log(`⚠ ${jsonPath}: ${warning}`);
+          }
+          if (validation.errors.length > 0) {
+            this.log(`⚠ Invalid provider at ${jsonPath}: ${validation.errors.join('; ')}`);
+          } else {
             // Load scripts.js if exists (IDE/Extension)
             // Skip for compatibility-format providers — scripts loaded lazily in resolve()
             const hasCompatibility = Array.isArray(normalizedProvider.compatibility);

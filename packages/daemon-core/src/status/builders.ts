@@ -9,7 +9,7 @@
  */
 
 import type { DaemonCdpManager } from '../cdp/manager.js';
-import type { SessionEntry, SessionCapability, ProviderControlSchema, AcpConfigOption, AcpMode } from '../shared-types.js';
+import type { SessionEntry, SessionCapability } from '../shared-types.js';
 import type {
     IdeProviderState,
     CliProviderState,
@@ -104,66 +104,6 @@ export function isCdpConnected(
     return false;
 }
 
-/**
- * Build legacy controls for providers that haven't been updated to the new schema.
- * Replaces the frontend fallback logic.
- */
-function buildFallbackControls(
-    providerControls?: ProviderControlSchema[],
-    serverModel?: string,
-    serverMode?: string,
-    acpConfigOptions?: AcpConfigOption[],
-    acpModes?: AcpMode[],
-): ProviderControlSchema[] {
-    if (providerControls && providerControls.length > 0) return providerControls;
-    const controls: ProviderControlSchema[] = [];
-
-    const isAcp = !!(acpConfigOptions || acpModes);
-
-    // Legacy model control
-    const modelFromAcp = acpConfigOptions?.find(c => c.category === 'model');
-    if (!isAcp || modelFromAcp) {
-        controls.push({
-            id: 'model',
-            type: 'select',
-            label: 'Model',
-            icon: '🤖',
-            placement: 'bar',
-            dynamic: !modelFromAcp,
-            listScript: 'listModels',
-            setScript: 'setModel',
-            readFrom: 'model',
-            ...(modelFromAcp && {
-                options: modelFromAcp.options.map((o: any) => ({ value: o.value, label: o.name || o.value })),
-            }),
-        });
-    }
-
-    // Legacy mode control
-    const modeFromAcp = acpModes && acpModes.length > 0;
-    const thoughtFromAcp = !modeFromAcp && acpConfigOptions?.find((c: any) => c.category !== 'model');
-    if (!isAcp || modeFromAcp || thoughtFromAcp) {
-        controls.push({
-            id: 'mode',
-            type: thoughtFromAcp ? 'cycle' : 'select',
-            label: thoughtFromAcp ? 'Thinking' : 'Mode',
-            icon: thoughtFromAcp ? '🧠' : '⚡',
-            placement: 'bar',
-            dynamic: !modeFromAcp && !thoughtFromAcp,
-            listScript: 'listModes',
-            setScript: thoughtFromAcp ? 'setThinkingLevel' : 'setMode',
-            readFrom: 'mode',
-            ...(modeFromAcp && {
-                options: acpModes!.map((m: any) => ({ value: m.id, label: m.name || m.id })),
-            }),
-            ...(thoughtFromAcp && {
-                options: thoughtFromAcp.options.map((o: any) => ({ value: o.value, label: o.name || o.value })),
-            }),
-        });
-    }
-
-    return controls;
-}
 
 const IDE_SESSION_CAPABILITIES: SessionCapability[] = [
     'read_chat',
@@ -242,11 +182,7 @@ function buildIdeWorkspaceSession(
         currentAutoApprove: state.currentAutoApprove,
         ...(includeSessionControls && {
             controlValues: state.controlValues,
-            providerControls: buildFallbackControls(
-                state.providerControls,
-                state.currentModel,
-                state.currentPlan
-            ),
+            providerControls: state.providerControls,
         }),
         errorMessage: state.errorMessage,
         errorReason: state.errorReason,
@@ -281,11 +217,7 @@ function buildExtensionAgentSession(
         currentPlan: ext.currentPlan,
         ...(includeSessionControls && {
             controlValues: ext.controlValues,
-            providerControls: buildFallbackControls(
-                ext.providerControls,
-                ext.currentModel,
-                ext.currentPlan
-            ),
+            providerControls: ext.providerControls,
         }),
         errorMessage: ext.errorMessage,
         errorReason: ext.errorReason,
@@ -327,9 +259,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         }),
         ...(includeSessionControls && {
             controlValues: state.controlValues,
-            providerControls: buildFallbackControls(
-                state.providerControls
-            ),
+            providerControls: state.providerControls,
         }),
         errorMessage: state.errorMessage,
         errorReason: state.errorReason,
@@ -362,13 +292,7 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
             acpConfigOptions: state.acpConfigOptions,
             acpModes: state.acpModes,
             controlValues: state.controlValues,
-            providerControls: buildFallbackControls(
-                state.providerControls,
-                state.currentModel,
-                state.currentPlan,
-                state.acpConfigOptions,
-                state.acpModes
-            ),
+            providerControls: state.providerControls,
         }),
         errorMessage: state.errorMessage,
         errorReason: state.errorReason,

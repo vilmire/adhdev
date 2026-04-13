@@ -15,6 +15,7 @@
  * 5. dispose() → kill process
  */
 
+import * as path from 'path';
 import { Readable, Writable } from 'stream';
 import { spawn, type ChildProcess } from 'child_process';
 import {
@@ -45,8 +46,8 @@ import {
     type ToolCallStatus,
     type SessionConfigOption,
 } from '@agentclientprotocol/sdk';
-import type { ProviderModule, ContentBlock, ToolCallInfo, ToolCallContent as TCC, ToolKind, ToolCallStatus as TCS } from './contracts.js';
-import { normalizeContent, flattenContent } from './contracts.js';
+import type { ProviderModule, ContentBlock, InputEnvelope, InputPart, ToolCallInfo, ToolCallContent as TCC, ToolKind, ToolCallStatus as TCS } from './contracts.js';
+import { normalizeContent, flattenContent, normalizeInputEnvelope } from './contracts.js';
 import type { ProviderInstance, ProviderState, AcpProviderState, ProviderErrorReason, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
 import { LOG } from '../logging/logger.js';
@@ -81,6 +82,121 @@ interface AcpMode {
     id: string;
     name: string;
     description?: string;
+}
+
+interface PromptCapabilityFlags {
+    image: boolean;
+    audio: boolean;
+    embeddedContext: boolean;
+}
+
+function getPromptCapabilityFlags(agentCapabilities?: Record<string, any>): PromptCapabilityFlags {
+    const prompt = agentCapabilities?.promptCapabilities || {};
+    return {
+        image: prompt.image === true,
+        audio: prompt.audio === true,
+        embeddedContext: prompt.embeddedContext === true,
+    };
+}
+
+function getResourceNameFromUri(uri: string, fallback: string): string {
+    try {
+        if (uri.startsWith('file://')) {
+            return path.basename(new URL(uri).pathname) || fallback;
+        }
+        return path.basename(uri) || fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+function inputPartToResourceLink(part: Extract<InputPart, { type: 'image' | 'audio' | 'video' | 'resource' }>, fallbackName: string): ContentBlock | null {
+    if (!part.uri) return null;
+    return {
+        type: 'resource_link',
+        uri: part.uri,
+        name: getResourceNameFromUri(part.uri, fallbackName),
+        ...(part.mimeType ? { mimeType: part.mimeType } : {}),
+    };
+}
+
+function appendPromptText(promptParts: ContentBlock[], text: string | undefined): void {
+    const normalized = typeof text === 'string' ? text.trim() : '';
+    if (!normalized) return;
+    const last = promptParts[promptParts.length - 1];
+    if (last?.type === 'text' && last.text === normalized) return;
+    promptParts.push({ type: 'text', text: normalized });
+}
+
+export function buildAcpPromptParts(input: InputEnvelope, agentCapabilities?: Record<string, any>): ContentBlock[] {
+    const caps = getPromptCapabilityFlags(agentCapabilities);
+    const promptParts: ContentBlock[] = [];
+
+    for (const part of input.parts) {
+        if (part.type === 'text') {
+            promptParts.push({ type: 'text', text: part.text });
+            continue;
+        }
+
+        if (part.type === 'image') {
+            if (caps.image && part.data) {
+                promptParts.push({
+                    type: 'image',
+                    data: part.data,
+                    mimeType: part.mimeType,
+                    ...(part.uri ? { uri: part.uri } : {}),
+                });
+                continue;
+            }
+            const fallback = inputPartToResourceLink(part, 'image');
+            if (fallback) promptParts.push(fallback);
+            appendPromptText(promptParts, part.alt || (!part.uri ? `Attached image (${part.mimeType})` : undefined));
+            continue;
+        }
+
+        if (part.type === 'audio') {
+            if (caps.audio && part.data) {
+                promptParts.push({
+                    type: 'audio',
+                    data: part.data,
+                    mimeType: part.mimeType,
+                });
+                continue;
+            }
+            const fallback = inputPartToResourceLink(part, 'audio');
+            if (fallback) promptParts.push(fallback);
+            appendPromptText(promptParts, part.transcript || (!part.uri ? `Attached audio (${part.mimeType})` : undefined));
+            continue;
+        }
+
+        if (part.type === 'resource') {
+            if (caps.embeddedContext && (part.text || part.data)) {
+                promptParts.push({
+                    type: 'resource',
+                    resource: part.text
+                        ? { uri: part.uri, text: part.text, mimeType: part.mimeType ?? null }
+                        : { uri: part.uri, blob: part.data || '', mimeType: part.mimeType ?? null },
+                });
+                continue;
+            }
+            const fallback = inputPartToResourceLink(part, part.name || 'resource');
+            if (fallback) promptParts.push(fallback);
+            appendPromptText(promptParts, part.text || (!part.uri && part.name ? part.name : undefined));
+            continue;
+        }
+
+        if (part.type === 'video') {
+            const fallback = inputPartToResourceLink(part, 'video');
+            if (fallback) promptParts.push(fallback);
+            appendPromptText(promptParts, !part.uri ? `Attached video (${part.mimeType})` : undefined);
+        }
+    }
+
+    if (!promptParts.some((part) => part.type === 'text') && input.textFallback) {
+        promptParts.unshift({ type: 'text', text: input.textFallback });
+    }
+
+    return promptParts;
 }
 
 // ─── AcpProviderInstance ───────────────────────────
@@ -237,8 +353,10 @@ export class AcpProviderInstance implements ProviderInstance {
     }
 
     onEvent(event: string, data?: any): void {
-        if (event === 'send_message' && data?.text) {
-            this.sendPrompt(data.text).catch(e =>
+        if (event === 'send_message') {
+            const input = normalizeInputEnvelope(data)
+            const promptParts = buildAcpPromptParts(input, this.agentCapabilities)
+            this.sendPrompt(input.textFallback, promptParts.length > 0 ? promptParts : undefined).catch(e =>
                 this.log.warn(`[${this.type}] sendPrompt error: ${e?.message}`)
             );
         } else if (event === 'resolve_action') {
@@ -768,19 +886,36 @@ export class AcpProviderInstance implements ProviderInstance {
         }
 
  // Build prompt content
-        let promptParts: any[];
-        if (contentBlocks && contentBlocks.length > 0) {
-            // Rich content — forward ContentBlock[] as ACP prompt parts
-            promptParts = contentBlocks.map(b => {
+        const promptParts: any[] = contentBlocks && contentBlocks.length > 0
+            ? contentBlocks.map((b) => {
                 if (b.type === 'text') return { type: 'text', text: b.text };
-                if (b.type === 'image') return { type: 'image', data: b.data, mimeType: b.mimeType };
-                if (b.type === 'resource_link') return { type: 'resource_link', uri: b.uri, name: b.name };
+                if (b.type === 'image') {
+                    return {
+                        type: 'image',
+                        data: b.data,
+                        mimeType: b.mimeType,
+                        ...(b.uri ? { uri: b.uri } : {}),
+                    };
+                }
+                if (b.type === 'audio') {
+                    return {
+                        type: 'audio',
+                        data: b.data,
+                        mimeType: b.mimeType,
+                    };
+                }
+                if (b.type === 'resource_link') {
+                    return {
+                        type: 'resource_link',
+                        uri: b.uri,
+                        name: b.name,
+                        ...(b.mimeType ? { mimeType: b.mimeType } : {}),
+                    };
+                }
                 if (b.type === 'resource') return { type: 'resource', resource: b.resource };
                 return { type: 'text', text: flattenContent([b]) };
-            });
-        } else {
-            promptParts = [{ type: 'text', text }];
-        }
+            })
+            : [{ type: 'text', text }];
 
  // Add user message locally (store as ContentBlock[])
         this.messages.push({
@@ -860,6 +995,13 @@ export class AcpProviderInstance implements ProviderInstance {
                 } else if (content.type === 'image') {
                     this.partialBlocks.push({
                         type: 'image',
+                        data: content.data,
+                        mimeType: content.mimeType,
+                        ...(content.uri ? { uri: content.uri } : {}),
+                    });
+                } else if (content.type === 'audio') {
+                    this.partialBlocks.push({
+                        type: 'audio',
                         data: content.data,
                         mimeType: content.mimeType,
                     });

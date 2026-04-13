@@ -134,9 +134,7 @@ export default function Dashboard() {
         actionLogCount: actionLogs.length,
     })
 
-    // Extract detectedIdes from machine-level entry (for standalone)
     const daemonEntry = ides.find(ide => ide.type === 'adhdev-daemon')
-    const detectedIdes: { type: string; name: string; running: boolean; id?: string }[] = daemonEntry?.detectedIdes || []
     const machineEntries = useMemo(
         () => ides
             .filter((entry) => entry.type === 'adhdev-daemon')
@@ -519,7 +517,6 @@ export default function Dashboard() {
     // ─── Command Handlers (header/history use activeConv) ──────
     const {
         isRefreshingHistory,
-        handleLaunchIde,
         handleRefreshHistory,
     } = useDashboardSessionCommands({
         sendDaemonCommand,
@@ -783,8 +780,6 @@ export default function Dashboard() {
                 splitTabRelative={splitTabRelative}
                 closeGroup={closeGroup}
                 handleResizeStart={handleResizeStart}
-                detectedIdes={detectedIdes}
-                handleLaunchIde={handleLaunchIde}
                 groupActiveTabIds={groupActiveTabIds}
                 setGroupActiveTabIds={setGroupActiveTabIds}
                 groupTabOrders={groupTabOrders}

@@ -9,6 +9,11 @@ import { IconCandle, IconRefresh, IconX } from '../Icons';
 import { isAcpConv, isCliConv, type ActiveConversation } from './types';
 import { createPortal } from 'react-dom';
 import { getConversationHistorySubtitle } from './conversation-presenters';
+import {
+    getRefreshSavedHistoryLabel,
+    getSavedHistoryEmptyStateLabel,
+    getSavedHistoryModalTitle,
+} from '../../utils/dashboard-launch-copy';
 
 export interface SavedSessionHistoryEntry {
     id: string;
@@ -71,7 +76,7 @@ export default function HistoryModal({
             <div className="card fade-in relative w-[90%] max-w-[500px] max-h-[80vh] flex flex-col p-0 overflow-hidden shadow-[0_20px_40px_rgba(0,0,0,0.4)] rounded-[20px]">
                 <div className="px-6 py-5 border-b border-border-subtle flex justify-between items-center bg-[var(--surface-primary)]">
                     <div>
-                        <h3 className="m-0 text-lg font-extrabold">{isSavedSessionMode ? 'Saved Sessions' : 'Chat History'}</h3>
+                        <h3 className="m-0 text-lg font-extrabold">{isSavedSessionMode ? getSavedHistoryModalTitle() : 'Chat History'}</h3>
                         <div className="text-xs text-text-muted mt-0.5">{getConversationHistorySubtitle(activeConv)}</div>
                     </div>
                     <button onClick={onClose} className="btn btn-secondary btn-sm rounded-md px-1.5 py-1.5 border-transparent bg-transparent hover:bg-bg-secondary"><IconX size={16} /></button>
@@ -174,7 +179,7 @@ export default function HistoryModal({
                         <div className="py-10 px-5 text-center text-text-muted">
                             <div className="text-3xl mb-3 opacity-60"><IconCandle size={32} /></div>
                             <div className="text-[13px]">
-                                {isSavedSessionMode ? 'No saved sessions found yet.' : 'No recent chat sessions found.'}
+                                {isSavedSessionMode ? getSavedHistoryEmptyStateLabel() : 'No recent chat sessions found.'}
                             </div>
                         </div>
                     )}
@@ -193,7 +198,7 @@ export default function HistoryModal({
                     >
                         {(isRefreshingHistory || isSavedSessionsLoading)
                             ? '⌛ Refreshing...'
-                            : <span className="flex items-center gap-1.5"><IconRefresh size={13} /> {isSavedSessionMode ? 'Refresh Sessions' : 'Refresh History'}</span>}
+                            : <span className="flex items-center gap-1.5"><IconRefresh size={13} /> {isSavedSessionMode ? getRefreshSavedHistoryLabel() : 'Refresh History'}</span>}
                     </button>
                 </div>
             </div>

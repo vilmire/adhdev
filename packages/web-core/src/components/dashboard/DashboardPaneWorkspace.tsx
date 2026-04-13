@@ -24,8 +24,6 @@ interface DashboardPaneWorkspaceProps {
     splitTabRelative: (tabKey: string, targetGroup: number, side: 'left' | 'right') => void
     closeGroup: (groupIdx: number) => void
     handleResizeStart: (dividerIdx: number, event: React.MouseEvent) => void
-    detectedIdes?: { type: string; name: string; running: boolean; id?: string }[]
-    handleLaunchIde?: (ideType: string) => void
     groupActiveTabIds: Record<number, string | null>
     setGroupActiveTabIds: React.Dispatch<React.SetStateAction<Record<number, string | null>>>
     groupTabOrders: Record<number, string[]>
@@ -55,8 +53,6 @@ export default function DashboardPaneWorkspace({
     splitTabRelative,
     closeGroup,
     handleResizeStart,
-    detectedIdes,
-    handleLaunchIde,
     groupActiveTabIds,
     setGroupActiveTabIds,
     groupTabOrders,
@@ -113,8 +109,6 @@ export default function DashboardPaneWorkspace({
                                 else if (direction === 'split-right' && numGroups < 4) splitTabRelative(tabKey, groupIndex, 'right')
                             }}
                             onReceiveTab={tabKey => moveTabToGroup(tabKey, groupIndex)}
-                            detectedIdes={groupIndex === 0 ? detectedIdes : undefined}
-                            handleLaunchIde={groupIndex === 0 ? handleLaunchIde : undefined}
                             onActiveTabChange={tabKey => setGroupActiveTabIds(prev => {
                                 if ((prev[groupIndex] ?? null) === (tabKey ?? null)) return prev
                                 return { ...prev, [groupIndex]: tabKey }

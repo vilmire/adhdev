@@ -33,7 +33,22 @@ export interface ReadChatResult {
 }
 
 import type { ChatMessage } from '../types.js';
-export type { ChatMessage };
+import {
+  flattenMessageParts,
+  normalizeInputEnvelope,
+  normalizeMessageParts,
+} from './io-contracts.js';
+export {
+  flattenMessageParts,
+  normalizeInputEnvelope,
+  normalizeMessageParts,
+} from './io-contracts.js';
+import type {
+  InputEnvelope,
+  InputPart,
+  MessagePart,
+} from './io-contracts.js';
+export type { ChatMessage, InputEnvelope, InputPart, MessagePart };
 
 export type AgentStatus = 
   | 'idle' 
@@ -52,7 +67,7 @@ export interface ModalInfo {
 
 export interface ProviderEffectMessage {
   role?: 'system' | 'assistant' | 'user';
-  content: string | ContentBlock[];
+  content: string | MessagePart[];
   kind?: string;
   senderName?: string;
 }
@@ -71,7 +86,7 @@ export interface ProviderEffectNotification {
   level?: 'info' | 'success' | 'warning';
   channels?: ProviderNotificationChannel[];
   preferenceKey?: ProviderNotificationPreferenceKey;
-  bubbleContent?: string | ContentBlock[];
+  bubbleContent?: string | MessagePart[];
 }
 
 export interface ProviderEffect {
@@ -87,9 +102,9 @@ export interface ProviderEffect {
   notification?: ProviderEffectNotification;
 }
 
-// ─── Rich Content Types (ACP Standard) ─────────────────
+// ─── Legacy ACP ContentBlock Types (compatibility adapter) ─────────────────
 // Based on ACP SDK v0.16.1 schema types.
-// All provider categories (ACP, IDE, Extension, CLI) use these as output standard.
+// Internal runtime code should prefer MessagePart/InputEnvelope from io-contracts.ts.
 
 /**
  * ContentBlock — ACP ContentBlock union type
@@ -192,29 +207,25 @@ export interface ToolCallLocation {
 
 // ─── Content Helpers ────────────────────────────────────
 
-/** Normalize content: string → ContentBlock[] */
-export function normalizeContent(content: string | ContentBlock[]): ContentBlock[] {
-  if (typeof content === 'string') {
-    return [{ type: 'text', text: content }];
-  }
-  return content;
+/** Normalize content into canonical message parts */
+export function normalizeContent(content: string | MessagePart[] | ContentBlock[]): MessagePart[] {
+  return normalizeMessageParts(content);
 }
 
-/** Flatten ContentBlock[] → string (backward compat / plain-text extraction) */
-export function flattenContent(content: string | ContentBlock[]): string {
+/** Flatten canonical/legacy content into a plain-text fallback string */
+export function flattenContent(content: string | MessagePart[] | ContentBlock[]): string {
   if (typeof content === 'string') return content;
-  return content
-    .filter((b): b is TextBlock => b.type === 'text')
-    .map(b => b.text)
-    .join('\n');
+  return flattenMessageParts(normalizeMessageParts(content));
 }
 
-/** SendMessage params — supports rich content (ACP PromptRequest compatible) */
+/** SendMessage params — canonical input envelope with legacy text/prompt compatibility */
 export interface SendMessageParams {
   /** Shortcut: text-only message */
   text?: string;
-  /** Rich content blocks (ACP ContentBlock[]) */
+  /** Rich content blocks (legacy ACP ContentBlock[]) */
   prompt?: ContentBlock[];
+  /** Canonical multipart runtime input */
+  input?: InputEnvelope;
 }
 
 // ─── sendMessage() return value ────────────────────────
@@ -332,6 +343,12 @@ export interface ProviderModule {
   icon?: string;
  /** Display name (short name) */
   displayName?: string;
+ /** Provider-definition version maintained in adhdev-providers */
+  providerVersion?: string;
+ /** Inventory/support status label maintained in adhdev-providers */
+  status?: string;
+ /** Inventory/support detail string maintained in adhdev-providers */
+  details?: string;
  /** Install instructions (shown when command is missing) */
   install?: string;
  /** Custom version detection command (e.g. 'cursor --version', 'claude -v') */
@@ -390,6 +407,14 @@ export interface ProviderModule {
     shell?: boolean;
     env?: Record<string, string>;
   };
+  /** Delay before submitting typed CLI input (provider-specific TUI tuning) */
+  sendDelayMs?: number;
+  /** Submit key used after typing into CLI PTY (default: carriage return) */
+  sendKey?: string;
+  /** How the CLI adapter decides when to submit typed input */
+  submitStrategy?: 'wait_for_echo' | 'immediate';
+  /** Keep this provider out of the upstream auto-updated bundle */
+  disableUpstream?: boolean;
   approvalKeys?: Record<number, string>;
   patterns?: {
     prompt?: RegExp[];
@@ -469,6 +494,14 @@ export interface ProviderModule {
  // ─── ACP Authentication (auth method definitions) ───
  /** ACP agent auth methods (multiple supported — in priority order) */
   auth?: AcpAuthMethod[];
+
+ // ─── Contract version / capability declaration ───
+  contractVersion?: number;
+  capabilities?: {
+    input?: { multipart?: boolean; mediaTypes?: Array<'text' | 'image' | 'audio' | 'video' | 'resource'> };
+    output?: { richContent?: boolean; mediaTypes?: Array<'text' | 'image' | 'audio' | 'video' | 'resource'> };
+    controls?: { typedResults?: boolean };
+  };
 }
 
 export interface ProviderResumeCapability {
@@ -672,6 +705,26 @@ export interface ProviderControlOption {
   label: string;
   description?: string;
   group?: string;
+}
+
+export interface ControlListResult {
+  options: ProviderControlOption[];
+  currentValue?: string | number | boolean;
+  error?: string;
+}
+
+export interface ControlSetResult {
+  ok: boolean;
+  currentValue?: string | number | boolean;
+  effects?: ProviderEffect[];
+  error?: string;
+}
+
+export interface ControlInvokeResult {
+  ok: boolean;
+  currentValue?: string | number | boolean;
+  effects?: ProviderEffect[];
+  error?: string;
 }
 
 /**

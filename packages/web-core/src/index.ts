@@ -78,7 +78,6 @@ export { default as ConnectionBanner } from './components/dashboard/ConnectionBa
 export { default as TerminalBackendBanner } from './components/dashboard/TerminalBackendBanner'
 export { default as DashboardHeader } from './components/dashboard/DashboardHeader'
 export { default as HistoryModal } from './components/dashboard/HistoryModal'
-export { default as DashboardModelModeBar } from './components/dashboard/ModelModeBar'
 export { default as ToastContainer } from './components/dashboard/ToastContainer'
 export { buildConversations } from './components/dashboard/buildConversations'
 export type { ActiveConversation } from './components/dashboard/types'

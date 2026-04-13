@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
     getSessionHostRecoveryLabel,
+    getSessionHostNextActionLabel,
+    getSessionHostSectionHint,
     partitionSessionHostRecords,
 } from '../../src/utils/session-host-surface'
 
@@ -19,5 +21,16 @@ describe('session host surface helpers', () => {
 
     it('formats orphan snapshots with a user-facing recovery label', () => {
         expect(getSessionHostRecoveryLabel({ runtimeRecoveryState: 'orphan_snapshot' })).toBe('snapshot recovered')
+    })
+
+    it('maps each runtime surface section to a primary next action', () => {
+        expect(getSessionHostNextActionLabel('live')).toBe('Attach')
+        expect(getSessionHostNextActionLabel('recovery')).toBe('Recover')
+        expect(getSessionHostNextActionLabel('inactive')).toBe('Restart')
+    })
+
+    it('describes recovery and inactive sections with explicit attachability guidance', () => {
+        expect(getSessionHostSectionHint('recovery')).toContain('not live attach targets')
+        expect(getSessionHostSectionHint('inactive')).toContain('shown for reference')
     })
 })

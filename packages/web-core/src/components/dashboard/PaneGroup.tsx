@@ -45,9 +45,6 @@ export interface PaneGroupProps {
     onReceiveTab?: (tabKey: string) => void;
     /** CSS style override (for flex-basis resizing) */
     style?: CSSProperties;
-    /** Standalone empty state */
-    detectedIdes?: { type: string; name: string; running: boolean; id?: string }[];
-    handleLaunchIde?: (ideType: string) => void;
     /** Notify parent when active tab changes */
     onActiveTabChange?: (tabKey: string | null) => void;
     /** Restore previously selected tab on mount */
@@ -72,7 +69,6 @@ export default function PaneGroup({
     groupIndex, onFocus,
     isSplitMode, numGroups, onMoveTab, onReceiveTab,
     style: styleProp,
-    detectedIdes, handleLaunchIde,
     onActiveTabChange,
     initialActiveTabId,
     initialTabOrder,
@@ -219,8 +215,6 @@ export default function PaneGroup({
                             isSplitMode={isSplitMode}
                             isStandalone={isStandalone}
                             hasRegisteredMachines={hasRegisteredMachines}
-                            detectedIdes={detectedIdes}
-                            handleLaunchIde={handleLaunchIde}
                         />
                     </div>
                 ) : (

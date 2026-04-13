@@ -2,43 +2,105 @@
 /**
  * ControlsBar — Dynamic provider controls rendered from schema
  *
- * Replaces ModelModeBar with a generic, schema-driven approach.
- * Each provider declares its controls (model, mode, thinking, temperature, etc.)
- * and this component renders the appropriate UI for each.
- *
- * Falls back to legacy ModelModeBar when providerControls schema is absent.
+ * Providers must declare typed bar controls. If no bar controls are declared,
+ * this component renders nothing instead of falling back to legacy model/mode heuristics.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import type {
+    ControlInvokeResult,
+    ControlListResult,
+    ControlSetResult,
+    ProviderControlSchema,
+} from '@adhdev/daemon-core';
 import { useTransport } from '../../context/TransportContext';
-import DashboardModelModeBar from './ModelModeBar';
-// Inline type (mirrors ProviderControlSchema from @adhdev/daemon-core/shared-types)
-// Avoids build dependency on daemon-core re-export timing
-interface ProviderControlSchema {
-    id: string;
-    type: 'select' | 'toggle' | 'cycle' | 'slider' | 'action' | 'display';
-    label: string;
-    icon?: string;
-    placement: 'bar' | 'header' | 'menu';
-    options?: { value: string; label: string; description?: string; group?: string }[];
-    dynamic?: boolean;
-    listScript?: string;
-    setScript?: string;
-    readFrom?: string;
-    defaultValue?: string | number | boolean;
-    invokeScript?: string;
-    resultDisplay?: 'toast' | 'inline' | 'none';
-    confirmTitle?: string;
-    confirmMessage?: string;
-    confirmLabel?: string;
-    min?: number;
-    max?: number;
-    step?: number;
-    order?: number;
-}
+import { eventManager } from '../../managers/EventManager';
 
 // Module-level cache for dynamic options (persists across tab switches)
-const _optionsCache = new Map<string, Record<string, string[]>>();
+const _optionsCache = new Map<string, Record<string, ControlOption[]>>();
+
+type ControlScalarValue = string | number | boolean;
+type ControlMutationResult = ControlSetResult | ControlInvokeResult;
+type ControlOption = ControlListResult['options'][number];
+type ControlEffect = {
+    type: 'toast' | 'notification' | string;
+    toast?: { message: string; level?: 'info' | 'success' | 'warning' };
+    notification?: { body: string; level?: 'info' | 'success' | 'warning' };
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isControlScalarValue(value: unknown): value is ControlScalarValue {
+    return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+}
+
+export function extractControlListResult(response: unknown): ControlListResult | null {
+    if (!isRecord(response) || !isRecord(response.controlResult) || !Array.isArray(response.controlResult.options)) {
+        return null;
+    }
+    return response.controlResult as unknown as ControlListResult;
+}
+
+export function extractControlMutationResult(response: unknown): ControlMutationResult | null {
+    if (!isRecord(response) || !isRecord(response.controlResult) || typeof response.controlResult.ok !== 'boolean') {
+        return null;
+    }
+    return response.controlResult as unknown as ControlMutationResult;
+}
+
+function getResponseError(response: unknown): string | undefined {
+    if (!isRecord(response) || typeof response.error !== 'string' || !response.error.trim()) return undefined;
+    return response.error;
+}
+
+function isExplicitFailure(response: unknown): boolean {
+    return isRecord(response) && response.success === false;
+}
+
+function applyControlEffects(effects: ControlEffect[] | undefined): void {
+    for (const effect of effects || []) {
+        if (effect.type === 'toast' && effect.toast?.message) {
+            const level = effect.toast.level === 'warning'
+                ? 'warning'
+                : effect.toast.level === 'success'
+                    ? 'success'
+                    : 'info';
+            eventManager.showToast(effect.toast.message, level);
+            continue;
+        }
+        if (effect.type === 'notification' && effect.notification?.body) {
+            const level = effect.notification.level === 'warning'
+                ? 'warning'
+                : effect.notification.level === 'success'
+                    ? 'success'
+                    : 'info';
+            eventManager.showToast(effect.notification.body, level);
+        }
+    }
+}
+
+function getMutationValue(result: ControlMutationResult | null, optimisticValue: ControlScalarValue): ControlScalarValue {
+    return result && isControlScalarValue(result.currentValue) ? result.currentValue : optimisticValue;
+}
+
+function getControlOptions(
+    ctrl: ProviderControlSchema,
+    dynamicOptions: Record<string, ControlOption[]>,
+): ControlOption[] {
+    return ctrl.options || dynamicOptions[ctrl.id] || [];
+}
+
+function getControlValueLabel(
+    ctrl: ProviderControlSchema,
+    dynamicOptions: Record<string, ControlOption[]>,
+    value: string,
+): string {
+    if (!value) return '';
+    const options = getControlOptions(ctrl, dynamicOptions);
+    return options.find(option => option.value === value)?.label || value;
+}
 
 export interface ControlsBarProps {
     routeId: string;
@@ -46,17 +108,8 @@ export interface ControlsBarProps {
     hostIdeType?: string;
     providerType: string;
     displayLabel: string;
-    /** Provider-declared controls schema */
     controls?: ProviderControlSchema[];
-    /** Current control values from daemon status */
     controlValues?: Record<string, string | number | boolean>;
-    /** Legacy compatibility values while providers finish migrating to schema controls */
-    serverModel?: string;
-    serverMode?: string;
-    /** ACP config options (backward compat) */
-    acpConfigOptions?: any[];
-    /** ACP modes (backward compat) */
-    acpModes?: any[];
 }
 
 const AGENT_COLORS: Record<string, string> = {
@@ -67,7 +120,7 @@ const AGENT_COLORS: Record<string, string> = {
 
 export default function ControlsBar({
     routeId, sessionId, hostIdeType, providerType, displayLabel,
-    controls, controlValues, serverModel, serverMode, acpConfigOptions, acpModes,
+    controls, controlValues,
 }: ControlsBarProps) {
     const { sendCommand } = useTransport();
     const cacheKey = `${routeId}:${sessionId || providerType}`;
@@ -86,8 +139,6 @@ export default function ControlsBar({
     // Merge server values with local overrides
     const effectiveValues: Record<string, string | number | boolean> = {
         ...defaultValues,
-        ...(serverModel ? { model: serverModel } : {}),
-        ...(serverMode ? { mode: serverMode } : {}),
         ...(controlValues || {}),
         ...(Date.now() < localOverrideUntil.current ? localValues : {}),
     };
@@ -100,7 +151,7 @@ export default function ControlsBar({
     }, [controlValues]);
 
     // Dynamic options state
-    const [dynamicOptions, setDynamicOptions] = useState<Record<string, string[]>>(
+    const [dynamicOptions, setDynamicOptions] = useState<Record<string, ControlOption[]>>(
         _optionsCache.get(cacheKey) || {}
     );
     const [openDropdown, setOpenDropdown] = useState<string | null>(null);
@@ -117,68 +168,51 @@ export default function ControlsBar({
     const invokeProviderScript = useCallback(async (
         scriptName: string,
         payload: Record<string, unknown> = {},
-        fallbackCmd?: string,
     ) => {
         const scope = sessionId
             ? { targetSessionId: sessionId }
             : { agentType: providerType, ...(hostIdeType ? { ideType: hostIdeType } : {}) };
-        try {
-            const res = await exec('invoke_provider_script', {
-                ...scope,
-                scriptName,
-                ...payload,
-            });
-            if (res?.success === false && fallbackCmd) {
-                return await exec(fallbackCmd, {
-                    ...scope,
-                    ...payload,
-                });
-            }
-            return res;
-        } catch (error) {
-            if (!fallbackCmd) throw error;
-            return await exec(fallbackCmd, {
-                ...scope,
-                ...payload,
-            });
-        }
-    }, [exec, providerType, hostIdeType]);
+        return await exec('invoke_provider_script', {
+            ...scope,
+            scriptName,
+            ...payload,
+        });
+    }, [exec, providerType, hostIdeType, sessionId]);
 
     if (!controls || controls.length === 0) {
-        return (
-            <DashboardModelModeBar
-                routeId={routeId}
-                sessionId={sessionId}
-                hostIdeType={hostIdeType}
-                providerType={providerType}
-                displayLabel={displayLabel}
-                serverModel={serverModel}
-                serverMode={serverMode}
-                acpConfigOptions={acpConfigOptions}
-                acpModes={acpModes}
-            />
-        );
+        return null;
     }
 
     const barControls = controls
-        .filter(c => c.placement === 'bar')
+        .filter(c => c.placement === 'bar' && c.hidden !== true)
         .sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
 
     if (barControls.length === 0) {
-        return (
-            <DashboardModelModeBar
-                routeId={routeId}
-                sessionId={sessionId}
-                hostIdeType={hostIdeType}
-                providerType={providerType}
-                displayLabel={displayLabel}
-                serverModel={serverModel}
-                serverMode={serverMode}
-                acpConfigOptions={acpConfigOptions}
-                acpModes={acpModes}
-            />
-        );
+        return null;
     }
+
+    const commitMutationResult = useCallback((
+        ctrl: ProviderControlSchema,
+        optimisticValue: ControlScalarValue,
+        result: ControlMutationResult | null,
+    ) => {
+        const nextValue = getMutationValue(result, optimisticValue);
+        setLocalValues(prev => ({ ...prev, [ctrl.id]: nextValue }));
+        applyControlEffects(result?.effects as ControlEffect[] | undefined);
+    }, []);
+
+    const rollbackControlValue = useCallback((ctrl: ProviderControlSchema, previousValue: ControlScalarValue | undefined) => {
+        setLocalValues(prev => {
+            const next = { ...prev };
+            if (previousValue === undefined) {
+                delete next[ctrl.id];
+            } else {
+                next[ctrl.id] = previousValue;
+            }
+            return next;
+        });
+        localOverrideUntil.current = 0;
+    }, []);
 
     const handleSelectToggle = async (ctrl: ProviderControlSchema) => {
         if (openDropdown === ctrl.id) {
@@ -186,51 +220,68 @@ export default function ControlsBar({
             return;
         }
 
-        // If we already have options, just open
-        const existing = ctrl.options?.map(o => o.value) || dynamicOptions[ctrl.id] || [];
+        const existing = getControlOptions(ctrl, dynamicOptions);
         if (existing.length > 0) {
             setOpenDropdown(ctrl.id);
             return;
         }
 
-        // Dynamic: fetch options via listScript
         if (ctrl.dynamic && ctrl.listScript) {
             setLoadingOption(ctrl.id);
             try {
-                const fallbackCmd = mapLegacyScriptCommand(ctrl.listScript);
-                const res: any = await invokeProviderScript(ctrl.listScript, {}, fallbackCmd);
-                const rawList = res?.models || res?.modes || res?.result?.models || res?.result?.modes || res?.options || [];
-                const list = rawList.map((item: any) =>
-                    typeof item === 'string' ? item : (item?.name || item?.id || item?.value || String(item))
-                );
+                const res = await invokeProviderScript(ctrl.listScript, {});
+                const controlResult = extractControlListResult(res);
+                if (!controlResult) {
+                    const errorMessage = getResponseError(res);
+                    if (errorMessage) eventManager.showToast(errorMessage, 'warning');
+                    return;
+                }
+                const options = controlResult.options;
                 setDynamicOptions(prev => {
-                    const next = { ...prev, [ctrl.id]: list };
+                    const next = { ...prev, [ctrl.id]: options };
                     _optionsCache.set(cacheKey, next);
                     return next;
                 });
+                if (isControlScalarValue(controlResult.currentValue)) {
+                    setLocalValues(prev => ({ ...prev, [ctrl.id]: controlResult.currentValue }));
+                }
                 setOpenDropdown(ctrl.id);
-            } catch { /* silent */ }
-            finally { setLoadingOption(null); }
+            } catch (error) {
+                const message = error instanceof Error ? error.message : `Could not load ${ctrl.label}`;
+                eventManager.showToast(message, 'warning');
+            } finally {
+                setLoadingOption(null);
+            }
         }
     };
 
     const handleSelectValue = async (ctrl: ProviderControlSchema, value: string) => {
         setOpenDropdown(null);
+        const previousValue = controlValues?.[ctrl.id] ?? defaultValues[ctrl.id];
         setLocalValues(prev => ({ ...prev, [ctrl.id]: value }));
         localOverrideUntil.current = Date.now() + 5000;
 
         try {
             if (!ctrl.setScript) return;
-            await invokeProviderScript(ctrl.setScript, {
+            const res = await invokeProviderScript(ctrl.setScript, {
                 model: ctrl.id === 'model' ? value : undefined,
                 mode: ctrl.id === 'mode' ? value : undefined,
                 value,
-            }, mapLegacyScriptCommand(ctrl.setScript));
-        } catch { /* silent */ }
+            });
+            const mutationResult = extractControlMutationResult(res);
+            if ((mutationResult && !mutationResult.ok) || isExplicitFailure(res)) {
+                throw new Error(mutationResult?.error || getResponseError(res) || `Could not update ${ctrl.label}`);
+            }
+            commitMutationResult(ctrl, value, mutationResult);
+        } catch (error) {
+            rollbackControlValue(ctrl, previousValue);
+            const message = error instanceof Error ? error.message : `Could not update ${ctrl.label}`;
+            eventManager.showToast(message, 'warning');
+        }
     };
 
     const handleCycleValue = async (ctrl: ProviderControlSchema) => {
-        const options = ctrl.options?.map(o => o.value) || dynamicOptions[ctrl.id] || [];
+        const options = getControlOptions(ctrl, dynamicOptions).map(option => option.value);
         if (options.length === 0) return;
         const current = String(effectiveValues[ctrl.id] || '');
         const currentIdx = options.indexOf(current);
@@ -238,26 +289,46 @@ export default function ControlsBar({
         const nextValue = options[nextIdx];
         if (typeof nextValue !== 'string') return;
 
+        const previousValue = controlValues?.[ctrl.id] ?? defaultValues[ctrl.id];
         setLocalValues(prev => ({ ...prev, [ctrl.id]: nextValue }));
         localOverrideUntil.current = Date.now() + 5000;
 
         try {
             if (!ctrl.setScript) return;
-            await invokeProviderScript(ctrl.setScript, { value: nextValue }, mapLegacyScriptCommand(ctrl.setScript));
-        } catch { /* silent */ }
+            const res = await invokeProviderScript(ctrl.setScript, { value: nextValue });
+            const mutationResult = extractControlMutationResult(res);
+            if ((mutationResult && !mutationResult.ok) || isExplicitFailure(res)) {
+                throw new Error(mutationResult?.error || getResponseError(res) || `Could not update ${ctrl.label}`);
+            }
+            commitMutationResult(ctrl, nextValue, mutationResult);
+        } catch (error) {
+            rollbackControlValue(ctrl, previousValue);
+            const message = error instanceof Error ? error.message : `Could not update ${ctrl.label}`;
+            eventManager.showToast(message, 'warning');
+        }
     };
 
     const handleToggleValue = async (ctrl: ProviderControlSchema) => {
         const current = effectiveValues[ctrl.id];
         const nextValue = !current;
+        const previousValue = controlValues?.[ctrl.id] ?? defaultValues[ctrl.id];
 
         setLocalValues(prev => ({ ...prev, [ctrl.id]: nextValue }));
         localOverrideUntil.current = Date.now() + 5000;
 
         try {
             if (!ctrl.setScript) return;
-            await invokeProviderScript(ctrl.setScript, { value: nextValue }, mapLegacyScriptCommand(ctrl.setScript));
-        } catch { /* silent */ }
+            const res = await invokeProviderScript(ctrl.setScript, { value: nextValue });
+            const mutationResult = extractControlMutationResult(res);
+            if ((mutationResult && !mutationResult.ok) || isExplicitFailure(res)) {
+                throw new Error(mutationResult?.error || getResponseError(res) || `Could not update ${ctrl.label}`);
+            }
+            commitMutationResult(ctrl, nextValue, mutationResult);
+        } catch (error) {
+            rollbackControlValue(ctrl, previousValue);
+            const message = error instanceof Error ? error.message : `Could not update ${ctrl.label}`;
+            eventManager.showToast(message, 'warning');
+        }
     };
 
     const handleActionClick = async (ctrl: ProviderControlSchema) => {
@@ -268,9 +339,21 @@ export default function ControlsBar({
             const confirmed = window.confirm(confirmLines.join('\n\n'));
             if (!confirmed) return;
         }
+        const previousValue = controlValues?.[ctrl.id] ?? defaultValues[ctrl.id];
         try {
-            await invokeProviderScript(ctrl.invokeScript);
-        } catch { /* silent */ }
+            const res = await invokeProviderScript(ctrl.invokeScript);
+            const mutationResult = extractControlMutationResult(res);
+            if ((mutationResult && !mutationResult.ok) || isExplicitFailure(res)) {
+                throw new Error(mutationResult?.error || getResponseError(res) || `Could not run ${ctrl.label}`);
+            }
+            if (mutationResult) {
+                commitMutationResult(ctrl, previousValue ?? true, mutationResult);
+            }
+        } catch (error) {
+            rollbackControlValue(ctrl, previousValue);
+            const message = error instanceof Error ? error.message : `Could not run ${ctrl.label}`;
+            eventManager.showToast(message, 'warning');
+        }
     };
 
     return (
@@ -282,11 +365,10 @@ export default function ControlsBar({
 
             {barControls.map(ctrl => {
                 const currentValue = String(effectiveValues[ctrl.id] || '');
+                const currentLabel = getControlValueLabel(ctrl, dynamicOptions, currentValue);
                 const isOpen = openDropdown === ctrl.id;
                 const isLoading = loadingOption === ctrl.id;
-                const options = ctrl.options?.map(o => o.value)
-                    || dynamicOptions[ctrl.id]
-                    || [];
+                const options = getControlOptions(ctrl, dynamicOptions);
 
                 switch (ctrl.type) {
                     case 'select':
@@ -302,7 +384,7 @@ export default function ControlsBar({
                                     onClick={() => handleSelectToggle(ctrl)}
                                 >
                                     {ctrl.icon && <span className="text-[9px] opacity-60">{ctrl.icon}</span>}
-                                    {isLoading ? '...' : currentValue || ctrl.label}
+                                    {isLoading ? '...' : currentLabel || ctrl.label}
                                     <span className="text-[7px] opacity-50">▼</span>
                                 </span>
                                 {isOpen && options.length > 0 && (
@@ -314,18 +396,19 @@ export default function ControlsBar({
                                             </div>
                                             {options.map(opt => (
                                                 <div
-                                                    key={opt}
+                                                    key={opt.value}
                                                     className="px-3 py-[7px] text-[11px] cursor-pointer whitespace-nowrap overflow-hidden text-ellipsis"
                                                     style={{
-                                                        background: opt === currentValue ? `${accent}18` : 'transparent',
-                                                        color: opt === currentValue ? accent : 'var(--text-secondary)',
-                                                        fontWeight: opt === currentValue ? 600 : 400,
-                                                        borderLeft: opt === currentValue ? `2px solid ${accent}` : '2px solid transparent',
+                                                        background: opt.value === currentValue ? `${accent}18` : 'transparent',
+                                                        color: opt.value === currentValue ? accent : 'var(--text-secondary)',
+                                                        fontWeight: opt.value === currentValue ? 600 : 400,
+                                                        borderLeft: opt.value === currentValue ? `2px solid ${accent}` : '2px solid transparent',
                                                     }}
+                                                    title={opt.description || opt.label}
                                                     onMouseEnter={e => { e.currentTarget.style.background = `${accent}12`; }}
-                                                    onMouseLeave={e => { e.currentTarget.style.background = opt === currentValue ? `${accent}18` : 'transparent'; }}
-                                                    onClick={() => handleSelectValue(ctrl, opt)}
-                                                >{opt}</div>
+                                                    onMouseLeave={e => { e.currentTarget.style.background = opt.value === currentValue ? `${accent}18` : 'transparent'; }}
+                                                    onClick={() => handleSelectValue(ctrl, opt.value)}
+                                                >{opt.label}</div>
                                             ))}
                                         </div>
                                     </>
@@ -343,10 +426,10 @@ export default function ControlsBar({
                                     color: currentValue ? 'var(--text-primary)' : 'var(--text-muted)',
                                 }}
                                 onClick={() => handleCycleValue(ctrl)}
-                                title={`Click to cycle: ${options.join(' → ')}`}
+                                title={`Click to cycle: ${options.map(option => option.label).join(' → ')}`}
                             >
                                 {ctrl.icon && <span className="text-[9px] opacity-60">{ctrl.icon}</span>}
-                                {currentValue || ctrl.label}
+                                {currentLabel || ctrl.label}
                                 <span className="text-[7px] opacity-50">⟳</span>
                             </span>
                         );
@@ -410,20 +493,4 @@ export default function ControlsBar({
             })}
         </div>
     );
-}
-
-// ─── Helpers ────────────────────────────────────────────
-
-/**
- * Legacy daemon commands kept as fallback while providers migrate to generic invoke_provider_script.
- */
-function mapLegacyScriptCommand(setScript: string): string | undefined {
-    const mapping: Record<string, string> = {
-        'setModel': 'set_extension_model',
-        'setMode': 'set_extension_mode',
-        'listModels': 'list_extension_models',
-        'listModes': 'list_extension_modes',
-        'setThinkingLevel': 'set_thought_level',
-    };
-    return mapping[setScript];
 }

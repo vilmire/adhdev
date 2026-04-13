@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { SessionHostDiagnosticsSnapshot } from '@adhdev/daemon-core'
 import {
+    getSessionHostNextActionLabel,
     getSessionHostRecoveryLabel,
+    getSessionHostSectionHint,
     partitionSessionHostRecords,
 } from '../../utils/session-host-surface'
 import { IconRefresh, IconServer, IconTerminal, IconUsers, IconWarning } from '../../components/Icons'
@@ -304,6 +306,7 @@ export default function SessionHostPanel({
             ? '1 client'
             : `${session.attachedClients.length} clients`
         const recoveryActionLabel = section === 'recovery' ? 'Recover' : 'Resume'
+        const nextActionLabel = getSessionHostNextActionLabel(section)
         return (
             <div key={session.sessionId} className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
                 <div className="flex items-start justify-between gap-3">
@@ -342,6 +345,8 @@ export default function SessionHostPanel({
                             </span>
                             <span className="text-text-muted">·</span>
                             <span className="text-text-primary/85">active {formatRelativeTime(session.lastActivityAt)}</span>
+                            <span className="text-text-muted">·</span>
+                            <span className="text-sky-200">Next: {nextActionLabel}</span>
                         </div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -387,7 +392,7 @@ export default function SessionHostPanel({
                         <IconServer size={14} /> Hosted Runtime Recovery
                     </div>
                     <div className="text-[12px] text-text-secondary mt-1">
-                        Live runtime status plus advanced recover/restart controls for hosted CLI sessions.
+                        Live runtime status, next actions, and explicit recover/restart controls for hosted CLI sessions.
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -472,6 +477,9 @@ export default function SessionHostPanel({
                             <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5 mb-2.5">
                                 <IconTerminal size={14} /> Live Hosted Runtimes
                             </div>
+                            <div className="text-[11px] text-text-secondary mb-2.5">
+                                {getSessionHostSectionHint('live')}
+                            </div>
                             {liveSessions.length === 0 ? (
                                 <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-4 text-[12px] text-text-secondary">
                                     No live hosted runtimes on this machine right now.
@@ -488,7 +496,7 @@ export default function SessionHostPanel({
                                 <IconServer size={14} /> Recovery Snapshots
                             </div>
                             <div className="text-[11px] text-text-secondary mb-2.5">
-                                These records were recovered from session-host state and are not live attach targets until you explicitly recover or restart them.
+                                {getSessionHostSectionHint('recovery')}
                             </div>
                             {recoverySessions.length === 0 ? (
                                 <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-4 text-[12px] text-text-secondary">
@@ -505,6 +513,9 @@ export default function SessionHostPanel({
                             <div>
                                 <div className="text-[11px] text-text-secondary font-semibold uppercase tracking-wider mb-2.5">
                                     Inactive Records
+                                </div>
+                                <div className="text-[11px] text-text-secondary mb-2.5">
+                                    {getSessionHostSectionHint('inactive')}
                                 </div>
                                 <div className="space-y-2 opacity-85">
                                     {inactiveSessions.map((session) => renderSessionCard(session, 'inactive'))}

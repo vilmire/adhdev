@@ -5,6 +5,10 @@ import type { ActiveConversation } from './types'
 import type { MachineRecentLaunch, WorkspaceLaunchKind } from '../../pages/machine/types'
 import { useMemo } from 'react'
 import { getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
+import {
+    getCliLaunchPrimaryActionLabel,
+    getCliResumeSelectPlaceholder,
+} from '../../utils/dashboard-launch-copy'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
 import LaunchConfirmDialog from '../machine/LaunchConfirmDialog'
@@ -487,7 +491,7 @@ export default function DashboardMobileMachineScreen({
                     selectedWorkspaceKey={launcher.launchConfirmWorkspaceKey}
                     onWorkspaceChange={launcher.setLaunchConfirmWorkspaceKeyAndSync}
                     confirmLabel={launcher.launchConfirm.providerType
-                        ? (launcher.launchConfirmResumeId ? 'Resume saved session' : 'Start fresh')
+                        ? getCliLaunchPrimaryActionLabel(!!launcher.launchConfirmResumeId)
                         : launcher.launchConfirm.confirmLabel}
                     busy={launcher.launchConfirmBusy}
                     showArgsInput={launcher.launchConfirm.showArgsInput}
@@ -509,7 +513,7 @@ export default function DashboardMobileMachineScreen({
                                     className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
                                     disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
                                 >
-                                    <option value="">Start fresh</option>
+                                    <option value="">{getCliResumeSelectPlaceholder()}</option>
                                     {launcher.launchConfirmSavedSessions.map(sess => (
                                         <option key={sess.providerSessionId} value={sess.providerSessionId} disabled={!sess.canResume}>
                                             {sess.title || sess.providerSessionId} {!sess.canResume ? '(workspace missing)' : ''}

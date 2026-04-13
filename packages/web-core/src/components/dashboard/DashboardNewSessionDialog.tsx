@@ -2,6 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DaemonData } from '../../types'
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader'
 import { compareMachineEntries, getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
+import {
+    getCliLaunchBusyLabel,
+    getCliLaunchPrimaryActionLabel,
+    getCliResumeSelectPlaceholder,
+    getHostedRuntimeReviewButtonLabel,
+    getOpenHistoryLabel,
+} from '../../utils/dashboard-launch-copy'
 import { IconFolder, IconPlay, IconServer, IconX } from '../Icons'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
 import { collectBrowsePathCandidates, getDefaultBrowseStartPath, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
@@ -445,14 +452,14 @@ export default function DashboardNewSessionDialog({
     ])
 
     const primaryActionLabel = activeKind === 'cli'
-        ? (selectedResumeSessionId ? 'Resume saved session' : 'Start fresh')
+        ? getCliLaunchPrimaryActionLabel(!!selectedResumeSessionId)
         : activeKind === 'ide'
             ? 'Start IDE'
             : activeKind === 'acp'
                 ? 'Start ACP session'
                 : 'Start'
     const primaryBusyLabel = activeKind === 'cli'
-        ? (selectedResumeSessionId ? 'Resuming…' : 'Starting fresh…')
+        ? getCliLaunchBusyLabel(!!selectedResumeSessionId)
         : 'Starting…'
 
     if (!selectedMachine) {
@@ -510,7 +517,7 @@ export default function DashboardNewSessionDialog({
                                     <div>
                                         <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Hosted runtimes</div>
                                         <div className="text-xs text-text-secondary mt-1">
-                                            Review live runtimes, recovery snapshots, and restart options without leaving this launch flow.
+                                            Review live runtimes, recovery snapshots, and recover or restart options without leaving this launch flow.
                                         </div>
                                     </div>
                                     <button
@@ -520,7 +527,7 @@ export default function DashboardNewSessionDialog({
                                         onClick={() => setSessionHostOpen(true)}
                                     >
                                         <IconServer size={14} />
-                                        Review
+                                        {getHostedRuntimeReviewButtonLabel()}
                                     </button>
                                 </div>
                             </div>
@@ -696,7 +703,7 @@ export default function DashboardNewSessionDialog({
                                                 void loadSavedSessions(selectedMachine.id, selectedTarget)
                                             }}
                                         >
-                                            Open History
+                                            {getOpenHistoryLabel()}
                                         </button>
                                     </div>
                                 </div>
@@ -714,7 +721,7 @@ export default function DashboardNewSessionDialog({
                                         className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
                                         disabled={busy || savedSessionsLoading}
                                     >
-                                        <option value="">Start fresh CLI session</option>
+                                        <option value="">{getCliResumeSelectPlaceholder()}</option>
                                         {savedSessions.map(session => (
                                             <option
                                                 key={session.providerSessionId}

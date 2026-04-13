@@ -3,6 +3,8 @@ export interface SessionHostSurfaceRecordLike {
     meta?: Record<string, unknown> | null
 }
 
+export type SessionHostSurfaceSection = 'live' | 'recovery' | 'inactive'
+
 export function getSessionHostRecoveryLabel(meta: Record<string, unknown> | null | undefined): string | null {
     const recoveryState = typeof meta?.runtimeRecoveryState === 'string'
         ? String(meta.runtimeRecoveryState).trim()
@@ -42,4 +44,20 @@ export function partitionSessionHostRecords<T extends SessionHostSurfaceRecordLi
         recoverySnapshots,
         inactiveRecords,
     }
+}
+
+export function getSessionHostNextActionLabel(section: SessionHostSurfaceSection): string {
+    if (section === 'live') return 'Attach'
+    if (section === 'recovery') return 'Recover'
+    return 'Restart'
+}
+
+export function getSessionHostSectionHint(section: SessionHostSurfaceSection): string {
+    if (section === 'live') {
+        return 'These runtimes are live now and are the only attachable targets.'
+    }
+    if (section === 'recovery') {
+        return 'These records were restored from session-host state and are not live attach targets until you explicitly recover or restart them.'
+    }
+    return 'These inactive records are shown for reference and usually need restart before they are useful again.'
 }

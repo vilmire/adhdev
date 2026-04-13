@@ -91,8 +91,6 @@ interface DashboardMainViewProps {
     splitTabRelative: (tabKey: string, targetGroup: number, side: 'left' | 'right') => void
     closeGroup: (groupIndex: number) => void
     handleResizeStart: (dividerIdx: number, event: React.MouseEvent) => void
-    detectedIdes: { type: string; name: string; running: boolean; id?: string }[]
-    handleLaunchIde: (ideType: string) => Promise<void>
     groupActiveTabIds: Record<number, string | null>
     setGroupActiveTabIds: React.Dispatch<React.SetStateAction<Record<number, string | null>>>
     groupTabOrders: Record<number, string[]>
@@ -179,8 +177,6 @@ export default function DashboardMainView({
     splitTabRelative,
     closeGroup,
     handleResizeStart,
-    detectedIdes,
-    handleLaunchIde,
     groupActiveTabIds,
     setGroupActiveTabIds,
     groupTabOrders,
@@ -551,8 +547,6 @@ export default function DashboardMainView({
                     splitTabRelative={splitTabRelative}
                     closeGroup={closeGroup}
                     handleResizeStart={handleResizeStart}
-                    detectedIdes={detectedIdes}
-                    handleLaunchIde={handleLaunchIde}
                     groupActiveTabIds={groupActiveTabIds}
                     setGroupActiveTabIds={setGroupActiveTabIds}
                     groupTabOrders={groupTabOrders}
@@ -573,8 +567,6 @@ export default function DashboardMainView({
                     hasRegisteredMachines={machineEntries.length > 0}
                     initialDataLoaded={initialDataLoaded}
                     userName={userName}
-                    detectedIdes={detectedIdes}
-                    handleLaunchIde={handleLaunchIde}
                     toggleHiddenTab={toggleHiddenTab}
                     actionShortcuts={actionShortcuts}
                     registerActionHandlers={handlers => {

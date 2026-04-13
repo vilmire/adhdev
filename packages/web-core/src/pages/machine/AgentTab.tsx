@@ -15,6 +15,9 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { formatIdeType, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
+import {
+    getOpenHistoryLabel,
+} from '../../utils/dashboard-launch-copy'
 import { IconChat, IconMonitor, IconSearch, IconPlay, IconRefresh, IconX } from '../../components/Icons'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, ProviderInfo } from './types'
 import type { useMachineActions } from './useMachineActions'
@@ -753,7 +756,7 @@ export default function AgentTab({
                                 {!isAcp && category === 'cli' && (
                                     <div className="flex flex-col gap-1.5">
                                         <div className="flex items-center justify-between gap-2">
-                                            <span className="text-[10px] font-semibold text-text-secondary uppercase">Resume from History</span>
+                                            <span className="text-[10px] font-semibold text-text-secondary uppercase">Resume saved history</span>
                                             <div className="flex items-center gap-2">
                                                 <button
                                                     type="button"
@@ -773,7 +776,7 @@ export default function AgentTab({
                                                     }}
                                                     disabled={!selectedType}
                                                 >
-                                                    Open History
+                                                    {getOpenHistoryLabel()}
                                                 </button>
                                             </div>
                                         </div>
@@ -802,7 +805,7 @@ export default function AgentTab({
                                             )
                                         })() : (
                                             <div className="text-[10px] text-text-muted">
-                                                Start a new CLI session, or choose one from history.
+                                                Start fresh, or choose saved history when you want continuity.
                                             </div>
                                         )}
                                         {savedSessionsError && (

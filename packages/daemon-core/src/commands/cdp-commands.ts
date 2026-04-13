@@ -293,6 +293,25 @@ function listDirectoryEntriesSafe(dirPath: string): Array<{ name: string; type: 
     return files;
 }
 
+function listWindowsDriveEntries(excludePath?: string): Array<{ name: string; type: 'directory'; path: string }> {
+    const excluded = typeof excludePath === 'string' ? excludePath.toLowerCase() : '';
+    const drives: Array<{ name: string; type: 'directory'; path: string }> = [];
+
+    for (let code = 65; code <= 90; code += 1) {
+        const letter = String.fromCharCode(code);
+        const root = `${letter}:\\`;
+        try {
+            if (!fs.existsSync(root)) continue;
+            if (excluded && root.toLowerCase() === excluded) continue;
+            drives.push({ name: `${letter}:`, type: 'directory', path: root });
+        } catch {
+            // Ignore inaccessible drive probes.
+        }
+    }
+
+    return drives;
+}
+
 export async function handleFileRead(h: CommandHelpers, args: any): Promise<CommandResult> {
     try {
         const filePath = resolveSafePath(args?.path);
@@ -330,6 +349,14 @@ export async function handleFileListBrowse(h: CommandHelpers, args: any): Promis
         const files = listDirectoryEntriesSafe(dirPath)
             .filter(entry => entry.type === 'directory')
             .sort((a, b) => a.name.localeCompare(b.name));
+        if (process.platform === 'win32' && /^[A-Za-z]:\\?$/.test(dirPath)) {
+            const driveEntries = listWindowsDriveEntries(dirPath);
+            return {
+                success: true,
+                files: [...driveEntries, ...files],
+                path: dirPath,
+            };
+        }
         return { success: true, files, path: dirPath };
     } catch (e: any) {
         return { success: false, error: e.message };

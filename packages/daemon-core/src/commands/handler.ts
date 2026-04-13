@@ -416,10 +416,6 @@ export class DaemonCommandHandler implements CommandHelpers {
             'pty_input',
             'pty_resize',
             'invoke_provider_script',
-            'list_extension_models',
-            'set_extension_model',
-            'list_extension_modes',
-            'set_extension_mode',
         ]);
 
         if (this._currentRoute.sessionLookupFailed && sessionScopedCommands.has(cmd)) {
@@ -511,12 +507,8 @@ export class DaemonCommandHandler implements CommandHelpers {
             case 'get_ide_extensions': return Stream.handleGetIdeExtensions(this, args);
             case 'set_ide_extension': return Stream.handleSetIdeExtension(this, args);
 
-            // ─── Extension Model / Mode Control (stream-commands.ts) ──────────
+            // ─── Provider control execution (stream-commands.ts) ──────────
             case 'invoke_provider_script': return Stream.handleProviderScript(this, args);
-            case 'list_extension_models': return Stream.handleExtensionScript(this, args, 'listModels');
-            case 'set_extension_model': return Stream.handleExtensionScript(this, args, 'setModel');
-            case 'list_extension_modes': return Stream.handleExtensionScript(this, args, 'listModes');
-            case 'set_extension_mode': return Stream.handleExtensionScript(this, args, 'setMode');
 
             // ─── Provider Auto-Fix / Clone (DevServer proxy) ──────────
             case 'provider_auto_fix': return this.proxyDevServerPost(args, 'auto-implement');

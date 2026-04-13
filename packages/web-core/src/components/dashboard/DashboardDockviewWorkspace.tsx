@@ -59,8 +59,6 @@ interface DashboardDockviewWorkspaceProps {
     hasRegisteredMachines: boolean
     initialDataLoaded: boolean
     userName?: string
-    detectedIdes?: { type: string; name: string; running: boolean; id?: string }[]
-    handleLaunchIde?: (ideType: string) => void
     toggleHiddenTab: (tabKey: string) => void
     actionShortcuts: Partial<Record<DashboardActionShortcutId, string>>
     registerActionHandlers?: (handlers: {
@@ -94,8 +92,7 @@ interface DashboardDockviewContextValue {
     actionLogs: { routeId: string; text: string; timestamp: number }[]
     clearedTabs: Record<string, number>
     conversationsByTabKey: Map<string, ActiveConversation>
-    detectedIdes?: { type: string; name: string; running: boolean; id?: string }[]
-    handleLaunchIde?: (ideType: string) => void
+    hasDetachedConversationPanels: boolean
     ides: DaemonData[]
     isStandalone: boolean
     hasRegisteredMachines: boolean
@@ -368,8 +365,7 @@ function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDo
                     isSplitMode={false}
                     isStandalone={ctx.isStandalone}
                     hasRegisteredMachines={ctx.hasRegisteredMachines}
-                    detectedIdes={ctx.detectedIdes}
-                    handleLaunchIde={ctx.handleLaunchIde}
+                    suppressGuide={ctx.hasDetachedConversationPanels}
                 />
             </div>
         )
@@ -450,8 +446,7 @@ function DashboardDockviewWatermark() {
                 isSplitMode={false}
                 isStandalone={ctx.isStandalone}
                 hasRegisteredMachines={ctx.hasRegisteredMachines}
-                detectedIdes={ctx.detectedIdes}
-                handleLaunchIde={ctx.handleLaunchIde}
+                suppressGuide={ctx.hasDetachedConversationPanels}
             />
         </div>
     )
@@ -594,8 +589,6 @@ export default function DashboardDockviewWorkspace({
     hasRegisteredMachines,
     initialDataLoaded,
     userName,
-    detectedIdes,
-    handleLaunchIde,
     toggleHiddenTab,
     actionShortcuts,
     registerActionHandlers,
@@ -634,6 +627,19 @@ export default function DashboardDockviewWorkspace({
         () => buildLiveSessionInboxStateMap(ides),
         [ides],
     )
+    const hasDetachedConversationPanels = useMemo(() => {
+        const api = apiRef.current
+        if (!api) return false
+        return api.groups.some(group => {
+            try {
+                const locationType = group.model.location.type
+                if (locationType !== 'floating' && locationType !== 'popout') return false
+                return group.panels.some(panel => conversationsByTabKey.has(panel.id))
+            } catch {
+                return false
+            }
+        })
+    }, [conversationsByTabKey, popoutWindowRevision, visibleConversations])
     const focusDockview = useCallback(() => {
         apiRef.current?.focus()
     }, [])
@@ -1228,8 +1234,7 @@ export default function DashboardDockviewWorkspace({
         actionLogs,
         clearedTabs,
         conversationsByTabKey,
-        detectedIdes,
-        handleLaunchIde,
+        hasDetachedConversationPanels,
         ides,
         isStandalone,
         hasRegisteredMachines,
@@ -1251,8 +1256,7 @@ export default function DashboardDockviewWorkspace({
         actionLogs,
         clearedTabs,
         conversationsByTabKey,
-        detectedIdes,
-        handleLaunchIde,
+        hasDetachedConversationPanels,
         ides,
         isStandalone,
         hasRegisteredMachines,

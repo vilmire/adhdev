@@ -233,7 +233,6 @@ export default function ChatPane({
             !targetEntry
             || targetEntry.providerControls === undefined
             || targetEntry.controlValues === undefined
-            || (controlsContext.isAcp && (targetEntry.acpConfigOptions === undefined || targetEntry.acpModes === undefined))
         );
 
         if (!needsMetadata) return;
@@ -243,8 +242,6 @@ export default function ChatPane({
         controlsContext.isAcp,
         controlsContext.targetEntry?.providerControls,
         controlsContext.targetEntry?.controlValues,
-        controlsContext.targetEntry?.acpConfigOptions,
-        controlsContext.targetEntry?.acpModes,
         loadDaemonMetadata,
     ]);
 
@@ -508,10 +505,6 @@ export default function ChatPane({
                         displayLabel={controlsContext.displayLabel}
                         controls={controlsContext.targetEntry?.providerControls}
                         controlValues={controlsContext.targetEntry?.controlValues}
-                        serverModel={controlsContext.targetEntry?.currentModel || undefined}
-                        serverMode={controlsContext.targetEntry?.currentPlan || undefined}
-                        acpConfigOptions={controlsContext.isAcp ? controlsContext.targetEntry?.acpConfigOptions : undefined}
-                        acpModes={controlsContext.isAcp ? controlsContext.targetEntry?.acpModes : undefined}
                     />
                 );
             })()}

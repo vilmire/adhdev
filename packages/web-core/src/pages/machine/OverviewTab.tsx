@@ -9,7 +9,7 @@ import { IconClock, IconMonitor, IconFolder, IconTerminal, IconBot } from '../..
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry } from './types'
 import type { useMachineActions } from './useMachineActions'
 import WorkspaceBrowseDialog from '../../components/machine/WorkspaceBrowseDialog'
-import { browseMachineDirectories, getDefaultBrowseStartPath, type BrowseDirectoryEntry } from '../../components/machine/workspaceBrowse'
+import { browseMachineDirectories, collectBrowsePathCandidates, getDefaultBrowseStartPath, type BrowseDirectoryEntry } from '../../components/machine/workspaceBrowse'
 
 interface OverviewTabProps {
     machineId: string
@@ -54,12 +54,21 @@ export default function OverviewTab({
 
     const openBrowseDialog = useCallback(() => {
         setBrowseDialogOpen(true)
-        const initialPath = getDefaultBrowseStartPath(machine.platform, [
-            machine.defaultWorkspacePath,
-            machine.workspaces[0]?.path,
-        ])
+        const activeWorkspacePaths = [
+            ...ideSessions.map(session => session.workspace),
+            ...cliSessions.map(session => session.workspace),
+            ...acpSessions.map(session => session.workspace),
+        ]
+        const initialPath = getDefaultBrowseStartPath(
+            machine.platform,
+            collectBrowsePathCandidates(
+                activeWorkspacePaths,
+                machine.defaultWorkspacePath,
+                (machine.workspaces || []).map(workspace => workspace.path),
+            ),
+        )
         void loadBrowsePath(initialPath)
-    }, [loadBrowsePath, machine.defaultWorkspacePath, machine.platform, machine.workspaces])
+    }, [acpSessions, cliSessions, ideSessions, loadBrowsePath, machine.defaultWorkspacePath, machine.platform, machine.workspaces])
 
     const hasRuntimeStats = typeof machine.uptime === 'number'
         || typeof machine.freeMem === 'number'

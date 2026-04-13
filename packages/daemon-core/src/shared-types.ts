@@ -415,6 +415,8 @@ export interface ProviderControlSchema {
     step?: number;
     /** Sort order */
     order?: number;
+    /** Hide this control even if it would otherwise render */
+    hidden?: boolean;
 }
 
 // ─── Common Sub-Types (used across StatusReportPayload, BaseDaemonData, etc.) ──
