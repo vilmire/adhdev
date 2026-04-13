@@ -179,18 +179,6 @@ export default function ControlsBar({
         });
     }, [exec, providerType, hostIdeType, sessionId]);
 
-    if (!controls || controls.length === 0) {
-        return null;
-    }
-
-    const barControls = controls
-        .filter(c => c.placement === 'bar' && c.hidden !== true)
-        .sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
-
-    if (barControls.length === 0) {
-        return null;
-    }
-
     const commitMutationResult = useCallback((
         ctrl: ProviderControlSchema,
         optimisticValue: ControlScalarValue,
@@ -213,6 +201,18 @@ export default function ControlsBar({
         });
         localOverrideUntil.current = 0;
     }, []);
+
+    if (!controls || controls.length === 0) {
+        return null;
+    }
+
+    const barControls = controls
+        .filter(c => c.placement === 'bar' && c.hidden !== true)
+        .sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
+
+    if (barControls.length === 0) {
+        return null;
+    }
 
     const handleSelectToggle = async (ctrl: ProviderControlSchema) => {
         if (openDropdown === ctrl.id) {

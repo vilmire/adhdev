@@ -24,6 +24,7 @@ import {
   type MuxControllerEvent,
   type MuxWorkspaceState,
 } from '@adhdev/terminal-mux-core';
+import { formatMuxRuntimeListHeader, formatMuxRuntimeListLine } from './runtime-list.js';
 
 interface OpenCommandOptions {
   runtimeTargets: string[];
@@ -76,7 +77,7 @@ function usage(exitCode = 1): never {
   stream.write('Usage:\n');
   stream.write('  adhmux <command> [options] [runtimeKey...]\n\n');
   stream.write('Core commands:\n');
-  stream.write('  list               List hosted runtimes visible to session host\n');
+  stream.write('  list               List raw session-host records visible to adhmux\n');
   stream.write('  open <runtimeKey>  Open a mux workspace for a live runtime\n');
   stream.write('  snapshot <id>      Print the latest terminal snapshot for a runtime\n');
   stream.write('  sessions           List saved mux sessions\n');
@@ -171,10 +172,9 @@ async function listRuntimes(flags: CommandFlags = { json: false }): Promise<void
     await client.close();
     return;
   }
+  process.stdout.write(`${formatMuxRuntimeListHeader()}\n`);
   for (const record of result.result) {
-    process.stdout.write(
-      `${record.runtimeKey}\t${record.lifecycle}\t${record.workspaceLabel}\t${record.writeOwner ? `${record.writeOwner.ownerType}:${record.writeOwner.clientId}` : 'none'}\n`,
-    );
+    process.stdout.write(`${formatMuxRuntimeListLine(record)}\n`);
   }
   await client.close();
 }

@@ -2,7 +2,7 @@
 
 All notable changes to ADHDev will be documented in this file.
 
-## [0.8.56] - 2026-04-14
+## [0.8.57] - 2026-04-14
 
 ### Added
 - 
@@ -12,6 +12,14 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+## [0.8.56] - 2026-04-14
+
+### Fixed
+- Kept the standalone/published runtime surface coherent by using `runtimeTarget`-style targeting and clearer attach vs recover behavior for hosted runtime commands.
+
+### Changed
+- Made ordinary CLI launches fresh by default while keeping saved-history resume and hosted runtime recovery explicit.
+- Unified runtime, dashboard, and machine wording around `Start fresh`, `Resume saved history`, `Recover hosted runtime`, and `Saved History`.
 ## [0.8.55] - 2026-04-14
 
 ### Added
