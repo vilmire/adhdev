@@ -1,7 +1,12 @@
 import type { SubscribeRequest, TopicUpdateEnvelope, TransportTopic, UnsubscribeRequest } from '@adhdev/daemon-core'
+import { webDebugStore } from '../debug/webDebugStore'
 
 export interface SubscriptionTransport {
     sendData?: (daemonId: string, data: SubscribeRequest | UnsubscribeRequest) => boolean
+}
+
+export type SubscriptionHandle = (() => void) & {
+    initialSendAccepted: boolean
 }
 
 type TopicHandler<T extends TopicUpdateEnvelope = TopicUpdateEnvelope> = (update: T) => void
@@ -31,7 +36,7 @@ function logSubscriptionDebug(event: string, payload: Record<string, unknown>): 
     console.debug(`[subscription-manager] ${event}`, payload)
 }
 
-class SubscriptionManager {
+export class SubscriptionManager {
     private active = new Map<string, ActiveSubscription>()
 
     subscribe<T extends TopicUpdateEnvelope>(
@@ -39,9 +44,10 @@ class SubscriptionManager {
         daemonId: string,
         request: SubscribeRequest,
         handler: TopicHandler<T>,
-    ): () => void {
+    ): SubscriptionHandle {
         const id = buildSubscriptionId(request.topic, request.key)
         const existing = this.active.get(id)
+        let initialSendAccepted = true
         if (existing) {
             existing.handlers.add(handler as TopicHandler)
             if (existing.lastUpdate) {
@@ -59,16 +65,16 @@ class SubscriptionManager {
                 topic: request.topic,
                 key: request.key,
             })
-            transport.sendData?.(daemonId, request)
+            initialSendAccepted = transport.sendData?.(daemonId, request) ?? false
         }
 
-        return () => {
+        const unsubscribe = (() => {
             const current = this.active.get(id)
             if (!current) return
             current.handlers.delete(handler as TopicHandler)
             if (current.handlers.size > 0) return
             this.active.delete(id)
-            const unsubscribe: UnsubscribeRequest = {
+            const unsubscribeRequest: UnsubscribeRequest = {
                 type: 'unsubscribe',
                 topic: request.topic,
                 key: request.key,
@@ -78,8 +84,11 @@ class SubscriptionManager {
                 topic: request.topic,
                 key: request.key,
             })
-            transport.sendData?.(daemonId, unsubscribe)
-        }
+            transport.sendData?.(daemonId, unsubscribeRequest)
+        }) as SubscriptionHandle
+
+        unsubscribe.initialSendAccepted = initialSendAccepted
+        return unsubscribe
     }
 
     publish(update: TopicUpdateEnvelope): void {
@@ -87,8 +96,20 @@ class SubscriptionManager {
         const subscription = this.active.get(id)
         if (!subscription) return
         subscription.lastUpdate = update
+        webDebugStore.record({
+            interactionId: typeof (update as { interactionId?: unknown }).interactionId === 'string' ? (update as { interactionId?: string }).interactionId : undefined,
+            kind: 'subscription.publish',
+            topic: update.topic,
+            payload: { key: update.key },
+        })
         subscription.handlers.forEach((handler) => {
             handler(update)
+            webDebugStore.record({
+                interactionId: typeof (update as { interactionId?: unknown }).interactionId === 'string' ? (update as { interactionId?: string }).interactionId : undefined,
+                kind: 'subscription.handler_invoked',
+                topic: update.topic,
+                payload: { key: update.key },
+            })
         })
     }
 

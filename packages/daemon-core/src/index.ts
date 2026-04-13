@@ -151,6 +151,23 @@ export {
     getCurrentDaemonLogPath,
 } from './logging/logger.js';
 export type { ScopedLogger, LogLevel, LogEntry } from './logging/logger.js';
+export {
+    resolveDebugRuntimeConfig,
+    setDebugRuntimeConfig,
+    getDebugRuntimeConfig,
+    resetDebugRuntimeConfig,
+    shouldCollectTraceCategory,
+} from './logging/debug-config.js';
+export type { DebugRuntimeOptions, DebugRuntimeConfig } from './logging/debug-config.js';
+export {
+    createDebugTraceStore,
+    configureDebugTraceStore,
+    recordDebugTrace,
+    getRecentDebugTrace,
+    clearDebugTrace,
+    createInteractionId,
+} from './logging/debug-trace.js';
+export type { DebugTraceEvent, DebugTraceEntry, DebugTraceQuery, DebugTraceStore, DebugTraceLevel } from './logging/debug-trace.js';
 export { logCommand, getRecentCommands } from './logging/command-log.js';
 
 // ── CLI Management ──

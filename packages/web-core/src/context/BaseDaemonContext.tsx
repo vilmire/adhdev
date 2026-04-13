@@ -11,6 +11,8 @@
  */
 import { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect, type ReactNode } from 'react'
 import type { DaemonData, SessionEntry, WebVersionUpdateReason } from '../types'
+import { webDebugStore } from '../debug/webDebugStore'
+import { summarizeDaemonEntriesForDebug } from '../debug/entryDebugSummary'
 
 // ─── Types ────────────────────────────────────────────
 
@@ -520,7 +522,17 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
     const injectEntries = useCallback((entries: DaemonData[], options?: { authoritativeDaemonIds?: string[] }) => {
         setIdes(prev => {
             const next = prev.length === 0 ? entries : reconcileIdes(entries, prev, options)
-            return daemonArraysEqual(prev, next) ? prev : next
+            const changed = !daemonArraysEqual(prev, next)
+            if (changed) {
+                webDebugStore.record({
+                    kind: 'dashboard.entries_applied',
+                    payload: {
+                        incoming: summarizeDaemonEntriesForDebug(entries),
+                        next: summarizeDaemonEntriesForDebug(next),
+                    },
+                })
+            }
+            return changed ? next : prev
         })
     }, [])
 

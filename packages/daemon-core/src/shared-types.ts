@@ -187,6 +187,7 @@ export interface SessionChatTailUpdate extends ReadChatSyncResult {
     key: string;
     sessionId: string;
     historySessionId?: string;
+    interactionId?: string;
     seq: number;
     timestamp: number;
 }
@@ -215,6 +216,7 @@ export interface SessionModalUpdate {
     title?: string;
     modalMessage?: string;
     modalButtons?: string[];
+    interactionId?: string;
     seq: number;
     timestamp: number;
 }

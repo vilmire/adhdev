@@ -118,6 +118,8 @@ export { eventManager } from './managers/EventManager'
 export type { StatusEventPayload, ToastConfig, SystemMessage, ToastAction, ViewRequestRespondFn } from './managers/EventManager'
 export { subscriptionManager } from './managers/SubscriptionManager'
 export type { SubscriptionTransport } from './managers/SubscriptionManager'
+export { webDebugStore, createWebDebugStore } from './debug/webDebugStore'
+export type { WebDebugEvent, WebDebugEntry, WebDebugQuery, WebDebugStore } from './debug/webDebugStore'
 // Re-export daemon-core shared types for downstream consumers
 export type { AcpConfigOption, AcpMode, StatusReportPayload } from './types'
 export { cn } from './lib/utils'

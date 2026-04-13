@@ -31,6 +31,7 @@ export interface CommandLogEntry {
     ts: string;           // ISO timestamp
     cmd: string;          // command name
     source: 'ws' | 'p2p' | 'ext' | 'api' | 'standalone' | 'unknown';  // where it came from
+    interactionId?: string;
     args?: Record<string, unknown>;  // command arguments (sensitive values masked)
     success?: boolean;    // result
     error?: string;       // error message if failed
@@ -136,6 +137,7 @@ export function logCommand(entry: CommandLogEntry): void {
             ts: entry.ts,
             cmd: entry.cmd,
             src: entry.source,
+            ...(entry.interactionId ? { interactionId: entry.interactionId } : {}),
             ...(entry.args ? { args: maskArgs(entry.args) } : {}),
             ...(entry.success !== undefined ? { ok: entry.success } : {}),
             ...(entry.error ? { err: entry.error } : {}),
@@ -161,6 +163,7 @@ export function getRecentCommands(count = 50): CommandLogEntry[] {
                     ts: parsed.ts,
                     cmd: parsed.cmd,
                     source: parsed.src,
+                    interactionId: parsed.interactionId,
                     args: parsed.args,
                     success: parsed.ok,
                     error: parsed.err,

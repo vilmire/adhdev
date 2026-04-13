@@ -30,6 +30,7 @@ import { LOG } from '../logging/logger.js';
 import { logCommand } from '../logging/command-log.js';
 import type { CommandLogEntry } from '../logging/command-log.js';
 import { getRecentLogs, LOG_PATH } from '../logging/logger.js';
+import { createInteractionId, getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
 import { buildSessionEntries } from '../status/builders.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
@@ -104,6 +105,14 @@ function normalizeCommandSource(source: string): CommandLogEntry['source'] {
     }
 }
 
+function normalizeCommandArgsWithInteractionId(args: any): Record<string, unknown> {
+    const base = args && typeof args === 'object' ? { ...args } : {};
+    if (typeof base._interactionId !== 'string' || !String(base._interactionId).trim()) {
+        base._interactionId = createInteractionId();
+    }
+    return base;
+}
+
 function toHostedCliRuntimeDescriptor(record: any): HostedCliRuntimeDescriptor | null {
     if (!record || typeof record !== 'object') return null;
     const runtimeId = typeof record.sessionId === 'string' ? record.sessionId : '';
@@ -149,18 +158,42 @@ export class DaemonCommandRouter {
     async execute(cmd: string, args: any, source: string = 'unknown'): Promise<CommandRouterResult> {
         const cmdStart = Date.now();
         const logSource = normalizeCommandSource(source);
+        const normalizedArgs = normalizeCommandArgsWithInteractionId(args);
+        const interactionId = typeof normalizedArgs._interactionId === 'string' ? normalizedArgs._interactionId : undefined;
+
+        recordDebugTrace({
+            interactionId,
+            category: 'command',
+            stage: 'received',
+            level: 'info',
+            payload: { cmd, source: logSource },
+        });
 
         try {
             // 1. Try daemon-level command
-            const daemonResult = await this.executeDaemonCommand(cmd, args);
+            const daemonResult = await this.executeDaemonCommand(cmd, normalizedArgs);
             if (daemonResult) {
-                logCommand({ ts: new Date().toISOString(), cmd, source: logSource, args, success: daemonResult.success, durationMs: Date.now() - cmdStart });
+                logCommand({ ts: new Date().toISOString(), cmd, source: logSource, interactionId, args: normalizedArgs, success: daemonResult.success, durationMs: Date.now() - cmdStart });
+                recordDebugTrace({
+                    interactionId,
+                    category: 'command',
+                    stage: 'completed',
+                    level: daemonResult.success ? 'info' : 'warn',
+                    payload: { cmd, source: logSource, success: daemonResult.success, durationMs: Date.now() - cmdStart },
+                });
                 return daemonResult;
             }
 
             // 2. Delegate to DaemonCommandHandler
-            const handlerResult = await this.deps.commandHandler.handle(cmd, args);
-            logCommand({ ts: new Date().toISOString(), cmd, source: logSource, args, success: handlerResult.success, durationMs: Date.now() - cmdStart });
+            const handlerResult = await this.deps.commandHandler.handle(cmd, normalizedArgs);
+            logCommand({ ts: new Date().toISOString(), cmd, source: logSource, interactionId, args: normalizedArgs, success: handlerResult.success, durationMs: Date.now() - cmdStart });
+            recordDebugTrace({
+                interactionId,
+                category: 'command',
+                stage: 'completed',
+                level: handlerResult.success ? 'info' : 'warn',
+                payload: { cmd, source: logSource, success: handlerResult.success, durationMs: Date.now() - cmdStart },
+            });
 
             // 3. Post-chat command callback
             if (CHAT_COMMANDS.includes(cmd) && this.deps.onPostChatCommand) {
@@ -169,7 +202,14 @@ export class DaemonCommandRouter {
 
             return handlerResult;
         } catch (e: any) {
-            logCommand({ ts: new Date().toISOString(), cmd, source: logSource, args, success: false, error: e.message, durationMs: Date.now() - cmdStart });
+            logCommand({ ts: new Date().toISOString(), cmd, source: logSource, interactionId, args: normalizedArgs, success: false, error: e.message, durationMs: Date.now() - cmdStart });
+            recordDebugTrace({
+                interactionId,
+                category: 'command',
+                stage: 'failed',
+                level: 'error',
+                payload: { cmd, source: logSource, error: e?.message || String(e), durationMs: Date.now() - cmdStart },
+            });
             throw e;
         }
     }
@@ -216,6 +256,16 @@ export class DaemonCommandRouter {
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }
+            }
+
+            case 'get_debug_trace': {
+                const count = parseInt(args?.count) || parseInt(args?.limit) || 100;
+                const sinceTs = Number(args?.since) || 0;
+                const interactionId = typeof args?.interactionId === 'string' ? args.interactionId : undefined;
+                const category = typeof args?.category === 'string' ? args.category : undefined;
+                const trace = getRecentDebugTrace({ interactionId, category, limit: count })
+                    .filter((entry) => !sinceTs || entry.ts > sinceTs);
+                return { success: true, trace, count: trace.length };
             }
 
             case 'session_host_get_diagnostics': {

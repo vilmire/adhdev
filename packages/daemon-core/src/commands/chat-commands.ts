@@ -9,6 +9,7 @@ import { flattenContent, type ProviderModule, type ProviderScripts } from '../pr
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { readChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
+import { recordDebugTrace } from '../logging/debug-trace.js';
 import type { ChatMessage } from '../types.js';
 import type { ReadChatCursor, ReadChatSyncMode, SessionTransport } from '../shared-types.js';
 
@@ -101,6 +102,34 @@ function getHistorySessionId(h: CommandHelpers, args: any): string | undefined {
     const state = instance?.getState?.();
     const providerSessionId = typeof state?.providerSessionId === 'string' ? state.providerSessionId.trim() : '';
     return providerSessionId || targetSessionId;
+}
+
+function getInteractionId(args: any): string | undefined {
+    return typeof args?._interactionId === 'string' && args._interactionId.trim()
+        ? args._interactionId.trim()
+        : undefined;
+}
+
+function traceProviderEvent(
+    args: any,
+    category: 'provider' | 'parser',
+    stage: string,
+    options: {
+        h: CommandHelpers;
+        provider?: ProviderModule;
+        payload?: Record<string, unknown>;
+        level?: 'debug' | 'info' | 'warn' | 'error';
+    },
+): void {
+    recordDebugTrace({
+        interactionId: getInteractionId(args),
+        category,
+        stage,
+        level: options.level || 'info',
+        sessionId: typeof args?.targetSessionId === 'string' ? args.targetSessionId : options.h.currentSession?.sessionId,
+        providerType: options.provider?.type || options.h.currentProviderType || options.h.currentSession?.providerType,
+        payload: options.payload,
+    });
 }
 
 function callLegacyTextScript(script: ProviderScripts[keyof ProviderScripts] | undefined, text: string): string | null {
@@ -392,6 +421,16 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
                 if (parsed && typeof parsed === 'object') {
                     _log(`Extension OK: ${parsed.messages?.length || 0} msgs`);
+                    traceProviderEvent(args, 'provider', 'extension.read_chat.success', {
+                        h,
+                        provider,
+                        payload: {
+                            method: 'evaluateProviderScript',
+                            result: evalResult.result,
+                            parsed,
+                            messageCount: Array.isArray(parsed.messages) ? parsed.messages.length : 0,
+                        },
+                    });
                     h.historyWriter.appendNewMessages(
                         provider?.type || 'unknown_extension',
                         toHistoryPersistedMessages(normalizeReadChatMessages(parsed)),
@@ -404,6 +443,12 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             }
         } catch (e: any) {
             _log(`Extension error: ${e.message}`);
+            traceProviderEvent(args, 'provider', 'extension.read_chat.error', {
+                h,
+                provider,
+                level: 'warn',
+                payload: { method: 'evaluateProviderScript', error: e.message },
+            });
         }
         // Alternative: AgentStreamManager (script fail when)
         if (h.agentStream) {
@@ -471,22 +516,40 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
     const script = h.getProviderScript('readChat') || h.getProviderScript('read_chat');
     if (script) {
         try {
-            const result = await cdp.evaluate(script, 50000);
-            let parsed: any = result;
-            if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
-            if (parsed && typeof parsed === 'object' && parsed.messages?.length > 0) {
-                _log(`OK: ${parsed.messages?.length} msgs`);
-                h.historyWriter.appendNewMessages(
-                    provider?.type || getCurrentProviderType(h, 'unknown_ide'),
-                    toHistoryPersistedMessages(normalizeReadChatMessages(parsed)),
-                    parsed.title,
-                    args?.targetSessionId,
-                    historySessionId,
-                );
-                return buildReadChatCommandResult(parsed, args);
+            const evalResult = await h.evaluateProviderScript('readChat', undefined, 50000);
+            if (evalResult?.result) {
+                let parsed: any = evalResult.result;
+                if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
+                if (parsed && typeof parsed === 'object' && parsed.messages?.length > 0) {
+                    _log(`OK: ${parsed.messages?.length} msgs`);
+                    traceProviderEvent(args, 'provider', 'ide.read_chat.success', {
+                        h,
+                        provider,
+                        payload: {
+                            method: 'evaluate',
+                            result: evalResult.result,
+                            parsed,
+                            messageCount: Array.isArray(parsed.messages) ? parsed.messages.length : 0,
+                        },
+                    });
+                    h.historyWriter.appendNewMessages(
+                        provider?.type || getCurrentProviderType(h, 'unknown_ide'),
+                        toHistoryPersistedMessages(normalizeReadChatMessages(parsed)),
+                        parsed.title,
+                        args?.targetSessionId,
+                        historySessionId,
+                    );
+                    return buildReadChatCommandResult(parsed, args);
+                }
             }
         } catch (e: any) {
             LOG.info('Command', `[read_chat] Script error: ${e.message}`);
+            traceProviderEvent(args, 'provider', 'ide.read_chat.error', {
+                h,
+                provider,
+                level: 'warn',
+                payload: { method: 'evaluate', error: e.message },
+            });
         }
     }
 

@@ -43,7 +43,7 @@ export interface MachineData {
     defaultWorkspacePath: string | null
 }
 
-export interface LogEntry { timestamp: number; level: 'info' | 'warn' | 'error'; message: string }
+export interface LogEntry { timestamp: number; level: 'debug' | 'info' | 'warn' | 'error'; message: string }
 
 export interface ProviderSettingsEntry {
     type: string; displayName: string; icon: string; category: string;

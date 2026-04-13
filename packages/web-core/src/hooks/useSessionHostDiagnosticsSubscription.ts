@@ -3,6 +3,8 @@ import type { SessionHostDiagnosticsSnapshot, SessionHostDiagnosticsUpdate } fro
 import { useTransport } from '../context/TransportContext'
 import { subscriptionManager } from '../managers/SubscriptionManager'
 
+export const SESSION_HOST_DIAGNOSTICS_INITIAL_TIMEOUT_MS = 4000
+
 export function useSessionHostDiagnosticsSubscription(
     daemonId: string | null | undefined,
     opts?: { enabled?: boolean; includeSessions?: boolean; limit?: number; intervalMs?: number },
@@ -23,6 +25,7 @@ export function useSessionHostDiagnosticsSubscription(
         }
         setDiagnostics(null)
         setLoading(true)
+        let initialTimeout: ReturnType<typeof setTimeout> | null = null
         const unsubscribe = subscriptionManager.subscribe(
             { sendData },
             daemonId,
@@ -37,11 +40,25 @@ export function useSessionHostDiagnosticsSubscription(
                 },
             },
             (update: SessionHostDiagnosticsUpdate) => {
+                if (initialTimeout) {
+                    clearTimeout(initialTimeout)
+                    initialTimeout = null
+                }
                 setDiagnostics(update.diagnostics)
                 setLoading(false)
             },
         )
+        if (!unsubscribe.initialSendAccepted) {
+            setLoading(false)
+        } else {
+            initialTimeout = setTimeout(() => {
+                setLoading(false)
+            }, SESSION_HOST_DIAGNOSTICS_INITIAL_TIMEOUT_MS)
+        }
         return () => {
+            if (initialTimeout) {
+                clearTimeout(initialTimeout)
+            }
             unsubscribe()
         }
     }, [daemonId, opts?.enabled, opts?.includeSessions, opts?.intervalMs, opts?.limit, sendData])

@@ -8,6 +8,7 @@ import ControlsBar from './ControlsBar';
 import ChatInputBar from './ChatInputBar';
 import ConversationMetaChips from './ConversationMetaChips';
 import { getConversationViewStates } from './DashboardMobileChatShared';
+import { webDebugStore } from '../../debug/webDebugStore';
 import type { ReadChatCursor, ReadChatSyncResult, SessionChatTailUpdate } from '@adhdev/daemon-core';
 import type { ActiveConversation, DashboardMessage } from './types';
 import type { DaemonData } from '../../types';
@@ -29,6 +30,7 @@ import {
     getConversationProviderLabel,
     getConversationProviderType,
 } from './conversation-selectors';
+import { getDefaultVisibleLiveMessages } from './chat-visibility';
 
 interface ChatHistoryResult {
     messages?: DashboardMessage[];
@@ -140,7 +142,6 @@ export interface ChatPaneProps {
     isInputActive?: boolean;
 }
 
-const DEFAULT_VISIBLE_LIVE_MESSAGES = 60;
 const LIVE_MESSAGE_PAGE_SIZE = 60;
 
 export default function ChatPane({
@@ -164,6 +165,13 @@ export default function ChatPane({
     });
 
     const viewStates = React.useMemo(() => getConversationViewStates(activeConv), [activeConv.status, activeConv.connectionState]);
+    const controlsContext = useMemo(
+        () => getConversationControlsContext(activeConv, ideEntry),
+        [activeConv, ideEntry],
+    )
+    const defaultVisibleLiveMessages = getDefaultVisibleLiveMessages({
+        isCliLike: controlsContext.isCli || controlsContext.isAcp,
+    })
 
     // Per-tab history cache — survives tab switches
     interface TabHistoryState {
@@ -182,11 +190,11 @@ export default function ChatPane({
                 offset: 0,
                 hasMore: true,
                 error: null,
-                visibleLiveCount: DEFAULT_VISIBLE_LIVE_MESSAGES,
+                visibleLiveCount: defaultVisibleLiveMessages,
             });
         }
         return historyCache.current.get(tabKey)!;
-    }, []);
+    }, [defaultVisibleLiveMessages]);
 
     const updateTabHistory = useCallback((tabKey: string, patch: Partial<TabHistoryState>) => {
         const prev = getTabHistory(tabKey);
@@ -208,15 +216,15 @@ export default function ChatPane({
     const liveMessages = cachedLiveMessages
         ? dedupeOptimisticMessages([...cachedLiveMessages, ...optimisticMessages])
         : activeConv.messages;
+    useEffect(() => {
+        if (tabHistory.visibleLiveCount >= defaultVisibleLiveMessages) return;
+        updateTabHistory(tabKey, { visibleLiveCount: defaultVisibleLiveMessages });
+    }, [defaultVisibleLiveMessages, tabHistory.visibleLiveCount, tabKey, updateTabHistory]);
     const hiddenLiveCount = Math.max(0, liveMessages.length - tabHistory.visibleLiveCount);
     const panelLabel = getConversationDisplayLabel(activeConv)
     const daemonId = getConversationDaemonRouteId(activeConv);
     const sessionId = activeConv.sessionId || '';
     const historySessionId = activeConv.providerSessionId || sessionId;
-    const controlsContext = useMemo(
-        () => getConversationControlsContext(activeConv, ideEntry),
-        [activeConv, ideEntry],
-    )
 
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     useEffect(() => {
@@ -281,6 +289,17 @@ export default function ChatPane({
                     === buildChatSnapshotSignature(nextMessages);
                 if (unchanged) return;
                 liveChatCache.current.set(tabKey, nextMessages);
+                webDebugStore.record({
+                    interactionId: update.interactionId,
+                    kind: 'dashboard.chat_tail_applied',
+                    topic: 'session.chat_tail',
+                    payload: {
+                        sessionId,
+                        syncMode: update.syncMode,
+                        previousCount: currentMessages.length,
+                        nextCount: nextMessages.length,
+                    },
+                });
                 setHistoryTick(t => t + 1);
             },
         );

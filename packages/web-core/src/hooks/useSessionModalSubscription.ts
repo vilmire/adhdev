@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { SessionModalUpdate } from '@adhdev/daemon-core'
 import type { ActiveConversation } from '../components/dashboard/types'
+import { webDebugStore } from '../debug/webDebugStore'
 import { useTransport } from '../context/TransportContext'
 import { subscriptionManager } from '../managers/SubscriptionManager'
 
@@ -40,6 +41,16 @@ export function useSessionModalSubscription(activeConv: ActiveConversation): Ses
                     status: update.status,
                     modalMessage: update.modalMessage,
                     modalButtons: update.modalButtons,
+                })
+                webDebugStore.record({
+                    interactionId: update.interactionId,
+                    kind: 'dashboard.session_modal_applied',
+                    topic: 'session.modal',
+                    payload: {
+                        sessionId: activeConv.sessionId,
+                        status: update.status,
+                        modalButtonCount: Array.isArray(update.modalButtons) ? update.modalButtons.length : 0,
+                    },
                 })
             },
         )
