@@ -1,10 +1,10 @@
-# ADHDev OSS
+# ADHDev Self-Hosted
 
 [![npm](https://img.shields.io/npm/v/@adhdev/daemon-standalone?label=npm)](https://www.npmjs.com/package/@adhdev/daemon-standalone)
 [![CI](https://github.com/vilmire/adhdev/actions/workflows/ci.yml/badge.svg)](https://github.com/vilmire/adhdev/actions)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-ADHDev OSS is the self-hosted, local-first edition of ADHDev.
+ADHDev Self-Hosted is the open-source, local-first edition of ADHDev.
 
 This repo contains:
 
@@ -12,11 +12,11 @@ This repo contains:
 - the shared daemon/runtime packages used by both standalone and cloud
 - the session-host and terminal-mux stack for hosted CLI runtimes
 
-Cloud deployment lives separately at [`vilmire/adhdev-cloud`](https://github.com/vilmire/adhdev-cloud).
+This repository is for the self-hosted and standalone path. Hosted cloud operations are not part of this repository.
 
 ## What It Runs
 
-ADHDev OSS is built around three local layers:
+ADHDev Self-Hosted is built around three local layers:
 
 1. `daemon-standalone` exposes a local HTTP/WebSocket server and serves the web UI.
 2. `daemon-core` manages IDE, CLI, extension, and ACP integrations.

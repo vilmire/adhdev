@@ -61,14 +61,6 @@ jobs:
             platform: win32
             arch: x64
             node-version: 22
-          - runner: windows-latest
-            platform: win32
-            arch: x64
-            node-version: 24
-          - runner: windows-latest
-            platform: win32
-            arch: x64
-            node-version: 25
 
     steps:
       - uses: actions/checkout@v5
