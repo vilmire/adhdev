@@ -6,6 +6,7 @@ import {
   getHostedRuntimeReviewButtonLabel,
   getOpenHistoryLabel,
   getRefreshSavedHistoryLabel,
+  getRefreshingSavedHistoryLabel,
   getSavedHistoryEmptyStateLabel,
   getSavedHistoryModalTitle,
 } from '../../src/utils/dashboard-launch-copy'
@@ -37,5 +38,6 @@ describe('dashboard launch copy helpers', () => {
     expect(getSavedHistoryModalTitle()).toBe('Saved History')
     expect(getSavedHistoryEmptyStateLabel()).toBe('No saved history found yet.')
     expect(getRefreshSavedHistoryLabel()).toBe('Refresh saved history')
+    expect(getRefreshingSavedHistoryLabel()).toBe('Refreshing saved history…')
   })
 })

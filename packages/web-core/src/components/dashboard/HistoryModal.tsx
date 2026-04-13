@@ -11,6 +11,7 @@ import { createPortal } from 'react-dom';
 import { getConversationHistorySubtitle } from './conversation-presenters';
 import {
     getRefreshSavedHistoryLabel,
+    getRefreshingSavedHistoryLabel,
     getSavedHistoryEmptyStateLabel,
     getSavedHistoryModalTitle,
 } from '../../utils/dashboard-launch-copy';
@@ -185,7 +186,7 @@ export default function HistoryModal({
                     )}
                     {isSavedSessionMode && isSavedSessionsLoading && (
                         <div className="py-10 px-5 text-center text-text-muted">
-                            <div className="text-[13px]">Refreshing saved sessions…</div>
+                            <div className="text-[13px]">{getRefreshingSavedHistoryLabel()}</div>
                         </div>
                     )}
                 </div>
