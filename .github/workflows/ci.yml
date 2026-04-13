@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   build:
-    if: "${{ github.event_name != 'push' || github.ref_type != 'branch' || !startsWith(github.event.head_commit.message || '', 'chore: release v') }}"
+    if: "${{ github.event_name != 'push' || github.ref_type != 'branch' || !startsWith(github.event.head_commit.message || '', 'chore: bump version to v') }}"
     runs-on: ubuntu-latest
     strategy:
       matrix:
