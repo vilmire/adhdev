@@ -46,6 +46,7 @@ export interface DaemonInitConfig {
         removeAgentTracking: (key: string) => void;
         createPtyTransportFactory?: (params: CliTransportFactoryParams) => PtyTransportFactory | null;
         listHostedCliRuntimes?: () => Promise<HostedCliRuntimeDescriptor[]>;
+        hostedRuntimeManagerTag?: string;
     };
 
     /** CDP config */

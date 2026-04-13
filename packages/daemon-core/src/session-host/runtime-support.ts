@@ -65,6 +65,7 @@ export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Prom
                 workspace: record.workspace,
                 cliArgs: Array.isArray(record.meta?.cliArgs) ? (record.meta.cliArgs as string[]) : [],
                 providerSessionId: typeof record.meta?.providerSessionId === 'string' ? String(record.meta.providerSessionId) : undefined,
+                managedBy: typeof record.meta?.managedBy === 'string' ? String(record.meta.managedBy) : undefined,
             }));
     } finally {
         await client.close().catch(() => {});

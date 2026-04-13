@@ -27,6 +27,7 @@ import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { SessionRegistry } from '../sessions/registry.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { LOG } from '../logging/logger.js';
+import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
 
 // ─── external dependency interface ──────────────────────────
 
@@ -43,6 +44,7 @@ export interface CliManagerDeps {
     getSessionRegistry?(): SessionRegistry | null;
     createPtyTransportFactory?: (params: CliTransportFactoryParams) => PtyTransportFactory | null;
     listHostedCliRuntimes?: () => Promise<HostedCliRuntimeDescriptor[]>;
+    hostedRuntimeManagerTag?: string;
 }
 
 type CommandResult = { success: boolean;[key: string]: unknown };
@@ -67,6 +69,7 @@ export interface HostedCliRuntimeDescriptor {
     workspace: string;
     cliArgs?: string[];
     providerSessionId?: string;
+    managedBy?: string;
 }
 
 type CliPresentationInstance = ProviderInstance & {
@@ -707,9 +710,17 @@ export class DaemonCliManager {
         const sessions = records || await this.deps.listHostedCliRuntimes?.() || [];
         let restored = 0;
         const restoredBindings = new Set<string>();
+        const managerTag = this.deps.hostedRuntimeManagerTag;
 
         for (const record of sessions) {
             if (!record?.runtimeId || !record?.cliType || !record?.workspace) continue;
+            if (!shouldRestoreHostedRuntime(record, managerTag)) {
+                LOG.info(
+                    'CLI',
+                    `↷ Skipping hosted runtime restore owned by ${record.managedBy}: ${record.runtimeKey || record.runtimeId}`
+                );
+                continue;
+            }
             if (this.adapters.has(record.runtimeId) || instanceManager.getInstance(record.runtimeId)) continue;
             const normalizedType = this.providerLoader.resolveAlias(record.cliType);
             const providerMeta = this.providerLoader.getMeta(normalizedType);

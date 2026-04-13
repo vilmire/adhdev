@@ -8,6 +8,24 @@
 
 set -e
 
+warn_if_node_release_runtime_old() {
+    local node_version
+    node_version=$(node -p "process.versions.node")
+    local needs_warning
+    needs_warning=$(node -e '
+const v = process.versions.node.split(".").map(Number);
+const major = v[0] || 0, minor = v[1] || 0, patch = v[2] || 0;
+const ok = major > 22 || major == 22 || (major == 20 && (minor > 19 || (minor == 19 && patch >= 0)));
+process.stdout.write(ok ? "0" : "1");
+')
+    if [ "$needs_warning" = "1" ]; then
+        echo "⚠ Local Node.js $node_version may be below the preferred release baseline."
+        echo "  Recommended: Node.js 22 LTS or at least 20.19.x to avoid npm engine/runtime drift during releases."
+    fi
+}
+
+warn_if_node_release_runtime_old()
+
 if [ -z "$1" ]; then
     echo "Usage: $0 <patch|minor|major|x.y.z>"
     echo "  patch  → 0.6.68 → 0.6.69"

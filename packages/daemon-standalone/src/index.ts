@@ -348,6 +348,7 @@ class StandaloneServer {
         }),
         onStatusChange: () => this.scheduleBroadcastStatus(),
         removeAgentTracking: () => {},
+        hostedRuntimeManagerTag: 'adhdev-standalone',
         createPtyTransportFactory: ({ runtimeId, providerType, workspace, cliArgs, providerSessionId, attachExisting }: CliTransportFactoryParams) => (
                         new SessionHostPtyTransportFactory({
                             endpoint: sessionHostEndpoint,
