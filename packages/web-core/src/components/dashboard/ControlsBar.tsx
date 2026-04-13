@@ -243,7 +243,8 @@ export default function ControlsBar({
                     return next;
                 });
                 if (isControlScalarValue(controlResult.currentValue)) {
-                    setLocalValues(prev => ({ ...prev, [ctrl.id]: controlResult.currentValue }));
+                    const currentValue = controlResult.currentValue;
+                    setLocalValues(prev => ({ ...prev, [ctrl.id]: currentValue }));
                 }
                 setOpenDropdown(ctrl.id);
             } catch (error) {
