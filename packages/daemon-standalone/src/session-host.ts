@@ -5,10 +5,15 @@ import * as path from 'path';
 import {
   ensureSessionHostReady as ensureSharedSessionHostReady,
   listHostedCliRuntimes as listSharedHostedCliRuntimes,
+  resolveSessionHostAppName,
   type SessionHostEndpoint,
 } from '@adhdev/daemon-core';
-const SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev';
+const SESSION_HOST_APP_NAME = resolveSessionHostAppName({ standalone: true });
 const SESSION_HOST_START_TIMEOUT_MS = 15_000;
+
+export function getStandaloneSessionHostAppName(): string {
+  return SESSION_HOST_APP_NAME;
+}
 
 function buildSessionHostEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};

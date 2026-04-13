@@ -191,6 +191,11 @@ export { NodePtyTransportFactory } from './cli-adapters/pty-transport.js';
 export type { PtyRuntimeTransport, PtyTransportFactory, PtySpawnOptions } from './cli-adapters/pty-transport.js';
 export { SessionHostPtyTransportFactory } from './cli-adapters/session-host-transport.js';
 export type { HostedCliRuntimeDescriptor, CliTransportFactoryParams } from './commands/cli-manager.js';
+export {
+  DEFAULT_SESSION_HOST_APP_NAME,
+  DEFAULT_STANDALONE_SESSION_HOST_APP_NAME,
+  resolveSessionHostAppName,
+} from './session-host/app-name.js';
 export { ensureSessionHostReady, listHostedCliRuntimes } from './session-host/runtime-support.js';
 export type { SessionHostEndpoint } from '@adhdev/session-host-core';
 

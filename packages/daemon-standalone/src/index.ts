@@ -53,6 +53,7 @@ import {
 } from '@adhdev/daemon-core';
 import {
   ensureSessionHostReady,
+  getStandaloneSessionHostAppName,
   listHostedCliRuntimes,
   proxySessionHostAttach,
   proxySessionHostList,
@@ -456,6 +457,7 @@ class StandaloneServer {
     const cdpCount = [...this.components.cdpManagers.values()].filter(m => m.isConnected).length;
     console.log(`   CDP: ${cdpCount > 0 ? `✅ ${cdpCount} connected` : '❌ none'}`);
     console.log(`   Providers: ${this.components.providerLoader.getAll().length} loaded`);
+    console.log(`   Session Host: ${getStandaloneSessionHostAppName()}`);
     if (options.dev) {
       console.log(`   🛠️  DevConsole: http://127.0.0.1:19280`);
     }
@@ -1633,6 +1635,9 @@ Options:
   --dev               Enable DevConsole to debug and test providers
   --public <path>     Custom path to the web dashboard distribution
   --no-open           Do not automatically open the browser on startup
+
+Environment:
+  ADHDEV_SESSION_HOST_NAME   Override session host namespace (default: adhdev-standalone)
   --help, -h          Show this help message
 
 Runtime commands:
