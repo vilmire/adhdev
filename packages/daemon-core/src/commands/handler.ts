@@ -46,6 +46,7 @@ export interface CommandContext {
     instanceManager?: ProviderInstanceManager;
     sessionRegistry?: SessionRegistry;
     onProviderSettingChanged?: (providerType: string, key: string, value: any) => Promise<void> | void;
+    onProviderSourceConfigChanged?: () => Promise<void> | void;
 }
 
 /**
@@ -502,6 +503,8 @@ export class DaemonCommandHandler implements CommandHelpers {
             // ─── Provider Settings (stream-commands.ts) ──────────
             case 'get_provider_settings': return Stream.handleGetProviderSettings(this, args);
             case 'set_provider_setting': return Stream.handleSetProviderSetting(this, args);
+            case 'get_provider_source_config': return Stream.handleGetProviderSourceConfig(this, args);
+            case 'set_provider_source_config': return Stream.handleSetProviderSourceConfig(this, args);
 
             // ─── IDE Extension Settings (stream-commands.ts) ──────────
             case 'get_ide_extensions': return Stream.handleGetIdeExtensions(this, args);

@@ -20,6 +20,7 @@ export interface DevServerContext {
   readonly cdpManagers: Map<string, DaemonCdpManager>;
   readonly instanceManager: ProviderInstanceManager | null;
   readonly cliManager: DaemonCliManager | null;
+  readonly onProviderSourceConfigChanged?: (() => Promise<void> | void) | null;
 
   // Utilities
   getCdp(ideType?: string): DaemonCdpManager | null;

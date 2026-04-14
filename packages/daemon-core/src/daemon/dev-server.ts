@@ -22,6 +22,8 @@ import * as os from 'os';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderCategory, ProviderModule, ProviderScripts, ProviderSettingDef } from '../providers/contracts.js';
 import { validateProviderDefinition } from '../providers/provider-schema.js';
+import { loadConfig, saveConfig } from '../config/config.js';
+import { parseProviderSourceConfigUpdate } from '../config/provider-source-config.js';
 import type { ChildProcess } from 'child_process';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
@@ -100,6 +102,7 @@ export class DevServer implements DevServerContext {
   public cdpManagers: Map<string, DaemonCdpManager>;
   public instanceManager: ProviderInstanceManager | null;
   public cliManager: DaemonCliManager | null;
+  public onProviderSourceConfigChanged: (() => Promise<void> | void) | null;
   private logFn: (msg: string) => void;
   private sseClients: http.ServerResponse[] = [];
   private watchScriptPath: string | null = null;
@@ -120,11 +123,13 @@ export class DevServer implements DevServerContext {
     instanceManager?: ProviderInstanceManager;
     cliManager?: DaemonCliManager;
     logFn?: (msg: string) => void;
+    onProviderSourceConfigChanged?: () => Promise<void> | void;
   }) {
     this.providerLoader = options.providerLoader;
     this.cdpManagers = options.cdpManagers;
     this.instanceManager = options.instanceManager || null;
     this.cliManager = options.cliManager || null;
+    this.onProviderSourceConfigChanged = options.onProviderSourceConfigChanged || null;
     this.logFn = options.logFn || LOG.forComponent('DevServer').asLogFn();
   }
 
@@ -140,6 +145,8 @@ export class DevServer implements DevServerContext {
   }[] = [
     // Static routes
     { method: 'GET',  pattern: '/api/providers',          handler: (q, s) => this.handleListProviders(q, s) },
+    { method: 'GET',  pattern: '/api/providers/source-config', handler: (q, s) => this.handleGetProviderSourceConfig(q, s) },
+    { method: 'POST', pattern: '/api/providers/source-config', handler: (q, s) => this.handleSetProviderSourceConfig(q, s) },
     { method: 'GET',  pattern: '/api/providers/versions',  handler: (q, s) => this.handleDetectVersions(q, s) },
     { method: 'POST', pattern: '/api/providers/reload',    handler: (q, s) => this.handleReload(q, s) },
     { method: 'POST', pattern: '/api/cdp/evaluate',        handler: (q, s) => this.handleCdpEvaluate(q, s) },
@@ -273,7 +280,38 @@ export class DevServer implements DevServerContext {
 
   private async handleListProviders(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const providers = this.providerLoader.getAll().map(toProviderListEntry);
-    this.json(res, 200, { providers, count: providers.length });
+    this.json(res, 200, { providers, count: providers.length, sourceConfig: this.providerLoader.getSourceConfig() });
+  }
+
+  private async handleGetProviderSourceConfig(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    this.json(res, 200, { success: true, sourceConfig: this.providerLoader.getSourceConfig() });
+  }
+
+  private async handleSetProviderSourceConfig(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await this.readBody(req);
+    const parsed = parseProviderSourceConfigUpdate(body || {});
+    if (!parsed.ok) {
+      this.json(res, 400, { success: false, error: parsed.error });
+      return;
+    }
+
+    const currentConfig = loadConfig();
+    const nextConfig = {
+      ...currentConfig,
+      ...(parsed.updates.providerSourceMode ? { providerSourceMode: parsed.updates.providerSourceMode } : {}),
+      ...(Object.prototype.hasOwnProperty.call(parsed.updates, 'providerDir') ? { providerDir: parsed.updates.providerDir } : {}),
+    };
+    saveConfig(nextConfig);
+
+    const sourceConfig = this.providerLoader.applySourceConfig({
+      sourceMode: nextConfig.providerSourceMode,
+      userDir: Object.prototype.hasOwnProperty.call(parsed.updates, 'providerDir') ? parsed.updates.providerDir : this.providerLoader.getSourceConfig().explicitProviderDir || undefined,
+    });
+    this.providerLoader.reload();
+    this.providerLoader.registerToDetector();
+    await this.onProviderSourceConfigChanged?.();
+
+    this.json(res, 200, { success: true, reloaded: true, sourceConfig });
   }
 
   private async handleProviderConfig(type: string, _req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

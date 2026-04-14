@@ -31,6 +31,7 @@ import type {
 } from './contracts.js';
 import { validateProviderDefinition } from './provider-schema.js';
 import type { ProviderSourceMode } from '../config/config.js';
+import type { ProviderSourceConfigSnapshot } from '../config/provider-source-config.js';
 
 interface ProviderAvailabilityState {
   installed: boolean;
@@ -40,8 +41,11 @@ interface ProviderAvailabilityState {
 export class ProviderLoader {
   private providers = new Map<string, ProviderModule>();
   private providerAvailability = new Map<string, ProviderAvailabilityState>();
+  private defaultProvidersDir: string;
+  private explicitProviderDir: string | null = null;
   private userDir: string;
   private upstreamDir: string;
+  private sourceMode: ProviderSourceMode = 'normal';
   private disableUpstream: boolean;
   private watchers: any[] = [];
   private logFn: (msg: string) => void;
@@ -67,21 +71,16 @@ export class ProviderLoader {
     this.logFn = options?.logFn || LOG.forComponent('Provider').asLogFn();
 
     // Default directory for auto-downloads
-    const defaultProvidersDir = path.join(os.homedir(), '.adhdev', 'providers');
+    this.defaultProvidersDir = path.join(os.homedir(), '.adhdev', 'providers');
+    this.userDir = this.defaultProvidersDir;
+    this.upstreamDir = path.join(this.defaultProvidersDir, '.upstream');
+    this.disableUpstream = false;
 
-    if (options?.userDir) {
-        this.userDir = options.userDir;
-        this.log(`Config 'providerDir' applied: ${this.userDir}`);
-    } else {
-        this.userDir = defaultProvidersDir;
-        this.log(`Using default user providers directory: ${this.userDir}`);
-    }
-
-    // Upstream auto-download directory is always in the default location
-    this.upstreamDir = path.join(defaultProvidersDir, '.upstream');
-    this.disableUpstream = options?.sourceMode === 'no-upstream'
-      ? true
-      : (options?.sourceMode === 'normal' ? false : (options?.disableUpstream ?? false));
+    this.applySourceConfig({
+      userDir: options?.userDir,
+      sourceMode: options?.sourceMode,
+      disableUpstream: options?.disableUpstream,
+    });
   }
 
   private log(msg: string): void {
@@ -110,6 +109,47 @@ export class ProviderLoader {
    */
   getProviderRoots(): string[] {
     return [this.userDir, this.upstreamDir];
+  }
+
+  getSourceConfig(): ProviderSourceConfigSnapshot {
+    return {
+      sourceMode: this.sourceMode,
+      disableUpstream: this.disableUpstream,
+      explicitProviderDir: this.explicitProviderDir,
+      userDir: this.userDir,
+      upstreamDir: this.upstreamDir,
+      providerRoots: this.getProviderRoots(),
+    };
+  }
+
+  applySourceConfig(options?: {
+    userDir?: string;
+    sourceMode?: ProviderSourceMode;
+    disableUpstream?: boolean;
+  }): ProviderSourceConfigSnapshot {
+    const nextSourceMode = options?.sourceMode === 'no-upstream'
+      ? 'no-upstream'
+      : (options?.sourceMode === 'normal'
+        ? 'normal'
+        : (options?.disableUpstream ? 'no-upstream' : this.sourceMode || 'normal'));
+
+    if (options && Object.prototype.hasOwnProperty.call(options, 'userDir')) {
+      this.explicitProviderDir = options.userDir?.trim() ? options.userDir : null;
+    }
+
+    this.sourceMode = nextSourceMode;
+    this.userDir = this.explicitProviderDir || this.defaultProvidersDir;
+    this.upstreamDir = path.join(this.defaultProvidersDir, '.upstream');
+    this.disableUpstream = this.sourceMode === 'no-upstream';
+
+    if (this.explicitProviderDir) {
+      this.log(`Config 'providerDir' applied: ${this.userDir}`);
+    } else {
+      this.log(`Using default user providers directory: ${this.userDir}`);
+    }
+    this.log(`Provider source config: mode=${this.sourceMode} explicitProviderDir=${this.explicitProviderDir || '-'} userDir=${this.userDir} upstreamDir=${this.upstreamDir}`);
+
+    return this.getSourceConfig();
   }
 
  /**

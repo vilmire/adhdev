@@ -195,6 +195,8 @@ export { IdeProviderInstance } from './providers/ide-provider-instance.js';
 export { CliProviderInstance } from './providers/cli-provider-instance.js';
 export { AcpProviderInstance } from './providers/acp-provider-instance.js';
 export type { ProviderModule, CdpTargetFilter, ProviderResumeCapability, InputEnvelope, InputPart, MessagePart, ControlListResult, ControlSetResult, ControlInvokeResult } from './providers/contracts.js';
+export type { ProviderSourceConfigSnapshot, ProviderSourceConfigUpdate } from './config/provider-source-config.js';
+export { parseProviderSourceConfigUpdate } from './config/provider-source-config.js';
 export { normalizeInputEnvelope, normalizeMessageParts, flattenMessageParts } from './providers/io-contracts.js';
 export { VersionArchive, detectAllVersions } from './providers/version-archive.js';
 export type { ProviderVersionInfo, VersionHistory } from './providers/version-archive.js';

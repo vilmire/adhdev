@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { ProviderSettingsEntry, ProviderInfo } from './types'
 import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './providerSettings'
+import { extractProviderSourceConfigPayload, normalizeProviderDirInput, type ProviderSourceConfigPayload } from './providerSourceConfig'
 import ProviderFixModal from './ProviderFixModal'
 import ProviderCloneModal from './ProviderCloneModal'
 
@@ -21,6 +22,23 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
     const [filter, setFilter] = useState<'all' | 'acp' | 'cli' | 'ide' | 'extension'>('all')
     const [fixTarget, setFixTarget] = useState<ProviderInfo | null>(null)
     const [showClone, setShowClone] = useState(false)
+    const [sourceConfig, setSourceConfig] = useState<ProviderSourceConfigPayload | null>(null)
+    const [sourceModeInput, setSourceModeInput] = useState<'normal' | 'no-upstream'>('normal')
+    const [providerDirInput, setProviderDirInput] = useState('')
+    const [sourceSaving, setSourceSaving] = useState(false)
+
+    const fetchSourceConfig = useCallback(async () => {
+        if (!machineId) return
+        try {
+            const res = await sendDaemonCommand(machineId, 'get_provider_source_config', {})
+            const payload = extractProviderSourceConfigPayload(res)
+            if (payload) {
+                setSourceConfig(payload)
+                setSourceModeInput(payload.sourceMode)
+                setProviderDirInput(payload.explicitProviderDir || '')
+            }
+        } catch { }
+    }, [machineId, sendDaemonCommand])
 
     const fetchSettings = useCallback(async () => {
         if (!machineId) return
@@ -39,6 +57,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
 
     useEffect(() => {
         if (settings.length === 0) fetchSettings()
+        if (!sourceConfig) fetchSourceConfig()
     }, [])
 
     const handleSetSetting = async (providerType: string, key: string, value: unknown) => {
@@ -54,6 +73,28 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
             fetchSettings()
         }
         setSavingKey(null)
+    }
+
+    const handleApplySourceConfig = async () => {
+        setSourceSaving(true)
+        try {
+            const res = await sendDaemonCommand(machineId, 'set_provider_source_config', {
+                providerSourceMode: sourceModeInput,
+                providerDir: normalizeProviderDirInput(providerDirInput),
+            })
+            const payload = extractProviderSourceConfigPayload(res)
+            if (payload) {
+                setSourceConfig(payload)
+                setSourceModeInput(payload.sourceMode)
+                setProviderDirInput(payload.explicitProviderDir || '')
+            } else {
+                await fetchSourceConfig()
+            }
+            await fetchSettings()
+        } catch {
+            await fetchSourceConfig()
+        }
+        setSourceSaving(false)
     }
 
     return (
@@ -79,6 +120,49 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                     <button onClick={fetchSettings} disabled={loading} className="machine-btn">
                         {loading ? '⏳ Loading...' : '↻ Refresh'}
                     </button>
+                </div>
+            </div>
+
+            <div className="px-4.5 py-3.5 rounded-xl bg-bg-secondary border border-border-subtle mb-4">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                    <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wider text-violet-400">Provider source config</div>
+                        <div className="text-[11px] text-text-muted mt-1">Affects provider resolution, fix/verify flows, and new launches. Existing running sessions may need restart.</div>
+                    </div>
+                    <button onClick={fetchSourceConfig} className="machine-btn text-[10px]">↻ Refresh source</button>
+                </div>
+                <div className="grid md:grid-cols-[180px_1fr_auto] gap-3 items-end">
+                    <label className="flex flex-col gap-1 text-[11px] text-text-secondary">
+                        <span className="font-medium text-text-primary">Source mode</span>
+                        <select
+                            value={sourceModeInput}
+                            onChange={e => setSourceModeInput(e.target.value as 'normal' | 'no-upstream')}
+                            className="machine-input text-[11px]"
+                        >
+                            <option value="normal">normal</option>
+                            <option value="no-upstream">no-upstream</option>
+                        </select>
+                    </label>
+                    <label className="flex flex-col gap-1 text-[11px] text-text-secondary">
+                        <span className="font-medium text-text-primary">Explicit providerDir</span>
+                        <input
+                            type="text"
+                            value={providerDirInput}
+                            onChange={e => setProviderDirInput(e.target.value)}
+                            placeholder="Leave blank to use ~/.adhdev/providers"
+                            className="machine-input text-[11px]"
+                        />
+                    </label>
+                    <button
+                        onClick={() => void handleApplySourceConfig()}
+                        disabled={sourceSaving}
+                        className="machine-btn text-[10px] bg-violet-500/[0.08] border-violet-500/20 text-violet-300 hover:bg-violet-500/[0.14]"
+                    >{sourceSaving ? 'Applying…' : 'Apply + Reload'}</button>
+                </div>
+                <div className="mt-3 grid gap-1 text-[11px] text-text-muted">
+                    <div><span className="text-text-primary font-medium">Effective user root:</span> {sourceConfig?.userDir || 'loading…'}</div>
+                    <div><span className="text-text-primary font-medium">Upstream root:</span> {sourceConfig?.upstreamDir || 'loading…'}</div>
+                    <div><span className="text-text-primary font-medium">Provider roots:</span> {sourceConfig?.providerRoots?.join(' → ') || 'loading…'}</div>
                 </div>
             </div>
 

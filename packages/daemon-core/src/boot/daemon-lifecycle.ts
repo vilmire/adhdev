@@ -90,6 +90,7 @@ export interface DaemonComponents {
     cdpManagers: Map<string, DaemonCdpManager>;
     sessionRegistry: SessionRegistry;
     detectedIdes: { value: IDEInfo[] };
+    refreshProviderAvailability: (providerType?: string) => Promise<void>;
 }
 
 export interface DaemonDevSupportOptions {
@@ -254,6 +255,10 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
             await refreshProviderAvailability(providerType);
             config.onStatusChange?.();
         },
+        onProviderSourceConfigChanged: async () => {
+            await refreshProviderAvailability();
+            config.onStatusChange?.();
+        },
     });
 
     // 8. AgentStreamManager
@@ -313,6 +318,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         cdpManagers,
         sessionRegistry,
         detectedIdes: detectedIdesRef,
+        refreshProviderAvailability,
     };
 }
 
@@ -328,6 +334,9 @@ export async function startDaemonDevSupport(options: DaemonDevSupportOptions): P
         instanceManager: options.components.instanceManager,
         cliManager: options.components.cliManager,
         logFn: options.logFn,
+        onProviderSourceConfigChanged: async () => {
+            await options.components.refreshProviderAvailability();
+        },
     });
     await devServer.start();
     options.components.providerLoader.watch();

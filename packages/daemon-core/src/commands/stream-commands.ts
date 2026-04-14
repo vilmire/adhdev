@@ -6,6 +6,8 @@
 import type { CommandResult, CommandHelpers } from './handler.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
+import { loadConfig, saveConfig } from '../config/config.js';
+import { parseProviderSourceConfigUpdate } from '../config/provider-source-config.js';
 import { getCliScriptCommand, parseCliScriptResult } from '../providers/cli-script-results.js';
 import {
     normalizeControlInvokeResult,
@@ -105,6 +107,45 @@ export async function handleSetProviderSetting(h: CommandHelpers, args: any): Pr
         return { success: true, providerType, key, value };
     }
     return { success: false, error: `Failed to set ${providerType}.${key} — invalid key, value, or not a public setting` };
+}
+
+export function handleGetProviderSourceConfig(h: CommandHelpers, _args: any): CommandResult {
+    const loader = h.ctx.providerLoader as ProviderLoader | undefined;
+    if (!loader) return { success: false, error: 'providerLoader not available' };
+    return { success: true, ...loader.getSourceConfig() };
+}
+
+export async function handleSetProviderSourceConfig(h: CommandHelpers, args: any): Promise<CommandResult> {
+    const loader = h.ctx.providerLoader as ProviderLoader | undefined;
+    if (!loader) return { success: false, error: 'providerLoader not available' };
+
+    const parsed = parseProviderSourceConfigUpdate(args || {});
+    if ('error' in parsed) {
+        return { success: false, error: parsed.error };
+    }
+
+    const currentConfig = loadConfig();
+    const nextConfig = {
+        ...currentConfig,
+        ...(parsed.updates.providerSourceMode ? { providerSourceMode: parsed.updates.providerSourceMode } : {}),
+        ...(Object.prototype.hasOwnProperty.call(parsed.updates, 'providerDir') ? { providerDir: parsed.updates.providerDir } : {}),
+    };
+    saveConfig(nextConfig);
+
+    const sourceConfig = loader.applySourceConfig({
+        sourceMode: nextConfig.providerSourceMode,
+        userDir: Object.prototype.hasOwnProperty.call(parsed.updates, 'providerDir') ? parsed.updates.providerDir : loader.getSourceConfig().explicitProviderDir || undefined,
+    });
+    loader.reload();
+    loader.registerToDetector();
+    await h.ctx.onProviderSourceConfigChanged?.();
+
+    LOG.info(
+        'Command',
+        `[set_provider_source_config] mode=${sourceConfig.sourceMode} explicitProviderDir=${sourceConfig.explicitProviderDir || '-'} userDir=${sourceConfig.userDir}`,
+    );
+
+    return { success: true, reloaded: true, ...sourceConfig };
 }
 
 // ─── Extension Script Execution (Model/Mode) ─────

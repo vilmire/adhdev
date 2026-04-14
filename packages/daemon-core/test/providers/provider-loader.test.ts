@@ -57,6 +57,37 @@ describe('ProviderLoader source root selection', () => {
 
     expect(loader.getUserDir()).toBe(path.join(homedir(), '.adhdev', 'providers'));
   });
+
+  it('applies provider source config live and resets to the default override root when providerDir is cleared', () => {
+    const loader = new ProviderLoader({
+      userDir: '/tmp/custom-provider-root',
+      sourceMode: 'no-upstream',
+    });
+
+    expect(loader.getSourceConfig()).toMatchObject({
+      sourceMode: 'no-upstream',
+      disableUpstream: true,
+      explicitProviderDir: '/tmp/custom-provider-root',
+      userDir: '/tmp/custom-provider-root',
+    });
+
+    const applied = loader.applySourceConfig({
+      sourceMode: 'normal',
+      userDir: undefined,
+    });
+
+    expect(applied).toMatchObject({
+      sourceMode: 'normal',
+      disableUpstream: false,
+      explicitProviderDir: null,
+      userDir: path.join(homedir(), '.adhdev', 'providers'),
+      upstreamDir: path.join(homedir(), '.adhdev', 'providers', '.upstream'),
+      providerRoots: [
+        path.join(homedir(), '.adhdev', 'providers'),
+        path.join(homedir(), '.adhdev', 'providers', '.upstream'),
+      ],
+    });
+  });
 });
 
 describe('ProviderLoader settings schema', () => {
