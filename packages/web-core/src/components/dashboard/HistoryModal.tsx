@@ -7,12 +7,16 @@
 import type { DaemonData } from '../../types';
 import { IconCandle, IconRefresh, IconX } from '../Icons';
 import { isAcpConv, isCliConv, type ActiveConversation } from './types';
+import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getConversationHistorySubtitle } from './conversation-presenters';
+import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state';
+import { prepareSavedHistoryEntries } from '../../utils/saved-history-filters';
 import {
     getRefreshSavedHistoryLabel,
     getRefreshingSavedHistoryLabel,
     getSavedHistoryEmptyStateLabel,
+    getSavedHistoryHelperLabel,
     getSavedHistoryModalTitle,
 } from '../../utils/dashboard-launch-copy';
 
@@ -54,6 +58,8 @@ export interface HistoryModalProps {
     savedSessions?: SavedSessionHistoryEntry[];
     isSavedSessionsLoading?: boolean;
     isResumingSavedSessionId?: string | null;
+    savedHistoryFilters?: SavedHistoryFilterState;
+    onSavedHistoryFiltersChange?: (next: SavedHistoryFilterState) => void;
     onClose: () => void;
     onNewChat: () => void;
     onSwitchSession: (routeId: string, sessionId: string) => void;
@@ -64,12 +70,32 @@ export interface HistoryModalProps {
 export default function HistoryModal({
     activeConv, ides, isCreatingChat, isRefreshingHistory,
     savedSessions = [], isSavedSessionsLoading = false, isResumingSavedSessionId = null,
+    savedHistoryFilters, onSavedHistoryFiltersChange,
     onClose, onNewChat, onSwitchSession, onRefreshHistory, onResumeSavedSession,
 }: HistoryModalProps) {
     const ideEntry = ides.find(i => i.id === activeConv.routeId);
     const chats = ideEntry?.chats || [];
     const activeChatId = ideEntry?.activeChat?.id;
     const isSavedSessionMode = isCliConv(activeConv) && !isAcpConv(activeConv);
+    const [localFilters, setLocalFilters] = useState<SavedHistoryFilterState>(() => createSavedHistoryFilterState());
+    const filters = savedHistoryFilters || localFilters;
+    const setFilters = (next: SavedHistoryFilterState) => {
+        if (onSavedHistoryFiltersChange) {
+            onSavedHistoryFiltersChange(next)
+            return
+        }
+        setLocalFilters(next)
+    }
+    const filteredSavedSessions = useMemo(
+        () => prepareSavedHistoryEntries(savedSessions, {
+            textQuery: filters.textQuery,
+            workspaceQuery: filters.workspaceQuery,
+            modelQuery: filters.modelQuery,
+            resumableOnly: filters.resumableOnly,
+            sortMode: filters.sortMode,
+        }),
+        [filters.modelQuery, filters.resumableOnly, filters.sortMode, filters.textQuery, filters.workspaceQuery, savedSessions],
+    );
 
     const content = (
         <div className="fixed inset-0 z-[1300] flex items-center justify-center">
@@ -79,6 +105,9 @@ export default function HistoryModal({
                     <div>
                         <h3 className="m-0 text-lg font-extrabold">{isSavedSessionMode ? getSavedHistoryModalTitle() : 'Chat History'}</h3>
                         <div className="text-xs text-text-muted mt-0.5">{getConversationHistorySubtitle(activeConv)}</div>
+                        {isSavedSessionMode && (
+                            <div className="text-[11px] text-text-muted mt-1">{getSavedHistoryHelperLabel()}</div>
+                        )}
                     </div>
                     <button onClick={onClose} className="btn btn-secondary btn-sm rounded-md px-1.5 py-1.5 border-transparent bg-transparent hover:bg-bg-secondary"><IconX size={16} /></button>
                 </div>
@@ -96,7 +125,49 @@ export default function HistoryModal({
 
                     {isSavedSessionMode ? (
                         <>
-                            {savedSessions.map((session) => {
+                            <div className="rounded-xl border border-border-subtle bg-[var(--surface-secondary)] p-3 mb-3">
+                                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                                    <input
+                                        type="text"
+                                        value={filters.textQuery}
+                                        onChange={(event) => setFilters({ ...filters, textQuery: event.target.value })}
+                                        placeholder="Search title or preview"
+                                        className="w-full rounded-lg border border-border-subtle bg-bg-primary px-3 py-2 text-sm text-text-primary"
+                                    />
+                                    <input
+                                        type="text"
+                                        value={filters.workspaceQuery}
+                                        onChange={(event) => setFilters({ ...filters, workspaceQuery: event.target.value })}
+                                        placeholder="Filter by workspace"
+                                        className="w-full rounded-lg border border-border-subtle bg-bg-primary px-3 py-2 text-sm text-text-primary"
+                                    />
+                                    <input
+                                        type="text"
+                                        value={filters.modelQuery}
+                                        onChange={(event) => setFilters({ ...filters, modelQuery: event.target.value })}
+                                        placeholder="Filter by model"
+                                        className="w-full rounded-lg border border-border-subtle bg-bg-primary px-3 py-2 text-sm text-text-primary"
+                                    />
+                                    <select
+                                        value={filters.sortMode}
+                                        onChange={(event) => setFilters({ ...filters, sortMode: event.target.value as SavedHistoryFilterState['sortMode'] })}
+                                        className="w-full rounded-lg border border-border-subtle bg-bg-primary px-3 py-2 text-sm text-text-primary"
+                                    >
+                                        <option value="recent">Most recent</option>
+                                        <option value="oldest">Oldest first</option>
+                                        <option value="messages">Most messages</option>
+                                    </select>
+                                </div>
+                                <label className="mt-2 flex items-center gap-2 text-[11px] text-text-muted">
+                                    <input
+                                        type="checkbox"
+                                        checked={filters.resumableOnly}
+                                        onChange={(event) => setFilters({ ...filters, resumableOnly: event.target.checked })}
+                                    />
+                                    Resume-ready only
+                                </label>
+                            </div>
+                            {filteredSavedSessions.map((session) => {
                                 const isActive = activeConv.providerSessionId === session.providerSessionId;
                                 const isDisabled = isActive || !session.canResume || !!isResumingSavedSessionId;
                                 return (
@@ -176,11 +247,13 @@ export default function HistoryModal({
                         </div>
                     ))}
 
-                    {((isSavedSessionMode && !isSavedSessionsLoading && savedSessions.length === 0) || (!isSavedSessionMode && chats.length === 0)) && (
+                    {((isSavedSessionMode && !isSavedSessionsLoading && filteredSavedSessions.length === 0) || (!isSavedSessionMode && chats.length === 0)) && (
                         <div className="py-10 px-5 text-center text-text-muted">
                             <div className="text-3xl mb-3 opacity-60"><IconCandle size={32} /></div>
                             <div className="text-[13px]">
-                                {isSavedSessionMode ? getSavedHistoryEmptyStateLabel() : 'No recent chat sessions found.'}
+                                {isSavedSessionMode
+                                    ? (savedSessions.length > 0 ? 'No saved history matches these filters.' : getSavedHistoryEmptyStateLabel())
+                                    : 'No recent chat sessions found.'}
                             </div>
                         </div>
                     )}

@@ -21,7 +21,11 @@ import {
     getMachineLaunchConfirmLabel,
     getMachineLaunchConfirmTitle,
     getOpenHistoryLabel,
+    getSavedHistoryHelperLabel,
 } from '../../utils/dashboard-launch-copy'
+import { buildSavedHistorySummaryView } from '../../utils/saved-history-summary'
+import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state'
+import { prepareSavedHistoryEntries, type SavedHistorySortMode } from '../../utils/saved-history-filters'
 import { IconChat, IconMonitor, IconSearch, IconPlay, IconRefresh, IconX } from '../../components/Icons'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, ProviderInfo } from './types'
 import type { useMachineActions } from './useMachineActions'
@@ -119,9 +123,15 @@ export default function AgentTab({
     const [launchModel, setLaunchModel] = useState('')
     const [selectedResumeSessionId, setSelectedResumeSessionId] = useState('')
     const [savedSessions, setSavedSessions] = useState<SavedSessionOption[]>([])
+    const [savedSessionsTextFilter, setSavedSessionsTextFilter] = useState('')
+    const [savedSessionsWorkspaceFilter, setSavedSessionsWorkspaceFilter] = useState('')
+    const [savedSessionsModelFilter, setSavedSessionsModelFilter] = useState('')
+    const [savedSessionsResumableOnly, setSavedSessionsResumableOnly] = useState(false)
+    const [savedSessionsSortMode, setSavedSessionsSortMode] = useState<SavedHistorySortMode>('recent')
     const [savedSessionsLoading, setSavedSessionsLoading] = useState(false)
     const [savedSessionsError, setSavedSessionsError] = useState('')
     const [resumeHistoryOpen, setResumeHistoryOpen] = useState(false)
+    const [resumeHistoryFilters, setResumeHistoryFilters] = useState<SavedHistoryFilterState>(() => createSavedHistoryFilterState())
     const [resumingSavedSessionId, setResumingSavedSessionId] = useState<string | null>(null)
     // Workspace selection: workspace-id | '__custom__' | '' (home)
     const [selectedWorkspace, setSelectedWorkspace] = useState(
@@ -325,6 +335,11 @@ export default function AgentTab({
 
     useEffect(() => {
         setSelectedResumeSessionId('')
+        setSavedSessionsTextFilter('')
+        setSavedSessionsWorkspaceFilter('')
+        setSavedSessionsModelFilter('')
+        setSavedSessionsResumableOnly(false)
+        setSavedSessionsSortMode('recent')
         loadRecentArgs(selectedType)
         if (category !== 'cli' || !selectedType) {
             setSavedSessions([])
@@ -335,12 +350,23 @@ export default function AgentTab({
         void loadSavedSessions(selectedType)
     }, [category, loadRecentArgs, loadSavedSessions, selectedType])
 
+    const filteredSavedSessions = useMemo(
+        () => prepareSavedHistoryEntries(savedSessions, {
+            textQuery: savedSessionsTextFilter,
+            workspaceQuery: savedSessionsWorkspaceFilter,
+            modelQuery: savedSessionsModelFilter,
+            resumableOnly: savedSessionsResumableOnly,
+            sortMode: savedSessionsSortMode,
+        }),
+        [savedSessions, savedSessionsModelFilter, savedSessionsResumableOnly, savedSessionsSortMode, savedSessionsTextFilter, savedSessionsWorkspaceFilter],
+    )
+
     useEffect(() => {
         if (!selectedResumeSessionId) return
-        const selectedSession = savedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
+        const selectedSession = filteredSavedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
         if (selectedSession?.canResume) return
         setSelectedResumeSessionId('')
-    }, [savedSessions, selectedResumeSessionId])
+    }, [filteredSavedSessions, selectedResumeSessionId])
 
     const openLaunchConfirm = useCallback((
         config: {
@@ -787,18 +813,71 @@ export default function AgentTab({
                                                 </button>
                                             </div>
                                         </div>
+                                        <div className="text-[10px] text-text-muted">
+                                            {getSavedHistoryHelperLabel()}
+                                        </div>
+                                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                                            <input
+                                                type="text"
+                                                placeholder="Search title or preview"
+                                                value={savedSessionsTextFilter}
+                                                onChange={event => setSavedSessionsTextFilter(event.target.value)}
+                                                className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors w-full"
+                                            />
+                                            <input
+                                                type="text"
+                                                placeholder="Filter by workspace"
+                                                value={savedSessionsWorkspaceFilter}
+                                                onChange={event => setSavedSessionsWorkspaceFilter(event.target.value)}
+                                                className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors w-full"
+                                            />
+                                            <input
+                                                type="text"
+                                                placeholder="Filter by model"
+                                                value={savedSessionsModelFilter}
+                                                onChange={event => setSavedSessionsModelFilter(event.target.value)}
+                                                className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors w-full"
+                                            />
+                                            <select
+                                                value={savedSessionsSortMode}
+                                                onChange={event => setSavedSessionsSortMode(event.target.value as SavedHistorySortMode)}
+                                                className="px-3 py-2 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors w-full"
+                                            >
+                                                <option value="recent">Most recent</option>
+                                                <option value="oldest">Oldest first</option>
+                                                <option value="messages">Most messages</option>
+                                            </select>
+                                        </div>
+                                        <label className="flex items-center gap-2 text-[10px] text-text-muted">
+                                            <input
+                                                type="checkbox"
+                                                checked={savedSessionsResumableOnly}
+                                                onChange={event => setSavedSessionsResumableOnly(event.target.checked)}
+                                            />
+                                            Resume-ready only
+                                        </label>
+                                        {savedSessions.length > 0 && filteredSavedSessions.length === 0 && (
+                                            <div className="text-[10px] text-text-muted">No saved history matches these filters.</div>
+                                        )}
                                         {selectedResumeSessionId ? (() => {
-                                            const selectedSession = savedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
+                                            const selectedSession = filteredSavedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
                                             if (!selectedSession) return null
+                                            const summary = buildSavedHistorySummaryView(selectedSession)
                                             return (
                                                 <div className="rounded-md border border-[#ffffff1a] bg-bg-primary px-3 py-2 text-[10px] text-text-muted leading-relaxed">
                                                     <div className="flex items-start justify-between gap-2">
-                                                        <div className="min-w-0">
+                                                        <div className="min-w-0 flex-1">
                                                             <div className="text-text-primary text-[11px] font-semibold truncate">
-                                                                {selectedSession.title || selectedSession.providerSessionId}
+                                                                {summary.title}
                                                             </div>
-                                                            <div className="font-mono break-all">{selectedSession.providerSessionId}</div>
-                                                            <div>{selectedSession.workspace || 'Workspace unknown'}</div>
+                                                            <div className="font-mono break-all mt-0.5">{summary.providerSessionId}</div>
+                                                            <div className="mt-1">{summary.metaLine}</div>
+                                                            {summary.updatedLabel && (
+                                                                <div className="mt-1 text-text-secondary">{summary.updatedLabel}</div>
+                                                            )}
+                                                            {summary.preview && (
+                                                                <div className="mt-2 line-clamp-2 text-text-secondary">{summary.preview}</div>
+                                                            )}
                                                         </div>
                                                         <button
                                                             type="button"
@@ -1225,6 +1304,8 @@ export default function AgentTab({
                     savedSessions={savedSessions}
                     isSavedSessionsLoading={savedSessionsLoading}
                     isResumingSavedSessionId={resumingSavedSessionId}
+                    savedHistoryFilters={resumeHistoryFilters}
+                    onSavedHistoryFiltersChange={setResumeHistoryFilters}
                     onClose={() => setResumeHistoryOpen(false)}
                     onNewChat={() => {
                         setSelectedResumeSessionId('')

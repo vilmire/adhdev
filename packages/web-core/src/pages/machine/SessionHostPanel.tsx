@@ -8,6 +8,7 @@ import {
     partitionSessionHostRecords,
 } from '../../utils/session-host-surface'
 import { IconRefresh, IconServer, IconTerminal, IconUsers, IconWarning } from '../../components/Icons'
+import { getHostedRuntimeRecoveryDescription } from '../../utils/dashboard-launch-copy'
 import { eventManager } from '../../managers/EventManager'
 import { useSessionHostDiagnosticsSubscription } from '../../hooks/useSessionHostDiagnosticsSubscription'
 import type { CliSessionEntry } from './types'
@@ -397,7 +398,7 @@ export default function SessionHostPanel({
                         <IconServer size={14} /> Hosted Runtime Recovery
                     </div>
                     <div className="text-[12px] text-text-secondary mt-1">
-                        Live runtime status, next actions, and explicit recover/restart controls for hosted CLI sessions.
+                        {getHostedRuntimeRecoveryDescription()}
                     </div>
                 </div>
                 <div className="flex items-center gap-2">

@@ -1032,26 +1032,13 @@ export class DevServer implements DevServerContext {
       this.log(`Auto-implement writable copy created: ${desiredDir}`);
     }
 
-    const providerJson = path.join(desiredDir, 'provider.json');
-    if (!fs.existsSync(providerJson)) {
-      return { dir: null, reason: `provider.json not found in writable provider directory: ${desiredDir}` };
-    }
-
-    try {
-      const providerData = JSON.parse(fs.readFileSync(providerJson, 'utf-8'));
-      if (providerData.disableUpstream !== true) {
-        providerData.disableUpstream = true;
-        fs.writeFileSync(providerJson, JSON.stringify(providerData, null, 2));
-      }
-    } catch (error) {
-      return {
-        dir: null,
-        reason: `Failed to update provider.json in writable provider directory: ${(error as Error).message}`,
-      };
-    }
-
-    return { dir: desiredDir };
+  const providerJson = path.join(desiredDir, 'provider.json');
+  if (!fs.existsSync(providerJson)) {
+    return { dir: null, reason: `provider.json not found in writable provider directory: ${desiredDir}` };
   }
+
+  return { dir: desiredDir };
+}
 
 
   private async handleAutoImplement(type: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

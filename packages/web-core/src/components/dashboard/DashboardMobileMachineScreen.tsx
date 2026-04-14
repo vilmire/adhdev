@@ -15,13 +15,16 @@ import {
     getMachineLaunchConfirmTitle,
     getRecentHistoryResumeConfirmDescription,
     getRecentHistoryResumeConfirmTitle,
+    getSavedHistoryHelperLabel,
 } from '../../utils/dashboard-launch-copy'
+import { buildSavedHistorySummaryView } from '../../utils/saved-history-summary'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
 import LaunchConfirmDialog from '../machine/LaunchConfirmDialog'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { buildLaunchWorkspaceOptions } from '../machine/launchWorkspaceOptions'
 import { getConversationTitle, getMachineConversationCardSubtitle } from './conversation-presenters'
+import { buildMachineRecentLaunchCardView } from '../../utils/machine-recent-launch-presenters'
 import { useDashboardMobileMachineLauncher } from './useDashboardMobileMachineLauncher'
 
 interface LaunchProviderInfo {
@@ -96,55 +99,59 @@ export default function DashboardMobileMachineScreen({
         onListSavedSessions,
     })
 
-    const recentLaunchCards = useMemo(() => topRecentLaunches.map(session => ({
-        key: `recent-launch:${session.id}`,
-        primary: session.label,
-        secondary: `${formatKindLabel(session.kind)}${session.subtitle ? ` · ${session.subtitle}` : ''}`,
-        onClick: () => {
-            const { options, selectedKey } = buildLaunchWorkspaceOptions({
-                machine: {
-                    workspaces: launcher.workspaceRows,
-                    defaultWorkspaceId: launcher.defaultWorkspaceId,
-                },
-                currentWorkspacePath: session.workspace,
-            })
-            launcher.openLaunchConfirm({
-                title: session.kind === 'ide'
-                    ? getMachineLaunchConfirmTitle('restart-ide', session.label)
-                    : session.providerSessionId
-                        ? getRecentHistoryResumeConfirmTitle(session.label)
-                        : getMachineLaunchConfirmTitle('start-fresh', session.label),
-                description: session.kind === 'ide'
-                    ? getMachineLaunchConfirmDescription('restart-ide')
-                    : session.providerSessionId
-                        ? getRecentHistoryResumeConfirmDescription()
-                        : getMachineLaunchConfirmDescription('start-fresh'),
-                confirmLabel: session.kind === 'ide'
-                    ? getMachineLaunchConfirmLabel('restart-ide')
-                    : session.providerSessionId
-                        ? getCliLaunchPrimaryActionLabel(true)
-                        : getMachineLaunchConfirmLabel('start-fresh'),
-                busyLabel: session.kind === 'ide'
-                    ? getMachineLaunchBusyLabel('restart-ide')
-                    : session.providerSessionId
-                        ? getCliLaunchBusyLabel(true)
-                        : getMachineLaunchBusyLabel('start-fresh'),
-                workspaceOptions: options,
-                selectedWorkspaceKey: selectedKey,
-                details: [
-                    { label: 'Mode', value: formatKindLabel(session.kind) },
-                    ...(session.providerType ? [{ label: 'Provider', value: session.providerType }] : []),
-                ],
-            }, async () => {
-                const selectedOption = options.find(option => option.key === launcher.launchConfirmWorkspaceKeyRef.current)
-                launcher.setWorkspaceSelectionFromOption(selectedOption)
-                await onOpenRecent({
-                    ...session,
-                    workspace: selectedOption?.workspacePath ?? null,
+    const recentLaunchCards = useMemo(() => topRecentLaunches.map(session => {
+        const { metaText, updatedLabel } = buildMachineRecentLaunchCardView(session)
+        return {
+            key: `recent-launch:${session.id}`,
+            primary: session.label,
+            secondary: metaText,
+            updatedLabel,
+            onClick: () => {
+                const { options, selectedKey } = buildLaunchWorkspaceOptions({
+                    machine: {
+                        workspaces: launcher.workspaceRows,
+                        defaultWorkspaceId: launcher.defaultWorkspaceId,
+                    },
+                    currentWorkspacePath: session.workspace,
                 })
-            })
-        },
-    })), [launcher, onOpenRecent, topRecentLaunches])
+                launcher.openLaunchConfirm({
+                    title: session.kind === 'ide'
+                        ? getMachineLaunchConfirmTitle('restart-ide', session.label)
+                        : session.providerSessionId
+                            ? getRecentHistoryResumeConfirmTitle(session.label)
+                            : getMachineLaunchConfirmTitle('start-fresh', session.label),
+                    description: session.kind === 'ide'
+                        ? getMachineLaunchConfirmDescription('restart-ide')
+                        : session.providerSessionId
+                            ? getRecentHistoryResumeConfirmDescription()
+                            : getMachineLaunchConfirmDescription('start-fresh'),
+                    confirmLabel: session.kind === 'ide'
+                        ? getMachineLaunchConfirmLabel('restart-ide')
+                        : session.providerSessionId
+                            ? getCliLaunchPrimaryActionLabel(true)
+                            : getMachineLaunchConfirmLabel('start-fresh'),
+                    busyLabel: session.kind === 'ide'
+                        ? getMachineLaunchBusyLabel('restart-ide')
+                        : session.providerSessionId
+                            ? getCliLaunchBusyLabel(true)
+                            : getMachineLaunchBusyLabel('start-fresh'),
+                    workspaceOptions: options,
+                    selectedWorkspaceKey: selectedKey,
+                    details: [
+                        { label: 'Mode', value: formatKindLabel(session.kind) },
+                        ...(session.providerType ? [{ label: 'Provider', value: session.providerType }] : []),
+                    ],
+                }, async () => {
+                    const selectedOption = options.find(option => option.key === launcher.launchConfirmWorkspaceKeyRef.current)
+                    launcher.setWorkspaceSelectionFromOption(selectedOption)
+                    await onOpenRecent({
+                        ...session,
+                        workspace: selectedOption?.workspacePath ?? null,
+                    })
+                })
+            },
+        }
+    }), [launcher, onOpenRecent, topRecentLaunches])
     const conversationCards = useMemo(() => topConversationItems.map(item => ({
         key: `recent-chat:${item.conversation.tabKey}`,
         primary: getConversationTitle(item.conversation),
@@ -218,7 +225,12 @@ export default function DashboardMobileMachineScreen({
                                     type="button"
                                     onClick={card.onClick}
                                 >
-                                    <span className="text-sm font-bold text-text-primary">{card.primary}</span>
+                                    <div className="flex items-center justify-between gap-3 w-full">
+                                        <span className="text-sm font-bold text-text-primary truncate">{card.primary}</span>
+                                        {card.updatedLabel && (
+                                            <span className="text-[11px] text-text-muted shrink-0">{card.updatedLabel}</span>
+                                        )}
+                                    </div>
                                     <span className="text-xs leading-relaxed text-text-secondary">
                                         {card.secondary}
                                     </span>
@@ -534,6 +546,52 @@ export default function DashboardMobileMachineScreen({
                                     <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Resume saved history</div>
                                     {launcher.launchConfirmSessionsLoading && <div className="text-[10px] text-text-secondary font-medium">Loading...</div>}
                                 </div>
+                                <div className="text-[11px] text-text-secondary mb-2">{getSavedHistoryHelperLabel()}</div>
+                                <div className="grid grid-cols-1 gap-2 mb-2">
+                                    <input
+                                        type="text"
+                                        value={launcher.launchConfirmTextFilter}
+                                        onChange={(e) => launcher.setLaunchConfirmTextFilter(e.target.value)}
+                                        placeholder="Search title or preview"
+                                        className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
+                                        disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
+                                    />
+                                    <input
+                                        type="text"
+                                        value={launcher.launchConfirmWorkspaceFilter}
+                                        onChange={(e) => launcher.setLaunchConfirmWorkspaceFilter(e.target.value)}
+                                        placeholder="Filter by workspace"
+                                        className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
+                                        disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
+                                    />
+                                    <input
+                                        type="text"
+                                        value={launcher.launchConfirmModelFilter}
+                                        onChange={(e) => launcher.setLaunchConfirmModelFilter(e.target.value)}
+                                        placeholder="Filter by model"
+                                        className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
+                                        disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
+                                    />
+                                    <select
+                                        value={launcher.launchConfirmSortMode}
+                                        onChange={(e) => launcher.setLaunchConfirmSortMode(e.target.value as 'recent' | 'oldest' | 'messages')}
+                                        className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm"
+                                        disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
+                                    >
+                                        <option value="recent">Most recent</option>
+                                        <option value="oldest">Oldest first</option>
+                                        <option value="messages">Most messages</option>
+                                    </select>
+                                </div>
+                                <label className="mb-2 flex items-center gap-2 text-[11px] text-text-muted">
+                                    <input
+                                        type="checkbox"
+                                        checked={launcher.launchConfirmResumableOnly}
+                                        onChange={(e) => launcher.setLaunchConfirmResumableOnly(e.target.checked)}
+                                        disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
+                                    />
+                                    Resume-ready only
+                                </label>
                                 <select
                                     value={launcher.launchConfirmResumeId}
                                     onChange={(e) => launcher.setLaunchConfirmResumeId(e.target.value)}
@@ -541,12 +599,35 @@ export default function DashboardMobileMachineScreen({
                                     disabled={launcher.launchConfirmBusy || launcher.launchConfirmSessionsLoading}
                                 >
                                     <option value="">{getCliResumeSelectPlaceholder()}</option>
-                                    {launcher.launchConfirmSavedSessions.map(sess => (
+                                    {launcher.filteredLaunchConfirmSavedSessions.map(sess => (
                                         <option key={sess.providerSessionId} value={sess.providerSessionId} disabled={!sess.canResume}>
                                             {sess.title || sess.providerSessionId} {!sess.canResume ? '(workspace missing)' : ''}
                                         </option>
                                     ))}
                                 </select>
+                                {!launcher.launchConfirmSessionsLoading && launcher.launchConfirmSavedSessions.length > 0 && launcher.filteredLaunchConfirmSavedSessions.length === 0 && (
+                                    <div className="mt-2 text-[11px] text-text-muted">No saved history matches these filters.</div>
+                                )}
+                                {launcher.launchConfirmResumeId && (() => {
+                                    const selectedSession = launcher.filteredLaunchConfirmSavedSessions.find(
+                                        sess => sess.providerSessionId === launcher.launchConfirmResumeId,
+                                    )
+                                    if (!selectedSession) return null
+                                    const summary = buildSavedHistorySummaryView(selectedSession)
+                                    return (
+                                        <div className="mt-2 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2.5 text-[11px] text-text-muted leading-relaxed">
+                                            <div className="font-semibold text-text-primary truncate">{summary.title}</div>
+                                            <div className="font-mono break-all mt-0.5">{summary.providerSessionId}</div>
+                                            <div className="mt-1">{summary.metaLine}</div>
+                                            {summary.updatedLabel && (
+                                                <div className="mt-1 text-text-secondary">{summary.updatedLabel}</div>
+                                            )}
+                                            {summary.preview && (
+                                                <div className="mt-2 line-clamp-2 text-text-secondary">{summary.preview}</div>
+                                            )}
+                                        </div>
+                                    )
+                                })()}
                             </div>
                         )
                     }

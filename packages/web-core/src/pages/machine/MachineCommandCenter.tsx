@@ -8,6 +8,7 @@ import type { ActiveConversation } from '../../components/dashboard/types'
 import type { MachineRecentLaunch, ProviderInfo } from './types'
 import { getConversationActivityAt } from '../../components/dashboard/conversation-sort'
 import { getConversationMetaText, getConversationTitle } from '../../components/dashboard/conversation-presenters'
+import { buildMachineRecentLaunchCardView } from '../../utils/machine-recent-launch-presenters'
 
 declare const __APP_VERSION__: string
 
@@ -52,12 +53,6 @@ export default function MachineCommandCenter({
     const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
     const requiresUpdate = isVersionUpdateRequired(machineEntry, appVersion)
 
-    const formatKindLabel = (kind: MachineRecentLaunch['kind']) => {
-        if (kind === 'ide') return 'IDE'
-        if (kind === 'cli') return 'CLI'
-        return 'ACP'
-    }
-
     return (
         <div className="flex flex-col gap-4 md:min-w-[300px] md:max-w-[360px] shrink-0 md:h-full overflow-y-auto">
             {topCurrentConversations.length > 0 && (
@@ -100,22 +95,31 @@ export default function MachineCommandCenter({
                     <SectionTitle icon={<IconClock size={13} />}>Recent Launches</SectionTitle>
                     <SectionCard>
                         <div className="flex flex-col gap-1.5">
-                            {topRecentLaunches.map(launch => (
-                                <button
-                                    key={launch.id}
-                                    type="button"
-                                    className="flex flex-col gap-1 items-start text-left p-3 rounded-xl bg-[#ffffff08] border border-transparent hover:border-[#ffffff12] hover:bg-[#ffffff0c] transition-colors cursor-pointer group"
-                                    onClick={() => onOpenRecent(launch)}
-                                >
-                                    <span className="text-sm font-semibold text-text-primary truncate w-full group-hover:text-accent-primary transition-colors">
-                                        {launch.label}
-                                    </span>
-                                    <span className="text-xs text-text-secondary truncate w-full opacity-80">
-                                        {formatKindLabel(launch.kind)}
-                                        {launch.subtitle ? ` · ${launch.subtitle}` : ''}
-                                    </span>
-                                </button>
-                            ))}
+                            {topRecentLaunches.map(launch => {
+                                const { metaText, updatedLabel } = buildMachineRecentLaunchCardView(launch)
+                                return (
+                                    <button
+                                        key={launch.id}
+                                        type="button"
+                                        className="flex flex-col gap-1 items-start text-left p-3 rounded-xl bg-[#ffffff08] border border-transparent hover:border-[#ffffff12] hover:bg-[#ffffff0c] transition-colors cursor-pointer group"
+                                        onClick={() => onOpenRecent(launch)}
+                                    >
+                                        <div className="flex items-center justify-between gap-3 w-full">
+                                            <span className="text-sm font-semibold text-text-primary truncate group-hover:text-accent-primary transition-colors">
+                                                {launch.label}
+                                            </span>
+                                            {updatedLabel && (
+                                                <span className="text-[11px] text-text-muted shrink-0">
+                                                    {updatedLabel}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <span className="text-xs text-text-secondary truncate w-full opacity-80">
+                                            {metaText}
+                                        </span>
+                                    </button>
+                                )
+                            })}
                         </div>
                     </SectionCard>
                 </div>

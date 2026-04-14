@@ -8,6 +8,7 @@ import {
     getCliResumeSelectPlaceholder,
     getHostedRuntimeReviewButtonLabel,
     getOpenHistoryLabel,
+    getSavedHistoryHelperLabel,
 } from '../../utils/dashboard-launch-copy'
 import { IconFolder, IconPlay, IconServer, IconX } from '../Icons'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
@@ -17,6 +18,9 @@ import HistoryModal from './HistoryModal'
 import type { ActiveConversation } from './types'
 import DashboardMobileSessionHostSheet from './DashboardMobileSessionHostSheet'
 import { getMobileMachineConnectionLabel } from './dashboard-mobile-chat-mode-helpers'
+import { buildSavedHistorySummaryView } from '../../utils/saved-history-summary'
+import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state'
+import { prepareSavedHistoryEntries } from '../../utils/saved-history-filters'
 
 type LaunchKind = 'ide' | 'cli' | 'acp'
 
@@ -118,6 +122,8 @@ export default function DashboardNewSessionDialog({
     const [savedSessionsLoading, setSavedSessionsLoading] = useState(false)
     const [savedSessionsError, setSavedSessionsError] = useState('')
     const [resumeHistoryOpen, setResumeHistoryOpen] = useState(false)
+    const [resumeHistoryFilters, setResumeHistoryFilters] = useState<SavedHistoryFilterState>(() => createSavedHistoryFilterState())
+    const [savedSessionsResumableOnly, setSavedSessionsResumableOnly] = useState(false)
     const [sessionHostOpen, setSessionHostOpen] = useState(false)
     const [resumingSavedSessionId, setResumingSavedSessionId] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
@@ -194,6 +200,8 @@ export default function DashboardNewSessionDialog({
             setSelectedResumeSessionId('')
             setSavedSessions([])
             setSavedSessionsError('')
+            setSavedSessionsResumableOnly(false)
+            setResumeHistoryFilters(createSavedHistoryFilterState())
             setMessage('')
             return
         }
@@ -245,6 +253,8 @@ export default function DashboardNewSessionDialog({
 
     useEffect(() => {
         setSelectedResumeSessionId('')
+        setSavedSessionsResumableOnly(false)
+        setResumeHistoryFilters(createSavedHistoryFilterState())
         if (!selectedMachine || !selectedTarget || activeKind === 'ide') {
             setRecentArgsOptions([])
         } else {
@@ -265,12 +275,20 @@ export default function DashboardNewSessionDialog({
         void loadSavedSessions(selectedMachine.id, selectedTarget)
     }, [activeKind, loadRecentArgs, loadSavedSessions, selectedMachine, selectedTarget])
 
+    const filteredSavedSessions = useMemo(
+        () => prepareSavedHistoryEntries(savedSessions, {
+            resumableOnly: savedSessionsResumableOnly,
+            sortMode: 'recent',
+        }),
+        [savedSessions, savedSessionsResumableOnly],
+    )
+
     useEffect(() => {
         if (!selectedResumeSessionId) return
-        const selectedSession = savedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
+        const selectedSession = filteredSavedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
         if (selectedSession?.canResume) return
         setSelectedResumeSessionId('')
-    }, [savedSessions, selectedResumeSessionId])
+    }, [filteredSavedSessions, selectedResumeSessionId])
 
     const resolvedWorkspacePath = workspaceChoice === '__custom__'
         ? customWorkspacePath.trim()
@@ -679,7 +697,7 @@ export default function DashboardNewSessionDialog({
                                 <div className="flex items-start justify-between gap-3">
                                     <div>
                                         <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Resume saved history</div>
-                                        <div className="text-xs text-text-secondary mt-1">Pick a saved CLI session when you want continuity. Leave this empty to start fresh.</div>
+                                        <div className="text-xs text-text-secondary mt-1">{getSavedHistoryHelperLabel()} Leave this empty to start fresh.</div>
                                     </div>
                                     <div className="flex items-center gap-2">
                                         <button
@@ -708,13 +726,22 @@ export default function DashboardNewSessionDialog({
                                     </div>
                                 </div>
                                 <div className="mt-2">
+                                    <label className="mb-2 flex items-center gap-2 text-[11px] text-text-muted">
+                                        <input
+                                            type="checkbox"
+                                            checked={savedSessionsResumableOnly}
+                                            onChange={(event) => setSavedSessionsResumableOnly(event.target.checked)}
+                                            disabled={busy || savedSessionsLoading}
+                                        />
+                                        Resume-ready only
+                                    </label>
                                     <select
                                         value={selectedResumeSessionId}
                                         onChange={(event) => {
                                             const nextId = event.target.value
                                             setSelectedResumeSessionId(nextId)
                                             if (!nextId) return
-                                            const session = savedSessions.find(item => item.providerSessionId === nextId)
+                                            const session = filteredSavedSessions.find(item => item.providerSessionId === nextId)
                                             if (!session || !session.canResume) return
                                             applySavedSessionWorkspace(session)
                                         }}
@@ -722,7 +749,7 @@ export default function DashboardNewSessionDialog({
                                         disabled={busy || savedSessionsLoading}
                                     >
                                         <option value="">{getCliResumeSelectPlaceholder()}</option>
-                                        {savedSessions.map(session => (
+                                        {filteredSavedSessions.map(session => (
                                             <option
                                                 key={session.providerSessionId}
                                                 value={session.providerSessionId}
@@ -735,21 +762,31 @@ export default function DashboardNewSessionDialog({
                                     </select>
                                 </div>
                                 {selectedResumeSessionId && (() => {
-                                    const selectedSession = savedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
+                                    const selectedSession = filteredSavedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
                                     if (!selectedSession) return null
+                                    const summary = buildSavedHistorySummaryView(selectedSession)
                                     return (
-                                        <div className="mt-2 text-[11px] text-text-muted leading-relaxed">
-                                            <div className="font-mono break-all">{selectedSession.providerSessionId}</div>
-                                            <div className="mt-1">
-                                                {selectedSession.workspace || 'Workspace unknown'}
-                                                {selectedSession.currentModel ? ` · ${selectedSession.currentModel}` : ''}
-                                            </div>
+                                        <div className="mt-2 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2.5 text-[11px] text-text-muted leading-relaxed">
+                                            <div className="font-semibold text-text-primary truncate">{summary.title}</div>
+                                            <div className="font-mono break-all mt-0.5">{summary.providerSessionId}</div>
+                                            <div className="mt-1">{summary.metaLine}</div>
+                                            {summary.updatedLabel && (
+                                                <div className="mt-1 text-text-secondary">{summary.updatedLabel}</div>
+                                            )}
+                                            {summary.preview && (
+                                                <div className="mt-2 line-clamp-2 text-text-secondary">{summary.preview}</div>
+                                            )}
                                         </div>
                                     )
                                 })()}
                                 {savedSessionsError && (
                                     <div className="mt-2 text-[11px] text-status-error">
                                         {savedSessionsError}
+                                    </div>
+                                )}
+                                {!savedSessionsLoading && !savedSessionsError && savedSessions.length > 0 && filteredSavedSessions.length === 0 && (
+                                    <div className="mt-2 text-[11px] text-text-muted">
+                                        No saved history matches these filters.
                                     </div>
                                 )}
                                 {!savedSessionsLoading && !savedSessionsError && savedSessions.length === 0 && (
@@ -816,6 +853,8 @@ export default function DashboardNewSessionDialog({
                     savedSessions={savedSessions}
                     isSavedSessionsLoading={savedSessionsLoading}
                     isResumingSavedSessionId={resumingSavedSessionId}
+                    savedHistoryFilters={resumeHistoryFilters}
+                    onSavedHistoryFiltersChange={setResumeHistoryFilters}
                     onClose={() => setResumeHistoryOpen(false)}
                     onNewChat={() => {
                         setSelectedResumeSessionId('')

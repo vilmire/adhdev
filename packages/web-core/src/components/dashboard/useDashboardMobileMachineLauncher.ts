@@ -5,6 +5,8 @@ import type { LaunchWorkspaceOption, WorkspaceLaunchKind } from '../../pages/mac
 import type { MobileMachineActionState } from './DashboardMobileChatShared'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { collectBrowsePathCandidates, getDefaultBrowseStartPath } from '../machine/workspaceBrowse'
+import { createSavedHistoryFilterState, shouldResetSavedHistoryFilterState } from '../../utils/saved-history-filter-state'
+import { prepareSavedHistoryEntries, type SavedHistorySortMode } from '../../utils/saved-history-filters'
 
 interface LaunchProviderInfo {
     type: string
@@ -77,9 +79,15 @@ export function useDashboardMobileMachineLauncher({
     const [launchConfirmModel, setLaunchConfirmModel] = useState('')
     const [launchConfirmResumeId, setLaunchConfirmResumeId] = useState('')
     const [launchConfirmSavedSessions, setLaunchConfirmSavedSessions] = useState<any[]>([])
+    const [launchConfirmTextFilter, setLaunchConfirmTextFilter] = useState(() => createSavedHistoryFilterState().textQuery)
+    const [launchConfirmWorkspaceFilter, setLaunchConfirmWorkspaceFilter] = useState(() => createSavedHistoryFilterState().workspaceQuery)
+    const [launchConfirmModelFilter, setLaunchConfirmModelFilter] = useState(() => createSavedHistoryFilterState().modelQuery)
+    const [launchConfirmResumableOnly, setLaunchConfirmResumableOnly] = useState(() => createSavedHistoryFilterState().resumableOnly)
+    const [launchConfirmSortMode, setLaunchConfirmSortMode] = useState<SavedHistorySortMode>(() => createSavedHistoryFilterState().sortMode)
     const [launchConfirmSessionsLoading, setLaunchConfirmSessionsLoading] = useState(false)
     const [launchConfirmBusy, setLaunchConfirmBusy] = useState(false)
     const lastMachineIdRef = useRef<string | null>(null)
+    const lastSavedHistoryScopeRef = useRef<string | null>(null)
 
     useEffect(() => {
         const needsMetadata = !selectedMachineEntry.workspaces
@@ -189,6 +197,16 @@ export function useDashboardMobileMachineLauncher({
         setLaunchConfirmModel(config.initialModel || '')
         setLaunchConfirmResumeId('')
         setLaunchConfirmSavedSessions([])
+        const nextScope = config.providerType ? `${selectedMachineEntry.id}:${config.providerType}` : null
+        if (shouldResetSavedHistoryFilterState(lastSavedHistoryScopeRef.current, nextScope)) {
+            const emptyFilters = createSavedHistoryFilterState()
+            setLaunchConfirmTextFilter(emptyFilters.textQuery)
+            setLaunchConfirmWorkspaceFilter(emptyFilters.workspaceQuery)
+            setLaunchConfirmModelFilter(emptyFilters.modelQuery)
+            setLaunchConfirmResumableOnly(emptyFilters.resumableOnly)
+            setLaunchConfirmSortMode(emptyFilters.sortMode)
+        }
+        lastSavedHistoryScopeRef.current = nextScope
         setLaunchConfirm(config)
 
         if (config.providerType && onListSavedSessions) {
@@ -198,7 +216,24 @@ export function useDashboardMobileMachineLauncher({
                 .catch(err => console.warn('Failed to load saved sessions', err))
                 .finally(() => setLaunchConfirmSessionsLoading(false))
         }
-    }, [onListSavedSessions])
+    }, [onListSavedSessions, selectedMachineEntry.id])
+
+    const filteredLaunchConfirmSavedSessions = useMemo(
+        () => prepareSavedHistoryEntries(launchConfirmSavedSessions, {
+            textQuery: launchConfirmTextFilter,
+            workspaceQuery: launchConfirmWorkspaceFilter,
+            modelQuery: launchConfirmModelFilter,
+            resumableOnly: launchConfirmResumableOnly,
+            sortMode: launchConfirmSortMode,
+        }),
+        [launchConfirmModelFilter, launchConfirmResumableOnly, launchConfirmSavedSessions, launchConfirmSortMode, launchConfirmTextFilter, launchConfirmWorkspaceFilter],
+    )
+
+    useEffect(() => {
+        if (!launchConfirmResumeId) return
+        if (filteredLaunchConfirmSavedSessions.some(session => session.providerSessionId === launchConfirmResumeId)) return
+        setLaunchConfirmResumeId('')
+    }, [filteredLaunchConfirmSavedSessions, launchConfirmResumeId])
 
     const handleConfirmLaunch = useCallback(() => {
         if (!launchConfirmActionRef.current) return
@@ -230,6 +265,12 @@ export function useDashboardMobileMachineLauncher({
             setBrowseDirectories([])
             setBrowseError('')
             setBrowseDialogOpen(false)
+            setLaunchConfirmTextFilter(createSavedHistoryFilterState().textQuery)
+            setLaunchConfirmWorkspaceFilter(createSavedHistoryFilterState().workspaceQuery)
+            setLaunchConfirmModelFilter(createSavedHistoryFilterState().modelQuery)
+            setLaunchConfirmResumableOnly(createSavedHistoryFilterState().resumableOnly)
+            setLaunchConfirmSortMode(createSavedHistoryFilterState().sortMode)
+            lastSavedHistoryScopeRef.current = null
             setActiveLauncherKind(getDefaultLauncherKind(hasIdeOptions, cliProviders.length, acpProviders.length))
         }
     }, [acpProviders.length, cliProviders.length, defaultWorkspaceId, hasIdeOptions, selectedMachineEntry.id, workspaceRows])
@@ -268,6 +309,12 @@ export function useDashboardMobileMachineLauncher({
         launchConfirmModel,
         launchConfirmResumeId,
         launchConfirmSavedSessions,
+        launchConfirmTextFilter,
+        launchConfirmWorkspaceFilter,
+        launchConfirmModelFilter,
+        launchConfirmResumableOnly,
+        launchConfirmSortMode,
+        filteredLaunchConfirmSavedSessions,
         launchConfirmSessionsLoading,
         launchConfirmBusy,
         resolvedWorkspacePath,
@@ -287,5 +334,10 @@ export function useDashboardMobileMachineLauncher({
         setLaunchConfirmArgs,
         setLaunchConfirmModel,
         setLaunchConfirmResumeId,
+        setLaunchConfirmTextFilter,
+        setLaunchConfirmWorkspaceFilter,
+        setLaunchConfirmModelFilter,
+        setLaunchConfirmResumableOnly,
+        setLaunchConfirmSortMode,
     }
 }

@@ -3,6 +3,7 @@ import {
   getCliLaunchPrimaryActionLabel,
   getCliLaunchBusyLabel,
   getCliResumeSelectPlaceholder,
+  getHostedRuntimeRecoveryDescription,
   getHostedRuntimeReviewButtonLabel,
   getMachineLaunchBusyLabel,
   getMachineLaunchConfirmDescription,
@@ -14,6 +15,7 @@ import {
   getRefreshSavedHistoryLabel,
   getRefreshingSavedHistoryLabel,
   getSavedHistoryEmptyStateLabel,
+  getSavedHistoryHelperLabel,
   getSavedHistoryModalTitle,
 } from '../../src/utils/dashboard-launch-copy'
 
@@ -42,9 +44,15 @@ describe('dashboard launch copy helpers', () => {
 
   it('uses saved-history labels inside the history modal flow', () => {
     expect(getSavedHistoryModalTitle()).toBe('Saved History')
+    expect(getSavedHistoryHelperLabel()).toBe('Use saved history when you want continuity in the same provider conversation.')
     expect(getSavedHistoryEmptyStateLabel()).toBe('No saved history found yet.')
     expect(getRefreshSavedHistoryLabel()).toBe('Refresh saved history')
     expect(getRefreshingSavedHistoryLabel()).toBe('Refreshing saved history…')
+  })
+
+  it('describes hosted runtime recovery as a fallback path', () => {
+    expect(getHostedRuntimeReviewButtonLabel()).toBe('Recover hosted runtime')
+    expect(getHostedRuntimeRecoveryDescription()).toBe('Fallback recovery for hosted runtimes after interruptions. For normal continuity, open saved history instead.')
   })
 
   it('uses explicit machine launch-confirm wording for start-fresh and restart flows', () => {

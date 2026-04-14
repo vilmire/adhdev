@@ -6,6 +6,7 @@ import DashboardRemoteDialog from './DashboardRemoteDialog'
 import type { ActiveConversation } from './types'
 import { isAcpConv, isCliConv } from './types'
 import HistoryModal, { type SavedSessionHistoryEntry } from './HistoryModal'
+import { createSavedHistoryFilterState } from '../../utils/saved-history-filter-state'
 import CliStopDialog from './CliStopDialog'
 import ToastContainer, { type Toast } from './ToastContainer'
 
@@ -86,6 +87,8 @@ export default function DashboardOverlays({
     showOnboarding,
     onCloseOnboarding,
 }: DashboardOverlaysProps) {
+    const [savedHistoryFilters, setSavedHistoryFilters] = React.useState(() => createSavedHistoryFilterState())
+
     return (
         <>
             {historyModalOpen && historyTargetConv && (
@@ -97,6 +100,8 @@ export default function DashboardOverlays({
                     savedSessions={savedHistorySessions}
                     isSavedSessionsLoading={isSavedHistoryLoading}
                     isResumingSavedSessionId={isResumingSavedHistorySessionId}
+                    savedHistoryFilters={savedHistoryFilters}
+                    onSavedHistoryFiltersChange={setSavedHistoryFilters}
                     onClose={onCloseHistory}
                     onNewChat={onNewHistoryChat}
                     onSwitchSession={onSwitchHistorySession}

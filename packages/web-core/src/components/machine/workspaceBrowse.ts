@@ -91,14 +91,22 @@ export function getParentBrowsePath(currentPath: string): string | null {
     return parent || separator
 }
 
+function unwrapBrowseCommandResult(raw: any): any {
+    if (raw?.result && typeof raw.result === 'object' && 'success' in raw.result) {
+        return raw.result
+    }
+    return raw
+}
+
 export async function browseMachineDirectories(
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>,
     machineId: string,
     path: string,
 ): Promise<BrowseDirectoryResult> {
-    const res: any = await sendDaemonCommand(machineId, 'file_list_browse', { path })
+    const raw: any = await sendDaemonCommand(machineId, 'file_list_browse', { path })
+    const res = unwrapBrowseCommandResult(raw)
     if (!res?.success) {
-        throw new Error(res?.error || 'Could not browse folder')
+        throw new Error(res?.error || raw?.error || 'Could not browse folder')
     }
 
     const currentPath = typeof res?.path === 'string' ? res.path : path

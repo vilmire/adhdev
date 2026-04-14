@@ -288,7 +288,7 @@ export default function CliTerminalPane({
                             sizingMode={terminalSizingMode}
                             onInput={(data) => {
                                 if (!runtimeReady) return;
-                                if (!sendData?.(daemonRouteId, { type: 'pty_input', targetSessionId: sessionId, data })) {
+                                if (!sendData?.(daemonRouteId, { type: 'pty_input', sessionId, targetSessionId: sessionId, data })) {
                                     sendCommand(daemonRouteId, 'pty_input', { targetSessionId: sessionId, data }).catch(console.error)
                                 }
                             }}

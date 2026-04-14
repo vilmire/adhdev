@@ -14,12 +14,20 @@ export function getHostedRuntimeReviewButtonLabel(): string {
   return 'Recover hosted runtime'
 }
 
+export function getHostedRuntimeRecoveryDescription(): string {
+  return 'Fallback recovery for hosted runtimes after interruptions. For normal continuity, open saved history instead.'
+}
+
 export function getOpenHistoryLabel(): string {
   return 'Open saved history'
 }
 
 export function getSavedHistoryModalTitle(): string {
   return 'Saved History'
+}
+
+export function getSavedHistoryHelperLabel(): string {
+  return 'Use saved history when you want continuity in the same provider conversation.'
 }
 
 export function getSavedHistoryEmptyStateLabel(): string {

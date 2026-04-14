@@ -258,7 +258,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             providerType: session.type,
             subtitle: session.workspace || undefined,
             workspace: session.workspace || undefined,
-            timestamp: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
+            lastLaunchedAt: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
         })),
         ...cliSessions.map(session => ({
             id: `cli:${session.type}:${session.workspace || ''}`,
@@ -268,7 +268,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             providerSessionId: session.providerSessionId,
             subtitle: session.workspace || undefined,
             workspace: session.workspace || undefined,
-            timestamp: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
+            lastLaunchedAt: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
         })),
         ...acpSessions.map(session => ({
             id: `acp:${session.type}:${session.workspace || ''}`,
@@ -279,11 +279,10 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             subtitle: session.currentModel || session.workspace || undefined,
             workspace: session.workspace || undefined,
             currentModel: session.currentModel,
-            timestamp: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
+            lastLaunchedAt: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
         })),
     ]
-        .sort((a, b) => b.timestamp - a.timestamp)
-        .map(({ timestamp, ...session }) => session)
+        .sort((a, b) => (b.lastLaunchedAt || 0) - (a.lastLaunchedAt || 0))
     const recentLaunches: MachineRecentLaunch[] = (machineEntry?.recentLaunches || []).length > 0
         ? (machineEntry?.recentLaunches || []).map((launch) => ({
             id: launch.id,
@@ -294,6 +293,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             subtitle: launch.currentModel || launch.workspace || undefined,
             workspace: launch.workspace,
             currentModel: launch.currentModel,
+            lastLaunchedAt: launch.lastLaunchedAt,
         }))
         : fallbackRecentLaunches
     const currentConversations = useMemo<ActiveConversation[]>(() => {

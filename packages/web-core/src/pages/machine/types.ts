@@ -76,6 +76,7 @@ export interface MachineRecentLaunch {
     subtitle?: string
     workspace?: string | null
     currentModel?: string
+    lastLaunchedAt?: number
 }
 
 export interface MachineLaunchTarget {
