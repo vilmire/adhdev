@@ -382,8 +382,9 @@ export class DaemonCommandRouter {
                     return { success: false, error: 'providerType required' };
                 }
 
-                const offset = Math.max(0, Number(args?.offset) || 0);
-                const limit = Math.max(1, Math.min(100, Number(args?.limit) || 30));
+                const wantsAll = args?.all === true;
+                const offset = wantsAll ? 0 : Math.max(0, Number(args?.offset) || 0);
+                const limit = wantsAll ? Number.MAX_SAFE_INTEGER : Math.max(1, Math.min(100, Number(args?.limit) || 30));
                 const { sessions: historySessions, hasMore } = listSavedHistorySessions(providerType, { offset, limit });
                 const state = loadState();
                 const savedSessions = getSavedProviderSessions(state, { providerType, kind });
@@ -406,13 +407,13 @@ export class DaemonCommandRouter {
                             providerName: saved?.providerName || recent?.providerName || providerType,
                             kind: saved?.kind || recent?.kind || kind,
                             title: saved?.title || recent?.title || session.sessionTitle || session.preview || providerType,
-                            workspace: saved?.workspace || recent?.workspace,
+                            workspace: saved?.workspace || recent?.workspace || session.workspace,
                             currentModel: saved?.currentModel || recent?.currentModel,
                             preview: session.preview,
                             messageCount: session.messageCount,
                             firstMessageAt: session.firstMessageAt,
                             lastMessageAt: session.lastMessageAt,
-                            canResume: !!(saved?.workspace || recent?.workspace) && canResumeById,
+                            canResume: !!(saved?.workspace || recent?.workspace || session.workspace) && canResumeById,
                         };
                     }),
                     hasMore,

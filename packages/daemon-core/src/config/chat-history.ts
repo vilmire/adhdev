@@ -27,6 +27,7 @@ interface HistoryMessage {
     instanceId?: string;  // IDE instance UUID (distinguishes windows of the same agent type)
     historySessionId?: string; // Persistent provider-side conversation/session key
     sessionTitle?: string;
+    workspace?: string;   // Working directory at session start (kind: 'session_start' only)
 }
 
 const CODEX_STARTER_PROMPT_RE = /^(?:[›❯]\s*)?(?:Find and fix a bug in @filename|Improve documentation in @filename|Write tests for @filename|Explain this codebase|Summarize recent commits|Implement \{feature\}|Use \/skills(?: to list available skills)?|Run \/review on my current changes)$/i;
@@ -123,6 +124,7 @@ export interface SavedHistorySessionSummary {
     firstMessageAt: number;
     lastMessageAt: number;
     preview?: string;
+    workspace?: string;
 }
 
 export class ChatHistoryWriter {
@@ -323,6 +325,37 @@ export class ChatHistoryWriter {
             options.instanceId,
             options.historySessionId,
         );
+    }
+
+    writeSessionStart(
+        agentType: string,
+        historySessionId: string,
+        workspace: string,
+        instanceId?: string,
+    ): void {
+        const id = String(historySessionId || '').trim();
+        const ws = String(workspace || '').trim();
+        if (!id || !ws) return;
+        try {
+            const dir = path.join(HISTORY_DIR, this.sanitize(agentType));
+            fs.mkdirSync(dir, { recursive: true });
+            const date = new Date().toISOString().slice(0, 10);
+            const filePath = path.join(dir, `${this.sanitize(id)}_${date}.jsonl`);
+            const record: HistoryMessage = {
+                ts: new Date().toISOString(),
+                receivedAt: Date.now(),
+                role: 'system',
+                kind: 'session_start',
+                content: ws,
+                agent: agentType,
+                instanceId,
+                historySessionId: id,
+                workspace: ws,
+            };
+            fs.appendFileSync(filePath, JSON.stringify(record) + '\n', 'utf-8');
+        } catch {
+            // Ignore — must not affect main functionality
+        }
     }
 
     promoteHistorySession(
@@ -606,6 +639,7 @@ export function listSavedHistorySessions(
             let lastMessageAt = 0;
             let sessionTitle = '';
             let preview = '';
+            let workspace = '';
 
             for (const file of files.sort()) {
                 const filePath = path.join(dir, file);
@@ -619,6 +653,10 @@ export function listSavedHistorySessions(
                         parsed = null;
                     }
                     if (!parsed || parsed.historySessionId !== historySessionId) continue;
+                    if (parsed.kind === 'session_start') {
+                        if (!workspace && parsed.workspace) workspace = parsed.workspace;
+                        continue;
+                    }
                     messageCount += 1;
                     if (!firstMessageAt || parsed.receivedAt < firstMessageAt) firstMessageAt = parsed.receivedAt;
                     if (!lastMessageAt || parsed.receivedAt > lastMessageAt) lastMessageAt = parsed.receivedAt;
@@ -635,6 +673,7 @@ export function listSavedHistorySessions(
                 firstMessageAt,
                 lastMessageAt,
                 preview: preview || undefined,
+                workspace: workspace || undefined,
             });
         }
 

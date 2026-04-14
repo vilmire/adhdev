@@ -55,6 +55,9 @@ export function getForcedNewSessionScriptName(
     const controls = Array.isArray((provider as any).controls) ? (provider as any).controls : [];
     for (const control of controls) {
         if (control?.type !== 'action') continue;
+        if (typeof control?.confirmTitle === 'string' && control.confirmTitle.trim()) continue;
+        if (typeof control?.confirmMessage === 'string' && control.confirmMessage.trim()) continue;
+        if (typeof control?.confirmLabel === 'string' && control.confirmLabel.trim()) continue;
         const invokeScript = typeof control?.invokeScript === 'string' ? control.invokeScript.trim() : '';
         if (!invokeScript) continue;
         const controlId = typeof control?.id === 'string' ? control.id.trim() : '';
@@ -64,6 +67,26 @@ export function getForcedNewSessionScriptName(
     }
 
     return null;
+}
+
+export async function waitForCliAdapterReady(
+    adapter: { isReady?: () => boolean; getStatus?: () => { status?: string } },
+    options?: { timeoutMs?: number; pollMs?: number },
+): Promise<void> {
+    const timeoutMs = Math.max(100, options?.timeoutMs ?? 15_000);
+    const pollMs = Math.max(10, options?.pollMs ?? 50);
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+        if (adapter?.isReady?.()) return;
+        const status = adapter?.getStatus?.()?.status;
+        if (status === 'stopped') {
+            throw new Error('CLI runtime stopped before it became ready');
+        }
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+
+    throw new Error(`CLI runtime did not become ready within ${timeoutMs}ms`);
 }
 
 export class CliProviderInstance implements ProviderInstance {
@@ -427,6 +450,7 @@ export class CliProviderInstance implements ProviderInstance {
         if (!scriptName) return;
 
         LOG.info('CLI', `[${this.type}] forcing fresh session launch via script: ${scriptName}`);
+        await waitForCliAdapterReady(this.adapter);
         const raw = await this.adapter.invokeScript(scriptName, {});
         const parsed = parseCliScriptResult(raw);
         if (!parsed.success) {
@@ -819,6 +843,7 @@ export class CliProviderInstance implements ProviderInstance {
         const previousProviderSessionId = this.providerSessionId;
         this.providerSessionId = nextSessionId;
         this.historyWriter.promoteHistorySession(this.type, previousHistorySessionId, nextSessionId);
+        this.historyWriter.writeSessionStart(this.type, nextSessionId, this.workingDir, this.instanceId);
         this.adapter.updateRuntimeMeta({ providerSessionId: nextSessionId });
         this.onProviderSessionResolved?.({
             instanceId: this.instanceId,
