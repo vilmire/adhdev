@@ -24,6 +24,7 @@ import {
     getSavedHistoryHelperLabel,
 } from '../../utils/dashboard-launch-copy'
 import { buildSavedHistorySummaryView } from '../../utils/saved-history-summary'
+import { getDashboardActiveTabHref } from '../../utils/dashboard-route-paths'
 import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state'
 import { prepareSavedHistoryEntries, type SavedHistorySortMode } from '../../utils/saved-history-filters'
 import { IconChat, IconMonitor, IconSearch, IconPlay, IconRefresh, IconX } from '../../components/Icons'
@@ -98,7 +99,7 @@ export default function AgentTab({
     const [copiedRuntimeKey, setCopiedRuntimeKey] = useState<string | null>(null)
     const openSessionInDashboard = useCallback((sessionId: string) => {
         if (!sessionId) return
-        navigate({ pathname: '/', search: `?activeTab=${encodeURIComponent(sessionId)}` })
+        navigate(getDashboardActiveTabHref(sessionId))
     }, [navigate])
 
     const config = CATEGORY_CONFIG[category]
