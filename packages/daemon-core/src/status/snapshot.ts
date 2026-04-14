@@ -64,6 +64,49 @@ export interface StatusSnapshotOptions {
 export type StatusSnapshot = StatusReportPayload;
 
 const READ_DEBUG_ENABLED = process.argv.includes('--dev') || process.env.ADHDEV_READ_DEBUG === '1';
+const recentReadDebugSignatureBySession = new Map<string, string>();
+
+export interface RecentReadDebugSnapshot {
+    sessionId: string;
+    providerType: string;
+    status: string;
+    inboxBucket: RecentSessionBucket;
+    unread: boolean;
+    lastSeenAt: number;
+    completionMarker: string;
+    seenCompletionMarker: string;
+    lastUpdated: number;
+    lastUsedAt: number;
+    lastRole: string;
+    messageUpdatedAt: number;
+}
+
+function buildRecentReadDebugSignature(snapshot: RecentReadDebugSnapshot): string {
+    return [
+        snapshot.providerType,
+        snapshot.status,
+        snapshot.inboxBucket,
+        snapshot.unread ? '1' : '0',
+        String(snapshot.lastSeenAt),
+        snapshot.completionMarker,
+        snapshot.seenCompletionMarker,
+        String(snapshot.lastUpdated),
+        String(snapshot.lastUsedAt),
+        snapshot.lastRole,
+        String(snapshot.messageUpdatedAt),
+    ].join('|');
+}
+
+export function shouldEmitRecentReadDebugLog(
+    cache: Map<string, string>,
+    snapshot: RecentReadDebugSnapshot,
+): boolean {
+    const nextSignature = buildRecentReadDebugSignature(snapshot);
+    const previousSignature = cache.get(snapshot.sessionId);
+    if (previousSignature === nextSignature) return false;
+    cache.set(snapshot.sessionId, nextSignature);
+    return true;
+}
 
 function buildDetectedIdeInfos(
     detectedIdes: StatusSnapshotOptions['detectedIdes'],
@@ -345,9 +388,24 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
         session.unread = unread;
         session.inboxBucket = inboxBucket;
         if (READ_DEBUG_ENABLED && (session.unread || session.inboxBucket !== 'idle' || session.providerType.includes('codex'))) {
+            const recentReadSnapshot: RecentReadDebugSnapshot = {
+                sessionId: session.id,
+                providerType: session.providerType,
+                status: String(session.status || ''),
+                inboxBucket,
+                unread,
+                lastSeenAt,
+                completionMarker: completionMarker || '-',
+                seenCompletionMarker: seenCompletionMarker || '-',
+                lastUpdated: Number(session.lastUpdated || 0),
+                lastUsedAt,
+                lastRole: getLastMessageRole(sourceSession),
+                messageUpdatedAt: getSessionMessageUpdatedAt(sourceSession),
+            };
+            if (!shouldEmitRecentReadDebugLog(recentReadDebugSignatureBySession, recentReadSnapshot)) continue;
             LOG.info(
                 'RecentRead',
-                `snapshot session id=${session.id} provider=${session.providerType} status=${String(session.status || '')} bucket=${inboxBucket} unread=${String(unread)} lastSeenAt=${lastSeenAt} completionMarker=${completionMarker || '-'} seenMarker=${seenCompletionMarker || '-'} lastUpdated=${String(session.lastUpdated || 0)} lastUsedAt=${lastUsedAt} lastRole=${getLastMessageRole(sourceSession)} msgUpdatedAt=${getSessionMessageUpdatedAt(sourceSession)}`,
+                `snapshot session id=${recentReadSnapshot.sessionId} provider=${recentReadSnapshot.providerType} status=${recentReadSnapshot.status} bucket=${recentReadSnapshot.inboxBucket} unread=${String(recentReadSnapshot.unread)} lastSeenAt=${recentReadSnapshot.lastSeenAt} completionMarker=${recentReadSnapshot.completionMarker} seenMarker=${recentReadSnapshot.seenCompletionMarker} lastUpdated=${String(recentReadSnapshot.lastUpdated)} lastUsedAt=${recentReadSnapshot.lastUsedAt} lastRole=${recentReadSnapshot.lastRole} msgUpdatedAt=${recentReadSnapshot.messageUpdatedAt}`,
             );
         }
         const lastDisplayMessage = getLastDisplayMessage(sourceSession);
