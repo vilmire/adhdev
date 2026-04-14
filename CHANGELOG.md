@@ -5,13 +5,15 @@ All notable changes to ADHDev will be documented in this file.
 ## [0.8.58] - 2026-04-14
 
 ### Added
-- 
+- Added richer saved-history continuity helpers across shared web surfaces, including selected-session summaries, recent-launch saved-history cues, compact recent-use timestamps, text/workspace/model filters, sort controls, and resume-ready-only filtering.
+- Added first-class shared utilities and regression coverage for saved-history filtering/state, recent-launch presentation, and wrapped workspace-browse responses.
 
 ### Fixed
-- 
+- Fixed hosted web CLI terminal input routing by accepting the actual session target id consistently across PTY input and resize paths.
+- Fixed workspace browsing in cloud-backed launch flows by unwrapping wrapped command-envelope responses before reading directory entries.
 
 ### Changed
-- 
+- Refined shared dashboard/machine/mobile continuity UX so saved-history search/filter/sort state persists across reopen flows within the same scope and normal resume paths stay subtle but easier to scan.
 ## [0.8.57] - 2026-04-14
 
 ### Added
