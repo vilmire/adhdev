@@ -402,11 +402,23 @@ export class SessionHostServer extends EventEmitter {
     };
   }
 
+  private sanitizeDiagnosticsRecord(record: SessionHostRecord): SessionHostRecord {
+    return {
+      ...record,
+      launchCommand: {
+        command: record.launchCommand.command,
+        args: Array.isArray(record.launchCommand.args) ? [...record.launchCommand.args] : [],
+      },
+    };
+  }
+
   private getHostDiagnostics(payload?: { includeSessions?: boolean; limit?: number }): SessionHostDiagnostics {
     const limit = Math.max(1, Math.min(200, Number(payload?.limit) || 50));
     const sessions = payload?.includeSessions === false
       ? undefined
-      : this.registry.listSessions().map((record) => this.annotateSessionSurface(record));
+      : this.registry.listSessions()
+        .map((record) => this.annotateSessionSurface(record))
+        .map((record) => this.sanitizeDiagnosticsRecord(record));
     const liveRuntimes = sessions?.filter((record) => record.surfaceKind === 'live_runtime');
     const recoverySnapshots = sessions?.filter((record) => record.surfaceKind === 'recovery_snapshot');
     const inactiveRecords = sessions?.filter((record) => record.surfaceKind === 'inactive_record');

@@ -5,6 +5,41 @@ export interface SessionHostSurfaceRecordLike {
 
 export type SessionHostSurfaceSection = 'live' | 'recovery' | 'inactive'
 
+export interface SessionHostAvailabilityBadge {
+    label: string
+    toneClass: string
+}
+
+export function getSessionHostAvailabilityBadge(options: {
+    diagnostics?: unknown
+    loading?: boolean
+    refreshing?: boolean
+    error?: string | null
+}): SessionHostAvailabilityBadge {
+    if (options.diagnostics) {
+        return {
+            label: 'Managed',
+            toneClass: 'bg-green-500/[0.08] text-green-500',
+        }
+    }
+    if (options.loading || options.refreshing) {
+        return {
+            label: 'Checking…',
+            toneClass: 'bg-sky-500/[0.08] text-sky-400',
+        }
+    }
+    if (options.error) {
+        return {
+            label: 'Diagnostics issue',
+            toneClass: 'bg-amber-500/[0.08] text-amber-400',
+        }
+    }
+    return {
+        label: 'Unavailable',
+        toneClass: 'bg-red-500/[0.08] text-red-400',
+    }
+}
+
 export function getSessionHostRecoveryLabel(meta: Record<string, unknown> | null | undefined): string | null {
     const recoveryState = typeof meta?.runtimeRecoveryState === 'string'
         ? String(meta.runtimeRecoveryState).trim()

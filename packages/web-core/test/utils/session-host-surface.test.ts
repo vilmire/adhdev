@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+    getSessionHostAvailabilityBadge,
     getSessionHostRecoveryLabel,
     getSessionHostNextActionLabel,
     getSessionHostSectionHint,
@@ -32,5 +33,27 @@ describe('session host surface helpers', () => {
     it('describes recovery and inactive sections with explicit attachability guidance', () => {
         expect(getSessionHostSectionHint('recovery')).toContain('not live attach targets')
         expect(getSessionHostSectionHint('inactive')).toContain('shown for reference')
+    })
+
+    it('labels successful diagnostics as managed even when there are no live runtimes', () => {
+        expect(getSessionHostAvailabilityBadge({ diagnostics: { runtimeCount: 0 } })).toEqual({
+            label: 'Managed',
+            toneClass: 'bg-green-500/[0.08] text-green-500',
+        })
+    })
+
+    it('distinguishes diagnostics delivery failures from full unavailability', () => {
+        expect(getSessionHostAvailabilityBadge({ error: 'Payload too large' })).toEqual({
+            label: 'Diagnostics issue',
+            toneClass: 'bg-amber-500/[0.08] text-amber-400',
+        })
+        expect(getSessionHostAvailabilityBadge({ loading: true })).toEqual({
+            label: 'Checking…',
+            toneClass: 'bg-sky-500/[0.08] text-sky-400',
+        })
+        expect(getSessionHostAvailabilityBadge({})).toEqual({
+            label: 'Unavailable',
+            toneClass: 'bg-red-500/[0.08] text-red-400',
+        })
     })
 })

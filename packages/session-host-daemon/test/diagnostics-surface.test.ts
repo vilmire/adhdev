@@ -65,3 +65,32 @@ test('getHostDiagnostics groups sessions into live runtimes, recovery snapshots,
   assert.equal(diagnostics.recoverySnapshots[0].surfaceKind, 'recovery_snapshot')
   assert.equal(diagnostics.inactiveRecords[0].surfaceKind, 'inactive_record')
 })
+
+test('getHostDiagnostics strips launch env from diagnostics records to keep payloads lightweight', () => {
+  const server = new SessionHostServer({ appName: 'adhdev-test-surface-sanitized' })
+  const record = buildRecord({
+    sessionId: 'recovery-heavy-1',
+    lifecycle: 'stopped',
+    meta: {
+      restoredFromStorage: true,
+      runtimeRecoveryState: 'orphan_snapshot',
+    },
+    launchCommand: {
+      command: '/bin/zsh',
+      args: ['-lc', 'echo heavy'],
+      env: {
+        HUGE_ONE: 'x'.repeat(4096),
+        HUGE_TWO: 'y'.repeat(4096),
+      },
+    },
+  })
+
+  server.registry.restoreSession(record)
+  const diagnostics = (server as any).getHostDiagnostics({ includeSessions: true, limit: 10 })
+
+  assert.equal(diagnostics.sessions.length, 1)
+  assert.equal(diagnostics.sessions[0].launchCommand.command, '/bin/zsh')
+  assert.deepEqual(diagnostics.sessions[0].launchCommand.args, ['-lc', 'echo heavy'])
+  assert.equal(diagnostics.sessions[0].launchCommand.env, undefined)
+  assert.equal(record.launchCommand.env?.HUGE_ONE?.length, 4096)
+})

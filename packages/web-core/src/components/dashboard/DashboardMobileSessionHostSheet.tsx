@@ -491,7 +491,7 @@ export default function DashboardMobileSessionHostSheet({
                             <div className="flex items-start gap-2">
                                 <IconWarning size={14} className="mt-0.5 shrink-0 text-amber-300" />
                                 <div>
-                                    <div className="font-medium">Hosted runtime recovery unavailable</div>
+                                    <div className="font-medium">Hosted runtime diagnostics need attention</div>
                                     <div className="mt-1 text-amber-200/90">{error}</div>
                                 </div>
                             </div>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { SessionHostDiagnosticsSnapshot } from '@adhdev/daemon-core'
 import {
+    getSessionHostAvailabilityBadge,
     getSessionHostNextActionLabel,
     getSessionHostRecoveryLabel,
     getSessionHostSectionHint,
@@ -173,6 +174,10 @@ export default function SessionHostPanel({
     const diagnostics = sessionHostSubscription.diagnostics as SessionHostDiagnosticsView | null
     const loading = sessionHostSubscription.loading
     const applyDiagnostics = sessionHostSubscription.applyDiagnostics
+    const availabilityBadge = useMemo(
+        () => getSessionHostAvailabilityBadge({ diagnostics, loading, refreshing, error }),
+        [diagnostics, loading, refreshing, error],
+    )
     const cliBySessionId = useMemo(
         () => new Map(cliSessions.map((session) => [session.sessionId || session.id, session])),
         [cliSessions],
@@ -408,10 +413,8 @@ export default function SessionHostPanel({
                                 : `Prune duplicates (${duplicateGroupCount})`}
                         </button>
                     )}
-                    <span className={`px-2 py-1 rounded-md text-[10px] font-semibold ${
-                        diagnostics ? 'bg-green-500/[0.08] text-green-500' : 'bg-amber-500/[0.08] text-amber-400'
-                    }`}>
-                        {diagnostics ? 'Managed' : 'Unavailable'}
+                    <span className={`px-2 py-1 rounded-md text-[10px] font-semibold ${availabilityBadge.toneClass}`}>
+                        {availabilityBadge.label}
                     </span>
                     <button
                         type="button"
@@ -430,7 +433,7 @@ export default function SessionHostPanel({
                     <div className="flex items-start gap-2">
                         <IconWarning size={14} className="mt-0.5 text-amber-300 shrink-0" />
                         <div>
-                            <div className="font-medium text-amber-100">Hosted runtime diagnostics unavailable</div>
+                            <div className="font-medium text-amber-100">Hosted runtime diagnostics need attention</div>
                             <div className="text-amber-200/90 mt-1">{error}</div>
                         </div>
                     </div>
