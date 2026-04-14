@@ -273,10 +273,11 @@ export default function PaneGroupTabBar({
         const el = tabBarRef.current
         if (!el) return
         const handler = (e: WheelEvent) => {
-            if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-                e.preventDefault()
-                el.scrollLeft += e.deltaY
-            }
+            // Only intercept when vertical scroll dominates (mouse wheel → horizontal)
+            // Horizontal trackpad swipes are handled natively; overscroll-behavior-x prevents back nav
+            if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
+            e.preventDefault()
+            el.scrollLeft += e.deltaY
         }
         el.addEventListener('wheel', handler, { passive: false })
         return () => el.removeEventListener('wheel', handler)
@@ -297,7 +298,7 @@ export default function PaneGroupTabBar({
                 <div
                     ref={tabBarRef}
                     className="flex-1 flex overflow-x-auto overflow-y-visible gap-1.5 select-none"
-                    style={{ scrollbarWidth: 'none' }}
+                    style={{ scrollbarWidth: 'none', overscrollBehaviorX: 'contain' }}
                 >
                     {conversations.map((conv) => (
                         <PaneGroupTabBarItem

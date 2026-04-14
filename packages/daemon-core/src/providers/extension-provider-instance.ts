@@ -232,7 +232,13 @@ export class ExtensionProviderInstance implements ProviderInstance {
         if (!data || typeof data !== 'object') return;
 
         const controlValues = extractProviderControlValues(this.provider.controls, data);
-        if (controlValues) this.controlValues = { ...this.controlValues, ...controlValues };
+        if (controlValues) {
+            this.controlValues = { ...this.controlValues, ...controlValues };
+            if (controlValues.model !== undefined) this.currentModel = String(controlValues.model);
+            if (controlValues.mode !== undefined) this.currentMode = String(controlValues.mode);
+        }
+        if (typeof data.model === 'string' && data.model.trim()) this.currentModel = data.model;
+        if (typeof data.mode === 'string' && data.mode.trim()) this.currentMode = data.mode;
 
         const effects = normalizeProviderEffects(data);
         for (const effect of effects) {

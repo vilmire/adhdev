@@ -68,7 +68,7 @@ interface ProviderStateBase {
     activeChat: ActiveChatData | null;
  /** Workspace — project path or name (all categories) */
     workspace?: string | null;
- /** Runtime info (real-time detection) */
+    /** Runtime info (real-time detection) */
     currentModel?: string;
     currentPlan?: string;
  /** Error details (when status === 'error') */

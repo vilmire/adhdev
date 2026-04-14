@@ -4,10 +4,10 @@ import { isAcpConv, isCliConv, isCliTerminalConv, type ActiveConversation } from
 
 type ConversationTargetEntry = Pick<
     DaemonData,
-    'type' | 'providerControls' | 'controlValues' | 'currentModel' | 'currentPlan' | 'acpConfigOptions' | 'acpModes'
+    'type' | 'providerControls' | 'controlValues'
 > | Pick<
     SessionEntry,
-    'providerType' | 'providerControls' | 'controlValues' | 'currentModel' | 'currentPlan' | 'acpConfigOptions' | 'acpModes'
+    'providerType' | 'providerControls' | 'controlValues'
 >
 
 export function isNativeConversation(conversation: ActiveConversation): boolean {

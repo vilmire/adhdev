@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  extractProviderControlValues,
   normalizeControlInvokeResult,
   normalizeControlListResult,
   normalizeControlSetResult,
@@ -33,6 +34,34 @@ describe('control result normalization', () => {
 
     expect(normalizeControlListResult({ modes: [{ value: 'plan', name: 'Plan' }] })).toEqual({
       options: [{ value: 'plan', label: 'Plan' }],
+    })
+  })
+
+  it('normalizes legacy model objects that only expose name + selected flags', () => {
+    expect(normalizeControlListResult({
+      models: [
+        { name: 'GPT-5.4', selected: true },
+        { name: 'GPT-5.4-Mini', selected: false },
+      ],
+      current: 'GPT-5.4',
+    })).toEqual({
+      options: [
+        { value: 'GPT-5.4', label: 'GPT-5.4' },
+        { value: 'GPT-5.4-Mini', label: 'GPT-5.4-Mini' },
+      ],
+      currentValue: 'GPT-5.4',
+    })
+  })
+
+  it('does not inject implicit model/mode control values without schema mapping', () => {
+    expect(extractProviderControlValues([], { model: 'opus', mode: 'plan' })).toBeUndefined()
+
+    expect(extractProviderControlValues([
+      { id: 'model', type: 'select', label: 'Model', placement: 'bar', readFrom: 'model' },
+      { id: 'mode', type: 'select', label: 'Mode', placement: 'bar', readFrom: 'mode' },
+    ], { model: 'opus', mode: 'plan' })).toEqual({
+      model: 'opus',
+      mode: 'plan',
     })
   })
 

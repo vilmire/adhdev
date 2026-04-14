@@ -1469,8 +1469,17 @@ class StandaloneServer {
       return { success: false, error: 'command type required' };
     }
     const result = await this.components.router.execute(type, args, 'standalone');
-    if (type.startsWith('workspace_') || type.startsWith('session_host_')) this.scheduleBroadcastStatus();
-    if (type === 'get_status_metadata' || type === 'set_user_name' || type === 'set_machine_nickname' || type.startsWith('workspace_') || type.startsWith('session_host_')) {
+    if (type === 'invoke_provider_script' || type.startsWith('workspace_') || type.startsWith('session_host_')) {
+      this.scheduleBroadcastStatus();
+    }
+    if (
+      type === 'invoke_provider_script'
+      || type === 'get_status_metadata'
+      || type === 'set_user_name'
+      || type === 'set_machine_nickname'
+      || type.startsWith('workspace_')
+      || type.startsWith('session_host_')
+    ) {
       void this.flushWsDaemonMetadataSubscriptions();
     }
     if (type.startsWith('session_host_')) void this.flushWsSessionHostDiagnosticsSubscriptions();

@@ -8,6 +8,7 @@ import type {
   ProviderControlSchema,
 } from '@adhdev/daemon-core'
 import ControlsBar, {
+  buildControlValueScriptArgs,
   extractControlListResult,
   extractControlMutationResult,
 } from '../../../src/components/dashboard/ControlsBar'
@@ -174,5 +175,30 @@ describe('ControlsBar typed controlResult consumption', () => {
       success: true,
       value: 'legacy-plan',
     })).toBeNull()
+  })
+
+  it('builds generic value-only script args for schema controls, including model and mode', () => {
+    const modelControl = {
+      id: 'model',
+      type: 'select',
+      label: 'Model',
+      placement: 'bar',
+    } satisfies ProviderControlSchema
+    const modeControl = {
+      id: 'mode',
+      type: 'select',
+      label: 'Mode',
+      placement: 'bar',
+    } satisfies ProviderControlSchema
+    const effortControl = {
+      id: 'effort',
+      type: 'select',
+      label: 'Effort',
+      placement: 'bar',
+    } satisfies ProviderControlSchema
+
+    expect(buildControlValueScriptArgs(modelControl, 'gpt-5')).toEqual({ value: 'gpt-5' })
+    expect(buildControlValueScriptArgs(modeControl, 'plan')).toEqual({ value: 'plan' })
+    expect(buildControlValueScriptArgs(effortControl, 'high')).toEqual({ value: 'high' })
   })
 })

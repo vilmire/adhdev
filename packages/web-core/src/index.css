@@ -290,6 +290,7 @@
     .adhdev-dockview .dv-tabs-container {
         gap: 6px;
         min-width: 0;
+        overscroll-behavior-x: contain;
     }
 
     .adhdev-dockview .dv-left-actions-container,

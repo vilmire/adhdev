@@ -32,9 +32,6 @@ export function extractProviderControlValues(
         values[ctrl.id] = normalizeControlValue(rawValue);
     }
 
-    if (data.model !== undefined && values.model === undefined) values.model = normalizeControlValue(data.model);
-    if (data.mode !== undefined && values.mode === undefined) values.mode = normalizeControlValue(data.mode);
-
     return Object.keys(values).length > 0 ? values : undefined;
 }
 
@@ -171,7 +168,9 @@ function normalizeControlOption(option: unknown): ProviderControlOption | null {
     const record = option as Record<string, unknown>;
     const value = typeof record.value === 'string'
         ? record.value
-        : (typeof record.id === 'string' ? record.id : null);
+        : (typeof record.id === 'string'
+            ? record.id
+            : (typeof record.name === 'string' ? record.name : null));
     if (!value) return null;
     const label = typeof record.label === 'string'
         ? record.label

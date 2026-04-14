@@ -80,6 +80,7 @@ describe('statusPayloadToEntries', () => {
             runtimeDisplayName: 'Terminal',
             runtimeWorkspaceLabel: 'repo',
             runtimeAttachedClients: [{ clientId: 'web', label: 'Browser' }],
+            summary: { items: [{ id: 'branch', label: 'Branch', value: 'main' }] },
         });
         const acpSession = createSession({
             id: 'acp-1',
@@ -145,6 +146,7 @@ describe('statusPayloadToEntries', () => {
             _isCli: true,
         });
         expect(cliEntry.runtimeAttachedClients).toEqual([{ clientId: 'web', label: 'Browser' }]);
+        expect((cliEntry as any).summary).toEqual({ items: [{ id: 'branch', label: 'Branch', value: 'main' }] });
 
         const acpEntry = entries[3];
         expect(acpEntry).toMatchObject({

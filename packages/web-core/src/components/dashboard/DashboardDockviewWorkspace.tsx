@@ -1782,6 +1782,39 @@ export default function DashboardDockviewWorkspace({
         return () => window.removeEventListener('keydown', handler, true)
     }, [encodeShortcut, isMac, shortcutListening, startShortcutListeningForActiveTab])
 
+    // Dockview tab bar wheel fix:
+    // dockview's Scrollbar only handles deltaY and ignores deltaX.
+    // Horizontal trackpad swipes (deltaX) bubble to browser → back/forward navigation.
+    // Also, .dv-scrollable > .dv-tabs-container has overflow:hidden, so scrollLeft is a no-op from outside.
+    // Fix: capture wheel events near .dv-scrollable, prevent default, then re-dispatch a synthetic
+    // wheel event with deltaY = effective delta so dockview's own Scrollbar handler does the scroll.
+    useEffect(() => {
+        const container = dockviewContainerRef.current
+        if (!container) return
+        const handler = (e: WheelEvent) => {
+            // synthetic events (isTrusted=false) are ones we dispatched ourselves —
+            // let them pass through so dockview's own Scrollbar handler can process them
+            if (!e.isTrusted) return
+            const scrollable = (e.target as Element | null)?.closest?.('.dv-scrollable')
+            if (!scrollable) return
+            e.preventDefault()
+            // stop original event from reaching dockview (which would mishandle deltaX or double-count)
+            e.stopPropagation()
+            const dx = Math.abs(e.deltaX)
+            const dy = Math.abs(e.deltaY)
+            const delta = dx > dy ? e.deltaX : e.deltaY
+            // dispatch on the .dv-scrollable element so dockview's Scrollbar wheel handler receives it
+            scrollable.dispatchEvent(new WheelEvent('wheel', {
+                deltaY: delta,
+                deltaMode: e.deltaMode,
+                bubbles: false,
+                cancelable: true,
+            }))
+        }
+        container.addEventListener('wheel', handler, { passive: false, capture: true })
+        return () => container.removeEventListener('wheel', handler, { capture: true })
+    }, [])
+
     useEffect(() => {
         const popoutWindows = getDistinctPopoutWindows(apiRef.current)
         if (popoutWindows.length === 0) return

@@ -150,8 +150,25 @@ export async function handleSetProviderSourceConfig(h: CommandHelpers, args: any
 
 // ─── Extension Script Execution (Model/Mode) ─────
 
-function normalizeProviderScriptArgs(args: any): Record<string, any> {
+export function normalizeProviderScriptArgs(args: any, scriptName?: string): Record<string, any> {
     const normalizedArgs = { ...(args || {}) };
+    const normalizedScriptName = String(scriptName || '').toLowerCase();
+
+    if (Object.prototype.hasOwnProperty.call(normalizedArgs, 'value')) {
+        if (
+            normalizedArgs.model === undefined
+            && (normalizedScriptName === 'setmodel' || normalizedScriptName === 'setmodelgui' || normalizedScriptName === 'webviewsetmodel')
+        ) {
+            normalizedArgs.model = normalizedArgs.value;
+        }
+        if (
+            normalizedArgs.mode === undefined
+            && (normalizedScriptName === 'setmode' || normalizedScriptName === 'webviewsetmode')
+        ) {
+            normalizedArgs.mode = normalizedArgs.value;
+        }
+    }
+
     for (const key of ['mode', 'model', 'message', 'action', 'button', 'text', 'sessionId', 'value']) {
         if (key in normalizedArgs && !(key.toUpperCase() in normalizedArgs)) {
             normalizedArgs[key.toUpperCase()] = normalizedArgs[key];
@@ -213,7 +230,7 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
         return { success: false, error: `Script '${actualScriptName}' not available for ${resolvedProviderType}` };
     }
 
-    const normalizedArgs = normalizeProviderScriptArgs(args);
+    const normalizedArgs = normalizeProviderScriptArgs(args, actualScriptName);
 
     if (provider.category === 'cli') {
         const adapter = h.getCliAdapter(args?.targetSessionId || resolvedProviderType);

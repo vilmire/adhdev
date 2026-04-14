@@ -92,6 +92,13 @@ function getControlOptions(
     return ctrl.options || dynamicOptions[ctrl.id] || [];
 }
 
+export function buildControlValueScriptArgs(
+    _ctrl: ProviderControlSchema,
+    value: ControlScalarValue,
+): Record<string, ControlScalarValue> {
+    return { value };
+}
+
 function getControlValueLabel(
     ctrl: ProviderControlSchema,
     dynamicOptions: Record<string, ControlOption[]>,
@@ -264,11 +271,7 @@ export default function ControlsBar({
 
         try {
             if (!ctrl.setScript) return;
-            const res = await invokeProviderScript(ctrl.setScript, {
-                model: ctrl.id === 'model' ? value : undefined,
-                mode: ctrl.id === 'mode' ? value : undefined,
-                value,
-            });
+            const res = await invokeProviderScript(ctrl.setScript, buildControlValueScriptArgs(ctrl, value));
             const mutationResult = extractControlMutationResult(res);
             if ((mutationResult && !mutationResult.ok) || isExplicitFailure(res)) {
                 throw new Error(mutationResult?.error || getResponseError(res) || `Could not update ${ctrl.label}`);
@@ -296,7 +299,7 @@ export default function ControlsBar({
 
         try {
             if (!ctrl.setScript) return;
-            const res = await invokeProviderScript(ctrl.setScript, { value: nextValue });
+            const res = await invokeProviderScript(ctrl.setScript, buildControlValueScriptArgs(ctrl, nextValue));
             const mutationResult = extractControlMutationResult(res);
             if ((mutationResult && !mutationResult.ok) || isExplicitFailure(res)) {
                 throw new Error(mutationResult?.error || getResponseError(res) || `Could not update ${ctrl.label}`);
@@ -319,7 +322,7 @@ export default function ControlsBar({
 
         try {
             if (!ctrl.setScript) return;
-            const res = await invokeProviderScript(ctrl.setScript, { value: nextValue });
+            const res = await invokeProviderScript(ctrl.setScript, buildControlValueScriptArgs(ctrl, nextValue));
             const mutationResult = extractControlMutationResult(res);
             if ((mutationResult && !mutationResult.ok) || isExplicitFailure(res)) {
                 throw new Error(mutationResult?.error || getResponseError(res) || `Could not update ${ctrl.label}`);

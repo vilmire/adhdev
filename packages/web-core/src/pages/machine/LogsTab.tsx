@@ -4,6 +4,12 @@
 import { useState, useEffect, useRef } from 'react'
 import type { LogEntry } from './types'
 import { webDebugStore } from '../../debug/webDebugStore'
+import {
+    DEBUG_TRACE_FILTERS,
+    buildDebugTraceQuery,
+    filterDebugTraceEntries,
+    type DebugTraceCategoryFilter,
+} from '../../utils/logs-trace-filters'
 
 interface LogsTabProps {
     machineId: string
@@ -47,8 +53,10 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
     const [lastTraceTs, setLastTraceTs] = useState(0)
     const [autoRefresh, setAutoRefresh] = useState(true)
     const [logLevel, setLogLevel] = useState<'debug' | 'info' | 'warn' | 'error'>('debug')
+    const [traceCategory, setTraceCategory] = useState<DebugTraceCategoryFilter>('all')
     const logsEndRef = useRef<HTMLDivElement>(null)
     const initialScrollDone = useRef(false)
+    const filteredDebugTrace = filterDebugTraceEntries(debugTrace, traceCategory)
 
     useEffect(() => {
         if (!machineId || !autoRefresh) return
@@ -56,7 +64,7 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
             try {
                 const [logsRes, traceRes] = await Promise.all([
                     sendDaemonCommand(machineId, 'get_logs', { count: 200, minLevel: logLevel, since: lastLogTs }),
-                    sendDaemonCommand(machineId, 'get_debug_trace', { count: 120, since: lastTraceTs }),
+                    sendDaemonCommand(machineId, 'get_debug_trace', buildDebugTraceQuery({ count: 120, since: lastTraceTs, category: traceCategory })),
                 ])
 
                 const logsPayload = logsRes?.result || logsRes
@@ -88,7 +96,7 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
         fetchDebugData()
         const timer = setInterval(fetchDebugData, 3000)
         return () => clearInterval(timer)
-    }, [machineId, autoRefresh, lastLogTs, lastTraceTs, logLevel, sendDaemonCommand])
+    }, [machineId, autoRefresh, lastLogTs, lastTraceTs, logLevel, traceCategory, sendDaemonCommand])
 
     useEffect(() => {
         if (autoRefresh && (daemonLogs.length > 0 || debugTrace.length > 0 || webEvents.length > 0)) {
@@ -99,6 +107,11 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
             }, 50)
         }
     }, [daemonLogs.length, debugTrace.length, webEvents.length, autoRefresh])
+
+    useEffect(() => {
+        setDebugTrace([])
+        setLastTraceTs(0)
+    }, [traceCategory])
 
     return (
         <div>
@@ -118,7 +131,7 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
                     ))}
                 </div>
                 <div className="flex gap-1.5 items-center">
-                    <span className="text-[10px] text-text-muted">logs={daemonLogs.length} trace={debugTrace.length} web={webEvents.length}</span>
+                    <span className="text-[10px] text-text-muted">logs={daemonLogs.length} trace={filteredDebugTrace.length} web={webEvents.length}</span>
                     <button
                         onClick={() => setAutoRefresh(!autoRefresh)}
                         className={`machine-btn ${
@@ -157,11 +170,33 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
                 </div>
 
                 <div className="bg-bg-secondary border border-border-subtle rounded-xl p-3 min-h-[180px] max-h-[320px] overflow-y-auto font-mono text-[11px] leading-relaxed">
-                    <div className="mb-2 text-[10px] uppercase tracking-wider text-text-muted">Structured daemon trace</div>
-                    {debugTrace.length === 0 && (
-                        <div className="p-6 text-center text-text-muted">No trace entries yet. Run daemon with --dev or --trace.</div>
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-[10px] uppercase tracking-wider text-text-muted">
+                            Structured daemon trace
+                            {traceCategory === 'session_host' ? ' · session_host only' : ''}
+                        </div>
+                        <div className="flex gap-1 items-center">
+                            {DEBUG_TRACE_FILTERS.map((filter) => (
+                                <button
+                                    key={filter.value}
+                                    onClick={() => setTraceCategory(filter.value)}
+                                    className={`machine-btn text-[10px] px-2 py-0.5 ${
+                                        traceCategory === filter.value ? 'bg-violet-500/15 border-violet-500/40 text-violet-400' : ''
+                                    }`}
+                                >
+                                    {filter.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    {filteredDebugTrace.length === 0 && (
+                        <div className="p-6 text-center text-text-muted">
+                            {traceCategory === 'session_host'
+                                ? 'No session_host trace entries yet. This filter uses get_debug_trace(category=session_host).'
+                                : 'No trace entries yet. Run daemon with --dev or --trace.'}
+                        </div>
                     )}
-                    {debugTrace.map((entry) => (
+                    {filteredDebugTrace.map((entry) => (
                         <div key={entry.id} className="py-1 border-b border-white/5 last:border-b-0">
                             <div className="flex gap-2 text-[10px] text-text-muted">
                                 <span>{new Date(entry.ts).toLocaleTimeString()}</span>
