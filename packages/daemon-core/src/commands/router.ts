@@ -31,6 +31,7 @@ import { logCommand } from '../logging/command-log.js';
 import type { CommandLogEntry } from '../logging/command-log.js';
 import { getRecentLogs, LOG_PATH } from '../logging/logger.js';
 import { createInteractionId, getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
+import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../session-host/runtime-surface.js';
 import { buildSessionEntries } from '../status/builders.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
@@ -137,11 +138,121 @@ function toHostedCliRuntimeDescriptor(record: any): HostedCliRuntimeDescriptor |
     };
 }
 
+function getWriteConflictOwnerClientId(error: unknown): string | undefined {
+    const message = typeof error === 'string'
+        ? error
+        : error instanceof Error
+            ? error.message
+            : '';
+    const match = /^Write owned by\s+(.+)$/.exec(message.trim());
+    return match?.[1]?.trim() || undefined;
+}
+
+function summarizeSessionHostRecord(result: unknown): Record<string, unknown> {
+    if (!result || typeof result !== 'object') return {};
+    const record = result as Record<string, any>;
+    return {
+        runtimeKey: typeof record.runtimeKey === 'string' ? record.runtimeKey : undefined,
+        lifecycle: typeof record.lifecycle === 'string' ? record.lifecycle : undefined,
+        surfaceKind: getSessionHostSurfaceKind(record as any),
+        attachedClientCount: Array.isArray(record.attachedClients) ? record.attachedClients.length : undefined,
+        hasWriteOwner: !!record.writeOwner,
+        writeOwnerClientId: typeof record.writeOwner?.clientId === 'string' ? record.writeOwner.clientId : undefined,
+    };
+}
+
+function summarizeSessionHostRecords(result: unknown): Record<string, unknown> {
+    const records = Array.isArray(result) ? result : [];
+    const groups = partitionSessionHostRecords(records as any[]);
+    return {
+        sessionCount: records.length,
+        liveRuntimeCount: groups.liveRuntimes.length,
+        recoverySnapshotCount: groups.recoverySnapshots.length,
+        inactiveRecordCount: groups.inactiveRecords.length,
+    };
+}
+
+function summarizeSessionHostDiagnostics(result: unknown): Record<string, unknown> {
+    const diagnostics = result && typeof result === 'object' ? result as Record<string, any> : {};
+    const sessions = Array.isArray(diagnostics.sessions) ? diagnostics.sessions : [];
+    return {
+        runtimeCount: typeof diagnostics.runtimeCount === 'number' ? diagnostics.runtimeCount : undefined,
+        ...summarizeSessionHostRecords(sessions),
+    };
+}
+
+function summarizeSessionHostPruneResult(result: unknown): Record<string, unknown> {
+    const value = result && typeof result === 'object' ? result as Record<string, any> : {};
+    return {
+        duplicateGroupCount: typeof value.duplicateGroupCount === 'number' ? value.duplicateGroupCount : undefined,
+        prunedCount: Array.isArray(value.prunedSessionIds) ? value.prunedSessionIds.length : undefined,
+        keptCount: Array.isArray(value.keptSessionIds) ? value.keptSessionIds.length : undefined,
+    };
+}
+
 export class DaemonCommandRouter {
     private deps: CommandRouterDeps;
 
     constructor(deps: CommandRouterDeps) {
         this.deps = deps;
+    }
+
+    private async traceSessionHostAction<T>(
+        action: string,
+        args: any,
+        run: () => Promise<T>,
+        summarizeResult?: (result: T) => Record<string, unknown>,
+    ): Promise<T> {
+        const interactionId = typeof args?._interactionId === 'string' ? args._interactionId : undefined;
+        const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : undefined;
+        const requestedPayload: Record<string, unknown> = { action };
+        if (sessionId) requestedPayload.sessionId = sessionId;
+        if (typeof args?.clientId === 'string') requestedPayload.clientId = args.clientId;
+        if (typeof args?.signal === 'string') requestedPayload.signal = args.signal;
+        if (typeof args?.providerType === 'string') requestedPayload.providerType = args.providerType;
+        if (typeof args?.workspace === 'string') requestedPayload.workspace = args.workspace;
+        if (typeof args?.dryRun === 'boolean') requestedPayload.dryRun = args.dryRun;
+
+        recordDebugTrace({
+            interactionId,
+            category: 'session_host',
+            stage: 'action_requested',
+            level: 'info',
+            sessionId,
+            payload: requestedPayload,
+        });
+
+        try {
+            const result = await run();
+            recordDebugTrace({
+                interactionId,
+                category: 'session_host',
+                stage: 'action_result',
+                level: 'info',
+                sessionId,
+                payload: {
+                    ...requestedPayload,
+                    success: true,
+                    ...(summarizeResult ? summarizeResult(result) : {}),
+                },
+            });
+            return result;
+        } catch (error: any) {
+            recordDebugTrace({
+                interactionId,
+                category: 'session_host',
+                stage: 'action_failed',
+                level: 'error',
+                sessionId,
+                payload: {
+                    ...requestedPayload,
+                    error: error?.message || String(error),
+                    failureKind: getWriteConflictOwnerClientId(error) ? 'write_conflict' : 'request_failed',
+                    conflictOwnerClientId: getWriteConflictOwnerClientId(error),
+                },
+            });
+            throw error;
+        }
     }
 
     /**
@@ -270,16 +381,20 @@ export class DaemonCommandRouter {
 
             case 'session_host_get_diagnostics': {
                 if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
-                const diagnostics = await this.deps.sessionHostControl.getDiagnostics({
+                const diagnostics = await this.traceSessionHostAction('session_host_get_diagnostics', args, () => this.deps.sessionHostControl!.getDiagnostics({
                     includeSessions: args?.includeSessions !== false,
                     limit: Number(args?.limit) || undefined,
-                });
+                }), (result) => ({
+                    includeSessions: args?.includeSessions !== false,
+                    limit: Number(args?.limit) || undefined,
+                    ...summarizeSessionHostDiagnostics(result),
+                }));
                 return { success: true, diagnostics };
             }
 
             case 'session_host_list_sessions': {
                 if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
-                const sessions = await this.deps.sessionHostControl.listSessions();
+                const sessions = await this.traceSessionHostAction('session_host_list_sessions', args, () => this.deps.sessionHostControl!.listSessions(), (records) => summarizeSessionHostRecords(records));
                 return { success: true, sessions };
             }
 
@@ -287,7 +402,7 @@ export class DaemonCommandRouter {
                 if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
                 const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
                 if (!sessionId) return { success: false, error: 'sessionId required' };
-                const record = await this.deps.sessionHostControl.stopSession(sessionId);
+                const record = await this.traceSessionHostAction('session_host_stop_session', args, () => this.deps.sessionHostControl!.stopSession(sessionId), (result) => summarizeSessionHostRecord(result));
                 return { success: true, record };
             }
 
@@ -295,11 +410,17 @@ export class DaemonCommandRouter {
                 if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
                 const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
                 if (!sessionId) return { success: false, error: 'sessionId required' };
-                const record = await this.deps.sessionHostControl.resumeSession(sessionId);
-                const hosted = toHostedCliRuntimeDescriptor(record);
-                if (hosted) {
-                    await this.deps.cliManager.restoreHostedSessions([hosted]);
-                }
+                const record = await this.traceSessionHostAction('session_host_resume_session', args, async () => {
+                    const nextRecord = await this.deps.sessionHostControl!.resumeSession(sessionId);
+                    const hosted = toHostedCliRuntimeDescriptor(nextRecord);
+                    if (hosted) {
+                        await this.deps.cliManager.restoreHostedSessions([hosted]);
+                    }
+                    return nextRecord;
+                }, (result) => ({
+                    ...summarizeSessionHostRecord(result),
+                    restoredHostedSession: !!toHostedCliRuntimeDescriptor(result),
+                }));
                 return { success: true, record };
             }
 
@@ -307,11 +428,17 @@ export class DaemonCommandRouter {
                 if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
                 const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
                 if (!sessionId) return { success: false, error: 'sessionId required' };
-                const record = await this.deps.sessionHostControl.restartSession(sessionId);
-                const hosted = toHostedCliRuntimeDescriptor(record);
-                if (hosted) {
-                    await this.deps.cliManager.restoreHostedSessions([hosted]);
-                }
+                const record = await this.traceSessionHostAction('session_host_restart_session', args, async () => {
+                    const nextRecord = await this.deps.sessionHostControl!.restartSession(sessionId);
+                    const hosted = toHostedCliRuntimeDescriptor(nextRecord);
+                    if (hosted) {
+                        await this.deps.cliManager.restoreHostedSessions([hosted]);
+                    }
+                    return nextRecord;
+                }, (result) => ({
+                    ...summarizeSessionHostRecord(result),
+                    restoredHostedSession: !!toHostedCliRuntimeDescriptor(result),
+                }));
                 return { success: true, record };
             }
 
@@ -321,7 +448,7 @@ export class DaemonCommandRouter {
                 const signal = typeof args?.signal === 'string' ? args.signal : '';
                 if (!sessionId) return { success: false, error: 'sessionId required' };
                 if (!signal) return { success: false, error: 'signal required' };
-                const record = await this.deps.sessionHostControl.sendSignal(sessionId, signal);
+                const record = await this.traceSessionHostAction('session_host_send_signal', args, () => this.deps.sessionHostControl!.sendSignal(sessionId, signal), (result) => summarizeSessionHostRecord(result));
                 return { success: true, record };
             }
 
@@ -331,17 +458,17 @@ export class DaemonCommandRouter {
                 const clientId = typeof args?.clientId === 'string' ? args.clientId : '';
                 if (!sessionId) return { success: false, error: 'sessionId required' };
                 if (!clientId) return { success: false, error: 'clientId required' };
-                const record = await this.deps.sessionHostControl.forceDetachClient(sessionId, clientId);
+                const record = await this.traceSessionHostAction('session_host_force_detach_client', args, () => this.deps.sessionHostControl!.forceDetachClient(sessionId, clientId), (result) => summarizeSessionHostRecord(result));
                 return { success: true, record };
             }
 
             case 'session_host_prune_duplicate_sessions': {
                 if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
-                const result = await this.deps.sessionHostControl.pruneDuplicateSessions({
+                const result = await this.traceSessionHostAction('session_host_prune_duplicate_sessions', args, () => this.deps.sessionHostControl!.pruneDuplicateSessions({
                     providerType: typeof args?.providerType === 'string' ? args.providerType : undefined,
                     workspace: typeof args?.workspace === 'string' ? args.workspace : undefined,
                     dryRun: args?.dryRun === true,
-                });
+                }), (value) => summarizeSessionHostPruneResult(value));
                 return { success: true, result };
             }
 
@@ -352,12 +479,15 @@ export class DaemonCommandRouter {
                 const ownerType = args?.ownerType === 'agent' ? 'agent' : 'user';
                 if (!sessionId) return { success: false, error: 'sessionId required' };
                 if (!clientId) return { success: false, error: 'clientId required' };
-                const record = await this.deps.sessionHostControl.acquireWrite({
+                const record = await this.traceSessionHostAction('session_host_acquire_write', args, () => this.deps.sessionHostControl!.acquireWrite({
                     sessionId,
                     clientId,
                     ownerType,
                     force: args?.force !== false,
-                });
+                }), (result) => ({
+                    ...summarizeSessionHostRecord(result),
+                    ownerType,
+                }));
                 return { success: true, record };
             }
 
@@ -367,7 +497,10 @@ export class DaemonCommandRouter {
                 const clientId = typeof args?.clientId === 'string' ? args.clientId : '';
                 if (!sessionId) return { success: false, error: 'sessionId required' };
                 if (!clientId) return { success: false, error: 'clientId required' };
-                const record = await this.deps.sessionHostControl.releaseWrite({ sessionId, clientId });
+                const record = await this.traceSessionHostAction('session_host_release_write', args, () => this.deps.sessionHostControl!.releaseWrite({
+                    sessionId,
+                    clientId,
+                }), (result) => summarizeSessionHostRecord(result));
                 return { success: true, record };
             }
 
