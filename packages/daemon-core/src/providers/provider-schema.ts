@@ -83,6 +83,9 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
       warnings.push(`Unknown provider field: ${key}`)
     }
   }
+  if (provider.disableUpstream !== undefined) {
+    warnings.push('disableUpstream is deprecated in provider definitions; use machine-level provider source policy instead')
+  }
 
   const category = provider.category
   if ((category === 'cli' || category === 'acp')) {

@@ -14,6 +14,18 @@ export type { RecentActivityEntry } from './recent-activity.js';
 export type { SavedProviderSessionEntry } from './saved-sessions.js';
 export type { DaemonState } from './state-store.js';
 
+export type ProviderSourceMode = 'normal' | 'no-upstream';
+
+export function resolveProviderSourceMode(
+    providerSourceMode: unknown,
+    legacyDisableUpstream: unknown,
+): ProviderSourceMode {
+    if (providerSourceMode === 'normal' || providerSourceMode === 'no-upstream') {
+        return providerSourceMode;
+    }
+    return legacyDisableUpstream === true ? 'no-upstream' : 'normal';
+}
+
 export interface ADHDevConfig {
  // Server connection
     serverUrl: string;
@@ -81,9 +93,13 @@ export interface ADHDevConfig {
 
  // Disable upstream provider auto-download (use builtin only)
  // Controllable from CLI (--no-upstream) and dashboard (machine page)
+ // Deprecated legacy boolean; prefer providerSourceMode.
     disableUpstream?: boolean;
 
- // Optional custom provider directory for local development
+ // Explicit machine-level provider source policy.
+    providerSourceMode?: ProviderSourceMode;
+
+ // Optional explicit provider override root (for example a local adhdev-providers checkout)
     providerDir?: string;
 
     /**
@@ -113,7 +129,7 @@ const DEFAULT_CONFIG: ADHDevConfig = {
     registeredMachineId: undefined,
     providerSettings: {},
     ideSettings: {},
-    disableUpstream: false,
+    providerSourceMode: 'normal',
     terminalSizingMode: 'measured',
 };
 
@@ -164,7 +180,7 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
         registeredMachineId: asOptionalString(parsed.registeredMachineId),
         providerSettings: isPlainObject(parsed.providerSettings) ? parsed.providerSettings : {},
         ideSettings: isPlainObject(parsed.ideSettings) ? parsed.ideSettings : {},
-        disableUpstream: asBoolean(parsed.disableUpstream, DEFAULT_CONFIG.disableUpstream ?? false),
+        providerSourceMode: resolveProviderSourceMode(parsed.providerSourceMode, parsed.disableUpstream),
         providerDir: asOptionalString(parsed.providerDir),
         terminalSizingMode: parsed.terminalSizingMode === 'fit' ? 'fit' : 'measured',
     };

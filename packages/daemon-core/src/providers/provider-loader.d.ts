@@ -14,6 +14,7 @@
  */
 import { VersionArchive } from './version-archive.js';
 import type { ProviderModule, ProviderCategory, ProviderSettingSchema, ResolvedProvider } from './contracts.js';
+import type { ProviderSourceMode } from '../config/config.js';
 export declare class ProviderLoader {
     private providers;
     private providerAvailability;
@@ -31,7 +32,9 @@ export declare class ProviderLoader {
     constructor(options?: {
         userDir?: string;
         logFn?: (msg: string) => void;
-        /** Disable upstream auto-download (for dev/testing/OSS) */
+        /** Explicit machine-level provider source policy */
+        sourceMode?: ProviderSourceMode;
+        /** Deprecated alias for sourceMode='no-upstream' */
         disableUpstream?: boolean;
     });
     private log;

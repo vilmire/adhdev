@@ -30,6 +30,7 @@ import type {
   ResolvedProvider,
 } from './contracts.js';
 import { validateProviderDefinition } from './provider-schema.js';
+import type { ProviderSourceMode } from '../config/config.js';
 
 interface ProviderAvailabilityState {
   installed: boolean;
@@ -58,7 +59,9 @@ export class ProviderLoader {
   constructor(options?: {
     userDir?: string;
     logFn?: (msg: string) => void;
-    /** Disable upstream auto-download (for dev/testing/OSS) */
+    /** Explicit machine-level provider source policy */
+    sourceMode?: ProviderSourceMode;
+    /** Deprecated alias for sourceMode='no-upstream' */
     disableUpstream?: boolean;
   }) {
     this.logFn = options?.logFn || LOG.forComponent('Provider').asLogFn();
@@ -70,20 +73,15 @@ export class ProviderLoader {
         this.userDir = options.userDir;
         this.log(`Config 'providerDir' applied: ${this.userDir}`);
     } else {
-        // Local dev overrides: Auto-detect local adhdev-providers repo for speed
-        const localRepoPath = path.resolve(__dirname, '../../../../../adhdev-providers');
-        if (fs.existsSync(localRepoPath)) {
-            this.userDir = localRepoPath;
-            this.log(`Auto-detected local public repository: ${this.userDir} (Dev workspace speedup)`);
-        } else {
-            this.userDir = defaultProvidersDir;
-            this.log(`Using default user providers directory: ${this.userDir}`);
-        }
+        this.userDir = defaultProvidersDir;
+        this.log(`Using default user providers directory: ${this.userDir}`);
     }
 
     // Upstream auto-download directory is always in the default location
     this.upstreamDir = path.join(defaultProvidersDir, '.upstream');
-    this.disableUpstream = options?.disableUpstream ?? false;
+    this.disableUpstream = options?.sourceMode === 'no-upstream'
+      ? true
+      : (options?.sourceMode === 'normal' ? false : (options?.disableUpstream ?? false));
   }
 
   private log(msg: string): void {
@@ -171,7 +169,7 @@ export class ProviderLoader {
         this.log(`Loaded ${upstreamCount} upstream providers (auto-updated)`);
       }
     } else if (this.disableUpstream) {
-      this.log('Upstream loading disabled (disableUpstream=true)');
+      this.log('Upstream loading disabled (sourceMode=no-upstream)');
     }
 
  // 2. Load user custom (excluding .upstream — highest priority, never auto-updated)
@@ -760,7 +758,7 @@ export class ProviderLoader {
  */
   async fetchLatest(): Promise<{ updated: boolean; error?: string }> {
     if (this.disableUpstream) {
-      this.log('Upstream fetch skipped (disableUpstream=true)');
+      this.log('Upstream fetch skipped (sourceMode=no-upstream)');
       return { updated: false };
     }
     const https = require('https') as typeof import('https');

@@ -92,7 +92,7 @@ describe('validateProviderDefinition', () => {
     expect(result.errors).toContain("controls.auto_approve: toggle controls require setScript")
   })
 
-  it('accepts provider-repo runtime and inventory metadata fields', () => {
+  it('warns that provider-level disableUpstream is deprecated while still accepting other runtime metadata', () => {
     const result = validateProviderDefinition({
       type: 'foo-cli',
       name: 'Foo CLI',
@@ -109,6 +109,6 @@ describe('validateProviderDefinition', () => {
     })
 
     expect(result.errors).toEqual([])
-    expect(result.warnings).toEqual([])
+    expect(result.warnings).toContain('disableUpstream is deprecated in provider definitions; use machine-level provider source policy instead')
   })
 })

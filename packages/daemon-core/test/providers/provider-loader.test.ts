@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { homedir, tmpdir } from 'os';
+import * as path from 'path';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import { ProviderLoader } from '../../src/providers/provider-loader.js';
 
 function writeProvider(root: string, category: string, type: string, data: Record<string, unknown>) {
@@ -39,6 +40,24 @@ class TestProviderLoader extends ProviderLoader {
     Object.assign(this.testConfig, config);
   }
 }
+
+describe('ProviderLoader source root selection', () => {
+  const localRepoPath = path.resolve(__dirname, '../../../../../adhdev-providers');
+
+  afterEach(() => {
+    if (existsSync(localRepoPath)) {
+      rmSync(localRepoPath, { recursive: true, force: true });
+    }
+  });
+
+  it('defaults to ~/.adhdev/providers even if a sibling adhdev-providers checkout exists', () => {
+    mkdirSync(localRepoPath, { recursive: true });
+
+    const loader = new ProviderLoader();
+
+    expect(loader.getUserDir()).toBe(path.join(homedir(), '.adhdev', 'providers'));
+  });
+});
 
 describe('ProviderLoader settings schema', () => {
   let userDir = '';

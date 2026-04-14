@@ -8,6 +8,8 @@ export type { WorkspaceEntry } from './workspaces.js';
 export type { RecentActivityEntry } from './recent-activity.js';
 export type { SavedProviderSessionEntry } from './saved-sessions.js';
 export type { DaemonState } from './state-store.js';
+export type ProviderSourceMode = 'normal' | 'no-upstream';
+export declare function resolveProviderSourceMode(providerSourceMode: unknown, legacyDisableUpstream: unknown): ProviderSourceMode;
 export interface ADHDevConfig {
     serverUrl: string;
     selectedIde: string | null;
@@ -45,6 +47,7 @@ export interface ADHDevConfig {
         }>;
     }>;
     disableUpstream?: boolean;
+    providerSourceMode?: ProviderSourceMode;
     providerDir?: string;
     /**
      * Browser terminal sizing behavior for dashboard CLI panes.

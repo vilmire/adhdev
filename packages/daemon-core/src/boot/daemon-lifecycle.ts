@@ -116,12 +116,13 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // 1. Global log interceptor
     installGlobalInterceptor();
 
-    // 2. ProviderLoader (disableUpstream from config.json)
+    // 2. ProviderLoader (provider source mode from config.json)
     const appConfig = loadConfig();
-    const disableUpstream = appConfig.disableUpstream ?? false;
+    const providerSourceMode = appConfig.providerSourceMode || 'normal';
+    const disableUpstream = providerSourceMode === 'no-upstream';
     const providerLoader = new ProviderLoader({
         logFn: config.providerLogFn,
-        disableUpstream,
+        sourceMode: providerSourceMode,
         userDir: appConfig.providerDir,
     });
 

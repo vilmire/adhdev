@@ -414,6 +414,7 @@ export interface ProviderModule {
   /** How the CLI adapter decides when to submit typed input */
   submitStrategy?: 'wait_for_echo' | 'immediate';
   /** Keep this provider out of the upstream auto-updated bundle */
+  /** @deprecated Machine-level provider source policy now lives in config.providerSourceMode. Local overrides shadow upstream by root precedence and should not rely on provider-level disableUpstream. */
   disableUpstream?: boolean;
   approvalKeys?: Record<number, string>;
   patterns?: {
