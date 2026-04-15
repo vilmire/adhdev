@@ -2,6 +2,14 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.63] - 2026-04-16
+
+### Fixed
+- Fixed the shared web-core status-transform typing so merged session `activeChat` state always normalizes to `null` instead of leaking `undefined`, unblocking downstream cloud/web builds during release verification.
+
+### Changed
+- Followed up the `v0.8.62` standalone CLI/dashboard fixes with a release-compatibility patch so the same shared surfaces build cleanly in downstream cloud consumers.
+
 ## [0.8.62] - 2026-04-16
 
 ### Added

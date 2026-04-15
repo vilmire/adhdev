@@ -33,9 +33,9 @@ type ExistingSessionLike = Partial<SessionEntry> & {
 function mergeActiveChatData(
     incoming: SessionEntry['activeChat'] | null | undefined,
     existing: SessionEntry['activeChat'] | null | undefined,
-): SessionEntry['activeChat'] | null | undefined {
-    if (!incoming) return existing
-    if (!existing) return incoming
+): SessionEntry['activeChat'] | null {
+    if (!incoming) return existing ?? null
+    if (!existing) return incoming ?? null
 
     const mergedMessages = Array.isArray(incoming.messages) && incoming.messages.length > 0
         ? incoming.messages
