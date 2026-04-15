@@ -238,8 +238,6 @@ export function getChatMessageStableKey(message: ChatMessage, index: number): st
     return parts.join('|');
 }
 
-const CLI_TRUNCATE = 5000;
-
 const ActionLogRow = memo(function ActionLogRow({ log }: { log: ActionLog }) {
     return (
         <div className="self-center chat-msg-action">
@@ -266,7 +264,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
     receivedAt,
     agentName,
     userName,
-    isCliMode,
+    isCliMode: _isCliMode,
     isTextExpanded,
     onToggleTextExpanded,
 }: ChatMessageRowProps) {
@@ -345,10 +343,8 @@ const ChatMessageRow = memo(function ChatMessageRow({
     const renderMode = typeof meta?.renderMode === 'string' ? meta.renderMode.trim() : '';
     const contentLooksPreformatted = renderMode === 'preformatted';
     const displayContent = contentStr;
-    const showExpandBtn = !hasStructuredRenderer && isCliMode && !isUser && !contentLooksPreformatted && displayContent.length > CLI_TRUNCATE;
-    const visibleContent = (showExpandBtn && !isTextExpanded)
-        ? displayContent.slice(0, CLI_TRUNCATE)
-        : displayContent;
+    const showExpandBtn = false;
+    const visibleContent = displayContent;
     const renderAsPreformatted = contentLooksPreformatted;
     const renderAsMarkdown = !renderAsPreformatted && likelyNeedsMarkdownRender(visibleContent);
 

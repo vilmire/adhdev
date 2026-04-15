@@ -5,6 +5,8 @@ import {
   getCliResumeSelectPlaceholder,
   getHostedRuntimeRecoveryDescription,
   getHostedRuntimeReviewButtonLabel,
+  getLaunchPrimaryActionLabel,
+  getLaunchPrimaryBusyLabel,
   getMachineLaunchBusyLabel,
   getMachineLaunchConfirmDescription,
   getMachineLaunchConfirmLabel,
@@ -28,6 +30,17 @@ describe('dashboard launch copy helpers', () => {
   it('uses Resume saved history for resume CLI launches', () => {
     expect(getCliLaunchPrimaryActionLabel(true)).toBe('Resume saved history')
     expect(getCliLaunchBusyLabel(true)).toBe('Resuming saved history…')
+  })
+
+  it('exposes shared launch button copy across dashboard and machine flows', () => {
+    expect(getLaunchPrimaryActionLabel('cli', false)).toBe('Start fresh')
+    expect(getLaunchPrimaryBusyLabel('cli', false)).toBe('Starting fresh…')
+    expect(getLaunchPrimaryActionLabel('cli', true)).toBe('Resume saved history')
+    expect(getLaunchPrimaryBusyLabel('cli', true)).toBe('Resuming saved history…')
+    expect(getLaunchPrimaryActionLabel('ide')).toBe('Start IDE')
+    expect(getLaunchPrimaryBusyLabel('ide')).toBe('Starting IDE…')
+    expect(getLaunchPrimaryActionLabel('acp')).toBe('Start ACP session')
+    expect(getLaunchPrimaryBusyLabel('acp')).toBe('Starting ACP session…')
   })
 
   it('uses a short start-fresh placeholder in resume selectors', () => {

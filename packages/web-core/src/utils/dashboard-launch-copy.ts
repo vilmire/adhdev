@@ -10,6 +10,20 @@ export function getCliResumeSelectPlaceholder(): string {
   return 'Start fresh'
 }
 
+export type LaunchPrimaryActionKind = 'cli' | 'ide' | 'acp'
+
+export function getLaunchPrimaryActionLabel(kind: LaunchPrimaryActionKind, isResume = false): string {
+  if (kind === 'cli') return getCliLaunchPrimaryActionLabel(isResume)
+  if (kind === 'ide') return 'Start IDE'
+  return 'Start ACP session'
+}
+
+export function getLaunchPrimaryBusyLabel(kind: LaunchPrimaryActionKind, isResume = false): string {
+  if (kind === 'cli') return getCliLaunchBusyLabel(isResume)
+  if (kind === 'ide') return 'Starting IDE…'
+  return 'Starting ACP session…'
+}
+
 export function getHostedRuntimeReviewButtonLabel(): string {
   return 'Recover hosted runtime'
 }

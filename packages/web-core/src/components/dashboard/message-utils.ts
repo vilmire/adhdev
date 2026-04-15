@@ -55,11 +55,35 @@ function getMessagePreferenceScore(message: MessageLike | null | undefined): num
     return score
 }
 
+function getNormalizedMessageContent(message: MessageLike | null | undefined): string {
+    return normalizeTextContent(message?.content)
+}
+
+function isLikelyTruncatedDuplicate(longer: string, shorter: string): boolean {
+    if (!longer || !shorter) return false
+    if (longer.length <= shorter.length) return false
+    if (shorter.length < 80) return false
+    return longer.startsWith(shorter) || longer.includes(shorter)
+}
+
+function preferMoreCompleteMessage<T extends MessageLike>(left: T, right: T): T | null {
+    const leftContent = getNormalizedMessageContent(left)
+    const rightContent = getNormalizedMessageContent(right)
+    if (!leftContent || !rightContent || leftContent === rightContent) return null
+
+    if (isLikelyTruncatedDuplicate(leftContent, rightContent)) return left
+    if (isLikelyTruncatedDuplicate(rightContent, leftContent)) return right
+    return null
+}
+
 export function choosePreferredMessage<T extends MessageLike>(existing: T, incoming: T): T {
+    const moreComplete = preferMoreCompleteMessage(existing, incoming)
+    if (moreComplete) return moreComplete
+
     const existingScore = getMessagePreferenceScore(existing)
     const incomingScore = getMessagePreferenceScore(incoming)
     if (incomingScore !== existingScore) return incomingScore > existingScore ? incoming : existing
-    return normalizeTextContent(incoming.content).length >= normalizeTextContent(existing.content).length
+    return getNormalizedMessageContent(incoming).length >= getNormalizedMessageContent(existing).length
         ? incoming
         : existing
 }
@@ -109,6 +133,23 @@ export function filterUnconfirmedLocalMessages(
 }
 
 export function excludeMessagesPresentInLiveFeed<T extends MessageLike>(historyMessages: T[], liveMessages: MessageLike[]): T[] {
-    const liveHashes = new Set(liveMessages.map((message) => getMessagePreviewHash(message)))
-    return historyMessages.filter((message) => !liveHashes.has(getMessagePreviewHash(message)))
+    return historyMessages.filter((historyMessage) => {
+        const historyContent = getNormalizedMessageContent(historyMessage)
+        const historyRole = String(historyMessage?.role || '').toLowerCase()
+        const historyTs = getMessageTimestamp(historyMessage)
+
+        return !liveMessages.some((liveMessage) => {
+            if (areLikelySameMessages(historyMessage, liveMessage)) return true
+
+            const liveRole = String(liveMessage?.role || '').toLowerCase()
+            if (!historyContent || !historyRole || historyRole !== liveRole) return false
+
+            const liveContent = getNormalizedMessageContent(liveMessage)
+            if (!isLikelyTruncatedDuplicate(liveContent, historyContent) && liveContent !== historyContent) return false
+
+            const liveTs = getMessageTimestamp(liveMessage)
+            if (historyTs && liveTs) return Math.abs(historyTs - liveTs) <= 15000
+            return true
+        })
+    })
 }

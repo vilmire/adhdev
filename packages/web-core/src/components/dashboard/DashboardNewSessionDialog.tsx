@@ -3,12 +3,9 @@ import type { DaemonData } from '../../types'
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader'
 import { compareMachineEntries, getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import {
-    getCliLaunchBusyLabel,
-    getCliLaunchPrimaryActionLabel,
-    getCliResumeSelectPlaceholder,
     getHostedRuntimeReviewButtonLabel,
-    getOpenHistoryLabel,
-    getSavedHistoryHelperLabel,
+    getLaunchPrimaryActionLabel,
+    getLaunchPrimaryBusyLabel,
 } from '../../utils/dashboard-launch-copy'
 import { IconFolder, IconPlay, IconServer, IconX } from '../Icons'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
@@ -18,9 +15,9 @@ import HistoryModal from './HistoryModal'
 import type { ActiveConversation } from './types'
 import DashboardMobileSessionHostSheet from './DashboardMobileSessionHostSheet'
 import { getMobileMachineConnectionLabel } from './dashboard-mobile-chat-mode-helpers'
-import { buildSavedHistorySummaryView } from '../../utils/saved-history-summary'
 import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state'
-import { prepareSavedHistoryEntries } from '../../utils/saved-history-filters'
+import SavedHistoryLaunchSection from '../SavedHistoryLaunchSection'
+import LaunchSectionCard from '../LaunchSectionCard'
 
 type LaunchKind = 'ide' | 'cli' | 'acp'
 
@@ -123,7 +120,6 @@ export default function DashboardNewSessionDialog({
     const [savedSessionsError, setSavedSessionsError] = useState('')
     const [resumeHistoryOpen, setResumeHistoryOpen] = useState(false)
     const [resumeHistoryFilters, setResumeHistoryFilters] = useState<SavedHistoryFilterState>(() => createSavedHistoryFilterState())
-    const [savedSessionsResumableOnly, setSavedSessionsResumableOnly] = useState(false)
     const [sessionHostOpen, setSessionHostOpen] = useState(false)
     const [resumingSavedSessionId, setResumingSavedSessionId] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
@@ -200,7 +196,6 @@ export default function DashboardNewSessionDialog({
             setSelectedResumeSessionId('')
             setSavedSessions([])
             setSavedSessionsError('')
-            setSavedSessionsResumableOnly(false)
             setResumeHistoryFilters(createSavedHistoryFilterState())
             setMessage('')
             return
@@ -253,7 +248,6 @@ export default function DashboardNewSessionDialog({
 
     useEffect(() => {
         setSelectedResumeSessionId('')
-        setSavedSessionsResumableOnly(false)
         setResumeHistoryFilters(createSavedHistoryFilterState())
         if (!selectedMachine || !selectedTarget || activeKind === 'ide') {
             setRecentArgsOptions([])
@@ -275,20 +269,12 @@ export default function DashboardNewSessionDialog({
         void loadSavedSessions(selectedMachine.id, selectedTarget)
     }, [activeKind, loadRecentArgs, loadSavedSessions, selectedMachine, selectedTarget])
 
-    const filteredSavedSessions = useMemo(
-        () => prepareSavedHistoryEntries(savedSessions, {
-            resumableOnly: savedSessionsResumableOnly,
-            sortMode: 'recent',
-        }),
-        [savedSessions, savedSessionsResumableOnly],
-    )
-
     useEffect(() => {
         if (!selectedResumeSessionId) return
-        const selectedSession = filteredSavedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
+        const selectedSession = savedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
         if (selectedSession?.canResume) return
         setSelectedResumeSessionId('')
-    }, [filteredSavedSessions, selectedResumeSessionId])
+    }, [savedSessions, selectedResumeSessionId])
 
     const resolvedWorkspacePath = workspaceChoice === '__custom__'
         ? customWorkspacePath.trim()
@@ -335,6 +321,11 @@ export default function DashboardNewSessionDialog({
         }
         return { workspaceId: null, workspacePath: sessionWorkspace }
     }, [workspaceRows])
+
+    const selectedSavedSession = useMemo(
+        () => savedSessions.find(session => session.providerSessionId === selectedResumeSessionId) || null,
+        [savedSessions, selectedResumeSessionId],
+    )
 
     const resumeHistoryConversation = useMemo<ActiveConversation | null>(() => {
         if (activeKind !== 'cli' || !selectedMachine || !selectedTarget) return null
@@ -469,15 +460,11 @@ export default function DashboardNewSessionDialog({
         workspaceChoice,
     ])
 
-    const primaryActionLabel = activeKind === 'cli'
-        ? getCliLaunchPrimaryActionLabel(!!selectedResumeSessionId)
-        : activeKind === 'ide'
-            ? 'Start IDE'
-            : activeKind === 'acp'
-                ? 'Start ACP session'
-                : 'Start'
-    const primaryBusyLabel = activeKind === 'cli'
-        ? getCliLaunchBusyLabel(!!selectedResumeSessionId)
+    const primaryActionLabel = activeKind
+        ? getLaunchPrimaryActionLabel(activeKind, activeKind === 'cli' && !!selectedResumeSessionId)
+        : 'Start'
+    const primaryBusyLabel = activeKind
+        ? getLaunchPrimaryBusyLabel(activeKind, activeKind === 'cli' && !!selectedResumeSessionId)
         : 'Starting…'
 
     if (!selectedMachine) {
@@ -513,8 +500,7 @@ export default function DashboardNewSessionDialog({
                     </div>
 
                     <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-4">
-                        <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
-                            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">Machine</div>
+                        <LaunchSectionCard title="Machine">
                             <select
                                 value={selectedMachine.id}
                                 onChange={(event) => setSelectedMachineId(event.target.value)}
@@ -527,17 +513,13 @@ export default function DashboardNewSessionDialog({
                                     </option>
                                 ))}
                             </select>
-                        </div>
+                        </LaunchSectionCard>
 
                         {activeKind === 'cli' && (
-                            <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                        <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Hosted runtimes</div>
-                                        <div className="text-xs text-text-secondary mt-1">
-                                            Review live runtimes, recovery snapshots, and recover or restart options without leaving this launch flow.
-                                        </div>
-                                    </div>
+                            <LaunchSectionCard
+                                title="Hosted runtimes"
+                                description="Review live runtimes, recovery snapshots, and recover or restart options without leaving this launch flow."
+                                action={(
                                     <button
                                         type="button"
                                         className="btn btn-secondary btn-sm"
@@ -547,16 +529,15 @@ export default function DashboardNewSessionDialog({
                                         <IconServer size={14} />
                                         {getHostedRuntimeReviewButtonLabel()}
                                     </button>
-                                </div>
-                            </div>
+                                )}
+                            >
+                            </LaunchSectionCard>
                         )}
 
-                        <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
-                            <div className="flex items-center justify-between gap-3 mb-2">
-                                <div>
-                                    <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Workspace</div>
-                                    <div className="text-xs text-text-secondary mt-1">Saved workspace is preferred. Home and custom folders are still available.</div>
-                                </div>
+                        <LaunchSectionCard
+                            title="Workspace"
+                            description="Saved workspace is preferred. Home and custom folders are still available."
+                            action={(
                                 <button
                                     type="button"
                                     className="btn btn-secondary btn-sm"
@@ -565,7 +546,8 @@ export default function DashboardNewSessionDialog({
                                 >
                                     Browse…
                                 </button>
-                            </div>
+                            )}
+                        >
                             <select
                                 value={workspaceChoice}
                                 onChange={(event) => {
@@ -614,7 +596,7 @@ export default function DashboardNewSessionDialog({
                                     </button>
                                 </div>
                             )}
-                        </div>
+                        </LaunchSectionCard>
 
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
                             <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-2">Category</div>
@@ -663,8 +645,7 @@ export default function DashboardNewSessionDialog({
                         </div>
 
                         {activeKind !== 'ide' && (
-                            <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
-                                <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">Startup arguments</div>
+                            <LaunchSectionCard title="Startup arguments">
                                 <input
                                     type="text"
                                     value={launchArgs}
@@ -689,112 +670,26 @@ export default function DashboardNewSessionDialog({
                                         ))}
                                     </div>
                                 )}
-                            </div>
+                            </LaunchSectionCard>
                         )}
 
                         {activeKind === 'cli' && (
-                            <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                        <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted">Resume saved history</div>
-                                        <div className="text-xs text-text-secondary mt-1">{getSavedHistoryHelperLabel()} Leave this empty to start fresh.</div>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <button
-                                            type="button"
-                                            className="btn btn-secondary btn-sm"
-                                            disabled={busy || !selectedMachine || !selectedTarget || savedSessionsLoading}
-                                            onClick={() => {
-                                                if (!selectedMachine || !selectedTarget) return
-                                                void loadSavedSessions(selectedMachine.id, selectedTarget)
-                                            }}
-                                        >
-                                            {savedSessionsLoading ? 'Loading…' : 'Refresh'}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="btn btn-secondary btn-sm"
-                                            disabled={busy || !selectedMachine || !selectedTarget}
-                                            onClick={() => {
-                                                if (!selectedMachine || !selectedTarget) return
-                                                setResumeHistoryOpen(true)
-                                                void loadSavedSessions(selectedMachine.id, selectedTarget)
-                                            }}
-                                        >
-                                            {getOpenHistoryLabel()}
-                                        </button>
-                                    </div>
-                                </div>
-                                <div className="mt-2">
-                                    <label className="mb-2 flex items-center gap-2 text-[11px] text-text-muted">
-                                        <input
-                                            type="checkbox"
-                                            checked={savedSessionsResumableOnly}
-                                            onChange={(event) => setSavedSessionsResumableOnly(event.target.checked)}
-                                            disabled={busy || savedSessionsLoading}
-                                        />
-                                        Resume-ready only
-                                    </label>
-                                    <select
-                                        value={selectedResumeSessionId}
-                                        onChange={(event) => {
-                                            const nextId = event.target.value
-                                            setSelectedResumeSessionId(nextId)
-                                            if (!nextId) return
-                                            const session = filteredSavedSessions.find(item => item.providerSessionId === nextId)
-                                            if (!session || !session.canResume) return
-                                            applySavedSessionWorkspace(session)
-                                        }}
-                                        className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
-                                        disabled={busy || savedSessionsLoading}
-                                    >
-                                        <option value="">{getCliResumeSelectPlaceholder()}</option>
-                                        {filteredSavedSessions.map(session => (
-                                            <option
-                                                key={session.providerSessionId}
-                                                value={session.providerSessionId}
-                                                disabled={!session.canResume}
-                                            >
-                                                {session.title || session.providerSessionId}
-                                                {!session.canResume ? ' (workspace missing)' : ''}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                                {selectedResumeSessionId && (() => {
-                                    const selectedSession = filteredSavedSessions.find(session => session.providerSessionId === selectedResumeSessionId)
-                                    if (!selectedSession) return null
-                                    const summary = buildSavedHistorySummaryView(selectedSession)
-                                    return (
-                                        <div className="mt-2 rounded-lg border border-border-subtle bg-bg-secondary px-3 py-2.5 text-[11px] text-text-muted leading-relaxed">
-                                            <div className="font-semibold text-text-primary truncate">{summary.title}</div>
-                                            <div className="font-mono break-all mt-0.5">{summary.providerSessionId}</div>
-                                            <div className="mt-1">{summary.metaLine}</div>
-                                            {summary.updatedLabel && (
-                                                <div className="mt-1 text-text-secondary">{summary.updatedLabel}</div>
-                                            )}
-                                            {summary.preview && (
-                                                <div className="mt-2 line-clamp-2 text-text-secondary">{summary.preview}</div>
-                                            )}
-                                        </div>
-                                    )
-                                })()}
-                                {savedSessionsError && (
-                                    <div className="mt-2 text-[11px] text-status-error">
-                                        {savedSessionsError}
-                                    </div>
-                                )}
-                                {!savedSessionsLoading && !savedSessionsError && savedSessions.length > 0 && filteredSavedSessions.length === 0 && (
-                                    <div className="mt-2 text-[11px] text-text-muted">
-                                        No saved history matches these filters.
-                                    </div>
-                                )}
-                                {!savedSessionsLoading && !savedSessionsError && savedSessions.length === 0 && (
-                                    <div className="mt-2 text-[11px] text-text-muted">
-                                        No saved history found for this provider yet.
-                                    </div>
-                                )}
-                            </div>
+                            <SavedHistoryLaunchSection
+                                busy={busy}
+                                savedSessionsLoading={savedSessionsLoading}
+                                savedSessionsError={savedSessionsError}
+                                selectedSession={selectedSavedSession}
+                                onRefresh={() => {
+                                    if (!selectedMachine || !selectedTarget) return
+                                    void loadSavedSessions(selectedMachine.id, selectedTarget)
+                                }}
+                                onOpenHistory={() => {
+                                    if (!selectedMachine || !selectedTarget) return
+                                    setResumeHistoryOpen(true)
+                                    void loadSavedSessions(selectedMachine.id, selectedTarget)
+                                }}
+                                onClearSelection={() => setSelectedResumeSessionId('')}
+                            />
                         )}
 
                         {message && (

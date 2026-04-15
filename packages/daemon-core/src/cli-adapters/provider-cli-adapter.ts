@@ -183,6 +183,7 @@ export class ProviderCliAdapter implements CliAdapter {
     private static readonly MAX_TRACE_ENTRIES = 250;
     private readonly providerResolutionMeta: ProviderResolutionMeta;
     private static readonly IDLE_FINISH_CONFIRM_MS = 2000;
+    private static readonly HERMES_IDLE_FINISH_CONFIRM_MS = 5000;
     private static readonly STATUS_ACTIVITY_HOLD_MS = 2000;
     private static readonly FINISH_RETRY_DELAY_MS = 300;
     private static readonly MAX_FINISH_RETRIES = 2;
@@ -190,6 +191,18 @@ export class ProviderCliAdapter implements CliAdapter {
     private syncMessageViews(): void {
         this.messages = [...this.committedMessages];
         this.structuredMessages = [...this.committedMessages];
+    }
+
+    private getIdleFinishConfirmMs(): number {
+        return this.cliType === 'hermes-cli'
+            ? ProviderCliAdapter.HERMES_IDLE_FINISH_CONFIRM_MS
+            : ProviderCliAdapter.IDLE_FINISH_CONFIRM_MS;
+    }
+
+    private getStatusActivityHoldMs(): number {
+        return this.cliType === 'hermes-cli'
+            ? ProviderCliAdapter.HERMES_IDLE_FINISH_CONFIRM_MS
+            : ProviderCliAdapter.STATUS_ACTIVITY_HOLD_MS;
     }
 
     private setStatus(status: CliSessionStatus['status'], trigger?: string): void {
@@ -216,6 +229,7 @@ export class ProviderCliAdapter implements CliAdapter {
 
     private armIdleFinishCandidate(assistantLength: number): void {
         const now = Date.now();
+        const idleFinishConfirmMs = this.getIdleFinishConfirmMs();
         this.idleFinishCandidate = {
             armedAt: now,
             lastOutputAt: this.lastOutputAt,
@@ -224,7 +238,7 @@ export class ProviderCliAdapter implements CliAdapter {
             assistantLength,
         };
         this.recordTrace('idle_candidate_armed', {
-            confirmMs: ProviderCliAdapter.IDLE_FINISH_CONFIRM_MS,
+            confirmMs: idleFinishConfirmMs,
             candidate: this.idleFinishCandidate,
             ...buildCliTraceParseSnapshot({
                 accumulatedBuffer: this.accumulatedBuffer,
@@ -239,7 +253,7 @@ export class ProviderCliAdapter implements CliAdapter {
             this.settleTimer = null;
             this.settledBuffer = this.recentOutputBuffer;
             this.evaluateSettled();
-        }, ProviderCliAdapter.IDLE_FINISH_CONFIRM_MS);
+        }, idleFinishConfirmMs);
     }
 
 
@@ -719,8 +733,9 @@ export class ProviderCliAdapter implements CliAdapter {
     private hasRecentInteractiveActivity(now: number): boolean {
         const quietForMs = this.lastNonEmptyOutputAt ? (now - this.lastNonEmptyOutputAt) : Number.MAX_SAFE_INTEGER;
         const screenStableMs = this.lastScreenChangeAt ? (now - this.lastScreenChangeAt) : Number.MAX_SAFE_INTEGER;
-        return quietForMs < ProviderCliAdapter.STATUS_ACTIVITY_HOLD_MS
-            || screenStableMs < ProviderCliAdapter.STATUS_ACTIVITY_HOLD_MS;
+        const holdMs = this.getStatusActivityHoldMs();
+        return quietForMs < holdMs
+            || screenStableMs < holdMs;
     }
 
     private getStartupConfirmationModal(screenText: string): { message: string; buttons: string[] } | null {
@@ -901,6 +916,7 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         const recentInteractiveActivity = this.hasRecentInteractiveActivity(now);
+        const statusActivityHoldMs = this.getStatusActivityHoldMs();
         const shouldHoldGenerating =
             scriptStatus === 'idle'
             && this.isWaitingForResponse
@@ -921,7 +937,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 recentInteractiveActivity,
                 lastNonEmptyOutputAt: this.lastNonEmptyOutputAt,
                 lastScreenChangeAt: this.lastScreenChangeAt,
-                holdMs: ProviderCliAdapter.STATUS_ACTIVITY_HOLD_MS,
+                holdMs: statusActivityHoldMs,
                 ...buildCliTraceParseSnapshot({
                     accumulatedBuffer: this.accumulatedBuffer,
                     accumulatedRawBuffer: this.accumulatedRawBuffer,
@@ -1013,8 +1029,9 @@ export class ProviderCliAdapter implements CliAdapter {
                 const screenStableMs = this.lastScreenChangeAt ? (now - this.lastScreenChangeAt) : 0;
                 const hasAssistantTurn = !!lastParsedAssistant;
                 const assistantLength = lastParsedAssistant?.content?.length || 0;
-                const idleQuietThresholdMs = Math.max(2000, this.timeouts.outputSettle);
-                const idleStableThresholdMs = 2000;
+                const idleFinishConfirmMs = this.getIdleFinishConfirmMs();
+                const idleQuietThresholdMs = Math.max(idleFinishConfirmMs, this.timeouts.outputSettle);
+                const idleStableThresholdMs = idleFinishConfirmMs;
                 const idleReady = visibleIdlePrompt
                     && !modal
                     && hasAssistantTurn
@@ -1026,7 +1043,7 @@ export class ProviderCliAdapter implements CliAdapter {
                     && candidate.lastOutputAt === this.lastOutputAt
                     && candidate.lastScreenChangeAt === this.lastScreenChangeAt
                     && assistantLength >= candidate.assistantLength
-                    && (now - candidate.armedAt) >= ProviderCliAdapter.IDLE_FINISH_CONFIRM_MS;
+                    && (now - candidate.armedAt) >= idleFinishConfirmMs;
                 const canFinishImmediately = idleReady && candidateQuiet;
 
                 this.recordTrace('idle_decision', {
@@ -1039,7 +1056,7 @@ export class ProviderCliAdapter implements CliAdapter {
                     idleQuietThresholdMs,
                     idleStableThresholdMs,
                     idleReady,
-                    idleFinishConfirmMs: ProviderCliAdapter.IDLE_FINISH_CONFIRM_MS,
+                    idleFinishConfirmMs,
                     idleFinishCandidate: candidate,
                     candidateQuiet,
                     canFinishImmediately,
