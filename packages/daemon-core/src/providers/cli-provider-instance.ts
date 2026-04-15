@@ -19,9 +19,10 @@ import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter, readChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
-import { extractProviderControlValues, normalizeProviderEffects } from './control-effects.js';
+import { normalizeProviderEffects } from './control-effects.js';
 import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
+import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 
 let CachedDatabaseSync: (new (path: string, options?: { readOnly?: boolean }) => {
     prepare(sql: string): { get(...params: Array<string | number>): unknown };
@@ -104,6 +105,7 @@ export class CliProviderInstance implements ProviderInstance {
     private generatingDebouncePending: { chatTitle: string; timestamp: number } | null = null;
     private lastApprovalEventAt = 0;
     private controlValues: Record<string, string | number | boolean> = {};
+    private summaryMetadata: unknown = undefined;
     private appliedEffectKeys = new Set<string>();
     private historyWriter: ChatHistoryWriter;
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
@@ -317,21 +319,7 @@ export class CliProviderInstance implements ProviderInstance {
                 ? parsedMessages.slice(-historyMessageCount)
                 : [];
         }
-        const controlValues = extractProviderControlValues(this.provider.controls, parsedStatus);
-        if (controlValues) {
-            this.controlValues = { ...this.controlValues, ...controlValues };
-        }
         const mergedMessages = this.mergeConversationMessages(parsedMessages);
-        const currentModel = typeof parsedStatus?.model === 'string' && parsedStatus.model.trim()
-            ? parsedStatus.model.trim()
-            : (typeof this.controlValues.model === 'string' && this.controlValues.model.trim()
-                ? this.controlValues.model.trim()
-                : undefined);
-        const currentPlan = typeof parsedStatus?.mode === 'string' && parsedStatus.mode.trim()
-            ? parsedStatus.mode.trim()
-            : (typeof this.controlValues.mode === 'string' && this.controlValues.mode.trim()
-                ? this.controlValues.mode.trim()
-                : undefined);
 
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
 
@@ -359,6 +347,10 @@ export class CliProviderInstance implements ProviderInstance {
         }
 
         this.applyProviderResponse(parsedStatus, { phase: 'immediate' });
+        const surface = resolveProviderStateSurface({
+            summaryMetadata: this.summaryMetadata as any,
+            controlValues: this.controlValues,
+        });
 
         return {
             type: this.type,
@@ -377,8 +369,6 @@ export class CliProviderInstance implements ProviderInstance {
                 inputContent: '',
             },
             workspace: this.workingDir,
-            currentModel,
-            currentPlan,
             instanceId: this.instanceId,
             providerSessionId: this.providerSessionId,
             lastUpdated: Date.now(),
@@ -393,8 +383,9 @@ export class CliProviderInstance implements ProviderInstance {
                 attachedClients: runtime.attachedClients || [],
             } : undefined,
             resume: this.provider.resume,
-            controlValues: this.controlValues,
+            controlValues: surface.controlValues,
             providerControls: this.provider.controls,
+            summaryMetadata: surface.summaryMetadata as any,
         };
     }
 
@@ -617,10 +608,14 @@ export class CliProviderInstance implements ProviderInstance {
             this.adapter.clearHistory();
         }
 
-        const controlValues = extractProviderControlValues(this.provider.controls, data);
-        if (controlValues) {
-            this.controlValues = { ...this.controlValues, ...controlValues };
-        }
+        const patchedState = mergeProviderPatchState({
+            providerControls: this.provider.controls,
+            data,
+            currentControlValues: this.controlValues,
+            currentSummaryMetadata: this.summaryMetadata,
+        });
+        this.controlValues = patchedState.controlValues;
+        this.summaryMetadata = patchedState.summaryMetadata;
 
         const effects = normalizeProviderEffects(data);
         for (const effect of effects) {

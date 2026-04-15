@@ -541,7 +541,7 @@ export class DaemonCommandRouter {
                             kind: saved?.kind || recent?.kind || kind,
                             title: saved?.title || recent?.title || session.sessionTitle || session.preview || providerType,
                             workspace: saved?.workspace || recent?.workspace || session.workspace,
-                            currentModel: saved?.currentModel || recent?.currentModel,
+                            summaryMetadata: saved?.summaryMetadata || recent?.summaryMetadata,
                             preview: session.preview,
                             messageCount: session.messageCount,
                             firstMessageAt: session.firstMessageAt,

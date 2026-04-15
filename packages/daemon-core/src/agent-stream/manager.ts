@@ -201,7 +201,8 @@ export class DaemonAgentStreamManager {
                 cdp.evaluateInSessionFrame(agent.cdpSessionId, expr, timeout);
             const state = await agent.adapter.readChat(evaluate);
             const stateError = this.getStateError(state);
-            LOG.debug('AgentStream', `[AgentStream] readChat(${type}) result: status=${state.status} msgs=${state.messages?.length || 0} model=${state.model || ''}${state.status === 'error' ? ' error=' + JSON.stringify(stateError) : ''}`);
+            const selectedModelValue = typeof state.controlValues?.model === 'string' ? state.controlValues.model : '';
+            LOG.debug('AgentStream', `[AgentStream] readChat(${type}) result: status=${state.status} msgs=${state.messages?.length || 0} model=${selectedModelValue}${state.status === 'error' ? ' error=' + JSON.stringify(stateError) : ''}`);
             if (state.status === 'error' && this.isRecoverableSessionError(stateError)) {
                 throw new Error(stateError);
             }

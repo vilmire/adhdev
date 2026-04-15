@@ -4,8 +4,6 @@
 
 import type {
     AgentSessionStream,
-    AcpConfigOption,
-    AcpMode,
     MachineInfo,
     DetectedIdeInfo,
     WorkspaceEntry,
@@ -55,7 +53,16 @@ export interface RecentLaunchEntry {
     providerSessionId?: string;
     title?: string;
     workspace?: string | null;
-    currentModel?: string;
+    summaryMetadata?: {
+        items: Array<{
+            id: string;
+            value: string;
+            label?: string;
+            shortValue?: string;
+            icon?: string;
+            order?: number;
+        }>;
+    };
     lastLaunchedAt: number;
 }
 
@@ -121,16 +128,11 @@ export interface BaseDaemonData {
     runtimeAttachedClients?: RuntimeAttachedClient[];
     resume?: ProviderResumeCapability;
     cdpConnected?: boolean;
-    currentModel?: string;
-    currentPlan?: string;
-    currentAutoApprove?: string;
     daemonId?: string;
     instanceId?: string;
     timestamp?: number;
     _lastUpdate?: number;
     cliName?: string;
-    acpConfigOptions?: AcpConfigOption[];
-    acpModes?: AcpMode[];
     currentConfig?: {
         cli: string;
         dir: string;
@@ -139,6 +141,7 @@ export interface BaseDaemonData {
     childSessions?: SessionEntry[];
     agentStreams?: AgentSessionStream[];
     availableProviders?: AvailableProviderInfo[];
+
     machine?: MachineInfo;
     system?: Partial<MachineInfo>;
     p2p?: {
@@ -176,6 +179,17 @@ export interface BaseDaemonData {
     controlValues?: Record<string, string | number | boolean>;
     /** Provider-declared controls schema */
     providerControls?: import('@adhdev/daemon-core').ProviderControlSchema[];
+    /** Flexible always-visible metadata for compact/live surfaces. */
+    summaryMetadata?: {
+        items: Array<{
+            id: string;
+            value: string;
+            label?: string;
+            shortValue?: string;
+            icon?: string;
+            order?: number;
+        }>;
+    };
     // ── Discriminator flags (set by status-transform) ──
     /** @internal CLI session marker */
     _isCli?: boolean;

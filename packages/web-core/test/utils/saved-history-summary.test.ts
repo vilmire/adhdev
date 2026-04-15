@@ -7,7 +7,9 @@ describe('saved history summary view', () => {
       title: 'Hermes Agent',
       providerSessionId: 'session-123',
       workspace: '/repo',
-      currentModel: 'gpt-5.4',
+      summaryMetadata: {
+        items: [{ id: 'model', label: 'Model', value: 'gpt-5.4', order: 10 }],
+      },
       messageCount: 4,
       lastMessageAt: 1711111111111,
       preview: 'SECOND',

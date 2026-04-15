@@ -6,7 +6,7 @@
  */
 import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { IconDashboard, IconServer, IconInfo, IconSettings, IconBook, ThemeToggle } from '@adhdev/web-core'
+import { IconDashboard, IconServer, IconInfo, IconSettings, IconBook, IconX, ThemeToggle } from '@adhdev/web-core'
 
 interface LayoutProps {
     children: React.ReactNode
@@ -80,7 +80,7 @@ export default function StandaloneLayout({ children }: LayoutProps) {
                         aria-label="Close menu"
                         onClick={() => setMobileMenuOpen(false)}
                     >
-                        ✕
+                        <IconX size={16} />
                     </button>
                 </div>
 

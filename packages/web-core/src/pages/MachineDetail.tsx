@@ -19,7 +19,7 @@ import { useTransport } from '../context/TransportContext'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import { useDaemonMachineRuntimeSubscription } from '../hooks/useDaemonMachineRuntimeSubscription'
 import type { DaemonData } from '../types'
-import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel } from '../utils/daemon-utils'
+import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel, getProviderSummaryLine, getProviderSummaryValue } from '../utils/daemon-utils'
 import { IconBarChart, IconMonitor, IconSettings, IconClipboard, IconServer } from '../components/Icons'
 import type { ReactNode } from 'react'
 import { eventManager, type ToastConfig } from '../managers/EventManager'
@@ -223,8 +223,6 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             workspace: i.workspace || '',
             activeChat: i.activeChat || null,
             providerSessionId: i.providerSessionId,
-            currentModel: i.currentModel,
-            currentPlan: i.currentPlan,
             daemonId: machineId!,
         }))
 
@@ -276,9 +274,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             kind: 'acp' as const,
             providerType: session.type,
             providerSessionId: session.providerSessionId,
-            subtitle: session.currentModel || session.workspace || undefined,
+            subtitle: getProviderSummaryLine(session.summaryMetadata) || session.workspace || undefined,
             workspace: session.workspace || undefined,
-            currentModel: session.currentModel,
             lastLaunchedAt: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
         })),
     ]
@@ -290,9 +287,9 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             kind: launch.kind,
             providerType: launch.providerType,
             providerSessionId: launch.providerSessionId,
-            subtitle: launch.currentModel || launch.workspace || undefined,
+            subtitle: getProviderSummaryLine(launch.summaryMetadata) || launch.workspace || undefined,
             workspace: launch.workspace,
-            currentModel: launch.currentModel,
+            summaryMetadata: launch.summaryMetadata,
             lastLaunchedAt: launch.lastLaunchedAt,
         }))
         : fallbackRecentLaunches
@@ -351,7 +348,9 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                     cliType: session.providerType,
                     dir: workspaceId ? undefined : (workspacePath || ''),
                     workspaceId: workspaceId || undefined,
-                    model: session.kind === 'acp' ? session.currentModel : undefined,
+                    model: session.kind === 'acp'
+                        ? (getProviderSummaryValue(session.summaryMetadata, 'model', { preferShortValue: true }) || undefined)
+                        : undefined,
                     resumeSessionId: session.providerSessionId,
                 })
                 return

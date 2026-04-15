@@ -340,7 +340,7 @@ function buildRecentLaunches(
             providerSessionId: item.providerSessionId,
             title: item.title || item.providerName,
             workspace: item.workspace,
-            currentModel: item.currentModel,
+            summaryMetadata: item.summaryMetadata,
             lastLaunchedAt: item.lastUsedAt,
         }))
         .sort((a, b) => b.lastLaunchedAt - a.lastLaunchedAt)

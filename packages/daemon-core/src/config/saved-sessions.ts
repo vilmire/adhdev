@@ -1,6 +1,8 @@
 import * as path from 'path';
+import type { ProviderSummaryMetadata } from '../shared-types.js';
 import type { DaemonState } from './state-store.js';
 import { expandPath } from './workspaces.js';
+import { normalizePersistedSummaryMetadata } from '../providers/summary-metadata.js';
 
 export interface SavedProviderSessionEntry {
     id: string;
@@ -9,7 +11,7 @@ export interface SavedProviderSessionEntry {
     providerName: string;
     providerSessionId: string;
     workspace?: string | null;
-    currentModel?: string;
+    summaryMetadata?: ProviderSummaryMetadata;
     title?: string;
     createdAt: number;
     lastUsedAt: number;
@@ -46,7 +48,9 @@ export function upsertSavedProviderSession(
         providerName: entry.providerName,
         providerSessionId,
         workspace: entry.workspace ? normalizeWorkspace(entry.workspace) : undefined,
-        currentModel: entry.currentModel,
+        summaryMetadata: normalizePersistedSummaryMetadata({
+            summaryMetadata: entry.summaryMetadata,
+        }),
         title: entry.title,
         createdAt: existing?.createdAt || entry.createdAt || Date.now(),
         lastUsedAt: entry.lastUsedAt || Date.now(),
@@ -69,5 +73,11 @@ export function getSavedProviderSessions(
             if (filters?.kind && entry.kind !== filters.kind) return false;
             return true;
         })
+        .map(entry => ({
+            ...entry,
+            summaryMetadata: normalizePersistedSummaryMetadata({
+                summaryMetadata: entry.summaryMetadata,
+            }),
+        }))
         .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
 }

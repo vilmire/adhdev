@@ -224,7 +224,7 @@ export class DaemonStatusReporter {
         const ideSummary = ideStates.map((s) => {
             const msgs = s.activeChat?.messages?.length || 0;
             const exts = s.extensions.length;
-            return `${s.type}(${s.status},${msgs}msg,${exts}ext${s.currentModel ? ',model=' + s.currentModel : ''})`;
+            return `${s.type}(${s.status},${msgs}msg,${exts}ext)`;
         }).join(', ');
 
  // CLI summary
@@ -302,9 +302,7 @@ export class DaemonStatusReporter {
                 workspace: session.workspace ?? null,
                 title: session.title,
                 cdpConnected: session.cdpConnected,
-                currentModel: session.currentModel,
-                currentPlan: session.currentPlan,
-                currentAutoApprove: session.currentAutoApprove,
+                summaryMetadata: session.summaryMetadata,
             })),
             p2p: payload.p2p,
             timestamp: now,

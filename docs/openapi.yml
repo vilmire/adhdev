@@ -188,10 +188,34 @@ components:
         activeFile:
           type: string
           nullable: true
-        currentModel:
-          type: string
-        currentPlan:
-          type: string
+        controlValues:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: string
+              - type: number
+              - type: boolean
+        summaryMetadata:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                type: object
+                required: [id, value]
+                properties:
+                  id:
+                    type: string
+                  value:
+                    type: string
+                  label:
+                    type: string
+                  shortValue:
+                    type: string
+                  icon:
+                    type: string
+                  order:
+                    type: integer
 
     CliEntry:
       type: object

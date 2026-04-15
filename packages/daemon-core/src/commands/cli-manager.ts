@@ -17,6 +17,7 @@ import { loadState, saveState } from '../config/state-store.js';
 import { getWorkspaceState, resolveLaunchDirectory } from '../config/workspaces.js';
 import { appendRecentActivity } from '../config/recent-activity.js';
 import { upsertSavedProviderSession } from '../config/saved-sessions.js';
+import { buildLegacyModelModeSummaryMetadata, normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
 import { CliProviderInstance } from '../providers/cli-provider-instance.js';
 import { AcpProviderInstance } from '../providers/acp-provider-instance.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
@@ -273,12 +274,16 @@ export class DaemonCliManager {
         providerName: string;
         providerSessionId?: string;
         workspace?: string;
-        currentModel?: string;
+        summaryMetadata?: unknown;
         sessionId?: string;
         title?: string;
     }): void {
         try {
-            let nextState = appendRecentActivity(loadState(), entry);
+            const summaryMetadata = normalizeProviderSummaryMetadata(entry.summaryMetadata as any);
+            let nextState = appendRecentActivity(loadState(), {
+                ...entry,
+                summaryMetadata,
+            });
             if (entry.providerSessionId && (entry.kind === 'cli' || entry.kind === 'acp')) {
                 nextState = upsertSavedProviderSession(nextState, {
                     kind: entry.kind,
@@ -286,7 +291,7 @@ export class DaemonCliManager {
                     providerName: entry.providerName,
                     providerSessionId: entry.providerSessionId,
                     workspace: entry.workspace,
-                    currentModel: entry.currentModel,
+                    summaryMetadata,
                     title: entry.title,
                 });
             }
@@ -534,7 +539,7 @@ export class DaemonCliManager {
                 providerType: normalizedType,
                 providerName: provider.displayName || provider.name || normalizedType,
                 workspace: resolvedDir,
-                currentModel: initialModel,
+                summaryMetadata: buildLegacyModelModeSummaryMetadata({ model: initialModel }),
                 sessionId,
                 title: provider.displayName || provider.name || normalizedType,
             });
@@ -646,7 +651,7 @@ export class DaemonCliManager {
             providerName: provider?.displayName || provider?.name || normalizedType,
             providerSessionId: sessionBinding.providerSessionId,
             workspace: resolvedDir,
-            currentModel: initialModel,
+            summaryMetadata: buildLegacyModelModeSummaryMetadata({ model: initialModel }),
             sessionId: key,
             title: provider?.displayName || provider?.name || normalizedType,
         });

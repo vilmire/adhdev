@@ -31,7 +31,7 @@ import { getMobileDashboardMode } from '../components/settings/MobileDashboardMo
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
 import { getConversationActiveTabTarget, getConversationMachineId, getConversationProviderType } from '../components/dashboard/conversation-selectors'
 import { getConversationTimestamp } from '../components/dashboard/conversation-sort'
-import { compareMachineEntries, getMachineDisplayName, isAcpEntry, isCliEntry } from '../utils/daemon-utils'
+import { compareMachineEntries, getMachineDisplayName, getProviderSummaryValue, isAcpEntry, isCliEntry } from '../utils/daemon-utils'
 import { browseMachineDirectories } from '../components/machine/workspaceBrowse'
 import type { WorkspaceLaunchKind } from './machine/types'
 
@@ -594,7 +594,7 @@ export default function Dashboard() {
                 cliType,
                 dir: session.workspace,
                 resumeSessionId: session.providerSessionId,
-                initialModel: session.currentModel,
+                initialModel: getProviderSummaryValue(session.summaryMetadata, 'model', { preferShortValue: true }) || undefined,
             })
             const result = raw?.result ?? raw
             const nextSessionId = typeof result?.sessionId === 'string' ? result.sessionId : typeof result?.id === 'string' ? result.id : ''

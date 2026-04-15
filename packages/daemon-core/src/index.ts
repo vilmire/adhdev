@@ -66,6 +66,8 @@ export type {
   SessionHostRuntimeTransition,
   DetectedIdeInfo,
   WorkspaceEntry,
+  ProviderSummaryItem,
+  ProviderSummaryMetadata,
   ProviderState,
   ProviderStatus,
   ProviderErrorReason,

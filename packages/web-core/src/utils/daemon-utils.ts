@@ -120,6 +120,32 @@ export function getMachineDisplayName(
     return getMachineNickname(source) || getMachineHostnameLabel(source, options)
 }
 
+export function getProviderSummaryValues(summaryMetadata?: DaemonData['summaryMetadata'] | null): string[] {
+    if (!summaryMetadata || !Array.isArray(summaryMetadata.items)) return []
+
+    return summaryMetadata.items
+        .map((item) => String(item?.value || item?.shortValue || '').trim())
+        .filter(Boolean)
+}
+
+export function getProviderSummaryValue(
+    summaryMetadata: DaemonData['summaryMetadata'] | null | undefined,
+    id: string,
+    options: { preferShortValue?: boolean } = {},
+): string {
+    const targetId = String(id || '').trim()
+    if (!summaryMetadata || !Array.isArray(summaryMetadata.items) || !targetId) return ''
+    const item = summaryMetadata.items.find((entry) => String(entry?.id || '').trim() === targetId)
+    if (!item) return ''
+    return String(options.preferShortValue ? (item.shortValue || item.value || '') : (item.value || item.shortValue || '')).trim()
+}
+
+export function getProviderSummaryLine(summaryMetadata?: DaemonData['summaryMetadata'] | null, limit?: number): string {
+    const values = getProviderSummaryValues(summaryMetadata)
+    const visibleValues = typeof limit === 'number' && limit > 0 ? values.slice(0, limit) : values
+    return visibleValues.join(' · ')
+}
+
 // ─── ID / Type Helpers ───────────────────────────
 
 /** Determine if entry is a PTY-backed CLI session */
@@ -442,7 +468,6 @@ export function groupByMachine(daemons: DaemonData[], providerLabels: Record<str
                     acpName: daemon.cliName || daemon.type,
                     status: daemon.status || 'online',
                     workspace: daemon.workspace || '',
-                    model: daemon.currentModel,
                     lastActivityAt: getDaemonEntryActivityAt(daemon),
                 })
             }

@@ -86,6 +86,42 @@ describe('recent-activity', () => {
     expect(result.map((entry) => entry.lastUsedAt)).toEqual([50, 5]);
   });
 
+  it('writes summary metadata without duplicating currentModel in new recent activity entries', () => {
+    const next = appendRecentActivity(createState(), {
+      kind: 'cli',
+      providerType: 'codex',
+      providerName: 'Codex',
+      providerSessionId: 'sess-2',
+      workspace: '/repo',
+      summaryMetadata: {
+        items: [{ id: 'model', value: 'gpt-5.4', shortValue: 'gpt-5.4', order: 10 }],
+      },
+      lastUsedAt: 33,
+    } as any)
+
+    expect(next.recentActivity[0]?.summaryMetadata).toEqual({
+      items: [{ id: 'model', value: 'gpt-5.4', shortValue: 'gpt-5.4', order: 10 }],
+    })
+    expect(next.recentActivity[0]).not.toHaveProperty('currentModel')
+  })
+
+  it('does not upgrade legacy currentModel when reading old recent activity after compat removal', () => {
+    const state = createState()
+    state.recentActivity = [{
+      id: 'cli:codex:session:sess-legacy',
+      kind: 'cli',
+      providerType: 'codex',
+      providerName: 'Codex',
+      providerSessionId: 'sess-legacy',
+      workspace: '/repo',
+      currentModel: 'gpt-5.4',
+      lastUsedAt: 99,
+    } as any]
+
+    const result = getRecentActivity(state)
+    expect(result[0]?.summaryMetadata).toBeUndefined()
+  })
+
   it('marks session seen monotonically and only updates marker when provided', () => {
     const state = createState();
     const first = markSessionSeen(state, 'session-1', 100, 'done-1');

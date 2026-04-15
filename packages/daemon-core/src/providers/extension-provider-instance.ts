@@ -8,9 +8,10 @@
 import type { ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
-import { extractProviderControlValues, normalizeProviderEffects } from './control-effects.js';
+import { normalizeProviderEffects } from './control-effects.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import type { ChatMessage } from '../types.js';
+import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 
 export class ExtensionProviderInstance implements ProviderInstance {
     readonly type: string;
@@ -27,9 +28,8 @@ export class ExtensionProviderInstance implements ProviderInstance {
     private messages: any[] = [];
     private prevMessageHashes = new Map<string, number>();
     private activeModal: any = null;
-    private currentModel: string = '';
-    private currentMode: string = '';
     private controlValues: Record<string, string | number | boolean> = {};
+    private summaryMetadata: unknown = undefined;
     private appliedEffectKeys = new Set<string>();
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     private lastAgentStatus: string = 'idle';
@@ -76,6 +76,11 @@ export class ExtensionProviderInstance implements ProviderInstance {
     }
 
     getState(): ProviderState {
+        const surface = resolveProviderStateSurface({
+            summaryMetadata: this.summaryMetadata as any,
+            controlValues: this.controlValues,
+        })
+
         return {
             type: this.type,
             name: this.provider.name,
@@ -89,10 +94,9 @@ export class ExtensionProviderInstance implements ProviderInstance {
                 activeModal: this.activeModal,
                 inputContent: '',
             } : null,
-            currentModel: this.currentModel || undefined,
-            currentPlan: this.currentMode || undefined,
-            controlValues: this.controlValues,
+            controlValues: surface.controlValues,
             providerControls: this.provider.controls,
+            summaryMetadata: surface.summaryMetadata as any,
             agentStreams: this.agentStreams,
             instanceId: this.instanceId,
             lastUpdated: Date.now(),
@@ -107,10 +111,14 @@ export class ExtensionProviderInstance implements ProviderInstance {
             if (data?.streams) this.agentStreams = data.streams;
             if (data?.messages) this.messages = this.assignReceivedAt(data.messages);
             if (data?.activeModal !== undefined) this.activeModal = data.activeModal;
-            if (data?.model) this.currentModel = data.model;
-            if (data?.mode) this.currentMode = data.mode;
-            const controlValues = extractProviderControlValues(this.provider.controls, data) || data?.controlValues;
-            if (controlValues) this.controlValues = controlValues;
+            const patchedState = mergeProviderPatchState({
+                providerControls: this.provider.controls,
+                data,
+                currentControlValues: this.controlValues,
+                currentSummaryMetadata: this.summaryMetadata,
+            });
+            this.controlValues = patchedState.controlValues;
+            this.summaryMetadata = patchedState.summaryMetadata;
             if (typeof data?.sessionId === 'string' && data.sessionId.trim()) this.chatId = data.sessionId;
             if (typeof data?.title === 'string' && data.title.trim()) this.chatTitle = data.title;
             if (typeof data?.agentName === 'string' && data.agentName.trim()) this.agentName = data.agentName;
@@ -231,14 +239,14 @@ export class ExtensionProviderInstance implements ProviderInstance {
     private applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void {
         if (!data || typeof data !== 'object') return;
 
-        const controlValues = extractProviderControlValues(this.provider.controls, data);
-        if (controlValues) {
-            this.controlValues = { ...this.controlValues, ...controlValues };
-            if (controlValues.model !== undefined) this.currentModel = String(controlValues.model);
-            if (controlValues.mode !== undefined) this.currentMode = String(controlValues.mode);
-        }
-        if (typeof data.model === 'string' && data.model.trim()) this.currentModel = data.model;
-        if (typeof data.mode === 'string' && data.mode.trim()) this.currentMode = data.mode;
+        const patchedState = mergeProviderPatchState({
+            providerControls: this.provider.controls,
+            data,
+            currentControlValues: this.controlValues,
+            currentSummaryMetadata: this.summaryMetadata,
+        });
+        this.controlValues = patchedState.controlValues;
+        this.summaryMetadata = patchedState.summaryMetadata;
 
         const effects = normalizeProviderEffects(data);
         for (const effect of effects) {
@@ -412,8 +420,6 @@ export class ExtensionProviderInstance implements ProviderInstance {
         this.messages = [];
         this.prevMessageHashes.clear();
         this.activeModal = null;
-        this.currentModel = '';
-        this.currentMode = '';
         this.controlValues = {};
         this.currentStatus = 'idle';
         this.chatId = null;

@@ -50,6 +50,7 @@ import type { ProviderModule, ContentBlock, InputEnvelope, InputPart, ToolCallIn
 import { normalizeContent, flattenContent, normalizeInputEnvelope } from './contracts.js';
 import type { ProviderInstance, ProviderState, AcpProviderState, ProviderErrorReason, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
+import { buildLegacyModelModeSummaryMetadata } from './summary-metadata.js';
 import { LOG } from '../logging/logger.js';
 
 // ─── Internal Display Types (for dashboard) ────────────────────────────
@@ -83,6 +84,8 @@ interface AcpMode {
     name: string;
     description?: string;
 }
+
+type SelectionCategory = 'model' | 'mode';
 
 interface PromptCapabilityFlags {
     image: boolean;
@@ -223,8 +226,7 @@ export class AcpProviderInstance implements ProviderInstance {
     private lastStatus: string = 'starting';
     private generatingStartedAt = 0;
     private agentCapabilities: Record<string, any> = {};
-    private currentModel: string | undefined;
-    private currentMode: string | undefined;
+    private currentSelections: Partial<Record<SelectionCategory, string>> = {};
     private activeToolCalls: AcpToolCall[] = [];
     private stopReason: string | null = null;
     private partialContent = '';
@@ -332,8 +334,6 @@ export class AcpProviderInstance implements ProviderInstance {
                 inputContent: '',
             },
             workspace: this.workingDir,
-            currentModel: this.currentModel,
-            currentPlan: this.currentMode,
             instanceId: this.instanceId,
             lastUpdated: Date.now(),
             settings: this.settings,
@@ -344,11 +344,9 @@ export class AcpProviderInstance implements ProviderInstance {
  // Error details for dashboard display
             errorMessage: this.errorMessage || undefined,
             errorReason: this.errorReason || undefined,
-            controlValues: {
-                ...(this.currentModel ? { model: this.currentModel } : {}),
-                ...(this.currentMode ? { mode: this.currentMode } : {}),
-            },
+            controlValues: this.getSelectionControlValues(),
             providerControls: this.provider.controls,
+            summaryMetadata: this.buildSelectionSummaryMetadata(),
         };
     }
 
@@ -384,6 +382,61 @@ export class AcpProviderInstance implements ProviderInstance {
 
     getInstanceId(): string {
         return this.instanceId;
+    }
+
+    private resolveConfigOptionLabel(category: string, value: string | undefined): string | undefined {
+        if (!value) return undefined;
+        const option = this.configOptions.find((entry) => entry.category === category);
+        return option?.options.find((candidate) => candidate.value === value)?.name || value;
+    }
+
+    private resolveModeLabel(modeId: string | undefined): string | undefined {
+        if (!modeId) return undefined;
+        return this.availableModes.find((mode) => mode.id === modeId)?.name || modeId;
+    }
+
+    private getCurrentSelection(category: SelectionCategory): string | undefined {
+        return this.currentSelections[category];
+    }
+
+    private setCurrentSelection(category: SelectionCategory, value: string | null | undefined): void {
+        const normalized = typeof value === 'string' ? value.trim() : '';
+        if (normalized) {
+            this.currentSelections[category] = normalized;
+            return;
+        }
+        delete this.currentSelections[category];
+    }
+
+    private getSelectionControlValues(): Record<string, string> {
+        const model = this.getCurrentSelection('model');
+        const mode = this.getCurrentSelection('mode');
+        return {
+            ...(model ? { model } : {}),
+            ...(mode ? { mode } : {}),
+        };
+    }
+
+    private resolveSelectionLabel(category: SelectionCategory, value: string | undefined): string | undefined {
+        if (!value) return undefined;
+        const configLabel = this.resolveConfigOptionLabel(category, value);
+        if (configLabel && configLabel !== value) return configLabel;
+        if (category === 'mode') {
+            const modeLabel = this.resolveModeLabel(value);
+            if (modeLabel) return modeLabel;
+        }
+        return configLabel || value;
+    }
+
+    private buildSelectionSummaryMetadata() {
+        const model = this.getCurrentSelection('model');
+        const mode = this.getCurrentSelection('mode');
+        return buildLegacyModelModeSummaryMetadata({
+            model,
+            mode,
+            modelLabel: this.resolveSelectionLabel('model', model),
+            modeLabel: this.resolveSelectionLabel('mode', mode),
+        });
     }
 
  // ─── ACP Config Options & Modes ─────────────────────
@@ -425,15 +478,17 @@ export class AcpProviderInstance implements ProviderInstance {
 
             this.configOptions.push({ category: category as 'model' | 'mode' | 'thought_level' | 'other', configId, currentValue, options: flatOptions });
 
- // Auto-set currentModel/currentMode from config
-            if (category === 'model' && currentValue) this.currentModel = currentValue;
+ // Auto-set current selections from config
+            if (category === 'model' || category === 'mode') {
+                this.setCurrentSelection(category, currentValue);
+            }
         }
     }
 
     private parseModes(raw: any): void {
         if (!raw) return;
  // modes: { currentModeId, availableModes: [{ id, name, description }] }
-        if (raw.currentModeId) this.currentMode = raw.currentModeId;
+        this.setCurrentSelection('mode', raw.currentModeId);
         if (Array.isArray(raw.availableModes)) {
             this.availableModes = raw.availableModes.map((m: any) => ({
                 id: m.id, name: m.name || m.id, description: m.description,
@@ -454,8 +509,7 @@ export class AcpProviderInstance implements ProviderInstance {
         if (this.useStaticConfig) {
             opt.currentValue = value;
             this.selectedConfig[opt.configId] = value;
-            if (category === 'model') this.currentModel = value;
-            if (category === 'mode') this.currentMode = value;
+            if (category === 'model' || category === 'mode') this.setCurrentSelection(category, value);
             this.log.info(`[${this.type}] Static config ${category} set to: ${value} — restarting agent`);
             await this.restartWithNewConfig();
             return;
@@ -476,7 +530,7 @@ export class AcpProviderInstance implements ProviderInstance {
             });
  // Update local state
             opt.currentValue = value;
-            if (category === 'model') this.currentModel = value;
+            if (category === 'model' || category === 'mode') this.setCurrentSelection(category, value);
  // Response may include updated configOptions
             if (result?.configOptions) this.parseConfigOptions(result.configOptions);
             this.log.info(`[${this.type}] Config ${category} set to: ${value} | response: ${JSON.stringify(result)?.slice(0, 300)}`);
@@ -495,7 +549,7 @@ export class AcpProviderInstance implements ProviderInstance {
                 opt.currentValue = modeId;
                 this.selectedConfig[opt.configId] = modeId;
             }
-            this.currentMode = modeId;
+            this.setCurrentSelection('mode', modeId);
             this.log.info(`[${this.type}] Static mode set to: ${modeId} — restarting agent`);
             await this.restartWithNewConfig();
             return;
@@ -512,7 +566,7 @@ export class AcpProviderInstance implements ProviderInstance {
                 sessionId: this.sessionId,
                 modeId,
             });
-            this.currentMode = modeId;
+            this.setCurrentSelection('mode', modeId);
             this.log.info(`[${this.type}] Mode set to: ${modeId}`);
         } catch (e: any) {
             const message = e?.message || 'Unknown ACP mode error';
@@ -845,8 +899,8 @@ export class AcpProviderInstance implements ProviderInstance {
             this.parseModes(result?.modes);
 
  // Legacy: models.currentModelId (some agent compat)
-            if (!this.currentModel && result?.models?.currentModelId) {
-                this.currentModel = result.models.currentModelId;
+            if (!this.getCurrentSelection('model') && result?.models?.currentModelId) {
+                this.setCurrentSelection('model', result.models.currentModelId);
             }
 
  // ─── Static config fallback (for agents without config/* support) ───
@@ -862,14 +916,17 @@ export class AcpProviderInstance implements ProviderInstance {
                     });
                     if (defaultVal) {
                         this.selectedConfig[sc.configId] = defaultVal;
-                        if (sc.category === 'model') this.currentModel = defaultVal;
-                        if (sc.category === 'mode') this.currentMode = defaultVal;
+                        if (sc.category === 'model' || sc.category === 'mode') {
+                            this.setCurrentSelection(sc.category, defaultVal);
+                        }
                     }
                 }
                 this.log.info(`[${this.type}] Using static configOptions (${this.configOptions.length} options)`);
             }
 
-            this.log.info(`[${this.type}] Session created: ${this.sessionId}${this.currentModel ? ` (model: ${this.currentModel})` : ''}${this.currentMode ? ` (mode: ${this.currentMode})` : ''}`);
+            const currentModel = this.getCurrentSelection('model');
+            const currentMode = this.getCurrentSelection('mode');
+            this.log.info(`[${this.type}] Session created: ${this.sessionId}${currentModel ? ` (model: ${currentModel})` : ''}${currentMode ? ` (mode: ${currentMode})` : ''}`);
             if (this.configOptions.length > 0) {
                 this.log.info(`[${this.type}] Config options: ${this.configOptions.map(c => `${c.category}(${c.options.length})`).join(', ')}`);
             }
@@ -1073,7 +1130,7 @@ export class AcpProviderInstance implements ProviderInstance {
                 break;
             }
             case 'current_mode_update': {
-                this.currentMode = update.currentModeId;
+                this.setCurrentSelection('mode', update.currentModeId);
                 break;
             }
             case 'config_option_update': {
@@ -1162,7 +1219,7 @@ export class AcpProviderInstance implements ProviderInstance {
 
  // Legacy: model info
         if (params.model) {
-            this.currentModel = params.model;
+            this.setCurrentSelection('model', params.model);
         }
     }
 

@@ -88,6 +88,19 @@ export interface ReadChatSyncResult {
     lastMessageSignature: string;
 }
 
+export interface ProviderSummaryItem {
+    id: string;
+    value: string;
+    label?: string;
+    shortValue?: string;
+    icon?: string;
+    order?: number;
+}
+
+export interface ProviderSummaryMetadata {
+    items: ProviderSummaryItem[];
+}
+
 export interface SessionHostAttachedClient {
     clientId: string;
     type: string;
@@ -303,15 +316,12 @@ export interface SessionEntry {
     activeChat: _ActiveChatData | null;
     capabilities?: SessionCapability[];
     cdpConnected?: boolean;
-    currentModel?: string;
-    currentPlan?: string;
-    currentAutoApprove?: string;
-    acpConfigOptions?: AcpConfigOption[];
-    acpModes?: AcpMode[];
     /** Dynamic control current values (generic key-value) */
     controlValues?: Record<string, string | number | boolean>;
     /** Provider-declared controls schema (transmitted once, cached by frontend) */
     providerControls?: ProviderControlSchema[];
+    /** Flexible always-visible metadata for compact/live surfaces. */
+    summaryMetadata?: ProviderSummaryMetadata;
     errorMessage?: string;
     errorReason?: _ProviderErrorReason;
     lastMessagePreview?: string;
@@ -340,9 +350,7 @@ export interface CompactSessionEntry {
     title: string;
     workspace: string | null;
     cdpConnected?: boolean;
-    currentModel?: string;
-    currentPlan?: string;
-    currentAutoApprove?: string;
+    summaryMetadata?: ProviderSummaryMetadata;
 }
 
 export type VersionUpdateReason =
@@ -457,7 +465,7 @@ export interface RecentLaunchEntry {
     providerSessionId?: string;
     title?: string;
     workspace?: string | null;
-    currentModel?: string;
+    summaryMetadata?: ProviderSummaryMetadata;
     lastLaunchedAt: number;
 }
 

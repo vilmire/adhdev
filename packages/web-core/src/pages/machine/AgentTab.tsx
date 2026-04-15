@@ -994,7 +994,6 @@ export default function AgentTab({
                         ))}
                     {managedEntries.map(entry => {
                         const ide = isIde ? (entry as IdeSessionEntry) : null
-                        const acp = isAcp ? (entry as AcpSessionEntry) : null
                         const cli = !isIde && !isAcp ? (entry as CliSessionEntry) : null
                         const normalizedStatus = normalizeManagedStatus(entry.status)
 
@@ -1010,8 +1009,6 @@ export default function AgentTab({
                                             </div>
                                             <div className="text-[11px] text-text-muted flex gap-2">
                                                 <span>{entry.workspace || '—'}</span>
-                                                {acp?.currentModel && <span className="text-cyan-500">🤖 {acp.currentModel}</span>}
-                                                {acp?.currentPlan && <span style={{ color: 'var(--status-warning)' }}>📋 {acp.currentPlan}</span>}
                                                 {cli?.mode && (
                                                     <span className={cli.mode === 'chat' ? 'text-violet-400' : 'text-text-secondary'}>
                                                         {cli.mode === 'chat' ? 'Chat view' : 'Terminal view'}
@@ -1177,7 +1174,6 @@ export default function AgentTab({
                                                             workspaceId: selectedOption?.workspaceId ?? null,
                                                             workspacePath: selectedOption?.workspacePath ?? '',
                                                             useHome: !selectedOption?.workspaceId && !selectedOption?.workspacePath,
-                                                            model: acp?.currentModel,
                                                         })
                                                     })
                                                 }}

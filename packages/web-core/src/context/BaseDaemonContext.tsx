@@ -315,9 +315,7 @@ interface CompactSessionEntry {
     title?: string
     workspace?: string | null
     cdpConnected?: boolean
-    currentModel?: string
-    currentPlan?: string
-    currentAutoApprove?: string
+    summaryMetadata?: DaemonData['summaryMetadata']
 }
 
 export interface CompactDaemon {
@@ -362,9 +360,7 @@ function normalizeCompactSession(session: CompactSessionEntry): SessionEntry {
         activeChat: null,
         capabilities: [],
         cdpConnected: session.cdpConnected,
-        currentModel: session.currentModel,
-        currentPlan: session.currentPlan,
-        currentAutoApprove: session.currentAutoApprove,
+        summaryMetadata: session.summaryMetadata,
     }
 }
 
@@ -430,11 +426,9 @@ export function expandCompactDaemons(
                 status: ide.status || 'online',
                 daemonId: d.id,
                 cdpConnected: ide.cdpConnected,
-                currentModel: ide.currentModel,
-                currentPlan: ide.currentPlan,
-                currentAutoApprove: ide.currentAutoApprove,
                 workspace: ide.workspace || null,
                 childSessions,
+                summaryMetadata: ide.summaryMetadata,
                 timestamp: ts,
             })
         }
@@ -449,6 +443,7 @@ export function expandCompactDaemons(
                 daemonId: d.id,
                 cliName: cli.providerName,
                 workspace: cli.workspace || '',
+                summaryMetadata: cli.summaryMetadata,
                 timestamp: ts,
             })
         }
@@ -463,8 +458,7 @@ export function expandCompactDaemons(
                 daemonId: d.id,
                 cliName: acp.providerName,
                 workspace: acp.workspace || '',
-                currentModel: acp.currentModel,
-                currentPlan: acp.currentPlan,
+                summaryMetadata: acp.summaryMetadata,
                 timestamp: ts,
             })
         }

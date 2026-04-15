@@ -8,8 +8,10 @@
  */
 
 import * as path from 'path';
+import type { ProviderSummaryMetadata } from '../shared-types.js';
 import type { DaemonState } from './state-store.js';
 import { expandPath } from './workspaces.js';
+import { normalizePersistedSummaryMetadata } from '../providers/summary-metadata.js';
 
 export interface RecentActivityEntry {
     id: string;
@@ -18,7 +20,7 @@ export interface RecentActivityEntry {
     providerName: string;
     providerSessionId?: string;
     workspace?: string | null;
-    currentModel?: string;
+    summaryMetadata?: ProviderSummaryMetadata;
     title?: string;
     lastUsedAt: number;
 }
@@ -55,6 +57,9 @@ export function appendRecentActivity(
     const nextEntry: RecentActivityEntry = {
         ...entry,
         workspace: entry.workspace ? normalizeWorkspace(entry.workspace) : undefined,
+        summaryMetadata: normalizePersistedSummaryMetadata({
+            summaryMetadata: entry.summaryMetadata,
+        }),
         id: buildRecentActivityKeyForEntry(entry),
         lastUsedAt: entry.lastUsedAt || Date.now(),
     };
@@ -68,6 +73,12 @@ export function appendRecentActivity(
 
 export function getRecentActivity(state: DaemonState, limit = 20): RecentActivityEntry[] {
     return [...(state.recentActivity || [])]
+        .map(entry => ({
+            ...entry,
+            summaryMetadata: normalizePersistedSummaryMetadata({
+                summaryMetadata: entry.summaryMetadata,
+            }),
+        }))
         .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
         .slice(0, limit);
 }

@@ -757,7 +757,6 @@ export async function handleCliStatus(ctx: DevServerContext, _req: http.Incoming
     lastMessage: s.activeChat?.messages?.slice(-1)[0] || null,
     activeModal: s.activeChat?.activeModal || null,
     pendingEvents: s.pendingEvents || [],
-    currentModel: s.currentModel,
     settings: s.settings,
   }));
   ctx.json(res, 200, { instances: result, count: result.length });

@@ -18,9 +18,8 @@ export declare class ExtensionProviderInstance implements ProviderInstance {
     private messages;
     private prevMessageHashes;
     private activeModal;
-    private currentModel;
-    private currentMode;
     private controlValues;
+    private summaryMetadata;
     private appliedEffectKeys;
     private runtimeMessages;
     private lastAgentStatus;

@@ -2,7 +2,7 @@
  * MachineDetail — Shared types & utils for machine sub-tabs.
  */
 
-import type { SessionEntry, RuntimeWriteOwner, RuntimeAttachedClient, AvailableProviderInfo } from '../../types'
+import type { SessionEntry, RuntimeWriteOwner, RuntimeAttachedClient, AvailableProviderInfo, DaemonData } from '../../types'
 
 // ─── Types ───────────────────────────────────────────
 export interface IdeSessionEntry {
@@ -27,7 +27,7 @@ export interface AcpSessionEntry {
     id: string; sessionId?: string; type: string; acpName: string; status: string
     workspace: string; activeChat: any; daemonId: string
     providerSessionId?: string
-    currentModel?: string; currentPlan?: string
+    summaryMetadata?: DaemonData['summaryMetadata']
 }
 
 export interface WorkspaceRow { id: string; path: string; label?: string; addedAt: number }
@@ -75,7 +75,7 @@ export interface MachineRecentLaunch {
     providerSessionId?: string
     subtitle?: string
     workspace?: string | null
-    currentModel?: string
+    summaryMetadata?: DaemonData['summaryMetadata']
     lastLaunchedAt?: number
 }
 

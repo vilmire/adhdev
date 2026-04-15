@@ -8,7 +8,7 @@
  * Each Instance manages its own status.
  */
 import type { ProviderResumeCapability } from './contracts.js';
-import type { AcpConfigOption, AcpMode, ProviderControlSchema } from '../shared-types.js';
+import type { AcpConfigOption, AcpMode, ProviderControlSchema, ProviderSummaryMetadata } from '../shared-types.js';
 import type { ChatMessage } from '../types.js';
 export type ProviderStatus = 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting';
 export interface ProviderRuntimeWriteOwner {
@@ -54,8 +54,6 @@ interface ProviderStateBase {
     /** Workspace — project path or name (all categories) */
     workspace?: string | null;
     /** Runtime info (real-time detection) */
-    currentModel?: string;
-    currentPlan?: string;
     /** Error details (when status === 'error') */
     errorMessage?: string;
     errorReason?: ProviderErrorReason;
@@ -72,6 +70,8 @@ interface ProviderStateBase {
     controlValues?: Record<string, string | number | boolean>;
     /** Provider-declared controls schema (from provider.controls) */
     providerControls?: ProviderControlSchema[];
+    /** Flexible always-visible metadata for compact/live surfaces. */
+    summaryMetadata?: ProviderSummaryMetadata;
 }
 /** IDE provider state */
 export interface IdeProviderState extends ProviderStateBase {
@@ -79,7 +79,6 @@ export interface IdeProviderState extends ProviderStateBase {
     cdpConnected: boolean;
     /** IDE child Extension Instance status */
     extensions: ProviderState[];
-    currentAutoApprove?: string;
 }
 /** CLI provider state */
 export interface CliProviderState extends ProviderStateBase {

@@ -6,6 +6,7 @@
  * - deduped by provider session when available, else by kind + providerType + workspace
  * - used only for quick-launch shortcuts
  */
+import type { ProviderSummaryMetadata } from '../shared-types.js';
 import type { DaemonState } from './state-store.js';
 export interface RecentActivityEntry {
     id: string;
@@ -14,7 +15,7 @@ export interface RecentActivityEntry {
     providerName: string;
     providerSessionId?: string;
     workspace?: string | null;
-    currentModel?: string;
+    summaryMetadata?: ProviderSummaryMetadata;
     title?: string;
     lastUsedAt: number;
 }

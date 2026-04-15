@@ -26,6 +26,7 @@ type ExistingSessionLike = Partial<SessionEntry> & {
     cliName?: string
     type?: string
     sessionCapabilities?: SessionEntry['capabilities']
+    summaryMetadata?: any
 }
 
 function buildExistingSessionMap(entries: DaemonData[] | undefined, daemonId: string) {
@@ -41,13 +42,9 @@ function buildExistingSessionMap(entries: DaemonData[] | undefined, daemonId: st
             workspace: entry.workspace ?? null,
             sessionCapabilities: entry.sessionCapabilities as SessionEntry['capabilities'] | undefined,
             cdpConnected: entry.cdpConnected,
-            currentModel: entry.currentModel,
-            currentPlan: entry.currentPlan,
-            currentAutoApprove: entry.currentAutoApprove,
             controlValues: entry.controlValues,
             providerControls: entry.providerControls,
-            acpConfigOptions: entry.acpConfigOptions,
-            acpModes: entry.acpModes,
+            summaryMetadata: entry.summaryMetadata,
             runtimeWriteOwner: entry.runtimeWriteOwner,
             runtimeAttachedClients: entry.runtimeAttachedClients,
             cliName: entry.cliName,
@@ -82,13 +79,9 @@ function mergeSessionSummary(
         workspace: session.workspace ?? existingEntry?.workspace ?? null,
         capabilities: session.capabilities ?? (existingEntry?.sessionCapabilities as SessionEntry['capabilities']) ?? [],
         cdpConnected: session.cdpConnected ?? existingEntry?.cdpConnected,
-        currentModel: session.currentModel ?? existingEntry?.currentModel,
-        currentPlan: session.currentPlan ?? existingEntry?.currentPlan,
-        currentAutoApprove: session.currentAutoApprove ?? existingEntry?.currentAutoApprove,
         controlValues: session.controlValues ?? existingEntry?.controlValues,
         providerControls: session.providerControls ?? existingEntry?.providerControls,
-        acpConfigOptions: session.acpConfigOptions ?? existingEntry?.acpConfigOptions,
-        acpModes: session.acpModes ?? existingEntry?.acpModes,
+        summaryMetadata: session.summaryMetadata ?? existingEntry?.summaryMetadata,
         runtimeWriteOwner: session.runtimeWriteOwner ?? existingEntry?.runtimeWriteOwner,
         runtimeAttachedClients: session.runtimeAttachedClients ?? existingEntry?.runtimeAttachedClients,
         lastMessagePreview: session.lastMessagePreview ?? existingEntry?.lastMessagePreview,
@@ -200,9 +193,6 @@ export function statusPayloadToEntries(
             activeChat: mergedSession.activeChat,
             chats: [],
             cdpConnected: mergedSession.cdpConnected,
-            ...(mergedSession.currentModel !== undefined && { currentModel: mergedSession.currentModel }),
-            ...(mergedSession.currentPlan !== undefined && { currentPlan: mergedSession.currentPlan }),
-            ...(mergedSession.currentAutoApprove !== undefined && { currentAutoApprove: mergedSession.currentAutoApprove }),
             ...(mergedSession.lastMessagePreview !== undefined && { lastMessagePreview: mergedSession.lastMessagePreview }),
             ...(mergedSession.lastMessageRole !== undefined && { lastMessageRole: mergedSession.lastMessageRole }),
             ...(mergedSession.lastMessageAt !== undefined && { lastMessageAt: mergedSession.lastMessageAt }),
@@ -214,6 +204,7 @@ export function statusPayloadToEntries(
             surfaceHidden: mergedSession.surfaceHidden,
             ...(mergedSession.controlValues !== undefined && { controlValues: mergedSession.controlValues }),
             ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
+            ...(mergedSession.summaryMetadata !== undefined && { summaryMetadata: mergedSession.summaryMetadata }),
             timestamp: ts,
         } as DaemonData)
     }
@@ -256,6 +247,7 @@ export function statusPayloadToEntries(
             surfaceHidden: mergedSession.surfaceHidden,
             ...(mergedSession.controlValues !== undefined && { controlValues: mergedSession.controlValues }),
             ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
+            ...(mergedSession.summaryMetadata !== undefined && { summaryMetadata: mergedSession.summaryMetadata }),
             timestamp: ts,
             _isCli: true,
         } as DaemonData)
@@ -287,8 +279,6 @@ export function statusPayloadToEntries(
             ...(mergedSession.runtimeWorkspaceLabel !== undefined && { runtimeWorkspaceLabel: mergedSession.runtimeWorkspaceLabel }),
             ...(mergedSession.runtimeWriteOwner !== undefined && { runtimeWriteOwner: mergedSession.runtimeWriteOwner }),
             ...(mergedSession.runtimeAttachedClients !== undefined && { runtimeAttachedClients: mergedSession.runtimeAttachedClients }),
-            ...(mergedSession.currentModel !== undefined && { currentModel: mergedSession.currentModel }),
-            ...(mergedSession.currentPlan !== undefined && { currentPlan: mergedSession.currentPlan }),
             ...(mergedSession.lastMessagePreview !== undefined && { lastMessagePreview: mergedSession.lastMessagePreview }),
             ...(mergedSession.lastMessageRole !== undefined && { lastMessageRole: mergedSession.lastMessageRole }),
             ...(mergedSession.lastMessageAt !== undefined && { lastMessageAt: mergedSession.lastMessageAt }),
@@ -298,10 +288,9 @@ export function statusPayloadToEntries(
             lastSeenAt: mergedSession.lastSeenAt,
             inboxBucket: mergedSession.inboxBucket,
             surfaceHidden: mergedSession.surfaceHidden,
-            ...(mergedSession.acpConfigOptions !== undefined && { acpConfigOptions: mergedSession.acpConfigOptions }),
-            ...(mergedSession.acpModes !== undefined && { acpModes: mergedSession.acpModes }),
             ...(mergedSession.controlValues !== undefined && { controlValues: mergedSession.controlValues }),
             ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
+            ...(mergedSession.summaryMetadata !== undefined && { summaryMetadata: mergedSession.summaryMetadata }),
             timestamp: ts,
             _isAcp: true,
         } as DaemonData)

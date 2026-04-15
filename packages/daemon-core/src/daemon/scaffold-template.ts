@@ -178,7 +178,11 @@ module.exports.setMode = (params) => {
  *   5. Approval dialog detection (buttons, modal)
  *   6. Input field selector
  *
- * → { id, status, title, messages[], inputContent, activeModal }
+ * Preferred live-state surface:
+ *   - controlValues: explicit current control selections (model/mode/etc.)
+ *   - summaryMetadata: compact always-visible metadata for dashboard/recent views
+ * Legacy top-level model/mode output is no longer the preferred shape.
+ * → { id, status, title, messages[], inputContent, activeModal, controlValues?, summaryMetadata? }
  */
 (() => {
   try {
@@ -206,6 +210,9 @@ module.exports.setMode = (params) => {
       messages,
       inputContent,
       activeModal,
+      // TODO: Return explicit selections when available, e.g.
+      // controlValues: { model: selectedModel, mode: selectedMode },
+      // summaryMetadata: { items: [{ id: 'model', value: selectedModelLabel || selectedModel, shortValue: selectedModel, order: 10 }] },
     });
   } catch(e) {
     return JSON.stringify({ id: '', status: 'error', messages: [], error: e.message });

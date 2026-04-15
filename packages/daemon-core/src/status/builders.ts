@@ -23,6 +23,8 @@ import {
     normalizeManagedStatus,
     type NormalizeActiveChatOptions,
 } from './normalize.js';
+import { normalizeProviderStateControlValues } from '../providers/provider-patch-state.js';
+import { normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
 
 export type SessionEntryProfile = 'full' | 'live' | 'metadata';
 
@@ -159,6 +161,8 @@ function buildIdeWorkspaceSession(
 ): SessionEntry {
     const profile = options.profile || 'full';
     const activeChat = normalizeActiveChatData(state.activeChat, getActiveChatOptions(profile));
+    const summaryMetadata = normalizeProviderSummaryMetadata(state.summaryMetadata);
+    const controlValues = normalizeProviderStateControlValues(state.controlValues);
     const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
     const includeSessionControls = shouldIncludeSessionControls(profile);
     const title = activeChat?.title || state.name;
@@ -175,13 +179,11 @@ function buildIdeWorkspaceSession(
         title,
         ...(includeSessionMetadata && { workspace: state.workspace || null }),
         activeChat,
+        ...(summaryMetadata && { summaryMetadata }),
         ...(includeSessionMetadata && { capabilities: IDE_SESSION_CAPABILITIES }),
         cdpConnected: state.cdpConnected ?? isCdpConnected(cdpManagers, state.type),
-        currentModel: state.currentModel,
-        currentPlan: state.currentPlan,
-        currentAutoApprove: state.currentAutoApprove,
         ...(includeSessionControls && {
-            controlValues: state.controlValues,
+            ...(controlValues && { controlValues }),
             providerControls: state.providerControls,
         }),
         errorMessage: state.errorMessage,
@@ -197,6 +199,8 @@ function buildExtensionAgentSession(
 ): SessionEntry {
     const profile = options.profile || 'full';
     const activeChat = normalizeActiveChatData(ext.activeChat, getActiveChatOptions(profile));
+    const summaryMetadata = normalizeProviderSummaryMetadata(ext.summaryMetadata);
+    const controlValues = normalizeProviderStateControlValues(ext.controlValues);
     const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
     const includeSessionControls = shouldIncludeSessionControls(profile);
     return {
@@ -212,11 +216,10 @@ function buildExtensionAgentSession(
         title: activeChat?.title || ext.name,
         ...(includeSessionMetadata && { workspace: parent.workspace || null }),
         activeChat,
+        ...(summaryMetadata && { summaryMetadata }),
         ...(includeSessionMetadata && { capabilities: EXTENSION_SESSION_CAPABILITIES }),
-        currentModel: ext.currentModel,
-        currentPlan: ext.currentPlan,
         ...(includeSessionControls && {
-            controlValues: ext.controlValues,
+            ...(controlValues && { controlValues }),
             providerControls: ext.providerControls,
         }),
         errorMessage: ext.errorMessage,
@@ -228,6 +231,8 @@ function buildExtensionAgentSession(
 function buildCliSession(state: CliProviderState, options: SessionEntryBuildOptions): SessionEntry {
     const profile = options.profile || 'full';
     const activeChat = normalizeActiveChatData(state.activeChat, getActiveChatOptions(profile));
+    const summaryMetadata = normalizeProviderSummaryMetadata(state.summaryMetadata);
+    const controlValues = normalizeProviderStateControlValues(state.controlValues);
     const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
     const includeRuntimeMetadata = shouldIncludeRuntimeMetadata(profile);
     const includeSessionControls = shouldIncludeSessionControls(profile);
@@ -254,11 +259,12 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         mode: state.mode,
         resume: state.resume,
         activeChat,
+        ...(summaryMetadata && { summaryMetadata }),
         ...(includeSessionMetadata && {
             capabilities: state.mode === 'terminal' ? PTY_SESSION_CAPABILITIES : CLI_CHAT_SESSION_CAPABILITIES,
         }),
         ...(includeSessionControls && {
-            controlValues: state.controlValues,
+            ...(controlValues && { controlValues }),
             providerControls: state.providerControls,
         }),
         errorMessage: state.errorMessage,
@@ -270,6 +276,8 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
 function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOptions): SessionEntry {
     const profile = options.profile || 'full';
     const activeChat = normalizeActiveChatData(state.activeChat, getActiveChatOptions(profile));
+    const summaryMetadata = normalizeProviderSummaryMetadata(state.summaryMetadata);
+    const controlValues = normalizeProviderStateControlValues(state.controlValues);
     const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
     const includeSessionControls = shouldIncludeSessionControls(profile);
     return {
@@ -285,13 +293,10 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
         title: activeChat?.title || state.name,
         ...(includeSessionMetadata && { workspace: state.workspace || null }),
         activeChat,
+        ...(summaryMetadata && { summaryMetadata }),
         ...(includeSessionMetadata && { capabilities: ACP_SESSION_CAPABILITIES }),
-        currentModel: state.currentModel,
-        currentPlan: state.currentPlan,
         ...(includeSessionControls && {
-            acpConfigOptions: state.acpConfigOptions,
-            acpModes: state.acpModes,
-            controlValues: state.controlValues,
+            ...(controlValues && { controlValues }),
             providerControls: state.providerControls,
         }),
         errorMessage: state.errorMessage,

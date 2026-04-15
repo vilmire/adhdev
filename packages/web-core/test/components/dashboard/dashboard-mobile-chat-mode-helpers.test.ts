@@ -61,7 +61,8 @@ describe('dashboard mobile chat mode helpers', () => {
                 title: 'CLI Launch',
                 providerSessionId: 'ps-1',
                 workspace: '/repo',
-                currentModel: 'sonnet',
+                summaryMetadata: { items: [{ id: 'model', value: 'sonnet' }] },
+                lastLaunchedAt: 123,
             }],
         })
 
@@ -73,7 +74,7 @@ describe('dashboard mobile chat mode helpers', () => {
             providerSessionId: 'ps-1',
             subtitle: 'sonnet',
             workspace: '/repo',
-            currentModel: 'sonnet',
+            summaryMetadata: { items: [{ id: 'model', value: 'sonnet' }] },
         }])
     })
 
@@ -99,5 +100,39 @@ describe('dashboard mobile chat mode helpers', () => {
             total: 1,
             preview: 'repo · Cursor · Codex · Studio Mac',
         })
+    })
+
+    it('uses live summary metadata for ACP fallback recent-launch subtitles', () => {
+        const machine = createMachine({ recentLaunches: [] })
+        const sessions = [
+            {
+                id: 'machine-1:acp:acp-1',
+                daemonId: 'machine-1',
+                type: 'claude-code',
+                transport: 'acp',
+                status: 'running',
+                cliName: 'Claude Code',
+                workspace: '/repo',
+                activeChat: { messages: [] },
+                summaryMetadata: {
+                    items: [
+                        { id: 'profile', label: 'Profile', value: 'Reasoning', order: 10 },
+                        { id: 'model', label: 'Model', value: 'Sonnet', order: 20 },
+                    ],
+                },
+            },
+        ] as DaemonData[]
+
+        expect(buildSelectedMachineRecentLaunches(machine, sessions)).toEqual([
+            {
+                id: 'acp:claude-code:/repo',
+                label: 'Claude Code',
+                kind: 'acp',
+                providerType: 'claude-code',
+                providerSessionId: undefined,
+                subtitle: 'Reasoning · Sonnet',
+                workspace: '/repo',
+            },
+        ])
     })
 })

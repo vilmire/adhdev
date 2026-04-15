@@ -17,9 +17,10 @@ import { ExtensionProviderInstance } from './extension-provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
-import { extractProviderControlValues, normalizeProviderEffects } from './control-effects.js';
+import { normalizeProviderEffects } from './control-effects.js';
 import type { ChatMessage } from '../types.js';
 import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
+import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 
 type ReadChatModal = {
     message?: string;
@@ -134,6 +135,11 @@ export class IdeProviderInstance implements ProviderInstance {
             extensionStates.push(ext.getState());
         }
 
+        const surface = resolveProviderStateSurface({
+            summaryMetadata: this.cachedChat?.summaryMetadata,
+            controlValues: this.cachedChat?.controlValues,
+        });
+
         return {
             type: this.type,
             name: this.provider.name,
@@ -152,11 +158,9 @@ export class IdeProviderInstance implements ProviderInstance {
             workspace: this.workspace || null,
             extensions: extensionStates,
             cdpConnected: cdp?.isConnected || false,
-            currentModel: this.cachedChat?.model || undefined,
-            currentPlan: this.cachedChat?.mode || undefined,
-            currentAutoApprove: this.cachedChat?.autoApprove || undefined,
-            controlValues: this.cachedChat?.controlValues || undefined,
+            controlValues: surface.controlValues,
             providerControls: this.provider.controls,
+            summaryMetadata: surface.summaryMetadata as any,
             instanceId: this.instanceId,
             lastUpdated: Date.now(),
             settings: this.settings,
@@ -348,8 +352,13 @@ export class IdeProviderInstance implements ProviderInstance {
                 }
             }
 
-            const controlValues = extractProviderControlValues(this.provider.controls, chat);
-            if (controlValues) chat.controlValues = controlValues;
+            const patchedState = mergeProviderPatchState({
+                providerControls: this.provider.controls,
+                data: chat,
+                mergeWithCurrent: false,
+            });
+            chat.controlValues = Object.keys(patchedState.controlValues).length > 0 ? patchedState.controlValues : undefined;
+            chat.summaryMetadata = patchedState.summaryMetadata;
 
             this.cachedChat = { ...chat, activeModal };
             this.detectAgentTransitions(chat, now);
@@ -464,14 +473,18 @@ export class IdeProviderInstance implements ProviderInstance {
     private applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void {
         if (!data || typeof data !== 'object') return;
 
-        const controlValues = extractProviderControlValues(this.provider.controls, data);
-        if (controlValues) {
-            this.cachedChat = {
-                ...(this.cachedChat || {}),
-                ...data,
-                controlValues: { ...(this.cachedChat?.controlValues || {}), ...controlValues },
-            };
-        }
+        const patchedState = mergeProviderPatchState({
+            providerControls: this.provider.controls,
+            data,
+            currentControlValues: this.cachedChat?.controlValues,
+            currentSummaryMetadata: this.cachedChat?.summaryMetadata,
+        });
+        this.cachedChat = {
+            ...(this.cachedChat || {}),
+            ...data,
+            controlValues: Object.keys(patchedState.controlValues).length > 0 ? patchedState.controlValues : undefined,
+            summaryMetadata: patchedState.summaryMetadata,
+        };
 
         const effects = normalizeProviderEffects(data);
         for (const effect of effects) {

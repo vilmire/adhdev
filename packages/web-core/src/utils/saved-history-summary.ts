@@ -1,8 +1,11 @@
+import type { DaemonData } from '../types'
+import { getProviderSummaryLine } from './daemon-utils'
+
 export interface SavedHistorySummaryLike {
   title?: string | null
   providerSessionId: string
   workspace?: string | null
-  currentModel?: string | null
+  summaryMetadata?: DaemonData['summaryMetadata'] | null
   messageCount?: number | null
   lastMessageAt?: number | null
   preview?: string | null
@@ -32,7 +35,8 @@ export function formatSavedHistorySummaryTime(timestamp?: number | null): string
 
 export function buildSavedHistorySummaryView(session: SavedHistorySummaryLike): SavedHistorySummaryView {
   const metaItems = [session.workspace || 'Workspace unknown']
-  if (session.currentModel) metaItems.push(session.currentModel)
+  const summaryLine = getProviderSummaryLine(session.summaryMetadata)
+  if (summaryLine) metaItems.push(summaryLine)
   if ((session.messageCount || 0) > 0) metaItems.push(`${session.messageCount} msgs`)
 
   const formattedTime = formatSavedHistorySummaryTime(session.lastMessageAt)

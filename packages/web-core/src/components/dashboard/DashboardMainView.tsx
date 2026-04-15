@@ -128,7 +128,7 @@ interface DashboardMainViewProps {
         kind: 'cli' | 'acp'
         title: string
         workspace?: string | null
-        currentModel?: string
+        summaryMetadata?: DaemonData['summaryMetadata']
         preview?: string
         messageCount: number
         firstMessageAt: number

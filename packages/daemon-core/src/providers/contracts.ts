@@ -9,6 +9,8 @@
 
 // ─── readChat() return value ───────────────────────────
 
+import type { ProviderSummaryMetadata } from '../shared-types.js';
+
 export interface ReadChatResult {
   messages: ChatMessage[];
   status: AgentStatus;
@@ -20,15 +22,15 @@ export interface ReadChatResult {
   agentType?: string;
   agentName?: string;
   extensionId?: string;
- /** Status metadata */
+  /** Status metadata */
   isVisible?: boolean;
   isWelcomeScreen?: boolean;
   inputContent?: string;
-  model?: string;
-  autoApprove?: string;
   /** Explicit dynamic control values returned by the provider */
   controlValues?: Record<string, string | number | boolean>;
-  /** Provider-driven UI effects derived from chat state */
+  /** Flexible always-visible metadata for compact/live surfaces. */
+  summaryMetadata?: ProviderSummaryMetadata;
+/** Provider-driven UI effects derived from chat state */
   effects?: ProviderEffect[];
 }
 

@@ -69,6 +69,7 @@ describe('statusPayloadToEntries', () => {
             lastSeenAt: 42,
             inboxBucket: 'inbox',
             surfaceHidden: true,
+            currentAutoApprove: 'auto',
             controlValues: { autoApprove: true },
             providerControls: [{ id: 'autoApprove', type: 'toggle', label: 'Auto approve', placement: 'bar' }],
         });
@@ -80,7 +81,6 @@ describe('statusPayloadToEntries', () => {
             runtimeDisplayName: 'Terminal',
             runtimeWorkspaceLabel: 'repo',
             runtimeAttachedClients: [{ clientId: 'web', label: 'Browser' }],
-            summary: { items: [{ id: 'branch', label: 'Branch', value: 'main' }] },
         });
         const acpSession = createSession({
             id: 'acp-1',
@@ -89,6 +89,12 @@ describe('statusPayloadToEntries', () => {
             providerName: 'Claude Code',
             acpModes: [{ id: 'plan', name: 'Plan' }],
             acpConfigOptions: [{ category: 'model', configId: 'model', options: [{ value: 'sonnet', name: 'Sonnet' }] }],
+            summaryMetadata: {
+                items: [
+                    { id: 'model', label: 'Model', value: 'sonnet', order: 20 },
+                    { id: 'profile', label: 'Profile', value: 'reasoning', order: 10 },
+                ],
+            },
         });
 
         const entries = statusPayloadToEntries(createPayload({
@@ -130,6 +136,9 @@ describe('statusPayloadToEntries', () => {
             inboxBucket: 'inbox',
             surfaceHidden: true,
         });
+        expect(ideEntry).not.toHaveProperty('currentAutoApprove')
+        expect(ideEntry).not.toHaveProperty('currentPlan')
+        expect(ideEntry).not.toHaveProperty('currentModel')
         expect(ideEntry.childSessions).toEqual([ideChild]);
         expect(ideEntry.agents).toEqual([{ id: 'agent-child', name: 'Codex', type: 'codex', status: 'running' }]);
         expect(ideEntry.providerControls).toEqual([{ id: 'autoApprove', type: 'toggle', label: 'Auto approve', placement: 'bar' }]);
@@ -145,8 +154,9 @@ describe('statusPayloadToEntries', () => {
             runtimeWorkspaceLabel: 'repo',
             _isCli: true,
         });
+        expect(cliEntry).not.toHaveProperty('currentModel')
+        expect(cliEntry).not.toHaveProperty('currentPlan')
         expect(cliEntry.runtimeAttachedClients).toEqual([{ clientId: 'web', label: 'Browser' }]);
-        expect((cliEntry as any).summary).toEqual({ items: [{ id: 'branch', label: 'Branch', value: 'main' }] });
 
         const acpEntry = entries[3];
         expect(acpEntry).toMatchObject({
@@ -156,10 +166,16 @@ describe('statusPayloadToEntries', () => {
             mode: 'chat',
             _isAcp: true,
         });
-        expect(acpEntry.acpModes).toEqual([{ id: 'plan', name: 'Plan' }]);
-        expect(acpEntry.acpConfigOptions).toEqual([
-            { category: 'model', configId: 'model', options: [{ value: 'sonnet', name: 'Sonnet' }] },
-        ]);
+        expect(acpEntry).not.toHaveProperty('currentModel')
+        expect(acpEntry).not.toHaveProperty('currentPlan')
+        expect(acpEntry).not.toHaveProperty('acpModes')
+        expect(acpEntry).not.toHaveProperty('acpConfigOptions')
+        expect(acpEntry.summaryMetadata).toEqual({
+            items: [
+                { id: 'model', label: 'Model', value: 'sonnet', order: 20 },
+                { id: 'profile', label: 'Profile', value: 'reasoning', order: 10 },
+            ],
+        })
     });
 
     it('keeps defaults stable for disconnected or sparse sessions', () => {
@@ -212,4 +228,32 @@ describe('statusPayloadToEntries', () => {
         expect(entries[3].runtimeWriteOwner ?? null).toBe(null);
         expect(entries[3].runtimeAttachedClients ?? []).toEqual([]);
     });
+
+    it('preserves existing summary metadata when a live session omits it', () => {
+        const entries = statusPayloadToEntries(createPayload({
+            sessions: [createSession({
+                id: 'acp-3',
+                transport: 'acp',
+                providerType: 'claude-code',
+                providerName: 'Claude Code',
+                summaryMetadata: undefined,
+            })],
+        }), {
+            daemonId: 'machine-3',
+            existingEntries: [{
+                id: 'machine-3:acp:acp-3',
+                daemonId: 'machine-3',
+                sessionId: 'acp-3',
+                type: 'claude-code',
+                status: 'running',
+                summaryMetadata: {
+                    items: [{ id: 'model', label: 'Model', value: 'sonnet', order: 20 }],
+                },
+            } as any],
+        })
+
+        expect(entries[1]?.summaryMetadata).toEqual({
+            items: [{ id: 'model', label: 'Model', value: 'sonnet', order: 20 }],
+        })
+    })
 });

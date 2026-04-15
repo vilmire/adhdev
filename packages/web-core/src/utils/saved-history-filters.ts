@@ -1,3 +1,6 @@
+import type { DaemonData } from '../types'
+import { getProviderSummaryValues } from './daemon-utils'
+
 export type SavedHistorySortMode = 'recent' | 'oldest' | 'messages'
 
 export interface SavedHistoryFilterOptions {
@@ -12,7 +15,7 @@ interface SavedHistoryFilterableEntry {
   title?: string | null
   preview?: string | null
   workspace?: string | null
-  currentModel?: string | null
+  summaryMetadata?: DaemonData['summaryMetadata'] | null
   canResume?: boolean | null
   lastMessageAt?: number | null
   messageCount?: number | null
@@ -42,7 +45,9 @@ export function filterSavedHistoryEntries<T extends SavedHistoryFilterableEntry>
       if (!workspace.includes(workspaceQuery)) return false
     }
     if (modelQuery) {
-      const model = String(entry.currentModel || '').toLowerCase()
+      const model = getProviderSummaryValues(entry.summaryMetadata)
+        .map(value => value.toLowerCase())
+        .join('\n')
       if (!model.includes(modelQuery)) return false
     }
     return true

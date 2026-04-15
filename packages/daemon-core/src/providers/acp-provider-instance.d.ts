@@ -34,8 +34,7 @@ export declare class AcpProviderInstance implements ProviderInstance {
     private lastStatus;
     private generatingStartedAt;
     private agentCapabilities;
-    private currentModel;
-    private currentMode;
+    private currentSelections;
     private activeToolCalls;
     private stopReason;
     private partialContent;
@@ -61,6 +60,13 @@ export declare class AcpProviderInstance implements ProviderInstance {
     getState(): AcpProviderState;
     onEvent(event: string, data?: any): void;
     getInstanceId(): string;
+    private resolveConfigOptionLabel;
+    private resolveModeLabel;
+    private getCurrentSelection;
+    private setCurrentSelection;
+    private getSelectionControlValues;
+    private resolveSelectionLabel;
+    private buildSelectionSummaryMetadata;
     private parseConfigOptions;
     private parseModes;
     setConfigOption(category: string, value: string): Promise<void>;

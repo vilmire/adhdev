@@ -1211,7 +1211,7 @@ export class DevServer implements DevServerContext {
     lines.push('## Required Return Format');
     lines.push('| Function | Return JSON |');
     lines.push('|---|---|');
-    lines.push('| readChat | `{ id, status, title, messages: [{role, content, index, kind?, meta?}], inputContent, activeModal }` — optional `kind`: standard, thought, tool, terminal; optional `meta`: e.g. `{ label, isRunning }` for dashboard |');
+    lines.push('| readChat | `{ id, status, title, messages: [{role, content, index, kind?, meta?}], inputContent, activeModal, controlValues?, summaryMetadata? }` — optional `kind`: standard, thought, tool, terminal; prefer explicit `controlValues` for current selections and `summaryMetadata` for compact always-visible UI metadata |');
     lines.push('| sendMessage | `{ sent: false, needsTypeAndSend: true, selector }` |');
     lines.push('| resolveAction | `{ resolved: true/false, clicked? }` |');
     lines.push('| listSessions | `{ sessions: [{ id, title, active, index }] }` |');

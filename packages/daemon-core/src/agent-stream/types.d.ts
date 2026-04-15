@@ -5,6 +5,7 @@
  * No vscode dependency — can be used as-is.
  */
 import type { ProviderEffect } from '../providers/contracts.js';
+import type { ProviderSummaryMetadata } from '../shared-types.js';
 /** Agent chat message */
 export interface AgentChatMessage {
     role: 'user' | 'assistant' | 'system';
@@ -28,10 +29,6 @@ export interface AgentStreamState {
     messages: AgentChatMessage[];
     inputContent: string;
     title?: string;
-    /** @deprecated Use controlValues['model'] — kept for backward compatibility */
-    model?: string;
-    /** @deprecated Use controlValues['mode'] — kept for backward compatibility */
-    mode?: string;
     activeModal?: {
         message: string;
         buttons: string[];
@@ -40,6 +37,8 @@ export interface AgentStreamState {
     _error?: string;
     /** Dynamic control current values (populated from readChat + provider controls schema) */
     controlValues?: Record<string, string | number | boolean>;
+    /** Flexible compact/live summary metadata from readChat */
+    summaryMetadata?: ProviderSummaryMetadata;
     /** Provider-driven UI effects from readChat */
     effects?: ProviderEffect[];
 }

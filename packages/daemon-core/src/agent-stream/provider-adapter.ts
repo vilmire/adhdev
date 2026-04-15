@@ -13,6 +13,7 @@ import type {
 } from './types.js';
 import type { ProviderModule, ProviderScripts } from '../providers/contracts.js';
 import { extractProviderControlValues, normalizeProviderEffects } from '../providers/control-effects.js';
+import { resolveProviderStateSurface } from '../providers/provider-patch-state.js';
 
 export class ProviderStreamAdapter implements IAgentStreamAdapter {
     readonly agentType: string;
@@ -154,15 +155,18 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
                 status: data.status || 'idle',
                 messages: data.messages || [],
                 inputContent: data.inputContent || '',
-                model: data.model,
-                mode: data.mode,
                 activeModal: data.activeModal,
             };
             if (typeof data.title === 'string' && data.title.trim()) {
                 state.title = data.title.trim();
             }
             const controlValues = extractProviderControlValues(this.provider.controls, data);
-            if (controlValues) state.controlValues = controlValues;
+            const surface = resolveProviderStateSurface({
+                controlValues,
+                summaryMetadata: data.summaryMetadata,
+            });
+            if (surface.controlValues) state.controlValues = surface.controlValues;
+            if (surface.summaryMetadata) state.summaryMetadata = surface.summaryMetadata as any;
             const effects = normalizeProviderEffects(data);
             if (effects.length > 0) state.effects = effects;
             if (state.messages.length > 0) {

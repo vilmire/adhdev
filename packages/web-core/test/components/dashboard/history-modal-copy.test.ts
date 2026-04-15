@@ -71,7 +71,9 @@ describe('HistoryModal saved-history wording', () => {
         title: 'Need sonnet follow-up',
         preview: 'reply with exactly ok',
         workspace: '/tmp/remote_vs',
-        currentModel: 'gpt-5.4',
+        summaryMetadata: {
+          items: [{ id: 'model', label: 'Model', value: 'gpt-5.4', order: 10 }],
+        },
         messageCount: 2,
         firstMessageAt: 1,
         lastMessageAt: 2,

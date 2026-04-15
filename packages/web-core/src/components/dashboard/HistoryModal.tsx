@@ -12,6 +12,7 @@ import { createPortal } from 'react-dom';
 import { getConversationHistorySubtitle } from './conversation-presenters';
 import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state';
 import { prepareSavedHistoryEntries } from '../../utils/saved-history-filters';
+import { getProviderSummaryLine } from '../../utils/daemon-utils';
 import {
     getRefreshSavedHistoryLabel,
     getRefreshingSavedHistoryLabel,
@@ -28,7 +29,7 @@ export interface SavedSessionHistoryEntry {
     kind: 'cli' | 'acp';
     title: string;
     workspace?: string | null;
-    currentModel?: string;
+    summaryMetadata?: DaemonData['summaryMetadata'];
     preview?: string;
     messageCount: number;
     firstMessageAt: number;
@@ -206,7 +207,7 @@ export default function HistoryModal({
                                         <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-text-muted">
                                             <div className="truncate">
                                                 {session.workspace || 'Workspace unknown'}
-                                                {session.currentModel ? ` · ${session.currentModel}` : ''}
+                                                {getProviderSummaryLine(session.summaryMetadata) ? ` · ${getProviderSummaryLine(session.summaryMetadata)}` : ''}
                                                 {session.messageCount > 0 ? ` · ${session.messageCount} msgs` : ''}
                                             </div>
                                             <div className="shrink-0">

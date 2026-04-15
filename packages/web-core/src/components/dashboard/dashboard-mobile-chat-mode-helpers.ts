@@ -1,6 +1,6 @@
 import type { DaemonData } from '../../types'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
-import { getDaemonEntryActivityAt, getMachineDisplayName, isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
+import { getDaemonEntryActivityAt, getMachineDisplayName, getProviderSummaryLine, isAcpEntry, isCliEntry } from '../../utils/daemon-utils'
 import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
 import { getConversationMachineId } from './conversation-selectors'
 import { getConversationMachineCardPreview } from './conversation-presenters'
@@ -26,9 +26,9 @@ export function buildSelectedMachineRecentLaunches(
             kind: launch.kind,
             providerType: launch.providerType,
             providerSessionId: launch.providerSessionId,
-            subtitle: launch.currentModel || launch.workspace || undefined,
+            subtitle: getProviderSummaryLine(launch.summaryMetadata) || launch.workspace || undefined,
             workspace: launch.workspace,
-            currentModel: launch.currentModel,
+            summaryMetadata: launch.summaryMetadata,
         }))
     }
 
@@ -36,6 +36,7 @@ export function buildSelectedMachineRecentLaunches(
         .filter(entry => entry.type !== 'adhdev-daemon' && entry.daemonId === selectedMachineEntry.id)
         .map(entry => {
             const kind: MachineRecentLaunch['kind'] = isCliEntry(entry) ? 'cli' : isAcpEntry(entry) ? 'acp' : 'ide'
+            const summaryLine = getProviderSummaryLine(entry.summaryMetadata)
             return {
                 id: `${kind}:${entry.type}:${entry.workspace || ''}`,
                 label: entry.activeChat?.title
@@ -48,10 +49,9 @@ export function buildSelectedMachineRecentLaunches(
                 providerType: entry.type,
                 providerSessionId: entry.providerSessionId,
                 subtitle: isAcpEntry(entry)
-                    ? (entry.currentModel || entry.workspace || undefined)
+                    ? (summaryLine || entry.workspace || undefined)
                     : (entry.workspace || undefined),
                 workspace: entry.workspace || undefined,
-                currentModel: entry.currentModel,
                 timestamp: entry.activeChat?.messages?.at?.(-1)?.timestamp || 0,
             }
         })

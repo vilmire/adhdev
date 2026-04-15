@@ -1,3 +1,4 @@
+import type { ProviderSummaryMetadata } from '../shared-types.js';
 import type { DaemonState } from './state-store.js';
 export interface SavedProviderSessionEntry {
     id: string;
@@ -6,7 +7,7 @@ export interface SavedProviderSessionEntry {
     providerName: string;
     providerSessionId: string;
     workspace?: string | null;
-    currentModel?: string;
+    summaryMetadata?: ProviderSummaryMetadata;
     title?: string;
     createdAt: number;
     lastUsedAt: number;

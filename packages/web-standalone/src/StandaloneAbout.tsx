@@ -116,7 +116,7 @@ export default function StandaloneAbout() {
                         { label: 'CLI agents', items: BUILTIN_CLI_AGENTS.map(item => `${item.icon} ${item.name}`) },
                     ].map(group => (
                         <div key={group.label} className="rounded-xl border border-border-subtle bg-bg-glass px-4 py-4">
-                            <div className="text-[10px] font-bold tracking-wider text-text-muted mb-3 uppercase">{group.label}</div>
+                            <div className="text-[11px] font-bold tracking-wider text-text-muted mb-3 uppercase">{group.label}</div>
                             <div className="flex flex-col gap-1.5">
                                 {group.items.map(item => (
                                     <div key={item} className="rounded-md border border-border-subtle bg-bg-card px-2.5 py-1.5 text-[12px] text-text-secondary">

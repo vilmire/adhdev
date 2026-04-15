@@ -8,9 +8,9 @@ import {
 describe('saved history filters', () => {
   it('filters entries by title/preview, workspace, and model substring, case-insensitively', () => {
     const entries = filterSavedHistoryEntries([
-      { providerSessionId: 'session-1', title: 'Alpha task', preview: 'Reply with exactly OK.', workspace: '/repo/alpha', currentModel: 'gpt-5.4' },
-      { providerSessionId: 'session-2', title: 'Beta notes', preview: 'Need sonnet follow-up.', workspace: '/repo/beta', currentModel: 'claude-sonnet-4' },
-      { providerSessionId: 'session-3', title: 'Gamma scratch', preview: 'Preview text', workspace: '/other/gamma', currentModel: 'gpt-5.4-mini' },
+      { providerSessionId: 'session-1', title: 'Alpha task', preview: 'Reply with exactly OK.', workspace: '/repo/alpha', summaryMetadata: { items: [{ id: 'model', value: 'gpt-5.4' }] } },
+      { providerSessionId: 'session-2', title: 'Beta notes', preview: 'Need sonnet follow-up.', workspace: '/repo/beta', summaryMetadata: { items: [{ id: 'model', value: 'claude-sonnet-4' }] } },
+      { providerSessionId: 'session-3', title: 'Gamma scratch', preview: 'Preview text', workspace: '/other/gamma', summaryMetadata: { items: [{ id: 'model', value: 'gpt-5.4-mini' }] } },
     ] as any, {
       textQuery: 'reply with exactly',
       workspaceQuery: 'REPO',
@@ -33,8 +33,8 @@ describe('saved history filters', () => {
 
   it('returns all entries when filters are empty', () => {
     const entries = [
-      { providerSessionId: 'session-1', workspace: '/repo/alpha', currentModel: 'gpt-5.4' },
-      { providerSessionId: 'session-2', workspace: '/repo/beta', currentModel: 'claude-sonnet-4' },
+      { providerSessionId: 'session-1', workspace: '/repo/alpha', summaryMetadata: { items: [{ id: 'model', value: 'gpt-5.4' }] } },
+      { providerSessionId: 'session-2', workspace: '/repo/beta', summaryMetadata: { items: [{ id: 'model', value: 'claude-sonnet-4' }] } },
     ] as any
 
     expect(filterSavedHistoryEntries(entries, {})).toEqual(entries)
@@ -77,9 +77,9 @@ describe('saved history filters', () => {
 
   it('applies filtering before sorting for shared saved-history web views', () => {
     const entries = prepareSavedHistoryEntries([
-      { providerSessionId: 'session-1', title: 'Alpha', preview: 'older note', workspace: '/repo/alpha', currentModel: 'gpt-5.4', lastMessageAt: 200, messageCount: 2 },
-      { providerSessionId: 'session-2', title: 'Alpha follow-up', preview: 'newer note', workspace: '/repo/alpha', currentModel: 'gpt-5.4', lastMessageAt: 500, messageCount: 1 },
-      { providerSessionId: 'session-3', title: 'Beta', preview: 'other', workspace: '/repo/beta', currentModel: 'claude', lastMessageAt: 300, messageCount: 7 },
+      { providerSessionId: 'session-1', title: 'Alpha', preview: 'older note', workspace: '/repo/alpha', summaryMetadata: { items: [{ id: 'model', value: 'gpt-5.4' }] }, lastMessageAt: 200, messageCount: 2 },
+      { providerSessionId: 'session-2', title: 'Alpha follow-up', preview: 'newer note', workspace: '/repo/alpha', summaryMetadata: { items: [{ id: 'model', value: 'gpt-5.4' }] }, lastMessageAt: 500, messageCount: 1 },
+      { providerSessionId: 'session-3', title: 'Beta', preview: 'other', workspace: '/repo/beta', summaryMetadata: { items: [{ id: 'model', value: 'claude' }] }, lastMessageAt: 300, messageCount: 7 },
     ] as any, {
       textQuery: 'alpha',
       workspaceQuery: '/repo/alpha',

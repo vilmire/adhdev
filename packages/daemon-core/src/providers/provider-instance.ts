@@ -9,7 +9,7 @@
  */
 
 import type { ProviderModule, ProviderSettingDef, ProviderResumeCapability } from './contracts.js';
-import type { AcpConfigOption, AcpMode, ProviderControlSchema } from '../shared-types.js';
+import type { AcpConfigOption, AcpMode, ProviderControlSchema, ProviderSummaryMetadata } from '../shared-types.js';
 import type { ChatMessage } from '../types.js';
 
 // ─── ProviderState — Discriminated union by category ─────────────
@@ -69,9 +69,7 @@ interface ProviderStateBase {
  /** Workspace — project path or name (all categories) */
     workspace?: string | null;
     /** Runtime info (real-time detection) */
-    currentModel?: string;
-    currentPlan?: string;
- /** Error details (when status === 'error') */
+    /** Error details (when status === 'error') */
     errorMessage?: string;
     errorReason?: ProviderErrorReason;
  /** meta */
@@ -85,8 +83,10 @@ interface ProviderStateBase {
     resume?: ProviderResumeCapability;
  /** Dynamic control current values */
     controlValues?: Record<string, string | number | boolean>;
- /** Provider-declared controls schema (from provider.controls) */
+    /** Provider-declared controls schema (from provider.controls) */
     providerControls?: ProviderControlSchema[];
+    /** Flexible always-visible metadata for compact/live surfaces. */
+    summaryMetadata?: ProviderSummaryMetadata;
 }
 
 /** IDE provider state */
@@ -95,7 +95,6 @@ export interface IdeProviderState extends ProviderStateBase {
     cdpConnected: boolean;
  /** IDE child Extension Instance status */
     extensions: ProviderState[];
-    currentAutoApprove?: string;
 }
 
 /** CLI provider state */

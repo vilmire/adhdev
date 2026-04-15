@@ -6,6 +6,7 @@
  * - Common across all categories (cli, ide, extension)
  * - User custom providers use the same contracts
  */
+import type { ProviderSummaryMetadata } from '../shared-types.js';
 export interface ReadChatResult {
     messages: ChatMessage[];
     status: AgentStatus;
@@ -21,10 +22,10 @@ export interface ReadChatResult {
     isVisible?: boolean;
     isWelcomeScreen?: boolean;
     inputContent?: string;
-    model?: string;
-    autoApprove?: string;
     /** Explicit dynamic control values returned by the provider */
     controlValues?: Record<string, string | number | boolean>;
+    /** Flexible always-visible metadata for compact/live surfaces. */
+    summaryMetadata?: ProviderSummaryMetadata;
     /** Provider-driven UI effects derived from chat state */
     effects?: ProviderEffect[];
 }
