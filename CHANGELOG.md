@@ -2,6 +2,19 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.61] - 2026-04-15
+
+### Added
+- Added shared chat-message normalization/builders plus provider-effect persistence helpers so richer semantic kinds can be emitted and preserved consistently across daemon-core provider categories.
+- Added regression coverage for chat-message normalization, CLI fallback message shaping, provider-effect persistence, command-output rendering, and live chat-cache refresh behavior.
+
+### Fixed
+- Fixed CLI/IDE/extension/ACP runtime plumbing so richer message kinds such as `tool`, `terminal`, `thought`, and `system` are no longer collapsed during runtime merge/persistence paths.
+- Fixed shared dashboard command-output/chat surfaces so fuller tool/terminal output and fresher live conversation copies survive cache merges and render without unintended clipping.
+
+### Changed
+- Unified shared daemon-core/web-core message-kind handling around reusable builders and richer effect-bubble metadata instead of ad-hoc per-provider literals.
+
 ## [0.8.60] - 2026-04-15
 
 ### Added

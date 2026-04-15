@@ -12,6 +12,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { buildRuntimeSystemChatMessage } from '../providers/chat-message-normalization.js';
 
 const HISTORY_DIR = path.join(os.homedir(), '.adhdev', 'history');
 const RETAIN_DAYS = 30;
@@ -314,11 +315,11 @@ export class ChatHistoryWriter {
         this.appendNewMessages(
             agentType,
             [{
-                role: 'system',
-                kind: 'system',
-                content,
-                receivedAt: options.receivedAt,
-                senderName: options.senderName,
+                ...buildRuntimeSystemChatMessage({
+                    content,
+                    receivedAt: options.receivedAt,
+                    senderName: options.senderName,
+                }),
                 historyDedupKey: options.dedupKey,
             }],
             options.sessionTitle,

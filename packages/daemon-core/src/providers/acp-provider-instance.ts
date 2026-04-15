@@ -51,15 +51,16 @@ import { normalizeContent, flattenContent, normalizeInputEnvelope } from './cont
 import type { ProviderInstance, ProviderState, AcpProviderState, ProviderErrorReason, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
 import { buildLegacyModelModeSummaryMetadata } from './summary-metadata.js';
+import { buildAssistantChatMessage, buildChatMessage, buildRuntimeSystemChatMessage, buildUserChatMessage, normalizeChatMessages } from './chat-message-normalization.js';
 import { LOG } from '../logging/logger.js';
+import type { ChatMessage } from '../types.js';
 
 // ─── Internal Display Types (for dashboard) ────────────────────────────
 
-interface AcpMessage {
+type AcpMessage = ChatMessage & {
     role: 'user' | 'assistant' | 'system';
     /** Rich content blocks (ACP standard) or plain text (legacy) */
     content: string | ContentBlock[];
-    timestamp?: number;
     /** Tool calls associated with this message */
     toolCalls?: ToolCallInfo[];
 }
@@ -293,26 +294,23 @@ export class AcpProviderInstance implements ProviderInstance {
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
 
  // Recent 50 messages
-        const recentMessages = this.messages.slice(-50).map(m => {
+        const recentMessages = normalizeChatMessages(this.messages.slice(-50).map(m => {
             const content = this.truncateContent(m.content);
-            return {
-                role: m.role,
+            return buildChatMessage({
+                ...m,
                 content,
-                timestamp: m.timestamp,
-                toolCalls: m.toolCalls,
-            };
-        });
+            });
+        }));
 
  // generating during partial response add
         if (this.currentStatus === 'generating' && (this.partialContent || this.partialBlocks.length > 0)) {
             const blocks = this.buildPartialBlocks();
             if (blocks.length > 0) {
-                recentMessages.push({
-                    role: 'assistant',
+                recentMessages.push(buildAssistantChatMessage({
                     content: blocks,
                     timestamp: Date.now(),
                     toolCalls: this.turnToolCalls.length > 0 ? [...this.turnToolCalls] : undefined,
-                });
+                }));
             }
         }
 
@@ -326,7 +324,7 @@ export class AcpProviderInstance implements ProviderInstance {
                 id: this.sessionId || `${this.type}_${this.workingDir}`,
                 title: `${this.provider.name} · ${dirName}`,
                 status: this.currentStatus,
-                messages: recentMessages,
+                messages: normalizeChatMessages(recentMessages as any),
                 activeModal: this.currentStatus === 'waiting_approval' ? {
                     message: this.activeToolCalls.find(t => t.status === 'running')?.name || 'Permission requested',
                     buttons: ['Approve', 'Reject'],
@@ -975,11 +973,10 @@ export class AcpProviderInstance implements ProviderInstance {
             : [{ type: 'text', text }];
 
  // Add user message locally (store as ContentBlock[])
-        this.messages.push({
-            role: 'user',
+        this.messages.push(buildUserChatMessage({
             content: contentBlocks && contentBlocks.length > 0 ? contentBlocks : text,
             timestamp: Date.now(),
-        });
+        }));
 
         this.currentStatus = 'generating';
         this.partialContent = '';
@@ -1181,11 +1178,11 @@ export class AcpProviderInstance implements ProviderInstance {
             }
 
             if (content.trim()) {
-                this.messages.push({
+                this.messages.push(buildChatMessage({
                     role: m.role || 'assistant',
                     content: content.trim(),
                     timestamp: Date.now(),
-                });
+                }));
                 this.partialContent = '';
             }
         }
@@ -1271,14 +1268,13 @@ export class AcpProviderInstance implements ProviderInstance {
         }).filter(b => b.type !== 'text' || (b.type === 'text' && b.text.trim()));
 
         if (finalBlocks.length > 0) {
-            this.messages.push({
-                role: 'assistant',
+            this.messages.push(buildAssistantChatMessage({
                 content: finalBlocks.length === 1 && finalBlocks[0].type === 'text'
                     ? (finalBlocks[0] as {type: 'text', text: string}).text   // single text → string (backward compat)
                     : finalBlocks,
                 timestamp: Date.now(),
                 toolCalls: this.turnToolCalls.length > 0 ? [...this.turnToolCalls] : undefined,
-            });
+            }));
         }
         this.partialContent = '';
         this.partialBlocks = [];
@@ -1347,11 +1343,10 @@ export class AcpProviderInstance implements ProviderInstance {
     private appendSystemMessage(content: string, timestamp = Date.now()): void {
         const normalizedContent = String(content || '').trim();
         if (!normalizedContent) return;
-        this.messages.push({
-            role: 'system',
+        this.messages.push(buildRuntimeSystemChatMessage({
             content: normalizedContent,
             timestamp,
-        });
+        }));
         if (this.messages.length > 200) {
             this.messages = this.messages.slice(-100);
         }

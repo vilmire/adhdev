@@ -10,6 +10,7 @@
 // ─── readChat() return value ───────────────────────────
 
 import type { ProviderSummaryMetadata } from '../shared-types.js';
+import type { ChatMessageKind } from './chat-message-normalization.js';
 
 export interface ReadChatResult {
   messages: ChatMessage[];
@@ -70,7 +71,7 @@ export interface ModalInfo {
 export interface ProviderEffectMessage {
   role?: 'system' | 'assistant' | 'user';
   content: string | MessagePart[];
-  kind?: string;
+  kind?: ChatMessageKind;
   senderName?: string;
 }
 
@@ -89,6 +90,9 @@ export interface ProviderEffectNotification {
   channels?: ProviderNotificationChannel[];
   preferenceKey?: ProviderNotificationPreferenceKey;
   bubbleContent?: string | MessagePart[];
+  bubbleKind?: ChatMessageKind;
+  bubbleRole?: 'system' | 'assistant' | 'user';
+  bubbleSenderName?: string;
 }
 
 export interface ProviderEffect {

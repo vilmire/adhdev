@@ -200,6 +200,19 @@ export type { ProviderModule, CdpTargetFilter, ProviderResumeCapability, InputEn
 export type { ProviderSourceConfigSnapshot, ProviderSourceConfigUpdate } from './config/provider-source-config.js';
 export { parseProviderSourceConfigUpdate } from './config/provider-source-config.js';
 export { normalizeInputEnvelope, normalizeMessageParts, flattenMessageParts } from './providers/io-contracts.js';
+export {
+  BUILTIN_CHAT_MESSAGE_KINDS,
+  isBuiltinChatMessageKind,
+  normalizeChatMessageKind,
+  buildChatMessage,
+  buildSystemChatMessage,
+  buildRuntimeSystemChatMessage,
+  buildAssistantChatMessage,
+  buildUserChatMessage,
+  normalizeChatMessage,
+  normalizeChatMessages,
+} from './providers/chat-message-normalization.js';
+export type { BuiltinChatMessageKind, ChatMessageKind } from './providers/chat-message-normalization.js';
 export { VersionArchive, detectAllVersions } from './providers/version-archive.js';
 export type { ProviderVersionInfo, VersionHistory } from './providers/version-archive.js';
 

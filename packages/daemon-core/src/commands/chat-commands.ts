@@ -12,6 +12,7 @@ import { LOG } from '../logging/logger.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
 import type { ChatMessage } from '../types.js';
 import type { ReadChatCursor, ReadChatSyncMode, SessionTransport } from '../shared-types.js';
+import { normalizeChatMessages } from '../providers/chat-message-normalization.js';
 
 const RECENT_SEND_WINDOW_MS = 1200;
 const recentSendByTarget = new Map<string, number>();
@@ -189,7 +190,7 @@ function normalizeReadChatCursor(args: any): Required<ReadChatCursor> {
 
 function normalizeReadChatMessages(payload: Record<string, any>): ChatMessage[] {
     const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
-    return messages;
+    return normalizeChatMessages(messages);
 }
 
 function deriveHistoryDedupKey(message: ChatMessage & { _unitKey?: string; _turnKey?: string }): string | undefined {

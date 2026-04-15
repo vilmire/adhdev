@@ -11,16 +11,17 @@
 
 import * as os from 'os';
 import * as crypto from 'crypto';
-import type { ProviderModule } from './contracts.js';
+import { flattenContent, type ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { ExtensionProviderInstance } from './extension-provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
-import { normalizeProviderEffects } from './control-effects.js';
+import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
 import type { ChatMessage } from '../types.js';
 import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
+import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages } from './chat-message-normalization.js';
 
 type ReadChatModal = {
     message?: string;
@@ -497,8 +498,8 @@ export class IdeProviderInstance implements ProviderInstance {
             this.appliedEffectKeys.add(effectKey);
 
             if (effect.persist !== false) {
-                const persisted = this.getPersistedEffectContent(effect);
-                if (persisted) this.appendRuntimeSystemMessage(persisted, effectKey);
+                const persistedMessage = buildPersistedProviderEffectMessage(effect);
+                if (persistedMessage) this.appendRuntimeMessage(persistedMessage, effectKey);
             }
 
             if (effect.type === 'message' && effect.message) {
@@ -537,8 +538,23 @@ export class IdeProviderInstance implements ProviderInstance {
     }
 
     private appendRuntimeSystemMessage(content: string, dedupKey: string, receivedAt = Date.now()): void {
-        const normalizedContent = String(content || '').trim();
-        if (!normalizedContent) return;
+        this.appendRuntimeMessage(buildRuntimeSystemChatMessage({
+            content,
+            receivedAt,
+            timestamp: receivedAt,
+        }), dedupKey);
+    }
+
+    private appendRuntimeMessage(message: ChatMessage, dedupKey: string): void {
+        const normalizedMessage = buildChatMessage({
+            ...message,
+            receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : (message.timestamp || Date.now()),
+            timestamp: typeof message.timestamp === 'number' ? message.timestamp : (message.receivedAt || Date.now()),
+        } as ChatMessage);
+        const normalizedContent = typeof normalizedMessage.content === 'string'
+            ? normalizedMessage.content.trim()
+            : flattenContent(normalizedMessage.content).trim();
+        if (!normalizedContent && (!Array.isArray(normalizedMessage.content) || normalizedMessage.content.length === 0)) return;
         if (this.runtimeMessages.some((entry) => entry.key === dedupKey)) return;
         if (!this.cachedChat) {
             this.cachedChat = {
@@ -553,35 +569,31 @@ export class IdeProviderInstance implements ProviderInstance {
 
         this.runtimeMessages.push({
             key: dedupKey,
-            message: {
-                role: 'system',
-                senderName: 'System',
-                content: normalizedContent,
-                receivedAt,
-                timestamp: receivedAt,
-            },
+            message: normalizedMessage,
         });
         if (this.runtimeMessages.length > 50) this.runtimeMessages = this.runtimeMessages.slice(-50);
 
-        this.historyWriter.appendNewMessages(
-            this.type,
-            [{
-                role: 'system',
-                senderName: 'System',
-                content: normalizedContent,
-                kind: 'system',
-                receivedAt,
-                historyDedupKey: dedupKey,
-            }],
-            this.cachedChat?.title || this.provider.name,
-            this.instanceId,
-            this.cachedChat?.id || this.instanceId,
-        );
+        if (normalizedContent) {
+            this.historyWriter.appendNewMessages(
+                this.type,
+                [{
+                    role: normalizedMessage.role,
+                    senderName: normalizedMessage.senderName,
+                    kind: normalizedMessage.kind,
+                    content: normalizedContent,
+                    receivedAt: normalizedMessage.receivedAt || normalizedMessage.timestamp,
+                    historyDedupKey: dedupKey,
+                }],
+                this.cachedChat?.title || this.provider.name,
+                this.instanceId,
+                this.cachedChat?.id || this.instanceId,
+            );
+        }
     }
 
     private mergeConversationMessages(messages: any[]): ChatMessage[] {
-        if (this.runtimeMessages.length === 0) return messages;
-        return [...messages, ...this.runtimeMessages.map((entry) => entry.message)]
+        if (this.runtimeMessages.length === 0) return normalizeChatMessages(messages);
+        return normalizeChatMessages([...messages, ...this.runtimeMessages.map((entry) => entry.message)]
             .map((message, index) => ({ message, index }))
             .sort((a, b) => {
                 const aTime = a.message.receivedAt || a.message.timestamp || 0;
@@ -589,7 +601,7 @@ export class IdeProviderInstance implements ProviderInstance {
                 if (aTime !== bTime) return aTime - bTime;
                 return a.index - b.index;
             })
-            .map((entry) => entry.message);
+            .map((entry) => entry.message));
     }
 
     private getPersistedEffectContent(effect: { type: string; message?: { content?: unknown }; toast?: { message?: string }; notification?: { title?: string; body?: string; bubbleContent?: unknown } }): string | null {

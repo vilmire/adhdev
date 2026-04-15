@@ -21,6 +21,7 @@ import { LOG } from '../logging/logger.js';
 import type { AgentStreamState } from './types.js';
 import { formatAutoApprovalMessage, pickApprovalButton } from '../providers/approval-utils.js';
 import type { ProviderModule } from '../providers/contracts.js';
+import { buildRuntimeSystemChatMessage } from '../providers/chat-message-normalization.js';
 
 interface ExtensionInstanceLike {
     type?: string;
@@ -229,12 +230,9 @@ export class AgentStreamPoller {
                                         type: 'message',
                                         id: effectId,
                                         persist: true,
-                                        message: {
-                                            role: 'system',
-                                            senderName: 'System',
-                                            kind: 'system',
+                                        message: buildRuntimeSystemChatMessage({
                                             content: formatAutoApprovalMessage(stream.activeModal?.message, buttonLabel),
-                                        },
+                                        }),
                                     },
                                 ],
                             };

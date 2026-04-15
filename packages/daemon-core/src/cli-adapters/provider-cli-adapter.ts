@@ -44,6 +44,7 @@ import {
     type CliSessionStatus,
     type CliTraceEntry,
 } from './provider-cli-shared.js';
+import { buildChatMessage } from '../providers/chat-message-normalization.js';
 import {
     buildCliParseInput,
     buildCliTraceParseSnapshot,
@@ -1297,11 +1298,10 @@ export class ProviderCliAdapter implements CliAdapter {
             && !this.activeModal;
         if (parsed && Array.isArray(parsed.messages)) {
             const hydratedMessages = shouldPreferCommittedMessages
-                ? this.committedMessages.map((message, index) => ({
+                ? this.committedMessages.map((message, index) => buildChatMessage({
                     ...message,
                     id: message.id || `msg_${index}`,
                     index: typeof message.index === 'number' ? message.index : index,
-                    kind: message.kind || 'standard',
                     receivedAt: typeof message.receivedAt === 'number'
                         ? message.receivedAt
                         : message.timestamp,
@@ -1326,13 +1326,13 @@ export class ProviderCliAdapter implements CliAdapter {
             id: 'cli_session',
             status: this.currentStatus,
             title: this.cliName,
-            messages: messages.slice(-50).map((message, index) => ({
-                id: `msg_${index}`,
-                role: message.role,
-                content: message.content,
-                timestamp: message.timestamp,
-                index,
-                kind: 'standard',
+            messages: messages.slice(-50).map((message, index) => buildChatMessage({
+                ...message,
+                id: message.id || `msg_${index}`,
+                index: typeof message.index === 'number' ? message.index : index,
+                receivedAt: typeof message.receivedAt === 'number'
+                    ? message.receivedAt
+                    : message.timestamp,
             })),
             activeModal: this.activeModal,
         };

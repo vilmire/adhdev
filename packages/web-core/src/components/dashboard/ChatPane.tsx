@@ -21,6 +21,7 @@ import {
     dedupeOptimisticMessages,
     excludeMessagesPresentInLiveFeed,
     getMessageTimestamp,
+    mergeLiveChatMessages,
     sortMessagesChronologically,
 } from './message-utils';
 import {
@@ -212,10 +213,7 @@ export default function ChatPane({
     const hasMoreHistory = tabHistory.hasMore;
     const loadError = tabHistory.error;
     const cachedLiveMessages = liveChatCache.current.get(tabKey);
-    const optimisticMessages = activeConv.messages.filter(message => !!message?._localId);
-    const liveMessages = cachedLiveMessages
-        ? dedupeOptimisticMessages([...cachedLiveMessages, ...optimisticMessages])
-        : activeConv.messages;
+    const liveMessages = mergeLiveChatMessages(cachedLiveMessages, activeConv.messages);
     useEffect(() => {
         if (tabHistory.visibleLiveCount >= defaultVisibleLiveMessages) return;
         updateTabHistory(tabKey, { visibleLiveCount: defaultVisibleLiveMessages });

@@ -2,6 +2,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import type { ProviderResumeCapability } from '../providers/contracts.js';
+import type { ChatMessageKind } from '../providers/chat-message-normalization.js';
 import { sanitizeSpawnEnv } from './spawn-env.js';
 
 export interface CliChatMessage {
@@ -9,10 +10,10 @@ export interface CliChatMessage {
     content: string;
     timestamp?: number;
     receivedAt?: number;
-    kind?: string;
+    kind?: ChatMessageKind;
     id?: string;
     index?: number;
-    meta?: Record<string, any>;
+    meta?: Record<string, unknown>;
     senderName?: string;
 }
 

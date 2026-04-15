@@ -6,6 +6,9 @@ import type {
     ProviderControlOption,
     ProviderEffect,
 } from './contracts.js';
+import { flattenContent } from './contracts.js';
+import type { ChatMessage } from '../types.js';
+import { buildChatMessage, buildRuntimeSystemChatMessage } from './chat-message-normalization.js';
 
 export type ProviderControlValue = string | number | boolean;
 
@@ -97,12 +100,74 @@ export function normalizeProviderEffects(data: any): ProviderEffect[] {
                     bubbleContent: typeof raw.notification.bubbleContent === 'string' || Array.isArray(raw.notification.bubbleContent)
                         ? raw.notification.bubbleContent
                         : undefined,
+                    bubbleKind: typeof raw.notification.bubbleKind === 'string'
+                        ? raw.notification.bubbleKind
+                        : undefined,
+                    bubbleRole: raw.notification.bubbleRole === 'assistant' || raw.notification.bubbleRole === 'user'
+                        ? raw.notification.bubbleRole
+                        : (raw.notification.bubbleRole === 'system' ? 'system' : undefined),
+                    bubbleSenderName: typeof raw.notification.bubbleSenderName === 'string'
+                        ? raw.notification.bubbleSenderName
+                        : undefined,
                 },
             });
         }
     }
 
     return effects;
+}
+
+export function buildPersistedProviderEffectMessage(effect: ProviderEffect | null | undefined): ChatMessage | null {
+    if (!effect) return null;
+
+    if (effect.type === 'message' && effect.message) {
+        const role = effect.message.role === 'assistant' || effect.message.role === 'user'
+            ? effect.message.role
+            : 'system';
+        if (role === 'system') {
+            return buildRuntimeSystemChatMessage({
+                content: effect.message.content,
+                kind: effect.message.kind,
+                senderName: effect.message.senderName,
+            });
+        }
+        return buildChatMessage({
+            role,
+            content: effect.message.content,
+            kind: effect.message.kind,
+            senderName: effect.message.senderName,
+        } as ChatMessage);
+    }
+
+    if (effect.type === 'notification' && effect.notification) {
+        const bubbleContent = effect.notification.bubbleContent
+            ?? formatNotificationBubbleFallback(effect.notification.title, effect.notification.body);
+        const flattened = typeof bubbleContent === 'string' ? bubbleContent.trim() : flattenContent(bubbleContent).trim();
+        if (!flattened && (!Array.isArray(bubbleContent) || bubbleContent.length === 0)) return null;
+
+        const role = effect.notification.bubbleRole === 'assistant' || effect.notification.bubbleRole === 'user'
+            ? effect.notification.bubbleRole
+            : 'system';
+        if (role === 'system') {
+            return buildRuntimeSystemChatMessage({
+                content: bubbleContent,
+                kind: effect.notification.bubbleKind,
+                senderName: effect.notification.bubbleSenderName,
+            });
+        }
+        return buildChatMessage({
+            role,
+            content: bubbleContent,
+            kind: effect.notification.bubbleKind,
+            senderName: effect.notification.bubbleSenderName,
+        } as ChatMessage);
+    }
+
+    if (effect.type === 'toast' && effect.toast?.message) {
+        return buildRuntimeSystemChatMessage({ content: effect.toast.message });
+    }
+
+    return null;
 }
 
 export function normalizeControlListResult(data: any): ControlListResult {
@@ -195,4 +260,11 @@ function normalizeControlValue(value: any): ProviderControlValue {
         if (typeof value.id === 'string') return value.id;
     }
     return String(value);
+}
+
+function formatNotificationBubbleFallback(title: string | undefined, body: string): string {
+    const cleanTitle = typeof title === 'string' ? title.trim() : '';
+    const cleanBody = String(body || '').trim();
+    if (cleanTitle && cleanBody) return `${cleanTitle}\n${cleanBody}`;
+    return cleanTitle || cleanBody;
 }

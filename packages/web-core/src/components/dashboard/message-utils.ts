@@ -101,6 +101,17 @@ export function dedupeOptimisticMessages<T extends MessageLike>(messages: T[]): 
     return result
 }
 
+export function mergeLiveChatMessages<T extends MessageLike>(
+    cachedLiveMessages: T[] | null | undefined,
+    activeConversationMessages: T[] | null | undefined,
+): T[] {
+    const cached = Array.isArray(cachedLiveMessages) ? cachedLiveMessages : []
+    const active = Array.isArray(activeConversationMessages) ? activeConversationMessages : []
+    if (cached.length === 0) return active
+    if (active.length === 0) return cached
+    return dedupeOptimisticMessages([...cached, ...active])
+}
+
 export function sortMessagesChronologically<T extends MessageLike>(messages: T[]): T[] {
     return [...messages].sort((left, right) => {
         const leftTs = getMessageTimestamp(left)

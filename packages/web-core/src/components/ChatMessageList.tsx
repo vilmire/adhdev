@@ -299,7 +299,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                         <MessagePartsRenderer parts={structuredParts} renderAsPreformatted={false} />
                     </div>
                 ) : (
-                    <span className="tool-text">{contentStr.split('\n')[0].slice(0, 80)}</span>
+                    <div className="tool-text w-full" style={{ whiteSpace: 'pre-wrap' }}>{contentStr}</div>
                 )}
             </div>
         );

@@ -962,7 +962,7 @@
         max-width: var(--chat-bubble-max-width);
         min-width: 0;
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         gap: 6px;
         font-size: 11px;
         color: var(--text-muted);
@@ -972,8 +972,8 @@
         border-radius: var(--radius-sm);
         font-family: monospace;
         flex-shrink: 0;
-        max-height: var(--chat-tool-max-height);
-        overflow-y: auto;
+        max-height: none;
+        overflow-y: visible;
         white-space: pre-wrap;
         word-break: break-all;
         overflow-wrap: anywhere;
@@ -1016,8 +1016,8 @@
         color: var(--text-muted);
         line-height: 1.6;
         margin: 0;
-        max-height: var(--chat-terminal-max-height);
-        overflow-y: auto;
+        max-height: none;
+        overflow-y: visible;
         overflow-x: hidden;
         white-space: pre-wrap;
         word-break: break-all;

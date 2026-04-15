@@ -10,7 +10,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { createRequire } from 'node:module';
-import { normalizeInputEnvelope, type ProviderModule } from './contracts.js';
+import { normalizeInputEnvelope, type ProviderModule, flattenContent } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
@@ -19,10 +19,11 @@ import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter, readChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
-import { normalizeProviderEffects } from './control-effects.js';
+import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
 import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
+import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages } from './chat-message-normalization.js';
 
 let CachedDatabaseSync: (new (path: string, options?: { readOnly?: boolean }) => {
     prepare(sql: string): { get(...params: Array<string | number>): unknown };
@@ -628,8 +629,8 @@ export class CliProviderInstance implements ProviderInstance {
             this.appliedEffectKeys.add(effectKey);
 
             if (effect.persist !== false) {
-                const persisted = this.getPersistedEffectContent(effect);
-                if (persisted) this.appendRuntimeSystemMessage(persisted, effectKey);
+                const persistedMessage = buildPersistedProviderEffectMessage(effect);
+                if (persistedMessage) this.appendRuntimeMessage(persistedMessage, effectKey);
             }
 
             if (effect.type === 'message' && effect.message) {
@@ -772,43 +773,55 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     private appendRuntimeSystemMessage(content: string, dedupKey: string, receivedAt = Date.now()): void {
-        const normalizedContent = String(content || '').trim();
-        if (!normalizedContent) return;
+        this.appendRuntimeMessage(buildRuntimeSystemChatMessage({
+            content,
+            receivedAt,
+            timestamp: receivedAt,
+        }), dedupKey);
+    }
+
+    private appendRuntimeMessage(message: ChatMessage, dedupKey: string): void {
+        const normalizedMessage = buildChatMessage({
+            ...message,
+            receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : (message.timestamp || Date.now()),
+            timestamp: typeof message.timestamp === 'number' ? message.timestamp : (message.receivedAt || Date.now()),
+        } as ChatMessage);
+        const normalizedContent = typeof normalizedMessage.content === 'string'
+            ? normalizedMessage.content.trim()
+            : flattenContent(normalizedMessage.content).trim();
+        if (!normalizedContent && (!Array.isArray(normalizedMessage.content) || normalizedMessage.content.length === 0)) return;
         if (this.runtimeMessages.some((entry) => entry.key === dedupKey)) return;
 
         this.runtimeMessages.push({
             key: dedupKey,
-            message: {
-                role: 'system',
-                senderName: 'System',
-                content: normalizedContent,
-                receivedAt,
-                timestamp: receivedAt,
-            },
+            message: normalizedMessage,
         });
         if (this.runtimeMessages.length > 50) {
             this.runtimeMessages = this.runtimeMessages.slice(-50);
         }
 
-        this.historyWriter.appendNewMessages(
-            this.type,
-            [{
-                role: 'system',
-                senderName: 'System',
-                content: normalizedContent,
-                receivedAt,
-                historyDedupKey: dedupKey,
-            }],
-            this.adapter.getScriptParsedStatus?.()?.title || this.workingDir.split('/').filter(Boolean).pop() || 'session',
-            this.instanceId,
-            this.providerSessionId,
-        );
+        if (normalizedContent) {
+            this.historyWriter.appendNewMessages(
+                this.type,
+                [{
+                    role: normalizedMessage.role,
+                    senderName: normalizedMessage.senderName,
+                    kind: normalizedMessage.kind,
+                    content: normalizedContent,
+                    receivedAt: normalizedMessage.receivedAt || normalizedMessage.timestamp,
+                    historyDedupKey: dedupKey,
+                }],
+                this.adapter.getScriptParsedStatus?.()?.title || this.workingDir.split('/').filter(Boolean).pop() || 'session',
+                this.instanceId,
+                this.providerSessionId,
+            );
+        }
     }
 
     private mergeConversationMessages(parsedMessages: any[]): ChatMessage[] {
-        if (this.runtimeMessages.length === 0) return parsedMessages;
+        if (this.runtimeMessages.length === 0) return normalizeChatMessages(parsedMessages);
 
-        return [...parsedMessages, ...this.runtimeMessages.map((entry) => entry.message)]
+        return normalizeChatMessages([...parsedMessages, ...this.runtimeMessages.map((entry) => entry.message)]
             .map((message, index) => ({ message, index }))
             .sort((a, b) => {
                 const aTime = a.message.receivedAt || a.message.timestamp || 0;
@@ -816,7 +829,7 @@ export class CliProviderInstance implements ProviderInstance {
                 if (aTime !== bTime) return aTime - bTime;
                 return a.index - b.index;
             })
-            .map((entry) => entry.message);
+            .map((entry) => entry.message));
     }
 
     private formatApprovalRequestMessage(modalMessage?: string, buttons?: string[]): string {

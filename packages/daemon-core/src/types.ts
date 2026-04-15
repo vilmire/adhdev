@@ -5,6 +5,7 @@
  * When modifying this file, also update interface contracts in AGENT_PROTOCOL.md.
  */
 import type { StatusReportPayload, AvailableProviderInfo } from './shared-types.js';
+import type { ChatMessageKind } from './providers/chat-message-normalization.js';
 
 // ── Daemon Status ──
 
@@ -29,7 +30,7 @@ export interface ChatMessage {
   role: string;       // 'user' | 'assistant' | 'system' | 'human'
   /** Plain text (legacy) or canonical message parts */
   content: string | MessagePart[];
-  kind?: string;      // 'standard' | 'thought' | 'tool' | 'terminal' | 'system'
+  kind?: ChatMessageKind;      // built-ins: standard | thought | tool | terminal | system; custom kinds allowed
   id?: string;
   index?: number;
   timestamp?: number;
