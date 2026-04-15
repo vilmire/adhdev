@@ -123,6 +123,7 @@ export function buildCliParseInput(options: {
     terminalScreenText: string;
     baseMessages: CliChatMessage[];
     partialResponse: string;
+    isWaitingForResponse?: boolean;
     scope?: TurnParseScope | null;
     runtimeSettings: Record<string, any>;
 }): CliScriptInput {
@@ -133,6 +134,7 @@ export function buildCliParseInput(options: {
         terminalScreenText,
         baseMessages,
         partialResponse,
+        isWaitingForResponse,
         scope,
         runtimeSettings,
     } = options;
@@ -155,6 +157,7 @@ export function buildCliParseInput(options: {
         recentScreen: buildCliScreenSnapshot(recentBuffer),
         messages: [...baseMessages],
         partialResponse,
+        isWaitingForResponse,
         promptText: scope?.prompt || '',
         settings: { ...runtimeSettings },
     };

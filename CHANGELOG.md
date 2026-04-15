@@ -2,6 +2,18 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.62] - 2026-04-16
+
+### Added
+- Added focused regression coverage for Hermes CLI waiting-state parsing, standalone compact session control metadata, CLI view-mode overrides, and dashboard conversation refresh invalidation.
+
+### Fixed
+- Fixed Hermes CLI turn completion handling so waiting-state providers keep long-running responses open until detectStatus truly settles and parse/detect scripts can see `isWaitingForResponse`.
+- Fixed shared standalone/dashboard CLI conversations so top-level CLI and ACP sessions preserve controls/chat metadata and completed replies appear in chat view without requiring a terminal/chat toggle refresh.
+
+### Changed
+- Tightened shared standalone status merging and dashboard conversation caching so live session snapshots preserve richer active-chat state more reliably.
+
 ## [0.8.61] - 2026-04-15
 
 ### Added

@@ -739,6 +739,19 @@ export class ProviderCliAdapter implements CliAdapter {
             || screenStableMs < holdMs;
     }
 
+    private shouldDeferIdleTimeoutFinish(): boolean {
+        if (!this.isWaitingForResponse || this.currentStatus === 'waiting_approval') {
+            return false;
+        }
+        const latestStatus = this.runDetectStatus(this.recentOutputBuffer) || this.currentStatus;
+        if (latestStatus === 'generating') {
+            this.settledBuffer = this.recentOutputBuffer;
+            this.evaluateSettled();
+            return true;
+        }
+        return false;
+    }
+
     private getStartupConfirmationModal(screenText: string): { message: string; buttons: string[] } | null {
         const text = sanitizeTerminalText(String(screenText || ''));
         if (!text.trim()) return null;
@@ -930,6 +943,7 @@ export class ProviderCliAdapter implements CliAdapter {
             if (this.idleTimeout) clearTimeout(this.idleTimeout);
             this.idleTimeout = setTimeout(() => {
                 if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
+                    if (this.shouldDeferIdleTimeoutFinish()) return;
                     this.finishResponse();
                 }
             }, this.timeouts.generatingIdle);
@@ -963,6 +977,7 @@ export class ProviderCliAdapter implements CliAdapter {
                     if (this.idleTimeout) clearTimeout(this.idleTimeout);
                     this.idleTimeout = setTimeout(() => {
                         if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
+                            if (this.shouldDeferIdleTimeoutFinish()) return;
                             this.finishResponse();
                         }
                     }, this.timeouts.generatingIdle);
@@ -1012,7 +1027,10 @@ export class ProviderCliAdapter implements CliAdapter {
             // Reset idle timeout
             if (this.idleTimeout) clearTimeout(this.idleTimeout);
             this.idleTimeout = setTimeout(() => {
-                if (this.isWaitingForResponse) this.finishResponse();
+                if (this.isWaitingForResponse) {
+                    if (this.shouldDeferIdleTimeoutFinish()) return;
+                    this.finishResponse();
+                }
             }, this.timeouts.generatingIdle);
             this.onStatusChange?.();
             return;
@@ -1091,6 +1109,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 if (this.idleTimeout) clearTimeout(this.idleTimeout);
                 this.idleTimeout = setTimeout(() => {
                     if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
+                        if (this.shouldDeferIdleTimeoutFinish()) return;
                         this.clearIdleFinishCandidate('idle_timeout_finish');
                         this.finishResponse();
                     }
@@ -1219,6 +1238,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 tail: text.slice(-500),
                 screenText,
                 rawBuffer: this.accumulatedRawBuffer,
+                isWaitingForResponse: this.isWaitingForResponse,
                 screen: buildCliScreenSnapshot(screenText),
                 tailScreen: buildCliScreenSnapshot(text.slice(-500)),
             });
@@ -1350,6 +1370,7 @@ export class ProviderCliAdapter implements CliAdapter {
             terminalScreenText: this.terminalScreen.getText(),
             baseMessages: this.committedMessages,
             partialResponse: this.responseBuffer,
+            isWaitingForResponse: this.isWaitingForResponse,
             scope: this.currentTurnScope,
             runtimeSettings: this.runtimeSettings,
         });
@@ -1369,6 +1390,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 terminalScreenText: this.terminalScreen.getText(),
                 baseMessages,
                 partialResponse,
+                isWaitingForResponse: this.isWaitingForResponse,
                 scope,
                 runtimeSettings: this.runtimeSettings,
             });

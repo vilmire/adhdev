@@ -139,7 +139,17 @@ describe('statusPayloadToEntries', () => {
         expect(ideEntry).not.toHaveProperty('currentAutoApprove')
         expect(ideEntry).not.toHaveProperty('currentPlan')
         expect(ideEntry).not.toHaveProperty('currentModel')
-        expect(ideEntry.childSessions).toEqual([ideChild]);
+        expect(ideEntry.childSessions).toHaveLength(1)
+        expect(ideEntry.childSessions[0]).toMatchObject({
+            id: 'agent-child',
+            parentId: 'ide-1',
+            providerType: 'codex',
+            providerName: 'Codex',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'running',
+            title: 'Child agent',
+        })
         expect(ideEntry.agents).toEqual([{ id: 'agent-child', name: 'Codex', type: 'codex', status: 'running' }]);
         expect(ideEntry.providerControls).toEqual([{ id: 'autoApprove', type: 'toggle', label: 'Auto approve', placement: 'bar' }]);
 
@@ -229,31 +239,52 @@ describe('statusPayloadToEntries', () => {
         expect(entries[3].runtimeAttachedClients ?? []).toEqual([]);
     });
 
-    it('preserves existing summary metadata when a live session omits it', () => {
+    it('preserves existing active chat messages and approval buttons when live snapshots omit them', () => {
         const entries = statusPayloadToEntries(createPayload({
             sessions: [createSession({
-                id: 'acp-3',
-                transport: 'acp',
-                providerType: 'claude-code',
-                providerName: 'Claude Code',
-                summaryMetadata: undefined,
+                id: 'cli-keep-chat',
+                providerType: 'hermes-cli',
+                providerName: 'Hermes Agent',
+                status: 'waiting_approval',
+                activeChat: {
+                    id: 'chat-1',
+                    title: 'Hermes Agent',
+                    status: 'waiting_approval',
+                    messages: [],
+                    activeModal: null,
+                } as any,
             })],
         }), {
-            daemonId: 'machine-3',
+            daemonId: 'machine-4',
             existingEntries: [{
-                id: 'machine-3:acp:acp-3',
-                daemonId: 'machine-3',
-                sessionId: 'acp-3',
-                type: 'claude-code',
-                status: 'running',
-                summaryMetadata: {
-                    items: [{ id: 'model', label: 'Model', value: 'sonnet', order: 20 }],
+                id: 'machine-4:cli:cli-keep-chat',
+                daemonId: 'machine-4',
+                sessionId: 'cli-keep-chat',
+                type: 'hermes-cli',
+                status: 'waiting_approval',
+                activeChat: {
+                    id: 'chat-1',
+                    title: 'Hermes Agent',
+                    status: 'waiting_approval',
+                    messages: [
+                        { role: 'user', content: 'full prompt', kind: 'standard' },
+                        { role: 'assistant', content: 'full reply', kind: 'standard' },
+                    ],
+                    activeModal: {
+                        message: '⚠️ Dangerous Command',
+                        buttons: ['Allow once', 'Deny'],
+                    },
                 },
             } as any],
         })
 
-        expect(entries[1]?.summaryMetadata).toEqual({
-            items: [{ id: 'model', label: 'Model', value: 'sonnet', order: 20 }],
+        expect(entries[1]?.activeChat?.messages).toEqual([
+            { role: 'user', content: 'full prompt', kind: 'standard' },
+            { role: 'assistant', content: 'full reply', kind: 'standard' },
+        ])
+        expect(entries[1]?.activeChat?.activeModal).toEqual({
+            message: '⚠️ Dangerous Command',
+            buttons: ['Allow once', 'Deny'],
         })
     })
 });

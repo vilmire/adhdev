@@ -27,6 +27,30 @@ type ExistingSessionLike = Partial<SessionEntry> & {
     type?: string
     sessionCapabilities?: SessionEntry['capabilities']
     summaryMetadata?: any
+    activeChat?: SessionEntry['activeChat']
+}
+
+function mergeActiveChatData(
+    incoming: SessionEntry['activeChat'] | null | undefined,
+    existing: SessionEntry['activeChat'] | null | undefined,
+): SessionEntry['activeChat'] | null | undefined {
+    if (!incoming) return existing
+    if (!existing) return incoming
+
+    const mergedMessages = Array.isArray(incoming.messages) && incoming.messages.length > 0
+        ? incoming.messages
+        : existing.messages
+
+    const mergedActiveModal = incoming.activeModal
+        || (incoming.status === 'waiting_approval' ? existing.activeModal : null)
+
+    return {
+        ...existing,
+        ...incoming,
+        messages: mergedMessages,
+        activeModal: mergedActiveModal,
+        inputContent: incoming.inputContent ?? existing.inputContent,
+    }
 }
 
 function buildExistingSessionMap(entries: DaemonData[] | undefined, daemonId: string) {
@@ -42,6 +66,7 @@ function buildExistingSessionMap(entries: DaemonData[] | undefined, daemonId: st
             workspace: entry.workspace ?? null,
             sessionCapabilities: entry.sessionCapabilities as SessionEntry['capabilities'] | undefined,
             cdpConnected: entry.cdpConnected,
+            activeChat: entry.activeChat as SessionEntry['activeChat'] | undefined,
             controlValues: entry.controlValues,
             providerControls: entry.providerControls,
             summaryMetadata: entry.summaryMetadata,
@@ -79,6 +104,7 @@ function mergeSessionSummary(
         workspace: session.workspace ?? existingEntry?.workspace ?? null,
         capabilities: session.capabilities ?? (existingEntry?.sessionCapabilities as SessionEntry['capabilities']) ?? [],
         cdpConnected: session.cdpConnected ?? existingEntry?.cdpConnected,
+        activeChat: mergeActiveChatData(session.activeChat, existingEntry?.activeChat),
         controlValues: session.controlValues ?? existingEntry?.controlValues,
         providerControls: session.providerControls ?? existingEntry?.providerControls,
         summaryMetadata: session.summaryMetadata ?? existingEntry?.summaryMetadata,

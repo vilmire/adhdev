@@ -24,6 +24,7 @@ export declare function buildCliParseInput(options: {
     terminalScreenText: string;
     baseMessages: CliChatMessage[];
     partialResponse: string;
+    isWaitingForResponse?: boolean;
     scope?: TurnParseScope | null;
     runtimeSettings: Record<string, any>;
 }): CliScriptInput;

@@ -62,6 +62,7 @@ export interface CliScriptInput {
     recentScreen: CliScreenSnapshot;
     messages: CliChatMessage[];
     partialResponse: string;
+    isWaitingForResponse?: boolean;
     promptText?: string;
     settings?: Record<string, any>;
     args?: Record<string, any>;
@@ -70,6 +71,7 @@ export interface CliStatusInput {
     tail: string;
     screenText?: string;
     rawBuffer?: string;
+    isWaitingForResponse?: boolean;
     screen: CliScreenSnapshot;
     tailScreen: CliScreenSnapshot;
 }

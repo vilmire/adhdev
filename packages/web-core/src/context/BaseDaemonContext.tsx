@@ -309,12 +309,31 @@ interface CompactSessionEntry {
     parentId?: string | null
     providerType: string
     providerName?: string
+    providerSessionId?: string
     kind: 'workspace' | 'agent'
     transport: SessionEntry['transport']
     status?: SessionEntry['status'] | 'online'
     title?: string
     workspace?: string | null
+    activeChat?: DaemonData['activeChat']
+    capabilities?: string[]
     cdpConnected?: boolean
+    runtimeKey?: string
+    runtimeDisplayName?: string
+    runtimeWorkspaceLabel?: string
+    runtimeWriteOwner?: DaemonData['runtimeWriteOwner']
+    runtimeAttachedClients?: DaemonData['runtimeAttachedClients']
+    lastMessagePreview?: string
+    lastMessageRole?: string
+    lastMessageAt?: number
+    lastMessageHash?: string
+    lastUpdated?: number
+    unread?: boolean
+    lastSeenAt?: number
+    inboxBucket?: DaemonData['inboxBucket']
+    surfaceHidden?: boolean
+    controlValues?: DaemonData['controlValues']
+    providerControls?: DaemonData['providerControls']
     summaryMetadata?: DaemonData['summaryMetadata']
 }
 
@@ -422,12 +441,29 @@ export function expandCompactDaemons(
             entries.push({
                 id: ideFullId,
                 sessionId: ide.id,
+                ...(ide.providerSessionId !== undefined && { providerSessionId: ide.providerSessionId }),
+                parentSessionId: ide.parentId ?? null,
+                sessionKind: ide.kind,
+                transport: ide.transport,
+                sessionCapabilities: ide.capabilities,
                 type: ide.providerType,
                 status: ide.status || 'online',
                 daemonId: d.id,
                 cdpConnected: ide.cdpConnected,
                 workspace: ide.workspace || null,
+                activeChat: ide.activeChat,
                 childSessions,
+                ...(ide.lastMessagePreview !== undefined && { lastMessagePreview: ide.lastMessagePreview }),
+                ...(ide.lastMessageRole !== undefined && { lastMessageRole: ide.lastMessageRole }),
+                ...(ide.lastMessageAt !== undefined && { lastMessageAt: ide.lastMessageAt }),
+                ...(ide.lastMessageHash !== undefined && { lastMessageHash: ide.lastMessageHash }),
+                ...(ide.lastUpdated !== undefined && { lastUpdated: ide.lastUpdated }),
+                ...(ide.unread !== undefined && { unread: ide.unread }),
+                ...(ide.lastSeenAt !== undefined && { lastSeenAt: ide.lastSeenAt }),
+                ...(ide.inboxBucket !== undefined && { inboxBucket: ide.inboxBucket }),
+                ...(ide.surfaceHidden !== undefined && { surfaceHidden: ide.surfaceHidden }),
+                ...(ide.controlValues !== undefined && { controlValues: ide.controlValues }),
+                ...(ide.providerControls !== undefined && { providerControls: ide.providerControls }),
                 summaryMetadata: ide.summaryMetadata,
                 timestamp: ts,
             })
@@ -438,13 +474,39 @@ export function expandCompactDaemons(
             entries.push({
                 id: cliFullId,
                 sessionId: cli.id,
+                ...(cli.providerSessionId !== undefined && { providerSessionId: cli.providerSessionId }),
+                parentSessionId: cli.parentId ?? null,
+                sessionKind: cli.kind,
+                transport: cli.transport,
+                sessionCapabilities: cli.capabilities,
                 type: cli.providerType,
+                agentType: cli.providerType,
                 status: cli.status || 'online',
                 daemonId: d.id,
+                instanceId: cli.id,
                 cliName: cli.providerName,
+                mode: 'chat',
                 workspace: cli.workspace || '',
+                activeChat: cli.activeChat,
+                ...(cli.runtimeKey !== undefined && { runtimeKey: cli.runtimeKey }),
+                ...(cli.runtimeDisplayName !== undefined && { runtimeDisplayName: cli.runtimeDisplayName }),
+                ...(cli.runtimeWorkspaceLabel !== undefined && { runtimeWorkspaceLabel: cli.runtimeWorkspaceLabel }),
+                ...(cli.runtimeWriteOwner !== undefined && { runtimeWriteOwner: cli.runtimeWriteOwner }),
+                ...(cli.runtimeAttachedClients !== undefined && { runtimeAttachedClients: cli.runtimeAttachedClients }),
+                ...(cli.lastMessagePreview !== undefined && { lastMessagePreview: cli.lastMessagePreview }),
+                ...(cli.lastMessageRole !== undefined && { lastMessageRole: cli.lastMessageRole }),
+                ...(cli.lastMessageAt !== undefined && { lastMessageAt: cli.lastMessageAt }),
+                ...(cli.lastMessageHash !== undefined && { lastMessageHash: cli.lastMessageHash }),
+                ...(cli.lastUpdated !== undefined && { lastUpdated: cli.lastUpdated }),
+                ...(cli.unread !== undefined && { unread: cli.unread }),
+                ...(cli.lastSeenAt !== undefined && { lastSeenAt: cli.lastSeenAt }),
+                ...(cli.inboxBucket !== undefined && { inboxBucket: cli.inboxBucket }),
+                ...(cli.surfaceHidden !== undefined && { surfaceHidden: cli.surfaceHidden }),
+                ...(cli.controlValues !== undefined && { controlValues: cli.controlValues }),
+                ...(cli.providerControls !== undefined && { providerControls: cli.providerControls }),
                 summaryMetadata: cli.summaryMetadata,
                 timestamp: ts,
+                _isCli: true,
             })
         }
 
@@ -453,13 +515,39 @@ export function expandCompactDaemons(
             entries.push({
                 id: acpFullId,
                 sessionId: acp.id,
+                ...(acp.providerSessionId !== undefined && { providerSessionId: acp.providerSessionId }),
+                parentSessionId: acp.parentId ?? null,
+                sessionKind: acp.kind,
+                transport: acp.transport,
+                sessionCapabilities: acp.capabilities,
                 type: acp.providerType,
+                agentType: acp.providerType,
                 status: acp.status || 'online',
                 daemonId: d.id,
+                instanceId: acp.id,
                 cliName: acp.providerName,
+                mode: 'chat',
                 workspace: acp.workspace || '',
+                activeChat: acp.activeChat,
+                ...(acp.runtimeKey !== undefined && { runtimeKey: acp.runtimeKey }),
+                ...(acp.runtimeDisplayName !== undefined && { runtimeDisplayName: acp.runtimeDisplayName }),
+                ...(acp.runtimeWorkspaceLabel !== undefined && { runtimeWorkspaceLabel: acp.runtimeWorkspaceLabel }),
+                ...(acp.runtimeWriteOwner !== undefined && { runtimeWriteOwner: acp.runtimeWriteOwner }),
+                ...(acp.runtimeAttachedClients !== undefined && { runtimeAttachedClients: acp.runtimeAttachedClients }),
+                ...(acp.lastMessagePreview !== undefined && { lastMessagePreview: acp.lastMessagePreview }),
+                ...(acp.lastMessageRole !== undefined && { lastMessageRole: acp.lastMessageRole }),
+                ...(acp.lastMessageAt !== undefined && { lastMessageAt: acp.lastMessageAt }),
+                ...(acp.lastMessageHash !== undefined && { lastMessageHash: acp.lastMessageHash }),
+                ...(acp.lastUpdated !== undefined && { lastUpdated: acp.lastUpdated }),
+                ...(acp.unread !== undefined && { unread: acp.unread }),
+                ...(acp.lastSeenAt !== undefined && { lastSeenAt: acp.lastSeenAt }),
+                ...(acp.inboxBucket !== undefined && { inboxBucket: acp.inboxBucket }),
+                ...(acp.surfaceHidden !== undefined && { surfaceHidden: acp.surfaceHidden }),
+                ...(acp.controlValues !== undefined && { controlValues: acp.controlValues }),
+                ...(acp.providerControls !== undefined && { providerControls: acp.providerControls }),
                 summaryMetadata: acp.summaryMetadata,
                 timestamp: ts,
+                _isAcp: true,
             })
         }
     }

@@ -6,6 +6,7 @@ import { useTransport } from '../context/TransportContext'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import type { DaemonData } from '../types'
 import { isCliConv, isAcpConv, getCliConversationViewMode } from '../components/dashboard/types'
+import { applyCliViewModeOverrides, getCliViewModeForSession } from '../components/dashboard/cliViewModeOverrides'
 import { useHiddenTabs } from '../hooks/useHiddenTabs'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
@@ -120,6 +121,7 @@ export default function Dashboard() {
     const [mobileViewMode] = useState<'chat' | 'workspace'>(() => getMobileDashboardMode())
     const [actionLogs, setActionLogs] = useState<{ routeId: string; text: string; timestamp: number }[]>([])
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
+    const [cliViewModeOverrides, setCliViewModeOverrides] = useState<Record<string, 'chat' | 'terminal'>>({})
     const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
     const [desktopActiveTabKey, setDesktopActiveTabKey] = useState<string | null>(null)
     const [scrollToBottomRequest, setScrollToBottomRequest] = useState<{ tabKey: string; nonce: number } | null>(null)
@@ -156,6 +158,10 @@ export default function Dashboard() {
         ? getMachineDisplayName(daemonEntry, { fallbackId: daemonEntry.id })
         : null
     const terminalBackendMachineKey = daemonEntry?.id || null
+    const effectiveIdes = useMemo(
+        () => applyCliViewModeOverrides(ides, cliViewModeOverrides),
+        [ides, cliViewModeOverrides],
+    )
     // ─── Hidden Tabs ───
     const {
         hiddenTabs,
@@ -172,12 +178,27 @@ export default function Dashboard() {
         resolveConversationBySessionId,
         resolveConversationByTarget,
     } = useDashboardConversations({
-        ides,
+        ides: effectiveIdes,
         connectionStates,
         localUserMessages,
         clearedTabs,
         hiddenTabs,
     })
+    useEffect(() => {
+        if (Object.keys(cliViewModeOverrides).length === 0) return
+        setCliViewModeOverrides((prev) => {
+            let changed = false
+            const next: Record<string, 'chat' | 'terminal'> = { ...prev }
+            for (const [sessionId, mode] of Object.entries(prev)) {
+                const serverMode = getCliViewModeForSession(ides, sessionId)
+                if (serverMode === null || serverMode === mode) {
+                    delete next[sessionId]
+                    changed = true
+                }
+            }
+            return changed ? next : prev
+        })
+    }, [ides, cliViewModeOverrides])
     const liveSessionInboxState = useMemo(
         () => buildLiveSessionInboxStateMap(ides),
         [ides],
@@ -665,6 +686,10 @@ export default function Dashboard() {
         if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return
         const currentMode = getCliConversationViewMode(activeConv)
         if (currentMode === mode) return
+        const sessionId = activeConv.sessionId
+        if (sessionId) {
+            setCliViewModeOverrides((prev) => ({ ...prev, [sessionId]: mode }))
+        }
         try {
             await sendDaemonCommand(getConversationMachineId(activeConv) || activeConv.routeId, 'set_cli_view_mode', {
                 targetSessionId: activeConv.sessionId,
@@ -672,13 +697,24 @@ export default function Dashboard() {
                 mode,
             })
         } catch (error) {
+            if (sessionId) {
+                setCliViewModeOverrides((prev) => {
+                    const next = { ...prev }
+                    if (currentMode === getCliViewModeForSession(ides, sessionId)) {
+                        delete next[sessionId]
+                    } else {
+                        next[sessionId] = currentMode
+                    }
+                    return next
+                })
+            }
             if (!isExpectedCliViewModeError(error)) {
                 console.error('Failed to switch CLI view mode:', error)
             } else {
                 console.warn('Skipped CLI view mode switch:', error instanceof Error ? error.message : String(error))
             }
         }
-    }, [activeConv, sendDaemonCommand])
+    }, [activeConv, ides, sendDaemonCommand])
 
     const {
         versionMismatchDaemons,

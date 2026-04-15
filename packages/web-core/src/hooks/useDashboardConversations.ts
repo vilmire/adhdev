@@ -47,6 +47,48 @@ function sameArrayRefs<T>(prev: T[], next: T[]) {
     return true
 }
 
+function buildChatDataSignature(activeChat: DaemonData['activeChat'] | undefined) {
+    if (!activeChat) return ''
+    const messages = Array.isArray(activeChat.messages) ? activeChat.messages : []
+    const lastMessage = messages[messages.length - 1]
+    return [
+        activeChat.id || '',
+        activeChat.title || '',
+        activeChat.status || '',
+        messages.length,
+        String(lastMessage?.id || ''),
+        String(lastMessage?.index ?? ''),
+        String(lastMessage?.receivedAt ?? lastMessage?.timestamp ?? ''),
+    ].join(':')
+}
+
+export function buildConversationSourceSignature(ide: DaemonData) {
+    const childSessions = Array.isArray(ide.childSessions) ? ide.childSessions : []
+    return [
+        ide.id,
+        ide.sessionId || '',
+        ide.providerSessionId || '',
+        ide.transport || '',
+        ide.mode || '',
+        ide.status || '',
+        ide.workspace || '',
+        ide.lastMessageHash || '',
+        String(ide.lastUpdated || ''),
+        buildChatDataSignature(ide.activeChat),
+        ...childSessions.map((child) => [
+            child.id || '',
+            child.providerSessionId || '',
+            child.transport || '',
+            child.mode || '',
+            child.status || '',
+            child.title || '',
+            child.lastMessageHash || '',
+            String(child.lastUpdated || ''),
+            buildChatDataSignature(child.activeChat),
+        ].join(':')),
+    ].join('|')
+}
+
 function applyClearedConversationState(conversations: ActiveConversation[], clearedTabs: Record<string, number>) {
     const now = Date.now()
     return conversations.map(conversation => {
@@ -88,6 +130,7 @@ function sameLocalMessageRefs(prev: LocalMessageRef[], next: LocalMessageRef[]) 
 
 type ConversationCacheEntry = {
     ide: DaemonData
+    sourceSignature: string
     connectionState: string
     machineName?: string
     localRefs: LocalMessageRef[]
@@ -122,17 +165,11 @@ export function useDashboardConversations({
     clearedTabs,
     hiddenTabs,
 }: UseDashboardConversationsOptions) {
-    const chatIdesRef = useRef<DaemonData[]>([])
+    const chatIdes = useMemo(() => dedupeChatIdes(ides), [ides])
+    const machineNames = useMemo(() => buildMachineNameMap(ides), [ides])
     const conversationsRef = useRef<ActiveConversation[]>([])
     const visibleConversationsRef = useRef<ActiveConversation[]>([])
     const visibleTabKeysRef = useRef<string[]>([])
-    const chatIdes = useMemo(() => {
-        const next = dedupeChatIdes(ides)
-        if (sameArrayRefs(chatIdesRef.current, next)) return chatIdesRef.current
-        chatIdesRef.current = next
-        return next
-    }, [ides])
-    const machineNames = useMemo(() => buildMachineNameMap(ides), [ides])
     const cacheRef = useRef<Map<string, ConversationCacheEntry>>(new Map())
     const sortCacheRef = useRef<Map<string, ConversationSortCacheEntry>>(new Map())
 
@@ -147,11 +184,13 @@ export function useDashboardConversations({
                 defaultConnectionState: 'new',
             })
             const localRefs = getCachedLocalMessageRefs(ide, localUserMessages)
+            const sourceSignature = buildConversationSourceSignature(ide)
             const cached = cacheRef.current.get(ide.id)
 
             if (
                 cached
                 && cached.ide === ide
+                && cached.sourceSignature === sourceSignature
                 && cached.connectionState === connectionState
                 && cached.machineName === machineName
                 && sameLocalMessageRefs(cached.localRefs, localRefs)
@@ -168,6 +207,7 @@ export function useDashboardConversations({
             })
             const entry: ConversationCacheEntry = {
                 ide,
+                sourceSignature,
                 connectionState,
                 machineName,
                 localRefs,
