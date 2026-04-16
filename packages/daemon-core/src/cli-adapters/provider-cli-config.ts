@@ -19,6 +19,8 @@ export interface ResolvedCliAdapterConfig {
         approvalCooldown: number;
         generatingIdle: number;
         idleFinish: number;
+        idleFinishConfirm: number;
+        statusActivityHold: number;
         maxResponse: number;
         shutdownGrace: number;
         outputSettle: number;
@@ -41,6 +43,8 @@ export function resolveCliAdapterConfig(provider: CliProviderModule): ResolvedCl
             approvalCooldown: t.approvalCooldown ?? 3000,
             generatingIdle: t.generatingIdle ?? 6000,
             idleFinish: t.idleFinish ?? 5000,
+            idleFinishConfirm: t.idleFinishConfirm ?? 2000,
+            statusActivityHold: t.statusActivityHold ?? 2000,
             maxResponse: t.maxResponse ?? 300000,
             shutdownGrace: t.shutdownGrace ?? 1000,
             outputSettle: t.outputSettle ?? 300,

@@ -123,6 +123,8 @@ export interface CliProviderModule {
         approvalCooldown?: number;
         generatingIdle?: number;
         idleFinish?: number;
+        idleFinishConfirm?: number;
+        statusActivityHold?: number;
         maxResponse?: number;
         shutdownGrace?: number;
         outputSettle?: number;

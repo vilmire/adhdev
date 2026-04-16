@@ -2,17 +2,24 @@ import { describe, expect, it, vi, afterEach } from 'vitest'
 import { ProviderCliAdapter } from '../../src/cli-adapters/provider-cli-adapter.js'
 
 function buildAdapter(type: string) {
+  const isHermes = type === 'hermes-cli'
   const adapter = new ProviderCliAdapter({
     type,
-    name: type === 'hermes-cli' ? 'Hermes Agent' : 'Codex CLI',
+    name: isHermes ? 'Hermes Agent' : 'Codex CLI',
     category: 'cli',
-    binary: type === 'hermes-cli' ? 'hermes' : 'codex',
+    binary: isHermes ? 'hermes' : 'codex',
     spawn: {
-      command: type === 'hermes-cli' ? 'hermes' : 'codex',
+      command: isHermes ? 'hermes' : 'codex',
       args: [],
       shell: true,
       env: {},
     },
+    // Replicate the provider.json timeout values so the test reflects real config.
+    // hermes-cli uses 5000ms for both idleFinishConfirm and statusActivityHold;
+    // other providers use the default 2000ms.
+    timeouts: isHermes
+      ? { idleFinishConfirm: 5000, statusActivityHold: 5000 }
+      : {},
     scripts: {
       detectStatus: () => 'idle',
       parseOutput: () => ({

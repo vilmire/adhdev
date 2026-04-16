@@ -184,9 +184,6 @@ export class ProviderCliAdapter implements CliAdapter {
     private traceSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     private static readonly MAX_TRACE_ENTRIES = 250;
     private readonly providerResolutionMeta: ProviderResolutionMeta;
-    private static readonly IDLE_FINISH_CONFIRM_MS = 2000;
-    private static readonly HERMES_IDLE_FINISH_CONFIRM_MS = 5000;
-    private static readonly STATUS_ACTIVITY_HOLD_MS = 2000;
     private static readonly FINISH_RETRY_DELAY_MS = 300;
     private static readonly MAX_FINISH_RETRIES = 2;
 
@@ -196,15 +193,11 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     private getIdleFinishConfirmMs(): number {
-        return this.cliType === 'hermes-cli'
-            ? ProviderCliAdapter.HERMES_IDLE_FINISH_CONFIRM_MS
-            : ProviderCliAdapter.IDLE_FINISH_CONFIRM_MS;
+        return this.timeouts.idleFinishConfirm;
     }
 
     private getStatusActivityHoldMs(): number {
-        return this.cliType === 'hermes-cli'
-            ? ProviderCliAdapter.HERMES_IDLE_FINISH_CONFIRM_MS
-            : ProviderCliAdapter.STATUS_ACTIVITY_HOLD_MS;
+        return this.timeouts.statusActivityHold;
     }
 
     private setStatus(status: CliSessionStatus['status'], trigger?: string): void {
