@@ -150,6 +150,46 @@ describe('SessionChatTailController registry', () => {
     )
   })
 
+  it('preserves earlier seeded transcript messages when a full tail refresh only returns the recent slice', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+
+    controller.hydrateLiveMessages([
+      { role: 'user', content: 'old-1', id: 'old-1', timestamp: 1 } as any,
+      { role: 'assistant', content: 'old-2', id: 'old-2', timestamp: 2 } as any,
+      { role: 'user', content: 'new-1', id: 'new-1', timestamp: 3 } as any,
+      { role: 'assistant', content: 'new-2', id: 'new-2', timestamp: 4 } as any,
+    ])
+    controller.retain()
+
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'new-1', id: 'new-1', timestamp: 3 } as any,
+        { role: 'assistant', content: 'new-2', id: 'new-2', timestamp: 4 } as any,
+        { role: 'user', content: 'new-3', id: 'new-3', timestamp: 5 } as any,
+      ],
+      totalMessages: 5,
+      lastMessageSignature: 'sig-3',
+    }))
+
+    expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
+      'old-1',
+      'old-2',
+      'new-1',
+      'new-2',
+      'new-3',
+    ])
+  })
+
   it('persists loaded history pages across controller reacquisition for the same session', async () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()

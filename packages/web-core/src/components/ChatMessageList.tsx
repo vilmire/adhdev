@@ -58,9 +58,20 @@ export interface ChatMessageListRef {
 type ChatScrollSnapshot = {
     top: number;
     fromBottom: number;
+    messageFingerprint?: string;
 }
 
 const chatScrollSnapshotCache = new Map<string, ChatScrollSnapshot>();
+
+export function shouldRestoreChatScrollSnapshot(
+    snapshot: ChatScrollSnapshot | null | undefined,
+    currentMessageFingerprint: string,
+): boolean {
+    if (!snapshot) return false;
+    const savedFingerprint = String(snapshot.messageFingerprint || '');
+    if (!savedFingerprint) return true;
+    return savedFingerprint === String(currentMessageFingerprint || '');
+}
 
 // ─── Helpers ──────────────────────────────────
 
@@ -432,15 +443,6 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         el.scrollTo({ top: el.scrollHeight, behavior });
     }, []);
 
-    const saveScrollSnapshot = useCallback(() => {
-        const el = containerRef.current;
-        if (!el || !contextKey) return;
-        chatScrollSnapshotCache.set(contextKey, {
-            top: el.scrollTop,
-            fromBottom: Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight),
-        });
-    }, [contextKey]);
-
     const updateSelectionState = useCallback(() => {
         const container = containerRef.current;
         const selection = window.getSelection?.();
@@ -458,6 +460,21 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         );
     }, []);
 
+    // Last message content length — detect content updates during streaming
+    const lastMsgFingerprint = messages.length > 0
+        ? `${messages.length}:${(messages[messages.length - 1]?.content || '').length}`
+        : '0:0';
+
+    const saveScrollSnapshot = useCallback(() => {
+        const el = containerRef.current;
+        if (!el || !contextKey) return;
+        chatScrollSnapshotCache.set(contextKey, {
+            top: el.scrollTop,
+            fromBottom: Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight),
+            messageFingerprint: lastMsgFingerprint,
+        });
+    }, [contextKey, lastMsgFingerprint]);
+
     const scheduleScrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
         if (scrollFrameRef.current != null) {
             cancelAnimationFrame(scrollFrameRef.current);
@@ -467,11 +484,6 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             scrollToBottom(behavior);
         });
     }, [scrollToBottom]);
-
-    // Last message content length — detect content updates during streaming
-    const lastMsgFingerprint = messages.length > 0
-        ? `${messages.length}:${(messages[messages.length - 1]?.content || '').length}`
-        : '0:0';
 
     // Auto-scroll: On new message / streaming update / tab switch
     useEffect(() => {
@@ -485,7 +497,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             contextAutoScrollRef.current = true;
             if (!hasSelectionRef.current) {
                 const snapshot = contextKey ? chatScrollSnapshotCache.get(contextKey) : null;
-                if (snapshot) {
+                if (snapshot && shouldRestoreChatScrollSnapshot(snapshot, lastMsgFingerprint)) {
                     requestAnimationFrame(() => {
                         const el = containerRef.current;
                         if (!el) return;
@@ -619,10 +631,15 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         const snapshot = chatScrollSnapshotCache.get(contextKey);
         const el = containerRef.current;
         if (!snapshot || !el) return;
+        if (!shouldRestoreChatScrollSnapshot(snapshot, lastMsgFingerprint)) {
+            scrollToBottom('auto');
+            restoredInitialScrollRef.current = true;
+            return;
+        }
         const nextTop = Math.max(0, el.scrollHeight - el.clientHeight - snapshot.fromBottom);
         el.scrollTop = Number.isFinite(nextTop) ? nextTop : snapshot.top;
         restoredInitialScrollRef.current = true;
-    }, [contextKey, messages.length]);
+    }, [contextKey, lastMsgFingerprint, messages.length, scrollToBottom]);
 
     // Track when load starts so we can restore scroll after
     const handleLoadMoreClick = () => {

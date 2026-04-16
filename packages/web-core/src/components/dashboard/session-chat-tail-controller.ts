@@ -131,7 +131,17 @@ export function applyReadChatSync(
         ...incomingMessages,
       ])
     }
-    case 'full':
+    case 'full': {
+      const totalMessages = Math.max(Number(result.totalMessages || 0), incomingMessages.length)
+      if (totalMessages > incomingMessages.length && previousMessages.length > incomingMessages.length) {
+        const preserveCount = Math.max(0, totalMessages - incomingMessages.length)
+        return dedupeOptimisticMessages([
+          ...previousMessages.slice(0, preserveCount),
+          ...incomingMessages,
+        ])
+      }
+      return incomingMessages
+    }
     default:
       return incomingMessages
   }
@@ -168,6 +178,24 @@ export class SessionChatTailController {
 
   getSnapshot(): SessionChatTailSnapshot {
     return this.snapshot
+  }
+
+  hydrateLiveMessages(messages: DashboardMessage[]): void {
+    const incoming = Array.isArray(messages) ? messages : []
+    if (incoming.length === 0) return
+    const nextMessages = dedupeOptimisticMessages([...incoming, ...this.snapshot.liveMessages])
+    if (nextMessages.length < incoming.length) return
+    const nextCursor = buildReadChatCursor(nextMessages, this.snapshot.cursor.tailLimit)
+    const unchanged = buildChatSnapshotSignature(this.snapshot.liveMessages)
+      === buildChatSnapshotSignature(nextMessages)
+      && this.snapshot.cursor.knownMessageCount === nextCursor.knownMessageCount
+      && this.snapshot.cursor.lastMessageSignature === nextCursor.lastMessageSignature
+    if (unchanged) return
+    this.snapshot = {
+      ...this.snapshot,
+      liveMessages: nextMessages,
+      cursor: nextCursor,
+    }
   }
 
   subscribe(listener: (snapshot: SessionChatTailSnapshot) => void): () => void {
@@ -394,6 +422,7 @@ export function useSessionChatTailController(
       setSnapshot(buildEmptySnapshot(tailLimit))
       return
     }
+    controller.hydrateLiveMessages(activeConv.messages as DashboardMessage[])
     controller.retain()
     setSnapshot(controller.getSnapshot())
     const unsubscribe = controller.subscribe((nextSnapshot) => {
@@ -403,7 +432,7 @@ export function useSessionChatTailController(
       unsubscribe()
       controller.release()
     }
-  }, [controller, tailLimit])
+  }, [activeConv.messages, controller, tailLimit])
 
   const loadHistoryPage = useCallback(async () => {
     if (!controller || !daemonId || !sessionId) return
