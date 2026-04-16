@@ -9,9 +9,10 @@ import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus 
 
 // ─── Formatters ──────────────────────────────────
 
-/** Format IDE type string (e.g. 'cursor' → 'Cursor') */
+/** Format IDE type string (e.g. 'cursor' → 'Cursor', 'claude-code-vscode' → 'Claude Code Vscode') */
 export function formatIdeType(type: string): string {
-    return type ? type.charAt(0).toUpperCase() + type.slice(1).toLowerCase() : 'IDE'
+    if (!type) return 'IDE'
+    return type.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
 }
 
 /** Convert seconds to human-readable uptime format */
