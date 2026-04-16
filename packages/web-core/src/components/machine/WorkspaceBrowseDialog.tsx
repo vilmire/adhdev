@@ -39,12 +39,12 @@ export default function WorkspaceBrowseDialog({
 
     return (
         <div
-            className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-[2px]"
+            className="fixed inset-0 z-[110] flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
             role="dialog"
             aria-modal="true"
             aria-labelledby="workspace-browse-title"
         >
-            <div className="w-full max-w-2xl max-h-[min(86vh,720px)] rounded-2xl border border-border-subtle bg-bg-secondary shadow-xl overflow-hidden flex flex-col">
+            <div className="w-full max-w-2xl max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[min(86vh,720px)] rounded-[24px] sm:rounded-2xl border border-border-subtle bg-bg-secondary shadow-xl overflow-hidden flex flex-col">
                 <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-border-subtle">
                     <div className="min-w-0">
                         <h2 id="workspace-browse-title" className="m-0 text-base font-semibold text-text-primary">
@@ -136,7 +136,7 @@ export default function WorkspaceBrowseDialog({
                     )}
                 </div>
 
-                <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-border-subtle bg-bg-secondary">
+                <div className="flex items-center justify-end gap-2 px-4 py-[calc(12px+env(safe-area-inset-bottom,0px))] sm:px-5 sm:py-4 border-t border-border-subtle bg-bg-secondary shrink-0">
                     <button
                         type="button"
                         className="machine-btn text-xs"

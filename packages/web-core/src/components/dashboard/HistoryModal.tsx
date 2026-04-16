@@ -99,10 +99,10 @@ export default function HistoryModal({
     );
 
     const content = (
-        <div className="fixed inset-0 z-[1300] flex items-center justify-center">
+        <div className="fixed inset-0 z-[1300] flex items-end justify-center overflow-y-auto px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4">
             <div onClick={onClose} className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-            <div className="card fade-in relative w-[90%] max-w-[500px] max-h-[80vh] flex flex-col p-0 overflow-hidden shadow-[0_20px_40px_rgba(0,0,0,0.4)] rounded-[20px]">
-                <div className="px-6 py-5 border-b border-border-subtle flex justify-between items-center bg-[var(--surface-primary)]">
+            <div className="card fade-in relative w-full sm:w-[90%] max-w-[500px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[80vh] flex flex-col p-0 overflow-hidden shadow-[0_20px_40px_rgba(0,0,0,0.4)] rounded-[24px] sm:rounded-[20px]">
+                <div className="px-4 py-4 sm:px-6 sm:py-5 border-b border-border-subtle flex justify-between items-center bg-[var(--surface-primary)] shrink-0">
                     <div>
                         <h3 className="m-0 text-lg font-extrabold">{isSavedSessionMode ? getSavedHistoryModalTitle() : 'Chat History'}</h3>
                         <div className="text-xs text-text-muted mt-0.5">{getConversationHistorySubtitle(activeConv)}</div>
@@ -113,7 +113,7 @@ export default function HistoryModal({
                     <button onClick={onClose} className="btn btn-secondary btn-sm rounded-md px-1.5 py-1.5 border-transparent bg-transparent hover:bg-bg-secondary"><IconX size={16} /></button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-3 bg-bg-primary">
+                <div className="flex-1 min-h-0 overflow-y-auto p-3 bg-bg-primary">
                     {!isSavedSessionMode && (
                         <button
                             onClick={onNewChat}
@@ -265,7 +265,7 @@ export default function HistoryModal({
                     )}
                 </div>
 
-                <div className="px-5 py-4 bg-[var(--surface-tertiary)] border-t border-border-subtle text-right">
+                <div className="px-4 py-[calc(12px+env(safe-area-inset-bottom,0px))] sm:px-5 sm:py-4 bg-[var(--surface-tertiary)] border-t border-border-subtle text-right shrink-0">
                     <button
                         onClick={onRefreshHistory}
                         disabled={isRefreshingHistory || isSavedSessionsLoading}

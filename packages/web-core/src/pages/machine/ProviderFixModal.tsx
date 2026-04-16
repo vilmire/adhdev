@@ -113,9 +113,9 @@ export default function ProviderFixModal({ machineId, provider, sendDaemonComman
     }
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-sm px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4" onClick={onClose}>
             <div
-                className="w-full max-w-[560px] max-h-[85vh] overflow-hidden rounded-2xl bg-bg-primary border border-border-subtle shadow-2xl flex flex-col"
+                className="w-full max-w-[560px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[85vh] overflow-hidden rounded-[24px] sm:rounded-2xl bg-bg-primary border border-border-subtle shadow-2xl flex flex-col"
                 onClick={e => e.stopPropagation()}
             >
                 {/* Header */}

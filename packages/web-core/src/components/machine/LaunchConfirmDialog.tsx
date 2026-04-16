@@ -46,12 +46,12 @@ export default function LaunchConfirmDialog({
 
     return (
         <div
-            className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-[2px]"
+            className="fixed inset-0 z-[110] flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
             role="dialog"
             aria-modal="true"
             aria-labelledby="launch-confirm-title"
         >
-            <div className="w-full max-w-lg rounded-2xl border border-border-subtle bg-bg-secondary shadow-xl overflow-hidden">
+            <div className="w-full max-w-lg max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[min(88vh,720px)] rounded-[24px] sm:rounded-2xl border border-border-subtle bg-bg-secondary shadow-xl overflow-hidden flex flex-col">
                 <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-border-subtle">
                     <div className="min-w-0">
                         <h2 id="launch-confirm-title" className="m-0 text-base font-semibold text-text-primary">
@@ -71,7 +71,7 @@ export default function LaunchConfirmDialog({
                     </button>
                 </div>
 
-                <div className="px-5 py-4 flex flex-col gap-3">
+                <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 sm:px-5 sm:py-4 flex flex-col gap-3">
                     {workspaceOptions && workspaceOptions.length > 0 && onWorkspaceChange && (
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-3.5 py-3">
                             <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-1">
@@ -139,7 +139,7 @@ export default function LaunchConfirmDialog({
                     )}
                 </div>
 
-                <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-border-subtle bg-bg-secondary">
+                <div className="flex items-center justify-end gap-2 px-4 py-[calc(12px+env(safe-area-inset-bottom,0px))] sm:px-5 sm:py-4 border-t border-border-subtle bg-bg-secondary shrink-0">
                     <button
                         type="button"
                         className="machine-btn text-xs"

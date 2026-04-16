@@ -19,6 +19,7 @@ import { useDashboardSessionCommands } from '../hooks/useDashboardSessionCommand
 import { useDashboardSplitView } from '../hooks/useDashboardSplitView'
 import { useDashboardVersionBanner } from '../hooks/useDashboardVersionBanner'
 import { useDevRenderTrace } from '../hooks/useDevRenderTrace'
+import { useDashboardNotifications } from '../hooks/useDashboardNotifications'
 
 import ConnectionBanner from '../components/dashboard/ConnectionBanner'
 import TerminalBackendBanner from '../components/dashboard/TerminalBackendBanner'
@@ -192,6 +193,18 @@ export default function Dashboard() {
         () => buildLiveSessionInboxStateMap(ides),
         [ides],
     )
+    const {
+        notifications,
+        unreadCount: notificationUnreadCount,
+        notificationStateBySessionId,
+        markRead: markDashboardNotificationRead,
+        markUnread: markDashboardNotificationUnread,
+        markTargetRead: markDashboardNotificationTargetRead,
+        deleteNotification: deleteDashboardNotification,
+    } = useDashboardNotifications({
+        conversations,
+        liveSessionInboxState,
+    })
     const lastDesktopAutoReadKeyRef = useRef<string | null>(null)
 
     const {
@@ -254,6 +267,7 @@ export default function Dashboard() {
 
             const liveState = getConversationLiveInboxState(activeConv, liveSessionInboxState)
             const readAt = Math.max(Date.now(), getConversationTimestamp(activeConv), liveState.lastUpdated || 0)
+            markDashboardNotificationTargetRead({ sessionId: activeConv.sessionId, tabKey: activeConv.tabKey }, readAt)
 
             void sendDaemonCommand(activeConv.daemonId || activeConv.routeId, 'mark_session_seen', {
                 sessionId: activeConv.sessionId,
@@ -279,7 +293,7 @@ export default function Dashboard() {
             document.addEventListener('visibilitychange', onVisible)
             return () => { document.removeEventListener('visibilitychange', onVisible) }
         }
-    }, [activeConv, isMobile, liveSessionInboxState, sendDaemonCommand])
+    }, [activeConv, isMobile, liveSessionInboxState, markDashboardNotificationTargetRead, sendDaemonCommand])
 
     const {
         requestedDesktopTabKey,
@@ -825,6 +839,13 @@ export default function Dashboard() {
                 onLaunchMachineIde={handleLaunchMachineIde}
                 onLaunchMachineProvider={handleLaunchMachineProvider}
                 onListMachineSavedSessions={handleListMachineSavedSessions}
+                notifications={notifications}
+                notificationUnreadCount={notificationUnreadCount}
+                notificationStateBySessionId={notificationStateBySessionId}
+                onMarkNotificationRead={markDashboardNotificationRead}
+                onMarkNotificationUnread={markDashboardNotificationUnread}
+                onDeleteNotification={deleteDashboardNotification}
+                onMarkNotificationTargetRead={markDashboardNotificationTargetRead}
             />
 
             <style>{`

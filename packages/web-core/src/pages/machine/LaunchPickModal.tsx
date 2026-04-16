@@ -16,12 +16,12 @@ export default function LaunchPickModal({ machine, launchPick, actions }: Launch
 
     return (
         <div
-            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/55 backdrop-blur-[2px]"
+            className="fixed inset-0 z-[100] flex items-end justify-center overflow-y-auto bg-black/55 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
             role="dialog"
             aria-modal="true"
             aria-labelledby="launch-pick-title"
         >
-            <div className="w-full max-w-md rounded-xl border border-border-subtle bg-bg-secondary shadow-xl p-5">
+            <div className="w-full max-w-md max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] rounded-[24px] sm:rounded-xl border border-border-subtle bg-bg-secondary shadow-xl p-4 sm:p-5 overflow-y-auto">
                 <h2 id="launch-pick-title" className="text-sm font-semibold text-text-primary m-0 mb-1">
                     Where should this run?
                 </h2>

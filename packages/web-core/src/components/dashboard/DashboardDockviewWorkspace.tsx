@@ -46,6 +46,7 @@ import { isEditableTarget, normalizeKey, readActionShortcuts, type DashboardActi
 import { getConversationTabMetaText, getConversationTitle, getRemotePanelTitle } from './conversation-presenters'
 import { getConversationNativeTargetSessionId } from './conversation-selectors'
 import { IconExternalWindow, IconArrowBack, IconKeyboard, IconX, IconEyeOff, IconFloat, IconDock } from '../Icons'
+import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 
 interface DashboardDockviewWorkspaceProps {
     visibleConversations: ActiveConversation[]
@@ -64,6 +65,7 @@ interface DashboardDockviewWorkspaceProps {
     registerActionHandlers?: (handlers: {
         setShortcutForActiveTab: () => void
         restoreHiddenTabToSavedLocation: (tabKey: string) => void
+        activateConversationTab: (tabKey: string) => void
         resetAllPanelsToMain: () => void
         activatePreviousTabInGroup: () => void
         activateNextTabInGroup: () => void
@@ -86,6 +88,7 @@ interface DashboardDockviewWorkspaceProps {
     requestedRemoteIdeId?: string | null
     onRequestedActiveTabConsumed?: () => void
     scrollToBottomRequest?: { tabKey: string; nonce: number } | null
+    notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
 }
 
 interface DashboardDockviewContextValue {
@@ -97,6 +100,7 @@ interface DashboardDockviewContextValue {
     isStandalone: boolean
     hasRegisteredMachines: boolean
     liveSessionInboxState: Map<string, LiveSessionInboxState>
+    notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
@@ -513,6 +517,7 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
 
     const surfaceState = getConversationInboxSurfaceState(conversation, ctx.liveSessionInboxState, {
         isOpenConversation: isActive,
+        notificationStateBySessionId: ctx.notificationStateBySessionId,
     })
     
     const isReconnecting = surfaceState.isReconnecting
@@ -597,6 +602,7 @@ export default function DashboardDockviewWorkspace({
     requestedRemoteIdeId,
     onRequestedActiveTabConsumed,
     scrollToBottomRequest,
+    notificationStateBySessionId,
 }: DashboardDockviewWorkspaceProps) {
     const { theme } = useTheme()
     const { sendCommand } = useTransport()
@@ -1239,6 +1245,7 @@ export default function DashboardDockviewWorkspace({
         isStandalone,
         hasRegisteredMachines,
         liveSessionInboxState,
+        notificationStateBySessionId,
         sendDaemonCommand,
         setActionLogs,
         setLocalUserMessages,
@@ -1261,6 +1268,7 @@ export default function DashboardDockviewWorkspace({
         isStandalone,
         hasRegisteredMachines,
         liveSessionInboxState,
+        notificationStateBySessionId,
         sendDaemonCommand,
         setActionLogs,
         setLocalUserMessages,
@@ -1385,6 +1393,7 @@ export default function DashboardDockviewWorkspace({
         registerActionHandlers?.({
             setShortcutForActiveTab: startShortcutListeningForActiveTab,
             restoreHiddenTabToSavedLocation,
+            activateConversationTab: selectTabByShortcut,
             resetAllPanelsToMain,
             activatePreviousTabInGroup: () => activateRelativeTabInGroup(-1),
             activateNextTabInGroup: () => activateRelativeTabInGroup(1),
@@ -1431,6 +1440,7 @@ export default function DashboardDockviewWorkspace({
         registerActionHandlers,
         resetAllPanelsToMain,
         restoreHiddenTabToSavedLocation,
+        selectTabByShortcut,
         startShortcutListeningForActiveTab,
     ])
 

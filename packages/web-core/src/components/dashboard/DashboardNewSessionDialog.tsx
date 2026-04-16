@@ -474,13 +474,13 @@ export default function DashboardNewSessionDialog({
     return (
         <>
             <div
-                className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-[2px]"
+                className="fixed inset-0 z-[110] flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-[2px] px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4"
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="dashboard-new-title"
             >
-                <div className="w-full max-w-3xl max-h-[min(88vh,860px)] rounded-2xl border border-border-subtle bg-bg-secondary shadow-xl overflow-hidden flex flex-col">
-                    <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-border-subtle">
+                <div className="w-full max-w-3xl max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] sm:max-h-[min(88vh,860px)] rounded-[24px] sm:rounded-2xl border border-border-subtle bg-bg-secondary shadow-xl overflow-hidden flex flex-col">
+                    <div className="flex items-start justify-between gap-3 px-4 py-4 sm:px-5 border-b border-border-subtle shrink-0">
                         <div className="min-w-0">
                             <h2 id="dashboard-new-title" className="m-0 text-base font-semibold text-text-primary">
                                 Start or recover session
@@ -499,7 +499,7 @@ export default function DashboardNewSessionDialog({
                         </button>
                     </div>
 
-                    <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-4">
+                    <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 sm:px-5 sm:py-4 space-y-4">
                         <LaunchSectionCard title="Machine">
                             <select
                                 value={selectedMachine.id}
@@ -699,7 +699,7 @@ export default function DashboardNewSessionDialog({
                         )}
                     </div>
 
-                    <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-border-subtle bg-bg-secondary">
+                    <div className="flex items-center justify-end gap-2 px-4 py-[calc(12px+env(safe-area-inset-bottom,0px))] sm:px-5 sm:py-4 border-t border-border-subtle bg-bg-secondary shrink-0">
                         <button
                             type="button"
                             className="machine-btn text-xs"

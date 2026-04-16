@@ -68,9 +68,9 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
 
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/60 backdrop-blur-sm px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4" onClick={onClose}>
             <div
-                className="w-full max-w-[480px] rounded-2xl bg-bg-primary border border-border-subtle shadow-2xl flex flex-col"
+                className="w-full max-w-[480px] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] rounded-[24px] sm:rounded-2xl bg-bg-primary border border-border-subtle shadow-2xl flex flex-col overflow-hidden"
                 onClick={e => e.stopPropagation()}
             >
                 {/* Header */}
@@ -80,7 +80,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                 </div>
 
                 {/* Body */}
-                <div className="px-5 py-4 flex flex-col gap-4">
+                <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 sm:px-5 sm:py-4 flex flex-col gap-4">
                     {!created ? (
                         <>
                             {/* Base Provider */}
@@ -158,7 +158,7 @@ export default function ProviderCloneModal({ machineId, providers, sendDaemonCom
                 </div>
 
                 {/* Footer */}
-                <div className="px-5 py-3.5 border-t border-border-subtle flex justify-end gap-2">
+                <div className="px-4 py-[calc(12px+env(safe-area-inset-bottom,0px))] sm:px-5 sm:py-3.5 border-t border-border-subtle flex justify-end gap-2 shrink-0">
                     {!created ? (
                         <>
                             <button onClick={onClose} className="machine-btn">Cancel</button>

@@ -343,20 +343,49 @@ export class ExtensionProviderInstance implements ProviderInstance {
         }
     }
 
+    private buildSyntheticTurnKey(message: any, occurrence: number): string {
+        const role = typeof message?.role === 'string' ? message.role : '';
+        const kind = typeof message?.kind === 'string' ? message.kind : '';
+        const senderName = typeof message?.senderName === 'string' ? message.senderName : '';
+        const content = flattenContent(message?.content)
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 500);
+        return `${role}|${kind}|${senderName}|${content}|${occurrence}`;
+    }
+
     /**
-     * Assign stable receivedAt to extension messages.
-     * Same pattern as IdeProviderInstance.readChat() prevByHash —
-     * preserves first-seen timestamp across polling cycles.
+     * Assign stable receivedAt / synthetic _turnKey to extension messages.
+     * Same transcript should keep the same identity across polling cycles and
+     * stream resets, while repeated identical text later in the transcript still
+     * produces a distinct completion marker via the occurrence suffix.
      */
     private assignReceivedAt(messages: any[]): any[] {
         const now = Date.now();
         const nextHashes = new Map<string, number>();
+        const occurrenceByBaseKey = new Map<string, number>();
 
         for (const msg of messages) {
-            const hash = `${msg.role}:${(msg.content || '').slice(0, 100)}`;
-            const prevTime = this.prevMessageHashes.get(hash);
+            const explicitTurnKey = typeof msg?._turnKey === 'string' && msg._turnKey.trim()
+                ? msg._turnKey.trim()
+                : '';
+            const explicitId = typeof msg?.id === 'string' && msg.id.trim()
+                ? `id:${msg.id.trim()}`
+                : '';
+            const explicitIndex = typeof msg?.index === 'number' && Number.isFinite(msg.index)
+                ? `idx:${msg.index}`
+                : '';
+            const baseKey = explicitTurnKey || explicitId || explicitIndex || `${msg?.role || ''}:${flattenContent(msg?.content || '').slice(0, 500)}`;
+            const occurrence = (occurrenceByBaseKey.get(baseKey) || 0) + 1;
+            occurrenceByBaseKey.set(baseKey, occurrence);
+            const syntheticTurnKey = explicitTurnKey || explicitId || explicitIndex || this.buildSyntheticTurnKey(msg, occurrence);
+            if (!explicitTurnKey && !explicitId && !explicitIndex) {
+                msg._turnKey = syntheticTurnKey;
+            }
+
+            const prevTime = this.prevMessageHashes.get(syntheticTurnKey);
             msg.receivedAt = prevTime || now;
-            nextHashes.set(hash, msg.receivedAt);
+            nextHashes.set(syntheticTurnKey, msg.receivedAt);
         }
 
         this.prevMessageHashes = nextHashes;

@@ -13,6 +13,7 @@ import { useActionShortcuts, type DashboardActionShortcutDefinition } from '../.
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { IconX } from '../Icons'
+import type { DashboardNotificationRecord, DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 
 type GuideTabId = 'overview' | 'quickstart' | 'shortcuts'
 type ShortcutSectionId = 'all' | 'workspace' | 'panes' | 'approvals'
@@ -135,6 +136,13 @@ interface DashboardMainViewProps {
         lastMessageAt: number
         canResume: boolean
     }>>
+    notifications: DashboardNotificationRecord[]
+    notificationUnreadCount: number
+    notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
+    onMarkNotificationRead: (notificationId: string) => void
+    onMarkNotificationUnread: (notificationId: string) => void
+    onDeleteNotification: (notificationId: string) => void
+    onMarkNotificationTargetRead: (target: { sessionId?: string; tabKey?: string }) => void
 }
 
 export default function DashboardMainView({
@@ -196,10 +204,18 @@ export default function DashboardMainView({
     onLaunchMachineIde,
     onLaunchMachineProvider,
     onListMachineSavedSessions,
+    notifications,
+    notificationUnreadCount,
+    notificationStateBySessionId,
+    onMarkNotificationRead,
+    onMarkNotificationUnread,
+    onDeleteNotification,
+    onMarkNotificationTargetRead,
 }: DashboardMainViewProps) {
     const dockviewActionHandlersRef = React.useRef<{
         setShortcutForActiveTab: () => void
         restoreHiddenTabToSavedLocation: (tabKey: string) => void
+        activateConversationTab: (tabKey: string) => void
         resetAllPanelsToMain: () => void
         activatePreviousTabInGroup: () => void
         activateNextTabInGroup: () => void
@@ -228,6 +244,36 @@ export default function DashboardMainView({
         })
         dockviewActionHandlersRef.current?.restoreHiddenTabToSavedLocation(conversation.tabKey)
     }, [onShowHiddenConversation])
+    const handleOpenNotification = React.useCallback((notification: DashboardNotificationRecord) => {
+        const targetConversation = mobileChatConversations.find(conversation => {
+            if (notification.sessionId && conversation.sessionId === notification.sessionId) return true
+            return !!notification.tabKey && conversation.tabKey === notification.tabKey
+        }) || hiddenConversations.find(conversation => {
+            if (notification.sessionId && conversation.sessionId === notification.sessionId) return true
+            return !!notification.tabKey && conversation.tabKey === notification.tabKey
+        })
+
+        if (targetConversation) {
+            if (hiddenConversations.some(conversation => conversation.tabKey === targetConversation.tabKey)) {
+                handleShowHiddenConversationWithRestore(targetConversation)
+            }
+            onDesktopActiveTabChange(targetConversation.tabKey)
+            dockviewActionHandlersRef.current?.activateConversationTab(targetConversation.tabKey)
+        }
+
+        onMarkNotificationRead(notification.id)
+        if (notification.sessionId || notification.tabKey) {
+            onMarkNotificationTargetRead({ sessionId: notification.sessionId, tabKey: notification.tabKey })
+        }
+        setInboxOpen(false)
+    }, [
+        handleShowHiddenConversationWithRestore,
+        hiddenConversations,
+        mobileChatConversations,
+        onDesktopActiveTabChange,
+        onMarkNotificationRead,
+        onMarkNotificationTargetRead,
+    ])
     const [guideNudgeVisible, setGuideNudgeVisible] = React.useState(false)
     const [guideTab, setGuideTab] = React.useState<GuideTabId>('quickstart')
     const [shortcutSection, setShortcutSection] = React.useState<ShortcutSectionId>('workspace')
@@ -478,11 +524,16 @@ export default function DashboardMainView({
                     conversations={visibleConversations}
                     hiddenConversations={hiddenConversations}
                     onOpenHistory={onOpenHistory}
-                    onOpenConversation={handleShowHiddenConversationWithRestore}
                     onHideConversation={onHideConversation}
                     onShowConversation={handleShowHiddenConversationWithRestore}
                     onShowAllHidden={onShowAllHiddenConversations}
                     onResetPanelsToMain={handleResetAllPanelsToMain}
+                    notifications={notifications}
+                    notificationUnreadCount={notificationUnreadCount}
+                    onOpenNotification={handleOpenNotification}
+                    onMarkNotificationRead={onMarkNotificationRead}
+                    onMarkNotificationUnread={onMarkNotificationUnread}
+                    onDeleteNotification={onDeleteNotification}
                     inboxOpen={inboxOpen}
                     onInboxOpenChange={handleInboxOpenChange}
                     hiddenOpen={hiddenOpen}
@@ -524,6 +575,8 @@ export default function DashboardMainView({
                     onShowHiddenConversation={handleShowHiddenConversationWithRestore}
                     onShowAllHiddenConversations={onShowAllHiddenConversations}
                     onOpenNewSession={() => setNewSessionOpen(true)}
+                    notificationStateBySessionId={notificationStateBySessionId}
+                    onMarkNotificationTargetRead={onMarkNotificationTargetRead}
                 />
             ) : isMobile ? (
                 <DashboardPaneWorkspace
@@ -572,6 +625,7 @@ export default function DashboardMainView({
                     registerActionHandlers={handlers => {
                         dockviewActionHandlersRef.current = handlers
                     }}
+                    notificationStateBySessionId={notificationStateBySessionId}
                     onActiveTabChange={onDesktopActiveTabChange}
                     requestedActiveTabKey={requestedDesktopTabKey}
                     onRequestedActiveTabConsumed={onRequestedDesktopTabConsumed}

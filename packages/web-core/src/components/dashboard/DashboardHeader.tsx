@@ -10,13 +10,11 @@ import type { ActiveConversation, CliConversationViewMode } from './types';
 import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
 import { IconBell, IconChat, IconScroll, IconMonitor, IconEyeOff, IconX, IconPlus } from '../Icons';
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
-import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, isHiddenNativeIdeParentConversation } from './DashboardMobileChatShared';
 import CliViewModeToggle from './CliViewModeToggle';
-import { getConversationDisplayLabel, getConversationMetaParts } from './conversation-selectors';
 import { getConversationMetaText, getConversationTitle } from './conversation-presenters';
 import type { DashboardActionShortcutId } from '../../hooks/useActionShortcuts';
-import { compareConversationRecency, getConversationTimestamp } from './conversation-sort';
 import { formatRelativeTime } from '../../utils/time';
+import type { DashboardNotificationRecord } from '../../utils/dashboard-notifications';
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -30,7 +28,6 @@ export interface DashboardHeaderProps {
     onStopCli?: (conversation?: ActiveConversation) => void;
     activeCliViewMode?: CliConversationViewMode | null;
     onSetCliViewMode?: (mode: CliConversationViewMode) => void;
-    onOpenConversation?: (conversation: ActiveConversation) => void;
     onHideConversation?: (conversation: ActiveConversation) => void;
     hiddenConversations?: ActiveConversation[];
     onShowConversation?: (conversation: ActiveConversation) => void;
@@ -41,6 +38,12 @@ export interface DashboardHeaderProps {
     onInboxOpenChange: (next: boolean) => void;
     hiddenOpen: boolean;
     onHiddenOpenChange: (next: boolean) => void;
+    notifications: DashboardNotificationRecord[];
+    notificationUnreadCount: number;
+    onOpenNotification: (notification: DashboardNotificationRecord) => void;
+    onMarkNotificationRead: (notificationId: string) => void;
+    onMarkNotificationUnread: (notificationId: string) => void;
+    onDeleteNotification: (notificationId: string) => void;
     onOpenNewSession?: () => void;
     actionShortcuts?: Partial<Record<DashboardActionShortcutId, string>>;
 }
@@ -50,35 +53,55 @@ function ShortcutPill({ value }: { value?: string }) {
     return <span className="dashboard-header-shortcut-pill">{value}</span>;
 }
 
-function DashboardHeaderInboxItem({
-    conversation,
-    isAttention,
+function DashboardHeaderNotificationItem({
+    notification,
     shortcutIndex,
-    onClick,
+    onOpen,
+    onMarkRead,
+    onMarkUnread,
+    onDelete,
 }: {
-    conversation: ActiveConversation;
-    isAttention?: boolean;
+    notification: DashboardNotificationRecord;
     shortcutIndex?: number;
-    onClick: () => void;
+    onOpen: () => void;
+    onMarkRead: () => void;
+    onMarkUnread: () => void;
+    onDelete: () => void;
 }) {
-    const metaParts = getConversationMetaParts(conversation);
-    const timeLabel = formatRelativeTime(getConversationTimestamp(conversation))
-    const infoParts = [...metaParts, timeLabel].filter(Boolean)
+    const timeLabel = formatRelativeTime(notification.updatedAt)
+    const isUnread = !notification.readAt
 
     return (
-        <button
-            type="button"
-            className={`dashboard-header-inbox-item ${isAttention ? 'is-attention' : ''}`.trim()}
-            onClick={onClick}
-        >
-            <span className="dashboard-header-inbox-item-title">{getConversationDisplayLabel(conversation)}</span>
-            {(shortcutIndex || infoParts.length > 0) && (
+        <div className={`dashboard-header-inbox-item ${isUnread ? 'is-attention' : ''}`.trim()}>
+            <button
+                type="button"
+                className="flex min-w-0 flex-1 flex-col items-start text-left"
+                onClick={onOpen}
+            >
+                <span className="dashboard-header-inbox-item-title">{notification.title}</span>
                 <span className="dashboard-header-inbox-item-meta">
                     {shortcutIndex ? <span className="dashboard-header-item-shortcut">⌥{shortcutIndex}</span> : null}
-                    {infoParts.join(' · ')}
+                    {[notification.type === 'needs_attention' ? 'Action needed' : 'Task complete', timeLabel].filter(Boolean).join(' · ')}
                 </span>
-            )}
-        </button>
+                {notification.preview ? (
+                    <span className="dashboard-header-inbox-item-meta">{notification.preview}</span>
+                ) : null}
+            </button>
+            <div className="ml-3 flex shrink-0 items-center gap-1.5">
+                {isUnread ? (
+                    <button type="button" className="dashboard-header-hidden-secondary" onClick={(event) => { event.stopPropagation(); onMarkRead(); }}>
+                        Mark read
+                    </button>
+                ) : (
+                    <button type="button" className="dashboard-header-hidden-secondary" onClick={(event) => { event.stopPropagation(); onMarkUnread(); }}>
+                        Mark unread
+                    </button>
+                )}
+                <button type="button" className="dashboard-header-hidden-secondary" onClick={(event) => { event.stopPropagation(); onDelete(); }}>
+                    Delete
+                </button>
+            </div>
+        </div>
     );
 }
 
@@ -93,7 +116,6 @@ export default function DashboardHeader({
     onStopCli,
     activeCliViewMode,
     onSetCliViewMode,
-    onOpenConversation,
     onHideConversation,
     hiddenConversations = [],
     onShowConversation,
@@ -105,6 +127,12 @@ export default function DashboardHeader({
     onHiddenOpenChange,
     onOpenNewSession,
     actionShortcuts,
+    notifications,
+    notificationUnreadCount,
+    onOpenNotification,
+    onMarkNotificationRead,
+    onMarkNotificationUnread,
+    onDeleteNotification,
 }: DashboardHeaderProps) {
     const { ides, p2pStates = {} } = useBaseDaemons();
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
@@ -119,10 +147,6 @@ export default function DashboardHeader({
 
     // Derive connection stage summary
     const daemons = ides.filter(i => i.type === 'adhdev-daemon');
-    const liveSessionInboxState = useMemo(
-        () => buildLiveSessionInboxStateMap(ides),
-        [ides],
-    );
     const p2pValues = Object.values(p2pStates) as string[];
     const p2pConnected = p2pValues.filter(s => s === 'connected').length;
     const p2pConnecting = p2pValues.filter(s => s === 'connecting' || s === 'new' || s === 'checking').length;
@@ -136,33 +160,19 @@ export default function DashboardHeader({
         return null;
     };
     const statusText = getStatusText();
-    const desktopInboxConversations = useMemo(
-        () => conversations.filter(conversation => !isHiddenNativeIdeParentConversation(conversation, conversations, liveSessionInboxState)),
-        [conversations, liveSessionInboxState],
+    const unreadNotifications = useMemo(
+        () => notifications.filter(notification => !notification.readAt),
+        [notifications],
     );
-    const inboxAttention = useMemo(
-        () => desktopInboxConversations
-            .filter(conversation => getConversationInboxSurfaceState(conversation, liveSessionInboxState).requiresAction)
-            .sort(compareConversationRecency),
-        [desktopInboxConversations, liveSessionInboxState],
-    );
-    const inboxUnread = useMemo(
-        () => desktopInboxConversations
-            .filter(conversation => {
-                const isOpenConversation = activeConv?.tabKey === conversation.tabKey;
-                return getConversationInboxSurfaceState(conversation, liveSessionInboxState, {
-                    hideOpenTaskCompleteUnread: true,
-                    isOpenConversation,
-                }).unread;
-            })
-            .sort(compareConversationRecency),
-        [activeConv, desktopInboxConversations, liveSessionInboxState],
+    const readNotifications = useMemo(
+        () => notifications.filter(notification => !!notification.readAt),
+        [notifications],
     );
     const inboxShortcutTargets = useMemo(
-        () => [...inboxAttention, ...inboxUnread].slice(0, 9),
-        [inboxAttention, inboxUnread],
+        () => unreadNotifications.slice(0, 9),
+        [unreadNotifications],
     )
-    const inboxCount = inboxAttention.length + inboxUnread.length;
+    const inboxCount = notificationUnreadCount;
 
     useEffect(() => {
         if (!inboxOpen) return;
@@ -192,8 +202,7 @@ export default function DashboardHeader({
             const index = Number(match[1]) - 1
             const hiddenTarget = hiddenOpen ? hiddenConversations[index] : undefined
             const inboxTarget = inboxOpen ? inboxShortcutTargets[index] : undefined
-            const target = hiddenTarget || inboxTarget
-            if (!target) return
+            if (!hiddenTarget && !inboxTarget) return
 
             event.preventDefault()
             event.stopPropagation()
@@ -204,8 +213,10 @@ export default function DashboardHeader({
                 return
             }
 
-            onOpenConversation?.(target)
-            onInboxOpenChange(false)
+            if (inboxTarget) {
+                onOpenNotification(inboxTarget)
+                onInboxOpenChange(false)
+            }
         }
 
         window.addEventListener('keydown', handleKeyDown, true)
@@ -217,7 +228,7 @@ export default function DashboardHeader({
         inboxShortcutTargets,
         onHiddenOpenChange,
         onInboxOpenChange,
-        onOpenConversation,
+        onOpenNotification,
         onShowConversation,
     ])
 
@@ -441,40 +452,38 @@ export default function DashboardHeader({
                     </button>
                     {inboxOpen && (
                         <div className="dashboard-header-inbox-popover">
-                            {inboxAttention.length > 0 && (
+                            {unreadNotifications.length > 0 && (
                                 <div className="dashboard-header-inbox-section">
-                                    <div className="dashboard-header-inbox-section-title">Needs attention</div>
-                                    {inboxAttention.map(conversation => (
-                                        <DashboardHeaderInboxItem
-                                            key={conversation.tabKey}
-                                            conversation={conversation}
-                                            isAttention={true}
-                                            shortcutIndex={inboxShortcutTargets.indexOf(conversation) >= 0 ? inboxShortcutTargets.indexOf(conversation) + 1 : undefined}
-                                            onClick={() => {
-                                                onOpenConversation?.(conversation);
-                                                onInboxOpenChange(false);
-                                            }}
+                                    <div className="dashboard-header-inbox-section-title">Unread</div>
+                                    {unreadNotifications.map(notification => (
+                                        <DashboardHeaderNotificationItem
+                                            key={notification.id}
+                                            notification={notification}
+                                            shortcutIndex={inboxShortcutTargets.indexOf(notification) >= 0 ? inboxShortcutTargets.indexOf(notification) + 1 : undefined}
+                                            onOpen={() => onOpenNotification(notification)}
+                                            onMarkRead={() => onMarkNotificationRead(notification.id)}
+                                            onMarkUnread={() => onMarkNotificationUnread(notification.id)}
+                                            onDelete={() => onDeleteNotification(notification.id)}
                                         />
                                     ))}
                                 </div>
                             )}
-                            {inboxUnread.length > 0 && (
+                            {readNotifications.length > 0 && (
                                 <div className="dashboard-header-inbox-section">
-                                    <div className="dashboard-header-inbox-section-title">Task complete</div>
-                                    {inboxUnread.map(conversation => (
-                                        <DashboardHeaderInboxItem
-                                            key={conversation.tabKey}
-                                            conversation={conversation}
-                                            shortcutIndex={inboxShortcutTargets.indexOf(conversation) >= 0 ? inboxShortcutTargets.indexOf(conversation) + 1 : undefined}
-                                            onClick={() => {
-                                                onOpenConversation?.(conversation);
-                                                onInboxOpenChange(false);
-                                            }}
+                                    <div className="dashboard-header-inbox-section-title">Read</div>
+                                    {readNotifications.map(notification => (
+                                        <DashboardHeaderNotificationItem
+                                            key={notification.id}
+                                            notification={notification}
+                                            onOpen={() => onOpenNotification(notification)}
+                                            onMarkRead={() => onMarkNotificationRead(notification.id)}
+                                            onMarkUnread={() => onMarkNotificationUnread(notification.id)}
+                                            onDelete={() => onDeleteNotification(notification.id)}
                                         />
                                     ))}
                                 </div>
                             )}
-                            {inboxCount === 0 && (
+                            {notifications.length === 0 && (
                                 <div className="dashboard-header-inbox-empty">No pending activity.</div>
                             )}
                         </div>
