@@ -342,7 +342,10 @@ class StandaloneServer {
             }
           }
         }),
-        onStatusChange: () => this.scheduleBroadcastStatus(),
+        onStatusChange: () => {
+          this.scheduleBroadcastStatus();
+          void this.flushWsChatSubscriptions(undefined, { onlyActive: false });
+        },
         removeAgentTracking: () => {},
         hostedRuntimeManagerTag: 'adhdev-standalone',
         createPtyTransportFactory: ({ runtimeId, providerType, workspace, cliArgs, providerSessionId, attachExisting }: CliTransportFactoryParams) => (
@@ -371,7 +374,12 @@ class StandaloneServer {
       statusInstanceId,
       statusVersion: pkgVersion,
       statusDaemonMode: false,
-      onStatusChange: () => this.scheduleBroadcastStatus(),
+      onStatusChange: () => {
+        this.scheduleBroadcastStatus();
+        // Flush chat subscriptions immediately on status change so completed
+        // messages reach the dashboard without waiting for the 2000ms timer.
+        void this.flushWsChatSubscriptions(undefined, { onlyActive: false });
+      },
       sessionHostControl,
       onStreamsUpdated: (ideType: string, streams: any[]) => {
         if (!this.components) return;
