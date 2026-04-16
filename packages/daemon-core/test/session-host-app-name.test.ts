@@ -7,9 +7,16 @@ describe('session host app-name resolution', () => {
     expect(resolveSessionHostAppName({ standalone: true, env: {} })).toBe('adhdev-standalone')
   })
 
-  it('lets explicit ADHDEV_SESSION_HOST_NAME override both modes', () => {
+  it('lets explicit custom ADHDEV_SESSION_HOST_NAME override both modes', () => {
     const env = { ADHDEV_SESSION_HOST_NAME: 'custom-host' }
     expect(resolveSessionHostAppName({ env })).toBe('custom-host')
     expect(resolveSessionHostAppName({ standalone: true, env })).toBe('custom-host')
+  })
+
+  it('rejects the reserved adhdev namespace in standalone mode even when explicitly requested', () => {
+    expect(() => resolveSessionHostAppName({
+      standalone: true,
+      env: { ADHDEV_SESSION_HOST_NAME: 'adhdev' },
+    })).toThrow(/reserved for the global daemon/i)
   })
 })

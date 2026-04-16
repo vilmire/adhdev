@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'child_process';
+import * as childProcess from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -73,7 +73,7 @@ function getSessionHostPidFile(): string {
 function killPid(pid: number): boolean {
   try {
     if (process.platform === 'win32') {
-      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+      childProcess.execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
     } else {
       process.kill(pid, 'SIGTERM');
     }
@@ -83,13 +83,13 @@ function killPid(pid: number): boolean {
   }
 }
 
-export function stopSessionHost(): boolean {
+export function stopManagedSessionHostProcess(): boolean {
   let stopped = false;
   const pidFile = getSessionHostPidFile();
   try {
     if (fs.existsSync(pidFile)) {
       const pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
-      if (Number.isFinite(pid)) {
+      if (Number.isFinite(pid) && pid !== process.pid) {
         stopped = killPid(pid) || stopped;
       }
     }
@@ -103,26 +103,16 @@ export function stopSessionHost(): boolean {
     }
   }
 
-  if (process.platform !== 'win32') {
-    try {
-      const raw = execFileSync('pgrep', ['-f', 'session-host-daemon'], { encoding: 'utf8' }).trim();
-      for (const line of raw.split('\n')) {
-        const pid = Number.parseInt(line.trim(), 10);
-        if (Number.isFinite(pid)) {
-          stopped = killPid(pid) || stopped;
-        }
-      }
-    } catch {
-      // noop
-    }
-  }
-
   return stopped;
+}
+
+export function stopSessionHost(): boolean {
+  return stopManagedSessionHostProcess();
 }
 
 async function runSessionHostCli(args: string[]): Promise<number> {
   const entry = resolveSessionHostEntry();
-  const child = spawn(process.execPath, [entry, ...args], {
+  const child = childProcess.spawn(process.execPath, [entry, ...args], {
     stdio: 'inherit',
     env: buildSessionHostEnv(process.env),
   });
@@ -135,7 +125,7 @@ async function runSessionHostCli(args: string[]): Promise<number> {
 export async function ensureSessionHostReady(): Promise<SessionHostEndpoint> {
   const spawnHost = () => {
     const entry = resolveSessionHostEntry();
-    const child = spawn(process.execPath, [entry], {
+    const child = childProcess.spawn(process.execPath, [entry], {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
