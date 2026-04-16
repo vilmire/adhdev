@@ -35,6 +35,28 @@ describe('agent stream provider surfaces', () => {
     })
   })
 
+  it('normalizes richer message kinds from readChat payloads before forwarding stream state', async () => {
+    const adapter = new ProviderStreamAdapter({
+      type: 'cline',
+      name: 'Cline',
+      category: 'extension',
+      scripts: {
+        readChat: () => '(() => "ignored")()',
+      },
+    } as any)
+
+    const state = await adapter.readChat(async () => JSON.stringify({
+      status: 'idle',
+      messages: [
+        { role: 'assistant', content: 'npm test', _sub: 'command' },
+        { role: 'assistant', content: 'Search files', _sub: 'tool' },
+      ],
+      inputContent: '',
+    }))
+
+    expect((state.messages as any[]).map((message) => message.kind)).toEqual(['terminal', 'tool'])
+  })
+
   it('forwards explicit controlValues and summaryMetadata to ide instances without legacy model/mode patch fields', () => {
     const onEvent = vi.fn()
     forwardAgentStreamsToIdeInstance(

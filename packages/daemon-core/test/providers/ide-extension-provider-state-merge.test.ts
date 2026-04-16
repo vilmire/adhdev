@@ -57,4 +57,38 @@ describe('IDE/Extension provider state merge', () => {
       items: [{ id: 'profile', label: 'Profile', value: 'reasoning', order: 5 }],
     })
   })
+
+  it('filters inferred tool messages from readChat when showToolCalls is disabled', async () => {
+    const instance = new IdeProviderInstance({
+      type: 'cursor',
+      name: 'Cursor',
+      category: 'ide',
+      scripts: {
+        readChat: () => '(() => "ignored")()',
+      },
+    } as any) as any
+
+    instance.context = {
+      cdp: {
+        isConnected: true,
+        evaluate: async () => ({
+          id: 'chat-1',
+          status: 'idle',
+          title: 'Cursor',
+          messages: [
+            { role: 'assistant', content: 'Search files', _sub: 'tool' },
+            { role: 'assistant', content: 'Final answer' },
+          ],
+          inputContent: '',
+        }),
+      },
+    }
+    instance.settings = { showToolCalls: false }
+
+    await instance.readChat()
+
+    expect(instance.getState().activeChat.messages).toEqual([
+      expect.objectContaining({ kind: 'standard', content: 'Final answer' }),
+    ])
+  })
 })

@@ -68,6 +68,7 @@ import {
   requestWorkspaceControl,
   type AdhMuxControlEvent,
 } from '@adhdev/terminal-mux-control/api';
+import { classifyHotChatSessionsForSubscriptionFlush } from '@adhdev/daemon-core';
 
 // ─── Constants ───
 const DEFAULT_PORT = 3847;
@@ -166,12 +167,6 @@ const SESSION_TARGET_COMMANDS = new Set([
   'stop_cli',
   'restart_session',
   'agent_command',
-]);
-
-const ACTIVE_CHAT_POLL_STATUSES = new Set([
-  'generating',
-  'waiting_approval',
-  'starting',
 ]);
 
 function hashSignatureParts(parts: string[]): string {
@@ -1069,16 +1064,12 @@ class StandaloneServer {
 
   private getHotChatSessionIdsForWsFlush(): { active: Set<string>; finalizing: Set<string> } {
     const snapshot = this.buildSharedSnapshot('live');
-    const active = new Set<string>(
-      snapshot.sessions
-        .filter((session: { status?: unknown }) => ACTIVE_CHAT_POLL_STATUSES.has(String(session.status || '').toLowerCase()))
-        .map((session: { id: string }) => session.id),
+    const hotSessions = classifyHotChatSessionsForSubscriptionFlush(
+      snapshot.sessions,
+      this.hotWsChatSessionIds,
     );
-    const finalizing = new Set<string>(
-      Array.from(this.hotWsChatSessionIds).filter((sessionId) => !active.has(sessionId)),
-    );
-    this.hotWsChatSessionIds = active;
-    return { active, finalizing };
+    this.hotWsChatSessionIds = hotSessions.active;
+    return hotSessions;
   }
 
   private async flushWsChatSubscriptions(

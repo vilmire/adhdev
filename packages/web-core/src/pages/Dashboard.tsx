@@ -6,7 +6,7 @@ import { useTransport } from '../context/TransportContext'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import type { DaemonData } from '../types'
 import { isCliConv, isAcpConv, getCliConversationViewMode } from '../components/dashboard/types'
-import { applyCliViewModeOverrides, getCliViewModeForSession } from '../components/dashboard/cliViewModeOverrides'
+import { applyCliViewModeOverrides, getCliViewModeForSession, reconcileCliViewModeOverrides } from '../components/dashboard/cliViewModeOverrides'
 import { useHiddenTabs } from '../hooks/useHiddenTabs'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
@@ -186,18 +186,7 @@ export default function Dashboard() {
     })
     useEffect(() => {
         if (Object.keys(cliViewModeOverrides).length === 0) return
-        setCliViewModeOverrides((prev) => {
-            let changed = false
-            const next: Record<string, 'chat' | 'terminal'> = { ...prev }
-            for (const [sessionId, mode] of Object.entries(prev)) {
-                const serverMode = getCliViewModeForSession(ides, sessionId)
-                if (serverMode === null || serverMode === mode) {
-                    delete next[sessionId]
-                    changed = true
-                }
-            }
-            return changed ? next : prev
-        })
+        setCliViewModeOverrides((prev) => reconcileCliViewModeOverrides(prev, ides))
     }, [ides, cliViewModeOverrides])
     const liveSessionInboxState = useMemo(
         () => buildLiveSessionInboxStateMap(ides),

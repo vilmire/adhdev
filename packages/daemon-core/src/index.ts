@@ -115,6 +115,11 @@ export type { IDEInfo } from './detection/ide-detector.js';
 export { detectCLIs } from './detection/cli-detector.js';
 export { getHostMemorySnapshot } from './system/host-memory.js';
 export type { HostMemorySnapshot } from './system/host-memory.js';
+export {
+  classifyHotChatSessionsForSubscriptionFlush,
+  DEFAULT_ACTIVE_CHAT_POLL_STATUSES,
+  DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS,
+} from './status/chat-tail-hot-sessions.js';
 
 // ── CDP ──
 export { DaemonCdpManager } from './cdp/manager.js';
@@ -204,10 +209,14 @@ export {
   BUILTIN_CHAT_MESSAGE_KINDS,
   isBuiltinChatMessageKind,
   normalizeChatMessageKind,
+  resolveChatMessageKind,
   buildChatMessage,
   buildSystemChatMessage,
   buildRuntimeSystemChatMessage,
   buildAssistantChatMessage,
+  buildThoughtChatMessage,
+  buildToolChatMessage,
+  buildTerminalChatMessage,
   buildUserChatMessage,
   normalizeChatMessage,
   normalizeChatMessages,

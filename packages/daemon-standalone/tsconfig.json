@@ -3,9 +3,14 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@adhdev/daemon-core": ["../daemon-core/src/index.ts"],
+      "@adhdev/daemon-core/status/normalize": ["../daemon-core/src/status/normalize.ts"]
+    },
     "lib": ["ES2022"],
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": "..",
     "declaration": true,
     "strict": true,
     "esModuleInterop": true,

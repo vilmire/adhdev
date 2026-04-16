@@ -7,12 +7,21 @@
 
 import type { ProviderEffect } from '../providers/contracts.js';
 import type { ProviderSummaryMetadata } from '../shared-types.js';
+import type { ChatMessageKind } from '../providers/chat-message-normalization.js';
 
 /** Agent chat message */
 export interface AgentChatMessage {
     role: 'user' | 'assistant' | 'system';
     content: string;
+    kind?: ChatMessageKind;
     timestamp?: number;
+    receivedAt?: number;
+    id?: string;
+    index?: number;
+    meta?: Record<string, unknown>;
+    senderName?: string;
+    _type?: string;
+    _sub?: string;
 }
 
 /** Agent chat history item */

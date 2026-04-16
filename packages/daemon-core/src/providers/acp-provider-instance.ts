@@ -51,7 +51,16 @@ import { normalizeContent, flattenContent, normalizeInputEnvelope } from './cont
 import type { ProviderInstance, ProviderState, AcpProviderState, ProviderErrorReason, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
 import { buildLegacyModelModeSummaryMetadata } from './summary-metadata.js';
-import { buildAssistantChatMessage, buildChatMessage, buildRuntimeSystemChatMessage, buildUserChatMessage, normalizeChatMessages } from './chat-message-normalization.js';
+import {
+    buildAssistantChatMessage,
+    buildChatMessage,
+    buildRuntimeSystemChatMessage,
+    buildTerminalChatMessage,
+    buildThoughtChatMessage,
+    buildToolChatMessage,
+    buildUserChatMessage,
+    normalizeChatMessages,
+} from './chat-message-normalization.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
 
@@ -231,6 +240,7 @@ export class AcpProviderInstance implements ProviderInstance {
     private activeToolCalls: AcpToolCall[] = [];
     private stopReason: string | null = null;
     private partialContent = '';
+    private partialThoughtContent = '';
     /** Rich content blocks accumulated during streaming */
     private partialBlocks: ContentBlock[] = [];
     /** Tool calls collected during current turn */
@@ -300,7 +310,12 @@ export class AcpProviderInstance implements ProviderInstance {
                 ...m,
                 content,
             });
-        }));
+        })) as ChatMessage[];
+
+        if (this.currentStatus === 'generating') {
+            const partialThoughtMessage = this.buildPartialThoughtMessage(Date.now());
+            if (partialThoughtMessage) recentMessages.push(partialThoughtMessage as ChatMessage);
+        }
 
  // generating during partial response add
         if (this.currentStatus === 'generating' && (this.partialContent || this.partialBlocks.length > 0)) {
@@ -980,6 +995,7 @@ export class AcpProviderInstance implements ProviderInstance {
 
         this.currentStatus = 'generating';
         this.partialContent = '';
+        this.partialThoughtContent = '';
         this.partialBlocks = [];
         this.turnToolCalls = [];
         this.detectStatusTransition();
@@ -1076,9 +1092,15 @@ export class AcpProviderInstance implements ProviderInstance {
                 this.currentStatus = 'generating';
                 break;
             }
-            case 'agent_thought_chunk':
+            case 'agent_thought_chunk': {
+                const content = update.content;
+                if (content?.type === 'text' && typeof content.text === 'string') {
+                    this.partialThoughtContent += content.text;
+                }
+                this.currentStatus = 'generating';
+                break;
+            }
             case 'user_message_chunk': {
- // Track but don't display thought chunks as main content
                 break;
             }
             case 'tool_call': {
@@ -1256,8 +1278,101 @@ export class AcpProviderInstance implements ProviderInstance {
         return blocks;
     }
 
+    private buildPartialThoughtMessage(timestamp = Date.now()): AcpMessage | null {
+        const content = this.partialThoughtContent.trim();
+        if (!content) return null;
+        return buildThoughtChatMessage({
+            content,
+            timestamp,
+            meta: {
+                label: 'Thought',
+                isRunning: this.currentStatus === 'generating',
+            },
+        });
+    }
+
+    private buildToolCallBubbleKind(toolCall: ToolCallInfo): 'thought' | 'tool' | 'terminal' {
+        if (toolCall.kind === 'think') return 'thought';
+        if (toolCall.kind === 'execute') return 'terminal';
+        if (Array.isArray(toolCall.content) && toolCall.content.some((entry) => entry?.type === 'terminal')) return 'terminal';
+        return 'tool';
+    }
+
+    private summarizeToolCallBubbleContent(toolCall: ToolCallInfo): string {
+        const rawOutput = typeof toolCall.rawOutput === 'string'
+            ? toolCall.rawOutput.trim()
+            : (toolCall.rawOutput != null ? JSON.stringify(toolCall.rawOutput) : '');
+        if (rawOutput) return rawOutput;
+
+        const contentText = Array.isArray(toolCall.content)
+            ? toolCall.content
+                .map((entry) => {
+                    if (!entry || typeof entry !== 'object') return '';
+                    if (entry.type === 'content') return flattenContent([entry.content]).trim();
+                    if (entry.type === 'diff') return `${entry.path}\n${entry.newText || ''}`.trim();
+                    if (entry.type === 'terminal') return `Terminal: ${entry.terminalId || ''}`.trim();
+                    return '';
+                })
+                .filter(Boolean)
+                .join('\n\n')
+                .trim()
+            : '';
+        if (contentText) return contentText;
+
+        const rawInput = typeof toolCall.rawInput === 'string'
+            ? toolCall.rawInput.trim()
+            : (toolCall.rawInput != null ? JSON.stringify(toolCall.rawInput) : '');
+        if (rawInput) {
+            return toolCall.title ? `${toolCall.title}\n${rawInput}` : rawInput;
+        }
+
+        return toolCall.title || '';
+    }
+
+    private buildTurnToolCallMessages(timestamp = Date.now()): AcpMessage[] {
+        return this.turnToolCalls
+            .map((toolCall) => {
+                const content = this.summarizeToolCallBubbleContent(toolCall);
+                if (!content) return null;
+                const isRunning = toolCall.status === 'pending' || toolCall.status === 'in_progress';
+                const label = toolCall.title || undefined;
+                const kind = this.buildToolCallBubbleKind(toolCall);
+                if (kind === 'thought') {
+                    return buildThoughtChatMessage({
+                        content,
+                        timestamp,
+                        meta: { label: label || 'Thought', isRunning },
+                    });
+                }
+                if (kind === 'terminal') {
+                    return buildTerminalChatMessage({
+                        content,
+                        timestamp,
+                        meta: { label: label || 'Ran command', isRunning },
+                    });
+                }
+                return buildToolChatMessage({
+                    content,
+                    timestamp,
+                    meta: { label: label || 'Tool call', isRunning },
+                });
+            })
+            .filter(Boolean) as AcpMessage[];
+    }
+
     /** Finalize streaming content into an assistant message */
     private finalizeAssistantMessage(): void {
+        const timestamp = Date.now();
+        const thoughtMessage = this.buildPartialThoughtMessage(timestamp);
+        if (thoughtMessage) {
+            this.messages.push(thoughtMessage);
+        }
+
+        const toolCallMessages = this.buildTurnToolCallMessages(timestamp);
+        if (toolCallMessages.length > 0) {
+            this.messages.push(...toolCallMessages);
+        }
+
         const blocks = this.buildPartialBlocks();
         // Remove trailing '...' from text blocks for final message
         const finalBlocks = blocks.map(b => {
@@ -1277,6 +1392,7 @@ export class AcpProviderInstance implements ProviderInstance {
             }));
         }
         this.partialContent = '';
+        this.partialThoughtContent = '';
         this.partialBlocks = [];
         this.turnToolCalls = [];
     }

@@ -336,11 +336,13 @@ export class IdeProviderInstance implements ProviderInstance {
                 if (pm.receivedAt) prevByHash.set(h, pm.receivedAt);
             }
             const now = Date.now();
-            const messages = chat.messages || [];
-            for (const msg of messages) {
+            const rawMessages = chat.messages || [];
+            for (const msg of rawMessages) {
                 const h = `${msg.role}:${(msg.content || '').slice(0, 100)}`;
                 msg.receivedAt = prevByHash.get(h) || now;
             }
+            chat.messages = normalizeChatMessages(rawMessages as ChatMessage[]) as any;
+            const messages = chat.messages || [];
 
             // Filter messages by provider settings (showThinking, showToolCalls, showTerminal)
             if (messages.length > 0) {

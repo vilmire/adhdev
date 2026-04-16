@@ -63,3 +63,21 @@ export function getCliViewModeForSession(
   }
   return null
 }
+
+export function reconcileCliViewModeOverrides(
+  overrides: CliViewModeOverrideMap,
+  entries: DaemonData[],
+): CliViewModeOverrideMap {
+  if (!overrides || Object.keys(overrides).length === 0) return overrides
+
+  let changed = false
+  const next: CliViewModeOverrideMap = { ...overrides }
+  for (const [sessionId, mode] of Object.entries(overrides)) {
+    const serverMode = getCliViewModeForSession(entries, sessionId)
+    if (serverMode === mode) {
+      delete next[sessionId]
+      changed = true
+    }
+  }
+  return changed ? next : overrides
+}

@@ -2,6 +2,19 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.64] - 2026-04-16
+
+### Added
+- Added regression coverage for ACP rich message-kind surfacing, upstream read-chat kind contracts, dashboard CLI conversation refresh/view-mode overrides, hot-session chat-tail classification, and timestamp-only status snapshot fallbacks.
+
+### Fixed
+- Fixed shared daemon/web chat plumbing so richer `thought`, `tool`, and `terminal` messages survive ACP and IDE-stream normalization paths instead of collapsing back into generic assistant output.
+- Fixed standalone/cloud CLI chat-tail delivery so very short completions stay hot long enough to publish their final assistant reply, even when runtime snapshots only provide `timestamp` instead of `receivedAt`.
+- Fixed dashboard CLI continuity so completed replies refresh in-place and explicit chat-mode overrides are not dropped on transient null server-mode updates.
+
+### Changed
+- Tightened shared status snapshot timing and dashboard conversation cache signatures around actual last-message content/time instead of relying only on coarse status transitions.
+
 ## [0.8.63] - 2026-04-16
 
 ### Fixed

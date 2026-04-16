@@ -14,6 +14,7 @@ import type {
 import type { ProviderModule, ProviderScripts } from '../providers/contracts.js';
 import { extractProviderControlValues, normalizeProviderEffects } from '../providers/control-effects.js';
 import { resolveProviderStateSurface } from '../providers/provider-patch-state.js';
+import { normalizeChatMessages } from '../providers/chat-message-normalization.js';
 
 export class ProviderStreamAdapter implements IAgentStreamAdapter {
     readonly agentType: string;
@@ -153,7 +154,7 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
                 agentName: this.agentName,
                 extensionId: this.extensionId,
                 status: data.status || 'idle',
-                messages: data.messages || [],
+                messages: normalizeChatMessages(Array.isArray(data.messages) ? data.messages : []) as any,
                 inputContent: data.inputContent || '',
                 activeModal: data.activeModal,
             };

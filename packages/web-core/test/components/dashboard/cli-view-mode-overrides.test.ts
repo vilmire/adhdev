@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyCliViewModeOverrides, getCliViewModeForSession } from '../../../src/components/dashboard/cliViewModeOverrides'
+import { applyCliViewModeOverrides, getCliViewModeForSession, reconcileCliViewModeOverrides } from '../../../src/components/dashboard/cliViewModeOverrides'
 import type { DaemonData } from '../../../src/types'
 
 function createEntry(overrides: Partial<DaemonData> = {}): DaemonData {
@@ -84,5 +84,15 @@ describe('cliViewModeOverrides', () => {
     expect(getCliViewModeForSession(entries, 'cli-1')).toBe('terminal')
     expect(getCliViewModeForSession(entries, 'cli-child')).toBe('terminal')
     expect(getCliViewModeForSession(entries, 'missing')).toBeNull()
+  })
+
+  it('keeps an optimistic override when the server temporarily has no session mode for that id', () => {
+    const next = reconcileCliViewModeOverrides({ 'cli-1': 'chat' }, [])
+    expect(next).toEqual({ 'cli-1': 'chat' })
+  })
+
+  it('clears an optimistic override once the server reports the same mode', () => {
+    const next = reconcileCliViewModeOverrides({ 'cli-1': 'chat' }, [createEntry({ mode: 'chat' })])
+    expect(next).toEqual({})
   })
 })

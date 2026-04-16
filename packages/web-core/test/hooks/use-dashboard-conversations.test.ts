@@ -37,6 +37,35 @@ function createCliEntry(overrides: Partial<DaemonData> = {}): DaemonData {
 }
 
 describe('buildConversationSourceSignature', () => {
+    it('changes when the last assistant message content changes in place without a new id or timestamp', () => {
+        const entry = createCliEntry({
+            activeChat: {
+                id: 'chat-1',
+                title: 'Hermes Agent',
+                status: 'idle',
+                messages: [
+                    {
+                        id: 'msg-1',
+                        role: 'assistant',
+                        content: 'partial answer',
+                        index: 0,
+                        timestamp: 1,
+                        receivedAt: 1,
+                    },
+                ],
+                activeModal: null,
+            },
+        })
+        const before = buildConversationSourceSignature(entry)
+
+        if (entry.activeChat?.messages?.[0]) {
+            entry.activeChat.messages[0].content = 'completed answer with final text'
+        }
+
+        const after = buildConversationSourceSignature(entry)
+        expect(after).not.toBe(before)
+    })
+
     it('changes when a stable entry reference gains a completed assistant message', () => {
         const entry = createCliEntry()
         const before = buildConversationSourceSignature(entry)

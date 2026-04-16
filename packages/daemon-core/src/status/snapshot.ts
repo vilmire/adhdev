@@ -189,6 +189,10 @@ function parseMessageTime(value: unknown): number {
     return 0;
 }
 
+function getMessageEventTime(message: { receivedAt?: unknown; timestamp?: unknown } | null | undefined): number {
+    return parseMessageTime(message?.receivedAt) || parseMessageTime(message?.timestamp) || 0;
+}
+
 function stringifyPreviewContent(content: unknown): string {
     if (typeof content === 'string') return content;
     if (Array.isArray(content)) {
@@ -233,6 +237,7 @@ function getLastDisplayMessage(session: {
             role?: string;
             content?: unknown;
             receivedAt?: number | string;
+            timestamp?: number | string;
         }> | null
     } | null
 }) {
@@ -247,7 +252,7 @@ function getLastDisplayMessage(session: {
         return {
             role,
             preview,
-            receivedAt: parseMessageTime(candidate?.receivedAt),
+            receivedAt: getMessageEventTime(candidate),
             hash: simplePreviewHash(`${role}:${preview}`),
         };
     }
@@ -256,12 +261,12 @@ function getLastDisplayMessage(session: {
 
 function getSessionMessageUpdatedAt(session: {
     activeChat?: {
-        messages?: Array<{ receivedAt?: number | string }> | null
+        messages?: Array<{ receivedAt?: number | string; timestamp?: number | string }> | null
     } | null
 }) {
     const lastMessage = session.activeChat?.messages?.at?.(-1);
     if (!lastMessage) return 0;
-    return parseMessageTime(lastMessage.receivedAt) || 0;
+    return getMessageEventTime(lastMessage);
 }
 
 export function getSessionCompletionMarker(session: {
@@ -271,6 +276,7 @@ export function getSessionCompletionMarker(session: {
             id?: string;
             index?: number;
             receivedAt?: number | string;
+            timestamp?: number | string;
             _turnKey?: string;
         }> | null
     } | null
@@ -282,13 +288,13 @@ export function getSessionCompletionMarker(session: {
     if (typeof lastMessage._turnKey === 'string' && lastMessage._turnKey) return `turn:${lastMessage._turnKey}`;
     if (typeof lastMessage.id === 'string' && lastMessage.id) return `id:${lastMessage.id}`;
     if (typeof lastMessage.index === 'number' && Number.isFinite(lastMessage.index)) return `idx:${lastMessage.index}`;
-    const timestamp = parseMessageTime(lastMessage.receivedAt);
+    const timestamp = getMessageEventTime(lastMessage);
     return timestamp > 0 ? `ts:${timestamp}` : '';
 }
 
 function getSessionLastUsedAt(session: {
     activeChat?: {
-        messages?: Array<{ receivedAt?: number | string }> | null
+        messages?: Array<{ receivedAt?: number | string; timestamp?: number | string }> | null
     } | null
     lastUpdated?: number
 }) {

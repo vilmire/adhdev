@@ -51,6 +51,7 @@ function buildChatDataSignature(activeChat: DaemonData['activeChat'] | undefined
     if (!activeChat) return ''
     const messages = Array.isArray(activeChat.messages) ? activeChat.messages : []
     const lastMessage = messages[messages.length - 1]
+    const lastMessageContent = lastMessage ? normalizeTextContent(lastMessage.content).slice(0, 240) : ''
     return [
         activeChat.id || '',
         activeChat.title || '',
@@ -59,6 +60,7 @@ function buildChatDataSignature(activeChat: DaemonData['activeChat'] | undefined
         String(lastMessage?.id || ''),
         String(lastMessage?.index ?? ''),
         String(lastMessage?.receivedAt ?? lastMessage?.timestamp ?? ''),
+        lastMessageContent,
     ].join(':')
 }
 
