@@ -135,6 +135,7 @@ export function getConversationInboxSurfaceState(
     const liveState = getConversationLiveInboxState(conversation, stateBySessionId)
     const viewStates = getConversationViewStates(conversation)
     const notificationState = (conversation.sessionId && options?.notificationStateBySessionId?.get(conversation.sessionId))
+        || (conversation.providerSessionId && options?.notificationStateBySessionId?.get(conversation.providerSessionId))
         || options?.notificationStateBySessionId?.get(conversation.tabKey)
     
     const isReconnecting = viewStates.isReconnecting

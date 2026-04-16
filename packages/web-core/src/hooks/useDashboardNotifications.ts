@@ -71,7 +71,7 @@ export function useDashboardNotifications(args: {
     setNotifications(previous => markDashboardNotificationUnread(previous, id))
   }, [])
 
-  const markTargetRead = useCallback((target: { sessionId?: string; tabKey?: string }, readAt?: number) => {
+  const markTargetRead = useCallback((target: { sessionId?: string; providerSessionId?: string; tabKey?: string }, readAt?: number) => {
     setNotifications(previous => markDashboardNotificationTargetRead(previous, target, readAt))
   }, [])
 

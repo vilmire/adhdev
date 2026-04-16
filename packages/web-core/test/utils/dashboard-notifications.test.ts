@@ -3,6 +3,7 @@ import type { ActiveConversation } from '../../src/components/dashboard/types'
 import type { LiveSessionInboxState } from '../../src/components/dashboard/DashboardMobileChatShared'
 import {
   buildDashboardNotificationCandidates,
+  buildDashboardNotificationStateBySessionId,
   deleteDashboardNotification,
   getDashboardNotificationUnreadCount,
   markDashboardNotificationRead,
@@ -137,6 +138,41 @@ describe('dashboard notifications', () => {
     expect(reduced[0]?.createdAt).toBe(100)
   })
 
+  it('dedupes resumed conversations by providerSessionId even when runtime session ids change', () => {
+    const first = buildDashboardNotificationCandidates(
+      [createConversation({
+        sessionId: 'runtime-a',
+        providerSessionId: 'provider-1',
+        tabKey: 'tab-a',
+        lastMessageHash: 'hash-1',
+        lastMessageAt: 100,
+      })],
+      new Map<string, LiveSessionInboxState>([
+        ['runtime-a', createLiveState({ sessionId: 'runtime-a', lastUpdated: 100 })],
+      ]),
+    )
+
+    const second = buildDashboardNotificationCandidates(
+      [createConversation({
+        sessionId: 'runtime-b',
+        providerSessionId: 'provider-1',
+        tabKey: 'tab-b',
+        lastMessageHash: 'hash-1',
+        lastMessageAt: 100,
+      })],
+      new Map<string, LiveSessionInboxState>([
+        ['runtime-b', createLiveState({ sessionId: 'runtime-b', lastUpdated: 100 })],
+      ]),
+    )
+
+    expect(first[0]?.id).toBe('task_complete|provider-1|hash-1|100')
+    expect(second[0]?.id).toBe(first[0]?.id)
+
+    const reduced = reduceDashboardNotifications(first, second)
+    expect(reduced).toHaveLength(1)
+    expect(reduced[0]?.providerSessionId).toBe('provider-1')
+  })
+
   it('supports read, unread, delete, and unread-count projections from the same records', () => {
     const records = [
       {
@@ -229,6 +265,31 @@ describe('dashboard notifications', () => {
     expect(next.find(record => record.id === 'a')?.readAt).toBe(400)
     expect(next.find(record => record.id === 'b')?.readAt).toBe(400)
     expect(next.find(record => record.id === 'c')?.readAt).toBeUndefined()
+  })
+
+  it('marks notifications read by providerSessionId across resumed runtime ids and updates state projections', () => {
+    const records = [{
+      id: 'task_complete|provider-1|hash-1|100',
+      dedupKey: 'task_complete|provider-1|hash-1|100',
+      type: 'task_complete' as const,
+      routeId: 'machine-1',
+      sessionId: 'runtime-a',
+      providerSessionId: 'provider-1',
+      tabKey: 'tab-a',
+      title: 'Hermes',
+      preview: 'Done',
+      createdAt: 100,
+      updatedAt: 100,
+      lastEventAt: 100,
+    }]
+
+    const next = markDashboardNotificationTargetRead(records, { providerSessionId: 'provider-1' }, 250)
+    expect(next[0]?.readAt).toBe(250)
+
+    const stateBySessionId = buildDashboardNotificationStateBySessionId(next)
+    expect(stateBySessionId.get('provider-1')?.unreadCount).toBe(0)
+    expect(stateBySessionId.get('runtime-a')?.unreadCount).toBe(0)
+    expect(stateBySessionId.get('tab-a')?.unreadCount).toBe(0)
   })
 
   it('keeps only the most recent retained notifications', () => {

@@ -8,6 +8,7 @@ export interface DashboardNotificationRecord {
   dedupKey: string
   type: DashboardNotificationType
   sessionId?: string
+  providerSessionId?: string
   tabKey?: string
   routeId: string
   machineId?: string
@@ -52,6 +53,7 @@ function normalizeNotificationRecord(record: DashboardNotificationRecord): Dashb
 export function buildDashboardNotificationDedupKey(args: {
   type: DashboardNotificationType
   sessionId?: string
+  providerSessionId?: string
   tabKey?: string
   lastMessageHash?: string
   lastMessageAt?: number
@@ -59,7 +61,7 @@ export function buildDashboardNotificationDedupKey(args: {
 }) {
   return [
     args.type,
-    args.sessionId || args.tabKey || '',
+    args.providerSessionId || args.sessionId || args.tabKey || '',
     args.lastMessageHash || '',
     String(args.lastMessageAt || args.lastUpdated || 0),
   ].join('|')
@@ -88,6 +90,7 @@ export function buildDashboardNotificationCandidates(
     const dedupKey = buildDashboardNotificationDedupKey({
       type,
       sessionId: conversation.sessionId,
+      providerSessionId: conversation.providerSessionId,
       tabKey: conversation.tabKey,
       lastMessageHash: conversation.lastMessageHash,
       lastMessageAt: conversation.lastMessageAt,
@@ -100,6 +103,7 @@ export function buildDashboardNotificationCandidates(
       routeId: conversation.routeId,
       machineId: conversation.daemonId || conversation.routeId,
       sessionId: conversation.sessionId,
+      providerSessionId: conversation.providerSessionId,
       tabKey: conversation.tabKey,
       title: conversation.title || conversation.displayPrimary || conversation.agentName || conversation.tabKey,
       preview: conversation.lastMessagePreview || conversation.displaySecondary || '',
@@ -174,13 +178,14 @@ export function markDashboardNotificationUnread(
 
 export function markDashboardNotificationTargetRead(
   records: DashboardNotificationRecord[],
-  target: { sessionId?: string; tabKey?: string },
+  target: { sessionId?: string; providerSessionId?: string; tabKey?: string },
   readAt = Date.now(),
 ): DashboardNotificationRecord[] {
   return records.map(record => {
     const matchesSession = !!target.sessionId && record.sessionId === target.sessionId
+    const matchesProviderSession = !!target.providerSessionId && record.providerSessionId === target.providerSessionId
     const matchesTab = !!target.tabKey && record.tabKey === target.tabKey
-    if (!matchesSession && !matchesTab) return record
+    if (!matchesSession && !matchesProviderSession && !matchesTab) return record
     return { ...record, readAt, updatedAt: Math.max(record.updatedAt, readAt) }
   })
 }
@@ -203,23 +208,25 @@ export function buildDashboardNotificationStateBySessionId(
 
   for (const record of records) {
     if (record.deletedAt) continue
-    const key = record.sessionId || record.tabKey
-    if (!key) continue
-    const previous = state.get(key)
+    const keys = [record.providerSessionId, record.sessionId, record.tabKey].filter(Boolean) as string[]
+    if (keys.length === 0) continue
     const unreadIncrement = record.readAt ? 0 : 1
-    if (!previous) {
+    for (const key of keys) {
+      const previous = state.get(key)
+      if (!previous) {
+        state.set(key, {
+          unreadCount: unreadIncrement,
+          latestNotificationAt: record.updatedAt,
+          latestRecordId: record.id,
+        })
+        continue
+      }
       state.set(key, {
-        unreadCount: unreadIncrement,
-        latestNotificationAt: record.updatedAt,
-        latestRecordId: record.id,
+        unreadCount: previous.unreadCount + unreadIncrement,
+        latestNotificationAt: Math.max(previous.latestNotificationAt, record.updatedAt),
+        latestRecordId: previous.latestNotificationAt >= record.updatedAt ? previous.latestRecordId : record.id,
       })
-      continue
     }
-    state.set(key, {
-      unreadCount: previous.unreadCount + unreadIncrement,
-      latestNotificationAt: Math.max(previous.latestNotificationAt, record.updatedAt),
-      latestRecordId: previous.latestNotificationAt >= record.updatedAt ? previous.latestRecordId : record.id,
-    })
   }
 
   return state

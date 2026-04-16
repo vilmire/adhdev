@@ -142,7 +142,7 @@ interface DashboardMainViewProps {
     onMarkNotificationRead: (notificationId: string) => void
     onMarkNotificationUnread: (notificationId: string) => void
     onDeleteNotification: (notificationId: string) => void
-    onMarkNotificationTargetRead: (target: { sessionId?: string; tabKey?: string }) => void
+    onMarkNotificationTargetRead: (target: { sessionId?: string; providerSessionId?: string; tabKey?: string }) => void
 }
 
 export default function DashboardMainView({
@@ -262,8 +262,12 @@ export default function DashboardMainView({
         }
 
         onMarkNotificationRead(notification.id)
-        if (notification.sessionId || notification.tabKey) {
-            onMarkNotificationTargetRead({ sessionId: notification.sessionId, tabKey: notification.tabKey })
+        if (notification.sessionId || notification.providerSessionId || notification.tabKey) {
+            onMarkNotificationTargetRead({
+                sessionId: notification.sessionId,
+                providerSessionId: notification.providerSessionId,
+                tabKey: notification.tabKey,
+            })
         }
         setInboxOpen(false)
     }, [

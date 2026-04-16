@@ -267,7 +267,11 @@ export default function Dashboard() {
 
             const liveState = getConversationLiveInboxState(activeConv, liveSessionInboxState)
             const readAt = Math.max(Date.now(), getConversationTimestamp(activeConv), liveState.lastUpdated || 0)
-            markDashboardNotificationTargetRead({ sessionId: activeConv.sessionId, tabKey: activeConv.tabKey }, readAt)
+            markDashboardNotificationTargetRead({
+                sessionId: activeConv.sessionId,
+                providerSessionId: activeConv.providerSessionId,
+                tabKey: activeConv.tabKey,
+            }, readAt)
 
             void sendDaemonCommand(activeConv.daemonId || activeConv.routeId, 'mark_session_seen', {
                 sessionId: activeConv.sessionId,
