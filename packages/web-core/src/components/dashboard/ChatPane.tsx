@@ -28,6 +28,7 @@ import {
 } from './conversation-selectors';
 import { getDefaultVisibleLiveMessages } from './chat-visibility';
 import { useSessionChatTailController } from './session-chat-tail-controller';
+import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
 
 export interface ChatPaneProps {
     activeConv: ActiveConversation;
@@ -89,6 +90,7 @@ export default function ChatPane({
     const hiddenLiveCount = Math.max(0, liveMessages.length - visibleLiveCount);
     const panelLabel = getConversationDisplayLabel(activeConv)
     const daemonId = getConversationDaemonRouteId(activeConv);
+    const canOpenPanel = shouldShowOpenPanelAction(activeConv)
 
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     useEffect(() => {
@@ -193,7 +195,7 @@ export default function ChatPane({
         if (viewStates.isGenerating || activeConv.status === 'streaming') {
             setIsLoadingMore(false);
         }
-        if (activeConv.status === 'not_monitored') {
+        if (activeConv.status === 'not_monitored' && canOpenPanel) {
             return (
                 <div className="text-center mt-16 flex flex-col items-center gap-3">
                     <div className="text-3xl opacity-60"><IconPlug size={28} /></div>
@@ -205,7 +207,7 @@ export default function ChatPane({
                 </div>
             );
         }
-        if (activeConv.status === 'panel_hidden') {
+        if (activeConv.status === 'panel_hidden' && canOpenPanel) {
             return (
                 <div className="text-center mt-16 flex flex-col items-center gap-3">
                     <div className="text-3xl opacity-60"><IconEye size={28} /></div>
@@ -226,7 +228,7 @@ export default function ChatPane({
             );
         }
         return undefined;
-    }, [activeConv.connectionState, activeConv.status, handleFocusAgent, isFocusingAgent, isLoadingMore, liveMessages.length, panelLabel, viewStates.isGenerating]);
+    }, [activeConv.connectionState, activeConv.status, canOpenPanel, handleFocusAgent, isFocusingAgent, isLoadingMore, liveMessages.length, panelLabel, viewStates.isGenerating]);
 
     return (
         <div className="flex-1 min-h-0 w-full flex flex-col">

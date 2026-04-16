@@ -4,6 +4,8 @@ import {
   buildRecentActivityKey,
   buildRecentActivityKeyForEntry,
   getRecentActivity,
+  getSessionSeenAt,
+  getSessionSeenMarker,
   markSessionSeen,
 } from '../../src/config/recent-activity.js';
 import type { DaemonState } from '../../src/config/state-store.js';
@@ -129,5 +131,15 @@ describe('recent-activity', () => {
 
     expect(second.sessionReads['session-1']).toBe(100);
     expect(second.sessionReadMarkers['session-1']).toBe('done-1');
+  });
+
+  it('reuses providerSessionId read markers across runtime session id churn', () => {
+    const state = createState();
+    const first = markSessionSeen(state, 'runtime-a', 100, 'done-1', 'provider-1');
+
+    expect(getSessionSeenAt(first, 'runtime-b', 'provider-1')).toBe(100);
+    expect(getSessionSeenMarker(first, 'runtime-b', 'provider-1')).toBe('done-1');
+    expect(first.sessionReads['provider:provider-1']).toBe(100);
+    expect(first.sessionReadMarkers['provider:provider-1']).toBe('done-1');
   });
 });

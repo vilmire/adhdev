@@ -83,12 +83,20 @@ export function getRecentActivity(state: DaemonState, limit = 20): RecentActivit
         .slice(0, limit);
 }
 
-export function getSessionSeenAt(state: DaemonState, sessionId: string): number {
-    return state.sessionReads?.[sessionId] || 0;
+export function buildSessionReadStateKey(sessionId: string, providerSessionId?: string | null): string {
+    const normalizedProviderSessionId = typeof providerSessionId === 'string' ? providerSessionId.trim() : '';
+    if (normalizedProviderSessionId) return `provider:${normalizedProviderSessionId}`;
+    return sessionId;
 }
 
-export function getSessionSeenMarker(state: DaemonState, sessionId: string): string {
-    return state.sessionReadMarkers?.[sessionId] || '';
+export function getSessionSeenAt(state: DaemonState, sessionId: string, providerSessionId?: string | null): number {
+    const providerKey = buildSessionReadStateKey(sessionId, providerSessionId);
+    return state.sessionReads?.[providerKey] || state.sessionReads?.[sessionId] || 0;
+}
+
+export function getSessionSeenMarker(state: DaemonState, sessionId: string, providerSessionId?: string | null): string {
+    const providerKey = buildSessionReadStateKey(sessionId, providerSessionId);
+    return state.sessionReadMarkers?.[providerKey] || state.sessionReadMarkers?.[sessionId] || '';
 }
 
 export function markSessionSeen(
@@ -96,22 +104,24 @@ export function markSessionSeen(
     sessionId: string,
     seenAt = Date.now(),
     completionMarker?: string | null,
+    providerSessionId?: string | null,
 ): DaemonState {
     const prev = state.sessionReads || {};
-    const nextSeenAt = Math.max(prev[sessionId] || 0, seenAt);
     const prevMarkers = state.sessionReadMarkers || {};
     const nextMarker = typeof completionMarker === 'string' ? completionMarker : '';
+    const readKeys = Array.from(new Set([
+        sessionId,
+        buildSessionReadStateKey(sessionId, providerSessionId),
+    ].filter(Boolean)));
+    const nextSessionReads = { ...prev };
+    const nextSessionReadMarkers = { ...prevMarkers };
+    for (const key of readKeys) {
+        nextSessionReads[key] = Math.max(prev[key] || 0, seenAt);
+        if (nextMarker) nextSessionReadMarkers[key] = nextMarker;
+    }
     return {
         ...state,
-        sessionReads: {
-            ...prev,
-            [sessionId]: nextSeenAt,
-        },
-        sessionReadMarkers: nextMarker
-            ? {
-                ...prevMarkers,
-                [sessionId]: nextMarker,
-            }
-            : prevMarkers,
+        sessionReads: nextSessionReads,
+        sessionReadMarkers: nextMarker ? nextSessionReadMarkers : prevMarkers,
     };
 }

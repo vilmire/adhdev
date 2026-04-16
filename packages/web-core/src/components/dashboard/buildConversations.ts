@@ -121,6 +121,7 @@ export function buildIdeConversations(
         instanceId?: string;
         providerSessionId?: string;
         transport?: string;
+        sessionCapabilities?: string[];
         agentType: string;
         agentName: string;
         status: string;
@@ -142,6 +143,7 @@ export function buildIdeConversations(
             instanceId: child.id,
             providerSessionId: child.providerSessionId,
             transport: child.transport,
+            sessionCapabilities: child.capabilities,
             agentType: child.providerType,
             agentName: child.providerName || formatIdeType(child.providerType),
             status: child.status,
@@ -160,10 +162,6 @@ export function buildIdeConversations(
         }))
         : [];
     const useConversationFirst = isConversationFirstIde(ide);
-
-    // Parent IDE chat title — shared with extension tabs
-    const parentChat = ide.activeChat || { title: '', messages: [] };
-    const parentTitle = (parentChat.title && String(parentChat.title).trim()) ? String(parentChat.title).trim() : '';
 
     // 1) IDE native chat tab
     if (useConversationFirst) {
@@ -199,6 +197,7 @@ export function buildIdeConversations(
             nativeSessionId,
             transport: ide.transport,
             daemonId: ide.daemonId || undefined,
+            sessionCapabilities: ide.sessionCapabilities,
             mode: isCliConv(ide) ? ((ide.mode || 'terminal') as 'terminal' | 'chat') : 'chat',
             agentName,
             agentType: nativeProviderType,
@@ -260,6 +259,7 @@ export function buildIdeConversations(
             nativeSessionId: ide.sessionId || ide.instanceId,
             transport: (stream.transport || 'cdp-webview') as import('../../types').SessionTransport,
             daemonId: ide.daemonId || undefined,
+            sessionCapabilities: stream.sessionCapabilities,
             mode: 'chat',
             agentName: stream.agentName,
             agentType: stream.agentType,
@@ -294,6 +294,7 @@ export function buildIdeConversations(
             nativeSessionId: ide.sessionId || ide.instanceId,
             transport: ide.transport,
             daemonId: ide.daemonId || undefined,
+            sessionCapabilities: ide.sessionCapabilities,
             mode: 'chat',
             agentName: providerLabel,
             agentType: 'ide-native',

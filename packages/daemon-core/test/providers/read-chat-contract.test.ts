@@ -9,7 +9,7 @@ describe('read chat contract validation', () => {
       status: 'idle',
       messages: [
         { role: 'user', content: 'hello' },
-        { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'hi' }], _turnKey: 'turn-1' },
       ],
       activeModal: null,
       controlValues: { model: 'sonnet', compact: true },
@@ -17,7 +17,7 @@ describe('read chat contract validation', () => {
       status: 'idle',
       messages: [
         { role: 'user', content: 'hello' },
-        { role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'hi' }], _turnKey: 'turn-1' },
       ],
       controlValues: { model: 'sonnet', compact: true },
     })

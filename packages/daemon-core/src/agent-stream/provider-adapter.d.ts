@@ -5,7 +5,7 @@
  * Auto-configured using provider.js scripts + metadata.
  */
 import type { IAgentStreamAdapter, AgentStreamState, AgentChatListItem, AgentEvaluateFn } from './types.js';
-import type { ProviderModule } from '../providers/contracts.js';
+import type { ProviderModule, FocusEditorResult, OpenPanelResult } from '../providers/contracts.js';
 export declare class ProviderStreamAdapter implements IAgentStreamAdapter {
     readonly agentType: string;
     readonly agentName: string;
@@ -31,6 +31,7 @@ export declare class ProviderStreamAdapter implements IAgentStreamAdapter {
     newSession(evaluate: AgentEvaluateFn): Promise<void>;
     listChats(evaluate: AgentEvaluateFn): Promise<AgentChatListItem[]>;
     switchSession(evaluate: AgentEvaluateFn, sessionId: string): Promise<boolean>;
-    focusEditor(evaluate: AgentEvaluateFn): Promise<void>;
+    focusEditor(evaluate: AgentEvaluateFn): Promise<FocusEditorResult>;
+    openPanel(evaluate: AgentEvaluateFn): Promise<OpenPanelResult>;
     private errorState;
 }

@@ -167,6 +167,28 @@ describe('validateProviderDefinition', () => {
     expect(result.errors).toContain('controls.auto_approve: toggle controls require setScript')
   })
 
+  it('warns when focusEditor is declared without any openPanel script, because open_panel capability will stay disabled', () => {
+    const result = validateProviderDefinition({
+      type: 'foo-ide',
+      name: 'Foo IDE',
+      category: 'ide',
+      cli: 'foo',
+      contractVersion: 2,
+      capabilities: {
+        input: { multipart: false, mediaTypes: ['text'] },
+        output: { richContent: false, mediaTypes: ['text'] },
+        controls: { typedResults: false },
+      },
+      scripts: {
+        readChat: () => '(() => JSON.stringify({ status: "idle", messages: [] }))()',
+        focusEditor: () => '(() => JSON.stringify({ focused: true }))()',
+      },
+    })
+
+    expect(result.errors).toEqual([])
+    expect(result.warnings).toContain('scripts.focusEditor is present without scripts.openPanel/webviewOpenPanel; open_panel capability will remain disabled')
+  })
+
   it('warns that provider-level disableUpstream is deprecated while still accepting runtime metadata', () => {
     const result = validateProviderDefinition({
       type: 'foo-cli',

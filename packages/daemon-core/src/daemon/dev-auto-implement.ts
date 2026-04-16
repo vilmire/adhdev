@@ -898,8 +898,8 @@ export function buildAutoImplPrompt(ctx: DevServerContext,
   lines.push('| setModel | `{ success: true/false }` |');
   lines.push('| listModes | `{ modes: [{ name, id }], current }` |');
   lines.push('| setMode | `{ success: true/false }` |');
-  lines.push('| focusEditor | `{ focused: true/false }` |');
-  lines.push('| openPanel | `{ opened: true/false }` |');
+  lines.push('| focusEditor | `{ focused: true/false, error? }` |');
+  lines.push('| openPanel | `{ opened: true/false, visible: true/false, focused?: true, error? }` |');
   lines.push('');
 
   // ── readChat.status lifecycle spec ──

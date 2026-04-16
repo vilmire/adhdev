@@ -1,4 +1,5 @@
 import type { ProviderControlDef, ProviderControlType, ProviderModule } from './contracts.js'
+import { providerHasOpenPanelSupport } from './open-panel-support.js'
 
 const VALID_CAPABILITY_MEDIA_TYPES = new Set(['text', 'image', 'audio', 'video', 'resource'])
 
@@ -91,6 +92,7 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
   }
 
   const category = provider.category
+  const typedProvider = provider as unknown as ProviderModule
   const controls = Array.isArray(provider.controls) ? provider.controls : []
   if ((category === 'cli' || category === 'acp')) {
     const spawn = provider.spawn
@@ -118,6 +120,14 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
 
   for (const control of controls) {
     validateControl(control as ProviderControlDef, errors)
+  }
+
+  if (
+    (category === 'ide' || category === 'extension')
+    && typeof typedProvider.scripts?.focusEditor === 'function'
+    && !providerHasOpenPanelSupport(typedProvider)
+  ) {
+    warnings.push('scripts.focusEditor is present without scripts.openPanel/webviewOpenPanel; open_panel capability will remain disabled')
   }
 
   return { errors, warnings }

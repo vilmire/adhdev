@@ -413,7 +413,8 @@ export class DaemonCommandHandler implements CommandHelpers {
             'change_model',
             'set_thought_level',
             'resolve_action',
-            'focus_session',
+            'select_session',
+            'open_panel',
             'pty_input',
             'pty_resize',
             'invoke_provider_script',
@@ -494,7 +495,8 @@ export class DaemonCommandHandler implements CommandHelpers {
             case 'refresh_scripts': return this.handleRefreshScripts(args);
 
             // ─── Stream commands (stream-commands.ts) ───────────
-            case 'focus_session': return Stream.handleFocusSession(this, args);
+            case 'select_session': return Stream.handleSelectSession(this, args);
+            case 'open_panel': return Stream.handleOpenPanel(this, args);
 
             // ─── PTY Raw I/O (stream-commands.ts) ─────────
             case 'pty_input': return Stream.handlePtyInput(this, args);

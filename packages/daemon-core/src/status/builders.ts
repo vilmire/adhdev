@@ -25,6 +25,10 @@ import {
 } from './normalize.js';
 import { normalizeProviderStateControlValues } from '../providers/provider-patch-state.js';
 import { normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
+import {
+    IDE_PROVIDER_SESSION_CAPABILITIES_BASE,
+    EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE,
+} from '../providers/open-panel-support.js';
 
 export type SessionEntryProfile = 'full' | 'live' | 'metadata';
 
@@ -107,28 +111,9 @@ export function isCdpConnected(
 }
 
 
-const IDE_SESSION_CAPABILITIES: SessionCapability[] = [
-    'read_chat',
-    'send_message',
-    'new_session',
-    'list_sessions',
-    'switch_session',
-    'resolve_action',
-    'change_model',
-    'set_mode',
-    'set_thought_level',
-];
+const IDE_SESSION_CAPABILITIES: SessionCapability[] = [...IDE_PROVIDER_SESSION_CAPABILITIES_BASE];
 
-const EXTENSION_SESSION_CAPABILITIES: SessionCapability[] = [
-    'read_chat',
-    'send_message',
-    'new_session',
-    'list_sessions',
-    'switch_session',
-    'resolve_action',
-    'change_model',
-    'set_mode',
-];
+const EXTENSION_SESSION_CAPABILITIES: SessionCapability[] = [...EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE];
 
 const PTY_SESSION_CAPABILITIES: SessionCapability[] = [
     'read_chat',
@@ -180,7 +165,7 @@ function buildIdeWorkspaceSession(
         ...(includeSessionMetadata && { workspace: state.workspace || null }),
         activeChat,
         ...(summaryMetadata && { summaryMetadata }),
-        ...(includeSessionMetadata && { capabilities: IDE_SESSION_CAPABILITIES }),
+        ...(includeSessionMetadata && { capabilities: state.sessionCapabilities || IDE_SESSION_CAPABILITIES }),
         cdpConnected: state.cdpConnected ?? isCdpConnected(cdpManagers, state.type),
         ...(includeSessionControls && {
             ...(controlValues && { controlValues }),
@@ -208,6 +193,7 @@ function buildExtensionAgentSession(
         parentId: parent.instanceId || parent.type,
         providerType: ext.type,
         ...(includeSessionMetadata && { providerName: ext.name }),
+        providerSessionId: ext.providerSessionId,
         kind: 'agent',
         transport: 'cdp-webview',
         status: normalizeManagedStatus(activeChat?.status || ext.status, {
@@ -217,7 +203,7 @@ function buildExtensionAgentSession(
         ...(includeSessionMetadata && { workspace: parent.workspace || null }),
         activeChat,
         ...(summaryMetadata && { summaryMetadata }),
-        ...(includeSessionMetadata && { capabilities: EXTENSION_SESSION_CAPABILITIES }),
+        ...(includeSessionMetadata && { capabilities: ext.sessionCapabilities || EXTENSION_SESSION_CAPABILITIES }),
         ...(includeSessionControls && {
             ...(controlValues && { controlValues }),
             providerControls: ext.providerControls,

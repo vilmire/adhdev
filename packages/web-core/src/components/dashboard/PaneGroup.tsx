@@ -19,6 +19,7 @@ import PaneGroupContent from './PaneGroupContent'
 import PaneGroupDropOverlay from './PaneGroupDropOverlay'
 import PaneGroupEmptyState from './PaneGroupEmptyState'
 import PaneGroupTabBar from './PaneGroupTabBar'
+import { getPassiveSessionSelectionCommand } from './dashboardSessionCommands'
 
 export interface PaneGroupProps {
     /** Conversations assigned to this group */
@@ -158,7 +159,7 @@ export default function PaneGroup({
 
     const handleConversationActivated = useCallback((conv: ActiveConversation) => {
         if (conv.streamSource === 'agent-stream' && conv.agentType) {
-            sendCommand(conv.routeId, 'focus_session', {
+            sendCommand(conv.routeId, getPassiveSessionSelectionCommand(), {
                 agentType: conv.agentType,
                 ...(conv.sessionId && { targetSessionId: conv.sessionId }),
             }).catch(() => {})

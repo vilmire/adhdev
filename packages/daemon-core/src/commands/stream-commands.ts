@@ -28,12 +28,84 @@ function getCliPresentationMode(h: CommandHelpers, targetSessionId?: string): 't
     return mode === 'chat' || mode === 'terminal' ? mode : null;
 }
 
-export async function handleFocusSession(h: CommandHelpers, args: any): Promise<CommandResult> {
+function normalizeOpenPanelCommandResult(result: CommandResult): { opened: boolean; visible: boolean; focused: boolean } {
+    const payload = Object.prototype.hasOwnProperty.call(result, 'result') ? result.result : result;
+    if (payload === true) return { opened: true, visible: true, focused: false };
+    if (!payload) return { opened: false, visible: false, focused: false };
+    if (typeof payload === 'string') {
+        const normalized = payload.trim().toLowerCase();
+        if (normalized === 'visible') return { opened: false, visible: true, focused: false };
+        if (normalized === 'focused') return { opened: false, visible: true, focused: true };
+        if (normalized === 'opened' || normalized === 'open' || normalized === 'true' || normalized === 'ok' || normalized === 'success') {
+            return { opened: true, visible: true, focused: false };
+        }
+        return { opened: false, visible: false, focused: false };
+    }
+    if (typeof payload === 'object') {
+        const record = payload as Record<string, unknown>;
+        return {
+            opened: record.opened === true,
+            visible: record.visible === true || record.opened === true || record.focused === true,
+            focused: record.focused === true,
+        };
+    }
+    return { opened: false, visible: false, focused: false };
+}
+
+function normalizeFocusEditorCommandResult(result: CommandResult): { focused: boolean } {
+    const payload = Object.prototype.hasOwnProperty.call(result, 'result') ? result.result : result;
+    if (payload === true) return { focused: true };
+    if (!payload) return { focused: false };
+    if (typeof payload === 'string') {
+        const normalized = payload.trim().toLowerCase();
+        return { focused: normalized === 'focused' || normalized === 'visible' || normalized === 'true' || normalized === 'ok' || normalized === 'success' };
+    }
+    if (typeof payload === 'object') {
+        const record = payload as Record<string, unknown>;
+        return { focused: record.focused === true || record.visible === true || record.success === true || record.ok === true };
+    }
+    return { focused: false };
+}
+
+export async function handleSelectSession(h: CommandHelpers, args: any): Promise<CommandResult> {
     if (!h.agentStream || !h.getCdp()) return { success: false, error: 'AgentStream or CDP not available' };
     const sessionId = args?.targetSessionId || h.currentSession?.sessionId;
     if (!sessionId) return { success: false, error: 'targetSessionId required' };
-    const ok = await h.agentStream.focusSession(h.getCdp()!, sessionId);
+    const ok = await h.agentStream.selectSession(h.getCdp()!, sessionId);
     return { success: ok };
+}
+
+export async function handleOpenPanel(h: CommandHelpers, args: any): Promise<CommandResult> {
+    const cdp = h.getCdp();
+    if (!cdp) return { success: false, error: 'AgentStream or CDP not available' };
+    const sessionId = args?.targetSessionId || h.currentSession?.sessionId;
+    if (!sessionId) return { success: false, error: 'targetSessionId required' };
+
+    const currentTransport = h.currentSession?.transport;
+    const shouldUseAgentStream = !!h.agentStream
+        && currentTransport !== 'cdp-page'
+        && currentTransport !== 'pty'
+        && currentTransport !== 'acp';
+    if (shouldUseAgentStream) {
+        const ok = await h.agentStream.openSessionPanel(cdp, sessionId);
+        return { success: ok };
+    }
+
+    const openResult = await executeProviderScript(h, args, 'openPanel');
+    if (!openResult.success) return openResult;
+    const revealState = normalizeOpenPanelCommandResult(openResult);
+
+    let focusState = { focused: false };
+    const focusResult = await executeProviderScript(h, args, 'focusEditor');
+    if (focusResult.success) {
+        focusState = normalizeFocusEditorCommandResult(focusResult);
+    }
+
+    return {
+        ...openResult,
+        ...(focusState.focused ? { focused: true } : {}),
+        success: revealState.visible || focusState.focused,
+    };
 }
 
 // ─── PTY Raw I/O ──────────────────────────────────

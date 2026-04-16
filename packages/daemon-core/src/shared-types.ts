@@ -285,6 +285,7 @@ export type SessionCapability =
     | 'list_sessions'
     | 'switch_session'
     | 'resolve_action'
+    | 'open_panel'
     | 'terminal_io'
     | 'resize_terminal'
     | 'change_model'

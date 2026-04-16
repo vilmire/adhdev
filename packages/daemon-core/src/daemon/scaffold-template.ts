@@ -303,9 +303,14 @@ module.exports.setMode = (params) => {
 (() => {
   try {
     const input = document.querySelector('${meta.inputSelector || '[contenteditable="true"]'}');
-    if (input) { input.focus(); return 'focused'; }
-    return 'not_found';
-  } catch(e) { return 'error'; }
+    if (input) {
+      input.focus();
+      return JSON.stringify({ focused: true });
+    }
+    return JSON.stringify({ focused: false, error: 'not_found' });
+  } catch(e) {
+    return JSON.stringify({ focused: false, error: e.message });
+  }
 })()
 `;
 
@@ -318,8 +323,10 @@ module.exports.setMode = (params) => {
 (() => {
   try {
     // TODO: Check if panel visible, if not find toggle button
-    return 'not_found';
-  } catch(e) { return 'error'; }
+    return JSON.stringify({ opened: false, visible: false, error: 'not_found' });
+  } catch(e) {
+    return JSON.stringify({ opened: false, visible: false, error: e.message });
+  }
 })()
 `;
 

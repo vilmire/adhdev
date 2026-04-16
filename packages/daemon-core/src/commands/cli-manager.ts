@@ -883,6 +883,18 @@ export class DaemonCliManager {
  // UUID session target based search priority
                 const found = this.findAdapter(cliType, { instanceKey: args?.targetSessionId, dir });
                 if (found) {
+ // If we got here via fuzzy match (no targetSessionId, no dir), check for ambiguity.
+ // If multiple sessions of the same type exist, refuse to stop without a targetSessionId.
+                    if (!args?.targetSessionId && !dir) {
+                        const matchCount = [...this.adapters.values()].filter((a) => a.cliType === cliType).length;
+                        if (matchCount > 1) {
+                            return {
+                                success: false,
+                                error: `Multiple ${cliType} sessions running — provide targetSessionId to stop a specific session`,
+                                code: 'AMBIGUOUS_SESSION',
+                            };
+                        }
+                    }
                     await this.stopSessionWithMode(found.key, mode);
                 } else {
                     console.log(colorize('yellow', `  ⚠ No adapter found for ${cliType}`));

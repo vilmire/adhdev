@@ -11,7 +11,7 @@ import type {
     AgentChatListItem,
     AgentEvaluateFn,
 } from './types.js';
-import type { ProviderModule, ProviderScripts } from '../providers/contracts.js';
+import type { ProviderModule, ProviderScripts, FocusEditorResult, OpenPanelResult } from '../providers/contracts.js';
 import { extractProviderControlValues, normalizeProviderEffects } from '../providers/control-effects.js';
 import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
 import { resolveProviderStateSurface } from '../providers/provider-patch-state.js';
@@ -55,6 +55,110 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
         } catch {
             return raw;
         }
+    }
+
+    private getOptionalError(raw: unknown): string | undefined {
+        return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
+    }
+
+    private normalizeFocusEditorResult(raw: unknown): FocusEditorResult {
+        const data = this.parseMaybeJson(raw);
+        if (data === true) return { focused: true };
+        if (data === false || data == null) return { focused: false };
+        if (typeof data === 'string') {
+            const trimmed = data.trim();
+            const normalized = trimmed.toLowerCase();
+            if (
+                normalized === 'true'
+                || normalized === 'ok'
+                || normalized === 'success'
+                || normalized === 'focused'
+                || normalized === 'visible'
+            ) {
+                return { focused: true };
+            }
+            if (
+                normalized === 'false'
+                || normalized === 'not_found'
+                || normalized === 'not found'
+                || normalized === 'missing'
+                || normalized === 'panel_hidden'
+                || normalized === 'hidden'
+            ) {
+                return { focused: false };
+            }
+            return { focused: false, ...(trimmed ? { error: trimmed } : {}) };
+        }
+        if (data && typeof data === 'object') {
+            const error = this.getOptionalError(data.error);
+            if (data.focused === true || data.success === true || data.ok === true || data.visible === true) {
+                return { focused: true };
+            }
+            if (data.focused === false || data.success === false || data.ok === false || error) {
+                return { focused: false, ...(error ? { error } : {}) };
+            }
+        }
+        return { focused: false };
+    }
+
+    private normalizeOpenPanelResult(raw: unknown): OpenPanelResult {
+        const data = this.parseMaybeJson(raw);
+        if (data === true) return { opened: true, visible: true };
+        if (data === false || data == null) return { opened: false, visible: false };
+        if (typeof data === 'string') {
+            const trimmed = data.trim();
+            const normalized = trimmed.toLowerCase();
+            if (
+                normalized === 'true'
+                || normalized === 'ok'
+                || normalized === 'opened'
+                || normalized === 'open'
+                || normalized === 'success'
+            ) {
+                return { opened: true, visible: true };
+            }
+            if (normalized === 'visible') {
+                return { opened: false, visible: true };
+            }
+            if (normalized === 'focused') {
+                return { opened: false, visible: true, focused: true };
+            }
+            if (
+                normalized === 'false'
+                || normalized === 'panel_hidden'
+                || normalized === 'hidden'
+                || normalized === 'not_found'
+                || normalized === 'not found'
+                || normalized === 'missing'
+            ) {
+                return { opened: false, visible: false };
+            }
+            return { opened: false, visible: false, ...(trimmed ? { error: trimmed } : {}) };
+        }
+        if (data && typeof data === 'object') {
+            const error = this.getOptionalError(data.error);
+            const focused = data.focused === true;
+            const visible = data.visible === true
+                || data.opened === true
+                || focused
+                || data.success === true
+                || data.ok === true;
+            if (visible) {
+                return {
+                    opened: data.opened === true,
+                    visible: true,
+                    ...(focused ? { focused: true } : {}),
+                };
+            }
+            if (data.opened === false || data.visible === false || data.success === false || data.ok === false || error) {
+                return {
+                    opened: false,
+                    visible: false,
+                    ...(error ? { error } : {}),
+                };
+            }
+        }
+        return { opened: false, visible: false };
     }
 
     private summarizeRaw(raw: unknown): string {
@@ -166,6 +270,13 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
             };
             if (typeof validated.title === 'string' && validated.title.trim()) {
                 state.title = validated.title.trim();
+            }
+            const providerSessionId = typeof validated.providerSessionId === 'string' && validated.providerSessionId.trim()
+                ? validated.providerSessionId.trim()
+                : '';
+            if (providerSessionId) {
+                state.sessionId = providerSessionId;
+                state.providerSessionId = providerSessionId;
             }
             const controlValues = extractProviderControlValues(this.provider.controls, validated);
             const surface = resolveProviderStateSurface({
@@ -303,10 +414,18 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
         return false;
     }
 
-    async focusEditor(evaluate: AgentEvaluateFn): Promise<void> {
+    async focusEditor(evaluate: AgentEvaluateFn): Promise<FocusEditorResult> {
         const script = this.callScript('focusEditor');
-        if (!script) return;
-        await evaluate(script);
+        if (!script) return { focused: false };
+        const raw = await evaluate(script);
+        return this.normalizeFocusEditorResult(raw);
+    }
+
+    async openPanel(evaluate: AgentEvaluateFn): Promise<OpenPanelResult> {
+        const script = this.callScript('openPanel');
+        if (!script) return { opened: false, visible: false };
+        const raw = await evaluate(script);
+        return this.normalizeOpenPanelResult(raw);
     }
 
     private errorState(message: string): AgentStreamState {

@@ -2,17 +2,18 @@
 
 All notable changes to ADHDev will be documented in this file.
 
-## [0.8.69] - 2026-04-16
+## [0.8.70] - 2026-04-17
 
 ### Added
-- 
+- Added regression coverage for extension provider-session surfacing, runtime unread marker reuse across session-id churn, explicit panel-open support, and hosted CLI busy-send guards.
 
 ### Fixed
-- 
+- Fixed shared extension/agent-stream unread plumbing so provider-backed sessions keep a stable `providerSessionId` through status snapshots, read markers, and resumed-runtime notification dedupe instead of resurrecting unread/task-complete state.
+- Fixed hosted CLI send behavior so busy PTY runtimes fail explicitly instead of silently dropping follow-up prompts while a previous response is still in progress.
 
 ### Changed
-- 
-## [0.8.68] - 2026-04-16
+- Split shared stream-session actions into explicit passive session selection vs panel-opening capabilities and exposed the richer session capability metadata to dashboard surfaces.
+## [0.8.69] - 2026-04-16
 
 ### Added
 - 

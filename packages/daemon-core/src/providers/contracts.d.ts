@@ -191,6 +191,16 @@ export interface SwitchSessionResult {
     clickY?: number;
     error?: string;
 }
+export interface FocusEditorResult {
+    focused: boolean;
+    error?: string;
+}
+export interface OpenPanelResult {
+    opened: boolean;
+    visible: boolean;
+    focused?: boolean;
+    error?: string;
+}
 /**
  * Method 1: Script-Click — script calls el.click() directly
  * Cursor Suitable for IDEs using div.cursor-pointer elements.

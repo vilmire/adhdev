@@ -718,6 +718,7 @@ export class DaemonCommandRouter {
                     sessionId,
                     typeof args?.seenAt === 'number' ? args.seenAt : Date.now(),
                     completionMarker,
+                    targetSession?.providerSessionId,
                 );
                 if (READ_DEBUG_ENABLED) {
                     LOG.info('RecentRead', `mark_session_seen sessionId=${sessionId} seenAt=${String(args?.seenAt || '')} prevSeenAt=${String(prevSeenAt)} nextSeenAt=${String(next.sessionReads?.[sessionId] || 0)} marker=${completionMarker || '-'}`);

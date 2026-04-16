@@ -375,8 +375,8 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
     for (const sourceSession of unreadSourceSessions) {
         const session = sessionsById.get(sourceSession.id);
         if (!session) continue;
-        const lastSeenAt = getSessionSeenAt(state, sourceSession.id);
-        const seenCompletionMarker = getSessionSeenMarker(state, sourceSession.id);
+        const lastSeenAt = getSessionSeenAt(state, sourceSession.id, sourceSession.providerSessionId);
+        const seenCompletionMarker = getSessionSeenMarker(state, sourceSession.id, sourceSession.providerSessionId);
         const lastUsedAt = getSessionLastUsedAt(sourceSession);
         const completionMarker = getSessionCompletionMarker(sourceSession);
         const { unread, inboxBucket } = sourceSession.surfaceHidden

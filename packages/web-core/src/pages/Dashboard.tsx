@@ -259,7 +259,15 @@ export default function Dashboard() {
             return
         }
 
-        const autoReadKey = `${activeConv.tabKey}:${activeConv.sessionId}`
+        const liveState = getConversationLiveInboxState(activeConv, liveSessionInboxState)
+        const autoReadKey = [
+            activeConv.tabKey,
+            activeConv.providerSessionId || activeConv.sessionId,
+            activeConv.lastMessageHash || '',
+            String(activeConv.lastMessageAt || 0),
+            liveState.inboxBucket,
+            liveState.unread ? '1' : '0',
+        ].join(':')
         if (lastDesktopAutoReadKeyRef.current === autoReadKey) return
 
         const doMarkSeen = () => {
@@ -267,7 +275,6 @@ export default function Dashboard() {
             if (lastDesktopAutoReadKeyRef.current === autoReadKey) return
             lastDesktopAutoReadKeyRef.current = autoReadKey
 
-            const liveState = getConversationLiveInboxState(activeConv, liveSessionInboxState)
             const readAt = Math.max(Date.now(), getConversationTimestamp(activeConv), liveState.lastUpdated || 0)
             markDashboardNotificationTargetRead({
                 sessionId: activeConv.sessionId,

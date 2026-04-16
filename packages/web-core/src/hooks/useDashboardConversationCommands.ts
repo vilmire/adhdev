@@ -2,6 +2,7 @@ import { useCallback, useRef, useState, type Dispatch, type SetStateAction } fro
 import type { ActiveConversation } from '../components/dashboard/types'
 import { isAcpConv, isCliConv } from '../components/dashboard/types'
 import { getProviderArgs, getRouteTarget } from './dashboardCommandUtils'
+import { getExplicitSessionRevealCommand } from '../components/dashboard/dashboardSessionCommands'
 
 interface UseDashboardConversationCommandsOptions {
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
@@ -225,7 +226,7 @@ export function useDashboardConversationCommands({
 
         setIsFocusingAgent(true)
         try {
-            await sendDaemonCommand(activeConv.routeId, 'focus_session', {
+            await sendDaemonCommand(activeConv.routeId, getExplicitSessionRevealCommand(), {
                 ...(activeConv.sessionId && { targetSessionId: activeConv.sessionId }),
             })
         } catch (e) {

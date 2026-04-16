@@ -91,4 +91,23 @@ describe('IDE/Extension provider state merge', () => {
       expect.objectContaining({ kind: 'standard', content: 'Final answer' }),
     ])
   })
+
+  it('surfaces providerSessionId from extension stream updates', () => {
+    const instance = new ExtensionProviderInstance({
+      type: 'codex',
+      name: 'Codex',
+      category: 'extension',
+    } as any)
+
+    instance.onEvent('stream_update', {
+      providerSessionId: 'provider-session-1',
+      title: 'Codex',
+      status: 'idle',
+      messages: [{ role: 'assistant', content: 'done' }],
+    })
+
+    const state = instance.getState() as any
+    expect(state.providerSessionId).toBe('provider-session-1')
+    expect(state.activeChat?.id).toBe('provider-session-1')
+  })
 })

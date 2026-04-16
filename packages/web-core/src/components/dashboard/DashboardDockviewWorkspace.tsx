@@ -48,6 +48,7 @@ import { getConversationNativeTargetSessionId } from './conversation-selectors'
 import { IconExternalWindow, IconArrowBack, IconKeyboard, IconX, IconEyeOff, IconFloat, IconDock } from '../Icons'
 import { buildDashboardDockviewContextMenuItems } from './dockviewContextMenuItems'
 import { shouldAwaitStoredDockviewHydration } from './dashboardDockviewHydration'
+import { getPassiveSessionSelectionCommand } from './dashboardSessionCommands'
 import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 
 interface DashboardDockviewWorkspaceProps {
@@ -217,7 +218,7 @@ function buildInitialDockviewLayout(
     api: DockviewApi,
     visibleConversations: ActiveConversation[],
     requestedActiveTabKey?: string | null,
-) {
+): string | null {
     const groups = [visibleConversations]
     let previousGroupAnchorId: string | undefined
 
@@ -243,9 +244,7 @@ function buildInitialDockviewLayout(
     const preferredActiveTabKey = requestedActiveTabKey
         ?? visibleConversations[0]?.tabKey
         ?? null
-    if (!preferredActiveTabKey) return
-    const preferredPanel = api.getPanel(preferredActiveTabKey)
-    if (preferredPanel) preferredPanel.group.model.openPanel(preferredPanel)
+    return preferredActiveTabKey
 }
 
 function syncDockviewPanels(api: DockviewApi, visibleConversations: ActiveConversation[]) {
@@ -1292,17 +1291,27 @@ export default function DashboardDockviewWorkspace({
         actionShortcuts,
     }) : []
 
+    const activatePanel = useCallback((panel: { id: string; group: { model: { openPanel: (panel: any) => void } }; api: { setActive: () => void } }) => {
+        const api = apiRef.current
+        const activePanelId = api?.activePanel?.id ?? null
+        if (activePanelId === panel.id) {
+            panel.group.model.openPanel(panel)
+            return
+        }
+        panel.group.model.openPanel(panel)
+        panel.api.setActive()
+    }, [])
+
     const activateRequestedTab = useCallback((tabKey: string | null | undefined) => {
         if (!tabKey) return false
         const api = apiRef.current
         if (!api) return false
         const panel = api.getPanel(tabKey)
         if (!panel) return false
-        panel.group.model.openPanel(panel)
-        panel.api.setActive()
+        activatePanel(panel)
         onRequestedActiveTabConsumed?.()
         return true
-    }, [onRequestedActiveTabConsumed])
+    }, [activatePanel, onRequestedActiveTabConsumed])
 
     const activateStoredActiveTab = useCallback(() => {
         if (hasRestoredStoredActiveTabRef.current) return false
@@ -1536,7 +1545,13 @@ export default function DashboardDockviewWorkspace({
         }
 
         if (event.api.totalPanels === 0 && visibleConversations.length > 0) {
-            buildInitialDockviewLayout(event.api, visibleConversations, requestedActiveTabKey)
+            const preferredActiveTabKey = buildInitialDockviewLayout(event.api, visibleConversations, requestedActiveTabKey)
+            if (preferredActiveTabKey) {
+                const preferredPanel = event.api.getPanel(preferredActiveTabKey)
+                if (preferredPanel) {
+                    activatePanel(preferredPanel)
+                }
+            }
         } else if (!awaitingInitialLayoutHydrationRef.current && !activateRequestedTab(requestedActiveTabKey)) {
             activateStoredActiveTab()
         }
@@ -1559,7 +1574,7 @@ export default function DashboardDockviewWorkspace({
             if (!panel) return
             const conversation = conversationsByTabKey.get(panel.id)
             if (conversation?.streamSource === 'agent-stream' && conversation.agentType) {
-                sendCommand(conversation.routeId, 'focus_session', {
+                sendCommand(conversation.routeId, getPassiveSessionSelectionCommand(), {
                     agentType: conversation.agentType,
                     ...(conversation.sessionId && { targetSessionId: conversation.sessionId }),
                 }).catch(() => {})
@@ -1613,6 +1628,7 @@ export default function DashboardDockviewWorkspace({
 
         onActiveTabChange(event.api.activePanel?.id ?? null)
     }, [
+        activatePanel,
         activateRequestedTab,
         cleanupDockviewOverlays,
         clearDockviewOverlayHiddenMarks,
@@ -1621,7 +1637,6 @@ export default function DashboardDockviewWorkspace({
         initialDataLoaded,
         layoutProfile,
         markDockviewOverlaysHidden,
-        removeDockviewOverlayNodes,
         onActiveTabChange,
         persistDockviewLayout,
         requestedActiveTabKey,
@@ -1701,15 +1716,14 @@ export default function DashboardDockviewWorkspace({
         }
 
         if (!api.activePanel && api.panels[0]) {
-            api.panels[0].group.model.openPanel(api.panels[0])
-            api.panels[0].api.setActive()
+            activatePanel(api.panels[0])
         }
 
         const activePanelStillExists = !!(api.activePanel && api.getPanel(api.activePanel.id))
         if (!activePanelStillExists) {
             activateStoredActiveTab()
         }
-    }, [activateRequestedTab, activateStoredActiveTab, ides, initialDataLoaded, persistHiddenRestoreState, readHiddenRestoreStateFromLayout, requestedActiveTabKey, requestedRemoteIdeId, visibleConversations])
+    }, [activatePanel, activateRequestedTab, activateStoredActiveTab, ides, initialDataLoaded, persistHiddenRestoreState, readHiddenRestoreStateFromLayout, requestedActiveTabKey, requestedRemoteIdeId, visibleConversations])
 
     useEffect(() => {
         if (!hasInitializedRef.current) return

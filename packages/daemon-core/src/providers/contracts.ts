@@ -267,6 +267,20 @@ export interface SwitchSessionResult {
   error?: string;
 }
 
+// ─── focusEditor() / openPanel() return values ─────────
+
+export interface FocusEditorResult {
+  focused: boolean;
+  error?: string;
+}
+
+export interface OpenPanelResult {
+  opened: boolean;
+  visible: boolean;
+  focused?: boolean;
+  error?: string;
+}
+
 // ─── resolveAction() return value ──────────────────────
 // Two methods supported:
 

@@ -34,6 +34,7 @@ export function forwardAgentStreamsToIdeInstance(
             summaryMetadata: stream.summaryMetadata || undefined,
             effects: stream.effects || undefined,
             sessionId: stream.sessionId || stream.instanceId || undefined,
+            providerSessionId: stream.providerSessionId || stream.sessionId || undefined,
             title: stream.title || stream.agentName || undefined,
             agentType: stream.agentType || undefined,
             agentName: stream.agentName || undefined,

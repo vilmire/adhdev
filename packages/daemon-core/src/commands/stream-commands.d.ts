@@ -3,7 +3,8 @@
  *                   IDE Extension Settings, Extension Script Execution
  */
 import type { CommandResult, CommandHelpers } from './handler.js';
-export declare function handleFocusSession(h: CommandHelpers, args: any): Promise<CommandResult>;
+export declare function handleSelectSession(h: CommandHelpers, args: any): Promise<CommandResult>;
+export declare function handleOpenPanel(h: CommandHelpers, args: any): Promise<CommandResult>;
 export declare function handlePtyInput(h: CommandHelpers, args: any): CommandResult;
 export declare function handlePtyResize(h: CommandHelpers, args: any): CommandResult;
 export declare function handleGetProviderSettings(h: CommandHelpers, args: any): CommandResult;

@@ -23,6 +23,7 @@ import type { ChatMessage } from '../types.js';
 import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages } from './chat-message-normalization.js';
+import { getProviderSessionCapabilities, IDE_PROVIDER_SESSION_CAPABILITIES_BASE } from './open-panel-support.js';
 
 type ReadChatModal = {
     message?: string;
@@ -160,6 +161,7 @@ export class IdeProviderInstance implements ProviderInstance {
             workspace: this.workspace || null,
             extensions: extensionStates,
             cdpConnected: cdp?.isConnected || false,
+            sessionCapabilities: getProviderSessionCapabilities(this.provider, IDE_PROVIDER_SESSION_CAPABILITIES_BASE),
             controlValues: surface.controlValues,
             providerControls: this.provider.controls,
             summaryMetadata: surface.summaryMetadata as any,

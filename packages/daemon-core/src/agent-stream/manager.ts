@@ -322,20 +322,35 @@ export class DaemonAgentStreamManager {
         }
     }
 
-    async focusSession(cdp: DaemonCdpManager, sessionId: string): Promise<boolean> {
+    async selectSession(cdp: DaemonCdpManager, sessionId: string): Promise<boolean> {
         const target = this.getSessionTarget(sessionId);
         if (!target?.parentSessionId) return false;
         await this.setActiveSession(cdp, target.parentSessionId, sessionId);
         await this.syncActiveSession(cdp, target.parentSessionId);
+        return this.managedBySessionId.has(sessionId);
+    }
+
+    async openSessionPanel(cdp: DaemonCdpManager, sessionId: string): Promise<boolean> {
+        const selected = await this.selectSession(cdp, sessionId);
+        if (!selected) return false;
         const agent = this.managedBySessionId.get(sessionId);
-        if (!agent || typeof agent.adapter.focusEditor !== 'function') return false;
+        if (!agent) return false;
+        let panelVisible = false;
+        let editorFocused = false;
         try {
             const evaluate: AgentEvaluateFn = (expr, timeout) =>
                 cdp.evaluateInSessionFrame(agent.cdpSessionId, expr, timeout);
-            await agent.adapter.focusEditor(evaluate);
-            return true;
+            if (typeof agent.adapter.openPanel === 'function') {
+                const result = await agent.adapter.openPanel(evaluate);
+                panelVisible = result.visible;
+            }
+            if (typeof agent.adapter.focusEditor === 'function') {
+                const result = await agent.adapter.focusEditor(evaluate);
+                editorFocused = result.focused;
+            }
+            return panelVisible || editorFocused;
         } catch (e) {
-            this.logFn(`[AgentStream] focusEditor(${sessionId}) error: ${(e as Error).message}`);
+            this.logFn(`[AgentStream] openPanel(${sessionId}) error: ${(e as Error).message}`);
             return false;
         }
     }

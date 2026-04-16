@@ -20,6 +20,7 @@ function createIdeEntry(overrides: Partial<DaemonData> = {}): DaemonData {
             activeModal: null,
         },
         childSessions: [],
+        sessionCapabilities: ['read_chat', 'open_panel'],
         ...overrides,
     }
 }
@@ -51,6 +52,7 @@ describe('build conversations shared context', () => {
             machineName: 'Studio Mac',
             connectionState: 'connected',
             tabKey: 'cursor-1',
+            sessionCapabilities: ['read_chat', 'open_panel'],
         })
     })
 
@@ -105,7 +107,7 @@ describe('build conversations shared context', () => {
                     messages: [],
                     activeModal: null,
                 },
-                capabilities: [],
+                capabilities: ['read_chat', 'open_panel'] as any,
             }],
         })
 
@@ -120,6 +122,7 @@ describe('build conversations shared context', () => {
             agentName: 'Claude Code (VS Code)',
             title: 'Actual Conversation Title',
             displayPrimary: 'Actual Conversation Title',
+            sessionCapabilities: ['read_chat', 'open_panel'],
         })
     })
 
@@ -151,7 +154,7 @@ describe('build conversations shared context', () => {
                     messages: [],
                     activeModal: null,
                 },
-                capabilities: [],
+                capabilities: ['read_chat'],
             }],
         })
 

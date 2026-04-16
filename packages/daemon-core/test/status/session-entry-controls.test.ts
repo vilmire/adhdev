@@ -170,4 +170,44 @@ describe('buildSessionEntries control schema output', () => {
     expect(sessions[0]).not.toHaveProperty('currentModel')
     expect(sessions[0]).not.toHaveProperty('currentPlan')
   })
+
+  it('preserves providerSessionId on extension child sessions', () => {
+    const sessions = buildSessionEntries([
+      {
+        category: 'ide',
+        type: 'antigravity',
+        name: 'Antigravity',
+        instanceId: 'ide-parent',
+        status: 'idle',
+        workspace: '/repo',
+        activeChat: null,
+        extensions: [
+          {
+            category: 'extension',
+            type: 'codex',
+            name: 'Codex',
+            instanceId: 'ext-1',
+            providerSessionId: 'provider-session-1',
+            status: 'idle',
+            activeChat: {
+              id: 'provider-session-1',
+              title: 'Codex',
+              status: 'idle',
+              messages: [],
+              activeModal: null,
+            },
+            lastUpdated: 100,
+            settings: {},
+            pendingEvents: [],
+          },
+        ],
+        lastUpdated: 100,
+        settings: {},
+        pendingEvents: [],
+      } as any,
+    ], new Map(), { profile: 'full' })
+
+    const extSession = sessions.find((session) => session.id === 'ext-1')
+    expect(extSession?.providerSessionId).toBe('provider-session-1')
+  })
 })

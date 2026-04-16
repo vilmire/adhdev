@@ -51,6 +51,7 @@ function validateMessage(message: unknown, source: string, index: number): ChatM
   if (isFiniteNumber(message.index)) normalized.index = message.index
   if (isFiniteNumber(message.timestamp)) normalized.timestamp = message.timestamp
   if (isFiniteNumber(message.receivedAt)) normalized.receivedAt = message.receivedAt
+  if (typeof (message as any)._turnKey === 'string') normalized._turnKey = (message as any)._turnKey
   if (Array.isArray(message.toolCalls)) normalized.toolCalls = message.toolCalls as any
   if (isPlainObject(message.meta)) normalized.meta = message.meta as any
   if (typeof message.senderName === 'string') normalized.senderName = message.senderName

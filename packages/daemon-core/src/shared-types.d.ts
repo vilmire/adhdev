@@ -157,7 +157,7 @@ export type UnsubscribeRequest = {
 export type StandaloneWsStatusPayload = StatusReportPayload;
 export type SessionTransport = 'cdp-page' | 'cdp-webview' | 'pty' | 'acp';
 export type SessionKind = 'workspace' | 'agent';
-export type SessionCapability = 'read_chat' | 'send_message' | 'new_session' | 'list_sessions' | 'switch_session' | 'resolve_action' | 'terminal_io' | 'resize_terminal' | 'change_model' | 'set_mode' | 'set_thought_level';
+export type SessionCapability = 'read_chat' | 'send_message' | 'new_session' | 'list_sessions' | 'switch_session' | 'resolve_action' | 'open_panel' | 'terminal_io' | 'resize_terminal' | 'change_model' | 'set_mode' | 'set_thought_level';
 import type { RuntimeWriteOwner, RuntimeAttachedClient, SessionStatus } from './shared-types-extra.js';
 export type { RuntimeWriteOwner, RuntimeAttachedClient, SessionStatus } from './shared-types-extra.js';
 export interface SessionEntry {

@@ -5,7 +5,7 @@
  * No vscode dependency — can be used as-is.
  */
 
-import type { ProviderEffect } from '../providers/contracts.js';
+import type { ProviderEffect, FocusEditorResult, OpenPanelResult } from '../providers/contracts.js';
 import type { ProviderSummaryMetadata } from '../shared-types.js';
 import type { ChatMessageKind } from '../providers/chat-message-normalization.js';
 
@@ -38,6 +38,8 @@ export interface AgentStreamState {
     agentType: string;
     agentName: string;
     extensionId: string;
+    sessionId?: string;
+    providerSessionId?: string;
     status: 'idle' | 'streaming' | 'waiting_approval' | 'error' | 'disconnected' | 'panel_hidden' | 'not_monitored';
     messages: AgentChatMessage[];
     inputContent: string;
@@ -74,7 +76,8 @@ export interface IAgentStreamAdapter {
     newSession(evaluate: AgentEvaluateFn): Promise<void>;
     listChats?(evaluate: AgentEvaluateFn): Promise<AgentChatListItem[]>;
     switchSession?(evaluate: AgentEvaluateFn, sessionId: string): Promise<boolean>;
-    focusEditor?(evaluate: AgentEvaluateFn): Promise<void>;
+    focusEditor?(evaluate: AgentEvaluateFn): Promise<FocusEditorResult>;
+    openPanel?(evaluate: AgentEvaluateFn): Promise<OpenPanelResult>;
     setProvider?(provider: any): void;
 }
 

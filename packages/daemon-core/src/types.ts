@@ -35,6 +35,7 @@ export interface ChatMessage {
   index?: number;
   timestamp?: number;
   receivedAt?: number;
+  _turnKey?: string;
   /** Tool calls associated with this message */
   toolCalls?: ToolCallInfo[];
   /** Optional: fiber metadata */

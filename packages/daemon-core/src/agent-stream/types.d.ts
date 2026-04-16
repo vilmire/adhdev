@@ -4,7 +4,7 @@
  * Agent stream types.
  * No vscode dependency — can be used as-is.
  */
-import type { ProviderEffect } from '../providers/contracts.js';
+import type { ProviderEffect, FocusEditorResult, OpenPanelResult } from '../providers/contracts.js';
 import type { ProviderSummaryMetadata } from '../shared-types.js';
 /** Agent chat message */
 export interface AgentChatMessage {
@@ -61,7 +61,8 @@ export interface IAgentStreamAdapter {
     newSession(evaluate: AgentEvaluateFn): Promise<void>;
     listChats?(evaluate: AgentEvaluateFn): Promise<AgentChatListItem[]>;
     switchSession?(evaluate: AgentEvaluateFn, sessionId: string): Promise<boolean>;
-    focusEditor?(evaluate: AgentEvaluateFn): Promise<void>;
+    focusEditor?(evaluate: AgentEvaluateFn): Promise<FocusEditorResult>;
+    openPanel?(evaluate: AgentEvaluateFn): Promise<OpenPanelResult>;
     setProvider?(provider: any): void;
 }
 export type AgentEvaluateFn = (expression: string, timeoutMs?: number) => Promise<unknown>;

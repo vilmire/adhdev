@@ -52,7 +52,8 @@ export declare class DaemonAgentStreamManager {
     newSession(cdp: DaemonCdpManager, sessionId: string): Promise<boolean>;
     listSessionChats(cdp: DaemonCdpManager, sessionId: string): Promise<AgentChatListItem[]>;
     switchConversation(cdp: DaemonCdpManager, sessionId: string, conversationId: string): Promise<boolean>;
-    focusSession(cdp: DaemonCdpManager, sessionId: string): Promise<boolean>;
+    selectSession(cdp: DaemonCdpManager, sessionId: string): Promise<boolean>;
+    openSessionPanel(cdp: DaemonCdpManager, sessionId: string): Promise<boolean>;
     getConnectedSessions(parentSessionId?: string): string[];
     getManagedSession(sessionId: string): ManagedAgent | undefined;
     dispose(cdpManagers: Map<string, DaemonCdpManager>): Promise<void>;

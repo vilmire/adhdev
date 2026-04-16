@@ -13,6 +13,7 @@ import { ChatHistoryWriter } from '../config/chat-history.js';
 import type { ChatMessage } from '../types.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages } from './chat-message-normalization.js';
+import { getProviderSessionCapabilities, EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE } from './open-panel-support.js';
 
 export class ExtensionProviderInstance implements ProviderInstance {
     readonly type: string;
@@ -42,6 +43,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
     private instanceId: string;
     private ideType: string = '';
     private chatId: string | null = null;
+    private providerSessionId: string | null = null;
     private chatTitle: string | null = null;
     private agentName: string = '';
     private extensionId: string = '';
@@ -87,8 +89,10 @@ export class ExtensionProviderInstance implements ProviderInstance {
             name: this.provider.name,
             category: 'extension',
             status: this.currentStatus as ProviderState['status'],
+            providerSessionId: this.providerSessionId || this.chatId || undefined,
+            sessionCapabilities: getProviderSessionCapabilities(this.provider, EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE),
             activeChat: (this.messages.length > 0 || this.runtimeMessages.length > 0) ? {
-                id: this.chatId || this.instanceId,
+                id: this.providerSessionId || this.chatId || this.instanceId,
                 title: this.chatTitle || this.agentName || this.provider.name,
                 status: this.currentStatus,
                 messages: this.mergeConversationMessages(this.messages),
@@ -120,7 +124,15 @@ export class ExtensionProviderInstance implements ProviderInstance {
             });
             this.controlValues = patchedState.controlValues;
             this.summaryMetadata = patchedState.summaryMetadata;
-            if (typeof data?.sessionId === 'string' && data.sessionId.trim()) this.chatId = data.sessionId;
+            const nextProviderSessionId = typeof data?.providerSessionId === 'string' && data.providerSessionId.trim()
+                ? data.providerSessionId.trim()
+                : typeof data?.sessionId === 'string' && data.sessionId.trim()
+                    ? data.sessionId.trim()
+                    : '';
+            if (nextProviderSessionId) {
+                this.providerSessionId = nextProviderSessionId;
+                this.chatId = nextProviderSessionId;
+            }
             if (typeof data?.title === 'string' && data.title.trim()) this.chatTitle = data.title;
             if (typeof data?.agentName === 'string' && data.agentName.trim()) this.agentName = data.agentName;
             if (typeof data?.extensionId === 'string' && data.extensionId.trim()) this.extensionId = data.extensionId;
@@ -464,6 +476,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
         this.controlValues = {};
         this.currentStatus = 'idle';
         this.chatId = null;
+        this.providerSessionId = null;
         this.chatTitle = null;
         this.agentName = '';
         this.extensionId = '';
