@@ -2,6 +2,14 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.65] - 2026-04-16
+
+### Fixed
+- Fixed the upstream provider read-chat contract regression test so CI runners without a populated `~/.adhdev/providers/.upstream` cache skip the environment-specific checks instead of failing the entire release pipeline.
+
+### Changed
+- Tightened the shared status snapshot timing fallback so timestamp-only assistant messages still contribute to completion markers and hot-session recency when `receivedAt` is absent.
+
 ## [0.8.64] - 2026-04-16
 
 ### Added
