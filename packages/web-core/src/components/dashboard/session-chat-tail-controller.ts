@@ -29,6 +29,13 @@ export interface SessionChatTailControllerHandle extends SessionChatTailSnapshot
   loadHistoryPage: () => Promise<void>
 }
 
+export interface WarmSessionChatTailDescriptor {
+  daemonId: string
+  sessionId: string
+  historySessionId: string
+  subscriptionKey: string
+}
+
 const DEFAULT_TAIL_LIMIT = 60
 const controllerRegistry = new Map<string, SessionChatTailController>()
 
@@ -309,6 +316,44 @@ function buildControllerHandle(
   }
 }
 
+function compareWarmSessionChatTailDescriptors(
+  left: WarmSessionChatTailDescriptor,
+  right: WarmSessionChatTailDescriptor,
+): number {
+  return left.subscriptionKey.localeCompare(right.subscriptionKey)
+    || left.daemonId.localeCompare(right.daemonId)
+    || left.sessionId.localeCompare(right.sessionId)
+    || left.historySessionId.localeCompare(right.historySessionId)
+}
+
+export function buildWarmSessionChatTailDescriptorState(
+  conversations: ActiveConversation[],
+): { descriptors: WarmSessionChatTailDescriptor[]; signature: string } {
+  const seen = new Set<string>()
+  const descriptors: WarmSessionChatTailDescriptor[] = []
+  for (const conversation of conversations) {
+    const daemonId = getConversationDaemonRouteId(conversation)
+    const sessionId = conversation.sessionId || ''
+    if (!daemonId || !sessionId) continue
+    const key = getControllerKey(daemonId, sessionId)
+    if (seen.has(key)) continue
+    seen.add(key)
+    descriptors.push({
+      daemonId,
+      sessionId,
+      historySessionId: conversation.providerSessionId || sessionId,
+      subscriptionKey: `daemon:${daemonId}:session:${sessionId}`,
+    })
+  }
+  descriptors.sort(compareWarmSessionChatTailDescriptors)
+  return {
+    descriptors,
+    signature: descriptors
+      .map((descriptor) => `${descriptor.subscriptionKey}|${descriptor.historySessionId}`)
+      .join('||'),
+  }
+}
+
 export function useSessionChatTailController(
   activeConv: ActiveConversation,
   options?: { enabled?: boolean; tailLimit?: number },
@@ -387,27 +432,14 @@ export function useWarmSessionChatTailControllers(
   const { sendData } = useTransport()
   const enabled = options?.enabled !== false
   const tailLimit = Math.max(0, options?.tailLimit ?? DEFAULT_TAIL_LIMIT)
-  const descriptors = useMemo(() => {
-    const seen = new Set<string>()
-    return conversations.flatMap((conversation) => {
-      const daemonId = getConversationDaemonRouteId(conversation)
-      const sessionId = conversation.sessionId || ''
-      if (!daemonId || !sessionId) return []
-      const key = getControllerKey(daemonId, sessionId)
-      if (seen.has(key)) return []
-      seen.add(key)
-      return [{
-        daemonId,
-        sessionId,
-        historySessionId: conversation.providerSessionId || sessionId,
-        subscriptionKey: `daemon:${daemonId}:session:${sessionId}`,
-      }]
-    })
-  }, [conversations])
+  const descriptorState = useMemo(
+    () => buildWarmSessionChatTailDescriptorState(conversations),
+    [conversations],
+  )
 
   useEffect(() => {
-    if (!enabled || !sendData || descriptors.length === 0) return
-    const controllers = descriptors.map((descriptor) => (
+    if (!enabled || !sendData || descriptorState.descriptors.length === 0) return
+    const controllers = descriptorState.descriptors.map((descriptor) => (
       getOrCreateSessionChatTailController({
         ...descriptor,
         sendData,
@@ -418,5 +450,5 @@ export function useWarmSessionChatTailControllers(
     return () => {
       controllers.forEach((controller) => controller.release())
     }
-  }, [descriptors, enabled, sendData, tailLimit])
+  }, [descriptorState.signature, enabled, sendData, tailLimit])
 }

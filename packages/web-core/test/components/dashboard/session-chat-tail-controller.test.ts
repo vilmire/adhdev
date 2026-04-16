@@ -2,9 +2,32 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SessionChatTailUpdate } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
+  buildWarmSessionChatTailDescriptorState,
   getOrCreateSessionChatTailController,
   resetSessionChatTailControllersForTest,
 } from '../../../src/components/dashboard/session-chat-tail-controller'
+
+function createConversation(overrides: Record<string, any> = {}) {
+  return {
+    routeId: 'route-1',
+    sessionId: 'session-1',
+    providerSessionId: 'provider-1',
+    daemonId: 'daemon-1',
+    transport: 'pty',
+    mode: 'chat',
+    agentName: 'Hermes',
+    agentType: 'hermes-cli',
+    status: 'idle',
+    title: 'Hermes Agent',
+    messages: [],
+    workspaceName: '/repo',
+    displayPrimary: 'Hermes',
+    displaySecondary: 'M4-L',
+    streamSource: 'native',
+    tabKey: 'daemon-1:session:session-1',
+    ...overrides,
+  }
+}
 
 function createUpdate(overrides: Partial<SessionChatTailUpdate> = {}): SessionChatTailUpdate {
   return {
@@ -24,6 +47,34 @@ function createUpdate(overrides: Partial<SessionChatTailUpdate> = {}): SessionCh
 }
 
 describe('SessionChatTailController registry', () => {
+  it('builds a stable warm-controller descriptor signature when conversation identities change but session targets stay the same', () => {
+    const first = buildWarmSessionChatTailDescriptorState([
+      createConversation(),
+      createConversation({
+        routeId: 'route-2',
+        sessionId: 'session-2',
+        providerSessionId: 'provider-2',
+        daemonId: 'daemon-2',
+        tabKey: 'daemon-2:session:session-2',
+      }),
+    ])
+
+    const second = buildWarmSessionChatTailDescriptorState([
+      createConversation({ messages: [{ role: 'assistant', content: 'new text' }] }),
+      createConversation({
+        routeId: 'route-2',
+        sessionId: 'session-2',
+        providerSessionId: 'provider-2',
+        daemonId: 'daemon-2',
+        tabKey: 'daemon-2:session:session-2',
+        title: 'Changed title only',
+      }),
+    ])
+
+    expect(second.signature).toBe(first.signature)
+    expect(second.descriptors).toEqual(first.descriptors)
+  })
+
   it('subscribes with a tail request when no prior live cursor exists', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()

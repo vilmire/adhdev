@@ -47,11 +47,22 @@ function sameArrayRefs<T>(prev: T[], next: T[]) {
     return true
 }
 
+function hashConversationText(value: string): string {
+    let hash = 0x811c9dc5
+    for (let i = 0; i < value.length; i += 1) {
+        hash ^= value.charCodeAt(i)
+        hash = Math.imul(hash, 0x01000193) >>> 0
+    }
+    return hash.toString(16).padStart(8, '0')
+}
+
 function buildChatDataSignature(activeChat: DaemonData['activeChat'] | undefined) {
     if (!activeChat) return ''
     const messages = Array.isArray(activeChat.messages) ? activeChat.messages : []
     const lastMessage = messages[messages.length - 1]
-    const lastMessageContent = lastMessage ? normalizeTextContent(lastMessage.content).slice(0, 240) : ''
+    const lastMessageContentHash = lastMessage
+        ? hashConversationText(normalizeTextContent(lastMessage.content))
+        : ''
     return [
         activeChat.id || '',
         activeChat.title || '',
@@ -60,7 +71,7 @@ function buildChatDataSignature(activeChat: DaemonData['activeChat'] | undefined
         String(lastMessage?.id || ''),
         String(lastMessage?.index ?? ''),
         String(lastMessage?.receivedAt ?? lastMessage?.timestamp ?? ''),
-        lastMessageContent,
+        lastMessageContentHash,
     ].join(':')
 }
 

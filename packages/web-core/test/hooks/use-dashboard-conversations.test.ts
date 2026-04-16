@@ -66,6 +66,35 @@ describe('buildConversationSourceSignature', () => {
         expect(after).not.toBe(before)
     })
 
+    it('changes when only content after the 240-character preview window changes', () => {
+        const entry = createCliEntry({
+            activeChat: {
+                id: 'chat-1',
+                title: 'Hermes Agent',
+                status: 'idle',
+                messages: [
+                    {
+                        id: 'msg-1',
+                        role: 'assistant',
+                        content: `${'A'.repeat(240)} tail-one`,
+                        index: 0,
+                        timestamp: 1,
+                        receivedAt: 1,
+                    },
+                ],
+                activeModal: null,
+            },
+        })
+        const before = buildConversationSourceSignature(entry)
+
+        if (entry.activeChat?.messages?.[0]) {
+            entry.activeChat.messages[0].content = `${'A'.repeat(240)} tail-two`
+        }
+
+        const after = buildConversationSourceSignature(entry)
+        expect(after).not.toBe(before)
+    })
+
     it('changes when a stable entry reference gains a completed assistant message', () => {
         const entry = createCliEntry()
         const before = buildConversationSourceSignature(entry)
