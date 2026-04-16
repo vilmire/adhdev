@@ -292,6 +292,64 @@ describe('dashboard notifications', () => {
     expect(stateBySessionId.get('tab-a')?.unreadCount).toBe(0)
   })
 
+  it('keeps only the latest notification per conversation target like a messenger inbox', () => {
+    const existing = [
+      {
+        id: 'task_complete|provider-1|hash-1|100',
+        dedupKey: 'task_complete|provider-1|hash-1|100',
+        type: 'task_complete' as const,
+        routeId: 'machine-1',
+        sessionId: 'runtime-a',
+        providerSessionId: 'provider-1',
+        tabKey: 'tab-a',
+        title: 'Hermes',
+        preview: 'Older reply',
+        createdAt: 100,
+        updatedAt: 100,
+        lastEventAt: 100,
+      },
+      {
+        id: 'task_complete|provider-2|hash-9|190',
+        dedupKey: 'task_complete|provider-2|hash-9|190',
+        type: 'task_complete' as const,
+        routeId: 'machine-2',
+        sessionId: 'runtime-z',
+        providerSessionId: 'provider-2',
+        tabKey: 'tab-z',
+        title: 'Codex',
+        preview: 'Other conversation',
+        createdAt: 190,
+        updatedAt: 190,
+        lastEventAt: 190,
+      },
+    ]
+    const incoming = [
+      {
+        id: 'task_complete|provider-1|hash-2|200',
+        dedupKey: 'task_complete|provider-1|hash-2|200',
+        type: 'task_complete' as const,
+        routeId: 'machine-1',
+        sessionId: 'runtime-b',
+        providerSessionId: 'provider-1',
+        tabKey: 'tab-b',
+        title: 'Hermes',
+        preview: 'Newest reply',
+        createdAt: 200,
+        updatedAt: 200,
+        lastEventAt: 200,
+      },
+    ]
+
+    const next = reduceDashboardNotifications(existing, incoming)
+
+    expect(next).toHaveLength(2)
+    expect(next.map(record => record.id)).toEqual([
+      'task_complete|provider-1|hash-2|200',
+      'task_complete|provider-2|hash-9|190',
+    ])
+    expect(next.find(record => record.providerSessionId === 'provider-1')?.preview).toBe('Newest reply')
+  })
+
   it('keeps only the most recent retained notifications', () => {
     const existing = Array.from({ length: 4 }, (_, index) => ({
       id: `n-${index}`,

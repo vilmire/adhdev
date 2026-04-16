@@ -50,6 +50,10 @@ function normalizeNotificationRecord(record: DashboardNotificationRecord): Dashb
   }
 }
 
+function getDashboardNotificationTargetKey(record: Pick<DashboardNotificationRecord, 'providerSessionId' | 'sessionId' | 'tabKey' | 'id'>): string {
+  return record.providerSessionId || record.sessionId || record.tabKey || record.id
+}
+
 export function buildDashboardNotificationDedupKey(args: {
   type: DashboardNotificationType
   sessionId?: string
@@ -144,8 +148,25 @@ export function reduceDashboardNotifications(
     })
   }
 
-  return Array.from(nextById.values())
-    .filter(record => !record.deletedAt)
+  const latestByTarget = new Map<string, DashboardNotificationRecord>()
+  for (const record of Array.from(nextById.values())) {
+    if (record.deletedAt) continue
+    const targetKey = getDashboardNotificationTargetKey(record)
+    const existing = latestByTarget.get(targetKey)
+    if (!existing) {
+      latestByTarget.set(targetKey, record)
+      continue
+    }
+
+    if (
+      record.updatedAt > existing.updatedAt
+      || (record.updatedAt === existing.updatedAt && record.createdAt > existing.createdAt)
+    ) {
+      latestByTarget.set(targetKey, record)
+    }
+  }
+
+  return Array.from(latestByTarget.values())
     .sort((left, right) => {
       const updatedDiff = right.updatedAt - left.updatedAt
       if (updatedDiff !== 0) return updatedDiff

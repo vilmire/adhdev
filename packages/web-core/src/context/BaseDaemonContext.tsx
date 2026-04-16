@@ -105,6 +105,45 @@ function payloadRichness(ide: DaemonData): number {
     return score;
 }
 
+function mergeChildSessions(
+    existingChildren: SessionEntry[] | undefined,
+    incomingChildren: SessionEntry[] | undefined,
+): SessionEntry[] | undefined {
+    if (!incomingChildren?.length) return existingChildren
+    if (!existingChildren?.length) return incomingChildren
+
+    const existingById = new Map(existingChildren.map((child) => [child.id, child]))
+    return incomingChildren.map((child) => {
+        const existing = existingById.get(child.id)
+        if (!existing) return child
+        const explicitProviderName = child.providerName && child.providerName !== child.providerType
+            ? child.providerName
+            : undefined
+        return {
+            ...existing,
+            ...child,
+            providerName: explicitProviderName ?? existing.providerName ?? child.providerName ?? child.providerType,
+            title: child.title ?? existing.title ?? child.providerName ?? existing.providerName ?? child.providerType,
+            workspace: child.workspace ?? existing.workspace ?? null,
+            activeChat: child.activeChat ?? existing.activeChat ?? null,
+            capabilities: child.capabilities ?? existing.capabilities ?? [],
+            cdpConnected: child.cdpConnected ?? existing.cdpConnected,
+            summaryMetadata: child.summaryMetadata ?? existing.summaryMetadata,
+            controlValues: child.controlValues ?? existing.controlValues,
+            providerControls: child.providerControls ?? existing.providerControls,
+            unread: child.unread ?? existing.unread,
+            lastSeenAt: child.lastSeenAt ?? existing.lastSeenAt,
+            inboxBucket: child.inboxBucket ?? existing.inboxBucket,
+            surfaceHidden: child.surfaceHidden ?? existing.surfaceHidden,
+            lastUpdated: child.lastUpdated ?? existing.lastUpdated,
+            lastMessagePreview: child.lastMessagePreview ?? existing.lastMessagePreview,
+            lastMessageRole: child.lastMessageRole ?? existing.lastMessageRole,
+            lastMessageAt: child.lastMessageAt ?? existing.lastMessageAt,
+            lastMessageHash: child.lastMessageHash ?? existing.lastMessageHash,
+        }
+    })
+}
+
 function mergeDaemonVersionFlags(existing: DaemonData, incoming: DaemonData, merged: DaemonData): DaemonData {
     if (merged.type !== 'adhdev-daemon') return merged
 
@@ -213,7 +252,8 @@ export function reconcileIdes(
         if (incomingRichness > existingRichness) {
             // Incoming is richer → always overwrite, preserve chats if incoming lacks them
             const chats = (ide.chats?.length) ? ide.chats : existing.chats;
-            const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, _lastUpdate: now })
+            const childSessions = mergeChildSessions(existing.childSessions, ide.childSessions)
+            const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, childSessions, _lastUpdate: now })
             resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now));
         } else if (incomingRichness < existingRichness) {
             // Incoming is weaker → NEVER overwrite core data.
@@ -244,7 +284,8 @@ export function reconcileIdes(
             const existingTs = existing._lastUpdate || existing.timestamp || 0;
             if (incomingTs >= existingTs) {
                 const chats = (ide.chats?.length) ? ide.chats : existing.chats;
-                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, _lastUpdate: now })
+                const childSessions = mergeChildSessions(existing.childSessions, ide.childSessions)
+                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, childSessions, _lastUpdate: now })
                 resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now));
             } else {
                 if (ide.chats?.length && !existing.chats?.length) {

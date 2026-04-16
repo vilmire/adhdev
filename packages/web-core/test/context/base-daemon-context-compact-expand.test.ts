@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { expandCompactDaemons, type CompactDaemonCompat } from '../../src/context/BaseDaemonContext'
+import { expandCompactDaemons, reconcileIdes, type CompactDaemonCompat } from '../../src/context/BaseDaemonContext'
 
 describe('expandCompactDaemons', () => {
   it('expands compact daemon sessions and preserves summary metadata', () => {
@@ -139,5 +139,90 @@ describe('expandCompactDaemons', () => {
         _isAcp: true,
       }),
     ]))
+  })
+
+  it('preserves child providerName through sparse compact updates after reconcile', () => {
+    const metadata = expandCompactDaemons([
+      {
+        id: 'machine-3',
+        type: 'adhdev-daemon',
+        timestamp: 300,
+        sessions: [
+          {
+            id: 'ide-1',
+            parentId: null,
+            providerType: 'antigravity',
+            providerName: 'Antigravity',
+            kind: 'workspace',
+            transport: 'cdp-page',
+            status: 'idle',
+            title: 'Workspace',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Workspace',
+              status: 'idle',
+              messages: [],
+              activeModal: null,
+            },
+            cdpConnected: true,
+          },
+          {
+            id: 'child-1',
+            parentId: 'ide-1',
+            providerType: 'claude-code-vscode',
+            providerName: 'Claude Code (VS Code)',
+            kind: 'agent',
+            transport: 'cdp-webview',
+            status: 'idle',
+            title: 'Claude Code (VS Code)',
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const sparse = expandCompactDaemons([
+      {
+        id: 'machine-3',
+        type: 'adhdev-daemon',
+        timestamp: 301,
+        sessions: [
+          {
+            id: 'ide-1',
+            parentId: null,
+            providerType: 'antigravity',
+            kind: 'workspace',
+            transport: 'cdp-page',
+            status: 'idle',
+            title: 'Workspace',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Workspace',
+              status: 'idle',
+              messages: [],
+              activeModal: null,
+            },
+            cdpConnected: true,
+          },
+          {
+            id: 'child-1',
+            parentId: 'ide-1',
+            providerType: 'claude-code-vscode',
+            kind: 'agent',
+            transport: 'cdp-webview',
+            status: 'idle',
+            title: 'Claude Code (VS Code)',
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const reconciled = reconcileIdes(sparse, metadata, { authoritativeDaemonIds: ['machine-3'] })
+    const ideEntry = reconciled.find((entry) => entry.id === 'machine-3:ide:ide-1')
+
+    expect(ideEntry?.childSessions?.[0]).toMatchObject({
+      id: 'child-1',
+      providerType: 'claude-code-vscode',
+      providerName: 'Claude Code (VS Code)',
+    })
   })
 })
