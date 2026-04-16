@@ -47,6 +47,7 @@ import { getConversationTabMetaText, getConversationTitle, getRemotePanelTitle }
 import { getConversationNativeTargetSessionId } from './conversation-selectors'
 import { IconExternalWindow, IconArrowBack, IconKeyboard, IconX, IconEyeOff, IconFloat, IconDock } from '../Icons'
 import { buildDashboardDockviewContextMenuItems } from './dockviewContextMenuItems'
+import { shouldAwaitStoredDockviewHydration } from './dashboardDockviewHydration'
 import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 
 interface DashboardDockviewWorkspaceProps {
@@ -1522,7 +1523,12 @@ export default function DashboardDockviewWorkspace({
             event.api.fromJSON(stored.layout, { reuseExistingPanels: false })
         }
 
-        awaitingInitialLayoutHydrationRef.current = !!stored?.layout && !initialDataLoaded && visibleConversations.length === 0
+        awaitingInitialLayoutHydrationRef.current = shouldAwaitStoredDockviewHydration({
+            hasStoredLayout: !!stored?.layout,
+            initialDataLoaded,
+            visibleConversationCount: visibleConversations.length,
+            ides,
+        })
 
         if (!awaitingInitialLayoutHydrationRef.current) {
             syncDockviewPanels(event.api, visibleConversations)
@@ -1611,6 +1617,7 @@ export default function DashboardDockviewWorkspace({
         cleanupDockviewOverlays,
         clearDockviewOverlayHiddenMarks,
         conversationsByTabKey,
+        ides,
         initialDataLoaded,
         layoutProfile,
         markDockviewOverlaysHidden,
@@ -1628,7 +1635,12 @@ export default function DashboardDockviewWorkspace({
         const api = apiRef.current
         if (!api || !hasInitializedRef.current) return
 
-        if (awaitingInitialLayoutHydrationRef.current && !initialDataLoaded) return
+        if (awaitingInitialLayoutHydrationRef.current && shouldAwaitStoredDockviewHydration({
+            hasStoredLayout: true,
+            initialDataLoaded,
+            visibleConversationCount: visibleConversations.length,
+            ides,
+        })) return
         if (awaitingInitialLayoutHydrationRef.current) {
             awaitingInitialLayoutHydrationRef.current = false
         }
@@ -1697,7 +1709,7 @@ export default function DashboardDockviewWorkspace({
         if (!activePanelStillExists) {
             activateStoredActiveTab()
         }
-    }, [activateRequestedTab, activateStoredActiveTab, initialDataLoaded, persistHiddenRestoreState, readHiddenRestoreStateFromLayout, requestedActiveTabKey, requestedRemoteIdeId, visibleConversations])
+    }, [activateRequestedTab, activateStoredActiveTab, ides, initialDataLoaded, persistHiddenRestoreState, readHiddenRestoreStateFromLayout, requestedActiveTabKey, requestedRemoteIdeId, visibleConversations])
 
     useEffect(() => {
         if (!hasInitializedRef.current) return
