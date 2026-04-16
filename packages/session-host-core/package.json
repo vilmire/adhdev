@@ -1,7 +1,7 @@
 {
   "name": "@adhdev/session-host-core",
-  "version": "0.8.70",
-  "description": "ADHDev local session host core \u2014 session registry, protocol, buffers",
+  "version": "0.8.71",
+  "description": "ADHDev local session host core — session registry, protocol, buffers",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {

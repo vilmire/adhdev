@@ -2,6 +2,17 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.71] - 2026-04-17
+
+### Added
+- Added regression coverage for chat scroll snapshot fingerprinting and seeded-transcript preservation when live chat-tail refreshes only return a recent slice.
+
+### Fixed
+- Fixed shared dashboard chat continuity so incoming assistant updates no longer restore stale viewport snapshots or replace the active conversation with an older-looking recent-tail transcript.
+
+### Changed
+- Hydrated live dashboard chat state from the active conversation before chat-tail refreshes and gated scroll restoration on message fingerprint matches.
+
 ## [0.8.70] - 2026-04-17
 
 ### Added
