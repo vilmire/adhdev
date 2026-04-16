@@ -208,8 +208,8 @@ export function buildIdeConversations(
             resume: ide.resume,
             hostIdeType: !isCliConv(ide) && !isAcpConv(ide) ? ide.type : undefined,
             workspaceName,
-            displayPrimary: workspaceName
-                || effectiveNativeTitle
+            displayPrimary: effectiveNativeTitle
+                || workspaceName
                 || (isCliConv(ide)
                     ? ((ide.mode === 'chat') ? agentName : 'Terminal')
                     : agentName),
@@ -268,7 +268,7 @@ export function buildIdeConversations(
             messages: [...serverMsgs, ...pendingLocal],
             hostIdeType: ide.type,
             workspaceName,
-            displayPrimary: workspaceName || parentTitle || effectiveStreamTitle || ideLabel,
+            displayPrimary: effectiveStreamTitle || workspaceName || stream.agentName || ideLabel,
             displaySecondary: `${ideLabel} · ${stream.agentName}`,
             cdpConnected: ide.cdpConnected,
             lastMessagePreview: stream.lastMessagePreview,
