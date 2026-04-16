@@ -46,6 +46,7 @@ import { isEditableTarget, normalizeKey, readActionShortcuts, type DashboardActi
 import { getConversationTabMetaText, getConversationTitle, getRemotePanelTitle } from './conversation-presenters'
 import { getConversationNativeTargetSessionId } from './conversation-selectors'
 import { IconExternalWindow, IconArrowBack, IconKeyboard, IconX, IconEyeOff, IconFloat, IconDock } from '../Icons'
+import { buildDashboardDockviewContextMenuItems } from './dockviewContextMenuItems'
 import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 
 interface DashboardDockviewWorkspaceProps {
@@ -1283,6 +1284,13 @@ export default function DashboardDockviewWorkspace({
         isTabFloating,
     ])
 
+    const ctxMenuItems = ctxMenu ? buildDashboardDockviewContextMenuItems({
+        isTabInPopout: isTabInPopout(ctxMenu.tabKey),
+        isTabFloating: isTabFloating(ctxMenu.tabKey),
+        tabShortcut: tabShortcuts[ctxMenu.tabKey],
+        actionShortcuts,
+    }) : []
+
     const activateRequestedTab = useCallback((tabKey: string | null | undefined) => {
         if (!tabKey) return false
         const api = apiRef.current
@@ -1978,108 +1986,84 @@ export default function DashboardDockviewWorkspace({
             {ctxMenu && createPortal(
                 <div
                     data-dockview-tab-context-menu
-                    className="fixed z-50 bg-bg-primary border border-border-subtle rounded-lg shadow-lg py-1 min-w-[180px]"
+                    className="fixed z-[55] min-w-[220px] rounded-xl border border-border-subtle bg-bg-primary shadow-2xl py-1"
                     style={{ left: ctxMenu.x, top: ctxMenu.y }}
                 >
-                    {isTabInPopout(ctxMenu.tabKey) ? (
-                        <>
-                            {isTabFloating(ctxMenu.tabKey) && (
-                                <button
-                                    className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
-                                onClick={() => {
+                    {ctxMenuItems.map(item => {
+                        if (item.type === 'separator') {
+                            return <div key={item.id} className="border-t border-border-subtle my-1" />
+                        }
+
+                        let icon = <IconKeyboard size={13} className="shrink-0 opacity-70" />
+                        let onClick = () => {}
+
+                        switch (item.id) {
+                            case 'dockInWindow':
+                            case 'dockBackToGrid':
+                                icon = <IconDock size={13} className="shrink-0 opacity-70" />
+                                onClick = () => {
                                     dockTabToWorkspaceGrid(ctxMenu.tabKey)
                                     setCtxMenu(null)
-                                }}
-                            >
-                                <IconDock size={13} className="shrink-0 opacity-70" />
-                                <span className="flex-1 min-w-0">Dock in window</span>
-                                <span className="dashboard-dockview-menu-shortcut">{actionShortcuts.dockActiveTab || ''}</span>
-                            </button>
-                        )}
-                        <button
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
-                            onClick={() => {
-                                moveTabBackToMain(ctxMenu.tabKey)
-                                setCtxMenu(null)
-                            }}
-                        >
-                            <IconArrowBack size={13} className="shrink-0 opacity-70" />
-                            <span className="flex-1 min-w-0">Move back to main window</span>
-                            <span className="dashboard-dockview-menu-shortcut">{actionShortcuts.dockActiveTab || ''}</span>
-                        </button>
-                    </>
-                ) : isTabFloating(ctxMenu.tabKey) ? (
-                    <button
-                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
-                            onClick={() => {
-                            dockTabToWorkspaceGrid(ctxMenu.tabKey)
-                            setCtxMenu(null)
-                        }}
-                    >
-                        <IconDock size={13} className="shrink-0 opacity-70" />
-                        <span className="flex-1 min-w-0">Dock back to grid</span>
-                        <span className="dashboard-dockview-menu-shortcut">{actionShortcuts.dockActiveTab || ''}</span>
-                    </button>
-                ) : (
-                    <>
-                        <button
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
-                                onClick={() => {
+                                }
+                                break
+                            case 'moveBackToMain':
+                                icon = <IconArrowBack size={13} className="shrink-0 opacity-70" />
+                                onClick = () => {
+                                    moveTabBackToMain(ctxMenu.tabKey)
+                                    setCtxMenu(null)
+                                }
+                                break
+                            case 'floatAsPanel':
+                                icon = <IconFloat size={13} className="shrink-0 opacity-70" />
+                                onClick = () => {
                                     floatTab(ctxMenu.tabKey)
                                     setCtxMenu(null)
-                                }}
-                            >
-                                <IconFloat size={13} className="shrink-0 opacity-70" />
-                                <span className="flex-1 min-w-0">Float as panel</span>
-                                <span className="dashboard-dockview-menu-shortcut">{actionShortcuts.floatActiveTab || ''}</span>
-                            </button>
-                            <button
-                                className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
-                                onClick={() => {
+                                }
+                                break
+                            case 'openInNewWindow':
+                                icon = <IconExternalWindow size={13} className="shrink-0 opacity-70" />
+                                onClick = () => {
                                     popoutTab(ctxMenu.tabKey)
                                     setCtxMenu(null)
-                                }}
+                                }
+                                break
+                            case 'setShortcut':
+                                onClick = ((event: any) => {
+                                    event.stopPropagation()
+                                    setShortcutListening(ctxMenu.tabKey)
+                                    setCtxMenu(null)
+                                }) as typeof onClick
+                                break
+                            case 'removeShortcut':
+                                icon = <IconX size={13} className="shrink-0 opacity-70" />
+                                onClick = () => {
+                                    const next = { ...tabShortcuts }
+                                    delete next[ctxMenu.tabKey]
+                                    saveShortcuts(next)
+                                    setCtxMenu(null)
+                                }
+                                break
+                            case 'hideTab':
+                                icon = <IconEyeOff size={13} className="shrink-0 opacity-70" />
+                                onClick = () => {
+                                    hideConversationTab(ctxMenu.tabKey)
+                                    setCtxMenu(null)
+                                }
+                                break
+                        }
+
+                        return (
+                            <button
+                                key={item.id}
+                                className={`w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2 ${item.tone === 'muted' ? 'text-text-muted' : ''}`}
+                                onClick={onClick}
                             >
-                                <IconExternalWindow size={13} className="shrink-0 opacity-70" />
-                                <span className="flex-1 min-w-0">Open in new window</span>
-                                <span className="dashboard-dockview-menu-shortcut">{actionShortcuts.popoutActiveTab || ''}</span>
+                                {icon}
+                                <span className="flex-1 min-w-0">{item.label}</span>
+                                {item.shortcut ? <span className="dashboard-dockview-menu-shortcut">{item.shortcut}</span> : null}
                             </button>
-                        </>
-                    )}
-                    <div className="border-t border-border-subtle my-1" />
-                    <button
-                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2"
-                        onClick={(event) => {
-                            event.stopPropagation()
-                            setShortcutListening(ctxMenu.tabKey)
-                            setCtxMenu(null)
-                        }}
-                    >
-                        <IconKeyboard size={13} className="shrink-0 opacity-70" /> {tabShortcuts[ctxMenu.tabKey] ? `Change shortcut (${tabShortcuts[ctxMenu.tabKey]})` : 'Set shortcut'}
-                    </button>
-                    {tabShortcuts[ctxMenu.tabKey] && (
-                        <button
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors text-text-muted flex items-center gap-2"
-                            onClick={() => {
-                                const next = { ...tabShortcuts }
-                                delete next[ctxMenu.tabKey]
-                                saveShortcuts(next)
-                                setCtxMenu(null)
-                            }}
-                        >
-                            <IconX size={13} className="shrink-0 opacity-70" /> Remove shortcut
-                        </button>
-                    )}
-                    <div className="border-t border-border-subtle my-1" />
-                    <button
-                        className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors text-text-muted flex items-center gap-2"
-                        onClick={() => {
-                            hideConversationTab(ctxMenu.tabKey)
-                            setCtxMenu(null)
-                        }}
-                    >
-                        <IconEyeOff size={13} className="shrink-0 opacity-70" /> Hide tab
-                    </button>
+                        )
+                    })}
                 </div>,
                 ctxMenu.sourceDocument.body,
             )}
