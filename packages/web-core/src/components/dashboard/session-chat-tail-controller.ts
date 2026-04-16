@@ -283,6 +283,13 @@ export class SessionChatTailController {
       liveMessages: nextMessages,
       cursor: nextCursor,
     }
+    // Keep the subscription manager's stored request params up to date so that
+    // resubscribeAll / resubscribeForDaemon on reconnect sends the current cursor
+    // rather than the stale cursor from when the subscription was first opened.
+    this.manager.updateParams('session.chat_tail', this.subscriptionKey, {
+      knownMessageCount: nextCursor.knownMessageCount,
+      lastMessageSignature: nextCursor.lastMessageSignature,
+    })
     this.emit()
   }
 }

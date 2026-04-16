@@ -113,6 +113,13 @@ export class SubscriptionManager {
         })
     }
 
+    updateParams(topic: TransportTopic, key: string, params: Record<string, unknown>): void {
+        const id = buildSubscriptionId(topic, key)
+        const existing = this.active.get(id)
+        if (!existing) return
+        existing.request = { ...existing.request, params: { ...existing.request.params, ...params } } as SubscribeRequest
+    }
+
     resubscribeAll(transport: SubscriptionTransport): void {
         logSubscriptionDebug('resubscribe_all', {
             count: this.active.size,
