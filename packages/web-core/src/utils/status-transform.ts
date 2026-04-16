@@ -102,7 +102,7 @@ function mergeSessionSummary(
     return {
         ...session,
         parentId: session.parentId ?? existingEntry?.parentSessionId ?? null,
-        providerName: session.providerName ?? existingEntry?.cliName ?? existingEntry?.type ?? session.providerType,
+        providerName: session.providerName ?? existingEntry?.providerName ?? existingEntry?.cliName ?? existingEntry?.type ?? session.providerType,
         workspace: session.workspace ?? existingEntry?.workspace ?? null,
         mode: session.mode ?? existingEntry?.mode,
         capabilities: session.capabilities ?? (existingEntry?.sessionCapabilities as SessionEntry['capabilities']) ?? [],
