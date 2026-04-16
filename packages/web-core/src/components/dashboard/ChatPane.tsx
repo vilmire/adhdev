@@ -8,14 +8,10 @@ import ControlsBar from './ControlsBar';
 import ChatInputBar from './ChatInputBar';
 import ConversationMetaChips from './ConversationMetaChips';
 import { getConversationViewStates } from './DashboardMobileChatShared';
-import { webDebugStore } from '../../debug/webDebugStore';
-import type { ReadChatCursor, ReadChatSyncResult, SessionChatTailUpdate } from '@adhdev/daemon-core';
-import type { ActiveConversation, DashboardMessage } from './types';
+import type { ActiveConversation } from './types';
 import type { DaemonData } from '../../types';
-import { useTransport } from '../../context/TransportContext';
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
-import { subscriptionManager } from '../../managers/SubscriptionManager';
 import { IconPlug, IconEye, IconFolder } from '../Icons';
 import {
     dedupeOptimisticMessages,
@@ -29,104 +25,9 @@ import {
     getConversationDaemonRouteId,
     getConversationDisplayLabel,
     getConversationProviderLabel,
-    getConversationProviderType,
 } from './conversation-selectors';
 import { getDefaultVisibleLiveMessages } from './chat-visibility';
-
-interface ChatHistoryResult {
-    messages?: DashboardMessage[];
-    hasMore?: boolean;
-}
-
-function unwrapChatHistoryResult(raw: unknown): ChatHistoryResult {
-    if (!raw || typeof raw !== 'object') return {};
-    if ('result' in raw && raw.result && typeof raw.result === 'object') {
-        return raw.result as ChatHistoryResult;
-    }
-    return raw as ChatHistoryResult;
-}
-
-function hashSignatureParts(parts: string[]): string {
-    let hash = 0x811c9dc5;
-    for (const part of parts) {
-        const text = String(part || '');
-        for (let i = 0; i < text.length; i += 1) {
-            hash ^= text.charCodeAt(i);
-            hash = Math.imul(hash, 0x01000193) >>> 0;
-        }
-        hash ^= 0xff;
-        hash = Math.imul(hash, 0x01000193) >>> 0;
-    }
-    return hash.toString(16).padStart(8, '0');
-}
-
-function buildChatSnapshotSignature(messages: DashboardMessage[], status?: string): string {
-    const lastMessage = messages[messages.length - 1];
-    if (!lastMessage) return `empty:${status || ''}`;
-
-    let content = '';
-    try {
-        content = JSON.stringify(lastMessage.content ?? '');
-    } catch {
-        content = String(lastMessage.content ?? '');
-    }
-
-    return [
-        status || '',
-        messages.length,
-        String(lastMessage.id || ''),
-        String(lastMessage.index ?? ''),
-        String(lastMessage.receivedAt ?? lastMessage.timestamp ?? ''),
-        content,
-    ].join('|');
-}
-
-function buildLastMessageSignature(message: DashboardMessage | null | undefined): string {
-    if (!message) return '';
-    let content = '';
-    try {
-        content = JSON.stringify(message.content ?? '');
-    } catch {
-        content = String(message.content ?? '');
-    }
-    return hashSignatureParts([
-        String(message.id || ''),
-        String(message.index ?? ''),
-        String(message.role || ''),
-        String(message.receivedAt ?? message.timestamp ?? ''),
-        content,
-    ]);
-}
-
-function buildReadChatCursor(messages: DashboardMessage[]): ReadChatCursor {
-    return {
-        knownMessageCount: messages.length,
-        lastMessageSignature: buildLastMessageSignature(messages[messages.length - 1]),
-    };
-}
-
-function applyReadChatSync(
-    previousMessages: DashboardMessage[],
-    result: Partial<ReadChatSyncResult>,
-): DashboardMessage[] {
-    const incomingMessages = Array.isArray(result.messages) ? result.messages as DashboardMessage[] : [];
-    switch (result.syncMode) {
-        case 'noop':
-            return previousMessages;
-        case 'append':
-            return dedupeOptimisticMessages([...previousMessages, ...incomingMessages]);
-        case 'replace_tail': {
-            const replaceFrom = Math.max(0, Math.min(Number(result.replaceFrom ?? previousMessages.length), previousMessages.length));
-            return dedupeOptimisticMessages([
-                ...previousMessages.slice(0, replaceFrom),
-                ...incomingMessages,
-            ]);
-        }
-        case 'full':
-        default:
-            return incomingMessages;
-    }
-}
+import { useSessionChatTailController } from './session-chat-tail-controller';
 
 export interface ChatPaneProps {
     activeConv: ActiveConversation;
@@ -146,7 +47,8 @@ export interface ChatPaneProps {
 const LIVE_MESSAGE_PAGE_SIZE = 60;
 
 export default function ChatPane({
-    activeConv, ideEntry, handleSendChat,
+    activeConv, ideEntry,
+    handleSendChat,
     isSendingChat = false,
     handleFocusAgent, isFocusingAgent, actionLogs, userName,
     showMetaChips = false,
@@ -154,9 +56,6 @@ export default function ChatPane({
     isInputActive = true,
 }: ChatPaneProps) {
     const receivedAtCache = useRef<Map<string, number>>(new Map());
-    const liveChatCache = useRef<Map<string, DashboardMessage[]>>(new Map());
-    const liveChatCursorCache = useRef<Map<string, ReadChatCursor>>(new Map());
-    const { sendCommand, sendData } = useTransport();
     const loadDaemonMetadata = useDaemonMetadataLoader();
     useDevRenderTrace('ChatPane', {
         tabKey: activeConv.tabKey,
@@ -173,56 +72,23 @@ export default function ChatPane({
     const defaultVisibleLiveMessages = getDefaultVisibleLiveMessages({
         isCliLike: controlsContext.isCli || controlsContext.isAcp,
     })
+    const chatTailState = useSessionChatTailController(activeConv, {
+        enabled: !!activeConv.sessionId,
+    })
 
-    // Per-tab history cache — survives tab switches
-    interface TabHistoryState {
-        messages: DashboardMessage[];
-        offset: number;
-        hasMore: boolean;
-        error: string | null;
-        visibleLiveCount: number;
-    }
-    const historyCache = useRef<Map<string, TabHistoryState>>(new Map());
+    const [visibleLiveCount, setVisibleLiveCount] = useState(defaultVisibleLiveMessages);
 
-    const getTabHistory = useCallback((tabKey: string): TabHistoryState => {
-        if (!historyCache.current.has(tabKey)) {
-            historyCache.current.set(tabKey, {
-                messages: [],
-                offset: 0,
-                hasMore: true,
-                error: null,
-                visibleLiveCount: defaultVisibleLiveMessages,
-            });
-        }
-        return historyCache.current.get(tabKey)!;
-    }, [defaultVisibleLiveMessages]);
-
-    const updateTabHistory = useCallback((tabKey: string, patch: Partial<TabHistoryState>) => {
-        const prev = getTabHistory(tabKey);
-        historyCache.current.set(tabKey, { ...prev, ...patch });
-        // Force re-render
-        setHistoryTick(t => t + 1);
-    }, [getTabHistory]);
-
-    const [, setHistoryTick] = useState(0);
-
-    // Derive current tab state
     const tabKey = activeConv.tabKey;
-    const tabHistory = getTabHistory(tabKey);
-    const historyMessages = tabHistory.messages;
-    const hasMoreHistory = tabHistory.hasMore;
-    const loadError = tabHistory.error;
-    const cachedLiveMessages = liveChatCache.current.get(tabKey);
-    const liveMessages = mergeLiveChatMessages(cachedLiveMessages, activeConv.messages);
+    const historyMessages = chatTailState.historyMessages;
+    const hasMoreHistory = chatTailState.hasMoreHistory;
+    const loadError = chatTailState.historyError;
+    const liveMessages = mergeLiveChatMessages(chatTailState.liveMessages, activeConv.messages);
     useEffect(() => {
-        if (tabHistory.visibleLiveCount >= defaultVisibleLiveMessages) return;
-        updateTabHistory(tabKey, { visibleLiveCount: defaultVisibleLiveMessages });
-    }, [defaultVisibleLiveMessages, tabHistory.visibleLiveCount, tabKey, updateTabHistory]);
-    const hiddenLiveCount = Math.max(0, liveMessages.length - tabHistory.visibleLiveCount);
+        setVisibleLiveCount(defaultVisibleLiveMessages);
+    }, [defaultVisibleLiveMessages, tabKey]);
+    const hiddenLiveCount = Math.max(0, liveMessages.length - visibleLiveCount);
     const panelLabel = getConversationDisplayLabel(activeConv)
     const daemonId = getConversationDaemonRouteId(activeConv);
-    const sessionId = activeConv.sessionId || '';
-    const historySessionId = activeConv.providerSessionId || sessionId;
 
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     useEffect(() => {
@@ -243,131 +109,26 @@ export default function ChatPane({
         loadDaemonMetadata,
     ]);
 
-    useEffect(() => {
-        if (!daemonId || !sessionId || !sendData) return;
-
-        const previousMessages = liveChatCache.current.get(tabKey) || [];
-        const cachedCursor = liveChatCursorCache.current.get(tabKey);
-        const cursor = cachedCursor && cachedCursor.knownMessageCount
-            ? cachedCursor
-            : buildReadChatCursor(previousMessages);
-        const subscriptionKey = `daemon:${daemonId}:session:${sessionId}`;
-        const unsubscribe = subscriptionManager.subscribe(
-            { sendData },
-            daemonId,
-            {
-                type: 'subscribe',
-                topic: 'session.chat_tail',
-                key: subscriptionKey,
-                params: {
-                    targetSessionId: sessionId,
-                    historySessionId,
-                    knownMessageCount: cursor.knownMessageCount,
-                    lastMessageSignature: cursor.lastMessageSignature,
-                    ...(cursor.knownMessageCount ? {} : { tailLimit: LIVE_MESSAGE_PAGE_SIZE }),
-                },
-            },
-            (update: SessionChatTailUpdate) => {
-                const currentMessages = liveChatCache.current.get(tabKey) || [];
-                const nextMessages = applyReadChatSync(currentMessages, update);
-                const totalMessages = Math.max(
-                    nextMessages.length,
-                    Number(update.totalMessages || 0),
-                );
-                liveChatCursorCache.current.set(tabKey, {
-                    knownMessageCount: totalMessages,
-                    lastMessageSignature: typeof update.lastMessageSignature === 'string'
-                        ? update.lastMessageSignature
-                        : buildLastMessageSignature(nextMessages[nextMessages.length - 1]),
-                });
-                const unchanged = buildChatSnapshotSignature(currentMessages)
-                    === buildChatSnapshotSignature(nextMessages);
-                if (unchanged) return;
-                liveChatCache.current.set(tabKey, nextMessages);
-                webDebugStore.record({
-                    interactionId: update.interactionId,
-                    kind: 'dashboard.chat_tail_applied',
-                    topic: 'session.chat_tail',
-                    payload: {
-                        sessionId,
-                        syncMode: update.syncMode,
-                        previousCount: currentMessages.length,
-                        nextCount: nextMessages.length,
-                    },
-                });
-                setHistoryTick(t => t + 1);
-            },
-        );
-
-        return unsubscribe;
-    }, [daemonId, historySessionId, sendData, sessionId, tabKey]);
-
     const handleLoadMore = useCallback(async () => {
         if (isLoadingMore) return;
-        const tk = activeConv.tabKey;
-        const currentState = getTabHistory(tk);
-        if (liveMessages.length > currentState.visibleLiveCount) {
-            updateTabHistory(tk, {
-                visibleLiveCount: Math.min(
-                    liveMessages.length,
-                    currentState.visibleLiveCount + LIVE_MESSAGE_PAGE_SIZE,
-                ),
-                error: null,
-            });
+        if (liveMessages.length > visibleLiveCount) {
+            setVisibleLiveCount((current) => Math.min(
+                liveMessages.length,
+                current + LIVE_MESSAGE_PAGE_SIZE,
+            ));
             return;
         }
         setIsLoadingMore(true);
-        updateTabHistory(tk, { error: null });
         try {
-            const daemonId = getConversationDaemonRouteId(activeConv);
-            if (!daemonId) {
-                updateTabHistory(tk, { hasMore: false });
-                return;
-            }
-
-            const agentType = getConversationProviderType(activeConv);
-
-            const raw = await sendCommand(daemonId, 'chat_history', {
-                agentType,
-                offset: currentState.offset,
-                limit: 30,
-                targetSessionId: activeConv.sessionId,
-                historySessionId: activeConv.providerSessionId || activeConv.sessionId,
-            });
-
-            const result = unwrapChatHistoryResult(raw);
-            const historyMessages = result.messages || [];
-
-            if (historyMessages.length > 0) {
-                const fresh = getTabHistory(tk);
-                updateTabHistory(tk, {
-                    messages: [...historyMessages, ...fresh.messages],
-                    offset: fresh.offset + historyMessages.length,
-                    hasMore: !!result.hasMore,
-                });
-            } else {
-                updateTabHistory(tk, { hasMore: !!result.hasMore });
-            }
-
-        } catch (e: any) {
-            const msg = e?.message || '';
-            const isTransient = msg.includes('P2P not available')
-                || msg.includes('channel not open')
-                || msg.includes('P2P not connected')
-                || msg.includes('timeout');
-            if (!isTransient) {
-                updateTabHistory(tk, { hasMore: false, error: 'Failed to load history' });
-            } else {
-                updateTabHistory(tk, { error: 'Connection not ready — tap to retry' });
-            }
+            await chatTailState.loadHistoryPage()
         } finally {
             setIsLoadingMore(false);
         }
-    }, [isLoadingMore, activeConv, liveMessages.length, sendCommand, getTabHistory, updateTabHistory]);
+    }, [chatTailState, isLoadingMore, liveMessages.length, visibleLiveCount]);
 
     const { allMessages, receivedAtMap } = useMemo(() => {
         const visibleLiveMessages = hiddenLiveCount > 0
-            ? liveMessages.slice(-tabHistory.visibleLiveCount)
+            ? liveMessages.slice(-visibleLiveCount)
             : liveMessages;
         if (historyMessages.length === 0) {
             const dedupedLiveMessages = sortMessagesChronologically(dedupeOptimisticMessages(visibleLiveMessages));
@@ -400,7 +161,7 @@ export default function ChatPane({
             nextReceivedAtMap[getChatMessageStableKey(message, index)] = receivedAt;
         });
         return { allMessages: mergedMessages, receivedAtMap: nextReceivedAtMap };
-    }, [activeConv.tabKey, hiddenLiveCount, historyMessages, liveMessages, tabHistory.visibleLiveCount]);
+    }, [activeConv.tabKey, hiddenLiveCount, historyMessages, liveMessages, visibleLiveCount]);
     const visibleActionLogs = useMemo(
         () => actionLogs
             .filter(l => l.routeId === activeConv.tabKey)
