@@ -53,6 +53,19 @@ describe('conversation presenters', () => {
         expect(getRemotePanelTitle(conversation)).toBe('Remote · repo')
     })
 
+    it('preserves provider casing in history subtitles for CLI conversations', () => {
+        const conversation = createConversation({
+            transport: 'pty',
+            hostIdeType: undefined,
+            agentName: 'Codex CLI',
+            agentType: 'codex-cli',
+            displaySecondary: 'Codex CLI',
+        })
+
+        expect(getConversationHistorySubtitle(conversation)).toBe('repo — Codex CLI')
+        expect(getConversationStopDialogLabel(conversation)).toBe('Codex CLI')
+    })
+
     it('prefers connection hints before action-needed hints', () => {
         expect(getConversationStatusHint(createConversation({ connectionState: 'failed' }), { requiresAction: true }))
             .toBe('Reconnecting…')

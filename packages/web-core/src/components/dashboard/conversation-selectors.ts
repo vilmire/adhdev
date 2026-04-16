@@ -85,12 +85,20 @@ export function getConversationControlsContext(
     ideEntry?: DaemonData,
 ) {
     const providerType = getConversationProviderType(conversation)
-    const displayLabel = isNativeConversation(conversation)
-        ? (ideEntry?.type ? formatIdeType(ideEntry.type) : formatIdeType(getConversationHostIdeType(conversation) || providerType))
+    const isNative = isNativeConversation(conversation)
+    const isCliLike = isCliConv(conversation) || isAcpConv(conversation)
+    const displayLabel = isNative
+        ? (isCliLike
+            ? (getConversationProviderLabel(conversation)
+                || ideEntry?.cliName
+                || formatIdeType(getConversationHostIdeType(conversation) || providerType))
+            : (ideEntry?.type
+                ? formatIdeType(ideEntry.type)
+                : formatIdeType(getConversationHostIdeType(conversation) || providerType)))
         : getConversationProviderLabel(conversation)
 
     return {
-        isNativeConversation: isNativeConversation(conversation),
+        isNativeConversation: isNative,
         isCli: isCliConv(conversation),
         isAcp: isAcpConv(conversation),
         isCliTerminal: isCliTerminalConv(conversation),

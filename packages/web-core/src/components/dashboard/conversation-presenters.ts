@@ -7,7 +7,6 @@ import {
     getConversationHostIdeType,
     getConversationMetaParts,
     getConversationProviderLabel,
-    getConversationProviderType,
 } from './conversation-selectors'
 
 export function getConversationTitle(conversation: ActiveConversation): string {
@@ -57,8 +56,11 @@ export function getConversationMachineCardPreview(conversation: ActiveConversati
 }
 
 export function getConversationHistorySubtitle(conversation: ActiveConversation): string {
-    const labelType = getConversationHostIdeType(conversation) || getConversationProviderType(conversation)
-    return `${getConversationTitle(conversation)} — ${formatIdeType(labelType)}`
+    const hostIdeType = getConversationHostIdeType(conversation)
+    const label = hostIdeType
+        ? formatIdeType(hostIdeType)
+        : getConversationProviderLabel(conversation)
+    return `${getConversationTitle(conversation)} — ${label || 'Agent'}`
 }
 
 export function getConversationStopDialogLabel(conversation: ActiveConversation): string {

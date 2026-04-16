@@ -114,7 +114,8 @@ export function buildIdeConversations(
     const machineName = context.machineName;
     const connectionState = context.connectionState;
     const workspaceName = getWorkspaceName(ide);
-    const ideLabel = formatIdeType(ide.type);
+    const providerLabel = getAgentDisplayName(ide.type, { agentName: ide.cliName });
+    const ideLabel = (isCliConv(ide) || isAcpConv(ide)) ? providerLabel : formatIdeType(ide.type);
     const streams: {
         sessionId?: string;
         instanceId?: string;
@@ -167,7 +168,7 @@ export function buildIdeConversations(
     // 1) IDE native chat tab
     if (useConversationFirst) {
         const nativeSessionId = ide.sessionId || ide.instanceId;
-        const agentName = getAgentDisplayName(ide.type);
+        const agentName = providerLabel;
         const modal = ide.activeChat?.activeModal;
         const hasRealModal = modal && Array.isArray(modal.buttons) && modal.buttons.length > 0;
         const agentStatus = normalizeManagedStatus(ide.activeChat?.status, { activeModal: ide.activeChat?.activeModal })
@@ -294,7 +295,7 @@ export function buildIdeConversations(
             transport: ide.transport,
             daemonId: ide.daemonId || undefined,
             mode: 'chat',
-            agentName: getAgentDisplayName(ide.type),
+            agentName: providerLabel,
             agentType: 'ide-native',
             status: 'idle',
             title: '',

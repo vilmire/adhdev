@@ -53,4 +53,35 @@ describe('build conversations shared context', () => {
             tabKey: 'cursor-1',
         })
     })
+
+    it('preserves provider-supplied CLI casing for native conversations', () => {
+        const cli = createIdeEntry({
+            id: 'machine-1:cli:cli-1',
+            sessionId: 'cli-1',
+            type: 'codex-cli',
+            transport: 'pty',
+            cliName: 'Codex CLI',
+            mode: 'chat',
+            activeChat: {
+                id: 'chat-1',
+                title: 'Codex CLI',
+                status: 'idle',
+                messages: [],
+                activeModal: null,
+            },
+        })
+
+        const conversations = buildScopedIdeConversations(cli, {}, {
+            machineNames: { 'machine-1': 'Studio Mac' },
+            connectionStates: { 'machine-1': 'connected' },
+            defaultConnectionState: 'new',
+        })
+
+        expect(conversations).toHaveLength(1)
+        expect(conversations[0]).toMatchObject({
+            agentName: 'Codex CLI',
+            displayPrimary: 'repo',
+            displaySecondary: 'Codex CLI',
+        })
+    })
 })

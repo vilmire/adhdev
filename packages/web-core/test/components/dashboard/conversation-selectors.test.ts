@@ -16,7 +16,7 @@ import type { DaemonData } from '../../../src/types'
 
 function createConversation(overrides: Partial<ActiveConversation> = {}): ActiveConversation {
     return {
-        ideId: 'machine-1:ide:cursor-1',
+        routeId: 'machine-1:ide:cursor-1',
         sessionId: 'cursor-1',
         nativeSessionId: 'cursor-1',
         transport: 'cdp-page',
@@ -26,7 +26,7 @@ function createConversation(overrides: Partial<ActiveConversation> = {}): Active
         status: 'idle',
         title: '',
         messages: [],
-        ideType: 'cursor',
+        hostIdeType: 'cursor',
         workspaceName: 'repo',
         displayPrimary: 'repo',
         displaySecondary: 'Cursor · Codex',
@@ -56,6 +56,32 @@ describe('conversation selectors', () => {
         expect(getConversationRemoteTabKey(conversation)).toBe('cursor-1')
         expect(getConversationActiveTabTarget(conversation)).toBe('agent-1')
         expect(getConversationMetaParts(conversation)).toEqual(['Cursor · Codex', 'Studio Mac'])
+    })
+
+    it('preserves provider casing for native CLI controls labels', () => {
+        const cliEntry: DaemonData = {
+            id: 'machine-1:cli:cli-1',
+            type: 'codex-cli',
+            cliName: 'Codex CLI',
+            transport: 'pty',
+            status: 'idle',
+            providerControls: [{ id: 'model', type: 'select', label: 'Model', placement: 'bar' }],
+        }
+
+        const context = getConversationControlsContext(createConversation({
+            transport: 'pty',
+            streamSource: 'native',
+            agentName: 'Codex CLI',
+            agentType: 'codex-cli',
+            hostIdeType: undefined,
+        }), cliEntry)
+
+        expect(context).toMatchObject({
+            isNativeConversation: true,
+            isCli: true,
+            providerType: 'codex-cli',
+            displayLabel: 'Codex CLI',
+        })
     })
 
     it('resolves controls context against the matching child session', () => {
