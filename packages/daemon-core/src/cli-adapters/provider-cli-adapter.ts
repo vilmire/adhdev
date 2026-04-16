@@ -45,6 +45,7 @@ import {
     type CliTraceEntry,
 } from './provider-cli-shared.js';
 import { buildChatMessage } from '../providers/chat-message-normalization.js';
+import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
 import {
     buildCliParseInput,
     buildCliTraceParseSnapshot,
@@ -1395,6 +1396,9 @@ export class ProviderCliAdapter implements CliAdapter {
                 runtimeSettings: this.runtimeSettings,
             });
             const parsed = this.cliScripts.parseOutput(input);
+            if (parsed && typeof parsed === 'object') {
+                Object.assign(parsed, validateReadChatResultPayload(parsed, `${this.cliType} parseOutput`));
+            }
             const refinedStatus = this.refineDetectedStatus(typeof parsed?.status === 'string' ? parsed.status : null, input.recentBuffer, input.screenText);
             if (parsed && refinedStatus && parsed.status !== refinedStatus) {
                 parsed.status = refinedStatus;

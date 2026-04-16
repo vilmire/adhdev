@@ -179,7 +179,7 @@ export function normalizeProviderScriptArgs(args: any, scriptName?: string): Rec
 
 function buildControlScriptResult(scriptName: string, payload: any): Record<string, unknown> {
     if (!payload || typeof payload !== 'object') return {};
-    if (Array.isArray(payload.options) || Array.isArray(payload.models) || Array.isArray(payload.modes)) {
+    if (Array.isArray(payload.options)) {
         return { controlResult: normalizeControlListResult(payload) };
     }
 
@@ -189,7 +189,7 @@ function buildControlScriptResult(scriptName: string, payload: any): Record<stri
     if (looksLikeValueMutation) {
         return { controlResult: normalizeControlSetResult(payload) };
     }
-    if (payload.ok !== undefined || payload.success !== undefined || Array.isArray(payload.effects)) {
+    if (payload.ok !== undefined || Array.isArray(payload.effects) || typeof payload.error === 'string') {
         return { controlResult: normalizeControlInvokeResult(payload) };
     }
     return {};

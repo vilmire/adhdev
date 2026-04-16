@@ -23,6 +23,7 @@ import { AcpProviderInstance } from '../providers/acp-provider-instance.js';
 import type { ProviderInstanceManager } from '../providers/provider-instance-manager.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
 import { normalizeInputEnvelope, type ProviderModule, type ProviderResumeCapability } from '../providers/contracts.js';
+import { assertProviderSupportsDeclaredInput, assertTextOnlyInput } from '../providers/provider-input-support.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { SessionRegistry } from '../sessions/registry.js';
@@ -950,6 +951,12 @@ export class DaemonCliManager {
 
                 if (action === 'send_chat') {
                     const input = normalizeInputEnvelope(args?.input ? { input: args.input } : args);
+                    const provider = this.providerLoader.resolve(agentType) || this.providerLoader.getMeta(agentType);
+                    if (provider?.category === 'acp') {
+                        assertProviderSupportsDeclaredInput(provider, input);
+                    } else {
+                        assertTextOnlyInput(provider, input);
+                    }
                     const message = input.textFallback;
                     if (!message) throw new Error('message required for send_chat');
                     await adapter.sendMessage(message);

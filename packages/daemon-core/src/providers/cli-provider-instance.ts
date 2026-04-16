@@ -11,6 +11,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { createRequire } from 'node:module';
 import { normalizeInputEnvelope, type ProviderModule, flattenContent } from './contracts.js';
+import { assertTextOnlyInput } from './provider-input-support.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
@@ -412,6 +413,7 @@ export class CliProviderInstance implements ProviderInstance {
     onEvent(event: string, data?: any): void {
         if (event === 'send_message') {
             const input = normalizeInputEnvelope(data);
+            assertTextOnlyInput(this.provider, input);
             if (input.textFallback) {
                 void this.adapter.sendMessage(input.textFallback).catch((e: any) => {
                     LOG.warn('CLI', `[${this.type}] send_message failed: ${e?.message || e}`);

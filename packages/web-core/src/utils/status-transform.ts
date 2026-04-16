@@ -25,6 +25,7 @@ type ExistingSessionLike = Partial<SessionEntry> & {
     parentSessionId?: string | null
     cliName?: string
     type?: string
+    mode?: SessionEntry['mode']
     sessionCapabilities?: SessionEntry['capabilities']
     summaryMetadata?: any
     activeChat?: SessionEntry['activeChat']
@@ -74,6 +75,7 @@ function buildExistingSessionMap(entries: DaemonData[] | undefined, daemonId: st
             runtimeAttachedClients: entry.runtimeAttachedClients,
             cliName: entry.cliName,
             type: entry.type,
+            mode: entry.mode,
             status: entry.status as SessionEntry['status'],
             lastMessagePreview: entry.lastMessagePreview,
             lastMessageRole: entry.lastMessageRole,
@@ -102,6 +104,7 @@ function mergeSessionSummary(
         parentId: session.parentId ?? existingEntry?.parentSessionId ?? null,
         providerName: session.providerName ?? existingEntry?.cliName ?? existingEntry?.type ?? session.providerType,
         workspace: session.workspace ?? existingEntry?.workspace ?? null,
+        mode: session.mode ?? existingEntry?.mode,
         capabilities: session.capabilities ?? (existingEntry?.sessionCapabilities as SessionEntry['capabilities']) ?? [],
         cdpConnected: session.cdpConnected ?? existingEntry?.cdpConnected,
         activeChat: mergeActiveChatData(session.activeChat, existingEntry?.activeChat),

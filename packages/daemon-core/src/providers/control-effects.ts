@@ -171,51 +171,43 @@ export function buildPersistedProviderEffectMessage(effect: ProviderEffect | nul
 }
 
 export function normalizeControlListResult(data: any): ControlListResult {
-    if (data && typeof data === 'object' && Array.isArray(data.options)) {
-        return {
-            options: normalizeControlOptions(data.options),
-            ...(isScalarControlValue(data.currentValue) ? { currentValue: data.currentValue } : {}),
-            ...(typeof data.error === 'string' ? { error: data.error } : {}),
-        };
+    if (!data || typeof data !== 'object' || !Array.isArray(data.options)) {
+        throw new Error('Provider control list results must use the typed shape { options, currentValue?, error? }');
     }
-
-    const rawOptions = Array.isArray(data?.models)
-        ? data.models
-        : Array.isArray(data?.modes)
-            ? data.modes
-            : Array.isArray(data?.options)
-                ? data.options
-                : [];
-    const options = normalizeControlOptions(rawOptions);
     return {
-        options,
-        ...(isScalarControlValue(data?.current) ? { currentValue: data.current } : {}),
-        ...(isScalarControlValue(data?.currentValue) ? { currentValue: data.currentValue } : {}),
-        ...(typeof data?.error === 'string' ? { error: data.error } : {}),
+        options: normalizeControlOptions(data.options),
+        ...(isScalarControlValue(data.currentValue) ? { currentValue: data.currentValue } : {}),
+        ...(typeof data.error === 'string' ? { error: data.error } : {}),
     };
 }
 
 export function normalizeControlSetResult(data: any): ControlSetResult {
-    const currentValue = isScalarControlValue(data?.currentValue)
+    if (!data || typeof data !== 'object' || typeof data.ok !== 'boolean') {
+        throw new Error('Provider control set results must use the typed shape { ok, currentValue?, effects?, error? }');
+    }
+    const currentValue = isScalarControlValue(data.currentValue)
         ? data.currentValue
-        : (isScalarControlValue(data?.value) ? data.value : undefined);
+        : (isScalarControlValue(data.value) ? data.value : undefined);
     return {
-        ok: data?.ok === true || data?.success === true,
+        ok: data.ok,
         ...(currentValue !== undefined ? { currentValue } : {}),
-        ...(Array.isArray(data?.effects) ? { effects: normalizeProviderEffects(data) } : {}),
-        ...(typeof data?.error === 'string' ? { error: data.error } : {}),
+        ...(Array.isArray(data.effects) ? { effects: normalizeProviderEffects(data) } : {}),
+        ...(typeof data.error === 'string' ? { error: data.error } : {}),
     };
 }
 
 export function normalizeControlInvokeResult(data: any): ControlInvokeResult {
-    const currentValue = isScalarControlValue(data?.currentValue)
+    if (!data || typeof data !== 'object' || typeof data.ok !== 'boolean') {
+        throw new Error('Provider control invoke results must use the typed shape { ok, currentValue?, effects?, error? }');
+    }
+    const currentValue = isScalarControlValue(data.currentValue)
         ? data.currentValue
-        : (isScalarControlValue(data?.value) ? data.value : undefined);
+        : (isScalarControlValue(data.value) ? data.value : undefined);
     return {
-        ok: data?.ok === true || data?.success === true,
+        ok: data.ok,
         ...(currentValue !== undefined ? { currentValue } : {}),
-        ...(Array.isArray(data?.effects) ? { effects: normalizeProviderEffects(data) } : {}),
-        ...(typeof data?.error === 'string' ? { error: data.error } : {}),
+        ...(Array.isArray(data.effects) ? { effects: normalizeProviderEffects(data) } : {}),
+        ...(typeof data.error === 'string' ? { error: data.error } : {}),
     };
 }
 

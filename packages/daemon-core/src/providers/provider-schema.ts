@@ -1,5 +1,7 @@
 import type { ProviderControlDef, ProviderControlType, ProviderModule } from './contracts.js'
 
+const VALID_CAPABILITY_MEDIA_TYPES = new Set(['text', 'image', 'audio', 'video', 'resource'])
+
 const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'type',
   'name',
@@ -50,6 +52,7 @@ const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'sendDelayMs',
   'sendKey',
   'submitStrategy',
+  'timeouts',
   'disableUpstream',
 ])
 
@@ -88,6 +91,7 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
   }
 
   const category = provider.category
+  const controls = Array.isArray(provider.controls) ? provider.controls : []
   if ((category === 'cli' || category === 'acp')) {
     const spawn = provider.spawn
     const command = spawn && typeof spawn === 'object'
@@ -110,11 +114,66 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
     warnings.push('Extension providers should have extensionId')
   }
 
-  for (const control of Array.isArray(provider.controls) ? provider.controls : []) {
+  validateCapabilities(provider as unknown as ProviderModule, controls, errors)
+
+  for (const control of controls) {
     validateControl(control as ProviderControlDef, errors)
   }
 
   return { errors, warnings }
+}
+
+function validateCapabilities(provider: ProviderModule, controls: ProviderControlDef[], errors: string[]): void {
+  const capabilities = provider.capabilities
+  if (provider.contractVersion === 2) {
+    if (!capabilities || typeof capabilities !== 'object') {
+      errors.push('contractVersion 2 providers must declare capabilities')
+      return
+    }
+  }
+  if (!capabilities || typeof capabilities !== 'object') {
+    return
+  }
+
+  const input = capabilities.input
+  if (!input || typeof input !== 'object') {
+    errors.push('capabilities.input is required')
+  } else {
+    if (typeof input.multipart !== 'boolean') {
+      errors.push('capabilities.input.multipart must be boolean')
+    }
+    if (!Array.isArray(input.mediaTypes) || input.mediaTypes.length === 0) {
+      errors.push('capabilities.input.mediaTypes must be a non-empty array')
+    } else if (input.mediaTypes.some((type) => typeof type !== 'string' || !VALID_CAPABILITY_MEDIA_TYPES.has(type))) {
+      errors.push(`capabilities.input.mediaTypes must only include: ${Array.from(VALID_CAPABILITY_MEDIA_TYPES).join(', ')}`)
+    }
+  }
+
+  const output = capabilities.output
+  if (!output || typeof output !== 'object') {
+    errors.push('capabilities.output is required')
+  } else {
+    if (typeof output.richContent !== 'boolean') {
+      errors.push('capabilities.output.richContent must be boolean')
+    }
+    if (!Array.isArray(output.mediaTypes) || output.mediaTypes.length === 0) {
+      errors.push('capabilities.output.mediaTypes must be a non-empty array')
+    } else if (output.mediaTypes.some((type) => typeof type !== 'string' || !VALID_CAPABILITY_MEDIA_TYPES.has(type))) {
+      errors.push(`capabilities.output.mediaTypes must only include: ${Array.from(VALID_CAPABILITY_MEDIA_TYPES).join(', ')}`)
+    }
+  }
+
+  const controlCapabilities = capabilities.controls
+  if (!controlCapabilities || typeof controlCapabilities !== 'object') {
+    errors.push('capabilities.controls is required')
+    return
+  }
+  if (typeof controlCapabilities.typedResults !== 'boolean') {
+    errors.push('capabilities.controls.typedResults must be boolean')
+  }
+  if (controls.length > 0 && controlCapabilities.typedResults !== true) {
+    errors.push('providers declaring controls must set capabilities.controls.typedResults=true')
+  }
 }
 
 function validateControl(control: ProviderControlDef, errors: string[]): void {

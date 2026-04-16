@@ -25,34 +25,12 @@ describe('control result normalization', () => {
     })
   })
 
-  it('normalizes legacy model/mode arrays into typed option results', () => {
-    expect(normalizeControlListResult({ models: ['opus', 'sonnet'], current: 'opus' })).toEqual({
-      options: [
-        { value: 'opus', label: 'opus' },
-        { value: 'sonnet', label: 'sonnet' },
-      ],
-      currentValue: 'opus',
-    })
+  it('rejects legacy list result shapes', () => {
+    expect(() => normalizeControlListResult({ models: ['opus', 'sonnet'], current: 'opus' }))
+      .toThrow('Provider control list results must use the typed shape')
 
-    expect(normalizeControlListResult({ modes: [{ value: 'plan', name: 'Plan' }] })).toEqual({
-      options: [{ value: 'plan', label: 'Plan' }],
-    })
-  })
-
-  it('normalizes legacy model objects that only expose name + selected flags', () => {
-    expect(normalizeControlListResult({
-      models: [
-        { name: 'GPT-5.4', selected: true },
-        { name: 'GPT-5.4-Mini', selected: false },
-      ],
-      current: 'GPT-5.4',
-    })).toEqual({
-      options: [
-        { value: 'GPT-5.4', label: 'GPT-5.4' },
-        { value: 'GPT-5.4-Mini', label: 'GPT-5.4-Mini' },
-      ],
-      currentValue: 'GPT-5.4',
-    })
+    expect(() => normalizeControlListResult({ modes: [{ value: 'plan', name: 'Plan' }] }))
+      .toThrow('Provider control list results must use the typed shape')
   })
 
   it('does not inject implicit model/mode control values without schema mapping', () => {
@@ -67,21 +45,20 @@ describe('control result normalization', () => {
     })
   })
 
-  it('normalizes typed and legacy set results', () => {
+  it('requires typed set results', () => {
     expect(normalizeControlSetResult({ ok: true, currentValue: 'opus' })).toEqual({
       ok: true,
       currentValue: 'opus',
     })
 
-    expect(normalizeControlSetResult({ success: true })).toEqual({ ok: true })
+    expect(() => normalizeControlSetResult({ success: true }))
+      .toThrow('Provider control set results must use the typed shape')
   })
 
-  it('normalizes typed and legacy invoke results', () => {
+  it('requires typed invoke results', () => {
     expect(normalizeControlInvokeResult({ ok: true })).toEqual({ ok: true })
-    expect(normalizeControlInvokeResult({ success: true, value: 'done' })).toEqual({
-      ok: true,
-      currentValue: 'done',
-    })
+    expect(() => normalizeControlInvokeResult({ success: true, value: 'done' }))
+      .toThrow('Provider control invoke results must use the typed shape')
   })
 
   it('normalizes provider effects into persisted richer chat messages without dropping semantic kinds', () => {

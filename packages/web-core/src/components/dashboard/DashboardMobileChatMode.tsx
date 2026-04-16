@@ -20,6 +20,7 @@ import { useDashboardMobileChatEffects } from './useDashboardMobileChatEffects'
 import { useDashboardMobileMachineActions } from './useDashboardMobileMachineActions'
 import { useDashboardMobileNavigationController } from './useDashboardMobileNavigationController'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
+import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 
 declare const __APP_VERSION__: string
 
@@ -48,6 +49,8 @@ interface DashboardMobileChatModeProps {
     onShowAllHiddenConversations: () => void
     onHideConversation?: (conversation: ActiveConversation) => void
     onOpenNewSession?: () => void
+    notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
+    onMarkNotificationTargetRead: (target: { sessionId?: string; tabKey?: string }) => void
 }
 
 function getAvatarText(primary: string) {
@@ -97,6 +100,8 @@ export default function DashboardMobileChatMode({
     onShowAllHiddenConversations,
     onHideConversation,
     onOpenNewSession,
+    notificationStateBySessionId,
+    onMarkNotificationTargetRead,
 }: DashboardMobileChatModeProps) {
     const [selectedTabKey, setSelectedTabKey] = useState<string | null>(() => conversations[0]?.tabKey || null)
     const [screen, setScreen] = useState<'inbox' | 'chat' | 'machine'>(() => (conversations[0] ? 'chat' : 'inbox'))
@@ -151,6 +156,7 @@ export default function DashboardMobileChatMode({
         const surfaceState = getConversationInboxSurfaceState(conversation, liveSessionInboxState, {
             hideOpenTaskCompleteUnread: true,
             isOpenConversation,
+            notificationStateBySessionId,
         })
         const timestamp = getConversationTimestamp(conversation)
         const preview = getConversationPreviewText(conversation)
@@ -163,7 +169,7 @@ export default function DashboardMobileChatMode({
             isWorking: surfaceState.isWorking,
             inboxBucket: surfaceState.inboxBucket,
         }
-    }), [conversations, liveSessionInboxState, screen, selectedConversation])
+    }), [conversations, liveSessionInboxState, notificationStateBySessionId, screen, selectedConversation])
     const { markConversationRead } = useDashboardMobileChatEffects({
         conversations,
         machineEntries,
@@ -185,6 +191,7 @@ export default function DashboardMobileChatMode({
         setSection,
         setMachineBackTarget,
         resetMachineAction: machineActions.resetMachineAction,
+        markNotificationTargetRead: onMarkNotificationTargetRead,
     })
     const navigation = useDashboardMobileNavigationController({
         conversations,

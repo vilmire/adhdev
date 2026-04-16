@@ -287,4 +287,45 @@ describe('statusPayloadToEntries', () => {
             buttons: ['Allow once', 'Deny'],
         })
     })
+
+    it('preserves an existing chat mode when a sparse live CLI snapshot omits mode', () => {
+        const entries = statusPayloadToEntries(createPayload({
+            sessions: [createSession({
+                id: 'cli-mode',
+                providerType: 'hermes-cli',
+                providerName: 'Hermes Agent',
+                status: 'idle',
+                activeChat: {
+                    id: 'chat-1',
+                    title: 'Hermes Agent',
+                    status: 'idle',
+                    messages: [],
+                    activeModal: null,
+                } as any,
+            })],
+        }), {
+            daemonId: 'machine-5',
+            existingEntries: [{
+                id: 'machine-5:cli:cli-mode',
+                daemonId: 'machine-5',
+                sessionId: 'cli-mode',
+                type: 'hermes-cli',
+                transport: 'pty',
+                mode: 'chat',
+                status: 'idle',
+                activeChat: {
+                    id: 'chat-1',
+                    title: 'Hermes Agent',
+                    status: 'idle',
+                    messages: [],
+                    activeModal: null,
+                },
+            } as any],
+        })
+
+        expect(entries[1]).toMatchObject({
+            id: 'machine-5:cli:cli-mode',
+            mode: 'chat',
+        })
+    })
 });

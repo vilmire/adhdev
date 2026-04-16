@@ -18,6 +18,7 @@ import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
+import { validateReadChatResultPayload } from './read-chat-contract.js';
 import type { ChatMessage } from '../types.js';
 import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
@@ -311,7 +312,7 @@ export class IdeProviderInstance implements ProviderInstance {
             }
 
             if (!raw || typeof raw !== 'object') return;
-            const chat = raw as ReadChatPayload;
+            const chat = validateReadChatResultPayload(raw, `${this.type} readChat`) as ReadChatPayload;
 
  // Modal filter
             let { activeModal } = chat;

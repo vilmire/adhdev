@@ -46,8 +46,9 @@ import {
     type ToolCallStatus,
     type SessionConfigOption,
 } from '@agentclientprotocol/sdk';
-import type { ProviderModule, ContentBlock, InputEnvelope, InputPart, ToolCallInfo, ToolCallContent as TCC, ToolKind, ToolCallStatus as TCS } from './contracts.js';
+import type { ProviderModule, ContentBlock, InputEnvelope, ToolCallInfo, ToolCallContent as TCC, ToolKind, ToolCallStatus as TCS } from './contracts.js';
 import { normalizeContent, flattenContent, normalizeInputEnvelope } from './contracts.js';
+import { assertProviderSupportsDeclaredInput } from './provider-input-support.js';
 import type { ProviderInstance, ProviderState, AcpProviderState, ProviderErrorReason, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
 import { buildLegacyModelModeSummaryMetadata } from './summary-metadata.js';
@@ -112,27 +113,6 @@ function getPromptCapabilityFlags(agentCapabilities?: Record<string, any>): Prom
     };
 }
 
-function getResourceNameFromUri(uri: string, fallback: string): string {
-    try {
-        if (uri.startsWith('file://')) {
-            return path.basename(new URL(uri).pathname) || fallback;
-        }
-        return path.basename(uri) || fallback;
-    } catch {
-        return fallback;
-    }
-}
-
-function inputPartToResourceLink(part: Extract<InputPart, { type: 'image' | 'audio' | 'video' | 'resource' }>, fallbackName: string): ContentBlock | null {
-    if (!part.uri) return null;
-    return {
-        type: 'resource_link',
-        uri: part.uri,
-        name: getResourceNameFromUri(part.uri, fallbackName),
-        ...(part.mimeType ? { mimeType: part.mimeType } : {}),
-    };
-}
-
 function appendPromptText(promptParts: ContentBlock[], text: string | undefined): void {
     const normalized = typeof text === 'string' ? text.trim() : '';
     if (!normalized) return;
@@ -152,61 +132,64 @@ export function buildAcpPromptParts(input: InputEnvelope, agentCapabilities?: Re
         }
 
         if (part.type === 'image') {
-            if (caps.image && part.data) {
-                promptParts.push({
-                    type: 'image',
-                    data: part.data,
-                    mimeType: part.mimeType,
-                    ...(part.uri ? { uri: part.uri } : {}),
-                });
-                continue;
+            if (!caps.image) {
+                throw new Error('ACP agent does not support input type: image');
             }
-            const fallback = inputPartToResourceLink(part, 'image');
-            if (fallback) promptParts.push(fallback);
-            appendPromptText(promptParts, part.alt || (!part.uri ? `Attached image (${part.mimeType})` : undefined));
+            if (!part.data) {
+                throw new Error('ACP image input requires inline image data');
+            }
+            promptParts.push({
+                type: 'image',
+                data: part.data,
+                mimeType: part.mimeType,
+                ...(part.uri ? { uri: part.uri } : {}),
+            });
             continue;
         }
 
         if (part.type === 'audio') {
-            if (caps.audio && part.data) {
-                promptParts.push({
-                    type: 'audio',
-                    data: part.data,
-                    mimeType: part.mimeType,
-                });
-                continue;
+            if (!caps.audio) {
+                throw new Error('ACP agent does not support input type: audio');
             }
-            const fallback = inputPartToResourceLink(part, 'audio');
-            if (fallback) promptParts.push(fallback);
-            appendPromptText(promptParts, part.transcript || (!part.uri ? `Attached audio (${part.mimeType})` : undefined));
+            if (!part.data) {
+                throw new Error('ACP audio input requires inline audio data');
+            }
+            promptParts.push({
+                type: 'audio',
+                data: part.data,
+                mimeType: part.mimeType,
+            });
             continue;
         }
 
         if (part.type === 'resource') {
-            if (caps.embeddedContext && (part.text || part.data)) {
+            if (!caps.embeddedContext) {
+                throw new Error('ACP agent does not support input type: resource');
+            }
+            if (part.text) {
                 promptParts.push({
                     type: 'resource',
-                    resource: part.text
-                        ? { uri: part.uri, text: part.text, mimeType: part.mimeType ?? null }
-                        : { uri: part.uri, blob: part.data || '', mimeType: part.mimeType ?? null },
+                    resource: { uri: part.uri, text: part.text, mimeType: part.mimeType ?? null },
                 });
                 continue;
             }
-            const fallback = inputPartToResourceLink(part, part.name || 'resource');
-            if (fallback) promptParts.push(fallback);
-            appendPromptText(promptParts, part.text || (!part.uri && part.name ? part.name : undefined));
-            continue;
+            if (part.data) {
+                promptParts.push({
+                    type: 'resource',
+                    resource: { uri: part.uri, blob: part.data, mimeType: part.mimeType ?? null },
+                });
+                continue;
+            }
+            throw new Error('ACP resource input requires embedded text or binary data');
         }
 
         if (part.type === 'video') {
-            const fallback = inputPartToResourceLink(part, 'video');
-            if (fallback) promptParts.push(fallback);
-            appendPromptText(promptParts, !part.uri ? `Attached video (${part.mimeType})` : undefined);
+            throw new Error('ACP agent does not support input type: video');
         }
     }
 
     if (!promptParts.some((part) => part.type === 'text') && input.textFallback) {
-        promptParts.unshift({ type: 'text', text: input.textFallback });
+        appendPromptText(promptParts, input.textFallback);
     }
 
     return promptParts;
@@ -366,6 +349,7 @@ export class AcpProviderInstance implements ProviderInstance {
     onEvent(event: string, data?: any): void {
         if (event === 'send_message') {
             const input = normalizeInputEnvelope(data)
+            assertProviderSupportsDeclaredInput(this.provider, input)
             const promptParts = buildAcpPromptParts(input, this.agentCapabilities)
             this.sendPrompt(input.textFallback, promptParts.length > 0 ? promptParts : undefined).catch(e =>
                 this.log.warn(`[${this.type}] sendPrompt error: ${e?.message}`)

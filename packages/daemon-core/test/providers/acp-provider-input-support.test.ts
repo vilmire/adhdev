@@ -6,7 +6,7 @@ import {
 import { normalizeInputEnvelope } from '../../src/providers/contracts.js'
 
 describe('ACP prompt part support', () => {
-  it('forwards all ACP-supported prompt part types when the agent advertises support', () => {
+  it('forwards ACP-supported prompt part types when the agent advertises support', () => {
     const input = normalizeInputEnvelope({
       input: {
         parts: [
@@ -35,67 +35,71 @@ describe('ACP prompt part support', () => {
     ])
   })
 
-  it('falls back unsupported ACP prompt parts to baseline-compatible forms', () => {
+  it('fails closed when the ACP agent does not advertise support for a requested input type', () => {
     const input = normalizeInputEnvelope({
       input: {
         parts: [
           { type: 'text', text: 'check the artifacts' },
-          { type: 'image', mimeType: 'image/png', uri: 'file:///tmp/image.png', alt: 'diagram screenshot' },
-          { type: 'audio', mimeType: 'audio/mpeg', uri: 'file:///tmp/audio.mp3', transcript: 'spoken note' },
-          { type: 'resource', uri: 'file:///tmp/spec.md', text: '# Embedded spec' },
-          { type: 'video', mimeType: 'video/mp4', uri: 'file:///tmp/video.mp4' },
+          { type: 'image', mimeType: 'image/png', uri: 'file:///tmp/image.png', data: 'img-base64' },
         ],
         textFallback: 'check the artifacts',
       },
     })
 
-    expect(buildAcpPromptParts(input, {
+    expect(() => buildAcpPromptParts(input, {
       promptCapabilities: {
         image: false,
         audio: false,
         embeddedContext: false,
       },
-    })).toEqual([
-      { type: 'text', text: 'check the artifacts' },
-      { type: 'resource_link', uri: 'file:///tmp/image.png', name: 'image.png', mimeType: 'image/png' },
-      { type: 'text', text: 'diagram screenshot' },
-      { type: 'resource_link', uri: 'file:///tmp/audio.mp3', name: 'audio.mp3', mimeType: 'audio/mpeg' },
-      { type: 'text', text: 'spoken note' },
-      { type: 'resource_link', uri: 'file:///tmp/spec.md', name: 'spec.md' },
-      { type: 'text', text: '# Embedded spec' },
-      { type: 'resource_link', uri: 'file:///tmp/video.mp4', name: 'video.mp4', mimeType: 'video/mp4' },
-    ])
+    })).toThrow('ACP agent does not support input type: image')
   })
 
-  it('falls back to descriptive text when unsupported inline media has no uri', () => {
-    const input = normalizeInputEnvelope({
+  it('fails closed when inline ACP media data is missing', () => {
+    const imageOnly = normalizeInputEnvelope({
       input: {
         parts: [
-          { type: 'image', mimeType: 'image/png', data: 'img-base64', alt: 'whiteboard photo' },
-          { type: 'audio', mimeType: 'audio/mpeg', data: 'audio-base64', transcript: 'meeting note' },
-          { type: 'video', mimeType: 'video/mp4', data: 'video-base64' },
+          { type: 'image', mimeType: 'image/png', uri: 'file:///tmp/image.png' },
         ],
-        textFallback: '',
+      },
+    })
+    expect(() => buildAcpPromptParts(imageOnly, { promptCapabilities: { image: true } }))
+      .toThrow('ACP image input requires inline image data')
+
+    const audioOnly = normalizeInputEnvelope({
+      input: {
+        parts: [
+          { type: 'audio', mimeType: 'audio/mpeg', uri: 'file:///tmp/audio.mp3' },
+        ],
+      },
+    })
+    expect(() => buildAcpPromptParts(audioOnly, { promptCapabilities: { audio: true } }))
+      .toThrow('ACP audio input requires inline audio data')
+  })
+
+  it('fails closed for unsupported ACP video input', () => {
+    const input = normalizeInputEnvelope({
+      input: {
+        parts: [{ type: 'video', mimeType: 'video/mp4', uri: 'file:///tmp/video.mp4' }],
       },
     })
 
-    expect(buildAcpPromptParts(input, {
+    expect(() => buildAcpPromptParts(input, {
       promptCapabilities: {
-        image: false,
-        audio: false,
-        embeddedContext: false,
+        image: true,
+        audio: true,
+        embeddedContext: true,
       },
-    })).toEqual([
-      { type: 'text', text: 'whiteboard photo' },
-      { type: 'text', text: 'meeting note' },
-      { type: 'text', text: 'Attached video (video/mp4)' },
-    ])
+    })).toThrow('ACP agent does not support input type: video')
   })
 
   it('passes normalized multipart input through onEvent(send_message)', async () => {
     const instance = Object.create(AcpProviderInstance.prototype) as AcpProviderInstance & {
       sendPrompt: ReturnType<typeof vi.fn>
       agentCapabilities: Record<string, unknown>
+      provider: any
+      type: string
+      log: { warn: ReturnType<typeof vi.fn> }
     }
     instance.sendPrompt = vi.fn().mockResolvedValue(undefined)
     instance.agentCapabilities = {
@@ -105,6 +109,18 @@ describe('ACP prompt part support', () => {
         embeddedContext: true,
       },
     }
+    instance.provider = {
+      name: 'ACP Test',
+      type: 'acp-test',
+      capabilities: {
+        input: {
+          multipart: true,
+          mediaTypes: ['text', 'image', 'audio'],
+        },
+      },
+    }
+    instance.type = 'acp-test'
+    instance.log = { warn: vi.fn() }
 
     instance.onEvent('send_message', {
       input: {

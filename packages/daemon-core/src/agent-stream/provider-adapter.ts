@@ -13,6 +13,7 @@ import type {
 } from './types.js';
 import type { ProviderModule, ProviderScripts } from '../providers/contracts.js';
 import { extractProviderControlValues, normalizeProviderEffects } from '../providers/control-effects.js';
+import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
 import { resolveProviderStateSurface } from '../providers/provider-patch-state.js';
 import { normalizeChatMessages } from '../providers/chat-message-normalization.js';
 
@@ -149,26 +150,31 @@ export class ProviderStreamAdapter implements IAgentStreamAdapter {
                 }
                 return state;
             }
+            const validated = validateReadChatResultPayload(data, `${this.agentType} readChat`);
+            const validatedStatus = (validated as any).status as string;
+            const streamStatus = validatedStatus === 'generating' || validatedStatus === 'long_generating'
+                ? 'streaming'
+                : validatedStatus;
             const state: AgentStreamState = {
                 agentType: this.agentType,
                 agentName: this.agentName,
                 extensionId: this.extensionId,
-                status: data.status || 'idle',
-                messages: normalizeChatMessages(Array.isArray(data.messages) ? data.messages : []) as any,
-                inputContent: data.inputContent || '',
-                activeModal: data.activeModal,
+                status: streamStatus as AgentStreamState['status'],
+                messages: normalizeChatMessages(validated.messages) as any,
+                inputContent: typeof validated.inputContent === 'string' ? validated.inputContent : '',
+                ...(validated.activeModal ? { activeModal: validated.activeModal } : {}),
             };
-            if (typeof data.title === 'string' && data.title.trim()) {
-                state.title = data.title.trim();
+            if (typeof validated.title === 'string' && validated.title.trim()) {
+                state.title = validated.title.trim();
             }
-            const controlValues = extractProviderControlValues(this.provider.controls, data);
+            const controlValues = extractProviderControlValues(this.provider.controls, validated);
             const surface = resolveProviderStateSurface({
                 controlValues,
-                summaryMetadata: data.summaryMetadata,
+                summaryMetadata: validated.summaryMetadata,
             });
             if (surface.controlValues) state.controlValues = surface.controlValues;
             if (surface.summaryMetadata) state.summaryMetadata = surface.summaryMetadata as any;
-            const effects = normalizeProviderEffects(data);
+            const effects = normalizeProviderEffects(validated);
             if (effects.length > 0) state.effects = effects;
             if (state.messages.length > 0) {
                 this.lastSuccessState = state;

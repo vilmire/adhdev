@@ -2,6 +2,18 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.66] - 2026-04-16
+
+### Added
+- Added fail-closed provider contract guards for structured input capability checks, canonical `read_chat` payload validation, and regression coverage around CLI/ACP send paths and timestamp-only transcript updates.
+
+### Fixed
+- Fixed shared provider/runtime plumbing so unsupported CLI and ACP inputs now fail explicitly instead of silently degrading, and invalid control result/read-chat payloads stop at the contract boundary instead of being normalized from legacy shapes.
+- Fixed shared mobile/dashboard conversation state so sparse live session snapshots preserve chat mode and timestamp-only assistant completions still invalidate inbox/conversation recency correctly.
+
+### Changed
+- Formalized provider schema requirements around explicit `capabilities` metadata and typed control results, and tightened the shared runtime to prefer canonical provider output contracts over legacy fallback shapes.
+
 ## [0.8.65] - 2026-04-16
 
 ### Fixed

@@ -6,6 +6,8 @@
 import type { CommandResult, CommandHelpers } from './handler.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import { flattenContent, normalizeInputEnvelope, type InputEnvelope, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
+import { assertProviderSupportsDeclaredInput, assertTextOnlyInput } from '../providers/provider-input-support.js';
+import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
 import { readChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
@@ -80,7 +82,7 @@ function isExtensionTransport(transport: SessionTransport | null): boolean {
     return transport === 'cdp-webview';
 }
 
-function buildRecentSendKey(h: CommandHelpers, args: any, provider: ProviderModule | undefined, text: string): string {
+function buildRecentSendKey(h: CommandHelpers, args: any, provider: ProviderModule | undefined, signature: string): string {
     const transport = getTargetTransport(h, provider) || 'unknown';
     const target =
         args?.targetSessionId
@@ -89,7 +91,13 @@ function buildRecentSendKey(h: CommandHelpers, args: any, provider: ProviderModu
         || h.currentProviderType
         || h.currentManagerKey
         || 'unknown';
-    return `${transport}:${target}:${text.trim()}`;
+    return `${transport}:${target}:${signature.trim()}`;
+}
+
+function buildSendInputSignature(input: InputEnvelope): string {
+    const text = typeof input.textFallback === 'string' ? input.textFallback.trim() : '';
+    if (text) return text;
+    return JSON.stringify(input.parts || []);
 }
 
 function getSendChatInputEnvelope(args: any): InputEnvelope {
@@ -292,14 +300,20 @@ function computeReadChatSync(messages: ChatMessage[], cursor: Required<ReadChatC
 }
 
 function buildReadChatCommandResult(payload: Record<string, any>, args: any): CommandResult {
-    const messages = normalizeReadChatMessages(payload);
+    let validatedPayload: Record<string, any>;
+    try {
+        validatedPayload = validateReadChatResultPayload(payload, 'read_chat command result') as Record<string, any>;
+    } catch (error: any) {
+        return { success: false, error: error?.message || String(error) };
+    }
+    const messages = normalizeReadChatMessages(validatedPayload);
     const cursor = normalizeReadChatCursor(args);
     if (!cursor.knownMessageCount && !cursor.lastMessageSignature && cursor.tailLimit > 0 && messages.length > cursor.tailLimit) {
         const tailMessages = messages.slice(-cursor.tailLimit);
         const lastMessageSignature = getChatMessageSignature(tailMessages[tailMessages.length - 1]);
         return {
             success: true,
-            ...payload,
+            ...validatedPayload,
             messages: tailMessages,
             syncMode: 'full',
             replaceFrom: 0,
@@ -310,7 +324,7 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any): Co
     const sync = computeReadChatSync(messages, cursor);
     return {
         success: true,
-        ...payload,
+        ...validatedPayload,
         messages: sync.messages,
         syncMode: sync.syncMode,
         replaceFrom: sync.replaceFrom,
@@ -405,12 +419,24 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (adapter) {
             _log(`${transport} adapter: ${adapter.cliType}`);
-            const status = adapter.getStatus();
+            const parsedStatus = typeof adapter.getScriptParsedStatus === 'function'
+                ? parseMaybeJson(adapter.getScriptParsedStatus())
+                : null;
+            const parsedRecord = parsedStatus && typeof parsedStatus === 'object'
+                ? parsedStatus as Record<string, any>
+                : null;
+            const status = parsedRecord || adapter.getStatus();
+            const title = typeof parsedRecord?.title === 'string' ? parsedRecord.title : undefined;
+            const providerSessionId = typeof parsedRecord?.providerSessionId === 'string'
+                ? parsedRecord.providerSessionId
+                : undefined;
             if (status) {
                 return buildReadChatCommandResult({
                     messages: status.messages || [],
                     status: status.status,
                     activeModal: status.activeModal,
+                    ...(title ? { title } : {}),
+                    ...(providerSessionId ? { providerSessionId } : {}),
                 }, args);
             }
         }
@@ -425,25 +451,26 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 let parsed = evalResult.result;
                 if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
                 if (parsed && typeof parsed === 'object') {
-                    _log(`Extension OK: ${parsed.messages?.length || 0} msgs`);
+                    const validated = validateReadChatResultPayload(parsed, 'extension read_chat');
+                    _log(`Extension OK: ${validated.messages?.length || 0} msgs`);
                     traceProviderEvent(args, 'provider', 'extension.read_chat.success', {
                         h,
                         provider,
                         payload: {
                             method: 'evaluateProviderScript',
                             result: evalResult.result,
-                            parsed,
-                            messageCount: Array.isArray(parsed.messages) ? parsed.messages.length : 0,
+                            parsed: validated,
+                            messageCount: Array.isArray(validated.messages) ? validated.messages.length : 0,
                         },
                     });
                     h.historyWriter.appendNewMessages(
                         provider?.type || 'unknown_extension',
-                        toHistoryPersistedMessages(normalizeReadChatMessages(parsed)),
-                        parsed.title,
+                        toHistoryPersistedMessages(normalizeReadChatMessages(validated)),
+                        validated.title,
                         args?.targetSessionId,
                         historySessionId,
                     );
-                    return buildReadChatCommandResult(parsed, args);
+                    return buildReadChatCommandResult(validated as Record<string, any>, args);
                 }
             }
         } catch (e: any) {
@@ -500,15 +527,16 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 let parsed: any = raw;
                 if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
                 if (parsed && typeof parsed === 'object') {
-                    _log(`Webview OK: ${parsed.messages?.length || 0} msgs`);
+                    const validated = validateReadChatResultPayload(parsed, 'webview read_chat');
+                    _log(`Webview OK: ${validated.messages?.length || 0} msgs`);
                 h.historyWriter.appendNewMessages(
                     provider?.type || getCurrentProviderType(h, 'unknown_webview'),
-                    toHistoryPersistedMessages(normalizeReadChatMessages(parsed)),
-                    parsed.title,
+                    toHistoryPersistedMessages(normalizeReadChatMessages(validated)),
+                    validated.title,
                     args?.targetSessionId,
                     historySessionId,
                 );
-                    return buildReadChatCommandResult(parsed, args);
+                    return buildReadChatCommandResult(validated as Record<string, any>, args);
                 }
             }
         } catch (e: any) {
@@ -526,25 +554,26 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 let parsed: any = evalResult.result;
                 if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
                 if (parsed && typeof parsed === 'object' && parsed.messages?.length > 0) {
-                    _log(`OK: ${parsed.messages?.length} msgs`);
+                    const validated = validateReadChatResultPayload(parsed, 'ide read_chat');
+                    _log(`OK: ${validated.messages?.length} msgs`);
                     traceProviderEvent(args, 'provider', 'ide.read_chat.success', {
                         h,
                         provider,
                         payload: {
                             method: 'evaluate',
                             result: evalResult.result,
-                            parsed,
-                            messageCount: Array.isArray(parsed.messages) ? parsed.messages.length : 0,
+                            parsed: validated,
+                            messageCount: Array.isArray(validated.messages) ? validated.messages.length : 0,
                         },
                     });
                     h.historyWriter.appendNewMessages(
                         provider?.type || getCurrentProviderType(h, 'unknown_ide'),
-                        toHistoryPersistedMessages(normalizeReadChatMessages(parsed)),
-                        parsed.title,
+                        toHistoryPersistedMessages(normalizeReadChatMessages(validated)),
+                        validated.title,
                         args?.targetSessionId,
                         historySessionId,
                     );
-                    return buildReadChatCommandResult(parsed, args);
+                    return buildReadChatCommandResult(validated as Record<string, any>, args);
                 }
             }
         } catch (e: any) {
@@ -564,11 +593,12 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
 export async function handleSendChat(h: CommandHelpers, args: any): Promise<CommandResult> {
     const input = getSendChatInputEnvelope(args);
     const text = input.textFallback;
-    if (!text) return { success: false, error: 'text required' };
+    const hasInput = input.parts.length > 0 || (typeof text === 'string' && text.trim().length > 0);
+    if (!hasInput) return { success: false, error: 'input required' };
     const _log = (msg: string) => LOG.debug('Command', `[send_chat] ${msg}`);
     const provider = h.getProvider(args?.agentType);
     const transport = getTargetTransport(h, provider);
-    const dedupeKey = buildRecentSendKey(h, args, provider, text);
+    const dedupeKey = buildRecentSendKey(h, args, provider, buildSendInputSignature(input));
 
     const _logSendSuccess = (method: string, targetAgent?: string) => {
         // Sending and transcript persistence are intentionally decoupled.
@@ -582,12 +612,28 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
         return { success: true, sent: false, deduplicated: true };
     }
 
-    // PTY / ACP transport: transmit via adapter
-    if (isCliLikeTransport(transport)) {
+    if (transport === 'acp') {
+        const target = getTargetInstance(h, args);
+        if (!target || target.category !== 'acp') {
+            return { success: false, error: `ACP instance not found for ${provider?.type || args?.agentType || 'unknown'}` };
+        }
+        try {
+            assertProviderSupportsDeclaredInput(provider, input);
+            target.onEvent('send_message', { input });
+            return _logSendSuccess('acp-instance', target.type);
+        } catch (e: any) {
+            return { success: false, error: `acp send failed: ${e.message}` };
+        }
+    }
+
+    // PTY transport: text-only send via adapter
+    if (transport === 'pty') {
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (adapter) {
             _log(`${transport} adapter: ${adapter.cliType}`);
             try {
+                assertTextOnlyInput(provider, input);
+                if (!text) return { success: false, error: 'text required for PTY send' };
                 await adapter.sendMessage(text);
                 return _logSendSuccess(`${transport}-adapter`, adapter.cliType);
             } catch (e: any) {
@@ -595,6 +641,9 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
             }
         }
     }
+
+    assertTextOnlyInput(provider, input);
+    if (!text) return { success: false, error: 'text required' };
 
     // Extension transport: via AgentStreamManager
     if (isExtensionTransport(transport)) {

@@ -92,6 +92,31 @@ describe('buildConversationSourceSignature', () => {
         expect(after).not.toBe(before)
     })
 
+    it('changes when a stable entry reference gains a timestamp-only completed assistant message', () => {
+        const entry = createCliEntry()
+        const before = buildConversationSourceSignature(entry)
+
+        entry.status = 'idle'
+        entry.lastMessageHash = 'hash-2'
+        entry.lastUpdated = 2
+        if (entry.activeChat) {
+            entry.activeChat.status = 'idle'
+            entry.activeChat.messages = [
+                ...(entry.activeChat.messages || []),
+                {
+                    id: 'msg-2',
+                    role: 'assistant',
+                    content: 'DONE',
+                    index: 1,
+                    timestamp: 2,
+                },
+            ]
+        }
+
+        const after = buildConversationSourceSignature(entry)
+        expect(after).not.toBe(before)
+    })
+
     it('changes when child session chat metadata changes even if parent reference is reused', () => {
         const entry = createCliEntry({
             transport: 'cdp-page',

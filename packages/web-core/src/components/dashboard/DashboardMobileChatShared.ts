@@ -1,6 +1,7 @@
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
 import type { RecentSessionBucket } from '@adhdev/daemon-core'
+import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 
 export interface MobileConversationListItem {
     conversation: ActiveConversation
@@ -125,10 +126,16 @@ export function getConversationLiveInboxState(
 export function getConversationInboxSurfaceState(
     conversation: ActiveConversation,
     stateBySessionId: Map<string, LiveSessionInboxState>,
-    options?: { hideOpenTaskCompleteUnread?: boolean; isOpenConversation?: boolean },
+    options?: {
+        hideOpenTaskCompleteUnread?: boolean
+        isOpenConversation?: boolean
+        notificationStateBySessionId?: Map<string, DashboardNotificationSessionState>
+    },
 ): ConversationInboxSurfaceState {
     const liveState = getConversationLiveInboxState(conversation, stateBySessionId)
     const viewStates = getConversationViewStates(conversation)
+    const notificationState = (conversation.sessionId && options?.notificationStateBySessionId?.get(conversation.sessionId))
+        || options?.notificationStateBySessionId?.get(conversation.tabKey)
     
     const isReconnecting = viewStates.isReconnecting
     const isConnecting = viewStates.isConnecting
@@ -137,9 +144,10 @@ export function getConversationInboxSurfaceState(
 
     const requiresAction = liveState.inboxBucket === 'needs_attention' || conversation.status === 'needs_attention' || conversation.status === 'waiting_for_user_input' || isWaiting
     const isWorking = liveState.inboxBucket === 'working' || isGenerating
+    const taskCompleteUnread = liveState.inboxBucket === 'task_complete'
+        && (notificationState ? notificationState.unreadCount > 0 : liveState.unread)
     const unread = (
-        liveState.inboxBucket === 'task_complete'
-        && liveState.unread
+        taskCompleteUnread
         && !(options?.hideOpenTaskCompleteUnread && options?.isOpenConversation)
     )
 
