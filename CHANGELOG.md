@@ -2,6 +2,17 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.75] - 2026-04-17
+
+### Added
+- Added focused regression coverage ensuring shared web-core/web-cloud terminal surfaces no longer expose PTY resize helper paths while the resize flow is intentionally disabled.
+
+### Fixed
+- Fixed the shared browser terminal surface so compatibility stubs, standalone connection managers, and the shared `CliTerminal` wrapper stop advertising resize callbacks that no longer have a supported transport path.
+
+### Changed
+- Finished the temporary PTY resize shutdown by removing the remaining shared resize helper surface from web consumers instead of only dropping the daemon-side envelope handler.
+
 ## [0.8.74] - 2026-04-17
 
 ### Added
