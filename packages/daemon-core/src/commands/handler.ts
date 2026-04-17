@@ -24,6 +24,7 @@ import { ChatHistoryWriter } from '../config/chat-history.js';
 import type { SessionRegistry, SessionRuntimeTarget } from '../sessions/registry.js';
 import { reconcileIdeRuntimeSessions } from '../sessions/reconcile.js';
 import { LOG } from '../logging/logger.js';
+import { resolveLegacyProviderScript, type LegacyStringScript } from './provider-script-resolver.js';
 
 // Sub-module imports
 import * as Chat from './chat-commands.js';
@@ -67,8 +68,6 @@ export interface CommandHelpers {
     readonly ctx: CommandContext;
     readonly historyWriter: ChatHistoryWriter;
 }
-
-type LegacyStringScript = (params?: Record<string, unknown> | string) => string;
 
 const COMMAND_DEBUG_LEVELS = new Set([
     'pty_input',
@@ -220,32 +219,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         if (provider?.scripts) {
             const fn = provider.scripts[scriptName];
             if (typeof fn === 'function') {
-                const callScript = fn as LegacyStringScript;
-                if (params && Object.keys(params).length > 0) {
-                    const firstVal = Object.values(params)[0];
-                    if (scriptName === 'sendMessage' && typeof firstVal === 'string') {
-                        const legacyScript = callScript(firstVal);
-                        if (legacyScript) return legacyScript;
-                    }
-                    const script = callScript(params);
-                    if (script) {
-                        const likelyLegacyObjectLeak =
-                            typeof script === 'string'
-                            && script.includes('[object Object]')
-                            && typeof firstVal === 'string';
-                        if (!likelyLegacyObjectLeak) return script;
-                    }
-
-                    if (firstVal !== undefined) {
-                        const legacyScript = callScript(firstVal);
-                        if (legacyScript) return legacyScript;
-                    }
-
-                    if (script) return script;
-                } else {
-                    const script = callScript();
-                    if (script) return script;
-                }
+                return resolveLegacyProviderScript(fn as LegacyStringScript, scriptName, params);
             }
         }
         return null;

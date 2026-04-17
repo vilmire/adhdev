@@ -188,6 +188,31 @@ export { DEFAULT_DAEMON_PORT, DAEMON_WS_PATH } from './ipc-protocol.js';
 
 // ── Chat History ──
 export { readChatHistory } from './config/chat-history.js';
+export {
+  hashSignatureParts,
+  buildChatMessageSignature,
+  buildChatTailDeliverySignature,
+  buildSessionModalDeliverySignature,
+} from './chat/chat-signatures.js';
+export type {
+  ChatMessageSignatureInput,
+  ChatTailDeliverySignatureInput,
+  SessionModalDeliverySignatureInput,
+} from './chat/chat-signatures.js';
+export {
+  normalizeChatTailActiveModal,
+  normalizeSessionModalFields,
+  prepareSessionChatTailUpdate,
+  prepareSessionModalUpdate,
+} from './chat/subscription-updates.js';
+export type {
+  ChatTailSubscriptionCursor,
+  PrepareSessionChatTailUpdateInput,
+  PreparedSessionChatTailUpdate,
+  PrepareSessionModalUpdateInput,
+  PreparedSessionModalUpdate,
+  SessionChatTailCommandResult,
+} from './chat/subscription-updates.js';
 
 // ── Agent Stream ──
 export { DaemonAgentStreamManager } from './agent-stream/index.js';

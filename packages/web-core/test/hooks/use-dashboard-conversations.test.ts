@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildConversationSourceSignature } from '../../src/hooks/useDashboardConversations'
+import { buildConversationSourceSignature, buildConversationTargetMap } from '../../src/hooks/useDashboardConversations'
+import type { ActiveConversation } from '../../src/components/dashboard/types'
 import type { DaemonData } from '../../src/types'
 
 function createCliEntry(overrides: Partial<DaemonData> = {}): DaemonData {
@@ -191,5 +192,59 @@ describe('buildConversationSourceSignature', () => {
 
         const after = buildConversationSourceSignature(entry)
         expect(after).not.toBe(before)
+    })
+})
+
+describe('buildConversationTargetMap', () => {
+    it('keeps route ids pointed at the preferred conversation instead of the last stream encountered', () => {
+        const nativeConversation: ActiveConversation = {
+            routeId: 'machine-1:ide:cursor-1',
+            sessionId: 'native-1',
+            providerSessionId: 'provider-native',
+            nativeSessionId: 'native-1',
+            transport: 'cdp-page',
+            daemonId: 'machine-1',
+            agentName: 'Cursor',
+            agentType: 'cursor',
+            status: 'idle',
+            title: 'Repo',
+            messages: [],
+            hostIdeType: 'cursor',
+            workspaceName: 'repo',
+            displayPrimary: 'Repo',
+            displaySecondary: 'Cursor',
+            streamSource: 'native',
+            tabKey: 'native-tab',
+        }
+        const preferredConversation: ActiveConversation = {
+            ...nativeConversation,
+            sessionId: 'agent-1',
+            providerSessionId: 'provider-agent',
+            transport: 'cdp-webview',
+            agentName: 'Codex',
+            agentType: 'codex',
+            displaySecondary: 'Cursor · Codex',
+            streamSource: 'agent-stream',
+            tabKey: 'agent-tab',
+        }
+        const otherStream: ActiveConversation = {
+            ...nativeConversation,
+            sessionId: 'agent-2',
+            providerSessionId: 'provider-other',
+            transport: 'cdp-webview',
+            agentName: 'Claude',
+            agentType: 'claude-code',
+            displaySecondary: 'Cursor · Claude',
+            streamSource: 'agent-stream',
+            tabKey: 'other-tab',
+        }
+
+        const targetMap = buildConversationTargetMap(
+            [nativeConversation, preferredConversation, otherStream],
+            new Map([[nativeConversation.routeId, preferredConversation]]),
+        )
+
+        expect(targetMap.get('machine-1:ide:cursor-1')?.tabKey).toBe('agent-tab')
+        expect(targetMap.get('route:machine-1:ide:cursor-1')?.tabKey).toBe('agent-tab')
     })
 })

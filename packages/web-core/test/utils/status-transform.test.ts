@@ -396,4 +396,71 @@ describe('statusPayloadToEntries', () => {
             providerName: 'Claude Code (VS Code)',
         })
     })
+
+    it('preserves an existing child title when sparse live snapshots omit it', () => {
+        const metadataEntries = statusPayloadToEntries(createPayload({
+            sessions: [
+                createSession({
+                    id: 'ide-parent',
+                    kind: 'workspace',
+                    transport: 'cdp-page',
+                    providerType: 'antigravity',
+                    providerName: 'Antigravity',
+                    status: 'idle',
+                    title: 'Workspace',
+                    cdpConnected: true,
+                    activeChat: { status: 'idle', messages: [] } as any,
+                }),
+                createSession({
+                    id: 'child-claude',
+                    parentId: 'ide-parent',
+                    kind: 'agent',
+                    transport: 'cdp-webview',
+                    providerType: 'claude-code-vscode',
+                    providerName: 'Claude Code (VS Code)',
+                    status: 'idle',
+                    title: 'Meaningful Conversation Title',
+                    activeChat: { status: 'idle', messages: [] } as any,
+                }),
+            ],
+        }), {
+            daemonId: 'machine-7',
+        })
+
+        const entries = statusPayloadToEntries(createPayload({
+            timestamp: 444,
+            sessions: [
+                createSession({
+                    id: 'ide-parent',
+                    kind: 'workspace',
+                    transport: 'cdp-page',
+                    providerType: 'antigravity',
+                    providerName: undefined,
+                    status: 'idle',
+                    title: 'Workspace',
+                    cdpConnected: true,
+                    activeChat: { status: 'idle', messages: [] } as any,
+                }),
+                createSession({
+                    id: 'child-claude',
+                    parentId: 'ide-parent',
+                    kind: 'agent',
+                    transport: 'cdp-webview',
+                    providerType: 'claude-code-vscode',
+                    providerName: undefined,
+                    status: 'idle',
+                    title: undefined,
+                    activeChat: { status: 'idle', messages: [] } as any,
+                }),
+            ],
+        }), {
+            daemonId: 'machine-7',
+            existingEntries: metadataEntries,
+        })
+
+        expect(entries[1].childSessions?.[0]).toMatchObject({
+            id: 'child-claude',
+            title: 'Meaningful Conversation Title',
+        })
+    })
 });

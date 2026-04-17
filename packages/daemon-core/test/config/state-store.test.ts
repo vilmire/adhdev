@@ -75,6 +75,71 @@ describe('state-store', () => {
     });
   });
 
+  it('drops polluted legacy state entries that use unstable session identities', () => {
+    writeFileSync(
+      join(configDir, 'state.json'),
+      JSON.stringify({
+        recentActivity: [
+          {
+            id: 'cli:hermes-cli:session:vi',
+            kind: 'cli',
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            providerSessionId: 'vi',
+            workspace: '/repo',
+            lastUsedAt: 10,
+          },
+          {
+            id: 'cli:hermes-cli:session:20260416_212202_9c583d',
+            kind: 'cli',
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            providerSessionId: '20260416_212202_9c583d',
+            workspace: '/repo',
+            lastUsedAt: 20,
+          },
+        ],
+        savedProviderSessions: [
+          { id: 'saved:vi', kind: 'cli', providerType: 'hermes-cli', providerName: 'Hermes Agent', providerSessionId: 'vi', createdAt: 1, lastUsedAt: 1 },
+          { id: 'saved:undefined', kind: 'cli', providerType: 'hermes-cli', providerName: 'Hermes Agent', providerSessionId: 'undefined', createdAt: 2, lastUsedAt: 2 },
+          { id: 'saved:20260416_212202_9c583d', kind: 'cli', providerType: 'hermes-cli', providerName: 'Hermes Agent', providerSessionId: '20260416_212202_9c583d', createdAt: 3, lastUsedAt: 3 },
+        ],
+        sessionReads: {
+          'provider:codex:vscode-webview://volatile': 123,
+          'provider:codex:turns:stable-1|stable-2': 456,
+        },
+        sessionReadMarkers: {
+          'provider:codex:vscode-webview://volatile': 'turn:legacy',
+          'provider:codex:turns:stable-1|stable-2': 'turn:stable',
+        },
+      }),
+      'utf-8',
+    );
+
+    expect(loadState()).toEqual({
+      recentActivity: [
+        {
+          id: 'cli:hermes-cli:session:20260416_212202_9c583d',
+          kind: 'cli',
+          providerType: 'hermes-cli',
+          providerName: 'Hermes Agent',
+          providerSessionId: '20260416_212202_9c583d',
+          workspace: '/repo',
+          lastUsedAt: 20,
+        },
+      ],
+      savedProviderSessions: [
+        { id: 'saved:20260416_212202_9c583d', kind: 'cli', providerType: 'hermes-cli', providerName: 'Hermes Agent', providerSessionId: '20260416_212202_9c583d', createdAt: 3, lastUsedAt: 3 },
+      ],
+      sessionReads: {
+        'provider:codex:turns:stable-1|stable-2': 456,
+      },
+      sessionReadMarkers: {
+        'provider:codex:turns:stable-1|stable-2': 'turn:stable',
+      },
+    });
+  });
+
   it('resetState overwrites state.json with the default shape', () => {
     writeFileSync(join(configDir, 'state.json'), JSON.stringify({ junk: true }), 'utf-8');
 

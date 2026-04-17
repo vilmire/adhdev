@@ -32,9 +32,11 @@ import type { Toast } from '../components/dashboard/ToastContainer'
 import type { DashboardMobileSection } from '../components/dashboard/DashboardMobileBottomNav'
 import { getMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
+import { buildConversationIdentity, getConversationHistorySessionId } from '../components/dashboard/conversation-identity'
 import { getConversationActiveTabTarget, getConversationMachineId, getConversationProviderType } from '../components/dashboard/conversation-selectors'
 import { getConversationTimestamp } from '../components/dashboard/conversation-sort'
 import { compareMachineEntries, getMachineDisplayName, getProviderSummaryValue, isAcpEntry, isCliEntry } from '../utils/daemon-utils'
+import { resolveDashboardSessionTargetFromEntry } from '../utils/dashboard-route-paths'
 import { browseMachineDirectories } from '../components/machine/workspaceBrowse'
 import type { WorkspaceLaunchKind } from './machine/types'
 
@@ -260,9 +262,10 @@ export default function Dashboard() {
         }
 
         const liveState = getConversationLiveInboxState(activeConv, liveSessionInboxState)
+        const activeConvIdentity = buildConversationIdentity(activeConv)
         const autoReadKey = [
             activeConv.tabKey,
-            activeConv.providerSessionId || activeConv.sessionId,
+            getConversationHistorySessionId(activeConv) || '',
             activeConv.lastMessageHash || '',
             String(activeConv.lastMessageAt || 0),
             liveState.inboxBucket,
@@ -277,9 +280,7 @@ export default function Dashboard() {
 
             const readAt = Math.max(Date.now(), getConversationTimestamp(activeConv), liveState.lastUpdated || 0)
             markDashboardNotificationTargetRead({
-                sessionId: activeConv.sessionId,
-                providerSessionId: activeConv.providerSessionId,
-                tabKey: activeConv.tabKey,
+                ...activeConvIdentity,
             }, readAt)
 
             void sendDaemonCommand(activeConv.daemonId || activeConv.routeId, 'mark_session_seen', {
@@ -513,11 +514,12 @@ export default function Dashboard() {
 
         if (!matchingEntry) return
 
-        const targetSessionId = typeof matchingEntry.sessionId === 'string' && matchingEntry.sessionId
-            ? matchingEntry.sessionId
-            : typeof matchingEntry.instanceId === 'string' && matchingEntry.instanceId
-                ? matchingEntry.instanceId
-                : conversations.find((conversation) => conversation.routeId === matchingEntry.id)?.sessionId
+        const targetSessionId = resolveDashboardSessionTargetFromEntry({
+            entrySessionId: matchingEntry.sessionId,
+            entryInstanceId: matchingEntry.instanceId,
+            entryRouteId: matchingEntry.id,
+            conversations,
+        })
 
         if (!targetSessionId) return
 

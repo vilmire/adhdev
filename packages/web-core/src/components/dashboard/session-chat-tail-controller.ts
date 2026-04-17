@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { ReadChatCursor, ReadChatSyncResult, SessionChatTailUpdate } from '@adhdev/daemon-core'
+import { buildChatMessageSignature, type ReadChatCursor, type ReadChatSyncResult, type SessionChatTailUpdate } from '@adhdev/daemon-core'
 import type { ActiveConversation, DashboardMessage } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
+import { getConversationHistorySessionId } from './conversation-identity'
 import { getConversationDaemonRouteId } from './conversation-selectors'
 import { dedupeOptimisticMessages } from './message-utils'
 
@@ -39,20 +40,6 @@ export interface WarmSessionChatTailDescriptor {
 const DEFAULT_TAIL_LIMIT = 60
 const controllerRegistry = new Map<string, SessionChatTailController>()
 
-function hashSignatureParts(parts: string[]): string {
-  let hash = 0x811c9dc5
-  for (const part of parts) {
-    const text = String(part || '')
-    for (let i = 0; i < text.length; i += 1) {
-      hash ^= text.charCodeAt(i)
-      hash = Math.imul(hash, 0x01000193) >>> 0
-    }
-    hash ^= 0xff
-    hash = Math.imul(hash, 0x01000193) >>> 0
-  }
-  return hash.toString(16).padStart(8, '0')
-}
-
 function getControllerKey(daemonId: string, sessionId: string): string {
   return `${daemonId}::${sessionId}`
 }
@@ -69,20 +56,7 @@ function buildEmptySnapshot(tailLimit = DEFAULT_TAIL_LIMIT): SessionChatTailSnap
 }
 
 export function buildLastMessageSignature(message: DashboardMessage | null | undefined): string {
-  if (!message) return ''
-  let content = ''
-  try {
-    content = JSON.stringify(message.content ?? '')
-  } catch {
-    content = String(message.content ?? '')
-  }
-  return hashSignatureParts([
-    String(message.id || ''),
-    String(message.index ?? ''),
-    String(message.role || ''),
-    String(message.receivedAt ?? message.timestamp ?? ''),
-    content,
-  ])
+  return buildChatMessageSignature(message)
 }
 
 export function buildReadChatCursor(messages: DashboardMessage[], tailLimit = DEFAULT_TAIL_LIMIT): Required<ReadChatCursor> {
@@ -373,10 +347,11 @@ export function buildWarmSessionChatTailDescriptorState(
     const key = getControllerKey(daemonId, sessionId)
     if (seen.has(key)) continue
     seen.add(key)
+    const historySessionId = getConversationHistorySessionId(conversation)
     descriptors.push({
       daemonId,
       sessionId,
-      historySessionId: conversation.providerSessionId || sessionId,
+      historySessionId: historySessionId || sessionId,
       subscriptionKey: `daemon:${daemonId}:session:${sessionId}`,
     })
   }
@@ -397,7 +372,7 @@ export function useSessionChatTailController(
   const enabled = options?.enabled !== false
   const daemonId = getConversationDaemonRouteId(activeConv)
   const sessionId = activeConv.sessionId || ''
-  const historySessionId = activeConv.providerSessionId || sessionId
+  const historySessionId = getConversationHistorySessionId(activeConv) || sessionId
   const subscriptionKey = `daemon:${daemonId}:session:${sessionId}`
   const tailLimit = Math.max(0, options?.tailLimit ?? DEFAULT_TAIL_LIMIT)
 

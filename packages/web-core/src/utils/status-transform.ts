@@ -9,6 +9,7 @@
  */
 import type { StatusReportPayload, SessionEntry } from '@adhdev/daemon-core'
 import type { DaemonData } from '../types'
+import { mergeSessionEntrySummary, type ExistingSessionLike } from './session-entry-merge'
 
 export interface StatusTransformOptions {
     /** Override daemon ID */
@@ -19,39 +20,6 @@ export interface StatusTransformOptions {
     existingEntries?: DaemonData[]
     /** Timestamp override */
     timestamp?: number
-}
-
-type ExistingSessionLike = Partial<SessionEntry> & {
-    parentSessionId?: string | null
-    cliName?: string
-    type?: string
-    mode?: SessionEntry['mode']
-    sessionCapabilities?: SessionEntry['capabilities']
-    summaryMetadata?: any
-    activeChat?: SessionEntry['activeChat']
-}
-
-function mergeActiveChatData(
-    incoming: SessionEntry['activeChat'] | null | undefined,
-    existing: SessionEntry['activeChat'] | null | undefined,
-): SessionEntry['activeChat'] | null {
-    if (!incoming) return existing ?? null
-    if (!existing) return incoming ?? null
-
-    const mergedMessages = Array.isArray(incoming.messages) && incoming.messages.length > 0
-        ? incoming.messages
-        : existing.messages
-
-    const mergedActiveModal = incoming.activeModal
-        || (incoming.status === 'waiting_approval' ? existing.activeModal : null)
-
-    return {
-        ...existing,
-        ...incoming,
-        messages: mergedMessages,
-        activeModal: mergedActiveModal,
-        inputContent: incoming.inputContent ?? existing.inputContent,
-    }
 }
 
 function buildExistingSessionMap(entries: DaemonData[] | undefined, daemonId: string) {
@@ -93,31 +61,6 @@ function buildExistingSessionMap(entries: DaemonData[] | undefined, daemonId: st
         }
     }
     return sessions
-}
-
-function mergeSessionSummary(
-    session: SessionEntry,
-    existingEntry: ExistingSessionLike | undefined,
-): SessionEntry {
-    return {
-        ...session,
-        parentId: session.parentId ?? existingEntry?.parentSessionId ?? null,
-        providerName: session.providerName ?? existingEntry?.providerName ?? existingEntry?.cliName ?? existingEntry?.type ?? session.providerType,
-        workspace: session.workspace ?? existingEntry?.workspace ?? null,
-        mode: session.mode ?? existingEntry?.mode,
-        capabilities: session.capabilities ?? (existingEntry?.sessionCapabilities as SessionEntry['capabilities']) ?? [],
-        cdpConnected: session.cdpConnected ?? existingEntry?.cdpConnected,
-        activeChat: mergeActiveChatData(session.activeChat, existingEntry?.activeChat),
-        controlValues: session.controlValues ?? existingEntry?.controlValues,
-        providerControls: session.providerControls ?? existingEntry?.providerControls,
-        summaryMetadata: session.summaryMetadata ?? existingEntry?.summaryMetadata,
-        runtimeWriteOwner: session.runtimeWriteOwner ?? existingEntry?.runtimeWriteOwner,
-        runtimeAttachedClients: session.runtimeAttachedClients ?? existingEntry?.runtimeAttachedClients,
-        lastMessagePreview: session.lastMessagePreview ?? existingEntry?.lastMessagePreview,
-        lastMessageRole: session.lastMessageRole ?? existingEntry?.lastMessageRole,
-        lastMessageAt: session.lastMessageAt ?? existingEntry?.lastMessageAt,
-        lastMessageHash: session.lastMessageHash ?? existingEntry?.lastMessageHash,
-    }
 }
 
 function groupChildSessions(sessions: SessionEntry[]) {
@@ -194,9 +137,9 @@ export function statusPayloadToEntries(
     // ─── 2. IDE entries ────────────────────────────────
     for (const session of ideSessions) {
         const existingEntry = existingSessionMap.get(session.id)
-        const mergedSession = mergeSessionSummary(session, existingEntry)
+        const mergedSession = mergeSessionEntrySummary(session, existingEntry)
         const childSessions = (childrenByParent.get(session.id) || []).map((child) =>
-            mergeSessionSummary(child, existingSessionMap.get(child.id)),
+            mergeSessionEntrySummary(child, existingSessionMap.get(child.id)),
         )
         entries.push({
             id: `${daemonId}:ide:${session.id}`,
@@ -241,7 +184,7 @@ export function statusPayloadToEntries(
     // ─── 3. CLI entries ────────────────────────────────
     for (const session of cliSessions) {
         const existingEntry = existingSessionMap.get(session.id)
-        const mergedSession = mergeSessionSummary(session, existingEntry)
+        const mergedSession = mergeSessionEntrySummary(session, existingEntry)
         entries.push({
             id: `${daemonId}:cli:${session.id}`,
             sessionId: session.id,
@@ -285,7 +228,7 @@ export function statusPayloadToEntries(
     // ─── 4. ACP entries ────────────────────────────────
     for (const session of acpSessions) {
         const existingEntry = existingSessionMap.get(session.id)
-        const mergedSession = mergeSessionSummary(session, existingEntry)
+        const mergedSession = mergeSessionEntrySummary(session, existingEntry)
         entries.push({
             id: `${daemonId}:acp:${session.id}`,
             sessionId: session.id,

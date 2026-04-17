@@ -50,6 +50,8 @@ import {
   type TopicUpdateEnvelope,
   type UnsubscribeRequest,
   buildMachineInfo,
+  prepareSessionChatTailUpdate,
+  prepareSessionModalUpdate,
 } from '@adhdev/daemon-core';
 import {
   ensureSessionHostReady,
@@ -168,68 +170,6 @@ const SESSION_TARGET_COMMANDS = new Set([
   'restart_session',
   'agent_command',
 ]);
-
-function hashSignatureParts(parts: string[]): string {
-  let hash = 0x811c9dc5;
-  for (const part of parts) {
-    const text = String(part || '');
-    for (let i = 0; i < text.length; i += 1) {
-      hash ^= text.charCodeAt(i);
-      hash = Math.imul(hash, 0x01000193) >>> 0;
-    }
-    hash ^= 0xff;
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(16).padStart(8, '0');
-}
-
-function buildChatTailDeliverySignature(payload: {
-  sessionId: string;
-  historySessionId?: string;
-  messages: unknown[];
-  status: string;
-  title?: string;
-  activeModal?: { message: string; buttons: string[] } | null;
-  syncMode: string;
-  replaceFrom: number;
-  totalMessages: number;
-  lastMessageSignature: string;
-}): string {
-  let messages = '';
-  try {
-    messages = JSON.stringify(payload.messages);
-  } catch {
-    messages = String(payload.messages.length);
-  }
-  return hashSignatureParts([
-    payload.sessionId,
-    payload.historySessionId || '',
-    payload.status,
-    payload.title || '',
-    payload.syncMode,
-    String(payload.replaceFrom),
-    String(payload.totalMessages),
-    payload.lastMessageSignature,
-    payload.activeModal ? `${payload.activeModal.message}|${payload.activeModal.buttons.join('\u001f')}` : '',
-    messages,
-  ]);
-}
-
-function buildSessionModalDeliverySignature(payload: {
-  sessionId: string;
-  status: string;
-  title?: string;
-  modalMessage?: string;
-  modalButtons?: string[];
-}): string {
-  return hashSignatureParts([
-    payload.sessionId,
-    payload.status,
-    payload.title || '',
-    payload.modalMessage || '',
-    Array.isArray(payload.modalButtons) ? payload.modalButtons.join('\u001f') : '',
-  ]);
-}
 
 
 // ─── Standalone Server ───
@@ -1005,69 +945,20 @@ class StandaloneServer {
       lastMessageSignature: state.cursor.lastMessageSignature,
       ...(state.cursor.tailLimit > 0 ? { tailLimit: state.cursor.tailLimit } : {}),
     });
-    if (!result?.success || result.syncMode === 'noop') {
-      if (result?.success) {
-        state.cursor = {
-          knownMessageCount: Math.max(0, Number(result.totalMessages || state.cursor.knownMessageCount)),
-          lastMessageSignature: typeof result.lastMessageSignature === 'string' ? result.lastMessageSignature : state.cursor.lastMessageSignature,
-          tailLimit: state.cursor.tailLimit,
-        };
-      }
-      return null;
-    }
-    state.seq += 1;
-    const syncMode = result.syncMode === 'append'
-      || result.syncMode === 'replace_tail'
-      || result.syncMode === 'noop'
-      || result.syncMode === 'full'
-      ? result.syncMode
-      : 'full';
-    state.cursor = {
-      knownMessageCount: Math.max(0, Number(result.totalMessages || 0)),
-      lastMessageSignature: typeof result.lastMessageSignature === 'string' ? result.lastMessageSignature : '',
-      tailLimit: state.cursor.tailLimit,
-    };
-    const activeModal = result.activeModal
-      && typeof result.activeModal === 'object'
-      && typeof (result.activeModal as { message?: unknown }).message === 'string'
-      && Array.isArray((result.activeModal as { buttons?: unknown[] }).buttons)
-            ? {
-                message: (result.activeModal as { message: string }).message,
-                buttons: (result.activeModal as { buttons: unknown[] }).buttons.filter((button): button is string => typeof button === 'string'),
-            }
-            : null;
-    const deliverySignature = buildChatTailDeliverySignature({
-      sessionId: request.targetSessionId,
-      ...(request.historySessionId ? { historySessionId: request.historySessionId } : {}),
-      messages: Array.isArray(result.messages) ? result.messages : [],
-      status: typeof result.status === 'string' ? result.status : 'idle',
-      ...(typeof result.title === 'string' ? { title: result.title } : {}),
-      ...(activeModal ? { activeModal } : {}),
-      syncMode,
-      replaceFrom: Number(result.replaceFrom || 0),
-      totalMessages: Number(result.totalMessages || 0),
-      lastMessageSignature: typeof result.lastMessageSignature === 'string' ? result.lastMessageSignature : '',
-    });
-    if (deliverySignature === state.lastDeliveredSignature) {
-      return null;
-    }
-    state.lastDeliveredSignature = deliverySignature;
-    return {
-      topic: 'session.chat_tail',
+    const prepared = prepareSessionChatTailUpdate({
       key,
       sessionId: request.targetSessionId,
       ...(request.historySessionId ? { historySessionId: request.historySessionId } : {}),
       seq: state.seq,
       timestamp: Date.now(),
-      messages: Array.isArray(result.messages) ? result.messages : [],
-      status: typeof result.status === 'string' ? result.status : 'idle',
-      ...(typeof result.title === 'string' ? { title: result.title } : {}),
-      ...(activeModal ? { activeModal } : {}),
-      syncMode,
-      replaceFrom: Number(result.replaceFrom || 0),
-      totalMessages: Number(result.totalMessages || 0),
-      lastMessageSignature: typeof result.lastMessageSignature === 'string' ? result.lastMessageSignature : '',
-    };
+      cursor: state.cursor,
+      lastDeliveredSignature: state.lastDeliveredSignature,
+      result,
+    });
+    state.cursor = prepared.cursor;
+    state.seq = prepared.seq;
+    state.lastDeliveredSignature = prepared.lastDeliveredSignature;
+    return prepared.update;
   }
 
   private getHotChatSessionIdsForWsFlush(): { active: Set<string>; finalizing: Set<string> } {
@@ -1219,37 +1110,26 @@ class StandaloneServer {
     const providerState = this.findProviderStateBySessionId(state.request.params.targetSessionId);
     if (!providerState) return null;
     const now = Date.now();
-    state.seq += 1;
-    state.lastSentAt = now;
     const activeModal = providerState.activeChat?.activeModal;
-    const modalButtons = Array.isArray(activeModal?.buttons)
-      ? activeModal.buttons.filter((button: unknown): button is string => typeof button === 'string')
-      : [];
     const status = String(providerState.activeChat?.status || providerState.status || 'idle');
     const title = typeof providerState.activeChat?.title === 'string' ? providerState.activeChat.title : undefined;
-    const modalMessage = typeof activeModal?.message === 'string' ? activeModal.message : undefined;
-    const deliverySignature = buildSessionModalDeliverySignature({
-      sessionId: state.request.params.targetSessionId,
-      status,
-      ...(title ? { title } : {}),
-      ...(modalMessage ? { modalMessage } : {}),
-      ...(modalButtons.length > 0 ? { modalButtons } : {}),
-    });
-    if (deliverySignature === state.lastDeliveredSignature) {
-      return null;
-    }
-    state.lastDeliveredSignature = deliverySignature;
-    return {
-      topic: 'session.modal',
+    const prepared = prepareSessionModalUpdate({
       key,
       sessionId: state.request.params.targetSessionId,
       status,
-      ...(title ? { title } : {}),
-      ...(modalMessage ? { modalMessage } : {}),
-      ...(modalButtons.length > 0 ? { modalButtons } : {}),
+      title,
+      activeModal,
       seq: state.seq,
       timestamp: now,
-    };
+      lastDeliveredSignature: state.lastDeliveredSignature,
+    });
+    state.seq = prepared.seq;
+    state.lastDeliveredSignature = prepared.lastDeliveredSignature;
+    if (!prepared.update) {
+      return null;
+    }
+    state.lastSentAt = now;
+    return prepared.update;
   }
 
   private async flushWsSessionModalSubscriptions(targetWs?: WebSocket): Promise<void> {

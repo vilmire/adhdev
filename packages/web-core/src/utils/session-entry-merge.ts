@@ -1,0 +1,102 @@
+import type { SessionEntry } from '@adhdev/daemon-core'
+
+export type ExistingSessionLike = Partial<SessionEntry> & {
+  parentSessionId?: string | null
+  cliName?: string
+  type?: string
+  mode?: SessionEntry['mode']
+  sessionCapabilities?: SessionEntry['capabilities']
+  summaryMetadata?: any
+  activeChat?: SessionEntry['activeChat']
+}
+
+function hasExplicitProviderName(value: string | null | undefined, providerType: string | null | undefined): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value !== providerType
+}
+
+export function mergeActiveChatData(
+  incoming: SessionEntry['activeChat'] | null | undefined,
+  existing: SessionEntry['activeChat'] | null | undefined,
+): SessionEntry['activeChat'] | null {
+  if (!incoming) return existing ?? null
+  if (!existing) return incoming ?? null
+
+  const mergedMessages = Array.isArray(incoming.messages) && incoming.messages.length > 0
+    ? incoming.messages
+    : existing.messages
+
+  const mergedActiveModal = incoming.activeModal
+    || (incoming.status === 'waiting_approval' ? existing.activeModal : null)
+
+  return {
+    ...existing,
+    ...incoming,
+    messages: mergedMessages,
+    activeModal: mergedActiveModal,
+    inputContent: incoming.inputContent ?? existing.inputContent,
+  }
+}
+
+export function mergeSessionEntrySummary(
+  session: SessionEntry,
+  existingEntry: ExistingSessionLike | undefined,
+): SessionEntry {
+  const explicitProviderName = hasExplicitProviderName(session.providerName, session.providerType)
+    ? session.providerName
+    : undefined
+
+  return {
+    ...session,
+    parentId: session.parentId ?? existingEntry?.parentSessionId ?? null,
+    providerSessionId: session.providerSessionId ?? existingEntry?.providerSessionId,
+    providerName: explicitProviderName
+      ?? existingEntry?.providerName
+      ?? existingEntry?.cliName
+      ?? existingEntry?.type
+      ?? session.providerName
+      ?? session.providerType,
+    title: session.title
+      ?? existingEntry?.title
+      ?? explicitProviderName
+      ?? existingEntry?.providerName
+      ?? session.providerName
+      ?? session.providerType,
+    workspace: session.workspace ?? existingEntry?.workspace ?? null,
+    mode: session.mode ?? existingEntry?.mode,
+    capabilities: session.capabilities ?? (existingEntry?.sessionCapabilities as SessionEntry['capabilities']) ?? existingEntry?.capabilities ?? [],
+    cdpConnected: session.cdpConnected ?? existingEntry?.cdpConnected,
+    activeChat: mergeActiveChatData(session.activeChat, existingEntry?.activeChat),
+    controlValues: session.controlValues ?? existingEntry?.controlValues,
+    providerControls: session.providerControls ?? existingEntry?.providerControls,
+    summaryMetadata: session.summaryMetadata ?? existingEntry?.summaryMetadata,
+    runtimeWriteOwner: session.runtimeWriteOwner ?? existingEntry?.runtimeWriteOwner,
+    runtimeAttachedClients: session.runtimeAttachedClients ?? existingEntry?.runtimeAttachedClients,
+    lastMessagePreview: session.lastMessagePreview ?? existingEntry?.lastMessagePreview,
+    lastMessageRole: session.lastMessageRole ?? existingEntry?.lastMessageRole,
+    lastMessageAt: session.lastMessageAt ?? existingEntry?.lastMessageAt,
+    lastMessageHash: session.lastMessageHash ?? existingEntry?.lastMessageHash,
+    unread: session.unread ?? existingEntry?.unread,
+    lastSeenAt: session.lastSeenAt ?? existingEntry?.lastSeenAt,
+    inboxBucket: session.inboxBucket ?? existingEntry?.inboxBucket,
+    surfaceHidden: session.surfaceHidden ?? existingEntry?.surfaceHidden,
+    resume: session.resume ?? existingEntry?.resume,
+    runtimeKey: session.runtimeKey ?? existingEntry?.runtimeKey,
+    runtimeDisplayName: session.runtimeDisplayName ?? existingEntry?.runtimeDisplayName,
+    runtimeWorkspaceLabel: session.runtimeWorkspaceLabel ?? existingEntry?.runtimeWorkspaceLabel,
+  }
+}
+
+export function mergeSessionEntryChildren(
+  existingChildren: SessionEntry[] | undefined,
+  incomingChildren: SessionEntry[] | undefined,
+): SessionEntry[] | undefined {
+  if (!incomingChildren?.length) return existingChildren
+  if (!existingChildren?.length) return incomingChildren
+
+  const existingById = new Map(existingChildren.map((child) => [child.id, child]))
+  return incomingChildren.map((child) => {
+    const existing = existingById.get(child.id)
+    if (!existing) return child
+    return mergeSessionEntrySummary(child, existing)
+  })
+}

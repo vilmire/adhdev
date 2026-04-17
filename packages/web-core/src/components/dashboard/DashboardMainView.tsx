@@ -14,6 +14,7 @@ import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUti
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { IconX } from '../Icons'
 import type { DashboardNotificationRecord, DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
+import { conversationMatchesTarget } from './conversation-identity'
 
 type GuideTabId = 'overview' | 'quickstart' | 'shortcuts'
 type ShortcutSectionId = 'all' | 'workspace' | 'panes' | 'approvals'
@@ -142,7 +143,7 @@ interface DashboardMainViewProps {
     onMarkNotificationRead: (notificationId: string) => void
     onMarkNotificationUnread: (notificationId: string) => void
     onDeleteNotification: (notificationId: string) => void
-    onMarkNotificationTargetRead: (target: { sessionId?: string; providerSessionId?: string; tabKey?: string }) => void
+    onMarkNotificationTargetRead: (target: { sessionId?: string; providerSessionId?: string; tabKey?: string; routeId?: string }) => void
 }
 
 export default function DashboardMainView({
@@ -245,13 +246,8 @@ export default function DashboardMainView({
         dockviewActionHandlersRef.current?.restoreHiddenTabToSavedLocation(conversation.tabKey)
     }, [onShowHiddenConversation])
     const handleOpenNotification = React.useCallback((notification: DashboardNotificationRecord) => {
-        const targetConversation = mobileChatConversations.find(conversation => {
-            if (notification.sessionId && conversation.sessionId === notification.sessionId) return true
-            return !!notification.tabKey && conversation.tabKey === notification.tabKey
-        }) || hiddenConversations.find(conversation => {
-            if (notification.sessionId && conversation.sessionId === notification.sessionId) return true
-            return !!notification.tabKey && conversation.tabKey === notification.tabKey
-        })
+        const targetConversation = mobileChatConversations.find(conversation => conversationMatchesTarget(conversation, notification))
+            || hiddenConversations.find(conversation => conversationMatchesTarget(conversation, notification))
 
         if (targetConversation) {
             if (hiddenConversations.some(conversation => conversation.tabKey === targetConversation.tabKey)) {
@@ -262,11 +258,12 @@ export default function DashboardMainView({
         }
 
         onMarkNotificationRead(notification.id)
-        if (notification.sessionId || notification.providerSessionId || notification.tabKey) {
+        if (notification.sessionId || notification.providerSessionId || notification.tabKey || notification.routeId) {
             onMarkNotificationTargetRead({
                 sessionId: notification.sessionId,
                 providerSessionId: notification.providerSessionId,
                 tabKey: notification.tabKey,
+                routeId: notification.routeId,
             })
         }
         setInboxOpen(false)

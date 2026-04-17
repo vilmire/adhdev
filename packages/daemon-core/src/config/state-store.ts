@@ -12,6 +12,7 @@ import { join } from 'path';
 import { getConfigDir } from './config.js';
 import type { RecentActivityEntry } from './recent-activity.js';
 import type { SavedProviderSessionEntry } from './saved-sessions.js';
+import { isLegacyVolatileSessionReadKey, normalizeProviderSessionId } from '../providers/provider-session-id.js';
 
 export interface DaemonState {
     /** Unified recent activity across IDE / CLI / ACP launch flows */
@@ -42,18 +43,38 @@ function getStatePath(): string {
 function normalizeState(raw: unknown): DaemonState {
     const parsed = isPlainObject(raw) ? raw : {};
 
+    const recentActivity = (Array.isArray(parsed.recentActivity) ? parsed.recentActivity : [])
+        .filter((entry): entry is RecentActivityEntry => {
+            if (!isPlainObject(entry)) return false;
+            const normalizedId = normalizeProviderSessionId(
+                typeof entry.providerType === 'string' ? entry.providerType : '',
+                typeof entry.providerSessionId === 'string' ? entry.providerSessionId : '',
+            );
+            if (typeof entry.providerSessionId === 'string' && !normalizedId) return false;
+            return true;
+        });
+
+    const savedProviderSessions = (Array.isArray(parsed.savedProviderSessions) ? parsed.savedProviderSessions : [])
+        .filter((entry): entry is SavedProviderSessionEntry => {
+            if (!isPlainObject(entry)) return false;
+            return !!normalizeProviderSessionId(
+                typeof entry.providerType === 'string' ? entry.providerType : '',
+                typeof entry.providerSessionId === 'string' ? entry.providerSessionId : '',
+            );
+        });
+
     const sessionReads = Object.fromEntries(
         Object.entries(isPlainObject(parsed.sessionReads) ? parsed.sessionReads : {})
-            .filter(([, value]) => typeof value === 'number' && Number.isFinite(value as number))
+            .filter(([key, value]) => !isLegacyVolatileSessionReadKey(key) && typeof value === 'number' && Number.isFinite(value as number))
     );
     const sessionReadMarkers = Object.fromEntries(
         Object.entries(isPlainObject(parsed.sessionReadMarkers) ? parsed.sessionReadMarkers : {})
-            .filter(([, value]) => typeof value === 'string')
+            .filter(([key, value]) => !isLegacyVolatileSessionReadKey(key) && typeof value === 'string')
     );
 
     return {
-        recentActivity: Array.isArray(parsed.recentActivity) ? parsed.recentActivity as RecentActivityEntry[] : [],
-        savedProviderSessions: Array.isArray(parsed.savedProviderSessions) ? parsed.savedProviderSessions as SavedProviderSessionEntry[] : [],
+        recentActivity,
+        savedProviderSessions,
         sessionReads,
         sessionReadMarkers,
     };

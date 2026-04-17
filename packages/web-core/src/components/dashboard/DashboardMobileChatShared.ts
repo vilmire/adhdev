@@ -2,6 +2,7 @@ import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
 import type { RecentSessionBucket } from '@adhdev/daemon-core'
 import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
+import { buildConversationLookupKeys } from './conversation-identity'
 
 export interface MobileConversationListItem {
     conversation: ActiveConversation
@@ -134,9 +135,9 @@ export function getConversationInboxSurfaceState(
 ): ConversationInboxSurfaceState {
     const liveState = getConversationLiveInboxState(conversation, stateBySessionId)
     const viewStates = getConversationViewStates(conversation)
-    const notificationState = (conversation.sessionId && options?.notificationStateBySessionId?.get(conversation.sessionId))
-        || (conversation.providerSessionId && options?.notificationStateBySessionId?.get(conversation.providerSessionId))
-        || options?.notificationStateBySessionId?.get(conversation.tabKey)
+    const notificationState = buildConversationLookupKeys(conversation)
+        .map((key) => options?.notificationStateBySessionId?.get(key))
+        .find((value): value is DashboardNotificationSessionState => !!value)
     
     const isReconnecting = viewStates.isReconnecting
     const isConnecting = viewStates.isConnecting

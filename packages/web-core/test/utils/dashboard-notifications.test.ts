@@ -49,6 +49,29 @@ function createLiveState(overrides: Partial<LiveSessionInboxState> = {}): LiveSe
 }
 
 describe('dashboard notifications', () => {
+  it('builds notification candidates from the shared display contract', () => {
+    const conversation = createConversation({
+      routeId: 'machine-1:ide:cursor-1',
+      title: '',
+      displayPrimary: '',
+      agentName: '',
+      tabKey: '',
+      lastMessagePreview: '',
+      displaySecondary: 'Cursor · Codex',
+    })
+    const stateBySessionId = new Map<string, LiveSessionInboxState>([
+      ['session-1', createLiveState()],
+    ])
+
+    const candidates = buildDashboardNotificationCandidates([conversation], stateBySessionId)
+
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]).toMatchObject({
+      title: 'machine-1:ide:cursor-1',
+      preview: 'Cursor · Codex',
+    })
+  })
+
   it('builds one task-complete notification candidate per unique completion event', () => {
     const conversation = createConversation()
     const stateBySessionId = new Map<string, LiveSessionInboxState>([
@@ -290,6 +313,69 @@ describe('dashboard notifications', () => {
     expect(stateBySessionId.get('provider-1')?.unreadCount).toBe(0)
     expect(stateBySessionId.get('runtime-a')?.unreadCount).toBe(0)
     expect(stateBySessionId.get('tab-a')?.unreadCount).toBe(0)
+  })
+
+  it('matches notifications by route id when session identifiers are unavailable', () => {
+    const records = [{
+      id: 'task_complete|machine-1:ide:cursor-1|hash-1|100',
+      dedupKey: 'task_complete|machine-1:ide:cursor-1|hash-1|100',
+      type: 'task_complete' as const,
+      routeId: 'machine-1:ide:cursor-1',
+      title: 'Hermes',
+      preview: 'Done',
+      createdAt: 100,
+      updatedAt: 100,
+      lastEventAt: 100,
+    }]
+
+    const next = markDashboardNotificationTargetRead(records, { routeId: 'machine-1:ide:cursor-1' }, 250)
+    expect(next[0]?.readAt).toBe(250)
+
+    const stateBySessionId = buildDashboardNotificationStateBySessionId(next)
+    expect(stateBySessionId.get('machine-1:ide:cursor-1')?.unreadCount).toBe(0)
+  })
+
+  it('does not clear sibling notifications on the same route when a more specific session target is present', () => {
+    const records = [
+      {
+        id: 'task_complete|provider-1|hash-1|100',
+        dedupKey: 'task_complete|provider-1|hash-1|100',
+        type: 'task_complete' as const,
+        routeId: 'machine-1:ide:cursor-1',
+        sessionId: 'runtime-a',
+        providerSessionId: 'provider-1',
+        tabKey: 'tab-a',
+        title: 'Codex A',
+        preview: 'Done A',
+        createdAt: 100,
+        updatedAt: 100,
+        lastEventAt: 100,
+      },
+      {
+        id: 'task_complete|provider-2|hash-2|101',
+        dedupKey: 'task_complete|provider-2|hash-2|101',
+        type: 'task_complete' as const,
+        routeId: 'machine-1:ide:cursor-1',
+        sessionId: 'runtime-b',
+        providerSessionId: 'provider-2',
+        tabKey: 'tab-b',
+        title: 'Codex B',
+        preview: 'Done B',
+        createdAt: 101,
+        updatedAt: 101,
+        lastEventAt: 101,
+      },
+    ]
+
+    const next = markDashboardNotificationTargetRead(records, {
+      sessionId: 'runtime-a',
+      providerSessionId: 'provider-1',
+      tabKey: 'tab-a',
+      routeId: 'machine-1:ide:cursor-1',
+    }, 250)
+
+    expect(next.find(record => record.id === 'task_complete|provider-1|hash-1|100')?.readAt).toBe(250)
+    expect(next.find(record => record.id === 'task_complete|provider-2|hash-2|101')?.readAt).toBeUndefined()
   })
 
   it('keeps only the latest notification per conversation target like a messenger inbox', () => {

@@ -4,6 +4,7 @@ import type { DaemonData } from '../../types'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
 import { browseMachineDirectories, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import type { ActiveConversation } from './types'
+import { getDashboardActiveTabHref, resolveDashboardSessionTargetFromEntry } from '../../utils/dashboard-route-paths'
 
 interface PendingWorkspaceLaunch {
     machineId: string
@@ -164,7 +165,7 @@ export function useDashboardMobileMachineActions({
                 setPendingWorkspaceLaunch(null)
                 setMachineActionState('done')
                 setMachineActionMessage(`${providerType} launched`)
-                navigate(`/dashboard?activeTab=${encodeURIComponent(launchedSessionId)}`)
+                navigate(getDashboardActiveTabHref(launchedSessionId))
                 return
             }
             if (res?.success) {
@@ -248,18 +249,19 @@ export function useDashboardMobileMachineActions({
 
         if (!matchingEntry) return
 
-        const targetSessionId = typeof matchingEntry.sessionId === 'string' && matchingEntry.sessionId
-            ? matchingEntry.sessionId
-            : typeof matchingEntry.instanceId === 'string' && matchingEntry.instanceId
-                ? matchingEntry.instanceId
-                : conversations.find((conversation) => conversation.routeId === matchingEntry.id)?.sessionId
+        const targetSessionId = resolveDashboardSessionTargetFromEntry({
+            entrySessionId: matchingEntry.sessionId,
+            entryInstanceId: matchingEntry.instanceId,
+            entryRouteId: matchingEntry.id,
+            conversations,
+        })
 
         if (!targetSessionId) return
 
         setPendingWorkspaceLaunch(null)
         setMachineActionState('done')
         setMachineActionMessage(`${pendingWorkspaceLaunch.providerType} launched`)
-        navigate(`/dashboard?activeTab=${encodeURIComponent(targetSessionId)}`)
+        navigate(getDashboardActiveTabHref(targetSessionId))
     }, [conversations, ides, navigate, pendingWorkspaceLaunch])
 
     useEffect(() => {

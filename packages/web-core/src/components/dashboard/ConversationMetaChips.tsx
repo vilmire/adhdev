@@ -6,9 +6,9 @@ import {
     getConversationIdeChipLabel,
     getConversationMachineId,
     getConversationMachineLabel,
-    getConversationNativeTargetSessionId,
     getConversationProviderLabel,
 } from './conversation-selectors'
+import { getDashboardActiveTabHref, getDashboardActiveTabKeyForConversation } from '../../utils/dashboard-route-paths'
 
 interface ConversationMetaChipsProps {
     conversation: ActiveConversation
@@ -48,9 +48,9 @@ export default function ConversationMetaChips({
             onOpenNativeConversation()
             return
         }
-        const targetSessionId = getConversationNativeTargetSessionId(conversation)
-        if (!targetSessionId) return
-        navigate(`/dashboard?activeTab=${encodeURIComponent(targetSessionId)}`)
+        const targetKey = getDashboardActiveTabKeyForConversation(conversation)
+        if (!targetKey) return
+        navigate(getDashboardActiveTabHref(targetKey))
     }, [conversation, navigate, onOpenNativeConversation])
 
     return (

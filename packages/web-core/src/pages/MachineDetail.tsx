@@ -20,6 +20,7 @@ import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import { useDaemonMachineRuntimeSubscription } from '../hooks/useDaemonMachineRuntimeSubscription'
 import type { DaemonData } from '../types'
 import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel, getProviderSummaryLine, getProviderSummaryValue } from '../utils/daemon-utils'
+import { getDashboardActiveTabHref, getDashboardActiveTabKeyForConversation } from '../utils/dashboard-route-paths'
 import { IconBarChart, IconMonitor, IconSettings, IconClipboard, IconServer } from '../components/Icons'
 import type { ReactNode } from 'react'
 import { eventManager, type ToastConfig } from '../managers/EventManager'
@@ -306,9 +307,9 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     }, [allIdes, daemonCtx.connectionStates, machineId])
 
     const handleOpenConversation = useCallback((conversation: ActiveConversation) => {
-        const targetKey = conversation.sessionId || conversation.tabKey
+        const targetKey = getDashboardActiveTabKeyForConversation(conversation)
         if (!targetKey) return
-        navigate(`/dashboard?activeTab=${encodeURIComponent(targetKey)}`)
+        navigate(getDashboardActiveTabHref(targetKey))
     }, [navigate])
 
     const handleConfirmRecentLaunch = useCallback(() => {
@@ -604,7 +605,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                 onDismiss={(id) => daemonCtx.setToasts((prev) => prev.filter(t => t.id !== id))}
                 onClickToast={(toast) => {
                     if (toast.targetKey) {
-                        navigate(`/dashboard?activeTab=${encodeURIComponent(toast.targetKey)}`)
+                        navigate(getDashboardActiveTabHref(toast.targetKey))
                     }
                 }}
             />

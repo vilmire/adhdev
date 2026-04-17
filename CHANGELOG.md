@@ -2,6 +2,19 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.72] - 2026-04-17
+
+### Added
+- Added shared daemon-core regression coverage for transport subscription update preparation, including cursor refresh-on-noop behavior and normalized modal duplicate suppression across runtimes.
+- Added web-core regression coverage for notification label/preview fallback selection so messenger inbox cards keep using the shared display contract.
+
+### Fixed
+- Fixed cloud and standalone transport parity so `session.chat_tail` and `session.modal` updates now share the same daemon-core payload preparation, modal sanitization, delivery-signature gating, and cursor/sequence mutation rules.
+- Fixed dashboard notification/inbox display fallback drift so title/preview selection uses shared web-core selectors instead of diverging inline chains.
+
+### Changed
+- Extracted shared `daemon-core` subscription update helpers under `src/chat/` and tightened web-core notification display helpers around a single selector contract.
+
 ## [0.8.71] - 2026-04-17
 
 ### Added

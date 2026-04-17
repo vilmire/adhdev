@@ -7,6 +7,8 @@ import {
     getConversationMachineLabel,
     getConversationMetaParts,
     getConversationNativeTargetSessionId,
+    getConversationNotificationLabel,
+    getConversationNotificationPreview,
     getConversationProviderLabel,
     getConversationProviderType,
     getConversationRemoteTabKey,
@@ -56,6 +58,27 @@ describe('conversation selectors', () => {
         expect(getConversationRemoteTabKey(conversation)).toBe('cursor-1')
         expect(getConversationActiveTabTarget(conversation)).toBe('agent-1')
         expect(getConversationMetaParts(conversation)).toEqual(['Cursor · Codex', 'Studio Mac'])
+    })
+
+    it('centralizes notification label and preview fallbacks', () => {
+        expect(getConversationNotificationLabel(createConversation({
+            title: '',
+            displayPrimary: '',
+            agentName: '',
+            tabKey: '',
+            routeId: 'machine-1:ide:cursor-1',
+        }))).toBe('machine-1:ide:cursor-1')
+
+        expect(getConversationNotificationLabel(createConversation({
+            title: '',
+            displayPrimary: 'Fix reconnect race',
+            agentName: 'Codex',
+        }))).toBe('Fix reconnect race')
+
+        expect(getConversationNotificationPreview(createConversation({
+            lastMessagePreview: '',
+            displaySecondary: 'Cursor · Codex',
+        }))).toBe('Cursor · Codex')
     })
 
     it('preserves provider casing for native CLI controls labels', () => {

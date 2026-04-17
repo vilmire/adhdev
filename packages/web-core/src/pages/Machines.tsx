@@ -9,6 +9,7 @@ import {
     formatUptime, formatBytes,
     isAgentActive, groupByMachine, getWorkspaceDisplayLabel,
 } from '../utils/daemon-utils'
+import { getDashboardActiveTabHref } from '../utils/dashboard-route-paths'
 import ProgressBar from '../components/ProgressBar'
 import ConnectionBadge from '../components/ConnectionBadge'
 import InstallCommand from '../components/InstallCommand'
@@ -101,7 +102,7 @@ export default function MachinesPage() {
 
     const openDashboardSession = (sessionId?: string | null, fallbackMachineId?: string | null) => {
         if (sessionId) {
-            navigate(`/dashboard?activeTab=${encodeURIComponent(sessionId)}`)
+            navigate(getDashboardActiveTabHref(sessionId))
             return
         }
         if (fallbackMachineId) navigate(`/machines/${encodeURIComponent(fallbackMachineId)}`)

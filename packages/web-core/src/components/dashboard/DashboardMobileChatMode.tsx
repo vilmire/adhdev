@@ -50,7 +50,7 @@ interface DashboardMobileChatModeProps {
     onHideConversation?: (conversation: ActiveConversation) => void
     onOpenNewSession?: () => void
     notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
-    onMarkNotificationTargetRead: (target: { sessionId?: string; tabKey?: string }) => void
+    onMarkNotificationTargetRead: (target: { sessionId?: string; providerSessionId?: string; tabKey?: string; routeId?: string }) => void
 }
 
 function getAvatarText(primary: string) {

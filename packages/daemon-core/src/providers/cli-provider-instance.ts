@@ -24,6 +24,7 @@ import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from '.
 import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
+import { normalizeProviderSessionId } from './provider-session-id.js';
 import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages } from './chat-message-normalization.js';
 
 let CachedDatabaseSync: (new (path: string, options?: { readOnly?: boolean }) => {
@@ -304,9 +305,10 @@ export class CliProviderInstance implements ProviderInstance {
         const parsedStatus = this.adapter.getScriptParsedStatus?.() || null;
         const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
         const visibleStatus = autoApproveActive ? 'generating' : adapterStatus.status;
-        const parsedProviderSessionId = typeof parsedStatus?.providerSessionId === 'string'
-            ? parsedStatus.providerSessionId.trim()
-            : '';
+        const parsedProviderSessionId = normalizeProviderSessionId(
+            this.type,
+            typeof parsedStatus?.providerSessionId === 'string' ? parsedStatus.providerSessionId : '',
+        );
         if (parsedProviderSessionId) {
             this.promoteProviderSessionId(parsedProviderSessionId);
         }
@@ -598,9 +600,10 @@ export class CliProviderInstance implements ProviderInstance {
     private applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void {
         if (!data || typeof data !== 'object') return;
 
-        const patchedProviderSessionId = typeof data.providerSessionId === 'string'
-            ? data.providerSessionId.trim()
-            : '';
+        const patchedProviderSessionId = normalizeProviderSessionId(
+            this.type,
+            typeof data.providerSessionId === 'string' ? data.providerSessionId : '',
+        );
         if (patchedProviderSessionId) {
             this.promoteProviderSessionId(patchedProviderSessionId);
         }

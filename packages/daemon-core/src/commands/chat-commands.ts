@@ -12,26 +12,13 @@ import type { ProviderInstance } from '../providers/provider-instance.js';
 import { readChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
+import { buildChatMessageSignature } from '../chat/chat-signatures.js';
 import type { ChatMessage } from '../types.js';
 import type { ReadChatCursor, ReadChatSyncMode, SessionTransport } from '../shared-types.js';
 import { normalizeChatMessages } from '../providers/chat-message-normalization.js';
 
 const RECENT_SEND_WINDOW_MS = 1200;
 const recentSendByTarget = new Map<string, number>();
-
-function hashSignatureParts(parts: string[]): string {
-    let hash = 0x811c9dc5;
-    for (const part of parts) {
-        const text = String(part || '');
-        for (let i = 0; i < text.length; i += 1) {
-            hash ^= text.charCodeAt(i);
-            hash = Math.imul(hash, 0x01000193) >>> 0;
-        }
-        hash ^= 0xff;
-        hash = Math.imul(hash, 0x01000193) >>> 0;
-    }
-    return hash.toString(16).padStart(8, '0');
-}
 
 interface ApprovalSelectableInstance extends ProviderInstance {
     recordApprovalSelection?(buttonText: string): void;
@@ -171,20 +158,7 @@ function parseMaybeJson(value: any): any {
 }
 
 function getChatMessageSignature(message: ChatMessage | null | undefined): string {
-    if (!message) return '';
-    let content = '';
-    try {
-        content = JSON.stringify(message.content ?? '');
-    } catch {
-        content = String(message.content ?? '');
-    }
-    return hashSignatureParts([
-        String(message.id || ''),
-        String(message.index ?? ''),
-        String(message.role || ''),
-        String(message.receivedAt ?? message.timestamp ?? ''),
-        content,
-    ]);
+    return buildChatMessageSignature(message);
 }
 
 function normalizeReadChatCursor(args: any): Required<ReadChatCursor> {

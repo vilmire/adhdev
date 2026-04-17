@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { buildMachineNameMap, buildScopedIdeConversations, type LocalUserMessage } from '../components/dashboard/buildConversations'
+import { conversationMatchesTarget } from '../components/dashboard/conversation-identity'
 import { getConversationNotificationLabel } from '../components/dashboard/conversation-presenters'
 import { getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
 import type { DaemonData } from '../types'
@@ -94,11 +95,7 @@ export function useIdeConversations({
 
     const resolveConversationByTarget = useCallback((target: string | null | undefined) => {
         if (!target) return undefined
-        return conversations.find(conversation =>
-            conversation.sessionId === target
-            || conversation.routeId === target
-            || conversation.tabKey === target
-        )
+        return conversations.find(conversation => conversationMatchesTarget(conversation, { sessionId: target, routeId: target, tabKey: target, providerSessionId: target }))
     }, [conversations])
 
     return {

@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef } from 'react'
 import { buildMachineNameMap, buildScopedIdeConversations, getIdeConversationBuildContext, type LocalUserMessage } from '../components/dashboard/buildConversations'
+import { buildConversationLookupKeys } from '../components/dashboard/conversation-identity'
 import { compareConversationRecency, getConversationSortTimestamp, getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
 import type { ActiveConversation, DashboardMessage } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
@@ -155,6 +156,29 @@ type ConversationSortCacheEntry = {
     timestamp: number
 }
 
+export function buildConversationTargetMap(
+    conversations: ActiveConversation[],
+    preferredConversationByIdeId: Map<string, ActiveConversation>,
+): Map<string, ActiveConversation> {
+    const map = new Map<string, ActiveConversation>()
+    for (const conversation of conversations) {
+        const preferred = preferredConversationByIdeId.get(conversation.routeId) || conversation
+        for (const lookupKey of buildConversationLookupKeys({ routeId: conversation.routeId })) {
+            map.set(lookupKey, preferred)
+        }
+        for (const lookupKey of buildConversationLookupKeys({
+            providerSessionId: conversation.providerSessionId,
+            sessionId: conversation.sessionId,
+        })) {
+            map.set(lookupKey, conversation.streamSource === 'native' ? preferred : conversation)
+        }
+        for (const lookupKey of buildConversationLookupKeys({ tabKey: conversation.tabKey })) {
+            map.set(lookupKey, conversation)
+        }
+    }
+    return map
+}
+
 function getLastConversationMessage(conversation: ActiveConversation): DashboardMessage | undefined {
     return [...conversation.messages].reverse().find((message) => !message?._localId)
         || conversation.messages[conversation.messages.length - 1]
@@ -273,24 +297,19 @@ export function useDashboardConversations({
     const conversationBySessionId = useMemo(() => {
         const map = new Map<string, ActiveConversation>()
         for (const conversation of conversations) {
-            if (conversation.sessionId) map.set(conversation.sessionId, conversation)
-            if (conversation.streamSource === 'native' && conversation.sessionId) {
-                const preferred = preferredConversationByIdeId.get(conversation.routeId)
-                if (preferred) {
-                    map.set(conversation.sessionId, preferred)
-                }
+            const preferred = preferredConversationByIdeId.get(conversation.routeId)
+            const sessionTarget = conversation.streamSource === 'native' && preferred ? preferred : conversation
+            for (const lookupKey of buildConversationLookupKeys({
+                providerSessionId: conversation.providerSessionId,
+                sessionId: conversation.sessionId,
+            })) {
+                map.set(lookupKey, sessionTarget)
             }
         }
         return map
     }, [conversations, preferredConversationByIdeId])
     const conversationTargetMap = useMemo(() => {
-        const map = new Map<string, ActiveConversation>()
-        for (const conversation of conversations) {
-            if (conversation.sessionId) map.set(conversation.sessionId, conversation)
-            map.set(conversation.routeId, preferredConversationByIdeId.get(conversation.routeId) || conversation)
-            map.set(conversation.tabKey, conversation)
-        }
-        return map
+        return buildConversationTargetMap(conversations, preferredConversationByIdeId)
     }, [conversations, preferredConversationByIdeId])
 
     const resolveConversationBySessionId = useCallback((sessionId: string | null | undefined) => {

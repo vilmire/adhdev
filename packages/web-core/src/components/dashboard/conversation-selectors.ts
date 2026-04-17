@@ -38,6 +38,19 @@ export function getConversationDisplayLabel(conversation: ActiveConversation): s
     return conversation.displayPrimary || conversation.agentName || 'Agent'
 }
 
+export function getConversationNotificationLabel(conversation: ActiveConversation): string {
+    return conversation.title
+        || conversation.displayPrimary
+        || conversation.agentName
+        || conversation.tabKey
+        || conversation.routeId
+        || 'Session'
+}
+
+export function getConversationNotificationPreview(conversation: ActiveConversation): string {
+    return conversation.lastMessagePreview || conversation.displaySecondary || ''
+}
+
 export function getConversationMetaParts(conversation: ActiveConversation): string[] {
     return [conversation.displaySecondary, getConversationMachineLabel(conversation)].filter(Boolean)
 }

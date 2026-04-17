@@ -1,5 +1,15 @@
 import type { RecentSessionBucket } from '@adhdev/daemon-core'
 import type { ActiveConversation } from '../components/dashboard/types'
+import {
+  getConversationNotificationLabel,
+  getConversationNotificationPreview,
+} from '../components/dashboard/conversation-selectors'
+import {
+  buildConversationLookupKeys,
+  buildConversationTargetKey,
+  conversationMatchesTarget,
+  getConversationTargetValue,
+} from '../components/dashboard/conversation-identity'
 
 export type DashboardNotificationType = 'task_complete' | 'needs_attention' | 'error' | 'disconnect'
 
@@ -50,8 +60,9 @@ function normalizeNotificationRecord(record: DashboardNotificationRecord): Dashb
   }
 }
 
-function getDashboardNotificationTargetKey(record: Pick<DashboardNotificationRecord, 'providerSessionId' | 'sessionId' | 'tabKey' | 'id'>): string {
-  return record.providerSessionId || record.sessionId || record.tabKey || record.id
+function getDashboardNotificationTargetKey(record: Pick<DashboardNotificationRecord, 'providerSessionId' | 'sessionId' | 'tabKey' | 'routeId' | 'id'>): string {
+  const targetKey = buildConversationTargetKey(record)
+  return targetKey === 'unknown:' ? record.id : targetKey
 }
 
 export function buildDashboardNotificationDedupKey(args: {
@@ -65,7 +76,7 @@ export function buildDashboardNotificationDedupKey(args: {
 }) {
   return [
     args.type,
-    args.providerSessionId || args.sessionId || args.tabKey || '',
+    getConversationTargetValue(args) || '',
     args.lastMessageHash || '',
     String(args.lastMessageAt || args.lastUpdated || 0),
   ].join('|')
@@ -109,8 +120,8 @@ export function buildDashboardNotificationCandidates(
       sessionId: conversation.sessionId,
       providerSessionId: conversation.providerSessionId,
       tabKey: conversation.tabKey,
-      title: conversation.title || conversation.displayPrimary || conversation.agentName || conversation.tabKey,
-      preview: conversation.lastMessagePreview || conversation.displaySecondary || '',
+      title: getConversationNotificationLabel(conversation),
+      preview: getConversationNotificationPreview(conversation),
       createdAt: eventAt,
       updatedAt: eventAt,
       lastEventAt: eventAt,
@@ -199,14 +210,11 @@ export function markDashboardNotificationUnread(
 
 export function markDashboardNotificationTargetRead(
   records: DashboardNotificationRecord[],
-  target: { sessionId?: string; providerSessionId?: string; tabKey?: string },
+  target: { sessionId?: string; providerSessionId?: string; tabKey?: string; routeId?: string },
   readAt = Date.now(),
 ): DashboardNotificationRecord[] {
   return records.map(record => {
-    const matchesSession = !!target.sessionId && record.sessionId === target.sessionId
-    const matchesProviderSession = !!target.providerSessionId && record.providerSessionId === target.providerSessionId
-    const matchesTab = !!target.tabKey && record.tabKey === target.tabKey
-    if (!matchesSession && !matchesProviderSession && !matchesTab) return record
+    if (!conversationMatchesTarget(record, target)) return record
     return { ...record, readAt, updatedAt: Math.max(record.updatedAt, readAt) }
   })
 }
@@ -229,7 +237,7 @@ export function buildDashboardNotificationStateBySessionId(
 
   for (const record of records) {
     if (record.deletedAt) continue
-    const keys = [record.providerSessionId, record.sessionId, record.tabKey].filter(Boolean) as string[]
+    const keys = buildConversationLookupKeys(record)
     if (keys.length === 0) continue
     const unreadIncrement = record.readAt ? 0 : 1
     for (const key of keys) {

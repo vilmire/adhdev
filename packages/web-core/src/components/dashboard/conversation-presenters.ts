@@ -6,6 +6,7 @@ import {
     getConversationDisplayLabel,
     getConversationHostIdeType,
     getConversationMetaParts,
+    getConversationNotificationLabel as getConversationNotificationDisplayLabel,
     getConversationProviderLabel,
 } from './conversation-selectors'
 
@@ -68,7 +69,7 @@ export function getConversationStopDialogLabel(conversation: ActiveConversation)
 }
 
 export function getConversationNotificationLabel(conversation: ActiveConversation): string {
-    return conversation.title || getConversationProviderLabel(conversation) || conversation.routeId
+    return getConversationNotificationDisplayLabel(conversation)
 }
 
 export function getRemotePanelTitle(conversation: ActiveConversation | null | undefined): string {

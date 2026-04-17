@@ -1,5 +1,6 @@
 import { useCallback, useState, type Dispatch, type SetStateAction } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
+import { getConversationHistoryLookupIds } from '../components/dashboard/conversation-identity'
 import type { DaemonData } from '../types'
 import { appendWarningToast, type DashboardToastSetter, getProviderArgs, getRouteTarget } from './dashboardCommandUtils'
 
@@ -25,7 +26,7 @@ function isLikelyCollapsedHistoryResult(
     if (!Array.isArray(nextChats) || nextChats.length !== 1 || !activeConv) return false
     const onlyChat = nextChats[0] as ChatSessionEntry
     if (onlyChat?.active === true) return true
-    const activeIds = [activeConv.providerSessionId, activeConv.sessionId].filter((value): value is string => typeof value === 'string' && value.length > 0)
+    const activeIds = getConversationHistoryLookupIds(activeConv)
     return typeof onlyChat?.id === 'string' && activeIds.includes(onlyChat.id)
 }
 

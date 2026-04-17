@@ -1,6 +1,7 @@
 import { useEffect, useRef, type Dispatch, type SetStateAction } from 'react'
 import type { SetURLSearchParams } from 'react-router-dom'
 import type { ActiveConversation } from '../components/dashboard/types'
+import { getConversationHistoryLookupIds } from '../components/dashboard/conversation-identity'
 import type { DaemonData } from '../types'
 
 function isLikelyCollapsedHistoryResult(
@@ -9,7 +10,7 @@ function isLikelyCollapsedHistoryResult(
 ) {
     if (!Array.isArray(chats) || chats.length !== 1 || !activeConv) return false
     const onlyChat = chats[0]
-    const activeIds = [activeConv.providerSessionId, activeConv.sessionId].filter((value): value is string => typeof value === 'string' && value.length > 0)
+    const activeIds = getConversationHistoryLookupIds(activeConv)
     return typeof onlyChat?.id === 'string' && activeIds.includes(onlyChat.id)
 }
 

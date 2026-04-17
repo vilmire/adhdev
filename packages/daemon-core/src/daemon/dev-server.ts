@@ -33,6 +33,7 @@ import { VersionArchive, detectAllVersions } from '../providers/version-archive.
 import { LOG } from '../logging/logger.js';
 import { findCdpManager } from '../status/builders.js';
 import { handleCdpEvaluate, handleCdpClick, handleCdpDomQuery, handleScreenshot, handleScriptsRun, handleTypeAndSend, handleTypeAndSendAt, handleScriptHints, handleCdpTargets, handleDomInspect, handleDomChildren, handleDomAnalyze, handleFindCommon, handleFindByText, handleDomContext } from './dev-cdp-handlers.js';
+import { resolveLegacyProviderScript, type LegacyStringScript } from '../commands/provider-script-resolver.js';
 import { handleCliStatus, handleCliLaunch, handleCliSend, handleCliStop, handleCliDebug, handleCliTrace, handleCliExercise, handleCliFixtureCapture, handleCliFixtureList, handleCliFixtureReplay, handleCliResolve, handleCliRaw, handleCliSSE } from './dev-cli-debug.js';
 import { handleAutoImplement, handleAutoImplCancel, handleAutoImplSSE } from './dev-auto-implement.js';
 
@@ -386,7 +387,8 @@ export class DevServer implements DevServerContext {
 
   public async handleRunScript(type: string, req: http.IncomingMessage, res: http.ServerResponse, parsedBody?: any): Promise<void> {
     const body = parsedBody || await this.readBody(req);
-    const { script: scriptName, params, ideType: scriptIdeType } = body;
+    const { script: scriptName, params, args, ideType: scriptIdeType } = body;
+    const rawParams = args !== undefined ? args : params;
 
     const provider = this.providerLoader.resolve(type);
     if (!provider) {
@@ -407,18 +409,7 @@ export class DevServer implements DevServerContext {
     }
 
     try {
-      // Emulate production CommandHandler behavior
-      let scriptCode: string | null = null;
-      if (['sendMessage', 'webviewSendMessage', 'switchSession', 'webviewSwitchSession', 'setMode', 'webviewSetMode', 'setModel', 'webviewSetModel'].includes(scriptName)) {
-        // Production daemon's getProviderScript always unpacks the object and sends the first value
-        const firstVal = params && typeof params === 'object' && Object.keys(params).length > 0 
-            ? Object.values(params)[0] 
-            : params;
-        scriptCode = firstVal !== undefined ? fn(firstVal) : fn();
-      } else {
-        // Scripts like resolveAction are passed the raw parameters object in production
-        scriptCode = params !== undefined ? fn(params) : fn();
-      }
+      const scriptCode = resolveLegacyProviderScript(fn as LegacyStringScript, scriptName, rawParams);
       if (!scriptCode) {
         this.json(res, 500, { error: 'Script function returned null' });
         return;
@@ -429,11 +420,22 @@ export class DevServer implements DevServerContext {
       const isWebviewScript = scriptName.toLowerCase().includes('webview');
       let raw: any;
       if (provider.category === 'extension' && !isWebviewScript) {
-        // Extension scripts: prefer session frame (agent webview) — matching agent-stream poller behavior
+        // Extension scripts: prefer the requested agent webview session.
         const sessions = cdp.getAgentSessions();
         let sessionId: string | null = null;
         for (const [sid, target] of sessions) {
           if (target.agentType === type) { sessionId = sid; break; }
+        }
+        if (!sessionId) {
+          try {
+            const discovered = await cdp.discoverAgentWebviews();
+            const target = discovered.find((entry) => entry.agentType === type);
+            if (target) {
+              sessionId = await cdp.attachToAgent(target);
+            }
+          } catch (error) {
+            this.log(`Extension attach fallback failed for ${type}: ${(error as Error)?.message || String(error)}`);
+          }
         }
         if (sessionId) {
           raw = await cdp.evaluateInSessionFrame(sessionId, scriptCode);

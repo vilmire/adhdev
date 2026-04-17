@@ -694,7 +694,7 @@ export default function AgentTab({
                                         if (isReady && matchingEntry) {
                                             const targetSessionId = (matchingEntry as IdeSessionEntry).sessionId
                                             if (targetSessionId) {
-                                                navigate(`/dashboard?activeTab=${encodeURIComponent(targetSessionId)}`, { state: { openRemoteForTabKey: targetSessionId } })
+                                                navigate(getDashboardActiveTabHref(targetSessionId), { state: { openRemoteForTabKey: targetSessionId } })
                                             } else {
                                                 navigate('/dashboard', { state: { openRemoteForTabKey: matchingEntry.id } })
                                             }
@@ -955,7 +955,7 @@ export default function AgentTab({
                                                     onClick={() => {
                                                         const targetSessionId = (entry as IdeSessionEntry).sessionId
                                                         if (targetSessionId) {
-                                                            navigate(`/dashboard?activeTab=${encodeURIComponent(targetSessionId)}`, {
+                                                            navigate(getDashboardActiveTabHref(targetSessionId), {
                                                                 state: { openRemoteForTabKey: targetSessionId },
                                                             })
                                                             return
