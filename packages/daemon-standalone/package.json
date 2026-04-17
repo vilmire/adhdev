@@ -1,16 +1,16 @@
 {
   "name": "@adhdev/daemon-standalone",
-  "version": "0.8.73",
-  "description": "ADHDev standalone daemon — embedded HTTP/WS server for local dashboard",
+  "version": "0.8.74",
+  "description": "ADHDev standalone daemon \u2014 embedded HTTP/WS server for local dashboard",
   "main": "dist/index.js",
   "bin": {
     "adhdev-standalone": "./dist/index.js",
     "adhdev": "./dist/index.js"
   },
   "scripts": {
-    "preinstall": "node -e \"const major=Number.parseInt(process.versions.node.split('.')[0],10); if (process.platform === 'win32' && major >= 24) { console.error('\\n✗ ADHDev standalone does not currently support Node.js 24+ on Windows.\\n  Install Node.js 22.x on Windows, then retry.\\n'); process.exit(1); }\"",
+    "preinstall": "node -e \"const major=Number.parseInt(process.versions.node.split('.')[0],10); if (process.platform === 'win32' && major >= 24) { console.error('\\n\u2717 ADHDev standalone does not currently support Node.js 24+ on Windows.\\n  Install Node.js 22.x on Windows, then retry.\\n'); process.exit(1); }\"",
     "build": "tsup",
-    "bundle:web": "node -e \"const{cpSync,mkdirSync}=require('fs');mkdirSync('public',{recursive:true});cpSync('../web-standalone/dist','public',{recursive:true});console.log('bundled web-standalone → public/')\"",
+    "bundle:web": "node -e \"const{cpSync,mkdirSync}=require('fs');mkdirSync('public',{recursive:true});cpSync('../web-standalone/dist','public',{recursive:true});console.log('bundled web-standalone \u2192 public/')\"",
     "bundle:vendor": "node ./scripts/vendor-runtime-deps.mjs",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",

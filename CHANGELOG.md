@@ -2,6 +2,19 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.74] - 2026-04-17
+
+### Added
+- Added regression coverage for saved-history pagination, legacy provider control-result bridging, Claude Code VS Code IDE-level control routing, CLI send guards, and shared dashboard saved-history load-state helpers.
+
+### Fixed
+- Fixed saved-history pagination so older messages page backward correctly without duplicating the recent live tail, and modal reopen flows stop needlessly reloading the same saved transcript.
+- Fixed shared chat send UX so blocked or failed sends keep the draft, approval-gated sessions report inline guidance instead of transcript spam, and intervention-friendly CLI providers can explicitly accept mid-generation input.
+- Fixed shared provider control routing so Claude Code VS Code can fall back to IDE-level model/mode controls without misrouting session-scoped usage requests, while legacy model/mode payloads normalize into typed control results.
+
+### Changed
+- Tightened shared dashboard/chat state around saved-history hydration, truncated-message duplicate detection, optimistic local user echoes, and scroll-restore signatures during live transcript refreshes.
+
 ## [0.8.73] - 2026-04-17
 
 ### Fixed
