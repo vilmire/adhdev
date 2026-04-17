@@ -262,6 +262,7 @@ export default function DashboardRemoteDialog({
                                 showMetaChips={false}
                                 handleSendChat={cmds.handleSendChat}
                                 isSendingChat={cmds.isSendingChat}
+                                sendFeedbackMessage={cmds.sendFeedbackMessage}
                                 handleFocusAgent={cmds.handleFocusAgent}
                                 isFocusingAgent={cmds.isFocusingAgent}
                                 actionLogs={visibleActionLogs}

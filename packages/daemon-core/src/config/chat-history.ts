@@ -17,6 +17,13 @@ import { buildRuntimeSystemChatMessage } from '../providers/chat-message-normali
 const HISTORY_DIR = path.join(os.homedir(), '.adhdev', 'history');
 const RETAIN_DAYS = 30;
 
+interface SavedHistorySessionCacheEntry {
+    signature: string;
+    summaries: SavedHistorySessionSummary[];
+}
+
+const savedHistorySessionCache = new Map<string, SavedHistorySessionCacheEntry>();
+
 interface HistoryMessage {
     ts: string;           // ISO timestamp
     receivedAt: number;   // epoch ms
@@ -126,6 +133,96 @@ export interface SavedHistorySessionSummary {
     lastMessageAt: number;
     preview?: string;
     workspace?: string;
+}
+
+function sanitizeHistoryFileSegment(value?: string): string {
+    return String(value || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function listHistoryFiles(dir: string, historySessionId?: string): string[] {
+    const sanitizedSessionId = historySessionId ? sanitizeHistoryFileSegment(historySessionId) : '';
+    return fs.readdirSync(dir)
+        .filter((file) => {
+            if (!file.endsWith('.jsonl')) return false;
+            if (sanitizedSessionId) {
+                return file.startsWith(`${sanitizedSessionId}_`);
+            }
+            return true;
+        })
+        .sort()
+        .reverse();
+}
+
+function buildSavedHistoryCacheSignature(dir: string, files: string[]): string {
+    return files.map((file) => {
+        try {
+            const stat = fs.statSync(path.join(dir, file));
+            return `${file}:${stat.size}:${Math.trunc(stat.mtimeMs)}`;
+        } catch {
+            return `${file}:missing`;
+        }
+    }).join('|');
+}
+
+function computeSavedHistorySessionSummaries(agentType: string, dir: string, files: string[]): SavedHistorySessionSummary[] {
+    const groupedFiles = new Map<string, string[]>();
+    const filePattern = /^([A-Za-z0-9_-]+)_\d{4}-\d{2}-\d{2}\.jsonl$/;
+    for (const file of files) {
+        const match = file.match(filePattern);
+        if (!match?.[1]) continue;
+        const historySessionId = match[1];
+        const grouped = groupedFiles.get(historySessionId) || [];
+        grouped.push(file);
+        groupedFiles.set(historySessionId, grouped);
+    }
+
+    const summaries: SavedHistorySessionSummary[] = [];
+    for (const [historySessionId, grouped] of groupedFiles.entries()) {
+        let messageCount = 0;
+        let firstMessageAt = 0;
+        let lastMessageAt = 0;
+        let sessionTitle = '';
+        let preview = '';
+        let workspace = '';
+
+        for (const file of grouped.sort()) {
+            const filePath = path.join(dir, file);
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const lines = content.split('\n').filter(Boolean);
+            for (const line of lines) {
+                let parsed: HistoryMessage | null = null;
+                try {
+                    parsed = JSON.parse(line) as HistoryMessage;
+                } catch {
+                    parsed = null;
+                }
+                if (!parsed || parsed.historySessionId !== historySessionId) continue;
+                if (parsed.kind === 'session_start') {
+                    if (!workspace && parsed.workspace) workspace = parsed.workspace;
+                    continue;
+                }
+                messageCount += 1;
+                if (!firstMessageAt || parsed.receivedAt < firstMessageAt) firstMessageAt = parsed.receivedAt;
+                if (!lastMessageAt || parsed.receivedAt > lastMessageAt) lastMessageAt = parsed.receivedAt;
+                if (parsed.sessionTitle) sessionTitle = parsed.sessionTitle;
+                if (parsed.role !== 'system' && parsed.content.trim()) preview = parsed.content.trim();
+            }
+        }
+
+        if (messageCount === 0 || !lastMessageAt) continue;
+        summaries.push({
+            historySessionId,
+            sessionTitle: sessionTitle || undefined,
+            messageCount,
+            firstMessageAt,
+            lastMessageAt,
+            preview: preview || undefined,
+            workspace: workspace || undefined,
+        });
+    }
+
+    summaries.sort((a, b) => b.lastMessageAt - a.lastMessageAt);
+    return summaries;
 }
 
 export class ChatHistoryWriter {
@@ -539,15 +636,17 @@ export class ChatHistoryWriter {
 /**
  * Read history (static — called from P2P commands)
  * 
- * Read JSONL files in reverse order, returning most recent messages first.
- * When instanceId is specified, reads only that instance file.
- * Offset/limit-based paging.
+ * Read JSONL files for a session and return a chronological page while paging
+ * backwards from the newest saved messages. When excludeRecentCount is set,
+ * the newest N messages are skipped so older-history pagination can avoid
+ * duplicating the live transcript tail already shown in the UI.
  */
 export function readChatHistory(
     agentType: string,
     offset: number = 0,
     limit: number = 30,
     historySessionId?: string,
+    excludeRecentCount: number = 0,
 ): { messages: HistoryMessage[]; hasMore: boolean } {
     try {
         const sanitized = agentType.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -555,19 +654,7 @@ export function readChatHistory(
         if (!fs.existsSync(dir)) return { messages: [], hasMore: false };
 
  // JSONL file list — filter by persistent history key when specified
-        const sanitizedInstance = historySessionId?.replace(/[^a-zA-Z0-9_-]/g, '_');
-        const files = fs.readdirSync(dir)
-            .filter(f => {
-                if (!f.endsWith('.jsonl')) return false;
-                if (sanitizedInstance) {
-                    // With instanceId: only that instance's files
-                    return f.startsWith(`${sanitizedInstance}_`);
-                }
-                // Without instanceId: include ALL files (legacy + instanced)
-                return true;
-            })
-            .sort()
-            .reverse();
+        const files = listHistoryFiles(dir, historySessionId);
 
         const allMessages: HistoryMessage[] = [];
         const seen = new Set<string>();
@@ -602,9 +689,15 @@ export function readChatHistory(
         }
         const collapsed = collapseReplayAssistantTurns(agentType, chronological);
 
- // offset/limit apply
-        const sliced = collapsed.slice(offset, offset + limit);
-        const hasMore = collapsed.length > offset + limit;
+ // Page backwards from the newest saved messages while keeping the returned
+ // slice in chronological order for prepend-based UI rendering.
+        const boundedLimit = Math.max(1, limit);
+        const boundedOffset = Math.max(0, offset);
+        const boundedExclude = Math.max(0, Math.min(excludeRecentCount, collapsed.length));
+        const endExclusive = Math.max(0, collapsed.length - boundedExclude - boundedOffset);
+        const startInclusive = Math.max(0, endExclusive - boundedLimit);
+        const sliced = collapsed.slice(startInclusive, endExclusive);
+        const hasMore = startInclusive > 0;
 
         return { messages: sliced, hasMore };
     } catch {
@@ -619,66 +712,24 @@ export function listSavedHistorySessions(
     try {
         const sanitized = agentType.replace(/[^a-zA-Z0-9_-]/g, '_');
         const dir = path.join(HISTORY_DIR, sanitized);
-        if (!fs.existsSync(dir)) return { sessions: [], hasMore: false };
-
-        const groupedFiles = new Map<string, string[]>();
-        const filePattern = /^([A-Za-z0-9_-]+)_\d{4}-\d{2}-\d{2}\.jsonl$/;
-        for (const file of fs.readdirSync(dir)) {
-            if (!file.endsWith('.jsonl')) continue;
-            const match = file.match(filePattern);
-            if (!match?.[1]) continue;
-            const historySessionId = match[1];
-            const files = groupedFiles.get(historySessionId) || [];
-            files.push(file);
-            groupedFiles.set(historySessionId, files);
+        if (!fs.existsSync(dir)) {
+            savedHistorySessionCache.delete(sanitized);
+            return { sessions: [], hasMore: false };
         }
 
-        const summaries: SavedHistorySessionSummary[] = [];
-        for (const [historySessionId, files] of groupedFiles.entries()) {
-            let messageCount = 0;
-            let firstMessageAt = 0;
-            let lastMessageAt = 0;
-            let sessionTitle = '';
-            let preview = '';
-            let workspace = '';
-
-            for (const file of files.sort()) {
-                const filePath = path.join(dir, file);
-                const content = fs.readFileSync(filePath, 'utf-8');
-                const lines = content.split('\n').filter(Boolean);
-                for (const line of lines) {
-                    let parsed: HistoryMessage | null = null;
-                    try {
-                        parsed = JSON.parse(line) as HistoryMessage;
-                    } catch {
-                        parsed = null;
-                    }
-                    if (!parsed || parsed.historySessionId !== historySessionId) continue;
-                    if (parsed.kind === 'session_start') {
-                        if (!workspace && parsed.workspace) workspace = parsed.workspace;
-                        continue;
-                    }
-                    messageCount += 1;
-                    if (!firstMessageAt || parsed.receivedAt < firstMessageAt) firstMessageAt = parsed.receivedAt;
-                    if (!lastMessageAt || parsed.receivedAt > lastMessageAt) lastMessageAt = parsed.receivedAt;
-                    if (parsed.sessionTitle) sessionTitle = parsed.sessionTitle;
-                    if (parsed.role !== 'system' && parsed.content.trim()) preview = parsed.content.trim();
-                }
-            }
-
-            if (messageCount === 0 || !lastMessageAt) continue;
-            summaries.push({
-                historySessionId,
-                sessionTitle: sessionTitle || undefined,
-                messageCount,
-                firstMessageAt,
-                lastMessageAt,
-                preview: preview || undefined,
-                workspace: workspace || undefined,
+        const files = listHistoryFiles(dir);
+        const signature = buildSavedHistoryCacheSignature(dir, files);
+        const cached = savedHistorySessionCache.get(sanitized);
+        const summaries = cached?.signature === signature
+            ? cached.summaries
+            : computeSavedHistorySessionSummaries(agentType, dir, files);
+        if (!cached || cached.signature !== signature) {
+            savedHistorySessionCache.set(sanitized, {
+                signature,
+                summaries,
             });
         }
 
-        summaries.sort((a, b) => b.lastMessageAt - a.lastMessageAt);
         const offset = Math.max(0, options.offset || 0);
         const limit = Math.max(1, options.limit || 30);
         const sliced = summaries.slice(offset, offset + limit);

@@ -105,6 +105,8 @@ export interface CliProviderModule {
     sendDelayMs?: number;
     sendKey?: string;
     submitStrategy?: 'wait_for_echo' | 'immediate';
+    /** Allow sending another prompt while the CLI is still generating so users can intervene mid-turn. */
+    allowInputDuringGeneration?: boolean;
     scripts?: CliScripts;
     spawn: {
         command: string;

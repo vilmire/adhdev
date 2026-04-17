@@ -26,6 +26,7 @@ import {
     getConversationDisplayLabel,
     getConversationProviderLabel,
 } from './conversation-selectors';
+import { getConversationSendBlockMessage } from '../../hooks/dashboardCommandUtils'
 import { getDefaultVisibleLiveMessages } from './chat-visibility';
 import { useSessionChatTailController } from './session-chat-tail-controller';
 import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
@@ -33,8 +34,9 @@ import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
 export interface ChatPaneProps {
     activeConv: ActiveConversation;
     ideEntry?: DaemonData;
-    handleSendChat: (message: string) => void;
+    handleSendChat: (message: string) => Promise<boolean>;
     isSendingChat?: boolean;
+    sendFeedbackMessage?: string | null;
     handleFocusAgent: () => void;
     isFocusingAgent: boolean;
     actionLogs: { routeId: string; text: string; timestamp: number }[];
@@ -51,6 +53,7 @@ export default function ChatPane({
     activeConv, ideEntry,
     handleSendChat,
     isSendingChat = false,
+    sendFeedbackMessage = null,
     handleFocusAgent, isFocusingAgent, actionLogs, userName,
     showMetaChips = false,
     scrollToBottomRequestNonce,
@@ -91,6 +94,9 @@ export default function ChatPane({
     const panelLabel = getConversationDisplayLabel(activeConv)
     const daemonId = getConversationDaemonRouteId(activeConv);
     const canOpenPanel = shouldShowOpenPanelAction(activeConv)
+    const sendBlockMessage = getConversationSendBlockMessage(activeConv)
+    const chatInputStatusMessage = sendFeedbackMessage || sendBlockMessage
+    const isChatInputBlocked = !!sendBlockMessage
 
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     useEffect(() => {
@@ -274,6 +280,8 @@ export default function ChatPane({
                     contextKey={activeConv.tabKey}
                     panelLabel={panelLabel}
                     isSending={isSendingChat}
+                    isBusy={isChatInputBlocked}
+                    statusMessage={chatInputStatusMessage}
                     onSend={handleSendChat}
                     isActive={isInputActive}
                 />

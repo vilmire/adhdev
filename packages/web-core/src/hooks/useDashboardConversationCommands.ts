@@ -1,7 +1,6 @@
-import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
-import { isAcpConv, isCliConv } from '../components/dashboard/types'
-import { getProviderArgs, getRouteTarget } from './dashboardCommandUtils'
+import { getProviderArgs, getRouteTarget, getConversationSendBlockMessage, getInlineSendFailureMessage } from './dashboardCommandUtils'
 import { getExplicitSessionRevealCommand } from '../components/dashboard/dashboardSessionCommands'
 
 interface UseDashboardConversationCommandsOptions {
@@ -16,6 +15,18 @@ interface RecentSendAttempt {
     tabKey: string
     message: string
     timestamp: number
+}
+
+export function shouldBlockConversationSend({
+    hasMessage,
+    blockedMessage,
+}: {
+    hasMessage: boolean
+    blockedMessage: string | null
+    sendInFlight?: boolean
+}): boolean {
+    if (!hasMessage) return true
+    return !!blockedMessage
 }
 
 export function shouldSuppressRecentDuplicateSend(
@@ -77,14 +88,27 @@ export function useDashboardConversationCommands({
 }: UseDashboardConversationCommandsOptions) {
     const [isFocusingAgent, setIsFocusingAgent] = useState(false)
     const [isSendingChat, setIsSendingChat] = useState(false)
+    const [sendFeedbackMessage, setSendFeedbackMessage] = useState<string | null>(null)
     const sendInFlightRef = useRef(false)
     const lastSendRef = useRef<RecentSendAttempt | null>(null)
 
-    const handleSendChat = useCallback(async (rawMessage: string) => {
-        if (!activeConv) return
+    useEffect(() => {
+        setSendFeedbackMessage(null)
+    }, [activeConv?.tabKey])
+
+    const handleSendChat = useCallback(async (rawMessage: string): Promise<boolean> => {
+        if (!activeConv) return false
 
         const message = rawMessage.trim()
-        if (!message || sendInFlightRef.current) return
+        const blockedMessage = getConversationSendBlockMessage(activeConv)
+        if (shouldBlockConversationSend({
+            hasMessage: !!message,
+            blockedMessage,
+            sendInFlight: sendInFlightRef.current,
+        })) {
+            if (blockedMessage) setSendFeedbackMessage(blockedMessage)
+            return false
+        }
 
         const now = Date.now()
         const attempt: RecentSendAttempt = {
@@ -93,16 +117,18 @@ export function useDashboardConversationCommands({
             timestamp: now,
         }
         if (shouldSuppressRecentDuplicateSend(lastSendRef.current, attempt)) {
-            return
+            setSendFeedbackMessage(null)
+            return true
         }
 
         sendInFlightRef.current = true
         setIsSendingChat(true)
+        setSendFeedbackMessage(null)
         lastSendRef.current = attempt
 
         const localId = `${now}-${Math.random().toString(36).slice(2, 8)}`
         const userMsg = { role: 'user', content: message, timestamp: now, _localId: localId }
-        const useLocalPendingMessage = !(isCliConv(activeConv) || isAcpConv(activeConv))
+        const useLocalPendingMessage = true
         if (useLocalPendingMessage) {
             setLocalUserMessages(prev => ({
                 ...prev,
@@ -112,7 +138,17 @@ export function useDashboardConversationCommands({
 
         try {
             const routeTarget = getRouteTarget(activeConv)
-            if (!routeTarget) return
+            if (!routeTarget) {
+                lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
+                if (useLocalPendingMessage) {
+                    setLocalUserMessages(prev => ({
+                        ...prev,
+                        [attempt.tabKey]: (prev[attempt.tabKey] || []).filter(entry => entry._localId !== localId),
+                    }))
+                }
+                setSendFeedbackMessage('Unable to send message right now.')
+                return false
+            }
 
             const raw = await sendDaemonCommand(routeTarget, 'send_chat', {
                 message,
@@ -120,12 +156,17 @@ export function useDashboardConversationCommands({
             })
             const res = unwrapCommandResult(raw)
 
-            if (useLocalPendingMessage && (res?.deduplicated || res?.sent === false)) {
+            if (useLocalPendingMessage && res?.deduplicated) {
                 setLocalUserMessages(prev => ({
                     ...prev,
                     [attempt.tabKey]: (prev[attempt.tabKey] || []).filter(entry => entry._localId !== localId),
                 }))
-                return
+                setSendFeedbackMessage(null)
+                return true
+            }
+
+            if (res?.sent === false) {
+                throw new Error(res?.error || 'Send failed')
             }
 
             if (res?.success === false) {
@@ -142,12 +183,14 @@ export function useDashboardConversationCommands({
                     return { ...prev, [attempt.tabKey]: filtered }
                 })
             }, 60000)
+            setSendFeedbackMessage(null)
+            return true
         } catch (e) {
             const errorMessage = getErrorMessage(e)
             if (errorMessage.toLowerCase().includes('provider sendmessage did not confirm send')) {
                 console.warn('Send not confirmed by provider script:', errorMessage)
             } else {
-                console.error('Send failed', e)
+                console.warn('Send blocked/failed', e)
             }
             lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
             if (useLocalPendingMessage) {
@@ -156,11 +199,8 @@ export function useDashboardConversationCommands({
                     [attempt.tabKey]: (prev[attempt.tabKey] || []).filter(entry => entry._localId !== localId),
                 }))
             }
-            setActionLogs(prev => [...prev, {
-                routeId: attempt.tabKey,
-                text: `❌ **Send failed** — ${errorMessage || 'Unknown error'}`,
-                timestamp: Date.now(),
-            }])
+            setSendFeedbackMessage(getInlineSendFailureMessage(e))
+            return false
         } finally {
             sendInFlightRef.current = false
             setIsSendingChat(false)
@@ -238,6 +278,7 @@ export function useDashboardConversationCommands({
 
     return {
         isSendingChat,
+        sendFeedbackMessage,
         isFocusingAgent,
         handleSendChat,
         handleRelaunch,

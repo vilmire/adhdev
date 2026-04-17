@@ -17,8 +17,9 @@ interface PaneGroupContentProps {
     terminalRef: RefObject<CliTerminalHandle | null>
     handleModalButton: (button: string) => void
     handleRelaunch: () => void
-    handleSendChat: (message: string) => void
+    handleSendChat: (message: string) => Promise<boolean>
     isSendingChat: boolean
+    sendFeedbackMessage?: string | null
     handleFocusAgent: () => void
     isFocusingAgent: boolean
     actionLogs: { routeId: string; text: string; timestamp: number }[]
@@ -37,6 +38,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     handleRelaunch,
     handleSendChat,
     isSendingChat,
+    sendFeedbackMessage = null,
     handleFocusAgent,
     isFocusingAgent,
     actionLogs,
@@ -81,6 +83,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
                             terminalRef={terminalRef}
                             handleSendChat={handleSendChat}
                             isSendingChat={isSendingChat}
+                            sendFeedbackMessage={sendFeedbackMessage}
                             isVisible={isCliTerminal}
                         />
                     </div>
@@ -91,6 +94,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
                                 ideEntry={ideEntry}
                                 handleSendChat={handleSendChat}
                                 isSendingChat={isSendingChat}
+                                sendFeedbackMessage={sendFeedbackMessage}
                                 handleFocusAgent={handleFocusAgent}
                                 isFocusingAgent={isFocusingAgent}
                                 actionLogs={actionLogs}
@@ -107,6 +111,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
                     ideEntry={ideEntry}
                     handleSendChat={handleSendChat}
                     isSendingChat={isSendingChat}
+                    sendFeedbackMessage={sendFeedbackMessage}
                     handleFocusAgent={handleFocusAgent}
                     isFocusingAgent={isFocusingAgent}
                     actionLogs={actionLogs}
@@ -126,6 +131,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     && prev.handleRelaunch === next.handleRelaunch
     && prev.handleSendChat === next.handleSendChat
     && prev.isSendingChat === next.isSendingChat
+    && prev.sendFeedbackMessage === next.sendFeedbackMessage
     && prev.handleFocusAgent === next.handleFocusAgent
     && prev.isFocusingAgent === next.isFocusingAgent
     && prev.actionLogs === next.actionLogs

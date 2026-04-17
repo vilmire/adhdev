@@ -15,6 +15,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkAlert from 'remark-github-blockquote-alert';
 import remarkBreaks from 'remark-breaks';
+import { buildChatMessageSignature } from '@adhdev/daemon-core/chat/chat-signatures';
 import { IconThought } from './Icons';
 import { stringifyTextContent } from '../utils/text';
 
@@ -71,6 +72,17 @@ export function shouldRestoreChatScrollSnapshot(
     const savedFingerprint = String(snapshot.messageFingerprint || '');
     if (!savedFingerprint) return true;
     return savedFingerprint === String(currentMessageFingerprint || '');
+}
+
+export function buildChatScrollFingerprint(messages: ChatMessage[]): string {
+    if (!Array.isArray(messages) || messages.length === 0) return '0:empty';
+    const lastMessage = messages[messages.length - 1];
+    return `${messages.length}:${buildChatMessageSignature(lastMessage)}`;
+}
+
+function restoreChatScrollSnapshot(el: HTMLDivElement, snapshot: ChatScrollSnapshot): void {
+    const nextTop = Math.max(0, el.scrollHeight - el.clientHeight - snapshot.fromBottom);
+    el.scrollTop = Number.isFinite(nextTop) ? nextTop : snapshot.top;
 }
 
 // ─── Helpers ──────────────────────────────────
@@ -460,10 +472,8 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         );
     }, []);
 
-    // Last message content length — detect content updates during streaming
-    const lastMsgFingerprint = messages.length > 0
-        ? `${messages.length}:${(messages[messages.length - 1]?.content || '').length}`
-        : '0:0';
+    // Last message signature — detect transcript changes robustly across remounts/tab switches.
+    const lastMsgFingerprint = buildChatScrollFingerprint(messages);
 
     const saveScrollSnapshot = useCallback(() => {
         const el = containerRef.current;
@@ -501,8 +511,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                     requestAnimationFrame(() => {
                         const el = containerRef.current;
                         if (!el) return;
-                        const nextTop = Math.max(0, el.scrollHeight - el.clientHeight - snapshot.fromBottom);
-                        el.scrollTop = Number.isFinite(nextTop) ? nextTop : snapshot.top;
+                        restoreChatScrollSnapshot(el, snapshot);
                         restoredInitialScrollRef.current = true;
                     });
                 } else {
@@ -636,8 +645,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             restoredInitialScrollRef.current = true;
             return;
         }
-        const nextTop = Math.max(0, el.scrollHeight - el.clientHeight - snapshot.fromBottom);
-        el.scrollTop = Number.isFinite(nextTop) ? nextTop : snapshot.top;
+        restoreChatScrollSnapshot(el, snapshot);
         restoredInitialScrollRef.current = true;
     }, [contextKey, lastMsgFingerprint, messages.length, scrollToBottom]);
 

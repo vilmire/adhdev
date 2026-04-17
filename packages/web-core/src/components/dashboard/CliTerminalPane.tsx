@@ -7,6 +7,8 @@ import type { CliTerminalHandle } from '../CliTerminal';
 import { useTransport } from '../../context/TransportContext';
 import { connectionManager } from '../../compat';
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
+import { getConversationSendBlockMessage } from '../../hooks/dashboardCommandUtils';
+import { shouldDisableChatSendButton } from './ChatInputBar';
 import type { ActiveConversation } from './types';
 import { getConversationTitle } from './conversation-presenters';
 
@@ -15,15 +17,17 @@ export interface CliTerminalPaneProps {
     clearToken?: number;
     /** Outer terminal ref for bumpResize etc. */
     terminalRef: React.RefObject<CliTerminalHandle | null>;
-    handleSendChat: (message: string) => void;
+    handleSendChat: (message: string) => Promise<boolean>;
     isSendingChat?: boolean;
+    sendFeedbackMessage?: string | null;
     isVisible?: boolean;
 }
 
 export default function CliTerminalPane({
     activeConv, clearToken = 0, terminalRef,
     handleSendChat,
-    isSendingChat = false,
+    isSendingChat: _isSendingChat = false,
+    sendFeedbackMessage = null,
     isVisible = true,
 }: CliTerminalPaneProps) {
     const { ides } = useBaseDaemons();
@@ -45,6 +49,8 @@ export default function CliTerminalPane({
     const daemonRouteId = activeConv.daemonId || activeConv.routeId?.split(':')[0] || activeConv.routeId || '';
     const daemonEntry = ides.find(entry => entry.id === daemonRouteId && entry.type === 'adhdev-daemon');
     const terminalSizingMode = daemonEntry?.terminalSizingMode === 'fit' ? 'fit' : 'measured';
+    const sendBlockMessage = getConversationSendBlockMessage(activeConv);
+    const inputStatusMessage = sendFeedbackMessage || sendBlockMessage;
     const MIN_TERMINAL_SCALE = 0.6;
     const MAX_TERMINAL_SCALE = 1.15;
     const getAutoTerminalScale = () => {
@@ -309,9 +315,9 @@ export default function CliTerminalPane({
                         <input
                             ref={chatInputRef}
                             type="text"
-                            placeholder={`Send message to ${getConversationTitle(activeConv)}...`}
+                            placeholder={inputStatusMessage || `Send message to ${getConversationTitle(activeConv)}...`}
                             value={draftInput}
-                            disabled={!runtimeReady || !isVisible || isSendingChat}
+                            disabled={!runtimeReady || !isVisible}
                             onChange={e => setDraftInput(e.target.value)}
                             onPaste={e => {
                                 const pasted = e.clipboardData.getData('text');
@@ -326,9 +332,10 @@ export default function CliTerminalPane({
                                 }
                                 e.preventDefault();
                                 const message = draftInput.trim();
-                                if (!runtimeReady || !message || isSendingChat) return;
-                                setDraftInput('');
-                                handleSendChat(message);
+                                if (!runtimeReady || !message || sendBlockMessage) return;
+                                void handleSendChat(message).then((accepted) => {
+                                    if (accepted !== false) setDraftInput('');
+                                });
                             }}
                             className="w-full h-9 rounded-[18px] px-4 bg-bg-secondary text-[13px] text-text-primary"
                             style={{ border: '1px solid var(--chat-input-border, var(--border-subtle))' }}
@@ -337,21 +344,27 @@ export default function CliTerminalPane({
                     <button
                         onClick={() => {
                             const message = draftInput.trim();
-                            if (!runtimeReady || !message || isSendingChat) return;
-                            setDraftInput('');
-                            handleSendChat(message);
+                            if (!runtimeReady || !message || sendBlockMessage) return;
+                            void handleSendChat(message).then((accepted) => {
+                                if (accepted !== false) setDraftInput('');
+                            });
                         }}
-                        disabled={!runtimeReady || !isVisible || !draftInput.trim() || isSendingChat}
+                        disabled={!runtimeReady || !isVisible || shouldDisableChatSendButton({ hasDraft: !!draftInput.trim(), isBusy: !!sendBlockMessage })}
                         className={`w-9 h-9 rounded-full flex items-center justify-center border-none shrink-0 transition-all duration-300 ${
-                            draftInput.trim() && !isSendingChat ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
+                            draftInput.trim() && !sendBlockMessage ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
                         }`}
-                        style={draftInput.trim() && !isSendingChat ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
+                        style={draftInput.trim() && !sendBlockMessage ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
                     >
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={draftInput.trim() ? 'text-white' : 'text-text-muted'}>
                             <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
                         </svg>
                     </button>
                 </div>
+                {inputStatusMessage && (
+                    <div className="pt-2 px-1 text-[11px] text-text-muted opacity-80">
+                        {inputStatusMessage}
+                    </div>
+                )}
             </div>
         </>
     );

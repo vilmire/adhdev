@@ -333,6 +333,8 @@ export interface ProviderModule {
     resume?: ProviderResumeCapability;
     /** Session ID probe config — auto-discovers provider session ID from local SQLite DB */
     sessionProbe?: ProviderSessionProbe;
+    /** Allow sending another prompt while the CLI is still generating so users can intervene mid-turn. */
+    allowInputDuringGeneration?: boolean;
     /** Approval button priority hints used when auto-approve must pick a positive action */
     approvalPositiveHints?: string[];
     scripts?: ProviderScripts;

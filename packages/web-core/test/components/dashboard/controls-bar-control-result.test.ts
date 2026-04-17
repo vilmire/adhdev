@@ -69,6 +69,29 @@ describe('ControlsBar typed controlResult consumption', () => {
     expect(html).toBe('')
   })
 
+  it('keeps the Usage action visible for Antigravity-hosted Claude Code sessions', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ControlsBar, {
+        routeId: 'daemon-1',
+        hostIdeType: 'antigravity',
+        providerType: 'claude-code-vscode',
+        displayLabel: 'Claude Code',
+        controls: [
+          {
+            id: 'usage',
+            type: 'action',
+            label: 'Usage',
+            placement: 'bar',
+            invokeScript: 'requestUsage',
+          } satisfies ProviderControlSchema,
+        ],
+        controlValues: {},
+      }),
+    )
+
+    expect(html).toContain('Usage')
+  })
+
   it('does not synthesize model values from legacy serverModel props when schema controls are present', () => {
     const html = renderToStaticMarkup(
       React.createElement(ControlsBar, {

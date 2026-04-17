@@ -92,6 +92,17 @@ function getControlOptions(
     return ctrl.options || dynamicOptions[ctrl.id] || [];
 }
 
+export function shouldHideBarControl(
+    hostIdeType: string | undefined,
+    providerType: string,
+    ctrl: ProviderControlSchema,
+): boolean {
+    if (hostIdeType === 'antigravity' && providerType === 'codex') {
+        return ctrl.id === 'model' || ctrl.id === 'mode' || ctrl.id === 'new_session';
+    }
+    return false;
+}
+
 export function buildControlValueScriptArgs(
     _ctrl: ProviderControlSchema,
     value: ControlScalarValue,

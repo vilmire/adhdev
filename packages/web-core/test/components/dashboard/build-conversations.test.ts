@@ -202,4 +202,40 @@ describe('build conversations shared context', () => {
             displaySecondary: 'Codex CLI',
         })
     })
+
+    it('keeps optimistic local user messages visible for native CLI conversations until the runtime transcript confirms them', () => {
+        const cli = createIdeEntry({
+            id: 'machine-1:cli:cli-2',
+            sessionId: 'cli-2',
+            type: 'hermes-cli',
+            transport: 'pty',
+            cliName: 'Hermes Agent',
+            mode: 'chat',
+            activeChat: {
+                id: 'chat-2',
+                title: 'Hermes Agent',
+                status: 'idle',
+                messages: [
+                    { role: 'assistant', content: 'Existing reply', receivedAt: 1000 },
+                ],
+                activeModal: null,
+            },
+        })
+
+        const conversations = buildScopedIdeConversations(cli, {
+            'cli-2': [
+                { role: 'user', content: 'Follow-up prompt', timestamp: 2000, _localId: 'local-cli-1' },
+            ],
+        }, {
+            machineNames: { 'machine-1': 'Studio Mac' },
+            connectionStates: { 'machine-1': 'connected' },
+            defaultConnectionState: 'new',
+        })
+
+        expect(conversations).toHaveLength(1)
+        expect(conversations[0]?.messages).toEqual([
+            { role: 'assistant', content: 'Existing reply', receivedAt: 1000 },
+            { role: 'user', content: 'Follow-up prompt', timestamp: 2000, _localId: 'local-cli-1' },
+        ])
+    })
 })

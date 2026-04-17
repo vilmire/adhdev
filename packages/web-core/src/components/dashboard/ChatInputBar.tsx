@@ -4,14 +4,28 @@ interface ChatInputBarProps {
     contextKey: string;
     panelLabel: string;
     isSending: boolean;
-    onSend: (message: string) => void;
+    isBusy?: boolean;
+    statusMessage?: string | null;
+    onSend: (message: string) => Promise<boolean>;
     isActive?: boolean;
+}
+
+export function shouldDisableChatSendButton({
+    hasDraft,
+    isBusy = false,
+}: {
+    hasDraft: boolean;
+    isBusy?: boolean;
+}): boolean {
+    return !hasDraft || isBusy;
 }
 
 const ChatInputBar = memo(function ChatInputBar({
     contextKey,
     panelLabel,
-    isSending,
+    isSending: _isSending,
+    isBusy = false,
+    statusMessage = null,
     onSend,
     isActive = true,
 }: ChatInputBarProps) {
@@ -27,11 +41,13 @@ const ChatInputBar = memo(function ChatInputBar({
         chatInputRef.current?.focus();
     }, [contextKey, isActive]);
 
-    const submitDraft = () => {
+    const submitDraft = async () => {
         const message = draftInput.trim();
-        if (!message || isSending) return;
-        setDraftInput('');
-        onSend(message);
+        if (!message || isBusy) return;
+        const accepted = await onSend(message);
+        if (accepted !== false) {
+            setDraftInput('');
+        }
     };
 
     return (
@@ -52,7 +68,7 @@ const ChatInputBar = memo(function ChatInputBar({
                     <input
                         ref={chatInputRef}
                         type="text"
-                        placeholder={`Send message to ${panelLabel}...`}
+                        placeholder={statusMessage || `Send message to ${panelLabel}...`}
                         value={draftInput}
                         onChange={e => setDraftInput(e.target.value)}
                         onPaste={e => {
@@ -67,7 +83,7 @@ const ChatInputBar = memo(function ChatInputBar({
                                 return;
                             }
                             e.preventDefault();
-                            submitDraft();
+                            void submitDraft();
                         }}
                         onBlur={(e) => {
                             if (window.innerWidth < 768) {
@@ -83,18 +99,23 @@ const ChatInputBar = memo(function ChatInputBar({
                     />
                 </div>
                 <button
-                    onClick={submitDraft}
-                    disabled={!draftInput.trim() || isSending}
+                    onClick={() => { void submitDraft(); }}
+                    disabled={shouldDisableChatSendButton({ hasDraft: !!draftInput.trim(), isBusy })}
                     className={`w-10 h-10 rounded-full flex items-center justify-center border-none shrink-0 transition-all duration-300 ${
-                        draftInput.trim() && !isSending ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
+                        draftInput.trim() && !isBusy ? 'cursor-pointer' : 'bg-bg-secondary cursor-default'
                     }`}
-                    style={draftInput.trim() && !isSending ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
+                    style={draftInput.trim() && !isBusy ? { background: 'var(--chat-send-bg, var(--accent-primary))' } : undefined}
                 >
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={draftInput.trim() ? 'text-white' : 'text-text-muted'}>
                         <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
                     </svg>
                 </button>
             </div>
+            {statusMessage && (
+                <div className="pt-2 px-1 text-[11px] text-text-muted opacity-80">
+                    {statusMessage}
+                </div>
+            )}
         </div>
     );
 });

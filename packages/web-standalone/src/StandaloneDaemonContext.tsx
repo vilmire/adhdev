@@ -98,6 +98,7 @@ export async function sendCommandViaWs(
 export function sendDataViaWs(_daemonId: string, data: SubscribeRequest | UnsubscribeRequest): boolean {
     const ws = _wsInstance
     if (!ws || ws.readyState !== WebSocket.OPEN) return false
+    if (!data || (data as any).type !== 'subscribe' && (data as any).type !== 'unsubscribe') return false
     try {
         ws.send(JSON.stringify(data))
         return true

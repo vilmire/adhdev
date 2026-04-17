@@ -17,6 +17,7 @@ interface DashboardMobileChatRoomProps {
     actionLogs: { routeId: string; text: string; timestamp: number }[]
     userName?: string
     isSendingChat: boolean
+    sendFeedbackMessage?: string | null
     isFocusingAgent: boolean
     onBack: () => void
     onOpenNativeConversation: (conversation: ActiveConversation) => void
@@ -27,7 +28,7 @@ interface DashboardMobileChatRoomProps {
     onStopCli?: (conversation?: ActiveConversation) => void | Promise<void>
     cliViewMode: CliConversationViewMode | null
     onSetCliViewMode: (mode: CliConversationViewMode) => void
-    handleSendChat: (message: string, images?: string[]) => Promise<void>
+    handleSendChat: (message: string, images?: string[]) => Promise<boolean>
     handleFocusAgent: () => Promise<void>
     handleModalButton: (button: string) => void
     handleRelaunch: () => void
@@ -41,6 +42,7 @@ export default function DashboardMobileChatRoom({
     actionLogs,
     userName,
     isSendingChat,
+    sendFeedbackMessage = null,
     isFocusingAgent,
     onBack,
     onOpenNativeConversation,
@@ -133,6 +135,7 @@ export default function DashboardMobileChatRoom({
                     handleRelaunch={handleRelaunch}
                     handleSendChat={handleSendChat}
                     isSendingChat={isSendingChat}
+                    sendFeedbackMessage={sendFeedbackMessage}
                     handleFocusAgent={handleFocusAgent}
                     isFocusingAgent={isFocusingAgent}
                     actionLogs={actionLogs}

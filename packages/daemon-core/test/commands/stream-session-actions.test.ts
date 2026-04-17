@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { handleOpenPanel, handleSelectSession } from '../../src/commands/stream-commands.js'
+import { handleOpenPanel, handlePtyInput, handlePtyResize, handleSelectSession } from '../../src/commands/stream-commands.js'
 
 describe('stream session action commands', () => {
   it('select_session activates the target stream session without routing through focusSession', async () => {
@@ -81,5 +81,34 @@ describe('stream session action commands', () => {
     expect(result).toMatchObject({ success: true })
     expect(providerLoader.resolve).toHaveBeenCalledWith('cursor')
     expect(cdp.evaluate).toHaveBeenCalledTimes(2)
+  })
+
+  it('pty_input allows direct terminal intervention even when the CLI session is currently in chat mode', () => {
+    const writeRaw = vi.fn()
+    const result = handlePtyInput({
+      getCliAdapter: vi.fn(() => ({ writeRaw })),
+      ctx: { instanceManager: { getInstance: () => ({ category: 'cli', getPresentationMode: () => 'chat' }) } },
+    } as any, {
+      targetSessionId: 'cli-1',
+      data: 'x',
+    })
+
+    expect(result).toEqual({ success: true })
+    expect(writeRaw).toHaveBeenCalledWith('x')
+  })
+
+  it('pty_resize is temporarily disabled even when the CLI session is in chat mode', () => {
+    const resize = vi.fn()
+    const result = handlePtyResize({
+      getCliAdapter: vi.fn(() => ({ resize })),
+      ctx: { instanceManager: { getInstance: () => ({ category: 'cli', getPresentationMode: () => 'chat' }) } },
+    } as any, {
+      targetSessionId: 'cli-1',
+      cols: 100,
+      rows: 30,
+    })
+
+    expect(result).toEqual({ success: false, error: 'PTY resize temporarily disabled', code: 'PTY_RESIZE_DISABLED' })
+    expect(resize).not.toHaveBeenCalled()
   })
 })

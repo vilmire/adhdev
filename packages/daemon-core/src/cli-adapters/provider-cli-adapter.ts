@@ -1439,6 +1439,10 @@ export class ProviderCliAdapter implements CliAdapter {
 
     async sendMessage(text: string): Promise<void> {
         if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
+        const allowInputDuringGeneration = this.provider.allowInputDuringGeneration === true;
+        const allowInterventionPrompt = allowInputDuringGeneration
+            && this.isWaitingForResponse
+            && this.currentStatus !== 'waiting_approval';
         if (this.startupParseGate) {
             const deadline = Date.now() + 10000;
             while (this.startupParseGate && Date.now() < deadline) {
@@ -1446,7 +1450,9 @@ export class ProviderCliAdapter implements CliAdapter {
                 await new Promise(resolve => setTimeout(resolve, 50));
             }
         }
-        await this.waitForInteractivePrompt();
+        if (!allowInterventionPrompt) {
+            await this.waitForInteractivePrompt();
+        }
         if (!this.ready) {
             this.resolveStartupState('send_precheck');
             const screenText = this.terminalScreen.getText() || '';
@@ -1458,7 +1464,7 @@ export class ProviderCliAdapter implements CliAdapter {
             }
         }
         if (!this.ready) throw new Error(`${this.cliName} not ready (status: ${this.currentStatus})`);
-        if (this.isWaitingForResponse) {
+        if (this.isWaitingForResponse && !allowInputDuringGeneration) {
             throw new Error(`${this.cliName} is still processing the previous prompt`);
         }
         const blockingModal = this.activeModal || this.getStartupConfirmationModal(this.terminalScreen.getText() || '');

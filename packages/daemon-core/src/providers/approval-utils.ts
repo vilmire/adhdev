@@ -1,24 +1,25 @@
 import type { ProviderModule } from './contracts.js';
 
 const DEFAULT_APPROVAL_POSITIVE_HINTS = [
-    'run',
+    'yes',
+    'allow once',
     'approve',
     'accept',
-    'allow once',
-    'always allow',
-    'allow',
-    'yes',
-    'proceed',
     'continue',
+    'run',
+    'proceed',
     'confirm',
     'save',
     'ok',
     'trust',
+    'allow',
+    'always allow',
 ];
 
 function normalizeApprovalLabel(value: string): string {
     return String(value || '')
         .toLowerCase()
+        .replace(/^[\s\[(<{]*\d+(?:\s*[.)\]}>:-]|\s)+/, '')
         .replace(/[^\p{L}\p{N}]+/gu, ' ')
         .trim();
 }

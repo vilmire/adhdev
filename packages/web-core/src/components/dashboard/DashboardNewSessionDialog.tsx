@@ -16,6 +16,7 @@ import type { ActiveConversation } from './types'
 import DashboardMobileSessionHostSheet from './DashboardMobileSessionHostSheet'
 import { getMobileMachineConnectionLabel } from './dashboard-mobile-chat-mode-helpers'
 import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state'
+import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-load-state'
 import SavedHistoryLaunchSection from '../SavedHistoryLaunchSection'
 import LaunchSectionCard from '../LaunchSectionCard'
 
@@ -117,6 +118,7 @@ export default function DashboardNewSessionDialog({
     const [selectedResumeSessionId, setSelectedResumeSessionId] = useState('')
     const [savedSessions, setSavedSessions] = useState<SavedSessionOption[]>([])
     const [savedSessionsLoading, setSavedSessionsLoading] = useState(false)
+    const [savedSessionsLoaded, setSavedSessionsLoaded] = useState(false)
     const [savedSessionsError, setSavedSessionsError] = useState('')
     const [resumeHistoryOpen, setResumeHistoryOpen] = useState(false)
     const [resumeHistoryFilters, setResumeHistoryFilters] = useState<SavedHistoryFilterState>(() => createSavedHistoryFilterState())
@@ -195,6 +197,7 @@ export default function DashboardNewSessionDialog({
             setLaunchArgs('')
             setSelectedResumeSessionId('')
             setSavedSessions([])
+            setSavedSessionsLoaded(false)
             setSavedSessionsError('')
             setResumeHistoryFilters(createSavedHistoryFilterState())
             setMessage('')
@@ -239,6 +242,7 @@ export default function DashboardNewSessionDialog({
             .finally(() => {
                 if (savedSessionsRequestSeqRef.current !== requestSeq) return
                 setSavedSessionsLoading(false)
+                setSavedSessionsLoaded(true)
             })
     }, [onListSavedSessions])
 
@@ -254,6 +258,7 @@ export default function DashboardNewSessionDialog({
         } else {
             loadRecentArgs(selectedMachine.id, selectedTarget)
         }
+        setSavedSessionsLoaded(false)
         if (activeKind !== 'cli') {
             setSavedSessions([])
             setSavedSessionsError('')
@@ -686,7 +691,12 @@ export default function DashboardNewSessionDialog({
                                 onOpenHistory={() => {
                                     if (!selectedMachine || !selectedTarget) return
                                     setResumeHistoryOpen(true)
-                                    void loadSavedSessions(selectedMachine.id, selectedTarget)
+                                    if (shouldRefreshSavedHistoryOnModalOpen({
+                                        hasLoadedInitialResults: savedSessionsLoaded,
+                                        isLoading: savedSessionsLoading,
+                                    })) {
+                                        void loadSavedSessions(selectedMachine.id, selectedTarget)
+                                    }
                                 }}
                                 onClearSelection={() => setSelectedResumeSessionId('')}
                             />

@@ -175,6 +175,48 @@ function normalizeReadChatMessages(payload: Record<string, any>): ChatMessage[] 
     return normalizeChatMessages(messages);
 }
 
+function buildReadChatReplayCollapseSignature(message: ChatMessage | null | undefined): string {
+    if (!message) return '';
+    const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
+    const kind = typeof message.kind === 'string' ? message.kind.trim().toLowerCase() : 'standard';
+    const senderName = typeof message.senderName === 'string' ? message.senderName.trim().toLowerCase() : '';
+    const content = flattenContent(message.content || '').replace(/\s+/g, ' ').trim();
+    return `${role}:${kind}:${senderName}:${content}`;
+}
+
+function shouldCollapseReadChatReplayDuplicate(message: ChatMessage | null | undefined): boolean {
+    if (!message) return false;
+    const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
+    if (role !== 'assistant' && role !== 'system') return false;
+    const kind = typeof message.kind === 'string' ? message.kind.trim().toLowerCase() : 'standard';
+    return kind === 'tool' || kind === 'terminal' || kind === 'thought' || kind === 'system';
+}
+
+function collapseReplayDuplicatesFromReadChat(messages: ChatMessage[]): ChatMessage[] {
+    const collapsed: ChatMessage[] = [];
+    let lastReplayTurnSignature = '';
+
+    for (const message of messages) {
+        const signature = buildReadChatReplayCollapseSignature(message);
+        const previous = collapsed[collapsed.length - 1];
+        const previousSignature = buildReadChatReplayCollapseSignature(previous);
+
+        if (shouldCollapseReadChatReplayDuplicate(message) && signature) {
+            if (previousSignature === signature) continue;
+            if (lastReplayTurnSignature === signature) continue;
+        }
+
+        collapsed.push(message);
+        if (shouldCollapseReadChatReplayDuplicate(message) && signature) {
+            lastReplayTurnSignature = signature;
+        } else if ((message.role || '').toLowerCase() === 'user') {
+            lastReplayTurnSignature = '';
+        }
+    }
+
+    return collapsed;
+}
+
 function deriveHistoryDedupKey(message: ChatMessage & { _unitKey?: string; _turnKey?: string }): string | undefined {
     const unitKey = typeof message._unitKey === 'string' ? message._unitKey.trim() : '';
     if (unitKey) return `read_chat:${unitKey}`;
@@ -273,14 +315,40 @@ function computeReadChatSync(messages: ChatMessage[], cursor: Required<ReadChatC
     };
 }
 
+function hasNonEmptyModalButtons(activeModal: unknown): boolean {
+    if (!activeModal || typeof activeModal !== 'object') return false;
+    const buttons = (activeModal as { buttons?: unknown }).buttons;
+    return Array.isArray(buttons) && buttons.some((button) => typeof button === 'string' && button.trim().length > 0);
+}
+
+function normalizeReadChatCommandStatus(status: unknown, activeModal: unknown): string {
+    const raw = typeof status === 'string' ? status.trim() : '';
+    if (!raw) {
+        return hasNonEmptyModalButtons(activeModal) ? 'waiting_approval' : 'idle';
+    }
+    switch (raw) {
+        case 'starting':
+            return hasNonEmptyModalButtons(activeModal) ? 'waiting_approval' : 'generating';
+        case 'stopped':
+        case 'disconnected':
+        case 'not_monitored':
+            return 'error';
+        default:
+            return raw;
+    }
+}
+
 function buildReadChatCommandResult(payload: Record<string, any>, args: any): CommandResult {
     let validatedPayload: Record<string, any>;
     try {
-        validatedPayload = validateReadChatResultPayload(payload, 'read_chat command result') as Record<string, any>;
+        validatedPayload = validateReadChatResultPayload({
+            ...payload,
+            status: normalizeReadChatCommandStatus(payload?.status, payload?.activeModal),
+        }, 'read_chat command result') as Record<string, any>;
     } catch (error: any) {
         return { success: false, error: error?.message || String(error) };
     }
-    const messages = normalizeReadChatMessages(validatedPayload);
+    const messages = collapseReplayDuplicatesFromReadChat(normalizeReadChatMessages(validatedPayload));
     const cursor = normalizeReadChatCursor(args);
     if (!cursor.knownMessageCount && !cursor.lastMessageSignature && cursor.tailLimit > 0 && messages.length > cursor.tailLimit) {
         const tailMessages = messages.slice(-cursor.tailLimit);
@@ -374,7 +442,15 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
     try {
         const provider = h.getProvider(agentType);
         const agentStr = provider?.type || agentType || getCurrentProviderType(h);
-        const result = readChatHistory(agentStr, offset || 0, limit || 30, historySessionId);
+        const transport = getTargetTransport(h, provider);
+        let excludeRecentCount = Math.max(0, Number(args?.excludeRecentCount || 0));
+        if (isCliLikeTransport(transport)) {
+            const adapter = getTargetedCliAdapter(h, args, provider?.type);
+            const status = adapter?.getStatus?.();
+            const visibleCount = Array.isArray(status?.messages) ? status.messages.length : 0;
+            if (visibleCount > excludeRecentCount) excludeRecentCount = visibleCount;
+        }
+        const result = readChatHistory(agentStr, offset || 0, limit || 30, historySessionId, excludeRecentCount);
         return { success: true, ...result, agent: agentStr };
     } catch (e: any) {
         return { success: false, error: e.message };

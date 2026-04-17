@@ -81,11 +81,12 @@ export declare class ChatHistoryWriter {
 /**
  * Read history (static — called from P2P commands)
  *
- * Read JSONL files in reverse order, returning most recent messages first.
- * When instanceId is specified, reads only that instance file.
- * Offset/limit-based paging.
+ * Read JSONL files for a session and return a chronological page while paging
+ * backwards from the newest saved messages. When excludeRecentCount is set,
+ * the newest N messages are skipped so older-history pagination can avoid
+ * duplicating the live transcript tail already shown in the UI.
  */
-export declare function readChatHistory(agentType: string, offset?: number, limit?: number, historySessionId?: string): {
+export declare function readChatHistory(agentType: string, offset?: number, limit?: number, historySessionId?: string, excludeRecentCount?: number): {
     messages: HistoryMessage[];
     hasMore: boolean;
 };

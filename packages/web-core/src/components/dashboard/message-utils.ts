@@ -37,7 +37,11 @@ export function areLikelySameMessages<T extends MessageLike>(
 
     const contentA = normalizeTextContent(a.content)
     const contentB = normalizeTextContent(b.content)
-    if (!contentA || contentA !== contentB) return false
+    if (!contentA || !contentB) return false
+    const contentMatches = contentA === contentB
+        || isLikelyTruncatedDuplicate(contentA, contentB)
+        || isLikelyTruncatedDuplicate(contentB, contentA)
+    if (!contentMatches) return false
 
     const tsA = getMessageTimestamp(a)
     const tsB = getMessageTimestamp(b)
@@ -62,7 +66,8 @@ function getNormalizedMessageContent(message: MessageLike | null | undefined): s
 function isLikelyTruncatedDuplicate(longer: string, shorter: string): boolean {
     if (!longer || !shorter) return false
     if (longer.length <= shorter.length) return false
-    if (shorter.length < 80) return false
+    const minUsefulLength = Math.max(12, Math.min(80, Math.floor(longer.length * 0.4)))
+    if (shorter.length < minUsefulLength) return false
     return longer.startsWith(shorter) || longer.includes(shorter)
 }
 

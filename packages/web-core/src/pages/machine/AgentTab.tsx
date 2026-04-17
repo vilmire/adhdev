@@ -41,6 +41,7 @@ import { browseMachineDirectories, collectBrowsePathCandidates, getDefaultBrowse
 import { buildLaunchWorkspaceOptions } from '../../components/machine/launchWorkspaceOptions'
 import type { LaunchWorkspaceOption } from './types'
 import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
+import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-load-state'
 
 type AgentCategory = 'ide' | 'cli' | 'acp'
 
@@ -126,6 +127,7 @@ export default function AgentTab({
     const [selectedResumeSessionId, setSelectedResumeSessionId] = useState('')
     const [savedSessions, setSavedSessions] = useState<SavedSessionOption[]>([])
     const [savedSessionsLoading, setSavedSessionsLoading] = useState(false)
+    const [savedSessionsLoaded, setSavedSessionsLoaded] = useState(false)
     const [savedSessionsError, setSavedSessionsError] = useState('')
     const [resumeHistoryOpen, setResumeHistoryOpen] = useState(false)
     const [resumeHistoryFilters, setResumeHistoryFilters] = useState<SavedHistoryFilterState>(() => createSavedHistoryFilterState())
@@ -272,6 +274,7 @@ export default function AgentTab({
         if (!sendDaemonCommand || !providerType || category !== 'cli') {
             setSavedSessions([])
             setSavedSessionsLoading(false)
+            setSavedSessionsLoaded(false)
             setSavedSessionsError('')
             return
         }
@@ -295,6 +298,7 @@ export default function AgentTab({
         } finally {
             if (savedSessionsRequestSeqRef.current === requestSeq) {
                 setSavedSessionsLoading(false)
+                setSavedSessionsLoaded(true)
             }
         }
     }, [category, machineId, sendDaemonCommand])
@@ -333,6 +337,7 @@ export default function AgentTab({
     useEffect(() => {
         setSelectedResumeSessionId('')
         loadRecentArgs(selectedType)
+        setSavedSessionsLoaded(false)
         if (category !== 'cli' || !selectedType) {
             setSavedSessions([])
             setSavedSessionsError('')
@@ -792,7 +797,12 @@ export default function AgentTab({
                                         onOpenHistory={() => {
                                             if (!selectedType) return
                                             setResumeHistoryOpen(true)
-                                            void loadSavedSessions(selectedType)
+                                            if (shouldRefreshSavedHistoryOnModalOpen({
+                                                hasLoadedInitialResults: savedSessionsLoaded,
+                                                isLoading: savedSessionsLoading,
+                                            })) {
+                                                void loadSavedSessions(selectedType)
+                                            }
                                         }}
                                         onClearSelection={() => setSelectedResumeSessionId('')}
                                     />

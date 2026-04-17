@@ -36,6 +36,17 @@ describe('dashboard message utils', () => {
         ])
     })
 
+    it('prefers the fuller confirmed user turn when a shorter live truncation would otherwise look like a second bubble', () => {
+        const deduped = dedupeOptimisticMessages([
+            { role: 'user', content: 'ㅇㅇ 근데 지금 보니까 방금 내가 한 말이 둘로 쪼개져보이네 ㅋ', id: 'msg-1', receivedAt: 1000 },
+            { role: 'user', content: 'ㅇㅇ 근데 지금 보니까 방금', receivedAt: 1005 },
+        ])
+
+        expect(deduped).toEqual([
+            { role: 'user', content: 'ㅇㅇ 근데 지금 보니까 방금 내가 한 말이 둘로 쪼개져보이네 ㅋ', id: 'msg-1', receivedAt: 1000 },
+        ])
+    })
+
     it('sorts messages chronologically and excludes history items already visible in live feed', () => {
         const historyMessages = [
             { role: 'assistant', content: 'Earlier reply', receivedAt: 1000 },

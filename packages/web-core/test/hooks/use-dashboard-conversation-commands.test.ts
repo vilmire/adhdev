@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   clearRecentSendOnFailure,
+  shouldBlockConversationSend,
   shouldSuppressRecentDuplicateSend,
 } from '../../src/hooks/useDashboardConversationCommands'
 
@@ -19,5 +20,13 @@ describe('useDashboardConversationCommands send dedupe helpers', () => {
 
     expect(cleared).toBeNull()
     expect(shouldSuppressRecentDuplicateSend(cleared, retryAttempt, 2_000)).toBe(false)
+  })
+
+  it('does not pre-block a new send just because another send request is still in flight', () => {
+    expect(shouldBlockConversationSend({ hasMessage: true, blockedMessage: null, sendInFlight: true })).toBe(false)
+  })
+
+  it('still blocks sends when the conversation is in an approval-gated state', () => {
+    expect(shouldBlockConversationSend({ hasMessage: true, blockedMessage: 'Resolve approval', sendInFlight: false })).toBe(true)
   })
 })

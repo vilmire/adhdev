@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shouldRestoreChatScrollSnapshot } from '../../src/components/ChatMessageList'
+import { buildChatScrollFingerprint, shouldRestoreChatScrollSnapshot } from '../../src/components/ChatMessageList'
 
 describe('ChatMessageList scroll snapshot restore', () => {
   it('does not restore an old scroll snapshot when newer chat content arrived for the same context', () => {
@@ -22,5 +22,16 @@ describe('ChatMessageList scroll snapshot restore', () => {
       },
       '40:same-signature',
     )).toBe(true)
+  })
+
+  it('builds different fingerprints when the last message text changes but its length stays the same', () => {
+    const first = buildChatScrollFingerprint([
+      { role: 'assistant', id: 'msg-1', content: 'AAAAA11111' } as any,
+    ])
+    const second = buildChatScrollFingerprint([
+      { role: 'assistant', id: 'msg-1', content: 'BBBBB22222' } as any,
+    ])
+
+    expect(first).not.toBe(second)
   })
 })

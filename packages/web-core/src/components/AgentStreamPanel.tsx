@@ -80,9 +80,9 @@ export default function AgentStreamPanel({ routeId, agentStreams, sendCommand }:
         };
     }, [activeStream, routeId, derivedStatus]);
 
-    const handleSendChat = useCallback(async (rawMessage: string) => {
+    const handleSendChat = useCallback(async (rawMessage: string): Promise<boolean> => {
         const message = rawMessage.trim();
-        if (!message || !activeAgent || isSending) return;
+        if (!message || !activeAgent || isSending) return false;
         setIsSending(true);
         const targetSessionId = activeStream?.sessionId;
         try {
@@ -91,8 +91,10 @@ export default function AgentStreamPanel({ routeId, agentStreams, sendCommand }:
                 message,
                 ...(targetSessionId && { targetSessionId }),
             });
+            return true;
         } catch (e) {
             console.error('Failed to send agent message', e);
+            return false;
         } finally {
             setIsSending(false);
         }

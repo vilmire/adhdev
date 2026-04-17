@@ -113,9 +113,6 @@ export async function handleOpenPanel(h: CommandHelpers, args: any): Promise<Com
 export function handlePtyInput(h: CommandHelpers, args: any): CommandResult {
     const { cliType, data, targetSessionId } = args || {};
     if (!data) return { success: false, error: 'data required' };
-    if (getCliPresentationMode(h, targetSessionId) === 'chat') {
-        return { success: false, error: 'CLI session is in chat mode', code: 'CLI_VIEW_MODE_NOT_TERMINAL' };
-    }
     const adapter = h.getCliAdapter(targetSessionId || cliType);
     if (!adapter || typeof adapter.writeRaw !== 'function') {
         return { success: false, error: `CLI adapter not found: ${targetSessionId || cliType || 'unknown'}` };
@@ -124,24 +121,10 @@ export function handlePtyInput(h: CommandHelpers, args: any): CommandResult {
     return { success: true };
 }
 
-export function handlePtyResize(h: CommandHelpers, args: any): CommandResult {
-    const { cliType, cols, rows, force, targetSessionId } = args || {};
+export function handlePtyResize(_h: CommandHelpers, args: any): CommandResult {
+    const { cols, rows } = args || {};
     if (!cols || !rows) return { success: false, error: 'cols and rows required' };
-    if (getCliPresentationMode(h, targetSessionId) === 'chat') {
-        return { success: false, error: 'CLI session is in chat mode', code: 'CLI_VIEW_MODE_NOT_TERMINAL' };
-    }
-    const adapter = h.getCliAdapter(targetSessionId || cliType);
-    if (!adapter || typeof adapter.resize !== 'function') {
-        return { success: false, error: `CLI adapter not found: ${targetSessionId || cliType || 'unknown'}` };
-    }
-    const resize = adapter.resize;
-    if (force) {
-        resize(cols - 1, rows);
-        setTimeout(() => resize(cols, rows), 50);
-    } else {
-        resize(cols, rows);
-    }
-    return { success: true };
+    return { success: false, error: 'PTY resize temporarily disabled', code: 'PTY_RESIZE_DISABLED' };
 }
 
 // ─── Provider Settings ────────────────────────
@@ -251,18 +234,56 @@ export function normalizeProviderScriptArgs(args: any, scriptName?: string): Rec
 
 function buildControlScriptResult(scriptName: string, payload: any): Record<string, unknown> {
     if (!payload || typeof payload !== 'object') return {};
-    if (Array.isArray(payload.options)) {
-        return { controlResult: normalizeControlListResult(payload) };
+
+    const legacyListPayload = (() => {
+        if (Array.isArray(payload.options)) return payload;
+        if (/^listmodels$/i.test(scriptName) && Array.isArray(payload.models)) {
+            return {
+                options: payload.models,
+                currentValue: payload.currentValue ?? payload.current ?? payload.currentModel,
+                ...(typeof payload.error === 'string' ? { error: payload.error } : {}),
+            };
+        }
+        if (/^listmodes$/i.test(scriptName) && Array.isArray(payload.modes)) {
+            return {
+                options: payload.modes,
+                currentValue: payload.currentValue ?? payload.current ?? payload.currentMode ?? payload.mode,
+                ...(typeof payload.error === 'string' ? { error: payload.error } : {}),
+            };
+        }
+        return null;
+    })();
+    if (legacyListPayload) {
+        return { controlResult: normalizeControlListResult(legacyListPayload) };
     }
+
+    const legacyMutationPayload = (() => {
+        if (typeof payload.ok === 'boolean') return payload;
+        if (typeof payload.success === 'boolean') {
+            return {
+                ok: payload.success,
+                currentValue: payload.currentValue
+                    ?? payload.value
+                    ?? payload.model
+                    ?? payload.mode
+                    ?? payload.selectedModel
+                    ?? payload.selectedMode,
+                ...(Array.isArray(payload.effects) ? { effects: payload.effects } : {}),
+                ...(typeof payload.error === 'string' ? { error: payload.error } : {}),
+            };
+        }
+        return null;
+    })();
 
     const looksLikeValueMutation = /^set|^change/i.test(scriptName)
         || payload.currentValue !== undefined
-        || payload.value !== undefined;
+        || payload.value !== undefined
+        || payload.success !== undefined;
     if (looksLikeValueMutation) {
-        return { controlResult: normalizeControlSetResult(payload) };
+        return { controlResult: normalizeControlSetResult(legacyMutationPayload || payload) };
     }
     if (payload.ok !== undefined || Array.isArray(payload.effects) || typeof payload.error === 'string') {
-        return { controlResult: normalizeControlInvokeResult(payload) };
+        return { controlResult: normalizeControlInvokeResult(legacyMutationPayload || payload) };
     }
     return {};
 }
@@ -359,7 +380,7 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
 
             // IDE-level scripts (model/mode) — try session frame first, fallback to main page
             const IDE_LEVEL_SCRIPTS = provider.type === 'claude-code-vscode'
-                ? ['listModes', 'setMode']
+                ? ['listModes', 'setMode', 'listModels', 'setModel', 'setModelGui']
                 : ['listModes', 'setMode', 'listModels', 'setModel'];
             if (IDE_LEVEL_SCRIPTS.includes(scriptName)) {
                 // Try session frame first (some extensions embed mode selector in their webview)
