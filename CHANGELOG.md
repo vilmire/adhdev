@@ -2,6 +2,15 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.73] - 2026-04-17
+
+### Fixed
+- Fixed the new shared subscription-update cursor type so downstream cloud verification no longer sees `knownMessageCount`/`lastMessageSignature`/`tailLimit` as optional after importing the daemon-core helper surfaces.
+- Fixed shared browser builds by exposing chat-signature helpers through a dedicated browser-safe daemon-core subpath and updating web-core to stop importing the full Node-oriented root entry for message signature hashing.
+
+### Changed
+- Added a dedicated `@adhdev/daemon-core/chat/chat-signatures` export path and follow-up release wiring so browser consumers can keep using the shared chat signature helper without pulling the full daemon-core runtime bundle.
+
 ## [0.8.72] - 2026-04-17
 
 ### Added

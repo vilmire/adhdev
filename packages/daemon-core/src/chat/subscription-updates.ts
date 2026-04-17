@@ -10,7 +10,11 @@ import {
   buildSessionModalDeliverySignature,
 } from './chat-signatures.js'
 
-export interface ChatTailSubscriptionCursor extends Pick<ReadChatCursor, 'knownMessageCount' | 'lastMessageSignature' | 'tailLimit'> {}
+export interface ChatTailSubscriptionCursor {
+  knownMessageCount: number
+  lastMessageSignature: string
+  tailLimit: number
+}
 
 export type SessionChatTailCommandResult = Partial<Omit<ReadChatSyncResult, 'activeModal'>> & {
   success?: boolean
