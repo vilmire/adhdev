@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { buildChatMessageSignature, type ReadChatCursor, type ReadChatSyncResult, type SessionChatTailUpdate } from '@adhdev/daemon-core'
+import { buildChatMessageSignature } from '@adhdev/daemon-core/chat/chat-signatures'
+import type { ReadChatCursor, ReadChatSyncResult, SessionChatTailUpdate } from '@adhdev/daemon-core'
 import type { ActiveConversation, DashboardMessage } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'

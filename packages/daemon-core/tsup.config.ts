@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/status/normalize.ts'],
+  entry: ['src/index.ts', 'src/status/normalize.ts', 'src/chat/chat-signatures.ts'],
   format: ['cjs', 'esm'],
   dts: false,
   clean: true,

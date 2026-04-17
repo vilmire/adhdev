@@ -16,6 +16,12 @@
       "import": "./dist/status/normalize.mjs",
       "require": "./dist/status/normalize.js",
       "default": "./dist/status/normalize.js"
+    },
+    "./chat/chat-signatures": {
+      "types": "./dist/chat/chat-signatures.d.ts",
+      "import": "./dist/chat/chat-signatures.mjs",
+      "require": "./dist/chat/chat-signatures.js",
+      "default": "./dist/chat/chat-signatures.js"
     }
   },
   "scripts": {
