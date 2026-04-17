@@ -61,7 +61,6 @@ class StandaloneConnectionManager {
 
     sendData(_daemonId: string, _data: any): boolean { return false }
     sendPtyInput(_daemonId: string, _sessionId: string, _data: string): boolean { return false }
-    sendPtyResize(_daemonId: string, _sessionId: string, _cols: number, _rows: number): boolean { return false }
 
     onScreenshot(key: string, callback: ScreenshotCallback): () => void {
         this.screenshotCallbacks.set(key, callback)

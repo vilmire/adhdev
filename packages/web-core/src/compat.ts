@@ -43,7 +43,6 @@ export let dashboardWS: any = new DashboardWSStub()
  */
 class ConnectionManagerStub {
     sendPtyInput(_daemonId: string, _sessionId: string, _data: string) { return false }
-    sendPtyResize(_daemonId: string, _sessionId: string, _cols: number, _rows: number) { return false }
     retryConnection(_daemonId: string) {}
     getState(_daemonId: string) { return 'disconnected' as string }
     sendData(_daemonId: string, _data: any) { return false }
