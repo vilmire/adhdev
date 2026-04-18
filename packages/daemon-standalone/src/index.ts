@@ -52,6 +52,7 @@ import {
   buildMachineInfo,
   prepareSessionChatTailUpdate,
   prepareSessionModalUpdate,
+  runAsyncBatch,
 } from '@adhdev/daemon-core';
 import {
   ensureSessionHostReady,
@@ -70,7 +71,9 @@ import {
   requestWorkspaceControl,
   type AdhMuxControlEvent,
 } from '@adhdev/terminal-mux-control/api';
-import { classifyHotChatSessionsForSubscriptionFlush } from '@adhdev/daemon-core';
+import {
+  classifyHotChatSessionsForSubscriptionFlush,
+} from '@adhdev/daemon-core';
 
 // ─── Constants ───
 const DEFAULT_PORT = 3847;
@@ -284,7 +287,7 @@ class StandaloneServer {
         }),
         onStatusChange: () => {
           this.scheduleBroadcastStatus();
-          void this.flushWsChatSubscriptions(undefined, { onlyActive: false });
+          void this.flushWsChatSubscriptions(undefined, { onlyActive: true });
         },
         removeAgentTracking: () => {},
         hostedRuntimeManagerTag: 'adhdev-standalone',
@@ -316,9 +319,9 @@ class StandaloneServer {
       statusDaemonMode: false,
       onStatusChange: () => {
         this.scheduleBroadcastStatus();
-        // Flush chat subscriptions immediately on status change so completed
-        // messages reach the dashboard without waiting for the 2000ms timer.
-        void this.flushWsChatSubscriptions(undefined, { onlyActive: false });
+        // Flush recently active/finalizing chat sessions immediately on status change so completed
+        // messages reach the dashboard without forcing cold background subscriptions to poll.
+        void this.flushWsChatSubscriptions(undefined, { onlyActive: true });
       },
       sessionHostControl,
       onStreamsUpdated: (ideType: string, streams: any[]) => {
@@ -989,6 +992,7 @@ class StandaloneServer {
     try {
       const targets = targetWs ? [targetWs] : Array.from(this.clients);
       const hotSessionIds = options.onlyActive ? this.getHotChatSessionIdsForWsFlush() : null;
+      const tasks: Array<{ ws: WebSocket; key: string; sub: ChatTailSubscriptionState }> = [];
       for (const ws of targets) {
         if (ws.readyState !== WebSocket.OPEN) continue;
         const subs = this.wsSubscriptions.get(ws);
@@ -1002,11 +1006,19 @@ class StandaloneServer {
           ) {
             continue;
           }
-          const update = await this.buildChatTailUpdate(sub.request.params, sub, key);
-          if (!update || ws.readyState !== WebSocket.OPEN) continue;
-          ws.send(JSON.stringify({ type: 'topic_update', update }));
+          tasks.push({ ws, key, sub });
         }
       }
+
+      await runAsyncBatch(tasks, async ({ ws, key, sub }) => {
+        try {
+          const update = await this.buildChatTailUpdate(sub.request.params, sub, key);
+          if (!update || ws.readyState !== WebSocket.OPEN) return;
+          ws.send(JSON.stringify({ type: 'topic_update', update }));
+        } catch (error: any) {
+          LOG.warn('Standalone', `[chat_tail] skipped session=${sub.request.params.targetSessionId} key=${key} error=${error?.message || error}`)
+        }
+      }, { concurrency: 4 });
     } finally {
       this.wsChatFlushInFlight = false;
       if (this.pendingWsChatFlush) {

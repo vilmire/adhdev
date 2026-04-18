@@ -205,6 +205,8 @@ export {
   prepareSessionChatTailUpdate,
   prepareSessionModalUpdate,
 } from './chat/subscription-updates.js';
+export { runAsyncBatch } from './chat/async-batch.js';
+export type { AsyncBatchOptions } from './chat/async-batch.js';
 export type {
   ChatTailSubscriptionCursor,
   PrepareSessionChatTailUpdateInput,
