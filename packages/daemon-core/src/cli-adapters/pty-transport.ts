@@ -40,6 +40,8 @@ export interface PtyRuntimeMetadata {
   runtimeKey?: string;
   displayName?: string;
   workspaceLabel?: string;
+  lifecycle?: string | null;
+  surfaceKind?: 'live_runtime' | 'recovery_snapshot' | 'inactive_record';
   writeOwner?: PtyRuntimeWriteOwner | null;
   attachedClients?: PtyRuntimeClientInfo[];
   restoredFromStorage?: boolean;

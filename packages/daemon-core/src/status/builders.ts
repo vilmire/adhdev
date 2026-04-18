@@ -50,7 +50,7 @@ function shouldIncludeSessionMetadata(profile: SessionEntryProfile): boolean {
 }
 
 function shouldIncludeRuntimeMetadata(profile: SessionEntryProfile): boolean {
-    return profile !== 'live';
+    return true;
 }
 
 // ─── CDP Manager lookup helpers ──────────────────────
@@ -266,8 +266,12 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
             runtimeKey: state.runtime?.runtimeKey,
             runtimeDisplayName: state.runtime?.displayName,
             runtimeWorkspaceLabel: state.runtime?.workspaceLabel,
+            runtimeLifecycle: state.runtime?.lifecycle ?? null,
+            runtimeSurfaceKind: state.runtime?.surfaceKind,
             runtimeWriteOwner: state.runtime?.writeOwner || null,
             runtimeAttachedClients: state.runtime?.attachedClients || [],
+            runtimeRestoredFromStorage: state.runtime?.restoredFromStorage === true,
+            runtimeRecoveryState: state.runtime?.recoveryState ?? null,
         }),
         mode: state.mode,
         resume: state.resume,

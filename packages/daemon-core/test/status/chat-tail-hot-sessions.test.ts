@@ -55,4 +55,107 @@ describe('classifyHotChatSessionsForSubscriptionFlush', () => {
     expect(Array.from(result.active)).toEqual([])
     expect(Array.from(result.finalizing)).toEqual(['session-finalizing'])
   })
+
+  it('does not classify stopped recovery snapshots as hot even when they were updated recently', () => {
+    const now = 40_000
+    const result = classifyHotChatSessionsForSubscriptionFlush([
+      {
+        id: 'session-recovery-snapshot',
+        status: 'idle',
+        lastMessageAt: now - 500,
+        runtimeLifecycle: 'stopped',
+        runtimeSurfaceKind: 'recovery_snapshot',
+        runtimeRestoredFromStorage: true,
+        runtimeRecoveryState: 'orphan_snapshot',
+      },
+    ], new Set(), { now })
+
+    expect(Array.from(result.active)).toEqual([])
+    expect(Array.from(result.finalizing)).toEqual([])
+  })
+
+  it('does not keep previously hot stopped recovery snapshots in the finalizing set', () => {
+    const now = 50_000
+    const result = classifyHotChatSessionsForSubscriptionFlush([
+      {
+        id: 'session-recovery-finalizing',
+        status: 'idle',
+        lastMessageAt: now - 500,
+        runtimeLifecycle: 'stopped',
+        runtimeSurfaceKind: 'recovery_snapshot',
+        runtimeRestoredFromStorage: true,
+        runtimeRecoveryState: 'snapshot',
+      },
+    ], new Set(['session-recovery-finalizing']), { now })
+
+    expect(Array.from(result.active)).toEqual([])
+    expect(Array.from(result.finalizing)).toEqual([])
+  })
+
+  it('still keeps explicitly recovered live runtimes hot during the grace window', () => {
+    const now = 60_000
+    const result = classifyHotChatSessionsForSubscriptionFlush([
+      {
+        id: 'session-recovered-live',
+        status: 'idle',
+        lastMessageAt: now - 500,
+        runtimeLifecycle: 'running',
+        runtimeSurfaceKind: 'live_runtime',
+        runtimeRestoredFromStorage: true,
+        runtimeRecoveryState: 'orphan_snapshot',
+      },
+    ], new Set(), { now })
+
+    expect(Array.from(result.active)).toEqual(['session-recovered-live'])
+    expect(Array.from(result.finalizing)).toEqual([])
+  })
+
+  it('keeps ordinary recently updated stopped sessions hot when they are not recovery artifacts', () => {
+    const now = 70_000
+    const result = classifyHotChatSessionsForSubscriptionFlush([
+      {
+        id: 'session-ordinary-stopped',
+        status: 'idle',
+        lastMessageAt: now - 500,
+        runtimeLifecycle: 'stopped',
+      },
+      {
+        id: 'session-inactive-record',
+        status: 'idle',
+        lastMessageAt: now - 500,
+        runtimeLifecycle: 'stopped',
+        runtimeSurfaceKind: 'inactive_record',
+      },
+    ], new Set(), { now })
+
+    expect(Array.from(result.active)).toEqual([
+      'session-ordinary-stopped',
+      'session-inactive-record',
+    ])
+    expect(Array.from(result.finalizing)).toEqual([])
+  })
+
+  it('excludes restored stopped sessions even when surface kind is missing', () => {
+    const now = 80_000
+    const result = classifyHotChatSessionsForSubscriptionFlush([
+      {
+        id: 'session-restored-stopped',
+        status: 'idle',
+        lastMessageAt: now - 500,
+        runtimeLifecycle: 'stopped',
+        runtimeRestoredFromStorage: true,
+      },
+      {
+        id: 'session-auto-resumed-stopped',
+        status: 'idle',
+        lastMessageAt: now - 500,
+        runtimeLifecycle: 'stopped',
+        runtimeRestoredFromStorage: true,
+        runtimeRecoveryState: 'auto_resumed',
+      },
+    ], new Set(['session-restored-stopped', 'session-auto-resumed-stopped']), { now })
+
+    expect(Array.from(result.active)).toEqual([])
+    expect(Array.from(result.finalizing)).toEqual([])
+  })
 })

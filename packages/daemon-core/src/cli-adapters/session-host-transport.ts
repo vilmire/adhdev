@@ -375,6 +375,8 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
             runtimeKey: record.runtimeKey,
             displayName: record.displayName,
             workspaceLabel: record.workspaceLabel,
+            lifecycle: typeof record.lifecycle === 'string' ? record.lifecycle : null,
+            surfaceKind: record.surfaceKind,
             writeOwner: record.writeOwner ? {
                 clientId: record.writeOwner.clientId,
                 ownerType: record.writeOwner.ownerType,

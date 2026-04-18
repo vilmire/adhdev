@@ -32,8 +32,12 @@ export interface ProviderRuntimeInfo {
     runtimeKey?: string;
     displayName?: string;
     workspaceLabel?: string;
+    lifecycle?: string | null;
+    surfaceKind?: 'live_runtime' | 'recovery_snapshot' | 'inactive_record';
     writeOwner?: ProviderRuntimeWriteOwner | null;
     attachedClients?: ProviderRuntimeClient[];
+    restoredFromStorage?: boolean;
+    recoveryState?: string | null;
 }
 
 export interface ActiveChatData {

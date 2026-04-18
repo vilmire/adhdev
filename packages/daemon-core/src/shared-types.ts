@@ -309,10 +309,14 @@ export interface SessionEntry {
     runtimeKey?: string;
     runtimeDisplayName?: string;
     runtimeWorkspaceLabel?: string;
+    runtimeLifecycle?: string | null;
+    runtimeSurfaceKind?: 'live_runtime' | 'recovery_snapshot' | 'inactive_record';
     /** CLI only: active presentation mode */
     mode?: 'terminal' | 'chat';
     runtimeWriteOwner?: RuntimeWriteOwner | null;
     runtimeAttachedClients?: RuntimeAttachedClient[];
+    runtimeRestoredFromStorage?: boolean;
+    runtimeRecoveryState?: string | null;
     resume?: ProviderResumeCapability;
     activeChat: _ActiveChatData | null;
     capabilities?: SessionCapability[];

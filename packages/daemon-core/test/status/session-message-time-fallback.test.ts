@@ -111,4 +111,63 @@ describe('status snapshot message time fallbacks', () => {
     expect(Array.from(hotSessions.finalizing)).toEqual([])
     expect(snapshot.sessions.find((entry) => entry.id === 'cli-1')?.lastMessageAt).toBe(ts)
   })
+
+  it('carries runtime recovery metadata into live snapshots so restored stopped sessions are excluded from hot polling', () => {
+    const ts = 1_717_000_100_000
+    const now = ts + (DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS - 250)
+    const snapshot = buildStatusSnapshot({
+      allStates: [
+        {
+          category: 'cli',
+          instanceId: 'cli-recovery',
+          type: 'hermes-cli',
+          name: 'Hermes',
+          providerSessionId: 'provider-recovery',
+          workspace: '/tmp',
+          status: 'idle',
+          mode: 'chat',
+          resume: false,
+          lastUpdated: ts,
+          runtime: {
+            runtimeId: 'runtime-recovery',
+            runtimeKey: 'hermes-cli-tmp',
+            displayName: 'hermes-cli @ tmp',
+            workspaceLabel: 'tmp',
+            lifecycle: 'stopped',
+            restoredFromStorage: true,
+            recoveryState: 'orphan_snapshot',
+          },
+          activeChat: {
+            title: 'Recovered',
+            status: 'idle',
+            messages: [
+              {
+                role: 'assistant',
+                content: 'RECOVERED',
+                timestamp: ts,
+              },
+            ],
+          },
+        } as any,
+      ],
+      cdpManagers: new Map(),
+      providerLoader: {
+        getAll: () => [],
+      },
+      detectedIdes: [],
+      instanceId: 'daemon-1',
+      version: '0.0.0-test',
+      timestamp: now,
+      profile: 'live',
+    })
+
+    const session = snapshot.sessions.find((entry) => entry.id === 'cli-recovery')
+    const hotSessions = classifyHotChatSessionsForSubscriptionFlush(snapshot.sessions, new Set(['cli-recovery']), { now })
+
+    expect(session?.runtimeLifecycle).toBe('stopped')
+    expect(session?.runtimeRestoredFromStorage).toBe(true)
+    expect(session?.runtimeRecoveryState).toBe('orphan_snapshot')
+    expect(Array.from(hotSessions.active)).toEqual([])
+    expect(Array.from(hotSessions.finalizing)).toEqual([])
+  })
 })
