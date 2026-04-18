@@ -1,4 +1,5 @@
 import type { ConnectionStatus } from '@adhdev/web-core'
+import { standaloneFetch } from './standalone-auth-client'
 
 export interface StandaloneConnectionAdapter {
     hasCommandChannel: boolean
@@ -114,7 +115,7 @@ class StandaloneConnectionManager {
 
     async requestRuntimeSnapshot(_daemonId: string, sessionId: string): Promise<void> {
         if (!sessionId) return
-        const res = await fetch(`/api/v1/runtime/${encodeURIComponent(sessionId)}/snapshot`)
+        const res = await standaloneFetch(`/api/v1/runtime/${encodeURIComponent(sessionId)}/snapshot`)
         if (!res.ok) return
         const snapshot = await res.json() as { seq?: number; text?: string; truncated?: boolean; cols?: number; rows?: number }
         this.emitRuntimeEvent(sessionId, {

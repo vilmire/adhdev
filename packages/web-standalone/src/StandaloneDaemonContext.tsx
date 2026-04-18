@@ -17,18 +17,15 @@ import type { ConnectionStatus } from '@adhdev/web-core'
 import type { StandaloneWsStatusPayload, SubscribeRequest, TopicUpdateEnvelope, UnsubscribeRequest } from '@adhdev/daemon-core'
 import { standaloneConnectionManager } from './connection-manager'
 
+import { getStandaloneToken } from './standalone-auth-client'
+
 // dev: vite proxy (ws://localhost:3000/ws → ws://localhost:3847/ws)
 // prod: same origin (daemon-standalone serves both HTTP + WS)
 function getWsUrl(): string {
     if (typeof window === 'undefined') return 'ws://localhost:3847/ws'
-    const isDevServer = (import.meta as any).env?.DEV && window.location.port === '3000'
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const base = isDevServer
-        ? `${proto}://127.0.0.1:3847/ws`
-        : `${proto}://${window.location.host}/ws`
-    // Pass token from URL if present (e.g. ?token=abc123)
-    const params = new URLSearchParams(window.location.search)
-    const token = params.get('token')
+    const base = `${proto}://${window.location.host}/ws`
+    const token = getStandaloneToken()
     return token ? `${base}?token=${encodeURIComponent(token)}` : base
 }
 const WS_URL = getWsUrl()

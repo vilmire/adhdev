@@ -17,6 +17,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 
 import {
   LOG,
@@ -78,6 +79,191 @@ import {
 // ─── Constants ───
 const DEFAULT_PORT = 3847;
 const STATUS_INTERVAL = 2000;
+const STANDALONE_AUTH_SESSION_COOKIE = 'adhdev_standalone_session';
+const STANDALONE_PASSWORD_CONFIG_FILE = 'standalone-auth.json';
+const STANDALONE_BIND_HOST_CONFIG_FILE = 'standalone-network.json';
+const STANDALONE_BIND_HOST_DEFAULT = '127.0.0.1';
+const PASSWORD_KEYLEN = 64;
+const DEFAULT_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
+
+interface StandalonePasswordConfig {
+  passwordHash: string;
+  passwordSalt: string;
+  updatedAt: string;
+}
+
+function getStandalonePasswordConfigPath(): string {
+  const dir = path.join(os.homedir(), '.adhdev');
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  return path.join(dir, STANDALONE_PASSWORD_CONFIG_FILE);
+}
+
+function getStandaloneConfigJsonPath(): string {
+  const dir = path.join(os.homedir(), '.adhdev');
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  return path.join(dir, STANDALONE_BIND_HOST_CONFIG_FILE);
+}
+
+function loadStandaloneBindHostPreference(): '127.0.0.1' | '0.0.0.0' {
+  try {
+    const configPath = getStandaloneConfigJsonPath();
+    if (!fs.existsSync(configPath)) return STANDALONE_BIND_HOST_DEFAULT;
+    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    return parsed?.standaloneBindHost === '0.0.0.0' ? '0.0.0.0' : STANDALONE_BIND_HOST_DEFAULT;
+  } catch {
+    return STANDALONE_BIND_HOST_DEFAULT;
+  }
+}
+
+function saveStandaloneBindHostPreference(bindHost: '127.0.0.1' | '0.0.0.0'): '127.0.0.1' | '0.0.0.0' {
+  const configPath = getStandaloneConfigJsonPath();
+  let parsed: Record<string, unknown> = {};
+  try {
+    if (fs.existsSync(configPath)) {
+      const raw = fs.readFileSync(configPath, 'utf8');
+      const next = JSON.parse(raw);
+      if (next && typeof next === 'object' && !Array.isArray(next)) parsed = next as Record<string, unknown>;
+    }
+  } catch {
+    parsed = {};
+  }
+  parsed.standaloneBindHost = bindHost;
+  fs.writeFileSync(configPath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
+  try { fs.chmodSync(configPath, 0o600); } catch {}
+  return bindHost;
+}
+
+function createPasswordRecord(password: string, salt = randomBytes(16).toString('hex')): StandalonePasswordConfig {
+  return {
+    passwordHash: scryptSync(`${password || ''}`, salt, PASSWORD_KEYLEN).toString('hex'),
+    passwordSalt: salt,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function verifyPassword(password: string, config: StandalonePasswordConfig | null | undefined): boolean {
+  if (!config?.passwordHash || !config.passwordSalt) return false;
+  const actual = Buffer.from(scryptSync(`${password || ''}`, config.passwordSalt, PASSWORD_KEYLEN).toString('hex'), 'utf8');
+  const expected = Buffer.from(config.passwordHash, 'utf8');
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function loadStandalonePasswordConfig(filePath = getStandalonePasswordConfigPath()): StandalonePasswordConfig | null {
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (typeof parsed.passwordHash !== 'string' || typeof parsed.passwordSalt !== 'string') return null;
+    return {
+      passwordHash: parsed.passwordHash,
+      passwordSalt: parsed.passwordSalt,
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date(0).toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveStandalonePasswordConfig(filePath: string, config: StandalonePasswordConfig): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  fs.writeFileSync(filePath, JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o600 });
+  try { fs.chmodSync(filePath, 0o600); } catch {}
+}
+
+function clearStandalonePasswordConfig(filePath = getStandalonePasswordConfigPath()): void {
+  if (fs.existsSync(filePath)) {
+    fs.rmSync(filePath, { force: true });
+  }
+}
+
+function shouldWarnForPublicUnauthenticatedHost(input: { host: string; hasTokenAuth: boolean; hasPasswordAuth: boolean }): boolean {
+  return input.host === '0.0.0.0' && !input.hasTokenAuth && !input.hasPasswordAuth;
+}
+
+function parseCookies(cookieHeader: string | undefined): Record<string, string> {
+  if (!cookieHeader) return {};
+  return Object.fromEntries(
+    cookieHeader.split(';').map(part => part.trim()).filter(Boolean).map(part => {
+      const eq = part.indexOf('=');
+      if (eq === -1) return [part, ''];
+      return [part.slice(0, eq), decodeURIComponent(part.slice(eq + 1))];
+    })
+  );
+}
+
+function buildSessionCookie(sessionId: string, secure: boolean, maxAgeMs = DEFAULT_SESSION_TTL_MS): string {
+  const parts = [
+    `${STANDALONE_AUTH_SESSION_COOKIE}=${encodeURIComponent(sessionId)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${Math.max(0, Math.floor(maxAgeMs / 1000))}`,
+  ];
+  if (secure) parts.push('Secure');
+  return parts.join('; ');
+}
+
+function buildClearedSessionCookie(secure: boolean): string {
+  return buildSessionCookie('', secure, 0);
+}
+
+class StandaloneSessionStore {
+  private sessions = new Map<string, number>();
+
+  create(ttlMs = DEFAULT_SESSION_TTL_MS): string {
+    const id = randomBytes(24).toString('hex');
+    this.sessions.set(id, Date.now() + ttlMs);
+    return id;
+  }
+
+  has(sessionId: string | null | undefined): boolean {
+    if (!sessionId) return false;
+    const expiresAt = this.sessions.get(sessionId);
+    if (!expiresAt) return false;
+    if (expiresAt <= Date.now()) {
+      this.sessions.delete(sessionId);
+      return false;
+    }
+    return true;
+  }
+
+  revoke(sessionId: string | null | undefined): void {
+    if (!sessionId) return;
+    this.sessions.delete(sessionId);
+  }
+
+  clear(): void {
+    this.sessions.clear();
+  }
+}
+
+function isStandaloneRequestAuthenticated(input: {
+  configuredToken: string | null;
+  passwordConfig: StandalonePasswordConfig | null;
+  bearerToken: string | null;
+  queryToken: string | null;
+  cookieHeader?: string;
+  sessionStore: StandaloneSessionStore;
+}): boolean {
+  const hasTokenAuth = !!input.configuredToken;
+  const hasPasswordAuth = !!input.passwordConfig;
+  if (!hasTokenAuth && !hasPasswordAuth) return true;
+  if (hasTokenAuth && (input.bearerToken === input.configuredToken || input.queryToken === input.configuredToken)) {
+    return true;
+  }
+  if (hasPasswordAuth) {
+    const cookies = parseCookies(input.cookieHeader);
+    return input.sessionStore.has(cookies[STANDALONE_AUTH_SESSION_COOKIE]);
+  }
+  return false;
+}
 
 let pkgVersion = process.env.ADHDEV_PKG_VERSION || 'unknown';
 if (pkgVersion === 'unknown') {
@@ -187,6 +373,10 @@ class StandaloneServer {
   private wsSessionModalSubscriptions = new Map<WebSocket, Map<string, SessionModalSubscriptionState>>();
   private wsDaemonMetadataSubscriptions = new Map<WebSocket, Map<string, DaemonMetadataSubscriptionState>>();
   private authToken: string | null = null;
+  private passwordConfigPath = getStandalonePasswordConfigPath();
+  private passwordConfig: StandalonePasswordConfig | null = null;
+  private authSessions = new StandaloneSessionStore();
+  private listenHost = '127.0.0.1';
   private statusTimer: NodeJS.Timeout | null = null;
   private lastStatusBroadcastAt = 0;
   private statusBroadcastPending = false;
@@ -255,10 +445,98 @@ class StandaloneServer {
     return mode === 'chat' || mode === 'terminal';
   }
 
+  private hasPasswordAuth(): boolean {
+    return !!this.passwordConfig;
+  }
+
+  private hasAnyAuth(): boolean {
+    return !!this.authToken || this.hasPasswordAuth();
+  }
+
+  private getCookieSecureFlag(req: IncomingMessage): boolean {
+    const forwardedProto = req.headers['x-forwarded-proto'];
+    return !!(req.socket as typeof req.socket & { encrypted?: boolean }).encrypted
+      || (typeof forwardedProto === 'string' && forwardedProto.toLowerCase().includes('https'));
+  }
+
+  private getRequestTokens(req: IncomingMessage, rawUrl: string): { bearerToken: string | null; queryToken: string | null } {
+    const authHeader = req.headers['authorization'];
+    const bearerToken = typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7)
+      : null;
+    const queryToken = new URL(rawUrl, `http://${req.headers.host || 'localhost'}`).searchParams.get('token');
+    return { bearerToken, queryToken };
+  }
+
+  private isRequestAuthenticated(req: IncomingMessage, rawUrl: string): boolean {
+    const { bearerToken, queryToken } = this.getRequestTokens(req, rawUrl);
+    return isStandaloneRequestAuthenticated({
+      configuredToken: this.authToken,
+      passwordConfig: this.passwordConfig,
+      bearerToken,
+      queryToken,
+      cookieHeader: typeof req.headers.cookie === 'string' ? req.headers.cookie : undefined,
+      sessionStore: this.authSessions,
+    });
+  }
+
+  private getRequestSessionId(req: IncomingMessage): string | null {
+    const cookies = parseCookies(typeof req.headers.cookie === 'string' ? req.headers.cookie : undefined);
+    return cookies.adhdev_standalone_session || null;
+  }
+
+  private buildAuthStatus(req: IncomingMessage, rawUrl: string) {
+    const required = this.hasAnyAuth();
+    return {
+      required,
+      authenticated: this.isRequestAuthenticated(req, rawUrl),
+      hasTokenAuth: !!this.authToken,
+      hasPasswordAuth: this.hasPasswordAuth(),
+      publicHostWarning: shouldWarnForPublicUnauthenticatedHost({
+        host: this.listenHost,
+        hasTokenAuth: !!this.authToken,
+        hasPasswordAuth: this.hasPasswordAuth(),
+      }),
+      boundHost: this.listenHost,
+    };
+  }
+
+  private isTrustedStandaloneMutationRequest(req: IncomingMessage): boolean {
+    const originHeader = req.headers.origin;
+    if (typeof originHeader !== 'string' || !originHeader.trim()) return true;
+    try {
+      const origin = new URL(originHeader);
+      const host = req.headers.host || '';
+      return origin.host === host;
+    } catch {
+      return false;
+    }
+  }
+
+  private async readJsonBody(req: IncomingMessage): Promise<Record<string, any>> {
+    return await new Promise((resolve, reject) => {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          resolve(body ? JSON.parse(body) : {});
+        } catch (error) {
+          reject(error);
+        }
+      });
+      req.on('error', reject);
+    });
+  }
+
   async start(options: StandaloneOptions = {}): Promise<void> {
-    const port = options.port || DEFAULT_PORT;
-    const host = options.host || '127.0.0.1';
+    const persistedStandaloneBindHost = loadStandaloneBindHostPreference();
     const cfg = loadConfig();
+    if (!options.host && persistedStandaloneBindHost !== STANDALONE_BIND_HOST_DEFAULT) {
+      saveStandaloneBindHostPreference(persistedStandaloneBindHost);
+    }
+    const port = options.port || DEFAULT_PORT;
+    const host = options.host || persistedStandaloneBindHost;
+    this.listenHost = host;
     const sessionHostEndpoint = await ensureSessionHostReady();
     this.sessionHostEndpoint = sessionHostEndpoint;
     const sessionHostControl = new StandaloneSessionHostControlPlane(
@@ -268,6 +546,7 @@ class StandaloneServer {
 
     // Auth token setup (opt-in only)
     this.authToken = options.token || process.env.ADHDEV_TOKEN || null;
+    this.passwordConfig = loadStandalonePasswordConfig(this.passwordConfigPath);
     const statusInstanceId = `standalone_${cfg.machineId || 'mach_unknown'}`;
 
     // Initialize all core components via daemon-core bootstrapper
@@ -355,14 +634,10 @@ class StandaloneServer {
     this.httpServer.on('upgrade', (req, socket, head) => {
       const wsUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
       if (wsUrl.pathname === '/ws') {
-        // Token auth for WS
-        if (this.authToken) {
-          const urlToken = wsUrl.searchParams.get('token');
-          if (urlToken !== this.authToken) {
-            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-            socket.destroy();
-            return;
-          }
+        if (!this.isRequestAuthenticated(req, req.url || '/')) {
+          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+          socket.destroy();
+          return;
         }
         this.wss!.handleUpgrade(req, socket, head, (ws) => {
           this.handleWsConnection(ws);
@@ -400,7 +675,14 @@ class StandaloneServer {
       }
     }
     if (this.authToken) {
-      console.log(`   🔑 Token: ${this.authToken}`);
+      console.log('   🔑 Token auth: enabled');
+    }
+    if (this.passwordConfig) {
+      console.log('   🔐 Password auth: enabled');
+    }
+    if (shouldWarnForPublicUnauthenticatedHost({ host, hasTokenAuth: !!this.authToken, hasPasswordAuth: !!this.passwordConfig })) {
+      console.warn('   ⚠️  Public host mode is enabled without any auth.');
+      console.warn('      Anyone on your LAN can open and control this dashboard until you set a password or token.');
     }
     console.log('');
 
@@ -453,21 +735,161 @@ class StandaloneServer {
       return;
     }
 
-    // Token auth for API routes
-    if (this.authToken && url.startsWith('/api/')) {
-      const authHeader = req.headers['authorization'];
-      const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
-      const queryToken = new URL(url, `http://${req.headers.host || 'localhost'}`).searchParams.get('token');
-      if (bearerToken !== this.authToken && queryToken !== this.authToken) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unauthorized. Provide token via Authorization header or ?token= query.' }));
-        return;
-      }
+    const parsedUrl = new URL(url, `http://${req.headers.host || 'localhost'}`);
+
+    if (parsedUrl.pathname === '/auth/session' && method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(this.buildAuthStatus(req, url)));
+      return;
+    }
+
+    if (parsedUrl.pathname === '/auth/login' && method === 'POST') {
+      void (async () => {
+        if (!this.passwordConfig) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Password auth is not configured.' }));
+          return;
+        }
+        const body = await this.readJsonBody(req);
+        if (!verifyPassword(typeof body.password === 'string' ? body.password : '', this.passwordConfig)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Incorrect password.' }));
+          return;
+        }
+        this.authSessions.clear();
+        const sessionId = this.authSessions.create();
+        res.setHeader('Set-Cookie', buildSessionCookie(sessionId, this.getCookieSecureFlag(req)));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ...this.buildAuthStatus(req, url), authenticated: true }));
+      })().catch((error: any) => {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: error?.message || String(error) }));
+      });
+      return;
+    }
+
+    if (parsedUrl.pathname === '/auth/logout' && method === 'POST') {
+      this.authSessions.revoke(this.getRequestSessionId(req));
+      res.setHeader('Set-Cookie', buildClearedSessionCookie(this.getCookieSecureFlag(req)));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+      return;
+    }
+
+    if (parsedUrl.pathname === '/auth/password' && method === 'POST') {
+      void (async () => {
+        if (!this.hasAnyAuth() && !this.isTrustedStandaloneMutationRequest(req)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Cross-origin standalone settings changes are not allowed without existing auth.' }));
+          return;
+        }
+        if (this.hasAnyAuth() && !this.isRequestAuthenticated(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' }));
+          return;
+        }
+        const body = await this.readJsonBody(req);
+        const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : '';
+        const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
+        const clearPassword = body.clear === true;
+
+        if (this.passwordConfig && !verifyPassword(currentPassword, this.passwordConfig)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Current password is incorrect.' }));
+          return;
+        }
+
+        if (clearPassword) {
+          clearStandalonePasswordConfig(this.passwordConfigPath);
+          this.passwordConfig = null;
+          this.authSessions.clear();
+          res.setHeader('Set-Cookie', buildClearedSessionCookie(this.getCookieSecureFlag(req)));
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, ...this.buildAuthStatus(req, url), authenticated: !this.hasAnyAuth() }));
+          return;
+        }
+
+        if (newPassword.trim().length < 4) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Password must be at least 4 characters.' }));
+          return;
+        }
+
+        const nextConfig = createPasswordRecord(newPassword.trim());
+        saveStandalonePasswordConfig(this.passwordConfigPath, nextConfig);
+        this.passwordConfig = nextConfig;
+        this.authSessions.clear();
+        const sessionId = this.authSessions.create();
+        res.setHeader('Set-Cookie', buildSessionCookie(sessionId, this.getCookieSecureFlag(req)));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, ...this.buildAuthStatus(req, url), authenticated: true }));
+      })().catch((error: any) => {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: error?.message || String(error) }));
+      });
+      return;
+    }
+
+    if (parsedUrl.pathname === '/api/v1/standalone/preferences' && method === 'GET') {
+      const configuredBindHost = loadStandaloneBindHostPreference();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        standaloneBindHost: configuredBindHost,
+        currentBindHost: this.listenHost,
+        hasPasswordAuth: !!this.passwordConfig,
+        hasTokenAuth: !!this.authToken,
+        publicHostWarning: shouldWarnForPublicUnauthenticatedHost({
+          host: configuredBindHost,
+          hasTokenAuth: !!this.authToken,
+          hasPasswordAuth: !!this.passwordConfig,
+        }),
+      }));
+      return;
+    }
+
+    if (parsedUrl.pathname === '/api/v1/standalone/preferences' && method === 'POST') {
+      void (async () => {
+        if (!this.hasAnyAuth() && !this.isTrustedStandaloneMutationRequest(req)) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Cross-origin standalone settings changes are not allowed without existing auth.' }));
+          return;
+        }
+        if (this.hasAnyAuth() && !this.isRequestAuthenticated(req, url)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized' }));
+          return;
+        }
+        const body = await this.readJsonBody(req);
+        const nextHost = body?.standaloneBindHost === '0.0.0.0' ? '0.0.0.0' : '127.0.0.1';
+        const savedHost = saveStandaloneBindHostPreference(nextHost);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          standaloneBindHost: savedHost,
+          currentBindHost: this.listenHost,
+          hasPasswordAuth: !!this.passwordConfig,
+          hasTokenAuth: !!this.authToken,
+          publicHostWarning: shouldWarnForPublicUnauthenticatedHost({
+            host: savedHost,
+            hasTokenAuth: !!this.authToken,
+            hasPasswordAuth: !!this.passwordConfig,
+          }),
+        }));
+      })().catch((error: any) => {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: error?.message || String(error) }));
+      });
+      return;
+    }
+
+    if (url.startsWith('/api/') && !this.isRequestAuthenticated(req, url)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized. Provide dashboard session cookie or token auth.' }));
+      return;
     }
 
     // ─── API Routes (v1) ───
     const apiPath = url.startsWith('/api/v1/') ? url.slice(7) : null; // /api/v1/status → /status
-    const parsedUrl = new URL(url, `http://${req.headers.host || 'localhost'}`);
 
     if (apiPath === '/status' && method === 'GET') {
       const status = this.getStatus(getSharedSnapshot());
@@ -1499,6 +1921,7 @@ async function main(): Promise<void> {
     process.exit(exitCode);
   }
   const options: StandaloneOptions = {};
+  let hostExplicit = false;
 
   // Parse simple args
   for (let i = 0; i < args.length; i++) {
@@ -1508,6 +1931,7 @@ async function main(): Promise<void> {
     }
     if (args[i] === '--host' || args[i] === '-H') {
       options.host = '0.0.0.0';
+      hostExplicit = true;
     }
     if (args[i] === '--public' && args[i + 1]) {
       options.publicDir = args[i + 1];
@@ -1551,6 +1975,10 @@ Runtime commands:
   }
 
   // Try to find web-standalone build
+  if (!hostExplicit) {
+    options.host = loadStandaloneBindHostPreference();
+  }
+
   if (!options.publicDir) {
     const candidates = [
       path.join(__dirname, '../../web-standalone/dist'),
@@ -1567,6 +1995,9 @@ Runtime commands:
 
   const server = new StandaloneServer();
   await server.start(options);
+  if (!hostExplicit) {
+    saveStandaloneBindHostPreference(options.host === '0.0.0.0' ? '0.0.0.0' : '127.0.0.1');
+  }
 
   // Keep process alive
   await new Promise<void>(() => {});
