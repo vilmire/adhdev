@@ -251,6 +251,7 @@ export default function DashboardNewSessionDialog({
     }, [])
 
     useEffect(() => {
+        savedSessionsRequestSeqRef.current += 1
         setSelectedResumeSessionId('')
         setResumeHistoryFilters(createSavedHistoryFilterState())
         if (!selectedMachine || !selectedTarget || activeKind === 'ide') {
@@ -259,19 +260,15 @@ export default function DashboardNewSessionDialog({
             loadRecentArgs(selectedMachine.id, selectedTarget)
         }
         setSavedSessionsLoaded(false)
+        setSavedSessions([])
+        setSavedSessionsError('')
+        setSavedSessionsLoading(false)
         if (activeKind !== 'cli') {
-            setSavedSessions([])
-            setSavedSessionsError('')
-            setSavedSessionsLoading(false)
             return
         }
         if (!selectedMachine || !selectedTarget) {
-            setSavedSessions([])
-            setSavedSessionsError('')
-            setSavedSessionsLoading(false)
             return
         }
-        void loadSavedSessions(selectedMachine.id, selectedTarget)
     }, [activeKind, loadRecentArgs, loadSavedSessions, selectedMachine, selectedTarget])
 
     useEffect(() => {

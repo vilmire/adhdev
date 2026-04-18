@@ -9,6 +9,7 @@ import { connectionManager } from '../../compat';
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import { getConversationSendBlockMessage } from '../../hooks/dashboardCommandUtils';
 import { shouldDisableChatSendButton } from './ChatInputBar';
+import { getAutoCliTerminalScaleForWidth, DEFAULT_MAX_CLI_TERMINAL_SCALE, DEFAULT_MIN_CLI_TERMINAL_SCALE } from '../../utils/cli-terminal-scale';
 import type { ActiveConversation } from './types';
 import { getConversationTitle } from './conversation-presenters';
 
@@ -51,16 +52,11 @@ export default function CliTerminalPane({
     const terminalSizingMode = daemonEntry?.terminalSizingMode === 'fit' ? 'fit' : 'measured';
     const sendBlockMessage = getConversationSendBlockMessage(activeConv);
     const inputStatusMessage = sendFeedbackMessage || sendBlockMessage;
-    const MIN_TERMINAL_SCALE = 0.6;
-    const MAX_TERMINAL_SCALE = 1.15;
+    const MIN_TERMINAL_SCALE = DEFAULT_MIN_CLI_TERMINAL_SCALE;
+    const MAX_TERMINAL_SCALE = DEFAULT_MAX_CLI_TERMINAL_SCALE;
     const getAutoTerminalScale = () => {
         if (typeof window === 'undefined') return 1;
-        const width = window.innerWidth || 0;
-        if (width <= 360) return 0.68;
-        if (width <= 390) return 0.74;
-        if (width <= 430) return 0.82;
-        if (width <= 480) return 0.9;
-        return 1;
+        return getAutoCliTerminalScaleForWidth(window.innerWidth || 0, { minScale: MIN_TERMINAL_SCALE });
     };
     const resetRuntimeView = () => {
         seededSnapshotSeqRef.current = 0;

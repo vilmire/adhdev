@@ -335,16 +335,16 @@ export default function AgentTab({
     }, [category, machineId])
 
     useEffect(() => {
+        savedSessionsRequestSeqRef.current += 1
         setSelectedResumeSessionId('')
         loadRecentArgs(selectedType)
         setSavedSessionsLoaded(false)
+        setSavedSessions([])
+        setSavedSessionsError('')
+        setSavedSessionsLoading(false)
         if (category !== 'cli' || !selectedType) {
-            setSavedSessions([])
-            setSavedSessionsError('')
-            setSavedSessionsLoading(false)
             return
         }
-        void loadSavedSessions(selectedType)
     }, [category, loadRecentArgs, loadSavedSessions, selectedType])
 
     const selectedSavedSession = useMemo(
