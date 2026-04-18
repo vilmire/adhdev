@@ -11,6 +11,8 @@ import ControlsBar, {
   buildControlValueScriptArgs,
   extractControlListResult,
   extractControlMutationResult,
+  getAuthoritativeControlValue,
+  shouldAdoptListedCurrentValue,
   shouldHideBarControl,
 } from '../../../src/components/dashboard/ControlsBar'
 
@@ -260,18 +262,46 @@ describe('ControlsBar typed controlResult consumption', () => {
       error: 'bad request',
     }
 
-    expect(extractControlMutationResult({
-      controlResult: typedSet,
-      success: false,
-      value: 'legacy-plan',
-    })).toEqual(typedSet)
-
+    expect(extractControlMutationResult({ controlResult: typedSet, success: false })).toEqual(typedSet)
     expect(extractControlMutationResult({ controlResult: typedInvoke })).toEqual(typedInvoke)
-
     expect(extractControlMutationResult({
       success: true,
       value: 'legacy-plan',
     })).toBeNull()
+  })
+
+  it('does not let stale list-script currentValue override an existing control value', () => {
+    expect(shouldAdoptListedCurrentValue('default', 'sonnet')).toBe(false)
+    expect(shouldAdoptListedCurrentValue('opus', 'sonnet')).toBe(false)
+  })
+
+  it('adopts list-script currentValue when no authoritative control value is known yet', () => {
+    expect(shouldAdoptListedCurrentValue(undefined, 'sonnet')).toBe(true)
+    expect(shouldAdoptListedCurrentValue('', 'sonnet')).toBe(true)
+  })
+
+  it('prefers the freshest local override before falling back to server control values', () => {
+    expect(getAuthoritativeControlValue('model', {
+      now: 100,
+      localOverrideUntil: 200,
+      localValues: { model: 'default' },
+      controlValues: { model: 'sonnet' },
+    })).toBe('default')
+
+    expect(getAuthoritativeControlValue('model', {
+      now: 300,
+      localOverrideUntil: 200,
+      localValues: { model: 'default' },
+      controlValues: { model: 'sonnet' },
+    })).toBe('sonnet')
+
+    expect(getAuthoritativeControlValue('model', {
+      now: 300,
+      localOverrideUntil: 200,
+      localValues: {},
+      controlValues: undefined,
+      defaultValues: { model: 'haiku' },
+    })).toBe('haiku')
   })
 
   it('builds generic value-only script args for schema controls, including model and mode', () => {

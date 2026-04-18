@@ -85,6 +85,36 @@ function getMutationValue(result: ControlMutationResult | null, optimisticValue:
     return result && isControlScalarValue(result.currentValue) ? result.currentValue : optimisticValue;
 }
 
+export function shouldAdoptListedCurrentValue(
+    authoritativeValue: unknown,
+    listedCurrentValue: unknown,
+): listedCurrentValue is ControlScalarValue {
+    if (!isControlScalarValue(listedCurrentValue)) return false;
+    if (!isControlScalarValue(authoritativeValue)) return true;
+    return typeof authoritativeValue === 'string' && authoritativeValue.trim() === '';
+}
+
+export function getAuthoritativeControlValue(
+    controlId: string,
+    options: {
+        now?: number;
+        localOverrideUntil: number;
+        localValues: Record<string, string | number | boolean>;
+        controlValues?: Record<string, string | number | boolean>;
+        defaultValues?: Record<string, string | number | boolean>;
+    },
+): ControlScalarValue | undefined {
+    const now = options.now ?? Date.now();
+    if (now < options.localOverrideUntil) {
+        const localValue = options.localValues[controlId];
+        if (isControlScalarValue(localValue)) return localValue;
+    }
+    const controlValue = options.controlValues?.[controlId];
+    if (isControlScalarValue(controlValue)) return controlValue;
+    const defaultValue = options.defaultValues?.[controlId];
+    return isControlScalarValue(defaultValue) ? defaultValue : undefined;
+}
+
 function getControlOptions(
     ctrl: ProviderControlSchema,
     dynamicOptions: Record<string, ControlOption[]>,
@@ -150,6 +180,10 @@ export default function ControlsBar({
 
     // Local state for optimistic updates
     const [localValues, setLocalValues] = useState<Record<string, string | number | boolean>>({});
+    const localValuesRef = useRef<Record<string, string | number | boolean>>({});
+    const controlValuesRef = useRef<Record<string, string | number | boolean> | undefined>(controlValues);
+    localValuesRef.current = localValues;
+    controlValuesRef.current = controlValues;
     const localOverrideUntil = useRef<number>(0);
     const defaultValues: Record<string, string | number | boolean> = {};
     for (const ctrl of controls || []) {
@@ -264,7 +298,13 @@ export default function ControlsBar({
                     _optionsCache.set(cacheKey, next);
                     return next;
                 });
-                if (isControlScalarValue(controlResult.currentValue)) {
+                const authoritativeCurrentValue = getAuthoritativeControlValue(ctrl.id, {
+                    localOverrideUntil: localOverrideUntil.current,
+                    localValues: localValuesRef.current,
+                    controlValues: controlValuesRef.current,
+                    defaultValues,
+                });
+                if (shouldAdoptListedCurrentValue(authoritativeCurrentValue, controlResult.currentValue)) {
                     const currentValue = controlResult.currentValue;
                     setLocalValues(prev => ({ ...prev, [ctrl.id]: currentValue }));
                 }

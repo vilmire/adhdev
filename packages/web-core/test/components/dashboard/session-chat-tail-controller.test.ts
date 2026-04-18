@@ -4,6 +4,7 @@ import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
   buildWarmSessionChatTailDescriptorState,
   getOrCreateSessionChatTailController,
+  getWarmSessionChatTailDescriptorRefreshMs,
   resetSessionChatTailControllersForTest,
 } from '../../../src/components/dashboard/session-chat-tail-controller'
 
@@ -47,20 +48,40 @@ function createUpdate(overrides: Partial<SessionChatTailUpdate> = {}): SessionCh
 }
 
 describe('SessionChatTailController registry', () => {
+  it('uses a bounded refresh cadence for warm descriptor expiry checks', () => {
+    expect(getWarmSessionChatTailDescriptorRefreshMs()).toBe(30_000)
+    expect(getWarmSessionChatTailDescriptorRefreshMs(5_000)).toBe(5_000)
+    expect(getWarmSessionChatTailDescriptorRefreshMs(500)).toBe(1_000)
+  })
+
   it('builds a stable warm-controller descriptor signature when conversation identities change but session targets stay the same', () => {
+    const now = 2_000_000
     const first = buildWarmSessionChatTailDescriptorState([
-      createConversation(),
+      createConversation({
+        sessionId: 'session-1',
+        providerSessionId: 'provider-1',
+        lastMessageAt: now - 5_000,
+        lastUpdated: now - 5_000,
+      }),
       createConversation({
         routeId: 'route-2',
         sessionId: 'session-2',
         providerSessionId: 'provider-2',
         daemonId: 'daemon-2',
         tabKey: 'daemon-2:session:session-2',
+        lastMessageAt: now - 8_000,
+        lastUpdated: now - 8_000,
       }),
-    ])
+    ], { now })
 
     const second = buildWarmSessionChatTailDescriptorState([
-      createConversation({ messages: [{ role: 'assistant', content: 'new text' }] }),
+      createConversation({
+        sessionId: 'session-1',
+        providerSessionId: 'provider-1',
+        messages: [{ role: 'assistant', content: 'new text' }],
+        lastMessageAt: now - 5_000,
+        lastUpdated: now - 5_000,
+      }),
       createConversation({
         routeId: 'route-2',
         sessionId: 'session-2',
@@ -68,12 +89,35 @@ describe('SessionChatTailController registry', () => {
         daemonId: 'daemon-2',
         tabKey: 'daemon-2:session:session-2',
         title: 'Changed title only',
+        lastMessageAt: now - 8_000,
+        lastUpdated: now - 8_000,
       }),
-    ])
+    ], { now })
 
+    expect(first.descriptors).toHaveLength(2)
     expect(second.signature).toBe(first.signature)
     expect(second.descriptors).toEqual(first.descriptors)
   })
+
+  it('keeps conversations with cached messages even when activity timestamps are absent', () => {
+    const now = 2_000_000
+    const cachedTranscript = createConversation({
+      sessionId: 'session-cached',
+      providerSessionId: 'provider-cached',
+      tabKey: 'daemon-1:session:session-cached',
+      status: 'idle',
+      messages: [{ role: 'assistant', content: 'still here' }],
+      lastMessageAt: 0,
+      lastUpdated: 0,
+    })
+
+    const state = buildWarmSessionChatTailDescriptorState([cachedTranscript], { now })
+
+    expect(state.descriptors).toEqual([
+      expect.objectContaining({ sessionId: 'session-cached' }),
+    ])
+  })
+
 
   it('subscribes with a tail request when no prior live cursor exists', () => {
     resetSessionChatTailControllersForTest()

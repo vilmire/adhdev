@@ -39,6 +39,14 @@ export interface WarmSessionChatTailDescriptor {
 }
 
 const DEFAULT_TAIL_LIMIT = 60
+const DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS = 120_000
+const WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES = new Set([
+  'generating',
+  'waiting_approval',
+  'starting',
+  'streaming',
+  'working',
+])
 const controllerRegistry = new Map<string, SessionChatTailController>()
 
 function getControllerKey(daemonId: string, sessionId: string): string {
@@ -336,12 +344,40 @@ function compareWarmSessionChatTailDescriptors(
     || left.historySessionId.localeCompare(right.historySessionId)
 }
 
+function shouldWarmSessionChatTailConversation(
+  conversation: ActiveConversation,
+  options: { now?: number; recentActivityMs?: number } = {},
+): boolean {
+  const status = String(conversation.status || '').trim().toLowerCase()
+  if (WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES.has(status)) return true
+  if ((conversation.modalMessage || '').trim()) return true
+  if (Array.isArray(conversation.modalButtons) && conversation.modalButtons.length > 0) return true
+
+  const now = options.now ?? Date.now()
+  const recentActivityMs = Math.max(0, Number(options.recentActivityMs ?? DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS))
+  const lastActivityAt = Math.max(
+    Number(conversation.lastUpdated || 0),
+    Number(conversation.lastMessageAt || 0),
+  )
+  if (lastActivityAt > 0) {
+    return (now - lastActivityAt) <= recentActivityMs
+  }
+
+  return Array.isArray(conversation.messages) && conversation.messages.length > 0
+}
+
+export function getWarmSessionChatTailDescriptorRefreshMs(recentActivityMs = DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS): number {
+  return Math.max(1_000, Math.min(30_000, Math.max(0, Number(recentActivityMs || 0))))
+}
+
 export function buildWarmSessionChatTailDescriptorState(
   conversations: ActiveConversation[],
+  options: { now?: number; recentActivityMs?: number } = {},
 ): { descriptors: WarmSessionChatTailDescriptor[]; signature: string } {
   const seen = new Set<string>()
   const descriptors: WarmSessionChatTailDescriptor[] = []
   for (const conversation of conversations) {
+    if (!shouldWarmSessionChatTailConversation(conversation, options)) continue
     const daemonId = getConversationDaemonRouteId(conversation)
     const sessionId = conversation.sessionId || ''
     if (!daemonId || !sessionId) continue
@@ -444,9 +480,22 @@ export function useWarmSessionChatTailControllers(
   const { sendData } = useTransport()
   const enabled = options?.enabled !== false
   const tailLimit = Math.max(0, options?.tailLimit ?? DEFAULT_TAIL_LIMIT)
+  const refreshMs = getWarmSessionChatTailDescriptorRefreshMs()
+  const [refreshTick, setRefreshTick] = useState(0)
+
+  useEffect(() => {
+    if (!enabled || conversations.length === 0) return
+    const timer = setInterval(() => {
+      setRefreshTick((prev) => prev + 1)
+    }, refreshMs)
+    return () => {
+      clearInterval(timer)
+    }
+  }, [conversations.length, enabled, refreshMs])
+
   const descriptorState = useMemo(
     () => buildWarmSessionChatTailDescriptorState(conversations),
-    [conversations],
+    [conversations, refreshTick],
   )
 
   useEffect(() => {
