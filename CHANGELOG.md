@@ -2,6 +2,17 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.77] - 2026-04-18
+
+### Added
+- Added regression coverage for recovery-snapshot hot-session filtering, including live-snapshot runtime metadata propagation and fallback classification when explicit session-host surface kinds are missing.
+
+### Fixed
+- Fixed shared chat-tail hot polling so stopped recovery snapshots no longer stay in the active/finalizing flush set while recently updated live and ordinary inactive hosted runtimes still receive the expected completion-tail grace window.
+
+### Changed
+- Threaded session-host runtime lifecycle and recovery metadata through the shared live status/session entry surface so standalone and cloud flush classification can make liveness-aware decisions.
+
 ## [0.8.76] - 2026-04-18
 
 ### Added
