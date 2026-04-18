@@ -181,10 +181,17 @@ export class DaemonAgentStreamManager {
     }
 
     /** Collect active extension session state */
-    async collectActiveSession(cdp: DaemonCdpManager, parentSessionId: string): Promise<AgentStreamState | null> {
+    async collectActiveSession(
+        cdp: DaemonCdpManager,
+        parentSessionId: string,
+        attemptedSessionIds: Set<string> = new Set(),
+        originSessionId?: string,
+    ): Promise<AgentStreamState | null> {
         if (!this.enabled) return null;
         const activeSessionId = this.getActiveSessionId(parentSessionId);
         if (!activeSessionId) return null;
+        const resolvedOriginSessionId = originSessionId || activeSessionId;
+        attemptedSessionIds.add(activeSessionId);
         let agent = this.managedBySessionId.get(activeSessionId);
         if (!agent) {
             agent = await this.connectManagedSession(cdp, parentSessionId, activeSessionId) || undefined;
@@ -200,18 +207,50 @@ export class DaemonAgentStreamManager {
             const evaluate: AgentEvaluateFn = (expr, timeout) =>
                 cdp.evaluateInSessionFrame(agent.cdpSessionId, expr, timeout);
             const state = await agent.adapter.readChat(evaluate);
-            const stateError = this.getStateError(state);
-            const selectedModelValue = typeof state.controlValues?.model === 'string' ? state.controlValues.model : '';
-            LOG.debug('AgentStream', `[AgentStream] readChat(${type}) result: status=${state.status} msgs=${state.messages?.length || 0} model=${selectedModelValue}${state.status === 'error' ? ' error=' + JSON.stringify(stateError) : ''}`);
-            if (state.status === 'error' && this.isRecoverableSessionError(stateError)) {
+            const resolvedProviderSessionId = typeof state.providerSessionId === 'string' && state.providerSessionId.trim()
+                ? state.providerSessionId.trim()
+                : (typeof state.sessionId === 'string' && state.sessionId.trim() && state.sessionId !== agent.runtimeSessionId
+                    ? state.sessionId.trim()
+                    : undefined);
+            const normalizedState: AgentStreamState = {
+                ...state,
+                sessionId: agent.runtimeSessionId,
+                ...(resolvedProviderSessionId ? { providerSessionId: resolvedProviderSessionId } : {}),
+            };
+            const stateError = this.getStateError(normalizedState);
+            const selectedModelValue = typeof normalizedState.controlValues?.model === 'string' ? normalizedState.controlValues.model : '';
+            LOG.debug('AgentStream', `[AgentStream] readChat(${type}) result: status=${normalizedState.status} msgs=${normalizedState.messages?.length || 0} model=${selectedModelValue}${normalizedState.status === 'error' ? ' error=' + JSON.stringify(stateError) : ''}`);
+            if (normalizedState.status === 'error' && this.isRecoverableSessionError(stateError)) {
                 throw new Error(stateError);
             }
-            agent.lastState = state;
+            agent.lastState = normalizedState;
             agent.lastError = null;
-            if (state.status === 'panel_hidden') {
+            if (normalizedState.status === 'panel_hidden') {
+                const discovered = await cdp.discoverAgentWebviews().catch(() => [] as AgentWebviewTarget[]);
+                const fallbackTarget = discovered.find((entry) => {
+                    if (entry.agentType === type) return false;
+                    const fallbackSessionId = this.resolveSessionIdForTarget(parentSessionId, entry.agentType);
+                    return !!fallbackSessionId
+                        && fallbackSessionId !== activeSessionId
+                        && !attemptedSessionIds.has(fallbackSessionId);
+                });
+                if (fallbackTarget) {
+                    const fallbackSessionId = this.resolveSessionIdForTarget(parentSessionId, fallbackTarget.agentType);
+                    if (fallbackSessionId && fallbackSessionId !== activeSessionId && !attemptedSessionIds.has(fallbackSessionId)) {
+                        this.logFn(`[AgentStream] Active session ${type} is hidden; switching to visible agent ${fallbackTarget.agentType} (${parentSessionId})`);
+                        await this.setActiveSession(cdp, parentSessionId, fallbackSessionId);
+                        await this.syncActiveSession(cdp, parentSessionId);
+                        const fallbackState = await this.collectActiveSession(cdp, parentSessionId, attemptedSessionIds, resolvedOriginSessionId);
+                        if (fallbackState?.status === 'panel_hidden' && resolvedOriginSessionId !== fallbackSessionId) {
+                            await this.setActiveSession(cdp, parentSessionId, resolvedOriginSessionId);
+                            await this.syncActiveSession(cdp, parentSessionId);
+                        }
+                        return fallbackState;
+                    }
+                }
                 agent.lastHiddenCheckTime = Date.now();
             }
-            return state;
+            return normalizedState;
         } catch (e) {
             const errorMsg = (e as Error)?.message || String(e);
             this.logFn(`[AgentStream] readChat(${type}) error: ${errorMsg.slice(0, 200)}`);

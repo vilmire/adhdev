@@ -214,6 +214,33 @@ function buildExtensionAgentSession(
     };
 }
 
+function shouldIncludeExtensionSession(ext: ExtensionProviderState): boolean {
+    const status = String(ext.status || '').trim().toLowerCase();
+    const hasActiveChat = !!ext.activeChat;
+    const hasMessages = Array.isArray(ext.activeChat?.messages) && ext.activeChat!.messages.length > 0;
+    const hasModal = !!ext.activeChat?.activeModal;
+    const hasStreams = Array.isArray((ext as any).agentStreams) && (ext as any).agentStreams.length > 0;
+    const hasProviderSessionId = typeof ext.providerSessionId === 'string' && ext.providerSessionId.trim().length > 0;
+    const hasControlValues = !!(ext.controlValues && Object.keys(ext.controlValues).length > 0);
+    const hasProviderControls = Array.isArray(ext.providerControls) && ext.providerControls.length > 0;
+    const hasOpenPanelCapability = Array.isArray(ext.sessionCapabilities) && ext.sessionCapabilities.includes('open_panel');
+    const hasSummaryMetadata = !!ext.summaryMetadata;
+    const hasError = typeof ext.errorMessage === 'string' && ext.errorMessage.trim().length > 0;
+    const hasInterestingStatus = !!status && !['idle', 'panel_hidden', 'disconnected', 'not_monitored'].includes(status);
+
+    return hasActiveChat
+        || hasMessages
+        || hasModal
+        || hasStreams
+        || hasProviderSessionId
+        || hasControlValues
+        || hasProviderControls
+        || hasOpenPanelCapability
+        || hasSummaryMetadata
+        || hasError
+        || hasInterestingStatus;
+}
+
 function buildCliSession(state: CliProviderState, options: SessionEntryBuildOptions): SessionEntry {
     const profile = options.profile || 'full';
     const activeChat = normalizeActiveChatData(state.activeChat, getActiveChatOptions(profile));
@@ -305,6 +332,7 @@ export function buildSessionEntries(
     for (const state of ideStates) {
         sessions.push(buildIdeWorkspaceSession(state, cdpManagers, options));
         for (const ext of state.extensions as ExtensionProviderState[]) {
+            if (!shouldIncludeExtensionSession(ext)) continue;
             sessions.push(buildExtensionAgentSession(state, ext, options));
         }
     }

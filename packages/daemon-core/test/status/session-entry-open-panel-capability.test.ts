@@ -38,7 +38,7 @@ describe('buildSessionEntries open_panel capability surface', () => {
     expect(extSession?.capabilities || []).not.toContain('open_panel')
   })
 
-  it('preserves open_panel when provider state explicitly declares support from resolved scripts', () => {
+  it('preserves open_panel when provider state explicitly declares support from resolved scripts, even if the panel is hidden and no streams are active yet', () => {
     const sessions = buildSessionEntries([
       {
         category: 'ide',

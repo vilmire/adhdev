@@ -206,6 +206,7 @@ export class AgentStreamPoller {
             try {
                 await agentStreamManager.syncActiveSession(cdp, parentSessionId);
                 let stream = await agentStreamManager.collectActiveSession(cdp, parentSessionId);
+                resolvedActiveSessionId = stream?.sessionId || agentStreamManager.getActiveSessionId(parentSessionId) || resolvedActiveSessionId;
                 if (stream?.status === 'waiting_approval') {
                     const autoApprove = providerLoader.getSettings(stream.agentType).autoApprove !== false;
                     if (autoApprove && resolvedActiveSessionId) {
