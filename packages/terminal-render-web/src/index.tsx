@@ -64,6 +64,30 @@ const TERMINAL_THEME = {
   brightWhite: '#a6adc8',
 };
 
+const TERMINAL_CHROME_CSS = `
+  .adhdev-terminal-renderer .xterm-viewport {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(137, 180, 250, 0.45) rgba(255, 255, 255, 0.04);
+    overscroll-behavior: contain;
+  }
+
+  .adhdev-terminal-renderer .xterm-viewport::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .adhdev-terminal-renderer .xterm-viewport::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 999px;
+  }
+
+  .adhdev-terminal-renderer .xterm-viewport::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(137, 180, 250, 0.5), rgba(203, 166, 247, 0.45));
+    border-radius: 999px;
+    border: 2px solid rgba(15, 17, 23, 0.9);
+  }
+`;
+
 let rendererRuntimeLogged = false;
 
 export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTerminalViewProps>(
@@ -147,6 +171,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           rows: DEFAULT_TERMINAL_ROWS,
           cursorBlink: true,
           cursorStyle: 'bar',
+          cursorWidth: 8,
           fontSize,
           fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
           fontWeight: '400',
@@ -155,6 +180,10 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           theme: TERMINAL_THEME,
           allowTransparency: true,
           scrollback: 5000,
+          scrollSensitivity: 1.15,
+          fastScrollSensitivity: 4,
+          smoothScrollDuration: 120,
+          scrollOnUserInput: true,
           convertEol: false,
           disableStdin: false,
         });
@@ -254,20 +283,25 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
     }, [sizingMode]);
 
     return (
-      <div
-        ref={containerRef}
-        data-terminal-renderer={rendererKind || 'pending'}
-        className={className}
-        style={{
-          width: '100%',
-          height: '100%',
-          overflow: 'hidden',
-          background: TERMINAL_THEME.background,
-          opacity: ready ? 1 : 0,
-          transition: 'opacity 200ms ease',
-          ...style,
-        }}
-      />
+      <>
+        <style>{TERMINAL_CHROME_CSS}</style>
+        <div
+          ref={containerRef}
+          data-terminal-renderer={rendererKind || 'pending'}
+          className={['adhdev-terminal-renderer', className].filter(Boolean).join(' ')}
+          style={{
+            width: '100%',
+            height: '100%',
+            overflow: 'hidden',
+            background: TERMINAL_THEME.background,
+            padding: '8px 10px',
+            boxSizing: 'border-box',
+            opacity: ready ? 1 : 0,
+            transition: 'opacity 200ms ease',
+            ...style,
+          }}
+        />
+      </>
     );
   },
 );

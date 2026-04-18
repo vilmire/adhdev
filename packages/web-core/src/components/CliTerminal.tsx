@@ -25,7 +25,7 @@ type TerminalViewComponent = ForwardRefExoticComponent<GhosttyTerminalViewProps 
 let rendererLoadLogged = false;
 
 export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
-    ({ onInput, fontSize = 13, readOnly = false }, ref) => {
+    ({ onInput, fontSize = 13, readOnly = false, sizingMode = 'measured' }, ref) => {
         const innerRef = useRef<CliTerminalHandle>(null);
         const [LoadedTerminal, setLoadedTerminal] = useState<TerminalViewComponent | null>(null);
         const pendingWritesRef = useRef<string[]>([]);
@@ -132,6 +132,7 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
                 onInput={onInput}
                 fontSize={fontSize}
                 readOnly={readOnly}
+                sizingMode={sizingMode}
                 className="w-full h-full rounded-lg overflow-hidden"
             />
         );

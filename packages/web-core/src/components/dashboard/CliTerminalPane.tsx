@@ -275,7 +275,7 @@ export default function CliTerminalPane({
                         +
                     </button>
                 </div>
-                <div className="w-full h-full overflow-auto rounded-lg">
+                <div className="w-full h-full overflow-x-auto overflow-y-hidden rounded-lg overscroll-contain">
                     <div
                         style={{
                             width: `${100 / terminalScale}%`,
