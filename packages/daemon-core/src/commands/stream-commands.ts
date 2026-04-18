@@ -301,8 +301,11 @@ function applyProviderPatch(h: CommandHelpers, args: any, payload: any): void {
 }
 
 async function executeProviderScript(h: CommandHelpers, args: any, scriptName: string): Promise<CommandResult> {
+    const explicitTargetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+    const targetSession = explicitTargetSessionId ? h.ctx.sessionRegistry?.get(explicitTargetSessionId) : undefined;
     const resolvedProviderType =
-        h.currentSession?.providerType
+        targetSession?.providerType
+        || h.currentSession?.providerType
         || h.currentProviderType
         || args?.agentType
         || args?.providerType;
@@ -358,8 +361,8 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
     if (!scriptCode) return { success: false, error: `Script '${actualScriptName}' returned null` };
 
     const cdpKey = provider.category === 'ide'
-        ? (h.currentSession?.cdpManagerKey || h.currentManagerKey || resolvedProviderType)
-        : (h.currentSession?.cdpManagerKey || h.currentManagerKey);
+        ? (targetSession?.cdpManagerKey || h.currentSession?.cdpManagerKey || h.currentManagerKey || resolvedProviderType)
+        : (targetSession?.cdpManagerKey || h.currentSession?.cdpManagerKey || h.currentManagerKey);
     LOG.info('Command', `[ExtScript] provider=${provider.type} category=${provider.category} cdpKey=${cdpKey}`);
     const cdp = h.getCdp(cdpKey);
     if (!cdp?.isConnected) return { success: false, error: `No CDP connection for ${cdpKey || 'any'}` };
@@ -368,9 +371,9 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
         let result: unknown;
 
         if (provider.category === 'extension') {
-            const runtimeSessionId = h.currentSession?.sessionId || args?.targetSessionId;
+            const runtimeSessionId = explicitTargetSessionId || h.currentSession?.sessionId;
             if (!runtimeSessionId) return { success: false, error: `No target session found for ${resolvedProviderType}` };
-            const parentSessionId = h.currentSession?.parentSessionId;
+            const parentSessionId = targetSession?.parentSessionId || h.currentSession?.parentSessionId;
             if (parentSessionId) {
                 await h.agentStream?.setActiveSession(cdp, parentSessionId, runtimeSessionId);
                 await h.agentStream?.syncActiveSession(cdp, parentSessionId);

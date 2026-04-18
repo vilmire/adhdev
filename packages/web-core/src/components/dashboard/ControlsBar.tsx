@@ -92,15 +92,19 @@ function getControlOptions(
     return ctrl.options || dynamicOptions[ctrl.id] || [];
 }
 
+const HIDE_NEW_SESSION_BAR_PROVIDERS = new Set([
+    'antigravity',
+    'claude-code-vscode',
+    'codex',
+]);
+
 export function shouldHideBarControl(
     hostIdeType: string | undefined,
     providerType: string,
     ctrl: ProviderControlSchema,
 ): boolean {
-    if (hostIdeType === 'antigravity' && providerType === 'codex') {
-        return ctrl.id === 'model' || ctrl.id === 'mode' || ctrl.id === 'new_session';
-    }
-    return false;
+    void hostIdeType;
+    return ctrl.id === 'new_session' && HIDE_NEW_SESSION_BAR_PROVIDERS.has(providerType);
 }
 
 export function buildControlValueScriptArgs(
@@ -225,7 +229,7 @@ export default function ControlsBar({
     }
 
     const barControls = controls
-        .filter(c => c.placement === 'bar' && c.hidden !== true)
+        .filter(c => c.placement === 'bar' && c.hidden !== true && !shouldHideBarControl(hostIdeType, providerType, c))
         .sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
 
     if (barControls.length === 0) {

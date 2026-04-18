@@ -11,6 +11,7 @@ import ControlsBar, {
   buildControlValueScriptArgs,
   extractControlListResult,
   extractControlMutationResult,
+  shouldHideBarControl,
 } from '../../../src/components/dashboard/ControlsBar'
 
 describe('ControlsBar typed controlResult consumption', () => {
@@ -90,6 +91,79 @@ describe('ControlsBar typed controlResult consumption', () => {
     )
 
     expect(html).toContain('Usage')
+  })
+
+  it('keeps model and mode controls visible for Antigravity-hosted Codex sessions', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ControlsBar, {
+        routeId: 'daemon-1',
+        hostIdeType: 'antigravity',
+        providerType: 'codex',
+        displayLabel: 'Codex',
+        controls: [
+          {
+            id: 'model',
+            type: 'select',
+            label: 'Model',
+            placement: 'bar',
+          } satisfies ProviderControlSchema,
+          {
+            id: 'mode',
+            type: 'select',
+            label: 'Mode',
+            placement: 'bar',
+          } satisfies ProviderControlSchema,
+        ],
+        controlValues: { model: 'GPT-5.4', mode: 'High' },
+      }),
+    )
+
+    expect(html).toContain('GPT-5.4')
+    expect(html).toContain('High')
+  })
+
+  it('hides the New action for Antigravity, Claude Code (VS Code), and Codex providers', () => {
+    const newControl = {
+      id: 'new_session',
+      type: 'action',
+      label: 'New',
+      placement: 'bar',
+      invokeScript: 'newSession',
+    } satisfies ProviderControlSchema
+
+    expect(shouldHideBarControl(undefined, 'antigravity', newControl)).toBe(true)
+    expect(shouldHideBarControl(undefined, 'claude-code-vscode', newControl)).toBe(true)
+    expect(shouldHideBarControl(undefined, 'codex', newControl)).toBe(true)
+    expect(shouldHideBarControl(undefined, 'roo-code', newControl)).toBe(false)
+  })
+
+  it('does not render the New action for Antigravity sessions', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ControlsBar, {
+        routeId: 'daemon-1',
+        providerType: 'antigravity',
+        displayLabel: 'Antigravity',
+        controls: [
+          {
+            id: 'model',
+            type: 'select',
+            label: 'Model',
+            placement: 'bar',
+          } satisfies ProviderControlSchema,
+          {
+            id: 'new_session',
+            type: 'action',
+            label: 'New',
+            placement: 'bar',
+            invokeScript: 'newSession',
+          } satisfies ProviderControlSchema,
+        ],
+        controlValues: { model: 'Claude Opus 4.6 (Thinking)' },
+      }),
+    )
+
+    expect(html).toContain('Claude Opus 4.6 (Thinking)')
+    expect(html).not.toContain('>New<')
   })
 
   it('does not synthesize model values from legacy serverModel props when schema controls are present', () => {

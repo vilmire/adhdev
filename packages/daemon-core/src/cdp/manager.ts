@@ -16,12 +16,50 @@ import * as fs from 'fs';
 import { LOG } from '../logging/logger.js';
 import type { CdpTargetFilter } from '../providers/contracts.js';
 
-interface CdpTarget {
+export interface CdpTarget {
     id: string;
     type: string;
     title: string;
     url: string;
     webSocketDebuggerUrl: string;
+}
+
+function normalizeTitle(value: string | null | undefined): string {
+    return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function titlesMatch(lhs: string | null | undefined, rhs: string | null | undefined): boolean {
+    const a = normalizeTitle(lhs);
+    const b = normalizeTitle(rhs);
+    if (!a || !b) return false;
+    return a === b || a.includes(b) || b.includes(a);
+}
+
+export function resolveCdpPageTarget(params: {
+    pages: CdpTarget[];
+    pinnedTargetId?: string | null;
+    previousPageTitle?: string | null;
+}): { target: CdpTarget | null; retargeted: boolean } {
+    const { pages, pinnedTargetId, previousPageTitle } = params;
+    if (pages.length === 0) return { target: null, retargeted: false };
+
+    if (!pinnedTargetId) {
+        return { target: pages[0] || null, retargeted: false };
+    }
+
+    const exact = pages.find((page) => page.id === pinnedTargetId);
+    if (exact) return { target: exact, retargeted: false };
+
+    const titleMatchesList = pages.filter((page) => titlesMatch(page.title, previousPageTitle));
+    if (titleMatchesList.length === 1) {
+        return { target: titleMatchesList[0], retargeted: true };
+    }
+
+    if (pages.length === 1) {
+        return { target: pages[0], retargeted: true };
+    }
+
+    return { target: null, retargeted: false };
 }
 
 export interface AgentWebviewTarget {
@@ -204,22 +242,36 @@ export class DaemonCdpManager {
                             return;
                         }
 
- // Exclude non-main tabs
-                        const mainPages = pages.filter(t => !this.isNonMainTitle(t.title || ''));
-                        const list = mainPages.length > 0 ? mainPages : pages;
+                        // Keep reconnect target selection aligned with initial scan rules:
+                        // prefer visible workbench pages that satisfy provider URL filters,
+                        // then fall back to title-filtered pages only when nothing else matches.
+                        const titleFilteredPages = pages.filter(t => !this.isNonMainTitle(t.title || ''));
+                        const mainPages = titleFilteredPages.filter(t => this.isMainPageUrl(t.url));
+                        const list = mainPages.length > 0
+                            ? mainPages
+                            : (titleFilteredPages.length > 0 ? titleFilteredPages : pages);
 
                         this.log(`[CDP] pages(${list.length}): ${list.map(t => `"${t.title}"`).join(', ')}`);
 
- // If targetId is specified, select only matching page
-                        if (this._targetId) {
-                            const specific = list.find(t => t.id === this._targetId);
-                            if (specific) {
-                                this._pageTitle = specific.title || '';
-                                resolve(specific);
-                            } else {
-                                this.log(`[CDP] Target ${this._targetId} not found in page list`);
-                                resolve(null);
+                        const previousTargetId = this._targetId;
+                        const selected = resolveCdpPageTarget({
+                            pages: list,
+                            pinnedTargetId: previousTargetId,
+                            previousPageTitle: this._pageTitle,
+                        });
+                        if (selected.target) {
+                            if (selected.retargeted && previousTargetId && previousTargetId !== selected.target.id) {
+                                this.log(`[CDP] Target ${previousTargetId} rekeyed to ${selected.target.id}`);
+                                this._targetId = selected.target.id;
                             }
+                            this._pageTitle = selected.target.title || '';
+                            resolve(selected.target);
+                            return;
+                        }
+
+                        if (previousTargetId) {
+                            this.log(`[CDP] Target ${previousTargetId} not found in page list`);
+                            resolve(null);
                             return;
                         }
 
