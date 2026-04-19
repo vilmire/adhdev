@@ -2,6 +2,17 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.78] - 2026-04-19
+
+### Added
+- Added focused web-core regression coverage for larger CLI-like chat-tail hydration windows, truncated-tail cursor recovery, dashboard chat-controls visibility preferences, and command-log filtering for low-value transcript-read noise.
+
+### Fixed
+- Fixed shared dashboard chat continuity so active CLI-heavy conversations no longer get stuck looking like a tiny recent tail after refresh or tail-only live resubscribe updates, and trimmed daemon command-log churn from `read_chat` / `mark_session_seen` spam.
+
+### Changed
+- Made the shared chat controls bar opt-in behind a persisted visibility toggle, removed dashboard-level warm transcript subscriptions that were adding background load, and clarified standalone auth/runtime/local-API surfaces across the OSS docs.
+
 ## [0.8.77] - 2026-04-18
 
 ### Added
