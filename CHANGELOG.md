@@ -2,6 +2,18 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.80] - 2026-04-19
+
+### Added
+- Added focused regression coverage for optimistic CLI view-mode overrides so dashboard and machine tabs keep the intended mode while transient transport-result loss is reconciled.
+
+### Fixed
+- Restored shared warm chat-tail retention for visible conversations so background-open chats recover their recent transcript continuity instead of always restarting cold.
+- Fixed shared CLI view-mode UX so lost or late transport results no longer immediately discard optimistic chat/terminal toggles that likely already applied remotely.
+
+### Changed
+- Rebalanced dashboard and machine chat-mode wiring around warm-tail retention plus transport-aware CLI mode override reconciliation.
+
 ## [0.8.79] - 2026-04-19
 
 ### Added
