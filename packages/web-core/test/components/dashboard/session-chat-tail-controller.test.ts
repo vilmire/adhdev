@@ -118,6 +118,41 @@ describe('SessionChatTailController registry', () => {
     ])
   })
 
+  it('can disable recent-idle warming while still keeping generating and modal sessions warm', () => {
+    const now = 2_000_000
+    const state = buildWarmSessionChatTailDescriptorState([
+      createConversation({
+        sessionId: 'session-idle-recent',
+        providerSessionId: 'provider-idle-recent',
+        tabKey: 'daemon-1:session:session-idle-recent',
+        status: 'idle',
+        lastMessageAt: now - 5_000,
+        lastUpdated: now - 5_000,
+      }),
+      createConversation({
+        sessionId: 'session-generating',
+        providerSessionId: 'provider-generating',
+        tabKey: 'daemon-1:session:session-generating',
+        status: 'generating',
+        lastMessageAt: now - 30_000,
+        lastUpdated: now - 30_000,
+      }),
+      createConversation({
+        sessionId: 'session-modal',
+        providerSessionId: 'provider-modal',
+        tabKey: 'daemon-1:session:session-modal',
+        status: 'idle',
+        modalMessage: 'Approve this command?',
+        lastMessageAt: now - 30_000,
+        lastUpdated: now - 30_000,
+      }),
+    ], { now, recentActivityMs: 0 })
+
+    expect(state.descriptors.map((descriptor) => descriptor.sessionId)).toEqual([
+      'session-generating',
+      'session-modal',
+    ])
+  })
 
   it('subscribes with a tail request when no prior live cursor exists', () => {
     resetSessionChatTailControllersForTest()
@@ -146,6 +181,93 @@ describe('SessionChatTailController registry', () => {
         knownMessageCount: 0,
         lastMessageSignature: '',
         tailLimit: 60,
+      },
+    })
+  })
+
+  it('does not advance the live cursor beyond the messages actually hydrated from a truncated tail snapshot', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: Array.from({ length: 60 }, (_, index) => ({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `msg-${index + 1}`,
+        id: `msg-${index + 1}`,
+        timestamp: index + 1,
+      })) as any,
+      totalMessages: 228,
+      lastMessageSignature: 'sig-tail-60',
+      syncMode: 'full',
+      replaceFrom: 0,
+    }))
+
+    expect(controller.getSnapshot().cursor).toMatchObject({
+      knownMessageCount: 60,
+      lastMessageSignature: 'sig-tail-60',
+      tailLimit: 60,
+    })
+  })
+
+  it('re-subscribes with a larger tail request when an active session upgrades the hydrate window', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const sendData = vi.fn().mockReturnValue(true)
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData,
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: Array.from({ length: 60 }, (_, index) => ({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `msg-${index + 1}`,
+        id: `msg-${index + 1}`,
+        timestamp: index + 1,
+      })) as any,
+      totalMessages: 228,
+      lastMessageSignature: 'sig-tail-60',
+      syncMode: 'full',
+      replaceFrom: 0,
+    }))
+
+    const reacquired = getOrCreateSessionChatTailController({
+      manager,
+      sendData,
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 200,
+    })
+
+    expect(reacquired).toBe(controller)
+    const subscribeCalls = sendData.mock.calls.filter((call) => call[1]?.type === 'subscribe')
+    expect(subscribeCalls.at(-1)?.[1]).toMatchObject({
+      topic: 'session.chat_tail',
+      key: 'daemon:daemon-1:session:session-1',
+      params: {
+        targetSessionId: 'session-1',
+        historySessionId: 'history-1',
+        knownMessageCount: 60,
+        lastMessageSignature: 'sig-tail-60',
+        tailLimit: 200,
       },
     })
   })

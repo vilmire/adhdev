@@ -116,7 +116,13 @@ function checkSize(): void {
 const SKIP_COMMANDS = new Set([
     'heartbeat',
     'status_report',
+    'read_chat',
+    'mark_session_seen',
 ]);
+
+export function shouldLogCommand(cmd: string): boolean {
+    return !SKIP_COMMANDS.has(cmd);
+}
 
 // ─── Public API ──────────────────────────────
 
@@ -125,7 +131,7 @@ const SKIP_COMMANDS = new Set([
  * Call this at the entry point of command handling.
  */
 export function logCommand(entry: CommandLogEntry): void {
-    if (SKIP_COMMANDS.has(entry.cmd)) return;
+    if (!shouldLogCommand(entry.cmd)) return;
     
     try {
         if (++writeCount % 500 === 0) {

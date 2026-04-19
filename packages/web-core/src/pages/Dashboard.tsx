@@ -20,7 +20,6 @@ import { useDashboardSplitView } from '../hooks/useDashboardSplitView'
 import { useDashboardVersionBanner } from '../hooks/useDashboardVersionBanner'
 import { useDevRenderTrace } from '../hooks/useDevRenderTrace'
 import { useDashboardNotifications } from '../hooks/useDashboardNotifications'
-import { useWarmSessionChatTailControllers } from '../components/dashboard/session-chat-tail-controller'
 
 import ConnectionBanner from '../components/dashboard/ConnectionBanner'
 import TerminalBackendBanner from '../components/dashboard/TerminalBackendBanner'
@@ -188,7 +187,6 @@ export default function Dashboard() {
         clearedTabs,
         hiddenTabs,
     })
-    useWarmSessionChatTailControllers(conversations)
     useEffect(() => {
         if (Object.keys(cliViewModeOverrides).length === 0) return
         setCliViewModeOverrides((prev) => reconcileCliViewModeOverrides(prev, ides))

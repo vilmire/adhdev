@@ -27,7 +27,7 @@ import {
     getConversationProviderLabel,
 } from './conversation-selectors';
 import { getConversationSendBlockMessage } from '../../hooks/dashboardCommandUtils'
-import { getDefaultVisibleLiveMessages } from './chat-visibility';
+import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages } from './chat-visibility';
 import { useSessionChatTailController } from './session-chat-tail-controller';
 import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
 
@@ -76,8 +76,12 @@ export default function ChatPane({
     const defaultVisibleLiveMessages = getDefaultVisibleLiveMessages({
         isCliLike: controlsContext.isCli || controlsContext.isAcp,
     })
+    const defaultChatTailHydrateLimit = getDefaultChatTailHydrateLimit({
+        isCliLike: controlsContext.isCli || controlsContext.isAcp,
+    })
     const chatTailState = useSessionChatTailController(activeConv, {
         enabled: !!activeConv.sessionId,
+        tailLimit: defaultChatTailHydrateLimit,
     })
 
     const [visibleLiveCount, setVisibleLiveCount] = useState(defaultVisibleLiveMessages);

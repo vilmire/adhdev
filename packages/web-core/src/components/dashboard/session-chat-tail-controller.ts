@@ -157,6 +157,24 @@ export class SessionChatTailController {
     if (options.manager) this.manager = options.manager
     if (options.sendData) this.sendData = options.sendData
     if (options.historySessionId) this.historySessionId = options.historySessionId
+    if (options.tailLimit !== undefined) {
+      const nextTailLimit = Math.max(0, options.tailLimit)
+      if (nextTailLimit !== this.snapshot.cursor.tailLimit) {
+        const nextKnownMessageCount = Math.min(this.snapshot.cursor.knownMessageCount, this.snapshot.liveMessages.length)
+        this.snapshot = {
+          ...this.snapshot,
+          cursor: {
+            ...this.snapshot.cursor,
+            knownMessageCount: nextKnownMessageCount,
+            tailLimit: nextTailLimit,
+          },
+        }
+        if (this.transportSubscription) {
+          this.disconnect()
+          this.connect()
+        }
+      }
+    }
   }
 
   getSnapshot(): SessionChatTailSnapshot {
@@ -275,10 +293,7 @@ export class SessionChatTailController {
   private handleUpdate(update: SessionChatTailUpdate): void {
     const nextMessages = applyReadChatSync(this.snapshot.liveMessages, update)
     const nextCursor: Required<ReadChatCursor> = {
-      knownMessageCount: Math.max(
-        nextMessages.length,
-        Number(update.totalMessages || 0),
-      ),
+      knownMessageCount: nextMessages.length,
       lastMessageSignature: typeof update.lastMessageSignature === 'string'
         ? update.lastMessageSignature
         : buildLastMessageSignature(nextMessages[nextMessages.length - 1]),
@@ -475,12 +490,13 @@ export function useSessionChatTailController(
 
 export function useWarmSessionChatTailControllers(
   conversations: ActiveConversation[],
-  options?: { enabled?: boolean; tailLimit?: number },
+  options?: { enabled?: boolean; tailLimit?: number; recentActivityMs?: number },
 ): void {
   const { sendData } = useTransport()
   const enabled = options?.enabled !== false
   const tailLimit = Math.max(0, options?.tailLimit ?? DEFAULT_TAIL_LIMIT)
-  const refreshMs = getWarmSessionChatTailDescriptorRefreshMs()
+  const recentActivityMs = Math.max(0, Number(options?.recentActivityMs ?? DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS))
+  const refreshMs = getWarmSessionChatTailDescriptorRefreshMs(recentActivityMs)
   const [refreshTick, setRefreshTick] = useState(0)
 
   useEffect(() => {
@@ -494,8 +510,8 @@ export function useWarmSessionChatTailControllers(
   }, [conversations.length, enabled, refreshMs])
 
   const descriptorState = useMemo(
-    () => buildWarmSessionChatTailDescriptorState(conversations),
-    [conversations, refreshTick],
+    () => buildWarmSessionChatTailDescriptorState(conversations, { recentActivityMs }),
+    [conversations, recentActivityMs, refreshTick],
   )
 
   useEffect(() => {
