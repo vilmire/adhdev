@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest'
 import type { ActiveConversation } from '../../src/components/dashboard/types'
 import type { LiveSessionInboxState } from '../../src/components/dashboard/DashboardMobileChatShared'
 import {
+  applyDashboardNotificationOverlays,
   buildDashboardNotificationCandidates,
+  buildDashboardNotificationOverlays,
   buildDashboardNotificationStateBySessionId,
   deleteDashboardNotification,
   getDashboardNotificationUnreadCount,
   markDashboardNotificationRead,
   markDashboardNotificationUnread,
   markDashboardNotificationTargetRead,
+  reduceDashboardNotificationOverlays,
   reduceDashboardNotifications,
 } from '../../src/utils/dashboard-notifications'
 
@@ -106,6 +109,32 @@ describe('dashboard notifications', () => {
       [conversation],
       stateBySessionId,
       notificationStateBySessionId,
+    )
+
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]).toMatchObject({
+      type: 'task_complete',
+      providerSessionId: 'provider-1',
+      dedupKey: 'task_complete|provider-1|hash-1|100',
+    })
+  })
+
+  it('keeps task-complete candidates alive for the current completion when a local force-unread overlay exists', () => {
+    const conversation = createConversation({
+      providerSessionId: 'provider-1',
+    })
+    const stateBySessionId = new Map<string, LiveSessionInboxState>([
+      ['session-1', createLiveState({ unread: false, inboxBucket: 'task_complete' })],
+    ])
+    const overlayById = new Map([
+      ['task_complete|provider-1|hash-1|100', { id: 'task_complete|provider-1|hash-1|100', forceUnread: true }],
+    ])
+
+    const candidates = buildDashboardNotificationCandidates(
+      [conversation],
+      stateBySessionId,
+      undefined,
+      overlayById,
     )
 
     expect(candidates).toHaveLength(1)
@@ -495,23 +524,83 @@ describe('dashboard notifications', () => {
     expect(next).toEqual([])
   })
 
-  it('keeps only the most recent retained notifications', () => {
-    const existing = Array.from({ length: 4 }, (_, index) => ({
-      id: `n-${index}`,
-      dedupKey: `n-${index}`,
+  it('applies overlay-only read state onto current daemon-derived candidates without keeping old presentation records', () => {
+    const incoming = [{
+      id: 'task_complete|provider-1|hash-2|200',
+      dedupKey: 'task_complete|provider-1|hash-2|200',
       type: 'task_complete' as const,
       routeId: 'machine-1',
-      sessionId: `session-${index}`,
-      tabKey: `tab-${index}`,
-      title: `Session ${index}`,
-      preview: `Preview ${index}`,
-      createdAt: index,
-      updatedAt: index,
-      lastEventAt: index,
-    }))
+      sessionId: 'runtime-b',
+      providerSessionId: 'provider-1',
+      tabKey: 'tab-b',
+      title: 'Hermes fresh',
+      preview: 'Newest reply',
+      createdAt: 200,
+      updatedAt: 200,
+      lastEventAt: 200,
+    }]
+    const overlays = [{
+      id: 'task_complete|provider-1|hash-2|200',
+      readAt: 250,
+    }]
 
-    const next = reduceDashboardNotifications(existing, [], 2)
+    const next = applyDashboardNotificationOverlays(incoming, overlays)
 
-    expect(next).toEqual([])
+    expect(next).toHaveLength(1)
+    expect(next[0]).toMatchObject({
+      id: 'task_complete|provider-1|hash-2|200',
+      title: 'Hermes fresh',
+      preview: 'Newest reply',
+      readAt: 250,
+      createdAt: 200,
+      updatedAt: 200,
+    })
+  })
+
+  it('serializes only local overlay metadata for current notifications', () => {
+    const records = [
+      {
+        id: 'task_complete|provider-1|hash-1|100',
+        dedupKey: 'task_complete|provider-1|hash-1|100',
+        type: 'task_complete' as const,
+        routeId: 'machine-1',
+        sessionId: 'runtime-a',
+        providerSessionId: 'provider-1',
+        tabKey: 'tab-a',
+        title: 'Hermes',
+        preview: 'Done',
+        createdAt: 100,
+        updatedAt: 100,
+        lastEventAt: 100,
+        readAt: 150,
+      },
+      {
+        id: 'needs_attention|provider-2|hash-2|200',
+        dedupKey: 'needs_attention|provider-2|hash-2|200',
+        type: 'needs_attention' as const,
+        routeId: 'machine-2',
+        sessionId: 'runtime-b',
+        providerSessionId: 'provider-2',
+        tabKey: 'tab-b',
+        title: 'Codex',
+        preview: 'Approve',
+        createdAt: 200,
+        updatedAt: 200,
+        lastEventAt: 200,
+      },
+    ]
+
+    expect(buildDashboardNotificationOverlays(records)).toEqual([
+      { id: 'task_complete|provider-1|hash-1|100', readAt: 150 },
+    ])
+  })
+
+  it('drops stale overlay-only state when daemon-derived candidates disappear', () => {
+    const overlays = [
+      { id: 'task_complete|provider-1|hash-1|100', readAt: 150 },
+      { id: 'needs_attention|provider-2|hash-2|200', deletedAt: 250 },
+    ]
+
+    expect(reduceDashboardNotificationOverlays(overlays, [])).toEqual([])
   })
 })

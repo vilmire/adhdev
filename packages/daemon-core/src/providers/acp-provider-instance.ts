@@ -286,9 +286,8 @@ export class AcpProviderInstance implements ProviderInstance {
     getState(): AcpProviderState {
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
 
- // Recent 50 messages
-        const recentMessages = normalizeChatMessages(this.messages.slice(-50).map(m => {
-            const content = this.truncateContent(m.content);
+        const recentMessages = normalizeChatMessages(this.messages.map(m => {
+            const content = m.content;
             return buildChatMessage({
                 ...m,
                 content,
@@ -1239,19 +1238,6 @@ export class AcpProviderInstance implements ProviderInstance {
 
  // ─── Rich Content Helpers ────────────────────────────
 
-    /** Truncate content for transport (text: 2000 chars, images preserved) */
-    private truncateContent(content: string | ContentBlock[]): string | ContentBlock[] {
-        if (typeof content === 'string') {
-            return content.length > 2000 ? content.slice(0, 2000) + '\n... (truncated)' : content;
-        }
-        return content.map(b => {
-            if (b.type === 'text' && b.text.length > 2000) {
-                return { ...b, text: b.text.slice(0, 2000) + '\n... (truncated)' };
-            }
-            return b;
-        });
-    }
-
     /** Build ContentBlock[] from current partial state */
     private buildPartialBlocks(): ContentBlock[] {
         const blocks: ContentBlock[] = [];
@@ -1437,7 +1423,6 @@ export class AcpProviderInstance implements ProviderInstance {
 
     private pushEvent(event: ProviderEvent): void {
         this.events.push(event);
-        if (this.events.length > 50) this.events = this.events.slice(-50);
     }
 
     private appendSystemMessage(content: string, timestamp = Date.now()): void {

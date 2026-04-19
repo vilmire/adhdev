@@ -55,6 +55,7 @@ export type ProviderErrorReason =
     | 'auth_failed'     // Authentication/API key error
     | 'spawn_error'     // Process spawn failure
     | 'init_failed'     // Initialization/handshake failure
+    | 'parse_error'     // Provider parser/adapter script failure
     | 'crash'           // Unexpected process crash
     | 'timeout'         // Operation timeout
     | 'cdp_error'       // CDP connection failure (IDE)

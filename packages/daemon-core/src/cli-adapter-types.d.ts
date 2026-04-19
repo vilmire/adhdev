@@ -7,6 +7,8 @@ import type { ChatMessage } from './types.js';
 export interface CliAdapterStatus {
     status?: string;
     messages?: ChatMessage[];
+    errorMessage?: string;
+    errorReason?: string;
     activeModal?: {
         message: string;
         buttons: string[];

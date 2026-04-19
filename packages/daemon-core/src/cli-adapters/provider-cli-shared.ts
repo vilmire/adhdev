@@ -22,6 +22,8 @@ export interface CliSessionStatus {
     messages: CliChatMessage[];
     workingDir: string;
     activeModal: { message: string; buttons: string[] } | null;
+    errorMessage?: string;
+    errorReason?: string;
 }
 
 export interface CliScripts {

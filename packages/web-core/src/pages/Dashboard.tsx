@@ -14,7 +14,7 @@ import {
     shouldRetainOptimisticCliViewModeOverrideOnError,
 } from '../components/dashboard/cliViewModeOverrides'
 import { useWarmSessionChatTailControllers } from '../components/dashboard/session-chat-tail-controller'
-import { useHiddenTabs } from '../hooks/useHiddenTabs'
+import { useHiddenTabs, getHiddenConversationStorageKey, isConversationHidden } from '../hooks/useHiddenTabs'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
 import { useDashboardActiveTabRequests } from '../hooks/useDashboardActiveTabRequests'
@@ -36,7 +36,7 @@ import type { SavedSessionHistoryEntry } from '../components/dashboard/HistoryMo
 import DashboardVersionBanner from '../components/dashboard/DashboardVersionBanner'
 import type { Toast } from '../components/dashboard/ToastContainer'
 import type { DashboardMobileSection } from '../components/dashboard/DashboardMobileBottomNav'
-import { getMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
+import { getMobileDashboardMode, subscribeMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
 import { getDashboardWarmChatTailOptions } from '../utils/dashboard-warm-chat-tail'
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
 import { buildConversationIdentity, getConversationHistorySessionId } from '../components/dashboard/conversation-identity'
@@ -121,7 +121,8 @@ export default function Dashboard() {
     const [savedHistorySessions, setSavedHistorySessions] = useState<SavedSessionHistoryEntry[]>([])
     const [isSavedHistoryLoading, setIsSavedHistoryLoading] = useState(false)
     const [resumingSavedHistorySessionId, setResumingSavedHistorySessionId] = useState<string | null>(null)
-    const [mobileViewMode] = useState<'chat' | 'workspace'>(() => getMobileDashboardMode())
+    const [mobileViewMode, setMobileViewMode] = useState<'chat' | 'workspace'>(() => getMobileDashboardMode())
+    useEffect(() => subscribeMobileDashboardMode(setMobileViewMode), [])
     const warmChatTailOptions = useMemo(
         () => getDashboardWarmChatTailOptions({ isMobile, mobileViewMode }),
         [isMobile, mobileViewMode],
@@ -191,6 +192,22 @@ export default function Dashboard() {
         clearedTabs,
         hiddenTabs,
     })
+    const hiddenConversationKeyByTabKey = useMemo(
+        () => new Map(conversations.map(conversation => [conversation.tabKey, getHiddenConversationStorageKey(conversation)])),
+        [conversations],
+    )
+    const hideConversationByTabKey = useCallback((tabKey: string) => {
+        const targetKey = hiddenConversationKeyByTabKey.get(tabKey) || getHiddenConversationStorageKey({ tabKey })
+        hideDashboardTab(targetKey)
+    }, [hiddenConversationKeyByTabKey, hideDashboardTab])
+    const toggleHiddenConversationByTabKey = useCallback((tabKey: string) => {
+        const targetKey = hiddenConversationKeyByTabKey.get(tabKey) || getHiddenConversationStorageKey({ tabKey })
+        toggleHiddenTab(targetKey)
+    }, [hiddenConversationKeyByTabKey, toggleHiddenTab])
+    const showConversationByTabKey = useCallback((tabKey: string) => {
+        const targetKey = hiddenConversationKeyByTabKey.get(tabKey) || getHiddenConversationStorageKey({ tabKey })
+        showHiddenTab(targetKey)
+    }, [hiddenConversationKeyByTabKey, showHiddenTab])
     useWarmSessionChatTailControllers(visibleConversations, warmChatTailOptions)
     useEffect(() => {
         if (Object.keys(cliViewModeOverrides).length === 0) return
@@ -383,7 +400,7 @@ export default function Dashboard() {
     )
     const showMobileChatMode = isMobile && mobileViewMode === 'chat'
     const hiddenConversations = useMemo(
-        () => conversations.filter(conversation => hiddenTabs.has(conversation.tabKey)),
+        () => conversations.filter(conversation => isConversationHidden(hiddenTabs, conversation)),
         [conversations, hiddenTabs],
     )
 
@@ -796,13 +813,13 @@ export default function Dashboard() {
     }, [setSearchParams])
 
     const handleShowHiddenConversation = useCallback((conversation: import('../components/dashboard/types').ActiveConversation) => {
-        showHiddenTab(conversation.tabKey)
+        showConversationByTabKey(conversation.tabKey)
         handleOpenDesktopConversation(conversation)
-    }, [handleOpenDesktopConversation, showHiddenTab])
+    }, [handleOpenDesktopConversation, showConversationByTabKey])
 
     const handleHideConversation = useCallback((conversation: import('../components/dashboard/types').ActiveConversation) => {
-        hideDashboardTab(conversation.tabKey)
-    }, [hideDashboardTab])
+        hideConversationByTabKey(conversation.tabKey)
+    }, [hideConversationByTabKey])
 
     return (
         <div className="page-dashboard flex-1 min-h-0 bg-bg-primary text-text-primary flex flex-col overflow-hidden">
@@ -875,7 +892,7 @@ export default function Dashboard() {
                 setGroupActiveTabIds={setGroupActiveTabIds}
                 groupTabOrders={groupTabOrders}
                 setGroupTabOrders={setGroupTabOrders}
-                toggleHiddenTab={toggleHiddenTab}
+                toggleHiddenTab={toggleHiddenConversationByTabKey}
                 visibleConversations={visibleConversations}
                 hiddenConversations={hiddenConversations}
                 requestedDesktopTabKey={requestedDesktopTabKey}

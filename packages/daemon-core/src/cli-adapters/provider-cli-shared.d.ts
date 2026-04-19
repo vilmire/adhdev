@@ -15,10 +15,9 @@ export interface CliSessionStatus {
     status: 'idle' | 'generating' | 'waiting_approval' | 'error' | 'stopped' | 'starting';
     messages: CliChatMessage[];
     workingDir: string;
-    activeModal: {
-        message: string;
-        buttons: string[];
-    } | null;
+    activeModal: { message: string; buttons: string[] } | null;
+    errorMessage?: string;
+    errorReason?: string;
 }
 export interface CliScripts {
     parseOutput?: (input: CliScriptInput) => any;

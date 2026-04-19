@@ -40,7 +40,7 @@ export interface ActiveChatData {
     inputContent?: string;
 }
 /** Standardized error reasons across all provider categories */
-export type ProviderErrorReason = 'not_installed' | 'auth_failed' | 'spawn_error' | 'init_failed' | 'crash' | 'timeout' | 'cdp_error' | 'disconnected';
+export type ProviderErrorReason = 'not_installed' | 'auth_failed' | 'spawn_error' | 'init_failed' | 'parse_error' | 'crash' | 'timeout' | 'cdp_error' | 'disconnected';
 /** Common fields shared by all provider categories */
 interface ProviderStateBase {
     /** Provider type (e.g. 'gemini-cli', 'cursor', 'cline') */

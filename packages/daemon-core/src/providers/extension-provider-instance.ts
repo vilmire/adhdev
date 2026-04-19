@@ -246,7 +246,6 @@ export class ExtensionProviderInstance implements ProviderInstance {
 
     private pushEvent(event: ProviderEvent): void {
         this.events.push(event);
-        if (this.events.length > 50) this.events = this.events.slice(-50);
     }
 
     private applyProviderResponse(data: any, options: { phase: 'immediate' | 'turn_completed' }): void {
@@ -335,7 +334,6 @@ export class ExtensionProviderInstance implements ProviderInstance {
             key: dedupKey,
             message: normalizedMessage,
         });
-        if (this.runtimeMessages.length > 50) this.runtimeMessages = this.runtimeMessages.slice(-50);
 
         if (normalizedContent) {
             this.historyWriter.appendNewMessages(

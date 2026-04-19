@@ -113,6 +113,7 @@ export class ProviderCliAdapter implements CliAdapter {
     private recentOutputBuffer = '';
     private isWaitingForResponse = false;
     private activeModal: { message: string; buttons: string[] } | null = null;
+    private parseErrorMessage: string | null = null;
     private responseTimeout: NodeJS.Timeout | null = null;
     private idleTimeout: NodeJS.Timeout | null = null;
     private ready = false;
@@ -1267,10 +1268,12 @@ export class ProviderCliAdapter implements CliAdapter {
 
     getStatus(): CliSessionStatus {
         return {
-            status: this.currentStatus,
+            status: this.parseErrorMessage ? 'error' : this.currentStatus,
             messages: [...this.committedMessages],
             workingDir: this.workingDir,
             activeModal: this.activeModal,
+            errorMessage: this.parseErrorMessage || undefined,
+            errorReason: this.parseErrorMessage ? 'parse_error' : undefined,
         };
     }
 
@@ -1340,7 +1343,7 @@ export class ProviderCliAdapter implements CliAdapter {
             id: 'cli_session',
             status: this.currentStatus,
             title: this.cliName,
-            messages: messages.slice(-50).map((message, index) => buildChatMessage({
+            messages: messages.map((message, index) => buildChatMessage({
                 ...message,
                 id: message.id || `msg_${index}`,
                 index: typeof message.index === 'number' ? message.index : index,
@@ -1375,7 +1378,10 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     private parseCurrentTranscript(baseMessages: CliChatMessage[], partialResponse: string, scope?: TurnParseScope | null): any {
-        if (!this.cliScripts?.parseOutput) return null;
+        if (!this.cliScripts?.parseOutput) {
+            this.parseErrorMessage = null;
+            return null;
+        }
         try {
             const input = buildCliParseInput({
                 accumulatedBuffer: this.accumulatedBuffer,
@@ -1403,10 +1409,13 @@ export class ProviderCliAdapter implements CliAdapter {
                     lastAssistant.content = trimPromptEchoPrefix(lastAssistant.content, promptForTrim);
                 }
             }
+            this.parseErrorMessage = null;
             return parsed;
         } catch (e: any) {
-            LOG.warn('CLI', `[${this.cliType}] parseOutput error: ${e.message}`);
-            return null;
+            const message = e?.message || String(e);
+            this.parseErrorMessage = message;
+            LOG.warn('CLI', `[${this.cliType}] parseOutput error: ${message}`);
+            throw e;
         }
     }
 

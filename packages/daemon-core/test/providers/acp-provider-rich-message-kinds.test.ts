@@ -90,4 +90,46 @@ describe('AcpProviderInstance richer message kinds', () => {
       ]),
     )
   })
+
+  it('returns the full ACP transcript without slicing or text truncation', () => {
+    const instance = new AcpProviderInstance({
+      type: 'acp-test',
+      name: 'ACP Test',
+      category: 'acp',
+    } as any, '/tmp/project') as any
+
+    const longText = 'x'.repeat(2500)
+    instance.messages = Array.from({ length: 80 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: index === 79 ? longText : `message-${index + 1}`,
+      timestamp: index + 1,
+      receivedAt: index + 1,
+    }))
+
+    const messages = instance.getState().activeChat.messages
+
+    expect(messages).toHaveLength(80)
+    expect(messages[0]).toEqual(expect.objectContaining({ content: 'message-1' }))
+    expect(messages[79]).toEqual(expect.objectContaining({ content: longText }))
+  })
+
+  it('keeps all pending ACP events until flush instead of silently slicing to 50', () => {
+    const instance = new AcpProviderInstance({
+      type: 'acp-test',
+      name: 'ACP Test',
+      category: 'acp',
+    } as any, '/tmp/project') as any
+
+    for (let index = 0; index < 60; index += 1) {
+      instance.pushEvent({ event: 'provider:toast', effectId: `acp-${index + 1}`, timestamp: index + 1, message: `toast-${index + 1}` })
+    }
+
+    const first = instance.getState()
+    expect(first.pendingEvents).toHaveLength(60)
+    expect(first.pendingEvents[0]).toEqual(expect.objectContaining({ message: 'toast-1' }))
+    expect(first.pendingEvents[59]).toEqual(expect.objectContaining({ message: 'toast-60' }))
+
+    const second = instance.getState()
+    expect(second.pendingEvents).toEqual([])
+  })
 })

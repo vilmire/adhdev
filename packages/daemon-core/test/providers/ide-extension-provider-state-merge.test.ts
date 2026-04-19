@@ -110,4 +110,45 @@ describe('IDE/Extension provider state merge', () => {
     expect(state.providerSessionId).toBe('provider-session-1')
     expect(state.activeChat?.id).toBe('provider-session-1')
   })
+
+  it('keeps all extension runtime overlay messages instead of slicing them to 50', () => {
+    const instance = new ExtensionProviderInstance({
+      type: 'codex',
+      name: 'Codex',
+      category: 'extension',
+    } as any) as any
+
+    instance.historyWriter = { appendNewMessages: () => {} }
+    instance.chatTitle = 'Codex'
+    instance.chatId = 'chat-1'
+
+    for (let index = 0; index < 60; index += 1) {
+      instance.appendRuntimeMessage({ role: 'system', senderName: 'System', content: `ext-runtime-${index + 1}`, receivedAt: index + 1, timestamp: index + 1 }, `ext:${index + 1}`)
+    }
+
+    const state = instance.getState() as any
+    expect(state.activeChat.messages).toHaveLength(60)
+    expect(state.activeChat.messages[0]).toEqual(expect.objectContaining({ content: 'ext-runtime-1' }))
+    expect(state.activeChat.messages[59]).toEqual(expect.objectContaining({ content: 'ext-runtime-60' }))
+  })
+
+  it('keeps all ide runtime overlay messages instead of slicing them to 50', () => {
+    const instance = new IdeProviderInstance({
+      type: 'cursor',
+      name: 'Cursor',
+      category: 'ide',
+    } as any) as any
+
+    instance.historyWriter = { appendNewMessages: () => {} }
+    instance.chatTitle = 'Cursor'
+
+    for (let index = 0; index < 60; index += 1) {
+      instance.appendRuntimeMessage({ role: 'system', senderName: 'System', content: `ide-runtime-${index + 1}`, receivedAt: index + 1, timestamp: index + 1 }, `ide:${index + 1}`)
+    }
+
+    const state = instance.getState() as any
+    expect(state.activeChat.messages).toHaveLength(60)
+    expect(state.activeChat.messages[0]).toEqual(expect.objectContaining({ content: 'ide-runtime-1' }))
+    expect(state.activeChat.messages[59]).toEqual(expect.objectContaining({ content: 'ide-runtime-60' }))
+  })
 })

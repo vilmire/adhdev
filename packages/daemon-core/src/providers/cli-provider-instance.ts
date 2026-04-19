@@ -12,7 +12,7 @@ import * as fs from 'fs';
 import { createRequire } from 'node:module';
 import { normalizeInputEnvelope, type ProviderModule, flattenContent } from './contracts.js';
 import { assertTextOnlyInput } from './provider-input-support.js';
-import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
+import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason } from './provider-instance.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
@@ -114,6 +114,8 @@ export class CliProviderInstance implements ProviderInstance {
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     readonly instanceId: string;
     private suppressIdleHistoryReplay = false;
+    private errorMessage: string | undefined = undefined;
+    private errorReason: ProviderErrorReason | undefined = undefined;
 
     private presentationMode: 'terminal' | 'chat';
     private providerSessionId?: string;
@@ -302,9 +304,26 @@ export class CliProviderInstance implements ProviderInstance {
 
     getState(): ProviderState {
         const adapterStatus = this.adapter.getStatus();
-        const parsedStatus = this.adapter.getScriptParsedStatus?.() || null;
+        let parsedStatus: any = null;
+        let parseErrorMessage: string | undefined;
+        if (typeof this.adapter.getScriptParsedStatus === 'function') {
+            try {
+                parsedStatus = this.adapter.getScriptParsedStatus() || null;
+                this.errorMessage = undefined;
+                this.errorReason = undefined;
+            } catch (error: any) {
+                parseErrorMessage = error?.message || String(error);
+                this.errorMessage = parseErrorMessage;
+                this.errorReason = 'parse_error';
+            }
+        } else {
+            this.errorMessage = undefined;
+            this.errorReason = undefined;
+        }
         const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
-        const visibleStatus = autoApproveActive ? 'generating' : adapterStatus.status;
+        const visibleStatus = parseErrorMessage
+            ? 'error'
+            : (autoApproveActive ? 'generating' : adapterStatus.status);
         const parsedProviderSessionId = normalizeProviderSessionId(
             this.type,
             typeof parsedStatus?.providerSessionId === 'string' ? parsedStatus.providerSessionId : '',
@@ -314,7 +333,11 @@ export class CliProviderInstance implements ProviderInstance {
         }
         const runtime = this.adapter.getRuntimeMetadata();
         this.maybeAppendRuntimeRecoveryMessage(runtime);
-        let parsedMessages = Array.isArray(parsedStatus?.messages) ? parsedStatus.messages : [];
+        let parsedMessages = Array.isArray(parsedStatus?.messages)
+            ? parsedStatus.messages
+            : (parseErrorMessage
+                ? normalizeChatMessages(Array.isArray(adapterStatus.messages) ? adapterStatus.messages as any : [])
+                : []);
         const historyMessageCount = Number.isFinite(parsedStatus?.historyMessageCount)
             ? Math.max(0, Number(parsedStatus.historyMessageCount))
             : null;
@@ -365,7 +388,9 @@ export class CliProviderInstance implements ProviderInstance {
             activeChat: {
                 id: `${this.type}_${this.workingDir}`,
                 title: parsedStatus?.title || dirName,
-                status: autoApproveActive && parsedStatus?.status === 'waiting_approval'
+                status: parseErrorMessage
+                    ? 'error'
+                    : autoApproveActive && parsedStatus?.status === 'waiting_approval'
                     ? 'generating'
                     : (parsedStatus?.status || visibleStatus),
                 messages: mergedMessages,
@@ -394,6 +419,8 @@ export class CliProviderInstance implements ProviderInstance {
             controlValues: surface.controlValues,
             providerControls: this.provider.controls,
             summaryMetadata: surface.summaryMetadata as any,
+            errorMessage: this.errorMessage,
+            errorReason: this.errorReason,
         };
     }
 
@@ -591,8 +618,6 @@ export class CliProviderInstance implements ProviderInstance {
 
     private pushEvent(event: ProviderEvent): void {
         this.events.push(event);
- // Max 50
-        if (this.events.length > 50) this.events = this.events.slice(-50);
     }
 
     private flushEvents(): ProviderEvent[] {
@@ -805,9 +830,6 @@ export class CliProviderInstance implements ProviderInstance {
             key: dedupKey,
             message: normalizedMessage,
         });
-        if (this.runtimeMessages.length > 50) {
-            this.runtimeMessages = this.runtimeMessages.slice(-50);
-        }
 
         if (normalizedContent) {
             this.historyWriter.appendNewMessages(

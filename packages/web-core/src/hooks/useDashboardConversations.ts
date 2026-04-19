@@ -5,6 +5,7 @@ import { compareConversationRecency, getConversationSortTimestamp, getPreferredC
 import type { ActiveConversation, DashboardMessage } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
 import { normalizeTextContent } from '../utils/text'
+import { isConversationHidden } from './useHiddenTabs'
 
 type LocalMessageRef = {
     key: string
@@ -323,7 +324,7 @@ export function useDashboardConversations({
     }, [conversationTargetMap])
 
     const visibleConversations = useMemo(() => {
-        const next = conversations.filter(conversation => !hiddenTabs.has(conversation.tabKey))
+        const next = conversations.filter(conversation => !isConversationHidden(hiddenTabs, conversation))
         if (sameArrayRefs(visibleConversationsRef.current, next)) return visibleConversationsRef.current
         visibleConversationsRef.current = next
         return next

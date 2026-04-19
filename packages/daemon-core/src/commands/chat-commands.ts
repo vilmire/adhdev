@@ -469,9 +469,14 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (adapter) {
             _log(`${transport} adapter: ${adapter.cliType}`);
-            const parsedStatus = typeof adapter.getScriptParsedStatus === 'function'
-                ? parseMaybeJson(adapter.getScriptParsedStatus())
-                : null;
+            let parsedStatus: any = null;
+            if (typeof adapter.getScriptParsedStatus === 'function') {
+                try {
+                    parsedStatus = parseMaybeJson(adapter.getScriptParsedStatus());
+                } catch (error: any) {
+                    return { success: false, error: error?.message || String(error) };
+                }
+            }
             const parsedRecord = parsedStatus && typeof parsedStatus === 'object'
                 ? parsedStatus as Record<string, any>
                 : null;
