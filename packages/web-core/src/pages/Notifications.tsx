@@ -13,6 +13,7 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { Section } from '../components/ui/Section'
 import { ToggleRow } from '../components/settings/ToggleRow'
 import { useNotificationPrefs } from '../hooks/useNotificationPrefs'
+import { requestNotificationPermission } from '../hooks/useBrowserNotifications'
 import { useTransport } from '../context/TransportContext'
 import type { ProviderSettingsEntry, ProviderInfo } from './machine/types'
 import { buildProviderSettingsEntries, extractProviderSettingsPayload } from './machine/providerSettings'
@@ -75,6 +76,10 @@ interface NotificationsPageProps {
 export default function NotificationsPage({ machines, onBrowserPrefChange, renderPushSection }: NotificationsPageProps) {
     const [prefs, updatePrefs] = useNotificationPrefs()
     const { sendCommand } = useTransport()
+    const [browserPermission, setBrowserPermission] = useState<NotificationPermission | 'unsupported'>(() => {
+        if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported'
+        return Notification.permission
+    })
 
     /* ─── Provider alert settings (from daemons) ─── */
     const [settings, setSettings] = useState<Record<string, ProviderSettingsEntry[]>>({}) // machineId → entries
@@ -82,6 +87,24 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
     const [savingKey, setSavingKey] = useState<string | null>(null)
 
     const onlineMachines = useMemo(() => machines.filter(m => m.status === 'online'), [machines])
+
+    useEffect(() => {
+        const refreshPermission = () => {
+            if (typeof window === 'undefined' || !('Notification' in window)) {
+                setBrowserPermission('unsupported')
+                return
+            }
+            setBrowserPermission(Notification.permission)
+        }
+
+        refreshPermission()
+        window.addEventListener('focus', refreshPermission)
+        document.addEventListener('visibilitychange', refreshPermission)
+        return () => {
+            window.removeEventListener('focus', refreshPermission)
+            document.removeEventListener('visibilitychange', refreshPermission)
+        }
+    }, [])
 
     // Fetch provider settings from all online machines
     const fetchAllSettings = useCallback(async () => {
@@ -196,6 +219,35 @@ export default function NotificationsPage({ machines, onBrowserPrefChange, rende
                                 checked={prefs.browserNotifications}
                                 onChange={v => setBrowserPref('browserNotifications', v)}
                             />
+                        )}
+
+                        {prefs.globalEnabled && (
+                            <div className="ml-5 pl-3 border-l-2 border-border-subtle flex flex-col gap-2">
+                                <div className="text-[11px] text-text-muted">
+                                    Browser alerts only fire while this dashboard tab stays open in the background.{renderPushSection ? ' If you close the tab, use Push Notifications instead.' : ''}
+                                </div>
+                                {browserPermission === 'default' && (
+                                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-amber-300">
+                                        <span>This browser has not granted notification permission yet. Allow it to receive browser alerts.</span>
+                                        <button
+                                            onClick={() => { void requestNotificationPermission().then(setBrowserPermission) }}
+                                            className="px-2 py-0.5 rounded border border-border-default bg-bg-glass text-text-secondary hover:text-text-primary transition-colors"
+                                        >
+                                            Allow notifications
+                                        </button>
+                                    </div>
+                                )}
+                                {browserPermission === 'denied' && (
+                                    <div className="text-[11px] text-amber-300">
+                                        Browser notifications are blocked in site or browser settings. Re-enable them there to receive desktop alerts.
+                                    </div>
+                                )}
+                                {browserPermission === 'unsupported' && (
+                                    <div className="text-[11px] text-amber-300">
+                                        This browser cannot show desktop notifications here. Use a supported desktop browser, or rely on Push Notifications where available.
+                                    </div>
+                                )}
+                            </div>
                         )}
 
                         {prefs.globalEnabled && prefs.browserNotifications && (
