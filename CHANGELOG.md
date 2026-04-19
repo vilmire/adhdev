@@ -2,6 +2,17 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.79] - 2026-04-19
+
+### Added
+- Added regression coverage for standalone session-host namespace resolution so reserved `adhdev` overrides now exercise the warning-first fallback path instead of only the old hard-error behavior.
+
+### Fixed
+- Fixed standalone session-host isolation so explicitly setting `ADHDEV_SESSION_HOST_NAME=adhdev` no longer aborts startup; standalone now falls back to `adhdev-standalone` and surfaces a warning instead of fighting the global daemon namespace.
+
+### Changed
+- Exposed richer session-host app-name resolution metadata to shared daemon-core and standalone surfaces so downstream launch/status paths can report whether a namespace came from defaults, an explicit override, or an isolation fallback.
+
 ## [0.8.78] - 2026-04-19
 
 ### Added
