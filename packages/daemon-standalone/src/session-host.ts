@@ -5,14 +5,19 @@ import * as path from 'path';
 import {
   ensureSessionHostReady as ensureSharedSessionHostReady,
   listHostedCliRuntimes as listSharedHostedCliRuntimes,
-  resolveSessionHostAppName,
+  resolveSessionHostAppNameResolution,
   type SessionHostEndpoint,
 } from '@adhdev/daemon-core';
-const SESSION_HOST_APP_NAME = resolveSessionHostAppName({ standalone: true });
+const SESSION_HOST_APP_NAME_RESOLUTION = resolveSessionHostAppNameResolution({ standalone: true });
+const SESSION_HOST_APP_NAME = SESSION_HOST_APP_NAME_RESOLUTION.appName;
 const SESSION_HOST_START_TIMEOUT_MS = 15_000;
 
 export function getStandaloneSessionHostAppName(): string {
   return SESSION_HOST_APP_NAME;
+}
+
+export function getStandaloneSessionHostAppNameWarning(): string | undefined {
+  return SESSION_HOST_APP_NAME_RESOLUTION.warning;
 }
 
 function buildSessionHostEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

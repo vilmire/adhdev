@@ -266,7 +266,9 @@ export {
   DEFAULT_SESSION_HOST_APP_NAME,
   DEFAULT_STANDALONE_SESSION_HOST_APP_NAME,
   resolveSessionHostAppName,
+  resolveSessionHostAppNameResolution,
 } from './session-host/app-name.js';
+export type { SessionHostAppNameResolution } from './session-host/app-name.js';
 export { ensureSessionHostReady, listHostedCliRuntimes } from './session-host/runtime-support.js';
 export {
   getSessionHostRecoveryLabel,

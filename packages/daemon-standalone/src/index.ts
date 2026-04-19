@@ -58,6 +58,7 @@ import {
 import {
   ensureSessionHostReady,
   getStandaloneSessionHostAppName,
+  getStandaloneSessionHostAppNameWarning,
   listHostedCliRuntimes,
   proxySessionHostAttach,
   proxySessionHostList,
@@ -689,6 +690,10 @@ class StandaloneServer {
     const cdpCount = [...this.components.cdpManagers.values()].filter(m => m.isConnected).length;
     console.log(`   CDP: ${cdpCount > 0 ? `✅ ${cdpCount} connected` : '❌ none'}`);
     console.log(`   Providers: ${this.components.providerLoader.getAll().length} loaded`);
+    const sessionHostWarning = getStandaloneSessionHostAppNameWarning();
+    if (sessionHostWarning) {
+      console.warn(`   ⚠️  ${sessionHostWarning}`);
+    }
     console.log(`   Session Host: ${getStandaloneSessionHostAppName()}`);
     if (options.dev) {
       console.log(`   🛠️  DevConsole: http://127.0.0.1:19280`);

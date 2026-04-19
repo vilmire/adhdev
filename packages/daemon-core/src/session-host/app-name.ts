@@ -1,26 +1,48 @@
 export const DEFAULT_SESSION_HOST_APP_NAME = 'adhdev'
 export const DEFAULT_STANDALONE_SESSION_HOST_APP_NAME = 'adhdev-standalone'
 
-function validateStandaloneSessionHostAppName(explicit: string): void {
-  if (explicit !== DEFAULT_SESSION_HOST_APP_NAME) return
-  throw new Error(
-    `Standalone session-host namespace '${DEFAULT_SESSION_HOST_APP_NAME}' is reserved for the global daemon. `
-    + `Use '${DEFAULT_STANDALONE_SESSION_HOST_APP_NAME}' or another non-default namespace.`,
-  )
+export interface SessionHostAppNameResolution {
+  appName: string
+  warning?: string
+  source: 'default' | 'explicit' | 'reserved-standalone-fallback'
 }
 
-export function resolveSessionHostAppName(options: {
+function getReservedStandaloneNamespaceWarning(): string {
+  return `Standalone session-host namespace '${DEFAULT_SESSION_HOST_APP_NAME}' is reserved for the global daemon. `
+    + `Falling back to '${DEFAULT_STANDALONE_SESSION_HOST_APP_NAME}' for this standalone run.`
+}
+
+export function resolveSessionHostAppNameResolution(options: {
   standalone?: boolean
   env?: NodeJS.ProcessEnv
-} = {}): string {
+} = {}): SessionHostAppNameResolution {
   const env = options.env || process.env
   const explicit = typeof env.ADHDEV_SESSION_HOST_NAME === 'string'
     ? env.ADHDEV_SESSION_HOST_NAME.trim()
     : ''
 
   if (explicit) {
-    if (options.standalone) validateStandaloneSessionHostAppName(explicit)
-    return explicit
+    if (options.standalone && explicit === DEFAULT_SESSION_HOST_APP_NAME) {
+      return {
+        appName: DEFAULT_STANDALONE_SESSION_HOST_APP_NAME,
+        warning: getReservedStandaloneNamespaceWarning(),
+        source: 'reserved-standalone-fallback',
+      }
+    }
+    return {
+      appName: explicit,
+      source: 'explicit',
+    }
   }
-  return options.standalone ? DEFAULT_STANDALONE_SESSION_HOST_APP_NAME : DEFAULT_SESSION_HOST_APP_NAME
+  return {
+    appName: options.standalone ? DEFAULT_STANDALONE_SESSION_HOST_APP_NAME : DEFAULT_SESSION_HOST_APP_NAME,
+    source: 'default',
+  }
+}
+
+export function resolveSessionHostAppName(options: {
+  standalone?: boolean
+  env?: NodeJS.ProcessEnv
+} = {}): string {
+  return resolveSessionHostAppNameResolution(options).appName
 }
