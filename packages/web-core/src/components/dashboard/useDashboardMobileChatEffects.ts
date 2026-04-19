@@ -29,7 +29,7 @@ interface UseDashboardMobileChatEffectsOptions {
     setSection: (value: DashboardMobileSection) => void
     setMachineBackTarget: (value: 'inbox' | 'chat') => void
     resetMachineAction: () => void
-    markNotificationTargetRead: (target: { sessionId?: string; providerSessionId?: string; tabKey?: string; routeId?: string }) => void
+    markNotificationTargetRead: (target: { sessionId?: string; providerSessionId?: string; tabKey?: string; routeId?: string }, readAt?: number) => void
 }
 
 function logMobileReadDebug(event: string, payload: Record<string, unknown>) {
@@ -89,7 +89,7 @@ export function useDashboardMobileChatEffects({
             providerSessionId: conversation.providerSessionId,
             tabKey: conversation.tabKey,
             routeId: conversation.routeId,
-        })
+        }, readAt)
         void sendDaemonCommand(getConversationMachineId(conversation) || conversation.routeId, 'mark_session_seen', {
             sessionId: conversation.sessionId,
             seenAt: readAt,

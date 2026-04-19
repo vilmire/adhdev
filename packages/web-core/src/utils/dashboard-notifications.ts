@@ -1,5 +1,6 @@
 import type { RecentSessionBucket } from '@adhdev/daemon-core'
 import type { ActiveConversation } from '../components/dashboard/types'
+import { getConversationInboxSurfaceState } from '../components/dashboard/DashboardMobileChatShared'
 import {
   getConversationNotificationLabel,
   getConversationNotificationPreview,
@@ -85,6 +86,7 @@ export function buildDashboardNotificationDedupKey(args: {
 export function buildDashboardNotificationCandidates(
   conversations: ActiveConversation[],
   stateBySessionId: Map<string, DashboardNotificationLiveState>,
+  notificationStateBySessionId?: Map<string, DashboardNotificationSessionState>,
 ): DashboardNotificationRecord[] {
   const now = Date.now()
   const candidates: DashboardNotificationRecord[] = []
@@ -93,10 +95,12 @@ export function buildDashboardNotificationCandidates(
     const liveState = conversation.sessionId ? stateBySessionId.get(conversation.sessionId) : undefined
     if (liveState?.surfaceHidden) continue
 
-    const inboxBucket = liveState?.inboxBucket || 'idle'
-    const type: DashboardNotificationType | null = inboxBucket === 'needs_attention'
+    const surfaceState = getConversationInboxSurfaceState(conversation, stateBySessionId, {
+      notificationStateBySessionId,
+    })
+    const type: DashboardNotificationType | null = surfaceState.inboxBucket === 'needs_attention'
       ? 'needs_attention'
-      : inboxBucket === 'task_complete' && liveState?.unread
+      : surfaceState.inboxBucket === 'task_complete' && surfaceState.unread
         ? 'task_complete'
         : null
     if (!type) continue
@@ -136,44 +140,38 @@ export function reduceDashboardNotifications(
   incoming: DashboardNotificationRecord[],
   maxItems = MAX_DASHBOARD_NOTIFICATIONS,
 ): DashboardNotificationRecord[] {
-  const nextById = new Map<string, DashboardNotificationRecord>()
-
+  const previousById = new Map<string, DashboardNotificationRecord>()
   for (const record of previous) {
     if (record.deletedAt) continue
-    nextById.set(record.id, normalizeNotificationRecord(record))
-  }
-
-  for (const candidate of incoming) {
-    const normalized = normalizeNotificationRecord(candidate)
-    const existing = nextById.get(normalized.id)
-    if (!existing) {
-      nextById.set(normalized.id, normalized)
-      continue
-    }
-    nextById.set(normalized.id, {
-      ...existing,
-      ...normalized,
-      createdAt: existing.createdAt,
-      readAt: existing.readAt,
-      deletedAt: existing.deletedAt,
-    })
+    previousById.set(record.id, normalizeNotificationRecord(record))
   }
 
   const latestByTarget = new Map<string, DashboardNotificationRecord>()
-  for (const record of Array.from(nextById.values())) {
-    if (record.deletedAt) continue
-    const targetKey = getDashboardNotificationTargetKey(record)
+  for (const candidate of incoming) {
+    const normalized = normalizeNotificationRecord(candidate)
+    const previousRecord = previousById.get(normalized.id)
+    const nextRecord = previousRecord
+      ? {
+          ...normalized,
+          createdAt: previousRecord.createdAt,
+          readAt: previousRecord.readAt,
+          deletedAt: previousRecord.deletedAt,
+        }
+      : normalized
+    if (nextRecord.deletedAt) continue
+
+    const targetKey = getDashboardNotificationTargetKey(nextRecord)
     const existing = latestByTarget.get(targetKey)
     if (!existing) {
-      latestByTarget.set(targetKey, record)
+      latestByTarget.set(targetKey, nextRecord)
       continue
     }
 
     if (
-      record.updatedAt > existing.updatedAt
-      || (record.updatedAt === existing.updatedAt && record.createdAt > existing.createdAt)
+      nextRecord.updatedAt > existing.updatedAt
+      || (nextRecord.updatedAt === existing.updatedAt && nextRecord.createdAt > existing.createdAt)
     ) {
-      latestByTarget.set(targetKey, record)
+      latestByTarget.set(targetKey, nextRecord)
     }
   }
 

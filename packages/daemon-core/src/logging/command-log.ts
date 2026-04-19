@@ -118,6 +118,8 @@ const SKIP_COMMANDS = new Set([
     'status_report',
     'read_chat',
     'mark_session_seen',
+    'delete_notification',
+    'mark_notification_unread',
 ]);
 
 export function shouldLogCommand(cmd: string): boolean {

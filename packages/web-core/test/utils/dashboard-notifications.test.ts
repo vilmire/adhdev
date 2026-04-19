@@ -91,6 +91,31 @@ describe('dashboard notifications', () => {
     })
   })
 
+  it('keeps task-complete candidates aligned with notification unread state when live unread already cleared', () => {
+    const conversation = createConversation({
+      providerSessionId: 'provider-1',
+    })
+    const stateBySessionId = new Map<string, LiveSessionInboxState>([
+      ['session-1', createLiveState({ unread: false, inboxBucket: 'task_complete' })],
+    ])
+    const notificationStateBySessionId = new Map([
+      ['session-1', { unreadCount: 1, latestNotificationAt: 100, latestRecordId: 'task_complete|provider-1|hash-1|100' }],
+    ])
+
+    const candidates = buildDashboardNotificationCandidates(
+      [conversation],
+      stateBySessionId,
+      notificationStateBySessionId,
+    )
+
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]).toMatchObject({
+      type: 'task_complete',
+      providerSessionId: 'provider-1',
+      dedupKey: 'task_complete|provider-1|hash-1|100',
+    })
+  })
+
   it('dedupes repeated completion candidates while keeping the existing read state', () => {
     const existing = [{
       id: 'task_complete|session-1|hash-1|100',
@@ -424,6 +449,20 @@ describe('dashboard notifications', () => {
         updatedAt: 200,
         lastEventAt: 200,
       },
+      {
+        id: 'task_complete|provider-2|hash-9|190',
+        dedupKey: 'task_complete|provider-2|hash-9|190',
+        type: 'task_complete' as const,
+        routeId: 'machine-2',
+        sessionId: 'runtime-z',
+        providerSessionId: 'provider-2',
+        tabKey: 'tab-z',
+        title: 'Codex',
+        preview: 'Other conversation',
+        createdAt: 190,
+        updatedAt: 190,
+        lastEventAt: 190,
+      },
     ]
 
     const next = reduceDashboardNotifications(existing, incoming)
@@ -434,6 +473,26 @@ describe('dashboard notifications', () => {
       'task_complete|provider-2|hash-9|190',
     ])
     expect(next.find(record => record.providerSessionId === 'provider-1')?.preview).toBe('Newest reply')
+  })
+
+  it('drops local-only notifications that are no longer present in daemon-derived candidates', () => {
+    const existing = [{
+      id: 'task_complete|session-1|hash-1|100',
+      dedupKey: 'task_complete|session-1|hash-1|100',
+      type: 'task_complete' as const,
+      routeId: 'machine-1',
+      sessionId: 'session-1',
+      tabKey: 'tab-1',
+      title: 'Hermes',
+      preview: 'Done',
+      createdAt: 100,
+      updatedAt: 100,
+      lastEventAt: 100,
+    }]
+
+    const next = reduceDashboardNotifications(existing, [])
+
+    expect(next).toEqual([])
   })
 
   it('keeps only the most recent retained notifications', () => {
@@ -453,6 +512,6 @@ describe('dashboard notifications', () => {
 
     const next = reduceDashboardNotifications(existing, [], 2)
 
-    expect(next.map(record => record.id)).toEqual(['n-3', 'n-2'])
+    expect(next).toEqual([])
   })
 })

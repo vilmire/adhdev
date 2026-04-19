@@ -1,6 +1,8 @@
 import React from 'react'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
+import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
+import type { LiveSessionInboxState } from './DashboardMobileChatShared'
 import PaneGroup from './PaneGroup'
 
 interface DashboardPaneWorkspaceProps {
@@ -30,6 +32,8 @@ interface DashboardPaneWorkspaceProps {
     setGroupTabOrders: React.Dispatch<React.SetStateAction<Record<number, string[]>>>
     toggleHiddenTab: (tabKey: string) => void
     allowTabShortcuts?: boolean
+    notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
+    liveSessionInboxState: Map<string, LiveSessionInboxState>
 }
 
 export default function DashboardPaneWorkspace({
@@ -59,6 +63,8 @@ export default function DashboardPaneWorkspace({
     setGroupTabOrders,
     toggleHiddenTab,
     allowTabShortcuts = true,
+    notificationStateBySessionId,
+    liveSessionInboxState,
 }: DashboardPaneWorkspaceProps) {
     return (
         <div ref={containerRef} className={`flex-1 min-h-0 flex ${isSplitMode ? 'flex-row' : 'flex-col'} overflow-hidden`}>
@@ -124,6 +130,8 @@ export default function DashboardPaneWorkspace({
                             })}
                             onHideTab={toggleHiddenTab}
                             allowTabShortcuts={allowTabShortcuts}
+                            notificationStateBySessionId={notificationStateBySessionId}
+                            liveSessionInboxState={liveSessionInboxState}
                         />
                     </React.Fragment>
                 )

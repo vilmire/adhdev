@@ -10,10 +10,11 @@ import { useDashboardConversationCommands } from '../../hooks/useDashboardConver
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace'
 import { usePaneGroupDropZone } from '../../hooks/usePaneGroupDropZone'
 import { usePaneGroupTabs } from '../../hooks/usePaneGroupTabs'
-import { buildLiveSessionInboxStateMap, isConversationTaskCompleteUnread } from './DashboardMobileChatShared'
+import { isConversationTaskCompleteUnread, type LiveSessionInboxState } from './DashboardMobileChatShared'
 import { getCliConversationViewMode, isAcpConv } from './types'
 import type { ActiveConversation } from './types'
 import type { DaemonData } from '../../types'
+import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 import type { CliTerminalHandle } from '../CliTerminal'
 import PaneGroupContent from './PaneGroupContent'
 import PaneGroupDropOverlay from './PaneGroupDropOverlay'
@@ -59,6 +60,8 @@ export interface PaneGroupProps {
     /** Whether this group is the focused/active group (split mode) */
     isFocused?: boolean;
     allowTabShortcuts?: boolean;
+    notificationStateBySessionId?: Map<string, DashboardNotificationSessionState>;
+    liveSessionInboxState: Map<string, LiveSessionInboxState>;
 }
 
 export default function PaneGroup({
@@ -77,6 +80,8 @@ export default function PaneGroup({
     onHideTab,
     isFocused,
     allowTabShortcuts = true,
+    notificationStateBySessionId,
+    liveSessionInboxState,
 }: PaneGroupProps) {
     const { sendCommand } = useTransport()
     const terminalRef = useRef<CliTerminalHandle>(null)
@@ -136,15 +141,12 @@ export default function PaneGroup({
         if (!activeConv) return []
         return actionLogs.filter(log => log.routeId === activeConv.tabKey)
     }, [actionLogs, activeConv])
-    const liveSessionInboxState = useMemo(
-        () => buildLiveSessionInboxStateMap(ides),
-        [ides],
-    )
     const unreadTabKeys = useMemo(
         () => new Set(
             sortedConversations
                 .filter(conversation => isConversationTaskCompleteUnread(conversation, liveSessionInboxState, {
                     isOpenConversation: conversation.tabKey === activeTabId,
+                    notificationStateBySessionId,
                 }))
                 .map(conversation => conversation.tabKey),
         ),

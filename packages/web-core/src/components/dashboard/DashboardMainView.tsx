@@ -14,6 +14,7 @@ import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUti
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { IconX } from '../Icons'
 import type { DashboardNotificationRecord, DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
+import type { LiveSessionInboxState } from './DashboardMobileChatShared'
 import { conversationMatchesTarget } from './conversation-identity'
 
 type GuideTabId = 'overview' | 'quickstart' | 'shortcuts'
@@ -140,10 +141,11 @@ interface DashboardMainViewProps {
     notifications: DashboardNotificationRecord[]
     notificationUnreadCount: number
     notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
+    liveSessionInboxState: Map<string, LiveSessionInboxState>
     onMarkNotificationRead: (notificationId: string) => void
     onMarkNotificationUnread: (notificationId: string) => void
     onDeleteNotification: (notificationId: string) => void
-    onMarkNotificationTargetRead: (target: { sessionId?: string; providerSessionId?: string; tabKey?: string; routeId?: string }) => void
+    onMarkNotificationTargetRead: (target: { sessionId?: string; providerSessionId?: string; tabKey?: string; routeId?: string }, readAt?: number) => void
 }
 
 export default function DashboardMainView({
@@ -208,6 +210,7 @@ export default function DashboardMainView({
     notifications,
     notificationUnreadCount,
     notificationStateBySessionId,
+    liveSessionInboxState,
     onMarkNotificationRead,
     onMarkNotificationUnread,
     onDeleteNotification,
@@ -577,6 +580,7 @@ export default function DashboardMainView({
                     onShowAllHiddenConversations={onShowAllHiddenConversations}
                     onOpenNewSession={() => setNewSessionOpen(true)}
                     notificationStateBySessionId={notificationStateBySessionId}
+                    liveSessionInboxState={liveSessionInboxState}
                     onMarkNotificationTargetRead={onMarkNotificationTargetRead}
                 />
             ) : isMobile ? (
@@ -607,6 +611,8 @@ export default function DashboardMainView({
                     setGroupTabOrders={setGroupTabOrders}
                     toggleHiddenTab={toggleHiddenTab}
                     allowTabShortcuts={false}
+                    notificationStateBySessionId={notificationStateBySessionId}
+                    liveSessionInboxState={liveSessionInboxState}
                 />
             ) : (
                 <DashboardDockviewWorkspace
@@ -627,6 +633,7 @@ export default function DashboardMainView({
                         dockviewActionHandlersRef.current = handlers
                     }}
                     notificationStateBySessionId={notificationStateBySessionId}
+                    liveSessionInboxState={liveSessionInboxState}
                     onActiveTabChange={onDesktopActiveTabChange}
                     requestedActiveTabKey={requestedDesktopTabKey}
                     onRequestedActiveTabConsumed={onRequestedDesktopTabConsumed}

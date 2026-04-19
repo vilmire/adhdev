@@ -290,7 +290,9 @@ export type SessionCapability =
     | 'resize_terminal'
     | 'change_model'
     | 'set_mode'
-    | 'set_thought_level';
+    | 'set_thought_level'
+    | 'delete_notification'
+    | 'mark_notification_unread';
 
 import type { RuntimeWriteOwner, RuntimeAttachedClient, SessionStatus } from './shared-types-extra.js';
 export type { RuntimeWriteOwner, RuntimeAttachedClient, SessionStatus } from './shared-types-extra.js';

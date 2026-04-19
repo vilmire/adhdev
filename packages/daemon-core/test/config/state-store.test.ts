@@ -29,6 +29,8 @@ describe('state-store', () => {
       savedProviderSessions: [],
       sessionReads: {},
       sessionReadMarkers: {},
+      sessionNotificationDismissals: {},
+      sessionNotificationUnreadOverrides: {},
     });
   });
 
@@ -49,6 +51,8 @@ describe('state-store', () => {
       savedProviderSessions: [{ id: 'b', providerSessionId: 'sess_1' }],
       sessionReads: { good: 1 },
       sessionReadMarkers: { ok: 'done' },
+      sessionNotificationDismissals: {},
+      sessionNotificationUnreadOverrides: {},
     });
   });
 
@@ -64,6 +68,7 @@ describe('state-store', () => {
         done: 'marker',
         invalid: 1 as unknown as string,
       },
+      sessionNotificationDismissals: {},
     });
 
     const raw = JSON.parse(readFileSync(join(configDir, 'state.json'), 'utf-8'));
@@ -72,6 +77,8 @@ describe('state-store', () => {
       savedProviderSessions: [],
       sessionReads: { ok: 123 },
       sessionReadMarkers: { done: 'marker' },
+      sessionNotificationDismissals: {},
+      sessionNotificationUnreadOverrides: {},
     });
   });
 
@@ -137,6 +144,8 @@ describe('state-store', () => {
       sessionReadMarkers: {
         'provider:codex:turns:stable-1|stable-2': 'turn:stable',
       },
+      sessionNotificationDismissals: {},
+      sessionNotificationUnreadOverrides: {},
     });
   });
 
@@ -150,6 +159,8 @@ describe('state-store', () => {
       savedProviderSessions: [],
       sessionReads: {},
       sessionReadMarkers: {},
+      sessionNotificationDismissals: {},
+      sessionNotificationUnreadOverrides: {},
     });
   });
 });

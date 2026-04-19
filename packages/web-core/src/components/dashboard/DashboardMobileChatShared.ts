@@ -31,13 +31,16 @@ export interface MobileMachineActionState {
     message: string
 }
 
-export interface LiveSessionInboxState {
+export interface InboxSurfaceStateSource {
+    unread?: boolean
+    lastSeenAt?: number
+    lastUpdated?: number
+    inboxBucket?: RecentSessionBucket
+    surfaceHidden?: boolean
+}
+
+export interface LiveSessionInboxState extends Required<InboxSurfaceStateSource> {
     sessionId: string
-    unread: boolean
-    lastSeenAt: number
-    lastUpdated: number
-    inboxBucket: RecentSessionBucket
-    surfaceHidden: boolean
 }
 
 export interface ConversationInboxSurfaceState {
@@ -51,13 +54,7 @@ export interface ConversationInboxSurfaceState {
     inboxBucket: RecentSessionBucket
 }
 
-function normalizeInboxState(source: {
-    unread?: boolean
-    lastSeenAt?: number
-    lastUpdated?: number
-    inboxBucket?: RecentSessionBucket
-    surfaceHidden?: boolean
-}) {
+function normalizeInboxState(source: InboxSurfaceStateSource) {
     return {
         unread: !!source.unread,
         lastSeenAt: source.lastSeenAt || 0,
@@ -80,13 +77,7 @@ export function buildLiveSessionInboxStateMap(ides: DaemonData[]) {
 
     const register = (
         sessionId: string | undefined,
-        source: {
-            unread?: boolean
-            lastSeenAt?: number
-            lastUpdated?: number
-            inboxBucket?: RecentSessionBucket
-            surfaceHidden?: boolean
-        },
+        source: InboxSurfaceStateSource,
     ) => {
         if (!sessionId) return
         stateBySessionId.set(sessionId, {
@@ -108,7 +99,7 @@ export function buildLiveSessionInboxStateMap(ides: DaemonData[]) {
 
 export function getConversationLiveInboxState(
     conversation: ActiveConversation,
-    stateBySessionId: Map<string, LiveSessionInboxState>,
+    stateBySessionId: Map<string, InboxSurfaceStateSource>,
 ) {
     if (conversation.sessionId) {
         const liveState = stateBySessionId.get(conversation.sessionId)
@@ -126,7 +117,7 @@ export function getConversationLiveInboxState(
 
 export function getConversationInboxSurfaceState(
     conversation: ActiveConversation,
-    stateBySessionId: Map<string, LiveSessionInboxState>,
+    stateBySessionId: Map<string, InboxSurfaceStateSource>,
     options?: {
         hideOpenTaskCompleteUnread?: boolean
         isOpenConversation?: boolean
@@ -148,7 +139,7 @@ export function getConversationInboxSurfaceState(
     const isWorking = liveState.inboxBucket === 'working' || isGenerating
     const taskCompleteUnread = liveState.inboxBucket === 'task_complete'
         && (notificationState ? notificationState.unreadCount > 0 : liveState.unread)
-    const unread = (
+    const unread = !!(
         taskCompleteUnread
         && !(options?.hideOpenTaskCompleteUnread && options?.isOpenConversation)
     )
@@ -173,12 +164,16 @@ export function getConversationInboxSurfaceState(
 
 export function isConversationTaskCompleteUnread(
     conversation: ActiveConversation,
-    stateBySessionId: Map<string, LiveSessionInboxState>,
-    options?: { isOpenConversation?: boolean },
+    stateBySessionId: Map<string, InboxSurfaceStateSource>,
+    options?: {
+        isOpenConversation?: boolean
+        notificationStateBySessionId?: Map<string, DashboardNotificationSessionState>
+    },
 ) {
     return getConversationInboxSurfaceState(conversation, stateBySessionId, {
         hideOpenTaskCompleteUnread: true,
         isOpenConversation: options?.isOpenConversation,
+        notificationStateBySessionId: options?.notificationStateBySessionId,
     }).unread
 }
 

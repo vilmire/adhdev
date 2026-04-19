@@ -21,7 +21,7 @@ import { launchWithCdp, killIdeProcess, isIdeRunning } from '../launch.js';
 import { loadConfig, saveConfig, updateConfig } from '../config/config.js';
 import { loadState, saveState } from '../config/state-store.js';
 import { resolveIdeLaunchWorkspace } from '../config/workspaces.js';
-import { appendRecentActivity, getRecentActivity, markSessionSeen } from '../config/recent-activity.js';
+import { appendRecentActivity, getRecentActivity, markSessionSeen, dismissSessionNotification, markSessionNotificationUnread } from '../config/recent-activity.js';
 import { getSavedProviderSessions } from '../config/saved-sessions.js';
 import { listSavedHistorySessions } from '../config/chat-history.js';
 import { detectIDEs } from '../detection/ide-detector.js';
@@ -730,6 +730,64 @@ export class DaemonCommandRouter {
                     sessionId,
                     seenAt: next.sessionReads?.[sessionId] || Date.now(),
                     completionMarker,
+                };
+            }
+
+            case 'delete_notification': {
+                const sessionId = args?.sessionId;
+                const notificationId = typeof args?.notificationId === 'string' ? args.notificationId.trim() : '';
+                if (!sessionId || typeof sessionId !== 'string') {
+                    return { success: false, error: 'sessionId is required' };
+                }
+                if (!notificationId) {
+                    return { success: false, error: 'notificationId is required' };
+                }
+                const sessionEntries = buildSessionEntries(
+                    this.deps.instanceManager.collectAllStates(),
+                    this.deps.cdpManagers,
+                );
+                const targetSession = sessionEntries.find((entry) => entry.id === sessionId);
+                const next = dismissSessionNotification(
+                    loadState(),
+                    sessionId,
+                    notificationId,
+                    targetSession?.providerSessionId,
+                );
+                saveState(next);
+                this.deps.onStatusChange?.();
+                return {
+                    success: true,
+                    sessionId,
+                    notificationId,
+                };
+            }
+
+            case 'mark_notification_unread': {
+                const sessionId = args?.sessionId;
+                const notificationId = typeof args?.notificationId === 'string' ? args.notificationId.trim() : '';
+                if (!sessionId || typeof sessionId !== 'string') {
+                    return { success: false, error: 'sessionId is required' };
+                }
+                if (!notificationId) {
+                    return { success: false, error: 'notificationId is required' };
+                }
+                const sessionEntries = buildSessionEntries(
+                    this.deps.instanceManager.collectAllStates(),
+                    this.deps.cdpManagers,
+                );
+                const targetSession = sessionEntries.find((entry) => entry.id === sessionId);
+                const next = markSessionNotificationUnread(
+                    loadState(),
+                    sessionId,
+                    notificationId,
+                    targetSession?.providerSessionId,
+                );
+                saveState(next);
+                this.deps.onStatusChange?.();
+                return {
+                    success: true,
+                    sessionId,
+                    notificationId,
                 };
             }
 

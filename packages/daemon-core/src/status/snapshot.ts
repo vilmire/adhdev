@@ -9,7 +9,7 @@
 import * as os from 'os';
 import { loadConfig } from '../config/config.js';
 import { loadState } from '../config/state-store.js';
-import { getRecentActivity, getSessionSeenAt, getSessionSeenMarker } from '../config/recent-activity.js';
+import { getRecentActivity, getSessionSeenAt, getSessionSeenMarker, getSessionNotificationDismissal, getSessionNotificationUnreadOverride, applySessionNotificationOverlay, getSessionCurrentNotificationId } from '../config/recent-activity.js';
 import { getWorkspaceState } from '../config/workspaces.js';
 import { getHostMemorySnapshot } from '../system/host-memory.js';
 import { getTerminalBackendRuntimeStatus } from '../cli-adapters/terminal-screen.js';
@@ -259,6 +259,8 @@ function getLastDisplayMessage(session: {
     return null;
 }
 
+export { getSessionCurrentNotificationId, applySessionNotificationOverlay } from '../config/recent-activity.js';
+
 function getSessionMessageUpdatedAt(session: {
     activeChat?: {
         messages?: Array<{ receivedAt?: number | string; timestamp?: number | string }> | null
@@ -390,9 +392,22 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
                 completionMarker,
                 seenCompletionMarker,
             );
+        const { unread: overlayUnread, inboxBucket: overlayInboxBucket } = applySessionNotificationOverlay({
+            id: sourceSession.id,
+            providerSessionId: sourceSession.providerSessionId,
+            status: sourceSession.status,
+            unread,
+            inboxBucket,
+            lastMessageHash: sourceSession.lastMessageHash,
+            lastMessageAt: sourceSession.lastMessageAt,
+            lastUpdated: sourceSession.lastUpdated,
+        }, {
+            dismissedNotificationId: getSessionNotificationDismissal(state, sourceSession.id, sourceSession.providerSessionId),
+            unreadNotificationId: getSessionNotificationUnreadOverride(state, sourceSession.id, sourceSession.providerSessionId),
+        });
         session.lastSeenAt = lastSeenAt;
-        session.unread = unread;
-        session.inboxBucket = inboxBucket;
+        session.unread = overlayUnread;
+        session.inboxBucket = overlayInboxBucket;
         if (READ_DEBUG_ENABLED && (session.unread || session.inboxBucket !== 'idle' || session.providerType.includes('codex'))) {
             const recentReadSnapshot: RecentReadDebugSnapshot = {
                 sessionId: session.id,

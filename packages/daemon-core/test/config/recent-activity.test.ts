@@ -3,9 +3,13 @@ import {
   appendRecentActivity,
   buildRecentActivityKey,
   buildRecentActivityKeyForEntry,
+  dismissSessionNotification,
   getRecentActivity,
+  getSessionNotificationDismissal,
+  getSessionNotificationUnreadOverride,
   getSessionSeenAt,
   getSessionSeenMarker,
+  markSessionNotificationUnread,
   markSessionSeen,
 } from '../../src/config/recent-activity.js';
 import type { DaemonState } from '../../src/config/state-store.js';
@@ -16,6 +20,8 @@ function createState(): DaemonState {
     savedProviderSessions: [],
     sessionReads: {},
     sessionReadMarkers: {},
+    sessionNotificationDismissals: {},
+    sessionNotificationUnreadOverrides: {},
   };
 }
 
@@ -133,13 +139,18 @@ describe('recent-activity', () => {
     expect(second.sessionReadMarkers['session-1']).toBe('done-1');
   });
 
-  it('reuses providerSessionId read markers across runtime session id churn', () => {
+  it('reuses providerSessionId notification dismissals across runtime session id churn', () => {
     const state = createState();
-    const first = markSessionSeen(state, 'runtime-a', 100, 'done-1', 'provider-1');
+    const next = dismissSessionNotification(state, 'runtime-a', 'task_complete|provider-1|hash-1|100', 'provider-1');
 
-    expect(getSessionSeenAt(first, 'runtime-b', 'provider-1')).toBe(100);
-    expect(getSessionSeenMarker(first, 'runtime-b', 'provider-1')).toBe('done-1');
-    expect(first.sessionReads['provider:provider-1']).toBe(100);
-    expect(first.sessionReadMarkers['provider:provider-1']).toBe('done-1');
+    expect(getSessionNotificationDismissal(next, 'runtime-b', 'provider-1')).toBe('task_complete|provider-1|hash-1|100');
+    expect(next.sessionNotificationDismissals['provider:provider-1']).toBe('task_complete|provider-1|hash-1|100');
+  });
+
+  it('clears notification dismissals when the session is marked seen', () => {
+    const dismissed = dismissSessionNotification(createState(), 'runtime-a', 'task_complete|provider-1|hash-1|100', 'provider-1');
+    const next = markSessionSeen(dismissed, 'runtime-a', 100, 'done-1', 'provider-1');
+
+    expect(getSessionNotificationDismissal(next, 'runtime-a', 'provider-1')).toBe('');
   });
 });

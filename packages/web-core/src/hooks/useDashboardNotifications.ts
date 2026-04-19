@@ -37,11 +37,15 @@ export function useDashboardNotifications(args: {
   maxItems?: number
 }) {
   const { conversations, liveSessionInboxState, maxItems = MAX_DASHBOARD_NOTIFICATIONS } = args
-  const candidates = useMemo(
-    () => buildDashboardNotificationCandidates(conversations, liveSessionInboxState),
-    [conversations, liveSessionInboxState],
-  )
   const [notifications, setNotifications] = useState<DashboardNotificationRecord[]>(() => readDashboardNotifications())
+  const notificationStateBySessionId = useMemo(
+    () => buildDashboardNotificationStateBySessionId(notifications),
+    [notifications],
+  )
+  const candidates = useMemo(
+    () => buildDashboardNotificationCandidates(conversations, liveSessionInboxState, notificationStateBySessionId),
+    [conversations, liveSessionInboxState, notificationStateBySessionId],
+  )
 
   useEffect(() => {
     setNotifications(previous => {
@@ -56,10 +60,6 @@ export function useDashboardNotifications(args: {
 
   const unreadCount = useMemo(
     () => getDashboardNotificationUnreadCount(notifications),
-    [notifications],
-  )
-  const notificationStateBySessionId = useMemo(
-    () => buildDashboardNotificationStateBySessionId(notifications),
     [notifications],
   )
 

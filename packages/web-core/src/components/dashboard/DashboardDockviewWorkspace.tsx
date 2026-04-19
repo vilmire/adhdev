@@ -36,7 +36,7 @@ import {
     writeDashboardDockviewStoredLayout,
     type DashboardStoredHiddenTabLocation,
 } from '../../utils/dashboardLayoutStorage'
-import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState, type LiveSessionInboxState } from './DashboardMobileChatShared'
+import { getConversationInboxSurfaceState, type LiveSessionInboxState } from './DashboardMobileChatShared'
 import { getPreferredConversationForIde } from './conversation-sort'
 import { getCliConversationViewMode, isAcpConv } from './types'
 import { useTransport } from '../../context/TransportContext'
@@ -92,6 +92,7 @@ interface DashboardDockviewWorkspaceProps {
     onRequestedActiveTabConsumed?: () => void
     scrollToBottomRequest?: { tabKey: string; nonce: number } | null
     notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
+    liveSessionInboxState: Map<string, LiveSessionInboxState>
 }
 
 interface DashboardDockviewContextValue {
@@ -604,6 +605,7 @@ export default function DashboardDockviewWorkspace({
     onRequestedActiveTabConsumed,
     scrollToBottomRequest,
     notificationStateBySessionId,
+    liveSessionInboxState,
 }: DashboardDockviewWorkspaceProps) {
     const { theme } = useTheme()
     const { sendCommand } = useTransport()
@@ -629,10 +631,6 @@ export default function DashboardDockviewWorkspace({
     const conversationsByTabKey = useMemo(
         () => new Map(visibleConversations.map(conversation => [conversation.tabKey, conversation])),
         [visibleConversations],
-    )
-    const liveSessionInboxState = useMemo(
-        () => buildLiveSessionInboxStateMap(ides),
-        [ides],
     )
     const hasDetachedConversationPanels = useMemo(() => {
         const api = apiRef.current

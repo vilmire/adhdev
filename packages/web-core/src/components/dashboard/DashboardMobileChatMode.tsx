@@ -3,6 +3,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
+import type { MachineRecentLaunch } from '../../pages/machine/types'
 import { getCliConversationViewMode, isAcpConv, isCliConv } from './types'
 import {
     isExpectedCliViewModeTransportError,
@@ -14,8 +15,8 @@ import DashboardMobileChatInbox from './DashboardMobileChatInbox'
 import DashboardMobileMachineScreen from './DashboardMobileMachineScreen'
 import type { DashboardMobileSection } from './DashboardMobileBottomNav'
 import { getConversationTimestamp } from './conversation-sort'
-import type { MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
-import { buildLiveSessionInboxStateMap, getConversationInboxSurfaceState } from './DashboardMobileChatShared'
+import type { LiveSessionInboxState, MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
+import { getConversationInboxSurfaceState } from './DashboardMobileChatShared'
 import { getConversationMachineId, getConversationProviderType } from './conversation-selectors'
 import { getConversationPreviewText } from './conversation-presenters'
 import { compareMachineEntries } from '../../utils/daemon-utils'
@@ -23,7 +24,6 @@ import { buildMobileMachineCards, buildSelectedMachineRecentLaunches } from './d
 import { useDashboardMobileChatEffects } from './useDashboardMobileChatEffects'
 import { useDashboardMobileMachineActions } from './useDashboardMobileMachineActions'
 import { useDashboardMobileNavigationController } from './useDashboardMobileNavigationController'
-import type { MachineRecentLaunch } from '../../pages/machine/types'
 import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 
 declare const __APP_VERSION__: string
@@ -54,7 +54,8 @@ interface DashboardMobileChatModeProps {
     onHideConversation?: (conversation: ActiveConversation) => void
     onOpenNewSession?: () => void
     notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
-    onMarkNotificationTargetRead: (target: { sessionId?: string; providerSessionId?: string; tabKey?: string; routeId?: string }) => void
+    liveSessionInboxState: Map<string, LiveSessionInboxState>
+    onMarkNotificationTargetRead: (target: { sessionId?: string; providerSessionId?: string; tabKey?: string; routeId?: string }, readAt?: number) => void
 }
 
 function getAvatarText(primary: string) {
@@ -97,6 +98,7 @@ export default function DashboardMobileChatMode({
     onHideConversation,
     onOpenNewSession,
     notificationStateBySessionId,
+    liveSessionInboxState,
     onMarkNotificationTargetRead,
 }: DashboardMobileChatModeProps) {
     const [selectedTabKey, setSelectedTabKey] = useState<string | null>(() => conversations[0]?.tabKey || null)
@@ -128,10 +130,6 @@ export default function DashboardMobileChatMode({
     const selectedMachineEntry = useMemo(
         () => machineEntries.find(machine => machine.id === selectedMachineId) || null,
         [machineEntries, selectedMachineId],
-    )
-    const liveSessionInboxState = useMemo(
-        () => buildLiveSessionInboxStateMap(ides),
-        [ides],
     )
     const cmds = useDashboardConversationCommands({
         sendDaemonCommand,

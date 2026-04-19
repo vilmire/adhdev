@@ -212,6 +212,15 @@ export default function Dashboard() {
         conversations,
         liveSessionInboxState,
     })
+    const handleDeleteDashboardNotification = useCallback((notificationId: string) => {
+        const notification = notifications.find(record => record.id === notificationId)
+        deleteDashboardNotification(notificationId)
+        if (!notification?.sessionId) return
+        void sendDaemonCommand(notification.machineId || notification.routeId, 'delete_notification', {
+            sessionId: notification.sessionId,
+            notificationId: notification.id,
+        }).catch(() => {})
+    }, [deleteDashboardNotification, notifications, sendDaemonCommand])
     const lastDesktopAutoReadKeyRef = useRef<string | null>(null)
 
     const {
@@ -866,9 +875,10 @@ export default function Dashboard() {
                 notifications={notifications}
                 notificationUnreadCount={notificationUnreadCount}
                 notificationStateBySessionId={notificationStateBySessionId}
+                liveSessionInboxState={liveSessionInboxState}
                 onMarkNotificationRead={markDashboardNotificationRead}
                 onMarkNotificationUnread={markDashboardNotificationUnread}
-                onDeleteNotification={deleteDashboardNotification}
+                onDeleteNotification={handleDeleteDashboardNotification}
                 onMarkNotificationTargetRead={markDashboardNotificationTargetRead}
             />
 

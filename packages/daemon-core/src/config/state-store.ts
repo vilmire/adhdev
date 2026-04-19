@@ -23,6 +23,10 @@ export interface DaemonState {
     sessionReads: Record<string, number>;
     /** Last seen completion marker for live sessions, keyed by sessionId */
     sessionReadMarkers: Record<string, string>;
+    /** Current notification dismissal ids keyed by stable session target */
+    sessionNotificationDismissals: Record<string, string>;
+    /** Current notification unread override ids keyed by stable session target */
+    sessionNotificationUnreadOverrides: Record<string, string>;
 }
 
 const DEFAULT_STATE: DaemonState = {
@@ -30,6 +34,8 @@ const DEFAULT_STATE: DaemonState = {
     savedProviderSessions: [],
     sessionReads: {},
     sessionReadMarkers: {},
+    sessionNotificationDismissals: {},
+    sessionNotificationUnreadOverrides: {},
 };
 
 function isPlainObject(value: unknown): value is Record<string, any> {
@@ -71,12 +77,22 @@ function normalizeState(raw: unknown): DaemonState {
         Object.entries(isPlainObject(parsed.sessionReadMarkers) ? parsed.sessionReadMarkers : {})
             .filter(([key, value]) => !isLegacyVolatileSessionReadKey(key) && typeof value === 'string')
     );
+    const sessionNotificationDismissals = Object.fromEntries(
+        Object.entries(isPlainObject(parsed.sessionNotificationDismissals) ? parsed.sessionNotificationDismissals : {})
+            .filter(([key, value]) => !isLegacyVolatileSessionReadKey(key) && typeof value === 'string' && value.length > 0)
+    );
+    const sessionNotificationUnreadOverrides = Object.fromEntries(
+        Object.entries(isPlainObject(parsed.sessionNotificationUnreadOverrides) ? parsed.sessionNotificationUnreadOverrides : {})
+            .filter(([key, value]) => !isLegacyVolatileSessionReadKey(key) && typeof value === 'string' && value.length > 0)
+    );
 
     return {
         recentActivity,
         savedProviderSessions,
         sessionReads,
         sessionReadMarkers,
+        sessionNotificationDismissals,
+        sessionNotificationUnreadOverrides,
     };
 }
 
