@@ -11,6 +11,7 @@ describe('buildDashboardDockviewContextMenuItems', () => {
         floatActiveTab: '⌥+F',
         popoutActiveTab: '⌥+P',
         hideCurrentTab: '⌥+X',
+        setActiveTabShortcut: '⌥+S',
       },
     })
 
@@ -18,7 +19,7 @@ describe('buildDashboardDockviewContextMenuItems', () => {
       { type: 'action', id: 'floatAsPanel', label: 'Float as panel', shortcut: '⌥+F' },
       { type: 'action', id: 'openInNewWindow', label: 'Open in new window', shortcut: '⌥+P' },
       { type: 'separator', id: 'before-shortcut-actions' },
-      { type: 'action', id: 'setShortcut', label: 'Set shortcut' },
+      { type: 'action', id: 'setShortcut', label: 'Set shortcut', shortcut: '⌥+S' },
       { type: 'separator', id: 'before-hide-tab' },
       { type: 'action', id: 'hideTab', label: 'Hide tab', shortcut: '⌥+X', tone: 'muted' },
     ])
@@ -53,6 +54,7 @@ describe('buildDashboardDockviewContextMenuItems', () => {
         floatActiveTab: '⌥+F',
         popoutActiveTab: '⌥+P',
         hideCurrentTab: '⌥+X',
+        setActiveTabShortcut: '⌥+S',
       },
     })
 
@@ -60,6 +62,7 @@ describe('buildDashboardDockviewContextMenuItems', () => {
       type: 'action',
       id: 'setShortcut',
       label: 'Change shortcut (⌘+1)',
+      shortcut: '⌥+S',
     })
     expect(items).toContainEqual({
       type: 'action',

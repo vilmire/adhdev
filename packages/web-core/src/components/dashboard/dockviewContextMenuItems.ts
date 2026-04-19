@@ -56,6 +56,7 @@ export function buildDashboardDockviewContextMenuItems({
       type: 'action',
       id: 'setShortcut',
       label: tabShortcut ? `Change shortcut (${tabShortcut})` : 'Set shortcut',
+      shortcut: actionShortcuts.setActiveTabShortcut,
     },
   )
 
