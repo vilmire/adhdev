@@ -69,6 +69,7 @@ describe('state-store', () => {
         invalid: 1 as unknown as string,
       },
       sessionNotificationDismissals: {},
+      sessionNotificationUnreadOverrides: {},
     });
 
     const raw = JSON.parse(readFileSync(join(configDir, 'state.json'), 'utf-8'));

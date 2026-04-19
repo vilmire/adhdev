@@ -55,4 +55,23 @@ describe('session notification overlay', () => {
     expect(next.unread).toBe(true)
     expect(next.inboxBucket).toBe('task_complete')
   })
+
+  it('keeps newer notifications visible after an older dismissal', () => {
+    const next = applySessionNotificationOverlay({
+      id: 'runtime-a',
+      providerSessionId: 'provider-1',
+      status: 'idle',
+      unread: true,
+      inboxBucket: 'task_complete',
+      lastMessageHash: 'hash-2',
+      lastMessageAt: 200,
+      lastUpdated: 200,
+    } as any, {
+      dismissedNotificationId: 'task_complete|provider-1|hash-1|100',
+      unreadNotificationId: 'task_complete|provider-1|hash-1|100',
+    })
+
+    expect(next.unread).toBe(true)
+    expect(next.inboxBucket).toBe('task_complete')
+  })
 })

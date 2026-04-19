@@ -212,6 +212,25 @@ export default function Dashboard() {
         conversations,
         liveSessionInboxState,
     })
+    const handleMarkDashboardNotificationRead = useCallback((notificationId: string) => {
+        const notification = notifications.find(record => record.id === notificationId)
+        const readAt = Math.max(Date.now(), notification?.updatedAt || 0)
+        markDashboardNotificationRead(notificationId, readAt)
+        if (!notification?.sessionId) return
+        void sendDaemonCommand(notification.machineId || notification.routeId, 'mark_session_seen', {
+            sessionId: notification.sessionId,
+            seenAt: readAt,
+        }).catch(() => {})
+    }, [markDashboardNotificationRead, notifications, sendDaemonCommand])
+    const handleMarkDashboardNotificationUnread = useCallback((notificationId: string) => {
+        const notification = notifications.find(record => record.id === notificationId)
+        markDashboardNotificationUnread(notificationId)
+        if (!notification?.sessionId) return
+        void sendDaemonCommand(notification.machineId || notification.routeId, 'mark_notification_unread', {
+            sessionId: notification.sessionId,
+            notificationId: notification.id,
+        }).catch(() => {})
+    }, [markDashboardNotificationUnread, notifications, sendDaemonCommand])
     const handleDeleteDashboardNotification = useCallback((notificationId: string) => {
         const notification = notifications.find(record => record.id === notificationId)
         deleteDashboardNotification(notificationId)
@@ -876,8 +895,8 @@ export default function Dashboard() {
                 notificationUnreadCount={notificationUnreadCount}
                 notificationStateBySessionId={notificationStateBySessionId}
                 liveSessionInboxState={liveSessionInboxState}
-                onMarkNotificationRead={markDashboardNotificationRead}
-                onMarkNotificationUnread={markDashboardNotificationUnread}
+                onMarkNotificationRead={handleMarkDashboardNotificationRead}
+                onMarkNotificationUnread={handleMarkDashboardNotificationUnread}
                 onDeleteNotification={handleDeleteDashboardNotification}
                 onMarkNotificationTargetRead={markDashboardNotificationTargetRead}
             />

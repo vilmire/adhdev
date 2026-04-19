@@ -147,10 +147,20 @@ describe('recent-activity', () => {
     expect(next.sessionNotificationDismissals['provider:provider-1']).toBe('task_complete|provider-1|hash-1|100');
   });
 
-  it('clears notification dismissals when the session is marked seen', () => {
+  it('reuses providerSessionId unread overrides across runtime session id churn', () => {
+    const state = createState();
+    const next = markSessionNotificationUnread(state, 'runtime-a', 'task_complete|provider-1|hash-1|100', 'provider-1');
+
+    expect(getSessionNotificationUnreadOverride(next, 'runtime-b', 'provider-1')).toBe('task_complete|provider-1|hash-1|100');
+    expect(next.sessionNotificationUnreadOverrides['provider:provider-1']).toBe('task_complete|provider-1|hash-1|100');
+  });
+
+  it('clears notification dismissals and unread overrides when the session is marked seen', () => {
     const dismissed = dismissSessionNotification(createState(), 'runtime-a', 'task_complete|provider-1|hash-1|100', 'provider-1');
-    const next = markSessionSeen(dismissed, 'runtime-a', 100, 'done-1', 'provider-1');
+    const unread = markSessionNotificationUnread(dismissed, 'runtime-a', 'task_complete|provider-1|hash-1|100', 'provider-1');
+    const next = markSessionSeen(unread, 'runtime-a', 100, 'done-1', 'provider-1');
 
     expect(getSessionNotificationDismissal(next, 'runtime-a', 'provider-1')).toBe('');
+    expect(getSessionNotificationUnreadOverride(next, 'runtime-a', 'provider-1')).toBe('');
   });
 });
