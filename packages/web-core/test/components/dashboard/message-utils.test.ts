@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
     areLikelySameMessages,
     dedupeOptimisticMessages,
@@ -78,5 +78,23 @@ describe('dashboard message utils', () => {
             { role: 'user', content: 'Run tests', timestamp: 1000, _localId: 'a' },
             { role: 'user', content: 'Run tests', timestamp: 1005, _localId: 'b' },
         )).toBe(true)
+    })
+
+    it('prunes duplicate checks to likely candidate groups instead of scanning every prior message', () => {
+        const matcher = vi.fn((left: any, right: any) => left.id === right.id)
+        const messages = [
+            ...Array.from({ length: 39 }, (_, index) => ({
+                role: 'assistant',
+                content: `unique-message-${index}`,
+                receivedAt: index + 1,
+                id: `msg-${index}`,
+            })),
+            { role: 'assistant', content: 'unique-message-0', receivedAt: 999, id: 'msg-0' },
+        ]
+
+        dedupeOptimisticMessages(messages, matcher)
+
+        expect(matcher).toHaveBeenCalled()
+        expect(matcher.mock.calls.length).toBeLessThan(10)
     })
 })

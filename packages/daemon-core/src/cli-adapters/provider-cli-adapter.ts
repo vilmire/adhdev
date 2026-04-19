@@ -183,8 +183,23 @@ export class ProviderCliAdapter implements CliAdapter {
     private currentTurnScope: TurnParseScope | null = null;
     private traceEntries: CliTraceEntry[] = [];
     private traceSeq = 0;
-    private traceSessionId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    private traceSessionId = '';
+    private parsedStatusCache: {
+        committedMessagesRef: CliChatMessage[];
+        responseBuffer: string;
+        currentTurnScope: TurnParseScope | null;
+        recentOutputBuffer: string;
+        accumulatedBuffer: string;
+        accumulatedRawBuffer: string;
+        screenText: string;
+        currentStatus: CliSessionStatus['status'];
+        activeModal: { message: string; buttons: string[] } | null;
+        cliName: string;
+        lastOutputAt: number;
+        result: any;
+    } | null = null;
     private static readonly MAX_TRACE_ENTRIES = 250;
+
     private readonly providerResolutionMeta: ProviderResolutionMeta;
     private static readonly FINISH_RETRY_DELAY_MS = 300;
     private static readonly MAX_FINISH_RETRIES = 2;
@@ -324,7 +339,19 @@ export class ProviderCliAdapter implements CliAdapter {
                 `[${this.cliType}] Provider resolution: providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'} scriptsPath=${this.providerResolutionMeta.scriptsPath || '-'} source=${this.providerResolutionMeta.scriptsSource || '-'} version=${this.providerResolutionMeta.resolvedVersion || '-'}`
             );
         } else {
-            LOG.warn('CLI', `[${this.cliType}] ⚠ No CLI scripts loaded! Provider needs scripts/{version}/scripts.js`);
+            const resolutionSummary = `providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'} scriptsPath=${this.providerResolutionMeta.scriptsPath || '-'} source=${this.providerResolutionMeta.scriptsSource || '-'} version=${this.providerResolutionMeta.resolvedVersion || '-'}`;
+            const hasResolvedProviderScripts = Boolean(
+                this.providerResolutionMeta.providerDir
+                || this.providerResolutionMeta.scriptDir
+                || this.providerResolutionMeta.scriptsPath
+                || this.providerResolutionMeta.scriptsSource
+                || this.providerResolutionMeta.resolvedVersion,
+            );
+            if (hasResolvedProviderScripts) {
+                LOG.warn('CLI', `[${this.cliType}] ⚠ No CLI scripts loaded! Provider needs scripts/{version}/scripts.js (${resolutionSummary})`);
+            } else {
+                LOG.info('CLI', `[${this.cliType}] CLI scripts not yet resolved (${resolutionSummary})`);
+            }
         }
     }
 
@@ -1307,15 +1334,36 @@ export class ProviderCliAdapter implements CliAdapter {
      * Called by command handler / dashboard for rich content rendering.
      */
     getScriptParsedStatus(): any {
+        const screenText = this.terminalScreen.getText();
+        const cached = this.parsedStatusCache;
+        if (
+            cached
+            && cached.committedMessagesRef === this.committedMessages
+            && cached.responseBuffer === this.responseBuffer
+            && cached.currentTurnScope === this.currentTurnScope
+            && cached.recentOutputBuffer === this.recentOutputBuffer
+            && cached.accumulatedBuffer === this.accumulatedBuffer
+            && cached.accumulatedRawBuffer === this.accumulatedRawBuffer
+            && cached.screenText === screenText
+            && cached.currentStatus === this.currentStatus
+            && cached.activeModal === this.activeModal
+            && cached.cliName === this.cliName
+            && cached.lastOutputAt === this.lastOutputAt
+        ) {
+            return cached.result;
+        }
+
         const parsed = this.parseCurrentTranscript(
             this.committedMessages,
             this.responseBuffer,
             this.currentTurnScope,
+            screenText,
         );
         const shouldPreferCommittedMessages =
             !this.currentTurnScope
             && this.currentStatus === 'idle'
             && !this.activeModal;
+        let result: any;
         if (parsed && Array.isArray(parsed.messages)) {
             const hydratedMessages = shouldPreferCommittedMessages
                 ? this.committedMessages.map((message, index) => buildChatMessage({
@@ -1331,7 +1379,7 @@ export class ProviderCliAdapter implements CliAdapter {
                     scope: this.currentTurnScope,
                     lastOutputAt: this.lastOutputAt,
                 });
-            return {
+            result = {
                 id: parsed.id || 'cli_session',
                 status: parsed.status || this.currentStatus,
                 title: parsed.title || this.cliName,
@@ -1339,23 +1387,39 @@ export class ProviderCliAdapter implements CliAdapter {
                 activeModal: parsed.activeModal ?? this.activeModal,
                 providerSessionId: typeof parsed.providerSessionId === 'string' ? parsed.providerSessionId : undefined,
             };
+        } else {
+            const messages = [...this.committedMessages];
+            result = {
+                id: 'cli_session',
+                status: this.currentStatus,
+                title: this.cliName,
+                messages: messages.map((message, index) => buildChatMessage({
+                    ...message,
+                    id: message.id || `msg_${index}`,
+                    index: typeof message.index === 'number' ? message.index : index,
+                    receivedAt: typeof message.receivedAt === 'number'
+                        ? message.receivedAt
+                        : message.timestamp,
+                })),
+                activeModal: this.activeModal,
+            };
         }
 
-        const messages = [...this.committedMessages];
-        return {
-            id: 'cli_session',
-            status: this.currentStatus,
-            title: this.cliName,
-            messages: messages.map((message, index) => buildChatMessage({
-                ...message,
-                id: message.id || `msg_${index}`,
-                index: typeof message.index === 'number' ? message.index : index,
-                receivedAt: typeof message.receivedAt === 'number'
-                    ? message.receivedAt
-                    : message.timestamp,
-            })),
+        this.parsedStatusCache = {
+            committedMessagesRef: this.committedMessages,
+            responseBuffer: this.responseBuffer,
+            currentTurnScope: this.currentTurnScope,
+            recentOutputBuffer: this.recentOutputBuffer,
+            accumulatedBuffer: this.accumulatedBuffer,
+            accumulatedRawBuffer: this.accumulatedRawBuffer,
+            screenText,
+            currentStatus: this.currentStatus,
             activeModal: this.activeModal,
+            cliName: this.cliName,
+            lastOutputAt: this.lastOutputAt,
+            result,
         };
+        return result;
     }
 
     async invokeScript(scriptName: string, args?: Record<string, any>): Promise<any> {
@@ -1380,17 +1444,18 @@ export class ProviderCliAdapter implements CliAdapter {
         }));
     }
 
-    private parseCurrentTranscript(baseMessages: CliChatMessage[], partialResponse: string, scope?: TurnParseScope | null): any {
+    private parseCurrentTranscript(baseMessages: CliChatMessage[], partialResponse: string, scope?: TurnParseScope | null, screenTextOverride?: string): any {
         if (!this.cliScripts?.parseOutput) {
             this.parseErrorMessage = null;
             return null;
         }
         try {
+            const screenText = typeof screenTextOverride === 'string' ? screenTextOverride : this.terminalScreen.getText();
             const input = buildCliParseInput({
                 accumulatedBuffer: this.accumulatedBuffer,
                 accumulatedRawBuffer: this.accumulatedRawBuffer,
                 recentOutputBuffer: this.recentOutputBuffer,
-                terminalScreenText: this.terminalScreen.getText(),
+                terminalScreenText: screenText,
                 baseMessages,
                 partialResponse,
                 isWaitingForResponse: this.isWaitingForResponse,

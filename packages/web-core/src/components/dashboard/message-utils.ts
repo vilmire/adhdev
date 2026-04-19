@@ -93,15 +93,88 @@ export function choosePreferredMessage<T extends MessageLike>(existing: T, incom
         : existing
 }
 
-export function dedupeOptimisticMessages<T extends MessageLike>(messages: T[]): T[] {
+function hasStableMessageIdentity(message: MessageLike | null | undefined): boolean {
+    return !!message && !!(message.id || message._localId || message._turnKey)
+}
+
+function getMessageCandidateKeys(message: MessageLike | null | undefined): string[] {
+    if (!message) return []
+
+    const keys: string[] = []
+    const pushKey = (value: string | undefined) => {
+        if (value) keys.push(value)
+    }
+
+    if (message.id) pushKey(`id:${String(message.id)}`)
+    if (message._localId) pushKey(`local:${String(message._localId)}`)
+    if (message._turnKey) pushKey(`turn:${String(message._turnKey)}`)
+
+    const role = String(message.role || '').toLowerCase()
+    const content = getNormalizedMessageContent(message)
+    const timestamp = getMessageTimestamp(message)
+    const roundedTimestamp = timestamp ? Math.round(timestamp / 15000) : 0
+    if (role && content) {
+        pushKey(`content:${role}:${content}`)
+        pushKey(`preview:${role}:${content.slice(0, 120)}:${roundedTimestamp}`)
+    }
+
+    return keys
+}
+
+export function dedupeOptimisticMessages<T extends MessageLike>(
+    messages: T[],
+    matcher: (left: T | null | undefined, right: T | null | undefined) => boolean = areLikelySameMessages,
+): T[] {
     const result: T[] = []
+    const candidateBuckets = new Map<string, number[]>()
+
+    const addCandidateIndex = (message: T, index: number) => {
+        for (const key of getMessageCandidateKeys(message)) {
+            const bucket = candidateBuckets.get(key)
+            if (bucket) bucket.push(index)
+            else candidateBuckets.set(key, [index])
+        }
+    }
+
+    const removeCandidateIndex = (message: T, index: number) => {
+        for (const key of getMessageCandidateKeys(message)) {
+            const bucket = candidateBuckets.get(key)
+            if (!bucket) continue
+            const nextBucket = bucket.filter((entryIndex) => entryIndex !== index)
+            if (nextBucket.length > 0) candidateBuckets.set(key, nextBucket)
+            else candidateBuckets.delete(key)
+        }
+    }
+
     for (const message of messages) {
-        const duplicateIndex = result.findIndex((existing) => areLikelySameMessages(existing, message))
-        if (duplicateIndex >= 0) {
-            result.splice(duplicateIndex, 1, choosePreferredMessage(result[duplicateIndex]!, message))
+        const candidateIndices = new Set<number>()
+        for (const key of getMessageCandidateKeys(message)) {
+            const bucket = candidateBuckets.get(key)
+            if (!bucket) continue
+            bucket.forEach((index) => candidateIndices.add(index))
+        }
+
+        const duplicateIndex = candidateIndices.size > 0
+            ? Array.from(candidateIndices)
+                .sort((left, right) => left - right)
+                .find((index) => matcher(result[index], message))
+            : (!hasStableMessageIdentity(message)
+                ? result.findIndex((existing) => matcher(existing, message))
+                : -1)
+
+        if (duplicateIndex !== undefined && duplicateIndex >= 0) {
+            const preferred = choosePreferredMessage(result[duplicateIndex]!, message)
+            if (preferred !== result[duplicateIndex]) {
+                removeCandidateIndex(result[duplicateIndex]!, duplicateIndex)
+                result.splice(duplicateIndex, 1, preferred)
+                addCandidateIndex(preferred, duplicateIndex)
+            }
             continue
         }
+
+        const nextIndex = result.length
         result.push(message)
+        addCandidateIndex(message, nextIndex)
     }
     return result
 }
@@ -148,14 +221,38 @@ export function filterUnconfirmedLocalMessages(
     })
 }
 
-export function excludeMessagesPresentInLiveFeed<T extends MessageLike>(historyMessages: T[], liveMessages: MessageLike[]): T[] {
+export function excludeMessagesPresentInLiveFeed<T extends MessageLike>(
+    historyMessages: T[],
+    liveMessages: MessageLike[],
+    matcher: (left: T | null | undefined, right: MessageLike | null | undefined) => boolean = areLikelySameMessages,
+): T[] {
+    const liveCandidateBuckets = new Map<string, MessageLike[]>()
+    const addLiveCandidate = (message: MessageLike) => {
+        for (const key of getMessageCandidateKeys(message)) {
+            const bucket = liveCandidateBuckets.get(key)
+            if (bucket) bucket.push(message)
+            else liveCandidateBuckets.set(key, [message])
+        }
+    }
+    liveMessages.forEach(addLiveCandidate)
+
     return historyMessages.filter((historyMessage) => {
         const historyContent = getNormalizedMessageContent(historyMessage)
         const historyRole = String(historyMessage?.role || '').toLowerCase()
         const historyTs = getMessageTimestamp(historyMessage)
 
-        return !liveMessages.some((liveMessage) => {
-            if (areLikelySameMessages(historyMessage, liveMessage)) return true
+        const liveCandidates = new Set<MessageLike>()
+        for (const key of getMessageCandidateKeys(historyMessage)) {
+            const bucket = liveCandidateBuckets.get(key)
+            if (!bucket) continue
+            bucket.forEach((message) => liveCandidates.add(message))
+        }
+        const candidateList = liveCandidates.size > 0
+            ? Array.from(liveCandidates)
+            : liveMessages
+
+        return !candidateList.some((liveMessage) => {
+            if (matcher(historyMessage, liveMessage)) return true
 
             const liveRole = String(liveMessage?.role || '').toLowerCase()
             if (!historyContent || !historyRole || historyRole !== liveRole) return false

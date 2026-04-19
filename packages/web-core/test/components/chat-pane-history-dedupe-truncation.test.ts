@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { choosePreferredMessage, excludeMessagesPresentInLiveFeed } from '../../src/components/dashboard/message-utils'
 
 describe('message-utils history/live dedupe', () => {
@@ -21,5 +21,27 @@ describe('message-utils history/live dedupe', () => {
 
     const preferred = choosePreferredMessage(full, truncated)
     expect(String(preferred.content || '')).toContain('TAIL_MARKER_VISIBLE')
+  })
+
+  it('prunes history/live duplicate checks to likely live candidates', () => {
+    const matcher = vi.fn((historyMessage: any, liveMessage: any) => historyMessage.id === liveMessage.id)
+    const live = [
+      ...Array.from({ length: 39 }, (_, index) => ({
+        role: 'assistant',
+        content: `live-message-${index}`,
+        receivedAt: index + 1,
+        id: `msg-${index}`,
+      })),
+      { role: 'assistant', content: 'live-message-0', receivedAt: 999, id: 'msg-0' },
+    ]
+    const history = [
+      { role: 'assistant', content: 'live-message-0', receivedAt: 1000, id: 'msg-0' },
+    ]
+
+    const result = excludeMessagesPresentInLiveFeed(history, live, matcher)
+
+    expect(result).toEqual([])
+    expect(matcher).toHaveBeenCalled()
+    expect(matcher.mock.calls.length).toBeLessThan(10)
   })
 })

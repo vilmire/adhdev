@@ -1,10 +1,58 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { ProviderCliAdapter } from '../../src/cli-adapters/provider-cli-adapter.js'
+import { LOG } from '../../src/logging/logger.js'
 import { resetDebugRuntimeConfig, resolveDebugRuntimeConfig, setDebugRuntimeConfig } from '../../src/logging/debug-config.js'
 
 describe('ProviderCliAdapter message fallback shaping', () => {
   afterEach(() => {
     resetDebugRuntimeConfig()
+  })
+
+  it('logs unresolved missing CLI scripts as info instead of warning noise', () => {
+    const warnSpy = vi.spyOn(LOG, 'warn').mockImplementation(() => {})
+    const infoSpy = vi.spyOn(LOG, 'info').mockImplementation(() => {})
+
+    new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {},
+    } as any, '/tmp/project')
+
+    expect(warnSpy).not.toHaveBeenCalledWith('CLI', expect.stringContaining('No CLI scripts loaded'))
+    expect(infoSpy).toHaveBeenCalledWith('CLI', expect.stringContaining('CLI scripts not yet resolved'))
+  })
+
+  it('keeps warning when a resolved provider still has no CLI scripts', () => {
+    const warnSpy = vi.spyOn(LOG, 'warn').mockImplementation(() => {})
+
+    new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {},
+      _resolvedProviderDir: '/providers/test-cli',
+      _resolvedScriptDir: '/providers/test-cli/scripts/1.0',
+      _resolvedScriptsPath: '/providers/test-cli/scripts/1.0/scripts.js',
+      _resolvedScriptsSource: 'upstream',
+      _resolvedVersion: '1.0',
+    } as any, '/tmp/project')
+
+    expect(warnSpy).toHaveBeenCalledWith('CLI', expect.stringContaining('No CLI scripts loaded'))
   })
 
   it('preserves the full committed transcript when parseOutput is unavailable', () => {
@@ -179,6 +227,52 @@ describe('ProviderCliAdapter message fallback shaping', () => {
         cleanLength: 11,
       },
     })
+  })
+
+  it('reuses cached parsed status when transcript inputs have not changed', () => {
+    const parseOutput = vi.fn(() => ({
+      id: 'cli_session',
+      status: 'idle',
+      title: 'Test CLI',
+      messages: [
+        { role: 'assistant', content: 'parsed assistant', id: 'assistant-1', index: 1, receivedAt: 2 },
+      ],
+    }))
+
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+        parseOutput,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => 'screen snapshot'),
+    }
+    adapter.committedMessages = [
+      { role: 'user', content: 'hello', timestamp: 1, receivedAt: 1, id: 'user-1', index: 0 },
+      { role: 'assistant', content: 'parsed assistant', timestamp: 2, receivedAt: 2, id: 'assistant-1', index: 1 },
+    ]
+    adapter.currentStatus = 'idle'
+    adapter.activeModal = null
+
+    const first = adapter.getScriptParsedStatus()
+    const second = adapter.getScriptParsedStatus()
+
+    expect(parseOutput).toHaveBeenCalledTimes(1)
+    expect(second).toEqual(first)
   })
 })
 
