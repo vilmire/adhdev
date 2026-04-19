@@ -33,7 +33,7 @@ export default function CliTerminalPane({
 }: CliTerminalPaneProps) {
     const { ides } = useBaseDaemons();
     const chatInputRef = useRef<HTMLInputElement>(null);
-    const { sendCommand, sendData } = useTransport();
+    const { sendData } = useTransport();
     const [draftInput, setDraftInput] = useState('');
     const [runtimeReady, setRuntimeReady] = useState(false);
     const [terminalScale, setTerminalScale] = useState(1);
@@ -290,9 +290,7 @@ export default function CliTerminalPane({
                             sizingMode={terminalSizingMode}
                             onInput={(data) => {
                                 if (!runtimeReady) return;
-                                if (!sendData?.(daemonRouteId, { type: 'pty_input', sessionId, targetSessionId: sessionId, data })) {
-                                    sendCommand(daemonRouteId, 'pty_input', { targetSessionId: sessionId, data }).catch(console.error)
-                                }
+                                sendData?.(daemonRouteId, { type: 'pty_input', sessionId, targetSessionId: sessionId, data })
                             }}
                         />
                     </div>
