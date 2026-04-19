@@ -2,6 +2,17 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.8.81] - 2026-04-19
+
+### Added
+- Added focused web-core regression coverage locking the mobile dashboard warm chat-tail policy so chat-mode phones explicitly disable recent-idle background warming while desktop and workspace-mode keep the default behavior.
+
+### Fixed
+- Reduced shared mobile dashboard churn by disabling recent-idle warm chat-tail retention in mobile chat mode, so phones stop background-warming recently idle conversations while active/modal sessions still stay warm.
+
+### Changed
+- Split the shared dashboard warm transcript policy by surface: desktop keeps the existing warm-tail defaults, while mobile chat mode now takes the lower-churn path tuned for messenger-style use.
+
 ## [0.8.80] - 2026-04-19
 
 ### Added
