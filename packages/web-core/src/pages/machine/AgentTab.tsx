@@ -14,6 +14,10 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
+import {
+    isExpectedCliViewModeTransportError,
+    shouldRetainOptimisticCliViewModeOverrideOnError,
+} from '../../components/dashboard/cliViewModeOverrides'
 import { formatIdeType, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import {
     getLaunchPrimaryActionLabel,
@@ -77,14 +81,6 @@ function normalizePath(path: string | null | undefined) {
         .replace(/\\/g, '/')
         .replace(/\/+$/, '')
         .toLowerCase()
-}
-
-function isExpectedCliViewModeError(error: unknown) {
-    const message = error instanceof Error ? error.message : String(error || '')
-    return message.includes('P2P command timeout')
-        || message.includes('P2P not connected')
-        || message.includes('CLI session not found')
-        || message.includes('CLI_SESSION_NOT_FOUND')
 }
 
 export default function AgentTab({
@@ -590,10 +586,16 @@ export default function AgentTab({
             })
             if (openInDashboard) openSessionInDashboard(entry.sessionId)
         } catch (error) {
-            if (!isExpectedCliViewModeError(error)) {
+            const shouldRetainOverride = shouldRetainOptimisticCliViewModeOverrideOnError(error)
+            if (!isExpectedCliViewModeTransportError(error)) {
                 console.error('Failed to switch CLI view mode:', error)
             } else {
-                console.warn('Skipped CLI view mode switch:', error instanceof Error ? error.message : String(error))
+                console.warn(
+                    shouldRetainOverride
+                        ? 'CLI view mode result was lost after send; dashboard open will trust the requested mode:'
+                        : 'Skipped CLI view mode switch:',
+                    error instanceof Error ? error.message : String(error),
+                )
             }
         }
     }, [machineId, openSessionInDashboard, sendDaemonCommand])

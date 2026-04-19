@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { applyCliViewModeOverrides, getCliViewModeForSession, reconcileCliViewModeOverrides } from '../../../src/components/dashboard/cliViewModeOverrides'
+import {
+  applyCliViewModeOverrides,
+  getCliViewModeForSession,
+  isExpectedCliViewModeTransportError,
+  shouldRetainOptimisticCliViewModeOverrideOnError,
+  reconcileCliViewModeOverrides,
+} from '../../../src/components/dashboard/cliViewModeOverrides'
 import type { DaemonData } from '../../../src/types'
 
 function createEntry(overrides: Partial<DaemonData> = {}): DaemonData {
@@ -94,5 +100,20 @@ describe('cliViewModeOverrides', () => {
   it('clears an optimistic override once the server reports the same mode', () => {
     const next = reconcileCliViewModeOverrides({ 'cli-1': 'chat' }, [createEntry({ mode: 'chat' })])
     expect(next).toEqual({})
+  })
+
+  it('treats CLI view-mode timeout/not-connected errors as expected transport issues', () => {
+    expect(isExpectedCliViewModeTransportError(new Error('P2P command timeout (30s)'))).toBe(true)
+    expect(isExpectedCliViewModeTransportError(new Error('P2P not connected'))).toBe(true)
+    expect(isExpectedCliViewModeTransportError(new Error('P2P channel not open'))).toBe(true)
+    expect(isExpectedCliViewModeTransportError(new Error('something else'))).toBe(false)
+  })
+
+  it('keeps the optimistic override only when the command may have applied before the transport failed', () => {
+    expect(shouldRetainOptimisticCliViewModeOverrideOnError(new Error('P2P command timeout (30s)'))).toBe(true)
+    expect(shouldRetainOptimisticCliViewModeOverrideOnError(new Error('P2P data channel closed'))).toBe(true)
+    expect(shouldRetainOptimisticCliViewModeOverrideOnError(new Error('P2P receiver stopped'))).toBe(true)
+    expect(shouldRetainOptimisticCliViewModeOverrideOnError(new Error('P2P not connected'))).toBe(false)
+    expect(shouldRetainOptimisticCliViewModeOverrideOnError(new Error('P2P channel not open'))).toBe(false)
   })
 })

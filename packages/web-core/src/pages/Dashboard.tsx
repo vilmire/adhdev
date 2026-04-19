@@ -6,7 +6,14 @@ import { useTransport } from '../context/TransportContext'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import type { DaemonData } from '../types'
 import { isCliConv, isAcpConv, getCliConversationViewMode } from '../components/dashboard/types'
-import { applyCliViewModeOverrides, getCliViewModeForSession, reconcileCliViewModeOverrides } from '../components/dashboard/cliViewModeOverrides'
+import {
+    applyCliViewModeOverrides,
+    getCliViewModeForSession,
+    isExpectedCliViewModeTransportError,
+    reconcileCliViewModeOverrides,
+    shouldRetainOptimisticCliViewModeOverrideOnError,
+} from '../components/dashboard/cliViewModeOverrides'
+import { useWarmSessionChatTailControllers } from '../components/dashboard/session-chat-tail-controller'
 import { useHiddenTabs } from '../hooks/useHiddenTabs'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
@@ -65,14 +72,6 @@ function normalizeWorkspacePath(path: string | null | undefined) {
 function isP2PLaunchTimeout(error: unknown) {
     const message = error instanceof Error ? error.message : String(error || '')
     return message.includes('P2P command timeout')
-}
-
-function isExpectedCliViewModeError(error: unknown) {
-    const message = error instanceof Error ? error.message : String(error || '')
-    return message.includes('P2P command timeout')
-        || message.includes('P2P not connected')
-        || message.includes('CLI session not found')
-        || message.includes('CLI_SESSION_NOT_FOUND')
 }
 
 export default function Dashboard() {
@@ -187,6 +186,7 @@ export default function Dashboard() {
         clearedTabs,
         hiddenTabs,
     })
+    useWarmSessionChatTailControllers(visibleConversations)
     useEffect(() => {
         if (Object.keys(cliViewModeOverrides).length === 0) return
         setCliViewModeOverrides((prev) => reconcileCliViewModeOverrides(prev, ides))
@@ -713,7 +713,8 @@ export default function Dashboard() {
                 mode,
             })
         } catch (error) {
-            if (sessionId) {
+            const shouldRetainOverride = shouldRetainOptimisticCliViewModeOverrideOnError(error)
+            if (sessionId && !shouldRetainOverride) {
                 setCliViewModeOverrides((prev) => {
                     const next = { ...prev }
                     if (currentMode === getCliViewModeForSession(ides, sessionId)) {
@@ -724,10 +725,15 @@ export default function Dashboard() {
                     return next
                 })
             }
-            if (!isExpectedCliViewModeError(error)) {
+            if (!isExpectedCliViewModeTransportError(error)) {
                 console.error('Failed to switch CLI view mode:', error)
             } else {
-                console.warn('Skipped CLI view mode switch:', error instanceof Error ? error.message : String(error))
+                console.warn(
+                    shouldRetainOverride
+                        ? 'CLI view mode result was lost after send; keeping optimistic mode override:'
+                        : 'Skipped CLI view mode switch:',
+                    error instanceof Error ? error.message : String(error),
+                )
             }
         }
     }, [activeConv, ides, sendDaemonCommand])

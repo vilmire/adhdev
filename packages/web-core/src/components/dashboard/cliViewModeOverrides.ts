@@ -4,6 +4,27 @@ import type { CliConversationViewMode } from './types'
 
 type CliViewModeOverrideMap = Record<string, CliConversationViewMode>
 
+function getCliViewModeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error || '')
+}
+
+export function isExpectedCliViewModeTransportError(error: unknown): boolean {
+  const message = getCliViewModeErrorMessage(error)
+  return message.includes('P2P command timeout')
+    || message.includes('P2P not connected')
+    || message.includes('P2P channel not open')
+    || message.includes('P2P not available')
+    || message.includes('P2P data channel closed')
+    || message.includes('P2P receiver stopped')
+}
+
+export function shouldRetainOptimisticCliViewModeOverrideOnError(error: unknown): boolean {
+  const message = getCliViewModeErrorMessage(error)
+  return message.includes('P2P command timeout')
+    || message.includes('P2P data channel closed')
+    || message.includes('P2P receiver stopped')
+}
+
 function applySessionModeOverride<T extends { id?: string; sessionId?: string; transport?: SessionEntry['transport']; mode?: 'terminal' | 'chat' }>(
   session: T,
   overrides: CliViewModeOverrideMap,

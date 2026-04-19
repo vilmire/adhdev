@@ -4,6 +4,10 @@ import { useNavigate } from 'react-router-dom'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
 import { getCliConversationViewMode, isAcpConv, isCliConv } from './types'
+import {
+    isExpectedCliViewModeTransportError,
+    shouldRetainOptimisticCliViewModeOverrideOnError,
+} from './cliViewModeOverrides'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 import DashboardMobileChatRoom from './DashboardMobileChatRoom'
 import DashboardMobileChatInbox from './DashboardMobileChatInbox'
@@ -57,14 +61,6 @@ function getAvatarText(primary: string) {
     const text = primary.trim()
     if (!text) return '?'
     return text[0]!.toUpperCase()
-}
-
-function isExpectedCliViewModeError(error: unknown) {
-    const message = error instanceof Error ? error.message : String(error || '')
-    return message.includes('P2P command timeout')
-        || message.includes('P2P not connected')
-        || message.includes('CLI session not found')
-        || message.includes('CLI_SESSION_NOT_FOUND')
 }
 
 function sortInboxItems(items: MobileConversationListItem[]) {
@@ -303,10 +299,16 @@ export default function DashboardMobileChatMode({
                                 mode,
                             })
                         } catch (error) {
-                            if (!isExpectedCliViewModeError(error)) {
+                            const shouldRetainOverride = shouldRetainOptimisticCliViewModeOverrideOnError(error)
+                            if (!isExpectedCliViewModeTransportError(error)) {
                                 console.error('Failed to switch CLI view mode:', error)
                             } else {
-                                console.warn('Skipped CLI view mode switch:', error instanceof Error ? error.message : String(error))
+                                console.warn(
+                                    shouldRetainOverride
+                                        ? 'CLI view mode result was lost after send; keeping optimistic mobile mode override:'
+                                        : 'Skipped CLI view mode switch:',
+                                    error instanceof Error ? error.message : String(error),
+                                )
                             }
                         }
                     }}
