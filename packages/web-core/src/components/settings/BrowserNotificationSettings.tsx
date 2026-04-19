@@ -3,7 +3,9 @@
  * Uses the shared useNotificationPrefs hook from web-core.
  * No server API needed — works in both cloud and standalone.
  */
+import { useEffect, useState } from 'react'
 import { useNotificationPrefs } from '../../hooks/useNotificationPrefs'
+import { requestNotificationPermission } from '../../hooks/useBrowserNotifications'
 import { ToggleRow } from './ToggleRow'
 import { IconBell, IconMonitor, IconCheckCircle, IconZap, IconPlug } from '../Icons'
 
@@ -14,6 +16,28 @@ export interface BrowserNotificationSettingsProps {
 
 export function BrowserNotificationSettings({ onPrefChange }: BrowserNotificationSettingsProps) {
     const [prefs, updatePrefs] = useNotificationPrefs()
+    const [browserPermission, setBrowserPermission] = useState<NotificationPermission | 'unsupported'>(() => {
+        if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported'
+        return Notification.permission
+    })
+
+    useEffect(() => {
+        const refreshPermission = () => {
+            if (typeof window === 'undefined' || !('Notification' in window)) {
+                setBrowserPermission('unsupported')
+                return
+            }
+            setBrowserPermission(Notification.permission)
+        }
+
+        refreshPermission()
+        window.addEventListener('focus', refreshPermission)
+        document.addEventListener('visibilitychange', refreshPermission)
+        return () => {
+            window.removeEventListener('focus', refreshPermission)
+            document.removeEventListener('visibilitychange', refreshPermission)
+        }
+    }, [])
 
     const handleUpdate = (key: string, value: boolean) => {
         updatePrefs({ [key]: value })
@@ -40,6 +64,35 @@ export function BrowserNotificationSettings({ onPrefChange }: BrowserNotificatio
                     checked={prefs.browserNotifications}
                     onChange={v => handleUpdate('browserNotifications', v)}
                 />
+            )}
+
+            {prefs.globalEnabled && (
+                <div className="ml-5 pl-3 border-l-2 border-border-subtle flex flex-col gap-2">
+                    <div className="text-[11px] text-text-muted">
+                        Browser alerts only fire while this dashboard tab stays open in the background. If you close it, standalone cannot deliver hosted push notifications for you.
+                    </div>
+                    {browserPermission === 'default' && (
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-amber-300">
+                            <span>This browser has not granted notification permission yet. Allow it to receive local browser alerts.</span>
+                            <button
+                                onClick={() => { void requestNotificationPermission().then(setBrowserPermission) }}
+                                className="px-2 py-0.5 rounded border border-border-default bg-bg-glass text-text-secondary hover:text-text-primary transition-colors"
+                            >
+                                Allow notifications
+                            </button>
+                        </div>
+                    )}
+                    {browserPermission === 'denied' && (
+                        <div className="text-[11px] text-amber-300">
+                            Browser notifications are blocked in site or browser settings. Re-enable them there to receive standalone desktop alerts.
+                        </div>
+                    )}
+                    {browserPermission === 'unsupported' && (
+                        <div className="text-[11px] text-amber-300">
+                            This browser cannot show desktop notifications here. Keep the dashboard visible, or use another supported browser on this device.
+                        </div>
+                    )}
+                </div>
             )}
 
             {/* Sub-toggles */}
