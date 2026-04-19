@@ -37,6 +37,7 @@ import DashboardVersionBanner from '../components/dashboard/DashboardVersionBann
 import type { Toast } from '../components/dashboard/ToastContainer'
 import type { DashboardMobileSection } from '../components/dashboard/DashboardMobileBottomNav'
 import { getMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
+import { getDashboardWarmChatTailOptions } from '../utils/dashboard-warm-chat-tail'
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
 import { buildConversationIdentity, getConversationHistorySessionId } from '../components/dashboard/conversation-identity'
 import { getConversationActiveTabTarget, getConversationMachineId, getConversationProviderType } from '../components/dashboard/conversation-selectors'
@@ -121,6 +122,10 @@ export default function Dashboard() {
     const [isSavedHistoryLoading, setIsSavedHistoryLoading] = useState(false)
     const [resumingSavedHistorySessionId, setResumingSavedHistorySessionId] = useState<string | null>(null)
     const [mobileViewMode] = useState<'chat' | 'workspace'>(() => getMobileDashboardMode())
+    const warmChatTailOptions = useMemo(
+        () => getDashboardWarmChatTailOptions({ isMobile, mobileViewMode }),
+        [isMobile, mobileViewMode],
+    )
     const [actionLogs, setActionLogs] = useState<{ routeId: string; text: string; timestamp: number }[]>([])
     const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
     const [cliViewModeOverrides, setCliViewModeOverrides] = useState<Record<string, 'chat' | 'terminal'>>({})
@@ -186,7 +191,7 @@ export default function Dashboard() {
         clearedTabs,
         hiddenTabs,
     })
-    useWarmSessionChatTailControllers(visibleConversations)
+    useWarmSessionChatTailControllers(visibleConversations, warmChatTailOptions)
     useEffect(() => {
         if (Object.keys(cliViewModeOverrides).length === 0) return
         setCliViewModeOverrides((prev) => reconcileCliViewModeOverrides(prev, ides))
