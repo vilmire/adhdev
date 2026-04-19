@@ -4,7 +4,7 @@
  */
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
-import ControlsBar from './ControlsBar';
+import ChatControlsSection from './ChatControlsSection';
 import ChatInputBar from './ChatInputBar';
 import ConversationMetaChips from './ConversationMetaChips';
 import { getConversationViewStates } from './DashboardMobileChatShared';
@@ -265,20 +265,17 @@ export default function ChatPane({
                 scrollToBottomRequestNonce={scrollToBottomRequestNonce}
             />
 
-            {/* Controls Bar (dynamic or legacy fallback) */}
-            {isInputActive && !controlsContext.isCliTerminal && (() => {
-                return (
-                    <ControlsBar
-                        routeId={activeConv.routeId}
-                        sessionId={activeConv.sessionId}
-                        hostIdeType={activeConv.hostIdeType}
-                        providerType={controlsContext.providerType}
-                        displayLabel={controlsContext.displayLabel}
-                        controls={controlsContext.targetEntry?.providerControls}
-                        controlValues={controlsContext.targetEntry?.controlValues}
-                    />
-                );
-            })()}
+            <ChatControlsSection
+                routeId={activeConv.routeId}
+                sessionId={activeConv.sessionId}
+                hostIdeType={activeConv.hostIdeType}
+                providerType={controlsContext.providerType}
+                displayLabel={controlsContext.displayLabel}
+                controls={controlsContext.targetEntry?.providerControls}
+                controlValues={controlsContext.targetEntry?.controlValues}
+                isActive={isInputActive}
+                isCliTerminal={controlsContext.isCliTerminal}
+            />
             {!controlsContext.isCliTerminal && (
                 <ChatInputBar
                     contextKey={activeConv.tabKey}

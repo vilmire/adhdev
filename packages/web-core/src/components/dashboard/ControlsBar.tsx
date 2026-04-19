@@ -137,6 +137,18 @@ export function shouldHideBarControl(
     return ctrl.id === 'new_session' && HIDE_NEW_SESSION_BAR_PROVIDERS.has(providerType);
 }
 
+export function getVisibleBarControls(
+    controls: ProviderControlSchema[] | undefined,
+    options: {
+        hostIdeType?: string;
+        providerType: string;
+    },
+): ProviderControlSchema[] {
+    return (controls || [])
+        .filter(c => c.placement === 'bar' && c.hidden !== true && !shouldHideBarControl(options.hostIdeType, options.providerType, c))
+        .sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
+}
+
 export function buildControlValueScriptArgs(
     _ctrl: ProviderControlSchema,
     value: ControlScalarValue,
@@ -262,9 +274,10 @@ export default function ControlsBar({
         return null;
     }
 
-    const barControls = controls
-        .filter(c => c.placement === 'bar' && c.hidden !== true && !shouldHideBarControl(hostIdeType, providerType, c))
-        .sort((a, b) => (a.order ?? 50) - (b.order ?? 50));
+    const barControls = getVisibleBarControls(controls, {
+        hostIdeType,
+        providerType,
+    });
 
     if (barControls.length === 0) {
         return null;
