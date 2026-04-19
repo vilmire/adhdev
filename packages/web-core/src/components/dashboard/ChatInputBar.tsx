@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
+import { useControlsBarVisibility } from '../../hooks/useControlsBarVisibility';
 
 interface ChatInputBarProps {
     contextKey: string;
@@ -8,6 +9,7 @@ interface ChatInputBarProps {
     statusMessage?: string | null;
     onSend: (message: string) => Promise<boolean>;
     isActive?: boolean;
+    showControlsToggle?: boolean;
 }
 
 export function shouldDisableChatSendButton({
@@ -28,9 +30,11 @@ const ChatInputBar = memo(function ChatInputBar({
     statusMessage = null,
     onSend,
     isActive = true,
+    showControlsToggle = false,
 }: ChatInputBarProps) {
     const chatInputRef = useRef<HTMLInputElement>(null);
     const [draftInput, setDraftInput] = useState('');
+    const { isVisible: areControlsVisible, toggleVisibility: toggleControlsVisibility } = useControlsBarVisibility();
 
     useEffect(() => {
         setDraftInput('');
@@ -63,7 +67,23 @@ const ChatInputBar = memo(function ChatInputBar({
             }}
             aria-hidden={!isActive}
         >
-            <div className="flex gap-2.5 items-center" title={isActive ? `Send message to ${panelLabel}` : undefined}>
+            <div className="flex gap-2 items-center" title={isActive ? `Send message to ${panelLabel}` : undefined}>
+                {showControlsToggle && (
+                    <button
+                        type="button"
+                        onClick={toggleControlsVisibility}
+                        aria-label={areControlsVisible ? 'Hide controls' : 'Show controls'}
+                        aria-pressed={areControlsVisible}
+                        title={areControlsVisible ? 'Hide controls' : 'Show controls'}
+                        className="h-10 w-7 shrink-0 rounded-full border border-border-subtle bg-bg-secondary text-text-muted hover:text-text-primary hover:bg-[var(--surface-tertiary)] transition-colors flex items-center justify-center"
+                    >
+                        <svg width="12" height="18" viewBox="0 0 12 18" fill="currentColor" aria-hidden="true">
+                            <circle cx="6" cy="3" r="1.2" />
+                            <circle cx="6" cy="9" r="1.2" />
+                            <circle cx="6" cy="15" r="1.2" />
+                        </svg>
+                    </button>
+                )}
                 <div className="flex-1 relative">
                     <input
                         ref={chatInputRef}

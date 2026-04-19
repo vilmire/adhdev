@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import ChatControlsSection from './ChatControlsSection';
 import ChatInputBar from './ChatInputBar';
+import { getVisibleBarControls } from './ControlsBar';
 import ConversationMetaChips from './ConversationMetaChips';
 import { getConversationViewStates } from './DashboardMobileChatShared';
 import type { ActiveConversation } from './types';
@@ -72,6 +73,13 @@ export default function ChatPane({
     const controlsContext = useMemo(
         () => getConversationControlsContext(activeConv, ideEntry),
         [activeConv, ideEntry],
+    )
+    const visibleBarControls = useMemo(
+        () => getVisibleBarControls(controlsContext.targetEntry?.providerControls, {
+            hostIdeType: activeConv.hostIdeType,
+            providerType: controlsContext.providerType,
+        }),
+        [activeConv.hostIdeType, controlsContext.providerType, controlsContext.targetEntry?.providerControls],
     )
     const defaultVisibleLiveMessages = getDefaultVisibleLiveMessages({
         isCliLike: controlsContext.isCli || controlsContext.isAcp,
@@ -285,6 +293,7 @@ export default function ChatPane({
                     statusMessage={chatInputStatusMessage}
                     onSend={handleSendChat}
                     isActive={isInputActive}
+                    showControlsToggle={visibleBarControls.length > 0}
                 />
             )}
         </div>

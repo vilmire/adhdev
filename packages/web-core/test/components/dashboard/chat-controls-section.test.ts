@@ -26,7 +26,7 @@ describe('ChatControlsSection visibility preference', () => {
       }),
     )
 
-    expect(html).toContain('Show controls')
+    expect(html).toBe('')
     expect(html).not.toContain('Reasoning mode')
     expect(html).not.toContain('high')
   })
