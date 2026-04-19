@@ -52,6 +52,31 @@ adhdev standalone --no-open
 adhdev standalone --dev
 ```
 
+What those choices mean in practice:
+
+- plain `adhdev standalone` = localhost-only dashboard on this machine
+- `--host` = other devices on the same LAN can open it too
+- `--token` = best for scripts, curl, and operator-style access
+- dashboard password = best for normal browser users who should see a login prompt
+- `--host` with no token and no password = warning-first LAN exposure, not a hard block
+
+Standalone stays localhost-only by default. If you bind to `0.0.0.0` for LAN access, the dashboard warns when neither token auth nor a dashboard password is configured.
+
+The standalone UI already includes both settings surfaces:
+
+- `Settings` → `Dashboard Security`
+  - enable password
+  - update/change password
+  - disable password
+- `Settings` → `Network Access`
+  - save default localhost-only vs all-interfaces bind mode for future launches
+
+Canonical self-hosted docs:
+
+- [Self-hosted setup](https://docs.adhf.dev/self-hosted/setup)
+- [Self-hosted configuration](https://docs.adhf.dev/self-hosted/configuration)
+- [Self-hosted local API](https://docs.adhf.dev/self-hosted/local-api)
+
 Windows note:
 
 - Windows + Node.js 24+ is currently blocked for normal startup/install paths.
@@ -164,7 +189,7 @@ npm run dev -w packages/web-devconsole
 | Local-only dashboard | ✅ | ✅ |
 | Remote access outside LAN | ❌ | ✅ |
 | Multi-machine management | ❌ | ✅ |
-| API keys and webhooks | Local-only | ✅ |
+| API keys and hosted webhooks | ❌ | ✅ |
 | OAuth / account system | ❌ | ✅ |
 | Push notifications | ❌ | ✅ |
 | Team / sharing features | ❌ | ✅ |
