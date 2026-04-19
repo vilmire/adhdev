@@ -231,6 +231,7 @@ export class CliProviderInstance implements ProviderInstance {
 
     async onTick(): Promise<void> {
         if (this.providerSessionId) return;
+        if (this.type === 'hermes-cli' && this.launchMode === 'new') return;
 
         let probedSessionId: string | null = null;
 
