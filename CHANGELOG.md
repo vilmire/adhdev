@@ -5,13 +5,15 @@ All notable changes to ADHDev will be documented in this file.
 ## [0.8.82] - 2026-04-20
 
 ### Added
-- 
+- Added focused daemon-core regression coverage for parser crash surfacing, full CLI/ACP transcript retention, unsliced runtime overlay message retention, and pending-event flush behavior across CLI/IDE/extension/ACP providers.
+- Added focused web-core regression coverage for hidden-tab persistence keys, mobile dashboard mode settings, larger chat visibility defaults, and daemon-derived dashboard notification overlay reconciliation.
 
 ### Fixed
-- 
+- Fixed shared CLI/ACP chat continuity so parser/read-chat paths no longer silently fall back to stale partial transcripts, recent-50 transcript caps are removed, and ACP message bodies are no longer truncated to 2000 characters.
+- Fixed shared provider state surfaces so synthetic runtime messages and pending provider events are no longer silently sliced to 50 entries before live chat state or event flush consumers can see them.
 
 ### Changed
-- 
+- Re-centered dashboard state around daemon-derived conversation/notification truth by tightening hidden-tab identity, notification overlay reduction, and related mobile dashboard mode wiring instead of relying on fragmented local fallback state.
 ## [0.8.81] - 2026-04-19
 
 ### Added
