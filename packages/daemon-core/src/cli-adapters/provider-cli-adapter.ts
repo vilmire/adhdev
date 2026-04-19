@@ -17,6 +17,7 @@
 import * as os from 'os';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import { LOG } from '../logging/logger.js';
+import { getDebugRuntimeConfig } from '../logging/debug-config.js';
 import { TerminalScreen } from './terminal-screen.js';
 import {
     NodePtyTransportFactory,
@@ -485,7 +486,8 @@ export class ProviderCliAdapter implements CliAdapter {
         this.terminalScreen.write(rawData);
         const cleanData = sanitizeTerminalText(rawData);
         const now = Date.now();
-        const normalizedScreenSnapshot = normalizeScreenSnapshot(this.terminalScreen.getText());
+        const screenText = this.terminalScreen.getText();
+        const normalizedScreenSnapshot = normalizeScreenSnapshot(screenText);
         this.lastOutputAt = now;
         if (cleanData.trim()) this.lastNonEmptyOutputAt = now;
         if (normalizedScreenSnapshot !== this.lastScreenSnapshot) {
@@ -498,13 +500,14 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.idleFinishCandidate && (rawData.length > 0 || cleanData.length > 0)) {
             this.clearIdleFinishCandidate('new_output');
         }
-        this.recordTrace('output', {
-            rawLength: rawData.length,
-            cleanLength: cleanData.length,
-            rawPreview: summarizeCliTraceText(rawData, 300),
-            cleanPreview: summarizeCliTraceText(cleanData, 300),
-            screenText: summarizeCliTraceText(this.terminalScreen.getText(), 1200),
-        });
+        if (getDebugRuntimeConfig().collectDebugTrace) {
+            this.recordTrace('output', {
+                rawLength: rawData.length,
+                cleanLength: cleanData.length,
+                rawPreview: summarizeCliTraceText(rawData, 300),
+                cleanPreview: summarizeCliTraceText(cleanData, 300),
+            });
+        }
 
         if (this.startupParseGate) {
             this.scheduleStartupSettleCheck();
