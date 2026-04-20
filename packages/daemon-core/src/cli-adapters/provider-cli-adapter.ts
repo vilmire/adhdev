@@ -1550,12 +1550,40 @@ export class ProviderCliAdapter implements CliAdapter {
                     ? message.receivedAt
                     : message.timestamp,
             }));
+            const parsedLastAssistant = [...parsedHydratedMessages].reverse().find((message) => message.role === 'assistant' && typeof message.content === 'string' && message.content.trim());
+            const shouldAdoptParsedIdleReplay =
+                !this.currentTurnScope
+                && !this.activeModal
+                && this.currentStatus === 'idle'
+                && parsedHydratedMessages.length > committedHydratedMessages.length
+                && !!parsedLastAssistant;
+            if (shouldAdoptParsedIdleReplay) {
+                this.committedMessages = normalizeCliParsedMessages(parsed.messages, {
+                    committedMessages: this.committedMessages,
+                    scope: this.currentTurnScope,
+                    lastOutputAt: this.lastOutputAt,
+                });
+                this.syncMessageViews();
+            }
+            const effectiveCommittedHydratedMessages = shouldAdoptParsedIdleReplay
+                ? this.committedMessages.map((message, index) => buildChatMessage({
+                    ...message,
+                    id: message.id || `msg_${index}`,
+                    index: typeof message.index === 'number' ? message.index : index,
+                    receivedAt: typeof message.receivedAt === 'number'
+                        ? message.receivedAt
+                        : message.timestamp,
+                }))
+                : committedHydratedMessages;
             const shouldPreferCommittedHistoryReplay =
                 !this.currentTurnScope
                 && !this.activeModal
-                && committedHydratedMessages.length > parsedHydratedMessages.length;
-            const hydratedMessages = (shouldPreferCommittedMessages || shouldPreferCommittedHistoryReplay)
-                ? committedHydratedMessages
+                && effectiveCommittedHydratedMessages.length > parsedHydratedMessages.length;
+            const shouldPreferCommittedIdleReplay =
+                shouldPreferCommittedMessages
+                && !shouldAdoptParsedIdleReplay;
+            const hydratedMessages = (shouldPreferCommittedIdleReplay || shouldPreferCommittedHistoryReplay)
+                ? effectiveCommittedHydratedMessages
                 : parsedHydratedMessages;
             result = {
                 id: parsed.id || 'cli_session',

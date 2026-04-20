@@ -195,6 +195,31 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
     expect(result.messages[1].content).toBe('done')
   })
 
+  it('adopts a richer parsed idle Hermes transcript even after the active turn scope has already been cleared', () => {
+    const adapter = buildAdapter('hermes-cli')
+    adapter.committedMessages = [{ role: 'user', content: 'hello', timestamp: 1 }]
+    adapter.syncMessageViews()
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.currentTurnScope = null
+    adapter.activeModal = null
+    adapter.parseCurrentTranscript = () => ({
+      status: 'idle',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'done later' },
+      ],
+    })
+
+    const result = adapter.getScriptParsedStatus()
+
+    expect(adapter.committedMessages).toHaveLength(2)
+    expect(adapter.committedMessages[1].content).toBe('done later')
+    expect(result.status).toBe('idle')
+    expect(result.messages).toHaveLength(2)
+    expect(result.messages[1].content).toBe('done later')
+  })
+
   it('eventually finishes an idle-looking screen for non-Hermes CLI providers when the settled transcript still has no assistant turn', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-15T15:00:00Z'))
