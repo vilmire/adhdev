@@ -4,34 +4,32 @@ All notable changes to ADHDev will be documented in this file.
 
 ## [0.8.87] - 2026-04-20
 
-### Added
-- 
-
-### Fixed
-- 
-
 ### Changed
-- 
+- Re-cut the OSS release after `0.8.86` so the published package set and downstream cloud release chain could converge on a clean `main`-based `v0.8.87` tag without reusing tags.
+
 ## [0.8.86] - 2026-04-20
 
-### Added
-- 
-
 ### Fixed
-- 
+- Fixed the standalone font preferences regression in `packages/daemon-standalone/test/standalone-preferences.test.ts` by removing the `.ts` extension import that broke standalone typecheck during release verification.
 
 ### Changed
-- 
+- Reissued the OSS package set as `v0.8.86` after the standalone font-preferences follow-up so downstream cloud verification could consume a clean published build.
+
 ## [0.8.85] - 2026-04-20
 
 ### Added
-- 
+- Added standalone-only font preferences across the standalone daemon and dashboard, including saved preferences, settings UI, and regression coverage for custom chat/code/terminal font choices.
+- Added startup-restore and session-host transport regressions covering hosted-runtime restore on standalone startup and resume behavior for restored/orphan snapshots.
+- Added Claude CLI parser regressions covering long transcript retention, approval surfacing, chopped spinner-prefix cleanup, and exact-answer residue stripping.
 
 ### Fixed
-- 
+- Stabilized Claude and Hermes CLI live session state so tool/progress bubbles, short replies, long replies, and sequential turns commit against the correct transcript instead of stalling in stale `generating` state or dropping prior assistant turns.
+- Fixed standalone hosted-session restore by defaulting startup restore on, resuming restored session-host snapshots, and preferring richer committed transcript state over degraded startup parser surfaces.
+- Fixed CLI send-guard behavior so non-intervention providers block second-turn sends while parsed status is still generating, while Hermes keeps its immediate idle-commit path for visible settled assistant turns.
 
 ### Changed
-- 
+- Consolidated standalone/session-host recovery semantics around daemon-owned transcript state and provider-script-driven completion detection rather than browser-local or parser-fallback heuristics.
+
 ## [0.8.84] - 2026-04-20
 
 ### Added
