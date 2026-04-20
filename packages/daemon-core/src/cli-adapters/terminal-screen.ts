@@ -67,10 +67,12 @@ function logTerminalBackendSelection(
     if (loggedTerminalBackends.has(key)) return;
     loggedTerminalBackends.add(key);
     if (backendKind === 'xterm' && preference !== 'xterm' && !ghosttyAvailable) {
-        LOG.warn(
-            'Terminal',
-            `[terminal-screen] ghostty-vt unavailable; using xterm fallback (preference=${preference})`,
-        );
+        const message = `[terminal-screen] ghostty-vt unavailable; using xterm fallback (preference=${preference})`;
+        if (preference === 'auto') {
+            LOG.info('Terminal', message);
+        } else {
+            LOG.warn('Terminal', message);
+        }
         return;
     }
     LOG.info(

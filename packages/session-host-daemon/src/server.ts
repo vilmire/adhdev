@@ -6,7 +6,6 @@ import {
   createLineParser,
   createResponseEnvelope,
   getDefaultSessionHostEndpoint,
-  writeEnvelope,
 } from '@adhdev/session-host-core';
 import type {
   CreateSessionPayload,
@@ -66,6 +65,9 @@ export class SessionHostServer extends EventEmitter {
     this.ipcServer = net.createServer((socket) => {
       this.sockets.add(socket);
       socket.on('close', () => {
+        this.sockets.delete(socket);
+      });
+      socket.on('end', () => {
         this.sockets.delete(socket);
       });
       socket.on('error', () => {
@@ -345,8 +347,17 @@ export class SessionHostServer extends EventEmitter {
       this.sockets.delete(socket);
       return;
     }
+    const payload = `${JSON.stringify(envelope)}\n`;
     try {
-      writeEnvelope(socket, envelope);
+      socket.write(payload, (error?: Error | null) => {
+        if (!error) return;
+        this.sockets.delete(socket);
+        try {
+          socket.destroy();
+        } catch {
+          // noop
+        }
+      });
     } catch {
       this.sockets.delete(socket);
       try {

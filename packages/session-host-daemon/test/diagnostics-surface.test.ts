@@ -66,6 +66,46 @@ test('getHostDiagnostics groups sessions into live runtimes, recovery snapshots,
   assert.equal(diagnostics.inactiveRecords[0].surfaceKind, 'inactive_record')
 })
 
+test('writeEnvelopeSafely drops sockets that fail asynchronously with EPIPE', async () => {
+  const server = new SessionHostServer({ appName: 'adhdev-test-surface-epipe' }) as any
+  let destroyed = false
+  const socket = {
+    destroyed: false,
+    writable: true,
+    writableEnded: false,
+    write: (_payload: string, cb?: (error?: Error | null) => void) => {
+      queueMicrotask(() => cb?.(new Error('write EPIPE')))
+      return true
+    },
+    destroy: () => { destroyed = true },
+  }
+
+  server.sockets.add(socket)
+  server.writeEnvelopeSafely(socket, { kind: 'event', event: { type: 'host_log', entry: { timestamp: 1, level: 'warn', message: 'boom' } } })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  assert.equal(server.sockets.has(socket), false)
+  assert.equal(destroyed, true)
+})
+
+test('writeEnvelopeSafely ignores already-ended sockets immediately', () => {
+  const server = new SessionHostServer({ appName: 'adhdev-test-surface-ended' }) as any
+  let writeCalled = false
+  const socket = {
+    destroyed: false,
+    writable: true,
+    writableEnded: true,
+    write: () => { writeCalled = true; return true },
+    destroy: () => {},
+  }
+
+  server.sockets.add(socket)
+  server.writeEnvelopeSafely(socket, { kind: 'event', event: { type: 'host_log', entry: { timestamp: 1, level: 'warn', message: 'noop' } } })
+
+  assert.equal(server.sockets.has(socket), false)
+  assert.equal(writeCalled, false)
+})
+
 test('getHostDiagnostics strips launch env from diagnostics records to keep payloads lightweight', () => {
   const server = new SessionHostServer({ appName: 'adhdev-test-surface-sanitized' })
   const record = buildRecord({
