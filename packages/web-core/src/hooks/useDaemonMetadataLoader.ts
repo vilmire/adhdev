@@ -5,12 +5,12 @@ import { useBaseDaemonActions } from '../context/BaseDaemonContext'
 import { useTransport } from '../context/TransportContext'
 import { subscriptionManager } from '../managers/SubscriptionManager'
 import { statusPayloadToEntries } from '../utils/status-transform'
+import { DAEMON_METADATA_SUBSCRIPTION_WAIT_MS, DEFAULT_DAEMON_METADATA_FRESH_MS } from '../utils/daemon-timing'
 
 const metadataInFlight = new Map<string, Promise<void>>()
 const metadataLoadedAt = new Map<string, number>()
 const metadataSubscriptions = new Set<string>()
 const metadataWaiters = new Map<string, Set<(updated: boolean) => void>>()
-const METADATA_SUBSCRIPTION_WAIT_MS = 1200
 
 function unwrapStatusPayload(raw: unknown): StatusReportPayload | null {
     if (!raw || typeof raw !== 'object') return null
@@ -56,7 +56,7 @@ export function useDaemonMetadataLoader() {
     return useCallback(async (daemonId: string, opts?: { force?: boolean; minFreshMs?: number }) => {
         if (!daemonId) return
 
-        const minFreshMs = opts?.minFreshMs ?? 60_000
+        const minFreshMs = opts?.minFreshMs ?? DEFAULT_DAEMON_METADATA_FRESH_MS
         const loadedAt = metadataLoadedAt.get(daemonId) || 0
         if (!opts?.force && metadataSubscriptions.has(daemonId) && loadedAt > 0) {
             return
@@ -100,7 +100,7 @@ export function useDaemonMetadataLoader() {
                 )
 
                 if (!opts?.force) {
-                    const updated = await waitForMetadataUpdate(daemonId, METADATA_SUBSCRIPTION_WAIT_MS)
+                    const updated = await waitForMetadataUpdate(daemonId, DAEMON_METADATA_SUBSCRIPTION_WAIT_MS)
                     if (updated) return
                 }
             }

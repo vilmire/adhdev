@@ -9,6 +9,10 @@ import {
 } from '../../utils/session-host-surface'
 import { IconRefresh, IconServer, IconTerminal, IconUsers, IconWarning } from '../../components/Icons'
 import { getHostedRuntimeRecoveryDescription } from '../../utils/dashboard-launch-copy'
+import {
+    DEFAULT_SESSION_HOST_DIAGNOSTICS_INTERVAL_MS,
+    DEFAULT_SESSION_HOST_DIAGNOSTICS_LIMIT,
+} from '../../utils/daemon-timing'
 import { eventManager } from '../../managers/EventManager'
 import { useSessionHostDiagnosticsSubscription } from '../../hooks/useSessionHostDiagnosticsSubscription'
 import type { CliSessionEntry } from './types'
@@ -169,8 +173,8 @@ export default function SessionHostPanel({
     const sessionHostSubscription = useSessionHostDiagnosticsSubscription(machineId, {
         enabled: !!machineId,
         includeSessions: true,
-        limit: 12,
-        intervalMs: 8000,
+        limit: DEFAULT_SESSION_HOST_DIAGNOSTICS_LIMIT,
+        intervalMs: DEFAULT_SESSION_HOST_DIAGNOSTICS_INTERVAL_MS,
     })
     const diagnostics = sessionHostSubscription.diagnostics as SessionHostDiagnosticsView | null
     const loading = sessionHostSubscription.loading
@@ -190,7 +194,7 @@ export default function SessionHostPanel({
         try {
             const raw = await sendDaemonCommand(machineId, 'session_host_get_diagnostics', {
                 includeSessions: true,
-                limit: 12,
+                limit: DEFAULT_SESSION_HOST_DIAGNOSTICS_LIMIT,
             })
             const envelope = unwrapCommandEnvelope(raw)
             if (!envelope?.success) {

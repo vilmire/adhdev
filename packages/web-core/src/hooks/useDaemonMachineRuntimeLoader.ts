@@ -3,6 +3,7 @@ import type { MachineInfo } from '@adhdev/daemon-core'
 import { useBaseDaemonActions } from '../context/BaseDaemonContext'
 import { useTransport } from '../context/TransportContext'
 import type { DaemonData } from '../types'
+import { DEFAULT_MACHINE_RUNTIME_FRESH_MS } from '../utils/daemon-timing'
 
 const runtimeInFlight = new Map<string, Promise<void>>()
 const runtimeLoadedAt = new Map<string, number>()
@@ -37,7 +38,7 @@ export function useDaemonMachineRuntimeLoader() {
     return useCallback(async (daemonId: string, opts?: { force?: boolean; minFreshMs?: number }) => {
         if (!daemonId) return
 
-        const minFreshMs = opts?.minFreshMs ?? 15_000
+        const minFreshMs = opts?.minFreshMs ?? DEFAULT_MACHINE_RUNTIME_FRESH_MS
         const loadedAt = runtimeLoadedAt.get(daemonId) || 0
         if (!opts?.force && loadedAt > 0 && (Date.now() - loadedAt) < minFreshMs) {
             return

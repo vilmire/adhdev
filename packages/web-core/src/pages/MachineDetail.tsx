@@ -52,6 +52,7 @@ import {
     getRecentHistoryResumeConfirmDescription,
     getRecentHistoryResumeConfirmTitle,
 } from '../utils/dashboard-launch-copy'
+import { DEFAULT_MACHINE_RUNTIME_REFRESH_MS } from '../utils/daemon-timing'
 
 // ─── Component ───────────────────────────────────────
 interface MachineDetailProps {
@@ -103,7 +104,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
 
     useDaemonMachineRuntimeSubscription(
         machineId && activeTab === 'overview' ? [machineId] : [],
-        { enabled: activeTab === 'overview', intervalMs: 15_000 },
+        { enabled: activeTab === 'overview', intervalMs: DEFAULT_MACHINE_RUNTIME_REFRESH_MS },
     )
 
     const handleBack = () => {

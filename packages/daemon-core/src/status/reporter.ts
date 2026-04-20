@@ -6,6 +6,11 @@
  */
 
 import { LOG } from '../logging/logger.js';
+import {
+    DEFAULT_STATUS_INITIAL_REPORT_DELAY_MS,
+    DEFAULT_STATUS_P2P_REPORT_INTERVAL_MS,
+    DEFAULT_STATUS_SERVER_REPORT_INTERVAL_MS,
+} from '../runtime-defaults.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { MachineInfo } from '../shared-types.js';
 import type { CloudStatusReportPayload, DaemonStatusEventPayload } from '../shared-types.js';
@@ -63,13 +68,13 @@ export class DaemonStatusReporter {
     startReporting(): void {
         setTimeout(() => {
             this.sendUnifiedStatusReport({ forceServer: true, reason: 'initial' }).catch(e => LOG.warn('Status', `Initial report failed: ${e?.message}`));
-        }, 2000);
+        }, DEFAULT_STATUS_INITIAL_REPORT_DELAY_MS);
 
         const scheduleServerReport = () => {
             this.statusTimer = setTimeout(() => {
                 this.sendUnifiedStatusReport({ forceServer: true, reason: 'periodic' }).catch(e => LOG.warn('Status', `Periodic report failed: ${e?.message}`));
                 scheduleServerReport();
-            }, 30_000);
+            }, DEFAULT_STATUS_SERVER_REPORT_INTERVAL_MS);
         };
         scheduleServerReport();
 
@@ -77,7 +82,7 @@ export class DaemonStatusReporter {
             if (this.deps.p2p?.isConnected) {
                 this.sendUnifiedStatusReport({ p2pOnly: true }).catch(e => LOG.warn('Status', `P2P status send failed: ${e?.message}`));
             }
-        }, 5_000);
+        }, DEFAULT_STATUS_P2P_REPORT_INTERVAL_MS);
     }
 
     stopReporting(): void {
@@ -92,14 +97,14 @@ export class DaemonStatusReporter {
     throttledReport(): void {
         const now = Date.now();
         const elapsed = now - this.lastStatusSentAt;
-        if (elapsed >= 5_000) {
+        if (elapsed >= DEFAULT_STATUS_P2P_REPORT_INTERVAL_MS) {
             this.sendUnifiedStatusReport().catch(e => LOG.warn('Status', `Throttled report failed: ${e?.message}`));
         } else if (!this.statusPendingThrottle) {
             this.statusPendingThrottle = true;
             setTimeout(() => {
                 this.statusPendingThrottle = false;
                 this.sendUnifiedStatusReport().catch(e => LOG.warn('Status', `Deferred report failed: ${e?.message}`));
-            }, 5_000 - elapsed);
+            }, DEFAULT_STATUS_P2P_REPORT_INTERVAL_MS - elapsed);
         }
     }
 

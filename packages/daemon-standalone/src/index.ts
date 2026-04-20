@@ -82,6 +82,13 @@ import {
 import {
   classifyHotChatSessionsForSubscriptionFlush,
 } from '@adhdev/daemon-core';
+import {
+  DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
+  MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
+  DEFAULT_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
+  MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
+  STANDALONE_CDP_SCAN_INTERVAL_MS,
+} from '../../daemon-core/src/runtime-defaults.js';
 
 // ─── Constants ───
 const DEFAULT_PORT = 3847;
@@ -603,7 +610,7 @@ class StandaloneServer {
         this.scheduleBroadcastStatus();
       },
       tickIntervalMs: 3000,
-      cdpScanIntervalMs: 15_000,
+      cdpScanIntervalMs: STANDALONE_CDP_SCAN_INTERVAL_MS,
     });
 
     if (shouldAutoRestoreHostedSessionsOnStartup(process.env)) {
@@ -1460,7 +1467,10 @@ class StandaloneServer {
     state: MachineRuntimeSubscriptionState,
     key: string,
   ): MachineRuntimeUpdate | null {
-    const intervalMs = Math.max(5_000, Number(state.request.params.intervalMs || 15_000));
+    const intervalMs = Math.max(
+      MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
+      Number(state.request.params.intervalMs || DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS),
+    );
     const now = Date.now();
     if (state.lastSentAt > 0 && (now - state.lastSentAt) < intervalMs) {
       return null;
@@ -1495,7 +1505,10 @@ class StandaloneServer {
     key: string,
   ): Promise<SessionHostDiagnosticsUpdate | null> {
     if (!this.sessionHostControl) return null;
-    const intervalMs = Math.max(5_000, Number(state.request.params.intervalMs || 10_000));
+    const intervalMs = Math.max(
+      MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
+      Number(state.request.params.intervalMs || DEFAULT_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS),
+    );
     const now = Date.now();
     if (state.lastSentAt > 0 && (now - state.lastSentAt) < intervalMs) {
       return null;

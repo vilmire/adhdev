@@ -4,6 +4,7 @@ import { useBaseDaemonActions } from '../context/BaseDaemonContext'
 import { useTransport } from '../context/TransportContext'
 import { subscriptionManager } from '../managers/SubscriptionManager'
 import type { DaemonData } from '../types'
+import { DEFAULT_MACHINE_RUNTIME_REFRESH_MS } from '../utils/daemon-timing'
 
 function buildRuntimeEntry(existingDaemon: DaemonData | undefined, daemonId: string, update: MachineRuntimeUpdate): DaemonData {
     return {
@@ -41,7 +42,7 @@ export function useDaemonMachineRuntimeSubscription(
                 topic: 'machine.runtime',
                 key: `machine:${daemonId}`,
                 params: {
-                    intervalMs: opts?.intervalMs ?? 15_000,
+                    intervalMs: opts?.intervalMs ?? DEFAULT_MACHINE_RUNTIME_REFRESH_MS,
                 },
             },
             (update: MachineRuntimeUpdate) => {

@@ -1,0 +1,22 @@
+import { describe, expect, it } from 'vitest'
+import {
+  DEFAULT_MACHINE_RUNTIME_REFRESH_MS,
+  DEFAULT_MACHINE_RUNTIME_FRESH_MS,
+  DEFAULT_DAEMON_METADATA_FRESH_MS,
+  DAEMON_METADATA_SUBSCRIPTION_WAIT_MS,
+  DEFAULT_SESSION_HOST_DIAGNOSTICS_LIMIT,
+  DEFAULT_SESSION_HOST_DIAGNOSTICS_INTERVAL_MS,
+  SESSION_HOST_DIAGNOSTICS_INITIAL_TIMEOUT_MS,
+} from '../../src/utils/daemon-timing.js'
+
+describe('daemon timing defaults', () => {
+  it('stays centralized for machine, metadata, and session-host refresh settings', () => {
+    expect(DEFAULT_MACHINE_RUNTIME_REFRESH_MS).toBe(15_000)
+    expect(DEFAULT_MACHINE_RUNTIME_FRESH_MS).toBe(15_000)
+    expect(DEFAULT_DAEMON_METADATA_FRESH_MS).toBe(60_000)
+    expect(DAEMON_METADATA_SUBSCRIPTION_WAIT_MS).toBe(1_200)
+    expect(DEFAULT_SESSION_HOST_DIAGNOSTICS_LIMIT).toBe(12)
+    expect(DEFAULT_SESSION_HOST_DIAGNOSTICS_INTERVAL_MS).toBe(8_000)
+    expect(SESSION_HOST_DIAGNOSTICS_INITIAL_TIMEOUT_MS).toBe(4_000)
+  })
+})

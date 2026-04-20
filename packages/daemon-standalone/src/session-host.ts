@@ -8,9 +8,10 @@ import {
   resolveSessionHostAppNameResolution,
   type SessionHostEndpoint,
 } from '@adhdev/daemon-core';
+import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../../daemon-core/src/runtime-defaults.js';
 const SESSION_HOST_APP_NAME_RESOLUTION = resolveSessionHostAppNameResolution({ standalone: true });
 const SESSION_HOST_APP_NAME = SESSION_HOST_APP_NAME_RESOLUTION.appName;
-const SESSION_HOST_START_TIMEOUT_MS = 15_000;
+const SESSION_HOST_START_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
 
 export function getStandaloneSessionHostAppName(): string {
   return SESSION_HOST_APP_NAME;

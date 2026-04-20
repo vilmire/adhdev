@@ -5,8 +5,9 @@ import {
     type SessionHostRecord,
 } from '@adhdev/session-host-core';
 import type { HostedCliRuntimeDescriptor } from '../commands/cli-manager.js';
+import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../runtime-defaults.js';
 
-const STARTUP_TIMEOUT_MS = 8000;
+const STARTUP_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
 const STARTUP_POLL_MS = 200;
 
 async function canConnect(endpoint: SessionHostEndpoint): Promise<boolean> {

@@ -12,6 +12,7 @@ import { DaemonCdpManager } from './manager.js';
 import { ProviderLoader } from '../providers/provider-loader.js';
 import { connectCdpManager, probeCdpPort, registerExtensionProviders, setupIdeInstance, type CdpSetupContext } from './setup.js';
 import { LOG } from '../logging/logger.js';
+import { DEFAULT_CDP_DISCOVERY_INTERVAL_MS, DEFAULT_CDP_SCAN_INTERVAL_MS } from '../runtime-defaults.js';
 
 export interface CdpScannerOptions {
   /** Context for setup operations */
@@ -68,7 +69,7 @@ export class DaemonCdpScanner {
    */
   startPeriodicScan(): void {
     if (this.scanTimer) return;
-    const interval = this.opts.scanIntervalMs || 30_000;
+    const interval = this.opts.scanIntervalMs || DEFAULT_CDP_SCAN_INTERVAL_MS;
 
     this.scanTimer = setInterval(async () => {
       const portMap = this.ctx.providerLoader.getCdpPortMap();
@@ -92,7 +93,7 @@ export class DaemonCdpScanner {
   /**
    * Start periodic agent webview discovery on all connected CDPs.
    */
-  startWebviewDiscovery(intervalMs = 30_000): void {
+  startWebviewDiscovery(intervalMs = DEFAULT_CDP_DISCOVERY_INTERVAL_MS): void {
     if (this.discoveryTimer) return;
     this.discoveryTimer = setInterval(async () => {
       for (const m of this.ctx.cdpManagers.values()) {

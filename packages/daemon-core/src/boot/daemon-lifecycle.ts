@@ -27,7 +27,11 @@ import { DevServer } from '../daemon/dev-server.js';
 import { detectIDEs, type IDEInfo } from '../detection/ide-detector.js';
 import { detectCLI, detectCLIs } from '../detection/cli-detector.js';
 import { SessionRegistry } from '../sessions/registry.js';
-import { installGlobalInterceptor, LOG } from '../logging/logger.js';
+import { LOG, installGlobalInterceptor } from '../logging/logger.js';
+import {
+    DEFAULT_CDP_DISCOVERY_INTERVAL_MS,
+    DEFAULT_CDP_SCAN_INTERVAL_MS,
+} from '../runtime-defaults.js';
 import { loadConfig } from '../config/config.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { IdeProviderInstance } from '../providers/ide-provider-instance.js';
@@ -240,8 +244,8 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         },
     });
     await cdpInitializer.connectAll(detectedIdesRef.value);
-    cdpInitializer.startPeriodicScan(config.cdpScanIntervalMs ?? 30_000);
-    cdpInitializer.startDiscovery(30_000);
+    cdpInitializer.startPeriodicScan(config.cdpScanIntervalMs ?? DEFAULT_CDP_SCAN_INTERVAL_MS);
+    cdpInitializer.startDiscovery(DEFAULT_CDP_DISCOVERY_INTERVAL_MS);
 
     // 7. CommandHandler
     const commandHandler = new DaemonCommandHandler({

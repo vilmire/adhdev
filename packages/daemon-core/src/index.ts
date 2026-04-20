@@ -185,6 +185,19 @@ export { launchWithCdp, getAvailableIdeIds, killIdeProcess, isIdeRunning } from 
 
 // ── IPC ──
 export { DEFAULT_DAEMON_PORT, DAEMON_WS_PATH } from './ipc-protocol.js';
+export {
+  DEFAULT_CDP_SCAN_INTERVAL_MS,
+  DEFAULT_CDP_DISCOVERY_INTERVAL_MS,
+  DEFAULT_STATUS_INITIAL_REPORT_DELAY_MS,
+  DEFAULT_STATUS_SERVER_REPORT_INTERVAL_MS,
+  DEFAULT_STATUS_P2P_REPORT_INTERVAL_MS,
+  MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
+  DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
+  MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
+  DEFAULT_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
+  DEFAULT_SESSION_HOST_READY_TIMEOUT_MS,
+  STANDALONE_CDP_SCAN_INTERVAL_MS,
+} from './runtime-defaults.js';
 
 // ── Chat History ──
 export { readChatHistory } from './config/chat-history.js';
@@ -253,7 +266,7 @@ export { VersionArchive, detectAllVersions } from './providers/version-archive.j
 export type { ProviderVersionInfo, VersionHistory } from './providers/version-archive.js';
 
 // ── Dev Server ──
-export { DevServer } from './daemon/dev-server.js';
+export { DevServer, DEV_SERVER_PORT } from './daemon/dev-server.js';
 
 // ── CLI Adapters ──
 export { ProviderCliAdapter } from './cli-adapters/provider-cli-adapter.js';

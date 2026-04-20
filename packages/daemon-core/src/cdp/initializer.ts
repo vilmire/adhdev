@@ -14,6 +14,7 @@ import { registerExtensionProviders } from './setup.js';
 import { probeCdpPort } from './setup.js';
 import type { ProviderLoader } from '../providers/provider-loader.js';
 import { LOG } from '../logging/logger.js';
+import { DEFAULT_CDP_DISCOVERY_INTERVAL_MS, DEFAULT_CDP_SCAN_INTERVAL_MS } from '../runtime-defaults.js';
 
 // ─── Config ───
 
@@ -206,7 +207,7 @@ export class DaemonCdpInitializer {
      * Start periodic scanning for newly opened IDEs.
      * Idempotent — ignored if already started.
      */
-    startPeriodicScan(intervalMs = 30_000): void {
+    startPeriodicScan(intervalMs = DEFAULT_CDP_SCAN_INTERVAL_MS): void {
         if (this.scanTimer) return;
 
         this.scanTimer = setInterval(async () => {
@@ -224,7 +225,7 @@ export class DaemonCdpInitializer {
     /**
      * Start periodic agent webview discovery.
      */
-    startDiscovery(intervalMs = 30_000): void {
+    startDiscovery(intervalMs = DEFAULT_CDP_DISCOVERY_INTERVAL_MS): void {
         if (this.discoveryTimer) return;
 
         this.discoveryTimer = setInterval(async () => {
