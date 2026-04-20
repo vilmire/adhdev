@@ -44,6 +44,7 @@ import { getConversationActiveTabTarget, getConversationMachineId, getConversati
 import { getConversationTimestamp } from '../components/dashboard/conversation-sort'
 import { compareMachineEntries, getMachineDisplayName, getProviderSummaryValue, isAcpEntry, isCliEntry } from '../utils/daemon-utils'
 import { resolveDashboardSessionTargetFromEntry } from '../utils/dashboard-route-paths'
+import { getDesktopAutoReadPlan, getDesktopAutoReadScheduleDecision } from '../utils/dashboard-auto-read'
 import { browseMachineDirectories } from '../components/machine/workspaceBrowse'
 import type { WorkspaceLaunchKind } from './machine/types'
 
@@ -258,6 +259,10 @@ export default function Dashboard() {
         }).catch(() => {})
     }, [deleteDashboardNotification, notifications, sendDaemonCommand])
     const lastDesktopAutoReadKeyRef = useRef<string | null>(null)
+    const pendingDesktopAutoReadKeyRef = useRef<string | null>(null)
+    const pendingDesktopAutoReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const pendingDesktopAutoReadVisibleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const pendingDesktopAutoReadVisibilityHandlerRef = useRef<(() => void) | null>(null)
 
     const {
         containerRef,
@@ -300,33 +305,72 @@ export default function Dashboard() {
     }, [desktopActiveTabKey, isMobile, groupActiveTabIds, focusedGroup, conversations, groupedConvs, visibleConversations])
 
     useEffect(() => {
+        const clearPendingDesktopAutoRead = () => {
+            if (pendingDesktopAutoReadTimerRef.current) {
+                clearTimeout(pendingDesktopAutoReadTimerRef.current)
+                pendingDesktopAutoReadTimerRef.current = null
+            }
+            if (pendingDesktopAutoReadVisibleTimerRef.current) {
+                clearTimeout(pendingDesktopAutoReadVisibleTimerRef.current)
+                pendingDesktopAutoReadVisibleTimerRef.current = null
+            }
+            if (pendingDesktopAutoReadVisibilityHandlerRef.current) {
+                document.removeEventListener('visibilitychange', pendingDesktopAutoReadVisibilityHandlerRef.current)
+                pendingDesktopAutoReadVisibilityHandlerRef.current = null
+            }
+            pendingDesktopAutoReadKeyRef.current = null
+        }
+
         if (isMobile) {
+            clearPendingDesktopAutoRead()
             lastDesktopAutoReadKeyRef.current = null
             return
         }
         if (!activeConv?.sessionId) {
+            clearPendingDesktopAutoRead()
             lastDesktopAutoReadKeyRef.current = null
             return
         }
 
         const liveState = getConversationLiveInboxState(activeConv, liveSessionInboxState)
-        const activeConvIdentity = buildConversationIdentity(activeConv)
-        const autoReadKey = [
-            activeConv.tabKey,
-            getConversationHistorySessionId(activeConv) || '',
-            activeConv.lastMessageHash || '',
-            String(activeConv.lastMessageAt || 0),
-            liveState.inboxBucket,
-            liveState.unread ? '1' : '0',
-        ].join(':')
-        if (lastDesktopAutoReadKeyRef.current === autoReadKey) return
+        const autoReadPlan = getDesktopAutoReadPlan({
+            tabKey: activeConv.tabKey,
+            historySessionId: getConversationHistorySessionId(activeConv) || '',
+            lastMessageHash: activeConv.lastMessageHash || '',
+            lastMessageAt: Number(activeConv.lastMessageAt || 0),
+            timestamp: getConversationTimestamp(activeConv),
+            liveState,
+        })
+        const autoReadKey = autoReadPlan.autoReadKey
+        const scheduleDecision = getDesktopAutoReadScheduleDecision({
+            autoReadKey,
+            shouldMarkSeen: autoReadPlan.shouldMarkSeen,
+            completedKey: lastDesktopAutoReadKeyRef.current,
+            pendingKey: pendingDesktopAutoReadKeyRef.current,
+        })
 
+        if (!autoReadPlan.shouldMarkSeen) {
+            if (scheduleDecision.shouldCancelPending) clearPendingDesktopAutoRead()
+            lastDesktopAutoReadKeyRef.current = autoReadKey
+            return
+        }
+        if (!scheduleDecision.shouldSchedule) return
+        if (scheduleDecision.shouldCancelPending) clearPendingDesktopAutoRead()
+
+        const activeConvIdentity = buildConversationIdentity(activeConv)
         const doMarkSeen = () => {
             if (document.visibilityState !== 'visible') return
             if (lastDesktopAutoReadKeyRef.current === autoReadKey) return
             lastDesktopAutoReadKeyRef.current = autoReadKey
+            pendingDesktopAutoReadKeyRef.current = null
+            pendingDesktopAutoReadTimerRef.current = null
+            pendingDesktopAutoReadVisibleTimerRef.current = null
+            if (pendingDesktopAutoReadVisibilityHandlerRef.current) {
+                document.removeEventListener('visibilitychange', pendingDesktopAutoReadVisibilityHandlerRef.current)
+                pendingDesktopAutoReadVisibilityHandlerRef.current = null
+            }
 
-            const readAt = Math.max(Date.now(), getConversationTimestamp(activeConv), liveState.lastUpdated || 0)
+            const readAt = autoReadPlan.readAt
             markDashboardNotificationTargetRead({
                 ...activeConvIdentity,
             }, readAt)
@@ -337,25 +381,44 @@ export default function Dashboard() {
             }).catch(() => {})
         }
 
-        // If page is already visible, debounce to avoid drive-by tab switches
-        // If page is hidden (user in another app/tab), defer until they return
+        pendingDesktopAutoReadKeyRef.current = scheduleDecision.nextPendingKey
+
         if (document.visibilityState === 'visible') {
-            const timer = setTimeout(doMarkSeen, 1500)
-            const onVisChange = () => { if (document.visibilityState !== 'visible') clearTimeout(timer) }
-            document.addEventListener('visibilitychange', onVisChange)
-            return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', onVisChange) }
-        } else {
-            const onVisible = () => {
-                if (document.visibilityState === 'visible') {
-                    // Small delay after returning to page
-                    setTimeout(doMarkSeen, 800)
-                    document.removeEventListener('visibilitychange', onVisible)
+            pendingDesktopAutoReadTimerRef.current = setTimeout(doMarkSeen, 1500)
+            const onVisChange = () => {
+                if (document.visibilityState === 'visible') return
+                if (pendingDesktopAutoReadTimerRef.current) {
+                    clearTimeout(pendingDesktopAutoReadTimerRef.current)
+                    pendingDesktopAutoReadTimerRef.current = null
                 }
             }
-            document.addEventListener('visibilitychange', onVisible)
-            return () => { document.removeEventListener('visibilitychange', onVisible) }
+            pendingDesktopAutoReadVisibilityHandlerRef.current = onVisChange
+            document.addEventListener('visibilitychange', onVisChange)
+            return
         }
+
+        const onVisible = () => {
+            if (document.visibilityState !== 'visible') return
+            if (pendingDesktopAutoReadVisibleTimerRef.current) {
+                clearTimeout(pendingDesktopAutoReadVisibleTimerRef.current)
+            }
+            pendingDesktopAutoReadVisibleTimerRef.current = setTimeout(doMarkSeen, 800)
+            if (pendingDesktopAutoReadVisibilityHandlerRef.current) {
+                document.removeEventListener('visibilitychange', pendingDesktopAutoReadVisibilityHandlerRef.current)
+                pendingDesktopAutoReadVisibilityHandlerRef.current = null
+            }
+        }
+        pendingDesktopAutoReadVisibilityHandlerRef.current = onVisible
+        document.addEventListener('visibilitychange', onVisible)
     }, [activeConv, isMobile, liveSessionInboxState, markDashboardNotificationTargetRead, sendDaemonCommand])
+
+    useEffect(() => () => {
+        if (pendingDesktopAutoReadTimerRef.current) clearTimeout(pendingDesktopAutoReadTimerRef.current)
+        if (pendingDesktopAutoReadVisibleTimerRef.current) clearTimeout(pendingDesktopAutoReadVisibleTimerRef.current)
+        if (pendingDesktopAutoReadVisibilityHandlerRef.current) {
+            document.removeEventListener('visibilitychange', pendingDesktopAutoReadVisibilityHandlerRef.current)
+        }
+    }, [])
 
     const {
         requestedDesktopTabKey,

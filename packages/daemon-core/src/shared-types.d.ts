@@ -190,10 +190,13 @@ export interface SessionEntry {
     summaryMetadata?: ProviderSummaryMetadata;
     errorMessage?: string;
     errorReason?: _ProviderErrorReason;
+    lastMessageHash?: string;
     lastUpdated?: number;
     unread?: boolean;
     lastSeenAt?: number;
     inboxBucket?: RecentSessionBucket;
+    completionMarker?: string;
+    seenCompletionMarker?: string;
     surfaceHidden?: boolean;
 }
 /**

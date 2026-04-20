@@ -37,6 +37,8 @@ export interface InboxSurfaceStateSource {
     lastUpdated?: number
     inboxBucket?: RecentSessionBucket
     surfaceHidden?: boolean
+    completionMarker?: string
+    seenCompletionMarker?: string
 }
 
 export interface LiveSessionInboxState extends Required<InboxSurfaceStateSource> {
@@ -61,6 +63,8 @@ function normalizeInboxState(source: InboxSurfaceStateSource) {
         lastUpdated: source.lastUpdated || 0,
         inboxBucket: source.inboxBucket || 'idle',
         surfaceHidden: !!source.surfaceHidden,
+        completionMarker: typeof source.completionMarker === 'string' ? source.completionMarker : '',
+        seenCompletionMarker: typeof source.seenCompletionMarker === 'string' ? source.seenCompletionMarker : '',
     }
 }
 
@@ -112,6 +116,8 @@ export function getConversationLiveInboxState(
         lastUpdated: 0,
         inboxBucket: 'idle',
         surfaceHidden: false,
+        completionMarker: '',
+        seenCompletionMarker: '',
     }
 }
 

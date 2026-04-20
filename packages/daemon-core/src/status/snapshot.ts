@@ -408,6 +408,8 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
         session.lastSeenAt = lastSeenAt;
         session.unread = overlayUnread;
         session.inboxBucket = overlayInboxBucket;
+        session.completionMarker = completionMarker;
+        session.seenCompletionMarker = seenCompletionMarker;
         if (READ_DEBUG_ENABLED && (session.unread || session.inboxBucket !== 'idle' || session.providerType.includes('codex'))) {
             const recentReadSnapshot: RecentReadDebugSnapshot = {
                 sessionId: session.id,

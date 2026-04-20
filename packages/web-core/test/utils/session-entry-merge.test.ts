@@ -90,6 +90,21 @@ describe('session entry merge helpers', () => {
     })
   })
 
+  it('preserves completion markers across sparse session merges', () => {
+    const merged = mergeSessionEntrySummary(createSession({
+      completionMarker: undefined,
+      seenCompletionMarker: undefined,
+    }), {
+      completionMarker: 'id:msg_7',
+      seenCompletionMarker: 'id:msg_1',
+    })
+
+    expect(merged).toMatchObject({
+      completionMarker: 'id:msg_7',
+      seenCompletionMarker: 'id:msg_1',
+    })
+  })
+
   it('merges child session arrays through the same sparse-preserving contract', () => {
     const merged = mergeSessionEntryChildren(
       [createSession()],

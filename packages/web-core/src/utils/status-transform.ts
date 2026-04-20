@@ -9,7 +9,11 @@
  */
 import type { StatusReportPayload, SessionEntry } from '@adhdev/daemon-core'
 import type { DaemonData } from '../types'
-import { mergeSessionEntrySummary, type ExistingSessionLike } from './session-entry-merge'
+import {
+    mergeSessionEntrySummary,
+    type ExistingSessionLike,
+    type SessionEntryWithInboxMarkers,
+} from './session-entry-merge'
 
 export interface StatusTransformOptions {
     /** Override daemon ID */
@@ -49,6 +53,8 @@ function buildExistingSessionMap(entries: DaemonData[] | undefined, daemonId: st
             lastMessageRole: entry.lastMessageRole,
             lastMessageAt: entry.lastMessageAt,
             lastMessageHash: entry.lastMessageHash,
+            completionMarker: entry.completionMarker,
+            seenCompletionMarker: entry.seenCompletionMarker,
         })
 
         for (const child of entry.childSessions || []) {
@@ -63,9 +69,9 @@ function buildExistingSessionMap(entries: DaemonData[] | undefined, daemonId: st
     return sessions
 }
 
-function groupChildSessions(sessions: SessionEntry[]) {
-    const topLevel: SessionEntry[] = []
-    const childrenByParent = new Map<string, SessionEntry[]>()
+function groupChildSessions(sessions: SessionEntryWithInboxMarkers[]) {
+    const topLevel: SessionEntryWithInboxMarkers[] = []
+    const childrenByParent = new Map<string, SessionEntryWithInboxMarkers[]>()
 
     for (const session of sessions) {
         if (session.parentId) {
@@ -173,6 +179,8 @@ export function statusPayloadToEntries(
             unread: mergedSession.unread,
             lastSeenAt: mergedSession.lastSeenAt,
             inboxBucket: mergedSession.inboxBucket,
+            completionMarker: mergedSession.completionMarker,
+            seenCompletionMarker: mergedSession.seenCompletionMarker,
             surfaceHidden: mergedSession.surfaceHidden,
             ...(mergedSession.controlValues !== undefined && { controlValues: mergedSession.controlValues }),
             ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
@@ -216,6 +224,8 @@ export function statusPayloadToEntries(
             unread: mergedSession.unread,
             lastSeenAt: mergedSession.lastSeenAt,
             inboxBucket: mergedSession.inboxBucket,
+            completionMarker: mergedSession.completionMarker,
+            seenCompletionMarker: mergedSession.seenCompletionMarker,
             surfaceHidden: mergedSession.surfaceHidden,
             ...(mergedSession.controlValues !== undefined && { controlValues: mergedSession.controlValues }),
             ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
@@ -259,6 +269,8 @@ export function statusPayloadToEntries(
             unread: mergedSession.unread,
             lastSeenAt: mergedSession.lastSeenAt,
             inboxBucket: mergedSession.inboxBucket,
+            completionMarker: mergedSession.completionMarker,
+            seenCompletionMarker: mergedSession.seenCompletionMarker,
             surfaceHidden: mergedSession.surfaceHidden,
             ...(mergedSession.controlValues !== undefined && { controlValues: mergedSession.controlValues }),
             ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),

@@ -170,6 +170,8 @@ export interface BaseDaemonData {
     lastUpdated?: number;
     /** Inbox categorization bucket */
     inboxBucket?: import('@adhdev/daemon-core').RecentSessionBucket;
+    completionMarker?: string;
+    seenCompletionMarker?: string;
     surfaceHidden?: boolean;
     lastMessagePreview?: string;
     lastMessageRole?: string;

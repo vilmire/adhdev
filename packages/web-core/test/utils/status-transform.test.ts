@@ -188,7 +188,35 @@ describe('statusPayloadToEntries', () => {
         })
     });
 
-    it('keeps defaults stable for disconnected or sparse sessions', () => {
+  it('preserves daemon completion markers through status transform for auto-read consumers', () => {
+    const cliSession = createSession({
+      id: 'cli-marker',
+      providerType: 'hermes-cli',
+      providerName: 'Hermes Agent',
+      transport: 'pty',
+      unread: true,
+      inboxBucket: 'task_complete',
+      completionMarker: 'id:msg_7',
+      seenCompletionMarker: 'id:msg_1',
+    })
+
+    const entries = statusPayloadToEntries(createPayload({
+      sessions: [cliSession],
+    }), {
+      daemonId: 'machine-1',
+      timestamp: 999,
+    })
+
+    expect(entries[1]).toMatchObject({
+      id: 'machine-1:cli:cli-marker',
+      completionMarker: 'id:msg_7',
+      seenCompletionMarker: 'id:msg_1',
+      unread: true,
+      inboxBucket: 'task_complete',
+    })
+  })
+
+  it('keeps defaults stable for disconnected or sparse sessions', () => {
         const ideSession = createSession({
             id: 'ide-2',
             kind: 'workspace',

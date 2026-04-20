@@ -307,13 +307,13 @@ function daemonArraysEqual(prev: DaemonData[], next: DaemonData[]): boolean {
  * expandCompactDaemons — server compact format → flat DaemonData[]
  * standalone/cloud shared
  */
-interface CompactSessionEntry {
+export interface CompactSessionEntry {
     id: string
     parentId?: string | null
     providerType: string
     providerName?: string
     providerSessionId?: string
-    kind: 'workspace' | 'agent'
+    kind: SessionEntry['kind']
     transport: SessionEntry['transport']
     status?: SessionEntry['status'] | 'online'
     title?: string
@@ -334,6 +334,8 @@ interface CompactSessionEntry {
     unread?: boolean
     lastSeenAt?: number
     inboxBucket?: DaemonData['inboxBucket']
+    completionMarker?: string
+    seenCompletionMarker?: string
     surfaceHidden?: boolean
     controlValues?: DaemonData['controlValues']
     providerControls?: DaemonData['providerControls']
@@ -374,6 +376,7 @@ function normalizeCompactSession(session: CompactSessionEntry): SessionEntry {
         parentId: session.parentId ?? null,
         providerType: session.providerType,
         providerName: session.providerName || session.providerType,
+        providerSessionId: session.providerSessionId,
         kind: session.kind,
         transport: session.transport,
         status: normalizedStatus,
@@ -383,7 +386,9 @@ function normalizeCompactSession(session: CompactSessionEntry): SessionEntry {
         capabilities: [],
         cdpConnected: session.cdpConnected,
         summaryMetadata: session.summaryMetadata,
-    }
+        completionMarker: session.completionMarker,
+        seenCompletionMarker: session.seenCompletionMarker,
+    } as SessionEntry
 }
 
 export type CompactDaemonCompat = CompactDaemon & {
@@ -464,6 +469,8 @@ export function expandCompactDaemons(
                 ...(ide.unread !== undefined && { unread: ide.unread }),
                 ...(ide.lastSeenAt !== undefined && { lastSeenAt: ide.lastSeenAt }),
                 ...(ide.inboxBucket !== undefined && { inboxBucket: ide.inboxBucket }),
+                ...(ide.completionMarker !== undefined && { completionMarker: ide.completionMarker }),
+                ...(ide.seenCompletionMarker !== undefined && { seenCompletionMarker: ide.seenCompletionMarker }),
                 ...(ide.surfaceHidden !== undefined && { surfaceHidden: ide.surfaceHidden }),
                 ...(ide.controlValues !== undefined && { controlValues: ide.controlValues }),
                 ...(ide.providerControls !== undefined && { providerControls: ide.providerControls }),
@@ -504,6 +511,8 @@ export function expandCompactDaemons(
                 ...(cli.unread !== undefined && { unread: cli.unread }),
                 ...(cli.lastSeenAt !== undefined && { lastSeenAt: cli.lastSeenAt }),
                 ...(cli.inboxBucket !== undefined && { inboxBucket: cli.inboxBucket }),
+                ...(cli.completionMarker !== undefined && { completionMarker: cli.completionMarker }),
+                ...(cli.seenCompletionMarker !== undefined && { seenCompletionMarker: cli.seenCompletionMarker }),
                 ...(cli.surfaceHidden !== undefined && { surfaceHidden: cli.surfaceHidden }),
                 ...(cli.controlValues !== undefined && { controlValues: cli.controlValues }),
                 ...(cli.providerControls !== undefined && { providerControls: cli.providerControls }),
@@ -545,6 +554,8 @@ export function expandCompactDaemons(
                 ...(acp.unread !== undefined && { unread: acp.unread }),
                 ...(acp.lastSeenAt !== undefined && { lastSeenAt: acp.lastSeenAt }),
                 ...(acp.inboxBucket !== undefined && { inboxBucket: acp.inboxBucket }),
+                ...(acp.completionMarker !== undefined && { completionMarker: acp.completionMarker }),
+                ...(acp.seenCompletionMarker !== undefined && { seenCompletionMarker: acp.seenCompletionMarker }),
                 ...(acp.surfaceHidden !== undefined && { surfaceHidden: acp.surfaceHidden }),
                 ...(acp.controlValues !== undefined && { controlValues: acp.controlValues }),
                 ...(acp.providerControls !== undefined && { providerControls: acp.providerControls }),

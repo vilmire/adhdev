@@ -1,6 +1,11 @@
 import type { SessionEntry } from '@adhdev/daemon-core'
 
-export type ExistingSessionLike = Partial<SessionEntry> & {
+export type SessionEntryWithInboxMarkers = SessionEntry & {
+  completionMarker?: string
+  seenCompletionMarker?: string
+}
+
+export type ExistingSessionLike = Partial<SessionEntryWithInboxMarkers> & {
   parentSessionId?: string | null
   cliName?: string
   type?: string
@@ -8,6 +13,8 @@ export type ExistingSessionLike = Partial<SessionEntry> & {
   sessionCapabilities?: SessionEntry['capabilities']
   summaryMetadata?: any
   activeChat?: SessionEntry['activeChat']
+  completionMarker?: string
+  seenCompletionMarker?: string
 }
 
 function hasExplicitProviderName(value: string | null | undefined, providerType: string | null | undefined): value is string {
@@ -38,9 +45,9 @@ export function mergeActiveChatData(
 }
 
 export function mergeSessionEntrySummary(
-  session: SessionEntry,
+  session: SessionEntryWithInboxMarkers,
   existingEntry: ExistingSessionLike | undefined,
-): SessionEntry {
+): SessionEntryWithInboxMarkers {
   const explicitProviderName = hasExplicitProviderName(session.providerName, session.providerType)
     ? session.providerName
     : undefined
@@ -78,6 +85,8 @@ export function mergeSessionEntrySummary(
     unread: session.unread ?? existingEntry?.unread,
     lastSeenAt: session.lastSeenAt ?? existingEntry?.lastSeenAt,
     inboxBucket: session.inboxBucket ?? existingEntry?.inboxBucket,
+    completionMarker: session.completionMarker ?? existingEntry?.completionMarker,
+    seenCompletionMarker: session.seenCompletionMarker ?? existingEntry?.seenCompletionMarker,
     surfaceHidden: session.surfaceHidden ?? existingEntry?.surfaceHidden,
     resume: session.resume ?? existingEntry?.resume,
     runtimeKey: session.runtimeKey ?? existingEntry?.runtimeKey,
@@ -87,9 +96,9 @@ export function mergeSessionEntrySummary(
 }
 
 export function mergeSessionEntryChildren(
-  existingChildren: SessionEntry[] | undefined,
-  incomingChildren: SessionEntry[] | undefined,
-): SessionEntry[] | undefined {
+  existingChildren: SessionEntryWithInboxMarkers[] | undefined,
+  incomingChildren: SessionEntryWithInboxMarkers[] | undefined,
+): SessionEntryWithInboxMarkers[] | undefined {
   if (!incomingChildren?.length) return existingChildren
   if (!existingChildren?.length) return incomingChildren
 

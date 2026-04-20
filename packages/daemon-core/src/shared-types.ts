@@ -339,6 +339,8 @@ export interface SessionEntry {
     unread?: boolean;
     lastSeenAt?: number;
     inboxBucket?: RecentSessionBucket;
+    completionMarker?: string;
+    seenCompletionMarker?: string;
     surfaceHidden?: boolean;
 }
 

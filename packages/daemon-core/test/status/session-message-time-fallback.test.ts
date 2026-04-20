@@ -112,6 +112,43 @@ describe('status snapshot message time fallbacks', () => {
     expect(snapshot.sessions.find((entry) => entry.id === 'cli-1')?.lastMessageAt).toBe(ts)
   })
 
+  it('includes completion markers in live snapshots so web auto-read can observe unseen task completions', () => {
+    const snapshot = buildStatusSnapshot({
+      instanceId: 'daemon-1',
+      version: '0.8.82',
+      allStates: [
+        {
+          instanceId: 'cli-1',
+          type: 'hermes-cli',
+          name: 'Hermes Agent',
+          category: 'cli',
+          status: 'idle',
+          activeChat: {
+            id: 'chat-1',
+            title: 'Hermes Agent',
+            status: 'idle',
+            messages: [
+              { role: 'user', content: 'hello', timestamp: 10, receivedAt: 10, id: 'msg_0', index: 0 },
+              { role: 'assistant', content: 'done', timestamp: 20, receivedAt: 20, id: 'msg_1', index: 1 },
+            ],
+            activeModal: null,
+          },
+          lastUpdated: 20,
+          workspace: '/repo',
+          providerSessionId: 'provider-1',
+        } as any,
+      ],
+      cdpManagers: new Map(),
+      profile: 'live',
+    })
+
+    const session = snapshot.sessions.find((entry) => entry.id === 'cli-1')
+    expect(session?.completionMarker).toBe('id:msg_1')
+    expect(session?.seenCompletionMarker).toBe('')
+    expect(session?.unread).toBe(true)
+    expect(session?.inboxBucket).toBe('task_complete')
+  })
+
   it('carries runtime recovery metadata into live snapshots so restored stopped sessions are excluded from hot polling', () => {
     const ts = 1_717_000_100_000
     const now = ts + (DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS - 250)
