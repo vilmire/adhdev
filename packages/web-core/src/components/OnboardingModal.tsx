@@ -46,7 +46,7 @@ export default function OnboardingModal({ onClose }: OnboardingModalProps) {
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         animation: 'fadeIn 0.3s ease-out',
       }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+      onClick={(e) => { e.stopPropagation() }}
     >
       <div
         style={{
@@ -129,13 +129,7 @@ export default function OnboardingModal({ onClose }: OnboardingModalProps) {
         </div>
 
         {/* Actions */}
-        <div className="flex justify-between items-center mt-6">
-          <button
-            onClick={onClose}
-            className="btn btn-secondary border-none"
-          >
-            Skip
-          </button>
+        <div className="flex justify-end items-center mt-6">
           <button
             onClick={() => isLast ? onClose() : setStep(s => s + 1)}
             className="btn btn-primary"
