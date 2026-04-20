@@ -8,7 +8,7 @@ import {
   loadStandalonePreferences,
   normalizeStandaloneFontPreferences,
   saveStandalonePreferences,
-} from '../src/standalone-preferences.ts'
+} from '../src/standalone-preferences'
 
 test('normalizeStandaloneFontPreferences trims custom families and falls back invalid presets', () => {
   const normalized = normalizeStandaloneFontPreferences({
