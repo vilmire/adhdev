@@ -773,6 +773,10 @@
         --chat-bubble-font-size: 13px;
         --chat-bubble-line-height: 1.65;
         --chat-bubble-max-width: 88%;
+        --chat-font-family: var(--font-sans);
+        --chat-code-font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+        --chat-terminal-font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+        --chat-tool-font-family: var(--chat-terminal-font-family);
 
         /* Header (name / time) */
         --chat-header-font-size: 10px;
@@ -887,6 +891,7 @@
         padding: var(--chat-bubble-padding);
         font-size: var(--chat-bubble-font-size);
         line-height: var(--chat-bubble-line-height);
+        font-family: var(--chat-font-family);
         min-width: 0;
         word-break: break-word;
     }
@@ -949,6 +954,7 @@
     .chat-msg-thought .chat-msg-body {
         padding: 8px 12px;
         font-size: 12px;
+        font-family: var(--chat-font-family);
         color: var(--text-muted);
         font-style: italic;
         line-height: 1.6;
@@ -970,7 +976,7 @@
         background: var(--chat-tool-bg);
         border: var(--chat-tool-border);
         border-radius: var(--radius-sm);
-        font-family: monospace;
+        font-family: var(--chat-tool-font-family);
         flex-shrink: 0;
         max-height: none;
         overflow-y: visible;
@@ -995,6 +1001,7 @@
         border-radius: var(--radius-md);
         background: var(--chat-terminal-bg);
         border: var(--chat-terminal-border);
+        font-family: var(--chat-terminal-font-family);
         flex-shrink: 0;
     }
 
@@ -1012,7 +1019,7 @@
     .chat-msg-terminal .chat-msg-body {
         padding: 8px 12px;
         font-size: 11px;
-        font-family: monospace;
+        font-family: var(--chat-terminal-font-family);
         color: var(--text-muted);
         line-height: 1.6;
         margin: 0;
@@ -1027,6 +1034,7 @@
 
     .chat-msg-system {
         font-size: 11px;
+        font-family: var(--chat-font-family);
         color: var(--chat-system-color);
         opacity: 0.6;
         padding: 2px 12px;
@@ -1041,6 +1049,7 @@
         padding: 6px 14px;
         border-radius: 20px;
         font-size: 12px;
+        font-family: var(--chat-font-family);
         text-align: center;
         border: var(--chat-action-border);
         opacity: 0.85;
@@ -1054,7 +1063,7 @@
 
     .chat-tool-badge {
         font-size: 10px;
-        font-family: monospace;
+        font-family: var(--chat-tool-font-family);
         color: var(--chat-tool-accent);
         background: var(--bg-secondary);
         border: 1px solid var(--border-subtle);
@@ -1209,6 +1218,7 @@
 
     .chat-markdown {
         font-size: inherit;
+        font-family: var(--chat-font-family);
         line-height: 1.6;
         white-space: normal;
         word-break: break-word;
@@ -1250,7 +1260,7 @@
     }
 
     .chat-markdown code {
-        font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+        font-family: var(--chat-code-font-family);
         font-size: 0.88em;
         padding: 0.15em 0.4em;
         border-radius: 5px;
@@ -1266,6 +1276,7 @@
         background: var(--bg-glass);
         border: 1px solid var(--border-subtle);
         overflow-x: hidden;
+        font-family: var(--chat-code-font-family);
         font-size: 0.86em;
         line-height: 1.65;
         box-shadow: none;
@@ -1301,7 +1312,7 @@
         font-feature-settings: "liga" 0, "calt" 0;
         tab-size: 4;
         text-rendering: optimizeSpeed;
-        font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+        font-family: var(--chat-code-font-family);
     }
 
     .chat-markdown ul,

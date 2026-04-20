@@ -18,6 +18,12 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { randomBytes, scryptSync, timingSafeEqual } from 'crypto';
+import {
+  loadStandalonePreferences,
+  saveStandalonePreferences,
+  type StandaloneFontPreferences,
+  type StandaloneBindHost,
+} from './standalone-preferences.js';
 
 import {
   LOG,
@@ -82,8 +88,8 @@ const DEFAULT_PORT = 3847;
 const STATUS_INTERVAL = 2000;
 const STANDALONE_AUTH_SESSION_COOKIE = 'adhdev_standalone_session';
 const STANDALONE_PASSWORD_CONFIG_FILE = 'standalone-auth.json';
-const STANDALONE_BIND_HOST_CONFIG_FILE = 'standalone-network.json';
-const STANDALONE_BIND_HOST_DEFAULT = '127.0.0.1';
+const STANDALONE_PREFERENCES_CONFIG_FILE = 'standalone-network.json';
+const STANDALONE_BIND_HOST_DEFAULT: StandaloneBindHost = '127.0.0.1';
 const PASSWORD_KEYLEN = 64;
 const DEFAULT_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 
@@ -106,36 +112,23 @@ function getStandaloneConfigJsonPath(): string {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
-  return path.join(dir, STANDALONE_BIND_HOST_CONFIG_FILE);
+  return path.join(dir, STANDALONE_PREFERENCES_CONFIG_FILE);
 }
 
-function loadStandaloneBindHostPreference(): '127.0.0.1' | '0.0.0.0' {
-  try {
-    const configPath = getStandaloneConfigJsonPath();
-    if (!fs.existsSync(configPath)) return STANDALONE_BIND_HOST_DEFAULT;
-    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    return parsed?.standaloneBindHost === '0.0.0.0' ? '0.0.0.0' : STANDALONE_BIND_HOST_DEFAULT;
-  } catch {
-    return STANDALONE_BIND_HOST_DEFAULT;
-  }
+function loadStandaloneBindHostPreference(): StandaloneBindHost {
+  return loadStandalonePreferences(getStandaloneConfigJsonPath()).standaloneBindHost;
 }
 
-function saveStandaloneBindHostPreference(bindHost: '127.0.0.1' | '0.0.0.0'): '127.0.0.1' | '0.0.0.0' {
-  const configPath = getStandaloneConfigJsonPath();
-  let parsed: Record<string, unknown> = {};
-  try {
-    if (fs.existsSync(configPath)) {
-      const raw = fs.readFileSync(configPath, 'utf8');
-      const next = JSON.parse(raw);
-      if (next && typeof next === 'object' && !Array.isArray(next)) parsed = next as Record<string, unknown>;
-    }
-  } catch {
-    parsed = {};
-  }
-  parsed.standaloneBindHost = bindHost;
-  fs.writeFileSync(configPath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
-  try { fs.chmodSync(configPath, 0o600); } catch {}
-  return bindHost;
+function loadStandaloneFontPreferences(): StandaloneFontPreferences {
+  return loadStandalonePreferences(getStandaloneConfigJsonPath()).standaloneFontPreferences;
+}
+
+function saveStandaloneBindHostPreference(bindHost: StandaloneBindHost): StandaloneBindHost {
+  return saveStandalonePreferences(getStandaloneConfigJsonPath(), { standaloneBindHost: bindHost }).standaloneBindHost;
+}
+
+function saveStandaloneFontPreferences(fontPreferences: StandaloneFontPreferences): StandaloneFontPreferences {
+  return saveStandalonePreferences(getStandaloneConfigJsonPath(), { standaloneFontPreferences: fontPreferences }).standaloneFontPreferences;
 }
 
 function createPasswordRecord(password: string, salt = randomBytes(16).toString('hex')): StandalonePasswordConfig {
@@ -837,10 +830,12 @@ class StandaloneServer {
 
     if (parsedUrl.pathname === '/api/v1/standalone/preferences' && method === 'GET') {
       const configuredBindHost = loadStandaloneBindHostPreference();
+      const standaloneFontPreferences = loadStandaloneFontPreferences();
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         standaloneBindHost: configuredBindHost,
         currentBindHost: this.listenHost,
+        standaloneFontPreferences,
         hasPasswordAuth: !!this.passwordConfig,
         hasTokenAuth: !!this.authToken,
         publicHostWarning: shouldWarnForPublicUnauthenticatedHost({
@@ -865,13 +860,18 @@ class StandaloneServer {
           return;
         }
         const body = await this.readJsonBody(req);
-        const nextHost = body?.standaloneBindHost === '0.0.0.0' ? '0.0.0.0' : '127.0.0.1';
-        const savedHost = saveStandaloneBindHostPreference(nextHost);
+        const savedHost = Object.prototype.hasOwnProperty.call(body || {}, 'standaloneBindHost')
+          ? saveStandaloneBindHostPreference(body?.standaloneBindHost === '0.0.0.0' ? '0.0.0.0' : '127.0.0.1')
+          : loadStandaloneBindHostPreference();
+        const savedFontPreferences = Object.prototype.hasOwnProperty.call(body || {}, 'standaloneFontPreferences')
+          ? saveStandaloneFontPreferences(body?.standaloneFontPreferences)
+          : loadStandaloneFontPreferences();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           success: true,
           standaloneBindHost: savedHost,
           currentBindHost: this.listenHost,
+          standaloneFontPreferences: savedFontPreferences,
           hasPasswordAuth: !!this.passwordConfig,
           hasTokenAuth: !!this.authToken,
           publicHostWarning: shouldWarnForPublicUnauthenticatedHost({

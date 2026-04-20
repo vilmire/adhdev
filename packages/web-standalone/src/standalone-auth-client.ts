@@ -1,3 +1,5 @@
+import type { StandaloneFontPreferences } from './standalone-font-preferences'
+
 export interface StandaloneAuthSessionStatus {
   required: boolean
   authenticated: boolean
@@ -10,6 +12,7 @@ export interface StandaloneAuthSessionStatus {
 export interface StandalonePreferencesStatus {
   standaloneBindHost: '127.0.0.1' | '0.0.0.0'
   currentBindHost: string
+  standaloneFontPreferences: StandaloneFontPreferences
   hasPasswordAuth: boolean
   hasTokenAuth: boolean
   publicHostWarning: boolean

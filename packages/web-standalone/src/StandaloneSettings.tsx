@@ -22,6 +22,14 @@ import {
     IconUser,
 } from '@adhdev/web-core'
 import {
+    DEFAULT_STANDALONE_FONT_PREFERENCES,
+    applyStandaloneFontPreferences,
+    cacheStandaloneFontPreferences,
+    normalizeStandaloneFontPreferences,
+    type StandaloneFontPreferences,
+} from './standalone-font-preferences'
+import StandaloneFontSettingsSection from './StandaloneFontSettingsSection'
+import {
     standaloneFetch,
     stripStandaloneTokenFromLocation,
     type StandaloneAuthSessionStatus,
@@ -43,6 +51,10 @@ export default function StandaloneSettings() {
     const [localUserName, setLocalUserName] = useState<string>(userName || '')
     const [authStatus, setAuthStatus] = useState<StandaloneAuthSessionStatus | null>(null)
     const [preferences, setPreferences] = useState<StandalonePreferencesStatus | null>(null)
+    const [fontPreferences, setFontPreferences] = useState<StandaloneFontPreferences>(DEFAULT_STANDALONE_FONT_PREFERENCES)
+    const [fontSaving, setFontSaving] = useState(false)
+    const [fontError, setFontError] = useState('')
+    const [fontNotice, setFontNotice] = useState('')
     const [bindHostInput, setBindHostInput] = useState<'127.0.0.1' | '0.0.0.0'>('127.0.0.1')
     const [currentPassword, setCurrentPassword] = useState('')
     const [newPassword, setNewPassword] = useState('')
@@ -62,6 +74,10 @@ export default function StandaloneSettings() {
         const data = await res.json() as StandalonePreferencesStatus
         setPreferences(data)
         setBindHostInput(data.standaloneBindHost)
+        const normalizedFonts = normalizeStandaloneFontPreferences(data.standaloneFontPreferences)
+        setFontPreferences(normalizedFonts)
+        applyStandaloneFontPreferences(normalizedFonts)
+        cacheStandaloneFontPreferences(normalizedFonts)
     }
 
     useEffect(() => {
@@ -75,6 +91,10 @@ export default function StandaloneSettings() {
             setAuthError(err instanceof Error ? err.message : String(err))
         })
     }, [])
+
+    useEffect(() => {
+        applyStandaloneFontPreferences(fontPreferences)
+    }, [fontPreferences])
 
     const handleSaveUserName = (e: React.FocusEvent<HTMLInputElement>) => {
         const val = e.target.value.trim()
@@ -91,6 +111,49 @@ export default function StandaloneSettings() {
     const handleSoundToggle = (v: boolean) => {
         setSoundEnabled(v)
         try { localStorage.setItem('adhdev_sound', v ? '1' : '0') } catch {}
+    }
+
+    const handleSaveFontPreferences = async () => {
+        setFontError('')
+        setFontNotice('')
+        setFontSaving(true)
+        try {
+            const normalizedFonts = normalizeStandaloneFontPreferences(fontPreferences)
+            const res = await standaloneFetch('/api/v1/standalone/preferences', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ standaloneFontPreferences: normalizedFonts }),
+            })
+            const data = await res.json() as StandalonePreferencesStatus & { error?: string }
+            if (!res.ok) {
+                throw new Error(data?.error || 'Failed to save standalone font preferences')
+            }
+            const savedFonts = normalizeStandaloneFontPreferences(data.standaloneFontPreferences)
+            setPreferences(data)
+            setFontPreferences(savedFonts)
+            applyStandaloneFontPreferences(savedFonts)
+            cacheStandaloneFontPreferences(savedFonts)
+            setFontNotice('Standalone chat fonts saved for this self-hosted dashboard.')
+        } catch (err) {
+            setFontError(err instanceof Error ? err.message : String(err))
+        } finally {
+            setFontSaving(false)
+        }
+    }
+
+    const handleResetFontPreferencesToSaved = () => {
+        const savedFonts = normalizeStandaloneFontPreferences(preferences?.standaloneFontPreferences)
+        setFontError('')
+        setFontNotice('')
+        setFontPreferences(savedFonts)
+        applyStandaloneFontPreferences(savedFonts)
+    }
+
+    const handleResetFontPreferencesToDefaults = () => {
+        setFontError('')
+        setFontNotice('')
+        setFontPreferences(DEFAULT_STANDALONE_FONT_PREFERENCES)
+        applyStandaloneFontPreferences(DEFAULT_STANDALONE_FONT_PREFERENCES)
     }
 
     const handleSaveBindHost = async () => {
@@ -353,7 +416,7 @@ export default function StandaloneSettings() {
             </Section>
 
             {/* ═══ Theme ═══ */}
-            <Section title="Appearance" description="Match the rest of the dashboard with a single place for mode and theme.">
+            <Section title="Appearance" description="Match the rest of the dashboard with a single place for mode, theme, and standalone-only font overrides.">
                 <div className="flex flex-col gap-4">
                     <div>
                         <div className="text-xs text-text-muted mb-2 font-medium">Mode</div>
@@ -363,6 +426,21 @@ export default function StandaloneSettings() {
                         <div className="text-xs text-text-muted mb-1 font-medium">Theme</div>
                         <p className="text-[11px] text-text-muted mb-3">Choose a preset or create a custom surface, accent, and chat palette for the standalone UI.</p>
                         <ChatThemeSection />
+                    </div>
+                    <div className="border-t border-border-subtle pt-4">
+                        <div className="text-xs text-text-muted mb-1 font-medium">Fonts</div>
+                        <p className="text-[11px] text-text-muted mb-3">Standalone-only typography overrides for chat text, markdown code, and terminal output.</p>
+                        <StandaloneFontSettingsSection
+                            value={fontPreferences}
+                            savedValue={normalizeStandaloneFontPreferences(preferences?.standaloneFontPreferences)}
+                            saving={fontSaving}
+                            error={fontError}
+                            notice={fontNotice}
+                            onChange={setFontPreferences}
+                            onSave={() => { void handleSaveFontPreferences() }}
+                            onResetToSaved={handleResetFontPreferencesToSaved}
+                            onResetToDefaults={handleResetFontPreferencesToDefaults}
+                        />
                     </div>
                     <div className="border-t border-border-subtle pt-4">
                         <div className="text-xs text-text-muted mb-1 font-medium">Mobile</div>

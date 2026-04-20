@@ -7,7 +7,13 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { StandaloneDaemonProvider, sendCommandViaWs, sendDataViaWs } from './StandaloneDaemonContext'
-import { getStandaloneToken, standaloneFetch, stripStandaloneTokenFromLocation, type StandaloneAuthSessionStatus } from './standalone-auth-client'
+import { getStandaloneToken, standaloneFetch, stripStandaloneTokenFromLocation, type StandaloneAuthSessionStatus, type StandalonePreferencesStatus } from './standalone-auth-client'
+import {
+    applyStandaloneFontPreferences,
+    cacheStandaloneFontPreferences,
+    initStandaloneFontPreferences,
+    normalizeStandaloneFontPreferences,
+} from './standalone-font-preferences'
 import { TransportProvider, MachineDetail, Dashboard, useBaseDaemons, initTheme, initChatTheme, ApiProvider, createApiClient } from '@adhdev/web-core'
 import StandaloneLayout from './StandaloneLayout'
 import StandaloneAbout from './StandaloneAbout'
@@ -17,6 +23,7 @@ import '@adhdev/web-core/index.css'
 // Restore persisted appearance before first render so CSS vars resolve correctly.
 initTheme()
 initChatTheme()
+initStandaloneFontPreferences()
 
 const standaloneApiClient = createApiClient({
     baseUrl: '',
@@ -47,6 +54,25 @@ function StandaloneAuthGate({ children }: { children: ReactNode }) {
     useEffect(() => {
         void refreshStatus()
     }, [])
+
+    useEffect(() => {
+        if (!status || (status.required && !status.authenticated)) return
+        let cancelled = false
+        void (async () => {
+            try {
+                const res = await standaloneFetch('/api/v1/standalone/preferences')
+                if (!res.ok) return
+                const data = await res.json() as StandalonePreferencesStatus
+                if (cancelled) return
+                const normalizedFonts = normalizeStandaloneFontPreferences(data.standaloneFontPreferences)
+                applyStandaloneFontPreferences(normalizedFonts)
+                cacheStandaloneFontPreferences(normalizedFonts)
+            } catch {
+                // keep cached standalone fonts when the preferences endpoint is unavailable
+            }
+        })()
+        return () => { cancelled = true }
+    }, [status?.authenticated, status?.required])
 
     const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault()
