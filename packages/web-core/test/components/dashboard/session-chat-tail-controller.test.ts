@@ -272,6 +272,35 @@ describe('SessionChatTailController registry', () => {
     })
   })
 
+  it('does not re-subscribe when a render-cycle release is immediately followed by retain for the same controller', () => {
+    resetSessionChatTailControllersForTest()
+    vi.useFakeTimers()
+    try {
+      const manager = new SubscriptionManager()
+      const sendData = vi.fn().mockReturnValue(true)
+      const controller = getOrCreateSessionChatTailController({
+        manager,
+        sendData,
+        daemonId: 'daemon-1',
+        sessionId: 'session-1',
+        historySessionId: 'history-1',
+        subscriptionKey: 'daemon:daemon-1:session:session-1',
+        tailLimit: 60,
+      })
+
+      controller.retain()
+      expect(sendData).toHaveBeenCalledTimes(1)
+
+      controller.release()
+      controller.retain()
+      vi.runAllTimers()
+
+      expect(sendData).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('replays cached transcript state after the background retain cycle releases and later reacquires the same session', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()

@@ -13,6 +13,8 @@ const LIVE_RUNTIME_LIFECYCLES = new Set(['starting', 'running', 'stopping', 'int
 export interface HotChatSessionLike {
   id?: string | null;
   status?: unknown;
+  unread?: unknown;
+  inboxBucket?: unknown;
   lastMessageAt?: unknown;
   runtimeLifecycle?: unknown;
   runtimeSurfaceKind?: unknown;
@@ -79,10 +81,22 @@ export function classifyHotChatSessionsForSubscriptionFlush(
     }
 
     const status = String(session?.status || '').toLowerCase();
+    const unread = session?.unread === true;
+    const inboxBucket = String(session?.inboxBucket || '').toLowerCase();
+    const runtimeSurfaceKind = String(session?.runtimeSurfaceKind || '').toLowerCase();
+    const runtimeLifecycle = String(session?.runtimeLifecycle || '').toLowerCase();
+    const isLiveRuntime = runtimeSurfaceKind === 'live_runtime' || LIVE_RUNTIME_LIFECYCLES.has(runtimeLifecycle);
     const lastMessageAt = parseMessageTimestamp(session?.lastMessageAt);
     const recentlyUpdated = lastMessageAt > 0 && (now - lastMessageAt) <= recentMessageGraceMs;
+    const shouldKeepRecentTailHot = recentlyUpdated && (
+      unread
+      || inboxBucket === 'task_complete'
+      || inboxBucket === 'needs_attention'
+      || isLiveRuntime
+      || activeStatuses.has(status)
+    );
 
-    if (activeStatuses.has(status) || recentlyUpdated) {
+    if (activeStatuses.has(status) || shouldKeepRecentTailHot) {
       active.add(sessionId);
     }
   }

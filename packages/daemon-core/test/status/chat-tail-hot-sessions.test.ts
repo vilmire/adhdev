@@ -14,17 +14,35 @@ describe('classifyHotChatSessionsForSubscriptionFlush', () => {
     expect(Array.from(result.finalizing)).toEqual([])
   })
 
-  it('keeps recently completed sessions hot long enough to flush the completion tail', () => {
+  it('keeps recently completed unread sessions hot long enough to flush the completion tail', () => {
     const now = 10_000
     const result = classifyHotChatSessionsForSubscriptionFlush([
       {
         id: 'session-complete',
         status: 'idle',
+        unread: true,
+        inboxBucket: 'task_complete',
         lastMessageAt: now - (DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS - 500),
       },
     ], new Set(), { now })
 
     expect(Array.from(result.active)).toEqual(['session-complete'])
+    expect(Array.from(result.finalizing)).toEqual([])
+  })
+
+  it('does not keep recently updated idle sessions hot after the completion marker has already been seen', () => {
+    const now = 15_000
+    const result = classifyHotChatSessionsForSubscriptionFlush([
+      {
+        id: 'session-seen-complete',
+        status: 'idle',
+        unread: false,
+        inboxBucket: 'idle',
+        lastMessageAt: now - 500,
+      },
+    ], new Set(), { now })
+
+    expect(Array.from(result.active)).toEqual([])
     expect(Array.from(result.finalizing)).toEqual([])
   })
 
@@ -110,28 +128,29 @@ describe('classifyHotChatSessionsForSubscriptionFlush', () => {
     expect(Array.from(result.finalizing)).toEqual([])
   })
 
-  it('keeps ordinary recently updated stopped sessions hot when they are not recovery artifacts', () => {
+  it('does not keep ordinary recently updated idle sessions hot unless they are still unread', () => {
     const now = 70_000
     const result = classifyHotChatSessionsForSubscriptionFlush([
       {
         id: 'session-ordinary-stopped',
         status: 'idle',
+        unread: false,
+        inboxBucket: 'idle',
         lastMessageAt: now - 500,
         runtimeLifecycle: 'stopped',
       },
       {
         id: 'session-inactive-record',
         status: 'idle',
+        unread: false,
+        inboxBucket: 'idle',
         lastMessageAt: now - 500,
         runtimeLifecycle: 'stopped',
         runtimeSurfaceKind: 'inactive_record',
       },
     ], new Set(), { now })
 
-    expect(Array.from(result.active)).toEqual([
-      'session-ordinary-stopped',
-      'session-inactive-record',
-    ])
+    expect(Array.from(result.active)).toEqual([])
     expect(Array.from(result.finalizing)).toEqual([])
   })
 

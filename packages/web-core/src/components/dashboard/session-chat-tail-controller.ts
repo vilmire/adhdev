@@ -142,6 +142,7 @@ export class SessionChatTailController {
   private listeners = new Set<(snapshot: SessionChatTailSnapshot) => void>()
   private retainCount = 0
   private loadHistoryPromise: Promise<void> | null = null
+  private pendingDisconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(options: SessionChatTailControllerOptions) {
     this.manager = options.manager || subscriptionManager
@@ -208,15 +209,25 @@ export class SessionChatTailController {
   }
 
   retain(): void {
+    if (this.pendingDisconnectTimer) {
+      clearTimeout(this.pendingDisconnectTimer)
+      this.pendingDisconnectTimer = null
+    }
     this.retainCount += 1
     this.connect()
   }
 
   release(): void {
     this.retainCount = Math.max(0, this.retainCount - 1)
-    if (this.retainCount === 0) {
-      this.disconnect()
+    if (this.retainCount !== 0 || this.pendingDisconnectTimer) {
+      return
     }
+    this.pendingDisconnectTimer = setTimeout(() => {
+      this.pendingDisconnectTimer = null
+      if (this.retainCount === 0) {
+        this.disconnect()
+      }
+    }, 0)
   }
 
   async loadHistoryPage(loader: () => Promise<{ messages?: DashboardMessage[]; hasMore?: boolean }>): Promise<void> {
@@ -280,6 +291,10 @@ export class SessionChatTailController {
   }
 
   dispose(): void {
+    if (this.pendingDisconnectTimer) {
+      clearTimeout(this.pendingDisconnectTimer)
+      this.pendingDisconnectTimer = null
+    }
     this.disconnect()
     this.listeners.clear()
     this.retainCount = 0
@@ -449,7 +464,6 @@ export function useSessionChatTailController(
       setSnapshot(buildEmptySnapshot(tailLimit))
       return
     }
-    controller.hydrateLiveMessages(activeConv.messages as DashboardMessage[])
     controller.retain()
     setSnapshot(controller.getSnapshot())
     const unsubscribe = controller.subscribe((nextSnapshot) => {
@@ -459,7 +473,13 @@ export function useSessionChatTailController(
       unsubscribe()
       controller.release()
     }
-  }, [activeConv.messages, controller, tailLimit])
+  }, [controller, tailLimit])
+
+  useEffect(() => {
+    if (!controller) return
+    controller.hydrateLiveMessages(activeConv.messages as DashboardMessage[])
+    setSnapshot(controller.getSnapshot())
+  }, [activeConv.messages, controller])
 
   const loadHistoryPage = useCallback(async () => {
     if (!controller || !daemonId || !sessionId) return
