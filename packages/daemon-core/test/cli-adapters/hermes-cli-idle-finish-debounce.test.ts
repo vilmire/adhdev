@@ -17,6 +17,7 @@ function buildAdapter(type: string) {
     // Replicate the provider.json timeout values so the test reflects real config.
     // hermes-cli uses 5000ms for both idleFinishConfirm and statusActivityHold;
     // other providers use the default 2000ms.
+    allowInputDuringGeneration: isHermes,
     timeouts: isHermes
       ? { idleFinishConfirm: 5000, statusActivityHold: 5000 }
       : {},
@@ -90,13 +91,17 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
     expect(captured?.isWaitingForResponse).toBe(true)
   })
 
-  it('keeps hermes-cli turns open for 5s before finishing an idle-looking screen', async () => {
+  it('keeps hermes-cli turns open for 5s before finishing an idle-looking screen when the settled transcript still has no assistant turn', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-15T15:00:00Z'))
 
     const adapter = buildAdapter('hermes-cli')
     const finishResponse = vi.fn()
     adapter.finishResponse = finishResponse
+    adapter.parseCurrentTranscript = () => ({
+      status: 'idle',
+      messages: [],
+    })
 
     adapter.evaluateSettled()
     expect(finishResponse).not.toHaveBeenCalled()
@@ -106,6 +111,36 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
 
     await vi.advanceTimersByTimeAsync(1_000)
     expect(finishResponse).toHaveBeenCalledTimes(1)
+  })
+
+  it('commits the settled transcript immediately when Hermes parseOutput already contains the assistant turn even if the screen only shows idle chrome', () => {
+    const adapter = buildAdapter('hermes-cli')
+    adapter.committedMessages = [{ role: 'user', content: 'hello', timestamp: 1 }]
+    adapter.syncMessageViews()
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'hello',
+      startedAt: 10,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+    adapter.terminalScreen = { getText: () => '❯' }
+    adapter.parseCurrentTranscript = () => ({
+      status: 'idle',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'done' },
+      ],
+    })
+
+    adapter.evaluateSettled()
+
+    expect(adapter.currentStatus).toBe('idle')
+    expect(adapter.isWaitingForResponse).toBe(false)
+    expect(adapter.currentTurnScope).toBeNull()
+    expect(adapter.committedMessages).toHaveLength(2)
+    expect(adapter.committedMessages[1].content).toBe('done')
   })
 
   it('keeps the generating timeout from force-finishing while detectStatus still reports generating', async () => {
@@ -128,18 +163,54 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
     expect(adapter.runDetectStatus).toHaveBeenCalled()
   })
 
-  it('keeps the default 2s idle-finish debounce for non-Hermes CLI providers', async () => {
+  it('commits a visible assistant turn immediately when parseOutput already reports idle during an active Hermes turn', () => {
+    const adapter = buildAdapter('hermes-cli')
+    adapter.committedMessages = [{ role: 'user', content: 'hello', timestamp: 1 }]
+    adapter.syncMessageViews()
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'hello',
+      startedAt: 10,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+    adapter.parseCurrentTranscript = () => ({
+      status: 'idle',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'done' },
+      ],
+    })
+
+    const result = adapter.getScriptParsedStatus()
+
+    expect(adapter.currentStatus).toBe('idle')
+    expect(adapter.isWaitingForResponse).toBe(false)
+    expect(adapter.currentTurnScope).toBeNull()
+    expect(adapter.committedMessages).toHaveLength(2)
+    expect(adapter.committedMessages[1].content).toBe('done')
+    expect(result.status).toBe('idle')
+    expect(result.messages).toHaveLength(2)
+    expect(result.messages[1].content).toBe('done')
+  })
+
+  it('eventually finishes an idle-looking screen for non-Hermes CLI providers when the settled transcript still has no assistant turn', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-15T15:00:00Z'))
 
     const adapter = buildAdapter('codex-cli')
     const finishResponse = vi.fn()
     adapter.finishResponse = finishResponse
+    adapter.parseCurrentTranscript = () => ({
+      status: 'idle',
+      messages: [],
+    })
 
     adapter.evaluateSettled()
     expect(finishResponse).not.toHaveBeenCalled()
 
-    await vi.advanceTimersByTimeAsync(2_000)
+    await vi.advanceTimersByTimeAsync(5_000)
     expect(finishResponse).toHaveBeenCalledTimes(1)
   })
 })

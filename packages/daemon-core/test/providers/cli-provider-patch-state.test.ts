@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
 
 describe('CliProviderInstance provider patch state', () => {
@@ -88,6 +88,35 @@ describe('CliProviderInstance provider patch state', () => {
     expect(state.activeChat.messages).toEqual([
       expect.objectContaining({ content: 'stale transcript' }),
     ])
+  })
+
+  it('does not surface parsed idle chat status while the adapter still reports generating', () => {
+    const instance = new CliProviderInstance({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      spawn: { command: 'hermes', args: [] },
+    } as any, '/tmp/project') as any
+
+    instance.adapter = {
+      getStatus: () => ({ status: 'generating', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        title: 'project',
+        status: 'idle',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'done' },
+        ],
+      }),
+      getRuntimeMetadata: () => null,
+    }
+    instance.historyWriter = { appendNewMessages: vi.fn() }
+
+    const state = instance.getState() as any
+    expect(state.status).toBe('generating')
+    expect(state.activeChat.status).toBe('generating')
+    expect(state.activeChat.messages).toHaveLength(2)
+    expect(state.activeChat.messages[1]).toEqual(expect.objectContaining({ content: 'done' }))
   })
 
   it('keeps all runtime overlay messages instead of slicing the live chat tail to 50', () => {

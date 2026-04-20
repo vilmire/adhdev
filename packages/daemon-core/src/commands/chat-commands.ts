@@ -340,6 +340,9 @@ function normalizeReadChatCommandStatus(status: unknown, activeModal: unknown): 
 
 function buildReadChatCommandResult(payload: Record<string, any>, args: any): CommandResult {
     let validatedPayload: Record<string, any>;
+    const debugReadChat = payload?.debugReadChat && typeof payload.debugReadChat === 'object'
+        ? payload.debugReadChat
+        : undefined;
     try {
         validatedPayload = validateReadChatResultPayload({
             ...payload,
@@ -361,6 +364,7 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any): Co
             replaceFrom: 0,
             totalMessages: messages.length,
             lastMessageSignature,
+            ...(debugReadChat ? { debugReadChat } : {}),
         };
     }
     const sync = computeReadChatSync(messages, cursor);
@@ -372,6 +376,7 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any): Co
         replaceFrom: sync.replaceFrom,
         totalMessages: sync.totalMessages,
         lastMessageSignature: sync.lastMessageSignature,
+        ...(debugReadChat ? { debugReadChat } : {}),
     };
 }
 
@@ -480,16 +485,44 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const parsedRecord = parsedStatus && typeof parsedStatus === 'object'
                 ? parsedStatus as Record<string, any>
                 : null;
-            const status = parsedRecord || adapter.getStatus();
+            const adapterStatus = adapter.getStatus();
+            const shouldPreferAdapterMessages =
+                Array.isArray(adapterStatus.messages)
+                && adapterStatus.messages.length > 0
+                && Array.isArray(parsedRecord?.messages)
+                && adapterStatus.messages.length > parsedRecord.messages.length;
+            const status = parsedRecord
+                ? {
+                    ...parsedRecord,
+                    messages: shouldPreferAdapterMessages ? adapterStatus.messages : parsedRecord.messages,
+                    status: adapterStatus.status !== 'idle'
+                        ? adapterStatus.status
+                        : (parsedRecord.status || adapterStatus.status),
+                    activeModal: parsedRecord.activeModal || adapterStatus.activeModal,
+                }
+                : adapterStatus;
+
             const title = typeof parsedRecord?.title === 'string' ? parsedRecord.title : undefined;
             const providerSessionId = typeof parsedRecord?.providerSessionId === 'string'
                 ? parsedRecord.providerSessionId
                 : undefined;
             if (status) {
+                LOG.info('Command', `[read_chat] cli-like resolved provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord?.status || '')} shouldPreferAdapterMessages=${String(shouldPreferAdapterMessages)} adapterMsgCount=${Array.isArray(adapterStatus.messages) ? adapterStatus.messages.length : 0} parsedMsgCount=${Array.isArray(parsedRecord?.messages) ? parsedRecord.messages.length : 0} returnedMsgCount=${Array.isArray((status as any).messages) ? (status as any).messages.length : 0}`);
                 return buildReadChatCommandResult({
-                    messages: status.messages || [],
+                    messages: (status as any).messages || [],
                     status: status.status,
                     activeModal: status.activeModal,
+                    debugReadChat: {
+                        provider: adapter.cliType,
+                        targetSessionId: String(args?.targetSessionId || ''),
+                        adapterStatus: String(adapterStatus.status || ''),
+                        parsedStatus: String(parsedRecord?.status || ''),
+                        returnedStatus: String(status.status || ''),
+                        shouldPreferAdapterMessages,
+                        adapterMsgCount: Array.isArray(adapterStatus.messages) ? adapterStatus.messages.length : 0,
+                        parsedMsgCount: Array.isArray(parsedRecord?.messages) ? parsedRecord.messages.length : 0,
+                        returnedMsgCount: Array.isArray((status as any).messages) ? (status as any).messages.length : 0,
+                    },
                     ...(title ? { title } : {}),
                     ...(providerSessionId ? { providerSessionId } : {}),
                 }, args);

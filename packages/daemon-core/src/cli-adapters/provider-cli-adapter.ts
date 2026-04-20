@@ -853,6 +853,58 @@ export class ProviderCliAdapter implements CliAdapter {
         );
     }
 
+    private clearStaleIdleResponseGuard(reason: string): boolean {
+        const screenText = this.terminalScreen.getText() || '';
+        const visibleIdlePrompt = this.looksLikeVisibleIdlePrompt(screenText);
+        const blockingModal = this.activeModal || this.getStartupConfirmationModal(screenText);
+        if (!this.isWaitingForResponse || this.currentStatus !== 'idle' || !visibleIdlePrompt || !!blockingModal) {
+            return false;
+        }
+        if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
+        if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
+        if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
+        if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
+        this.clearIdleFinishCandidate(reason);
+        this.responseBuffer = '';
+        this.isWaitingForResponse = false;
+        this.responseSettleIgnoreUntil = 0;
+        this.submitRetryUsed = false;
+        this.submitRetryPromptSnippet = '';
+        this.finishRetryCount = 0;
+        this.currentTurnScope = null;
+        this.activeModal = null;
+        this.recordTrace('stale_idle_response_cleared', {
+            reason,
+            screenText: summarizeCliTraceText(screenText, 240),
+        });
+        return true;
+    }
+
+    private hasMeaningfulResponseBuffer(promptSnippet: string): boolean {
+        const raw = String(this.responseBuffer || '').trim();
+        if (!raw) return false;
+        const normalizedPrompt = compactPromptText(promptSnippet);
+        if (!normalizedPrompt) return true;
+        const normalizedBuffer = compactPromptText(raw);
+        if (!normalizedBuffer) return false;
+        if (normalizedBuffer === normalizedPrompt) return false;
+        if (normalizedBuffer.startsWith(normalizedPrompt)) {
+            const remainder = normalizedBuffer
+                .slice(normalizedPrompt.length)
+                .replace(/[─═\-]+/g, '')
+                .replace(/⏵⏵accepteditson\([^)]*\)/gi, '')
+                .replace(/accepteditson\([^)]*\)/gi, '')
+                .replace(/(?:◐|◑|◒|◓|◔|◕|◉|●|·)?(?:x?high|medium|low|max)·?\/effort/gi, '')
+                .replace(/updateavailable!run:[a-z0-9:._\-/]+/gi, '')
+                .replace(/esctointerrupt/gi, '')
+                .replace(/❯/g, '')
+                .replace(/^[\s\-–—:;,.!/?]+/, '')
+                .trim();
+            return remainder.length > 0;
+        }
+        return true;
+    }
+
     private evaluateSettled(): void {
         const now = Date.now();
         if (this.submitPendingUntil > now || this.responseSettleIgnoreUntil > now) {
@@ -888,7 +940,11 @@ export class ProviderCliAdapter implements CliAdapter {
                 lastOutputAt: this.lastOutputAt,
             })
             : [];
+        if (this.maybeCommitVisibleIdleTranscript(parsedTranscript)) {
+            return;
+        }
         const lastParsedAssistant = [...parsedMessages].reverse().find((message) => message.role === 'assistant');
+        const normalizedPromptSnippet = normalizePromptText(this.submitRetryPromptSnippet || this.currentTurnScope?.prompt || '');
         this.recordTrace('settled', {
             tail: summarizeCliTraceText(tail, 500),
             screenText: summarizeCliTraceText(screenText, 1200),
@@ -906,6 +962,32 @@ export class ProviderCliAdapter implements CliAdapter {
                 scope: this.currentTurnScope,
             }),
         });
+        if (
+            this.currentTurnScope
+            && !lastParsedAssistant
+            && !this.submitRetryUsed
+            && this.ptyProcess
+            && this.currentStatus !== 'waiting_approval'
+            && promptLikelyVisible(screenText, normalizedPromptSnippet)
+            && !this.hasMeaningfulResponseBuffer(normalizedPromptSnippet)
+        ) {
+            this.submitRetryUsed = true;
+            this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
+            LOG.info('CLI', `[${this.cliType}] Retrying submit key from settled parser (no assistant yet)`);
+            this.recordTrace('submit_write', {
+                mode: 'settled_retry',
+                sendKey: this.sendKey,
+                screenText: summarizeCliTraceText(screenText, 500),
+            });
+            this.ptyProcess.write(this.sendKey);
+            if (this.settleTimer) clearTimeout(this.settleTimer);
+            this.settleTimer = setTimeout(() => {
+                this.settleTimer = null;
+                this.settledBuffer = this.recentOutputBuffer;
+                this.evaluateSettled();
+            }, this.timeouts.outputSettle + 150);
+            return;
+        }
         if (this.currentTurnScope && !lastParsedAssistant) {
             LOG.info(
                 'CLI',
@@ -956,11 +1038,20 @@ export class ProviderCliAdapter implements CliAdapter {
 
         const recentInteractiveActivity = this.hasRecentInteractiveActivity(now);
         const statusActivityHoldMs = this.getStatusActivityHoldMs();
+        const visibleIdlePrompt = this.looksLikeVisibleIdlePrompt(screenText);
+        const visibleAssistantCandidate = this.looksLikeVisibleAssistantCandidate(screenText);
+        if (this.currentTurnScope && this.cliType === 'claude-cli') {
+            LOG.info(
+                'CLI',
+                `[${this.cliType}] settled diagnostics prompt=${JSON.stringify(this.currentTurnScope.prompt).slice(0, 140)} scriptStatus=${String(scriptStatus || '')} parsedStatus=${String(parsedTranscript?.status || '')} parsedMsgCount=${parsedMessages.length} lastParsedAssistant=${JSON.stringify(summarizeCliTraceText(lastParsedAssistant?.content || '', 120)).slice(0, 160)} visibleIdlePrompt=${String(visibleIdlePrompt)} visibleAssistantCandidate=${String(visibleAssistantCandidate)} responseBuffer=${JSON.stringify(summarizeCliTraceText(this.responseBuffer, 160)).slice(0, 220)} screen=${JSON.stringify(summarizeCliTraceText(screenText, 160)).slice(0, 220)}`
+            );
+        }
         const shouldHoldGenerating =
             scriptStatus === 'idle'
             && this.isWaitingForResponse
             && !modal
-            && recentInteractiveActivity;
+            && recentInteractiveActivity
+            && !(visibleIdlePrompt && visibleAssistantCandidate);
 
         if (shouldHoldGenerating) {
             this.clearIdleFinishCandidate('hold_generating_recent_activity');
@@ -1202,6 +1293,70 @@ export class ProviderCliAdapter implements CliAdapter {
         this.onStatusChange?.();
     }
 
+    private maybeCommitVisibleIdleTranscript(
+        parsed: any,
+        options?: { requireVisibleAssistantCandidate?: boolean; screenText?: string },
+    ): boolean {
+        const allowImmediateScriptIdleCommit = this.provider.allowInputDuringGeneration === true;
+        if (!allowImmediateScriptIdleCommit) return false;
+        if (
+            !parsed
+            || !Array.isArray(parsed.messages)
+            || parsed.status !== 'idle'
+            || !this.isWaitingForResponse
+            || !this.currentTurnScope
+            || this.activeModal
+            || parsed.activeModal
+        ) {
+            return false;
+        }
+
+        if (options?.requireVisibleAssistantCandidate) {
+            const candidateText = options.screenText || this.terminalScreen.getText() || '';
+            if (!this.looksLikeVisibleAssistantCandidate(candidateText)) {
+                return false;
+            }
+        }
+
+        const hydratedForIdleCommit = normalizeCliParsedMessages(parsed.messages, {
+            committedMessages: this.committedMessages,
+            scope: this.currentTurnScope,
+            lastOutputAt: this.lastOutputAt,
+        });
+        const visibleAssistant = [...hydratedForIdleCommit].reverse().find((message) => message.role === 'assistant' && message.content.trim());
+        if (!visibleAssistant) return false;
+
+        this.committedMessages = hydratedForIdleCommit;
+        const promptForTrim = this.currentTurnScope?.prompt || getLastUserPromptText(this.committedMessages);
+        if (promptForTrim) {
+            const lastAssistantForTrim = [...this.committedMessages].reverse().find((message) => message.role === 'assistant');
+            if (lastAssistantForTrim) {
+                lastAssistantForTrim.content = trimPromptEchoPrefix(lastAssistantForTrim.content, promptForTrim);
+            }
+        }
+        if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
+        if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
+        if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
+        if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
+        if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
+        this.syncMessageViews();
+        this.responseBuffer = '';
+        this.isWaitingForResponse = false;
+        this.responseSettleIgnoreUntil = 0;
+        this.submitRetryUsed = false;
+        this.submitRetryPromptSnippet = '';
+        this.finishRetryCount = 0;
+        this.currentTurnScope = null;
+        this.activeModal = null;
+        this.setStatus('idle', 'script_idle_commit');
+        this.onStatusChange?.();
+        this.recordTrace('script_idle_commit', {
+            messageCount: this.committedMessages.length,
+            lastAssistant: summarizeCliTraceText(visibleAssistant.content, 320),
+        });
+        return true;
+    }
+
     private commitCurrentTranscript(): { hasAssistant: boolean; assistantContent: string } {
         const parsed = this.parseCurrentTranscript(
             this.committedMessages,
@@ -1223,6 +1378,12 @@ export class ProviderCliAdapter implements CliAdapter {
             }
             this.syncMessageViews();
             const lastAssistant = [...this.committedMessages].reverse().find((message) => message.role === 'assistant');
+            if (this.currentTurnScope) {
+                LOG.info(
+                    'CLI',
+                    `[${this.cliType}] commitCurrentTranscript committedMessages=${this.committedMessages.length} finalLastAssistant=${JSON.stringify(summarizeCliTraceText(lastAssistant?.content || '', 220)).slice(0, 260)}`
+                );
+            }
             this.recordTrace('commit_transcript', {
                 parsedStatus: parsed.status || null,
                 messageCount: this.committedMessages.length,
@@ -1242,16 +1403,24 @@ export class ProviderCliAdapter implements CliAdapter {
                     `[${this.cliType}] Commit without assistant turn: prompt=${JSON.stringify(this.currentTurnScope.prompt).slice(0, 140)} responseBuffer=${JSON.stringify(summarizeCliTraceText(this.responseBuffer, 220)).slice(0, 260)} providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'} scriptsPath=${this.providerResolutionMeta.scriptsPath || '-'}`
                 );
             }
+            const hasAssistant = !!lastAssistant;
             return {
-                hasAssistant: !!lastAssistant,
+                hasAssistant,
                 assistantContent: lastAssistant?.content || '',
             };
+        }
+        if (this.currentTurnScope) {
+            LOG.info(
+                'CLI',
+                `[${this.cliType}] commitCurrentTranscript parsed.messages=none responseBufferLen=${this.responseBuffer.length} accumulatedBufferLen=${this.accumulatedBuffer.length} parsedStatus=${parsed?.status || '-'} providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'}`
+            );
         }
         return {
             hasAssistant: false,
             assistantContent: '',
         };
     }
+
 
  // ─── Script Execution ──────────────────────────
 
@@ -1359,26 +1528,35 @@ export class ProviderCliAdapter implements CliAdapter {
             this.currentTurnScope,
             screenText,
         );
+        if (this.maybeCommitVisibleIdleTranscript(parsed)) {
+            return this.getScriptParsedStatus();
+        }
         const shouldPreferCommittedMessages =
             !this.currentTurnScope
-            && this.currentStatus === 'idle'
-            && !this.activeModal;
+            && !this.activeModal
+            && this.currentStatus === 'idle';
         let result: any;
         if (parsed && Array.isArray(parsed.messages)) {
-            const hydratedMessages = shouldPreferCommittedMessages
-                ? this.committedMessages.map((message, index) => buildChatMessage({
-                    ...message,
-                    id: message.id || `msg_${index}`,
-                    index: typeof message.index === 'number' ? message.index : index,
-                    receivedAt: typeof message.receivedAt === 'number'
-                        ? message.receivedAt
-                        : message.timestamp,
-                }))
-                : hydrateCliParsedMessages(parsed.messages, {
-                    committedMessages: this.committedMessages,
-                    scope: this.currentTurnScope,
-                    lastOutputAt: this.lastOutputAt,
-                });
+            const parsedHydratedMessages = hydrateCliParsedMessages(parsed.messages, {
+                committedMessages: this.committedMessages,
+                scope: this.currentTurnScope,
+                lastOutputAt: this.lastOutputAt,
+            });
+            const committedHydratedMessages = this.committedMessages.map((message, index) => buildChatMessage({
+                ...message,
+                id: message.id || `msg_${index}`,
+                index: typeof message.index === 'number' ? message.index : index,
+                receivedAt: typeof message.receivedAt === 'number'
+                    ? message.receivedAt
+                    : message.timestamp,
+            }));
+            const shouldPreferCommittedHistoryReplay =
+                !this.currentTurnScope
+                && !this.activeModal
+                && committedHydratedMessages.length > parsedHydratedMessages.length;
+            const hydratedMessages = (shouldPreferCommittedMessages || shouldPreferCommittedHistoryReplay)
+                ? committedHydratedMessages
+                : parsedHydratedMessages;
             result = {
                 id: parsed.id || 'cli_session',
                 status: parsed.status || this.currentStatus,
@@ -1402,6 +1580,32 @@ export class ProviderCliAdapter implements CliAdapter {
                         : message.timestamp,
                 })),
                 activeModal: this.activeModal,
+            };
+        }
+
+        const hasVisibleAssistantMessage = Array.isArray(result?.messages)
+            && result.messages.some((message: any) => message?.role === 'assistant' && typeof message?.content === 'string' && message.content.trim());
+        const shouldClampStaleGeneratingToIdle =
+            result?.status === 'generating'
+            && this.currentStatus === 'idle'
+            && !this.currentTurnScope
+            && !result?.activeModal
+            && hasVisibleAssistantMessage;
+        if (shouldClampStaleGeneratingToIdle) {
+            result = {
+                ...result,
+                status: 'idle',
+                messages: Array.isArray(result.messages)
+                    ? result.messages.map((message: any) => {
+                        if (message?.role !== 'assistant' || !message?.meta?.streaming) return message;
+                        const nextMeta = { ...(message.meta || {}) };
+                        delete nextMeta.streaming;
+                        return {
+                            ...message,
+                            ...(Object.keys(nextMeta).length > 0 ? { meta: nextMeta } : { meta: undefined }),
+                        };
+                    })
+                    : result.messages,
             };
         }
 
@@ -1541,8 +1745,35 @@ export class ProviderCliAdapter implements CliAdapter {
             }
         }
         if (!this.ready) throw new Error(`${this.cliName} not ready (status: ${this.currentStatus})`);
-        if (this.isWaitingForResponse && !allowInputDuringGeneration) {
+        const parsedStatusBeforeSend = !allowInputDuringGeneration
+            ? (() => {
+                try {
+                    return this.getScriptParsedStatus?.() || null;
+                } catch {
+                    return null;
+                }
+            })()
+            : null;
+        const parsedSessionStatus = typeof parsedStatusBeforeSend?.status === 'string'
+            ? String(parsedStatusBeforeSend.status)
+            : '';
+        const parsedMessagesBeforeSend = Array.isArray(parsedStatusBeforeSend?.messages)
+            ? parsedStatusBeforeSend.messages.filter((message: any) => message && (message.role === 'user' || message.role === 'assistant'))
+            : [];
+        const shouldCommitParsedIdleBeforeSend = !allowInputDuringGeneration
+            && parsedSessionStatus === 'idle'
+            && parsedMessagesBeforeSend.length > this.committedMessages.length
+            && parsedMessagesBeforeSend.some((message: any) => message?.role === 'assistant' && typeof message?.content === 'string' && message.content.trim());
+        if (shouldCommitParsedIdleBeforeSend) {
+            this.commitCurrentTranscript();
+        }
+        if (!allowInputDuringGeneration && (parsedSessionStatus === 'generating' || parsedSessionStatus === 'long_generating')) {
             throw new Error(`${this.cliName} is still processing the previous prompt`);
+        }
+        if (this.isWaitingForResponse && !allowInputDuringGeneration) {
+            if (!this.clearStaleIdleResponseGuard('send_message_guard')) {
+                throw new Error(`${this.cliName} is still processing the previous prompt`);
+            }
         }
         const blockingModal = this.activeModal || this.getStartupConfirmationModal(this.terminalScreen.getText() || '');
         if (blockingModal || this.currentStatus === 'waiting_approval') {
@@ -1622,7 +1853,7 @@ export class ProviderCliAdapter implements CliAdapter {
                     this.submitRetryTimer = null;
                     if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
                     if (this.currentStatus === 'waiting_approval') return;
-                    if ((this.responseBuffer || '').trim()) return;
+                    if (this.hasMeaningfulResponseBuffer(normalizedPromptSnippet)) return;
                     const screenText = this.terminalScreen.getText();
                     if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
                     if (/Esc to interrupt|Do you want to proceed|This command requires approval|Allow Codex to|Approve and run now|Always approve this session|Running…|Running\.\.\./i.test(screenText)) return;
@@ -1660,7 +1891,7 @@ export class ProviderCliAdapter implements CliAdapter {
                     this.submitRetryTimer = null;
                     if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
                     if (this.currentStatus === 'waiting_approval') return;
-                    if ((this.responseBuffer || '').trim()) return;
+                    if (this.hasMeaningfulResponseBuffer(normalizedPromptSnippet)) return;
                     const screenText = this.terminalScreen.getText();
                     if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
                     LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt 1)`);

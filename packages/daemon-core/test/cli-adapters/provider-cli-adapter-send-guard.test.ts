@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { ProviderCliAdapter } from '../../src/cli-adapters/provider-cli-adapter.js'
 
 function buildAdapter(options: { allowInputDuringGeneration?: boolean } = {}) {
@@ -34,11 +34,65 @@ function buildAdapter(options: { allowInputDuringGeneration?: boolean } = {}) {
 }
 
 describe('ProviderCliAdapter sendMessage guard', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('rejects a new prompt while a response is still in progress for providers that do not allow intervention', async () => {
     const adapter = buildAdapter()
 
     await expect(adapter.sendMessage('second prompt')).rejects.toThrow('still processing')
     expect(adapter.ptyProcess.write).not.toHaveBeenCalled()
+  })
+
+  it('clears a stale waiting guard when the UI is already back at an idle prompt', async () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'idle'
+    adapter.terminalScreen = { getText: () => '❯\n' }
+
+    await expect(adapter.sendMessage('next prompt')).resolves.toBeUndefined()
+    expect(adapter.isWaitingForResponse).toBe(true)
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('next prompt\r')
+  })
+
+  it('rejects a second prompt when parsed status still says generating even if adapter status already looks idle', async () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.terminalScreen = { getText: () => '❯\n' }
+    adapter.getScriptParsedStatus = vi.fn(() => ({
+      status: 'generating',
+      messages: [
+        { role: 'user', content: 'Reply with exactly TURN-ONE and nothing else.' },
+        { role: 'assistant', content: '· Proofing…' },
+      ],
+    }))
+
+    await expect(adapter.sendMessage('Reply with exactly TURN-TWO and nothing else.')).rejects.toThrow('still processing')
+    expect(adapter.ptyProcess.write).not.toHaveBeenCalled()
+  })
+
+  it('retries submit when the response buffer only contains the echoed long prompt', async () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.scripts = undefined
+    adapter.runDetectStatus = vi.fn(() => 'idle')
+    adapter.terminalScreen = {
+      getText: () => '❯ Reply with BEGIN, then the numbers 1 through 40 with one number per line, then END.\n'
+    }
+
+    const sendPromise = adapter.sendMessage('Reply with BEGIN, then the numbers 1 through 40 with one number per line, then END.')
+    await vi.runAllTicks()
+    adapter.responseBuffer = 'Reply with BEGIN, then the numbers 1 through 40 with one number per line, then END.'
+    await vi.advanceTimersByTimeAsync(1000)
+    await expect(sendPromise).resolves.toBeUndefined()
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('Reply with BEGIN, then the numbers 1 through 40 with one number per line, then END.\r')
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('\r')
   })
 
   it('allows an intervention prompt during generation for providers that explicitly opt in', async () => {

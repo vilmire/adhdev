@@ -27,6 +27,14 @@ interface SessionHostRuntimeOptions extends SessionHostPtyTransportFactoryOption
     spawnOptions: PtySpawnOptions;
 }
 
+export function shouldResumeAttachedSession(record: SessionHostRecord | null | undefined): boolean {
+    if (!record) return false;
+    if (record.lifecycle === 'interrupted') return true;
+    if (record.lifecycle !== 'stopped') return false;
+    if (record.meta?.restoredFromStorage === true) return true;
+    return typeof record.meta?.runtimeRecoveryState === 'string' && String(record.meta.runtimeRecoveryState).trim().length > 0;
+}
+
 class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     readonly ready: Promise<void>;
     readonly terminalQueriesHandled = true;
@@ -215,7 +223,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
             const existingRecord = existingRecords.success && existingRecords.result
                 ? existingRecords.result.find((item) => item.sessionId === this.options.runtimeId) || null
                 : null;
-            if (existingRecord?.lifecycle === 'interrupted') {
+            if (shouldResumeAttachedSession(existingRecord)) {
                 const resumeResponse = await this.client.request<SessionHostRecord>({
                     type: 'resume_session',
                     payload: {

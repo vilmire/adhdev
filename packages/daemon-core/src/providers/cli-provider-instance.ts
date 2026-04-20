@@ -455,7 +455,9 @@ export class CliProviderInstance implements ProviderInstance {
                     ? 'error'
                     : autoApproveActive && parsedStatus?.status === 'waiting_approval'
                     ? 'generating'
-                    : (parsedStatus?.status || visibleStatus),
+                    : (adapterStatus.status !== 'idle'
+                        ? visibleStatus
+                        : (parsedStatus?.status || visibleStatus)),
                 messages: mergedMessages,
                 activeModal: autoApproveActive ? null : (parsedStatus?.activeModal ?? adapterStatus.activeModal),
                 inputContent: '',
