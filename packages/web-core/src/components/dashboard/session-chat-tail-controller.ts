@@ -198,6 +198,7 @@ export class SessionChatTailController {
       liveMessages: nextMessages,
       cursor: nextCursor,
     }
+    this.emit()
   }
 
   subscribe(listener: (snapshot: SessionChatTailSnapshot) => void): () => void {
