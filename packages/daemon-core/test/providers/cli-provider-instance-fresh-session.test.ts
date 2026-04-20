@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { CliProviderInstance, getForcedNewSessionScriptName, waitForCliAdapterReady } from '../../src/providers/cli-provider-instance.js'
 
 describe('getForcedNewSessionScriptName', () => {
@@ -124,5 +124,70 @@ describe('CliProviderInstance provider session recovery', () => {
     await instance.onTick()
 
     expect(instance.getState().providerSessionId).toBeUndefined()
+  })
+})
+
+describe('CliProviderInstance incremental history persistence', () => {
+  it('persists only the new transcript suffix when repeated getState snapshots replay the full transcript with fresh fallback timestamps', () => {
+    const instance = new CliProviderInstance({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      spawn: { command: 'hermes', args: [] },
+    } as any, '/tmp/project') as any
+
+    const appendNewMessages = vi.fn()
+    instance.historyWriter = { appendNewMessages } as any
+    instance.adapter = {
+      getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        title: 'Hermes Agent',
+        messages: [
+          { role: 'user', content: 'same prompt', kind: 'standard', receivedAt: 1_000 },
+          { role: 'assistant', content: 'same reply', kind: 'tool', senderName: 'Tool', receivedAt: 2_000 },
+        ],
+      }),
+      getRuntimeMetadata: () => null,
+    }
+
+    instance.getState()
+    instance.adapter = {
+      getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        title: 'Hermes Agent',
+        messages: [
+          { role: 'user', content: 'same prompt', kind: 'standard', receivedAt: 9_000 },
+          { role: 'assistant', content: 'same reply', kind: 'tool', senderName: 'Tool', receivedAt: 10_000 },
+          { role: 'assistant', content: 'new tail', kind: 'standard', receivedAt: 11_000 },
+        ],
+      }),
+      getRuntimeMetadata: () => null,
+    }
+
+    instance.getState()
+
+    expect(appendNewMessages).toHaveBeenNthCalledWith(
+      1,
+      'hermes-cli',
+      [
+        { role: 'user', content: 'same prompt', kind: 'standard', receivedAt: 1_000 },
+        { role: 'assistant', content: 'same reply', kind: 'tool', senderName: 'Tool', receivedAt: 2_000 },
+      ],
+      'Hermes Agent',
+      instance.instanceId,
+      undefined,
+    )
+    expect(appendNewMessages).toHaveBeenNthCalledWith(
+      2,
+      'hermes-cli',
+      [
+        { role: 'assistant', content: 'new tail', kind: 'standard', receivedAt: 11_000 },
+      ],
+      'Hermes Agent',
+      instance.instanceId,
+      undefined,
+    )
   })
 })

@@ -1274,3 +1274,140 @@ export function listSavedHistorySessions(
         return { sessions: [], hasMore: false };
     }
 }
+
+function normalizeCanonicalHermesMessageContent(content: unknown): string {
+    if (typeof content === 'string') return content.trim();
+    if (content == null) return '';
+    try {
+        return JSON.stringify(content).trim();
+    } catch {
+        return String(content).trim();
+    }
+}
+
+function extractCanonicalHermesMessageTimestamp(message: Record<string, unknown>, fallbackTs: number): number {
+    const numericTimestamp = Number(message.receivedAt || message.timestamp || message.ts || 0);
+    if (Number.isFinite(numericTimestamp) && numericTimestamp > 0) return numericTimestamp;
+    const stringTimestamp = typeof message.ts === 'string'
+        ? Date.parse(message.ts)
+        : (typeof message.timestamp === 'string' ? Date.parse(message.timestamp) : NaN);
+    if (Number.isFinite(stringTimestamp) && stringTimestamp > 0) return stringTimestamp;
+    return fallbackTs;
+}
+
+function readExistingHermesSessionStartRecord(historySessionId: string): HistoryMessage | null {
+    try {
+        const dir = path.join(HISTORY_DIR, 'hermes-cli');
+        if (!fs.existsSync(dir)) return null;
+        const files = listHistoryFiles(dir, historySessionId).sort();
+        for (const file of files) {
+            const lines = fs.readFileSync(path.join(dir, file), 'utf-8').split('\n').filter(Boolean);
+            for (const line of lines) {
+                try {
+                    const parsed = JSON.parse(line) as HistoryMessage;
+                    if (parsed.historySessionId !== historySessionId) continue;
+                    if (parsed.kind === 'session_start' && parsed.role === 'system') {
+                        return parsed;
+                    }
+                } catch {
+                    // Ignore malformed lines while probing for the original session_start marker.
+                }
+            }
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+export function rebuildHermesSavedHistoryFromCanonicalSession(historySessionId: string): boolean {
+    const normalizedSessionId = normalizeSavedHistorySessionId('hermes-cli', historySessionId);
+    if (!normalizedSessionId) return false;
+
+    try {
+        const sessionFilePath = path.join(os.homedir(), '.hermes', 'sessions', `session_${normalizedSessionId}.json`);
+        if (!fs.existsSync(sessionFilePath)) return false;
+        const raw = JSON.parse(fs.readFileSync(sessionFilePath, 'utf-8')) as {
+            session_start?: string;
+            last_updated?: string;
+            messages?: Array<Record<string, unknown>>;
+        };
+        const canonicalMessages = Array.isArray(raw.messages) ? raw.messages : [];
+        const dir = path.join(HISTORY_DIR, 'hermes-cli');
+        fs.mkdirSync(dir, { recursive: true });
+        const existingSessionStart = readExistingHermesSessionStartRecord(normalizedSessionId);
+        const records: HistoryMessage[] = [];
+        if (existingSessionStart) {
+            records.push({
+                ...existingSessionStart,
+                historySessionId: normalizedSessionId,
+            });
+        }
+
+        let fallbackTs = Date.parse(raw.session_start || raw.last_updated || '') || Date.now();
+        for (const message of canonicalMessages) {
+            const role = String(message.role || '').trim();
+            const content = normalizeCanonicalHermesMessageContent(message.content);
+            if (!content) continue;
+            const receivedAt = extractCanonicalHermesMessageTimestamp(message, fallbackTs);
+            fallbackTs = receivedAt + 1;
+
+            if (role === 'user') {
+                records.push({
+                    ts: new Date(receivedAt).toISOString(),
+                    receivedAt,
+                    role: 'user',
+                    content,
+                    kind: 'standard',
+                    agent: 'hermes-cli',
+                    historySessionId: normalizedSessionId,
+                });
+                continue;
+            }
+
+            if (role === 'assistant') {
+                records.push({
+                    ts: new Date(receivedAt).toISOString(),
+                    receivedAt,
+                    role: 'assistant',
+                    content,
+                    kind: 'standard',
+                    agent: 'hermes-cli',
+                    historySessionId: normalizedSessionId,
+                });
+                continue;
+            }
+
+            if (role === 'tool') {
+                records.push({
+                    ts: new Date(receivedAt).toISOString(),
+                    receivedAt,
+                    role: 'assistant',
+                    content,
+                    kind: 'tool',
+                    senderName: 'Tool',
+                    agent: 'hermes-cli',
+                    historySessionId: normalizedSessionId,
+                });
+            }
+        }
+
+        if (records.length === 0) return false;
+
+        const prefix = `${normalizedSessionId.replace(/[^a-zA-Z0-9_-]/g, '_')}_`;
+        for (const file of fs.readdirSync(dir)) {
+            if (file.startsWith(prefix) && file.endsWith('.jsonl')) {
+                fs.unlinkSync(path.join(dir, file));
+            }
+        }
+
+        const targetDate = new Date(records[records.length - 1].receivedAt || Date.now()).toISOString().slice(0, 10);
+        const filePath = path.join(dir, `${prefix}${targetDate}.jsonl`);
+        fs.writeFileSync(filePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`, 'utf-8');
+        invalidatePersistedSavedHistoryIndex('hermes-cli', dir);
+        savedHistorySessionCache.delete('hermes-cli');
+        return true;
+    } catch {
+        return false;
+    }
+}

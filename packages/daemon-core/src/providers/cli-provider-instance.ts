@@ -27,6 +27,51 @@ import { mergeProviderPatchState, resolveProviderStateSurface } from './provider
 import { normalizeProviderSessionId } from './provider-session-id.js';
 import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages } from './chat-message-normalization.js';
 
+type PersistableCliHistoryMessage = {
+    role: string;
+    content: string;
+    kind?: string;
+    senderName?: string;
+    receivedAt?: number;
+};
+
+function normalizePersistableCliHistoryContent(content: unknown): string {
+    return flattenContent(content as any).replace(/\s+/g, ' ').trim();
+}
+
+function buildPersistableCliHistorySignature(message: PersistableCliHistoryMessage): string {
+    return [
+        String(message.role || ''),
+        String(message.kind || ''),
+        String(message.senderName || ''),
+        normalizePersistableCliHistoryContent(message.content),
+    ].join('|');
+}
+
+export function buildIncrementalHistoryAppendMessages(
+    previousMessages: PersistableCliHistoryMessage[],
+    currentMessages: PersistableCliHistoryMessage[],
+): PersistableCliHistoryMessage[] {
+    if (!Array.isArray(currentMessages) || currentMessages.length === 0) return [];
+    if (!Array.isArray(previousMessages) || previousMessages.length === 0) return currentMessages;
+
+    const previousSignatures = previousMessages.map(buildPersistableCliHistorySignature);
+    const currentSignatures = currentMessages.map(buildPersistableCliHistorySignature);
+
+    let sharedPrefixLength = 0;
+    while (
+        sharedPrefixLength < previousSignatures.length
+        && sharedPrefixLength < currentSignatures.length
+        && previousSignatures[sharedPrefixLength] === currentSignatures[sharedPrefixLength]
+    ) {
+        sharedPrefixLength += 1;
+    }
+
+    if (sharedPrefixLength === currentSignatures.length) return [];
+    if (sharedPrefixLength === previousSignatures.length) return currentMessages.slice(sharedPrefixLength);
+    return currentMessages;
+}
+
 let CachedDatabaseSync: (new (path: string, options?: { readOnly?: boolean }) => {
     prepare(sql: string): { get(...params: Array<string | number>): unknown };
     close(): void;
@@ -112,6 +157,7 @@ export class CliProviderInstance implements ProviderInstance {
     private appliedEffectKeys = new Set<string>();
     private historyWriter: ChatHistoryWriter;
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
+    private lastPersistedHistoryMessages: PersistableCliHistoryMessage[] = [];
     readonly instanceId: string;
     private suppressIdleHistoryReplay = false;
     private errorMessage: string | undefined = undefined;
@@ -200,6 +246,13 @@ export class CliProviderInstance implements ProviderInstance {
                 this.providerSessionId,
                 this.instanceId,
             );
+            this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
+                role: message.role,
+                content: message.content,
+                kind: message.kind,
+                senderName: message.senderName,
+                receivedAt: message.receivedAt,
+            }));
             this.suppressIdleHistoryReplay = restoredHistory.messages.length > 0;
             if (restoredHistory.messages.length > 0) {
                 this.adapter.seedCommittedMessages(
@@ -363,15 +416,24 @@ export class CliProviderInstance implements ProviderInstance {
                     messagesToSave = messagesToSave.slice(0, lastIdx);
                 }
             }
-            if (!shouldSkipReplayPersist && messagesToSave.length > 0) {
+            const normalizedMessagesToSave = messagesToSave.map((message: PersistableCliHistoryMessage & { timestamp?: number }) => ({
+                role: message.role,
+                content: flattenContent(message.content),
+                kind: typeof message.kind === 'string' ? message.kind : undefined,
+                senderName: typeof message.senderName === 'string' ? message.senderName : undefined,
+                receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : message.timestamp,
+            }));
+            if (!shouldSkipReplayPersist && normalizedMessagesToSave.length > 0) {
+                const incrementalMessages = buildIncrementalHistoryAppendMessages(this.lastPersistedHistoryMessages, normalizedMessagesToSave);
                 this.historyWriter.appendNewMessages(
                     this.type,
-                    messagesToSave,
+                    incrementalMessages,
                     parsedStatus?.title || dirName,
                     this.instanceId,
                     this.providerSessionId,
                 );
             }
+            this.lastPersistedHistoryMessages = normalizedMessagesToSave;
         }
 
         this.applyProviderResponse(parsedStatus, { phase: 'immediate' });
@@ -640,6 +702,7 @@ export class CliProviderInstance implements ProviderInstance {
 
         if (data.sessionEvent === 'new_session') {
             this.runtimeMessages = [];
+            this.lastPersistedHistoryMessages = [];
             this.suppressIdleHistoryReplay = false;
             this.adapter.clearHistory();
         }

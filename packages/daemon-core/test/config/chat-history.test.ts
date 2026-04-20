@@ -161,6 +161,76 @@ describe('chat-history config helpers', () => {
     expect(fs.existsSync(buildHistoryIndexPath('hermes-cli'))).toBe(false)
   })
 
+  it('rebuilds a polluted hermes saved-history session from the canonical ~/.hermes session file', async () => {
+    const historySessionId = '20260420_095128_ae3acd'
+    const pollutedPath = buildHistoryFilePath('hermes-cli', historySessionId, '2026-04-20')
+    fs.mkdirSync(path.dirname(pollutedPath), { recursive: true })
+    fs.writeFileSync(pollutedPath, [
+      JSON.stringify({
+        ts: new Date(1_700_000_000_000).toISOString(),
+        receivedAt: 1_700_000_000_000,
+        role: 'system',
+        kind: 'session_start',
+        content: '/workspaces/adhdev',
+        agent: 'hermes-cli',
+        historySessionId,
+        workspace: '/workspaces/adhdev',
+      }),
+      JSON.stringify({
+        ts: new Date(1_700_000_001_000).toISOString(),
+        receivedAt: 1_700_000_001_000,
+        role: 'user',
+        kind: 'standard',
+        content: 'duplicated prompt',
+        agent: 'hermes-cli',
+        historySessionId,
+      }),
+      JSON.stringify({
+        ts: new Date(1_700_000_002_000).toISOString(),
+        receivedAt: 1_700_000_002_000,
+        role: 'assistant',
+        kind: 'tool',
+        content: 'duplicated tool',
+        senderName: 'Tool',
+        agent: 'hermes-cli',
+        historySessionId,
+      }),
+      JSON.stringify({
+        ts: new Date(1_700_000_003_000).toISOString(),
+        receivedAt: 1_700_000_003_000,
+        role: 'user',
+        kind: 'standard',
+        content: 'duplicated prompt',
+        agent: 'hermes-cli',
+        historySessionId,
+      }),
+    ].join('\n') + '\n', 'utf-8')
+
+    const hermesDir = path.join(mockHomeDir, '.hermes', 'sessions')
+    fs.mkdirSync(hermesDir, { recursive: true })
+    fs.writeFileSync(path.join(hermesDir, `session_${historySessionId}.json`), JSON.stringify({
+      session_id: historySessionId,
+      session_start: '2026-04-20T09:52:10.792817',
+      last_updated: '2026-04-20T09:54:51.287447',
+      messages: [
+        { role: 'user', content: 'canonical user prompt' },
+        { role: 'assistant', content: 'canonical assistant reply' },
+        { role: 'tool', content: 'canonical tool output' },
+      ],
+    }), 'utf-8')
+
+    const { rebuildHermesSavedHistoryFromCanonicalSession, readChatHistory } = await import('../../src/config/chat-history.js')
+    expect(rebuildHermesSavedHistoryFromCanonicalSession(historySessionId)).toBe(true)
+
+    const rebuilt = readChatHistory('hermes-cli', 0, 20, historySessionId)
+    expect(rebuilt.messages.map(message => ({ role: message.role, kind: message.kind, content: message.content }))).toEqual([
+      { role: 'system', kind: 'session_start', content: '/workspaces/adhdev' },
+      { role: 'user', kind: 'standard', content: 'canonical user prompt' },
+      { role: 'assistant', kind: 'standard', content: 'canonical assistant reply' },
+      { role: 'assistant', kind: 'tool', content: 'canonical tool output' },
+    ])
+  })
+
   it('persists session-level saved-history aggregates inside the on-disk index', async () => {
     const { ChatHistoryWriter } = await import('../../src/config/chat-history.js')
     const writer = new ChatHistoryWriter()
