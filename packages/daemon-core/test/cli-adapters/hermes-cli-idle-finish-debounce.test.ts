@@ -220,6 +220,41 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
     expect(result.messages[1].content).toBe('done later')
   })
 
+  it('adopts a richer parsed idle Hermes transcript when the turn scope is already cleared but stale generating state is still hanging around', () => {
+    const adapter = buildAdapter('hermes-cli')
+    adapter.committedMessages = [{ role: 'user', content: 'hello', timestamp: 1 }]
+    adapter.syncMessageViews()
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = null
+    adapter.activeModal = null
+    adapter.terminalScreen = {
+      getText: () => [
+        '╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮',
+        'done after visible box',
+        '╰──────────────────────────────────────────────────────────────────────────────╯',
+        '❯',
+      ].join('\n'),
+    }
+    adapter.parseCurrentTranscript = () => ({
+      status: 'idle',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'done after visible box' },
+      ],
+    })
+
+    const result = adapter.getScriptParsedStatus()
+
+    expect(adapter.committedMessages).toHaveLength(2)
+    expect(adapter.committedMessages[1].content).toBe('done after visible box')
+    expect(adapter.currentStatus).toBe('idle')
+    expect(adapter.isWaitingForResponse).toBe(false)
+    expect(result.status).toBe('idle')
+    expect(result.messages).toHaveLength(2)
+    expect(result.messages[1].content).toBe('done after visible box')
+  })
+
   it('eventually finishes an idle-looking screen for non-Hermes CLI providers when the settled transcript still has no assistant turn', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-15T15:00:00Z'))

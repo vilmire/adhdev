@@ -804,9 +804,7 @@ export class ProviderCliAdapter implements CliAdapter {
         const buttons = Array.isArray(modal.buttons) ? modal.buttons : [];
         if (buttons.length !== 1) return false;
         const buttonLabel = String(buttons[0] || '').trim();
-        const modalText = `${modal.message || ''} ${buttonLabel}`.trim();
-        return looksLikeConfirmOnlyLabel(buttonLabel)
-            || /Quick safety check|project trust|trust (?:this project|the contents of this directory|the files in this folder)|Enter to confirm/i.test(modalText);
+        return looksLikeConfirmOnlyLabel(buttonLabel);
     }
 
     private async waitForInteractivePrompt(maxWaitMs = 5000): Promise<void> {
@@ -1466,11 +1464,16 @@ export class ProviderCliAdapter implements CliAdapter {
  // ─── Public API (CliAdapter) ───────────────────
 
     getStatus(): CliSessionStatus {
+        const screenText = this.terminalScreen.getText() || '';
+        const startupModal = this.startupParseGate ? this.getStartupConfirmationModal(screenText) : null;
+        const effectiveStatus = this.parseErrorMessage
+            ? 'error'
+            : (startupModal ? 'waiting_approval' : this.currentStatus);
         return {
-            status: this.parseErrorMessage ? 'error' : this.currentStatus,
+            status: effectiveStatus,
             messages: [...this.committedMessages],
             workingDir: this.workingDir,
-            activeModal: this.activeModal,
+            activeModal: startupModal || this.activeModal,
             errorMessage: this.parseErrorMessage || undefined,
             errorReason: this.parseErrorMessage ? 'parse_error' : undefined,
         };
@@ -1551,12 +1554,21 @@ export class ProviderCliAdapter implements CliAdapter {
                     : message.timestamp,
             }));
             const parsedLastAssistant = [...parsedHydratedMessages].reverse().find((message) => message.role === 'assistant' && typeof message.content === 'string' && message.content.trim());
+            const visibleIdlePrompt = this.looksLikeVisibleIdlePrompt(screenText);
             const shouldAdoptParsedIdleReplay =
                 !this.currentTurnScope
                 && !this.activeModal
-                && this.currentStatus === 'idle'
+                && !!parsedLastAssistant
                 && parsedHydratedMessages.length > committedHydratedMessages.length
-                && !!parsedLastAssistant;
+                && (
+                    this.currentStatus === 'idle'
+                    || (
+                        this.currentStatus === 'generating'
+                        && this.isWaitingForResponse
+                        && parsed.status === 'idle'
+                        && visibleIdlePrompt
+                    )
+                );
             if (shouldAdoptParsedIdleReplay) {
                 this.committedMessages = normalizeCliParsedMessages(parsed.messages, {
                     committedMessages: this.committedMessages,
@@ -1564,6 +1576,18 @@ export class ProviderCliAdapter implements CliAdapter {
                     lastOutputAt: this.lastOutputAt,
                 });
                 this.syncMessageViews();
+                if (this.currentStatus !== 'idle' || this.isWaitingForResponse) {
+                    this.responseBuffer = '';
+                    this.isWaitingForResponse = false;
+                    this.responseSettleIgnoreUntil = 0;
+                    this.submitRetryUsed = false;
+                    this.submitRetryPromptSnippet = '';
+                    this.finishRetryCount = 0;
+                    this.currentTurnScope = null;
+                    this.activeModal = null;
+                    this.setStatus('idle', 'parsed_idle_replay_commit');
+                    this.onStatusChange?.();
+                }
             }
             const effectiveCommittedHydratedMessages = shouldAdoptParsedIdleReplay
                 ? this.committedMessages.map((message, index) => buildChatMessage({
@@ -2160,8 +2184,9 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     resolveModal(buttonIndex: number): void {
-        if (!this.ptyProcess || (this.currentStatus !== 'waiting_approval' && !this.activeModal)) return;
-        const modal = this.activeModal;
+        const screenText = this.terminalScreen.getText() || '';
+        const modal = this.activeModal || this.getStartupConfirmationModal(screenText);
+        if (!this.ptyProcess || ((this.currentStatus !== 'waiting_approval') && !modal)) return;
         this.clearIdleFinishCandidate('resolve_modal');
         this.recordTrace('resolve_modal', {
             buttonIndex,
@@ -2176,7 +2201,10 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         this.setStatus('generating', 'approval_resolved');
         this.onStatusChange?.();
-        if (this.shouldResolveModalWithEnter(modal, buttonIndex)) {
+        const startupTrustModal = /Quick safety check|project trust|trust (?:this project|the contents of this directory|the files in this folder)/i.test(String(modal?.message || ''));
+        if (startupTrustModal && buttonIndex in this.approvalKeys) {
+            this.ptyProcess.write(`${this.approvalKeys[buttonIndex]}\r`);
+        } else if (this.shouldResolveModalWithEnter(modal, buttonIndex)) {
             this.ptyProcess.write('\r');
         } else if (buttonIndex in this.approvalKeys) {
             this.ptyProcess.write(this.approvalKeys[buttonIndex]);
@@ -2198,20 +2226,24 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     getDebugState(): Record<string, any> {
+        const screenText = sanitizeTerminalText(this.terminalScreen.getText());
+        const startupModal = this.startupParseGate ? this.getStartupConfirmationModal(screenText) : null;
+        const effectiveStatus = startupModal ? 'waiting_approval' : this.currentStatus;
+        const effectiveReady = this.ready || !!startupModal;
         return {
             type: this.cliType,
             name: this.cliName,
             providerResolution: this.providerResolutionMeta,
-            status: this.currentStatus,
-            ready: this.ready,
+            status: effectiveStatus,
+            ready: effectiveReady,
             startupParseGate: this.startupParseGate,
             spawnAt: this.spawnAt,
             workingDir: this.workingDir,
-            messages: this.messages.slice(-20),
-            committedMessages: this.committedMessages.slice(-20),
-            structuredMessages: this.structuredMessages.slice(-20),
+            messages: this.messages,
+            committedMessages: this.committedMessages,
+            structuredMessages: this.structuredMessages,
             messageCount: this.committedMessages.length,
-            screenText: sanitizeTerminalText(this.terminalScreen.getText()).slice(-4000),
+            screenText: screenText.slice(-4000),
             currentTurnScope: this.currentTurnScope,
             startupBuffer: this.startupBuffer.slice(-4000),
             recentOutputBuffer: this.recentOutputBuffer.slice(-500),
@@ -2226,7 +2258,7 @@ export class ProviderCliAdapter implements CliAdapter {
             lastScreenChangeAt: this.lastScreenChangeAt,
             lastScreenSnapshot: this.lastScreenSnapshot.slice(-500),
             isWaitingForResponse: this.isWaitingForResponse,
-            activeModal: this.activeModal,
+            activeModal: startupModal || this.activeModal,
             lastApprovalResolvedAt: this.lastApprovalResolvedAt,
             sendDelayMs: this.sendDelayMs,
             sendKey: this.sendKey,
