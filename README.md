@@ -73,9 +73,9 @@ The standalone UI already includes both settings surfaces:
 
 Canonical self-hosted docs:
 
-- [Self-hosted setup](https://docs.adhf.dev/self-hosted/setup)
-- [Self-hosted configuration](https://docs.adhf.dev/self-hosted/configuration)
-- [Self-hosted local API](https://docs.adhf.dev/self-hosted/local-api)
+- [Self-hosted setup](docs/self-hosted/setup.md)
+- [Self-hosted configuration](docs/self-hosted/configuration.md)
+- [Self-hosted local API](docs/self-hosted/local-api.md)
 
 Windows note:
 
@@ -135,7 +135,7 @@ Canonical runtime contract:
 Reference:
 
 - [docs/openapi.yml](docs/openapi.yml)
-- [Self-hosted API docs](https://docs.adhf.dev/self-hosted/local-api)
+- [Self-hosted API docs](docs/self-hosted/local-api.md)
 
 ## Session Host
 
@@ -150,8 +150,8 @@ Key properties of the current design:
 
 See:
 
-- [Self-hosted setup](https://docs.adhf.dev/self-hosted/setup)
-- [Self-hosted local API](https://docs.adhf.dev/self-hosted/local-api)
+- [Self-hosted setup](docs/self-hosted/setup.md)
+- [Self-hosted local API](docs/self-hosted/local-api.md)
 - [Compatibility & caveats](https://docs.adhf.dev/guide/compatibility)
 
 ## Development
@@ -176,8 +176,8 @@ npm run dev -w packages/web-devconsole
 
 ## Documentation
 
-- [Self-hosted setup](https://docs.adhf.dev/self-hosted/setup)
-- [Self-hosted local API](https://docs.adhf.dev/self-hosted/local-api)
+- [Self-hosted setup](docs/self-hosted/setup.md)
+- [Self-hosted local API](docs/self-hosted/local-api.md)
 - [Supported providers](https://docs.adhf.dev/reference/supported-providers)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)

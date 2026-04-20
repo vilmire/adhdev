@@ -96,9 +96,9 @@ Environment variables:
 
 For end-user behavior, the canonical docs are:
 
-- setup and startup flags → https://docs.adhf.dev/self-hosted/setup
-- password auth and saved network defaults → https://docs.adhf.dev/self-hosted/configuration
-- local route contract and examples → https://docs.adhf.dev/self-hosted/local-api
+- setup and startup flags → ../../docs/self-hosted/setup.md
+- password auth and saved network defaults → ../../docs/self-hosted/configuration.md
+- local route contract and examples → ../../docs/self-hosted/local-api.md
 
 By default, standalone binds to localhost only.
 
@@ -163,10 +163,10 @@ Notes:
 
 ## Links
 
-- [Self-hosted setup](https://docs.adhf.dev/self-hosted/setup)
-- [Self-hosted configuration](https://docs.adhf.dev/self-hosted/configuration)
-- [Self-hosted local API](https://docs.adhf.dev/self-hosted/local-api)
-- [Self-hosted session host](https://docs.adhf.dev/self-hosted/session-host)
+- [Self-hosted setup](../../docs/self-hosted/setup.md)
+- [Self-hosted configuration](../../docs/self-hosted/configuration.md)
+- [Self-hosted local API](../../docs/self-hosted/local-api.md)
+- [Self-hosted session host](../../docs/self-hosted/session-host.md)
 - [GitHub](https://github.com/vilmire/adhdev)
 
 ## License
