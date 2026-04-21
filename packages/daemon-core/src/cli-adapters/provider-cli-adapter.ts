@@ -677,6 +677,7 @@ export class ProviderCliAdapter implements CliAdapter {
     private looksLikeClaudeGeneratingLine(line: string): boolean {
         const trimmed = String(line || '').trim();
         if (!trimmed) return false;
+        if (/^⏵⏵\s+accept edits on/i.test(trimmed)) return false;
         if (/esc to (cancel|interrupt|stop)/i.test(trimmed)) return true;
         if (/^[✻✶✳✢✽⠂⠐⠒⠓⠦⠴⠶⠷⠿]+\s+\S+.*\b(?:thinking|thought for \d+s?)\b/i.test(trimmed)) return true;
         if (/^[✻✶✳✢✽⠂⠐⠒⠓⠦⠴⠶⠷⠿]+\s+[A-Z][A-Za-z-]{3,}ing\b.*(?:…|\.{3})/u.test(trimmed)) return true;
@@ -1049,7 +1050,8 @@ export class ProviderCliAdapter implements CliAdapter {
             && this.isWaitingForResponse
             && !modal
             && recentInteractiveActivity
-            && !(visibleIdlePrompt && visibleAssistantCandidate);
+            && !(visibleIdlePrompt && visibleAssistantCandidate)
+            && !(parsedTranscript?.status === 'idle' && !!lastParsedAssistant);
 
         if (shouldHoldGenerating) {
             this.clearIdleFinishCandidate('hold_generating_recent_activity');
@@ -1461,14 +1463,19 @@ export class ProviderCliAdapter implements CliAdapter {
         }
     }
 
+    private projectEffectiveStatus(startupModal: { message: string; buttons: string[] } | null = null): CliSessionStatus['status'] {
+        if (this.parseErrorMessage) return 'error';
+        if (startupModal) return 'waiting_approval';
+        if (this.isWaitingForResponse && this.currentTurnScope && this.currentStatus === 'idle') return 'generating';
+        return this.currentStatus;
+    }
+
  // ─── Public API (CliAdapter) ───────────────────
 
     getStatus(): CliSessionStatus {
         const screenText = this.terminalScreen.getText() || '';
         const startupModal = this.startupParseGate ? this.getStartupConfirmationModal(screenText) : null;
-        const effectiveStatus = this.parseErrorMessage
-            ? 'error'
-            : (startupModal ? 'waiting_approval' : this.currentStatus);
+        const effectiveStatus = this.projectEffectiveStatus(startupModal);
         return {
             status: effectiveStatus,
             messages: [...this.committedMessages],
@@ -2201,7 +2208,7 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         this.setStatus('generating', 'approval_resolved');
         this.onStatusChange?.();
-        const startupTrustModal = /Quick safety check|project trust|trust (?:this project|the contents of this directory|the files in this folder)/i.test(String(modal?.message || ''));
+        const startupTrustModal = /Quick safety check|project trust|Confirm Claude Code project trust|trust (?:this project|the contents of this directory|the files in this folder)/i.test(String(modal?.message || ''));
         if (startupTrustModal && buttonIndex in this.approvalKeys) {
             this.ptyProcess.write(`${this.approvalKeys[buttonIndex]}\r`);
         } else if (this.shouldResolveModalWithEnter(modal, buttonIndex)) {
@@ -2228,7 +2235,7 @@ export class ProviderCliAdapter implements CliAdapter {
     getDebugState(): Record<string, any> {
         const screenText = sanitizeTerminalText(this.terminalScreen.getText());
         const startupModal = this.startupParseGate ? this.getStartupConfirmationModal(screenText) : null;
-        const effectiveStatus = startupModal ? 'waiting_approval' : this.currentStatus;
+        const effectiveStatus = this.projectEffectiveStatus(startupModal);
         const effectiveReady = this.ready || !!startupModal;
         return {
             type: this.cliType,

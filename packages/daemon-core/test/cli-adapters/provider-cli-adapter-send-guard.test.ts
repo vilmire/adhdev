@@ -101,4 +101,63 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     await expect(adapter.sendMessage('interrupt now')).resolves.toBeUndefined()
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('interrupt now\r')
   })
+
+  it('resolves the synthetic Claude startup trust modal with numeric selection plus enter', () => {
+    const adapter = new ProviderCliAdapter({
+      type: 'claude-cli',
+      name: 'Claude Code',
+      category: 'cli',
+      binary: 'claude',
+      spawn: {
+        command: 'claude',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      approvalKeys: { 0: '1', 1: '2' },
+      scripts: {
+        detectStatus: () => 'waiting_approval',
+        parseApproval: () => null,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.ptyProcess = { write: vi.fn() }
+    adapter.currentStatus = 'waiting_approval'
+    adapter.activeModal = null
+    adapter.terminalScreen = {
+      getText: () => 'Quick safety check\nClaude Code\'ll be able to read, edit, and execute files here.\n❯ 1. Yes, I trust this folder\n2. No, exit\nEnter to confirm'
+    }
+
+    adapter.resolveModal(0)
+
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('1\r')
+  })
+
+  it('reports generating from getStatus while a turn is still open even if currentStatus has not caught up yet', () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'next prompt',
+      startedAt: Date.now(),
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+
+    expect(adapter.getStatus().status).toBe('generating')
+  })
+
+  it('reports generating from getDebugState while a turn is still open even if currentStatus still says idle', () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'next prompt',
+      startedAt: Date.now(),
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+
+    expect(adapter.getDebugState().status).toBe('generating')
+  })
 })

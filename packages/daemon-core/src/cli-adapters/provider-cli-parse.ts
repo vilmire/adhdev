@@ -139,10 +139,10 @@ export function buildCliParseInput(options: {
         runtimeSettings,
     } = options;
     const buffer = scope
-        ? (sliceFromOffset(accumulatedBuffer, scope.bufferStart) || accumulatedBuffer)
+        ? sliceFromOffset(accumulatedBuffer, scope.bufferStart)
         : accumulatedBuffer;
     const rawBuffer = scope
-        ? (sliceFromOffset(accumulatedRawBuffer, scope.rawBufferStart) || accumulatedRawBuffer)
+        ? sliceFromOffset(accumulatedRawBuffer, scope.rawBufferStart)
         : accumulatedRawBuffer;
     const screenText = terminalScreenText;
     const recentBuffer = buffer.slice(-1000) || recentOutputBuffer;
@@ -189,10 +189,10 @@ export function buildCliTraceParseSnapshot(options: {
 }): Record<string, any> {
     const { accumulatedBuffer, accumulatedRawBuffer, responseBuffer, partialResponse, scope } = options;
     const scopedBuffer = scope
-        ? (sliceFromOffset(accumulatedBuffer, scope.bufferStart) || accumulatedBuffer)
+        ? sliceFromOffset(accumulatedBuffer, scope.bufferStart)
         : accumulatedBuffer;
     const scopedRawBuffer = scope
-        ? (sliceFromOffset(accumulatedRawBuffer, scope.rawBufferStart) || accumulatedRawBuffer)
+        ? sliceFromOffset(accumulatedRawBuffer, scope.rawBufferStart)
         : accumulatedRawBuffer;
     return {
         currentTurnScope: scope || null,

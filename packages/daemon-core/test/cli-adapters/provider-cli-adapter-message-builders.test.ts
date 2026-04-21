@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { ProviderCliAdapter } from '../../src/cli-adapters/provider-cli-adapter.js'
+import { buildCliParseInput } from '../../src/cli-adapters/provider-cli-parse.js'
 import { LOG } from '../../src/logging/logger.js'
 import { resetDebugRuntimeConfig, resolveDebugRuntimeConfig, setDebugRuntimeConfig } from '../../src/logging/debug-config.js'
 
@@ -273,6 +274,29 @@ describe('ProviderCliAdapter message fallback shaping', () => {
 
     expect(parseOutput).toHaveBeenCalledTimes(1)
     expect(second).toEqual(first)
+  })
+
+  it('keeps turn-scoped parse input empty instead of falling back to the full pre-turn transcript when no new output has arrived yet', () => {
+    const input = buildCliParseInput({
+      accumulatedBuffer: 'startup text already on screen',
+      accumulatedRawBuffer: 'startup raw buffer',
+      recentOutputBuffer: 'recent startup text',
+      terminalScreenText: 'startup text already on screen',
+      baseMessages: [],
+      partialResponse: '',
+      isWaitingForResponse: true,
+      scope: {
+        prompt: 'Reply with exactly T1 and nothing else.',
+        startedAt: 1,
+        bufferStart: 'startup text already on screen'.length,
+        rawBufferStart: 'startup raw buffer'.length,
+      },
+      runtimeSettings: {},
+    })
+
+    expect(input.buffer).toBe('')
+    expect(input.rawBuffer).toBe('')
+    expect(input.recentBuffer).toBe('recent startup text')
   })
 })
 
