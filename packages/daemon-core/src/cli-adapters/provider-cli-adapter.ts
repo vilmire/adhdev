@@ -923,15 +923,22 @@ export class ProviderCliAdapter implements CliAdapter {
             return;
         }
         const startupModal = this.getStartupConfirmationModal(screenText);
-        const modal = this.runParseApproval(tail) || startupModal;
-        const rawScriptStatus = this.runDetectStatus(tail);
-        // detectStatus is the sole authority for status. parseApproval only enriches modal info.
-        const scriptStatus = startupModal ? 'waiting_approval' : rawScriptStatus;
         const parsedTranscript = this.parseCurrentTranscript(
             this.committedMessages,
             this.responseBuffer,
             this.currentTurnScope,
         );
+        const parsedModal = parsedTranscript?.activeModal && Array.isArray(parsedTranscript.activeModal.buttons) && parsedTranscript.activeModal.buttons.some((button: any) => typeof button === 'string' && button.trim())
+            ? parsedTranscript.activeModal
+            : null;
+        const modal = this.runParseApproval(tail) || parsedModal || startupModal;
+        const rawScriptStatus = this.runDetectStatus(tail);
+        // detectStatus is the primary authority for status, but if the parsed transcript
+        // already surfaced actionable approval buttons, promote that state so runtime
+        // status and resolve_action stay aligned with the visible prompt.
+        const scriptStatus = startupModal
+            ? 'waiting_approval'
+            : (parsedModal && parsedTranscript?.status === 'waiting_approval' ? 'waiting_approval' : rawScriptStatus);
         const parsedMessages = Array.isArray(parsedTranscript?.messages)
             ? normalizeCliParsedMessages(parsedTranscript.messages, {
                 committedMessages: this.committedMessages,
@@ -943,6 +950,9 @@ export class ProviderCliAdapter implements CliAdapter {
             return;
         }
         const lastParsedAssistant = [...parsedMessages].reverse().find((message) => message.role === 'assistant');
+        const parsedShowsLiveAssistantProgress = parsedTranscript?.status === 'generating'
+            && !!lastParsedAssistant
+            && parsedMessages.length > this.committedMessages.length;
         const normalizedPromptSnippet = normalizePromptText(this.submitRetryPromptSnippet || this.currentTurnScope?.prompt || '');
         this.recordTrace('settled', {
             tail: summarizeCliTraceText(tail, 500),
@@ -1126,7 +1136,7 @@ export class ProviderCliAdapter implements CliAdapter {
                     && (/Update available!/i.test(screenText)
                         || /\/effort/i.test(screenText)
                         || /^.*➜\s+\S+/m.test(effectiveScreenText)));
-            if (prevStatus === 'idle' && !this.isWaitingForResponse && noActiveTurn && !modal && looksIdleChrome) {
+            if (prevStatus === 'idle' && !this.isWaitingForResponse && noActiveTurn && !modal && looksIdleChrome && !parsedShowsLiveAssistantProgress) {
                 return;
             }
             if (prevStatus === 'waiting_approval') {

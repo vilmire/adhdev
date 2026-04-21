@@ -491,13 +491,17 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 && adapterStatus.messages.length > 0
                 && Array.isArray(parsedRecord?.messages)
                 && adapterStatus.messages.length > parsedRecord.messages.length;
+            const parsedShowsApproval = hasNonEmptyModalButtons(parsedRecord?.activeModal)
+                && parsedRecord?.status === 'waiting_approval';
             const status = parsedRecord
                 ? {
                     ...parsedRecord,
                     messages: shouldPreferAdapterMessages ? adapterStatus.messages : parsedRecord.messages,
-                    status: adapterStatus.status !== 'idle'
-                        ? adapterStatus.status
-                        : (parsedRecord.status || adapterStatus.status),
+                    status: parsedShowsApproval
+                        ? parsedRecord.status
+                        : (adapterStatus.status !== 'idle'
+                            ? adapterStatus.status
+                            : (parsedRecord.status || adapterStatus.status)),
                     activeModal: parsedRecord.activeModal || adapterStatus.activeModal,
                 }
                 : adapterStatus;

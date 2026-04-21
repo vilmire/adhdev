@@ -158,6 +158,62 @@ describe('handleReadChat for CLI adapters', () => {
     expect(result.error).toContain('waiting_approval status requires activeModal with buttons')
   })
 
+  it('uses parsed waiting_approval status when the parsed transcript has approval buttons even if adapter status is still generating', async () => {
+    const adapter = {
+      cliType: 'hermes-cli',
+      cliName: 'Hermes Agent',
+      workingDir: '/tmp/project',
+      spawn: async () => {},
+      sendMessage: async () => {},
+      getStatus: () => ({
+        status: 'generating',
+        messages: [{ role: 'user', content: 'delete it' }],
+        activeModal: null,
+      }),
+      getScriptParsedStatus: () => ({
+        status: 'waiting_approval',
+        messages: [
+          { role: 'user', content: 'delete it' },
+          { role: 'assistant', kind: 'terminal', content: '$ rm /tmp/file' },
+          { role: 'assistant', content: 'I need approval before deleting /tmp/file.' },
+        ],
+        activeModal: {
+          message: 'Deleting /tmp/file requires approval. Approve the delete?',
+          buttons: ['Approve delete', 'Do not delete', 'Other (type your answer)'],
+        },
+        title: 'Hermes Agent',
+      }),
+      getPartialResponse: () => '',
+      shutdown: () => {},
+      cancel: () => {},
+      isProcessing: () => true,
+      isReady: () => true,
+      setOnStatusChange: () => {},
+    }
+
+    const result = await handleReadChat({
+      getCdp: () => null,
+      getProvider: () => ({ type: 'hermes-cli', category: 'cli' }),
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      getCliAdapter: () => adapter as any,
+      currentManagerKey: undefined,
+      currentIdeType: undefined,
+      currentProviderType: undefined,
+      currentSession: undefined,
+      agentStream: null,
+      ctx: {},
+      historyWriter: { appendNewMessages: () => {} },
+    } as any, { agentType: 'hermes-cli' })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('waiting_approval')
+    expect(result.activeModal).toEqual({
+      message: 'Deleting /tmp/file requires approval. Approve the delete?',
+      buttons: ['Approve delete', 'Do not delete', 'Other (type your answer)'],
+    })
+  })
+
   it('collapses replayed adjacent tool and terminal updates before applying tail sync', async () => {
     const getScriptParsedStatus = vi.fn(() => ({
       status: 'generating',

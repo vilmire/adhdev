@@ -255,6 +255,75 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
     expect(result.messages[1].content).toBe('done after visible box')
   })
 
+  it('promotes Hermes back to generating when parsed transcript is still live even if the turn scope was cleared early', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-21T12:30:00Z'))
+
+    const adapter = buildAdapter('hermes-cli')
+    adapter.committedMessages = [{ role: 'user', content: 'hello', timestamp: 1 }]
+    adapter.syncMessageViews()
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.currentTurnScope = null
+    adapter.activeModal = null
+    adapter.runDetectStatus = () => 'generating'
+    adapter.terminalScreen = {
+      getText: () => [
+        'Welcome to Hermes Agent! Type your message or /help for commands.',
+        '● hello',
+        '╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮',
+        'Still checking a couple more files...',
+        '❯',
+      ].join('\n'),
+    }
+    adapter.parseCurrentTranscript = () => ({
+      status: 'generating',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'Still checking a couple more files...' },
+      ],
+    })
+
+    adapter.evaluateSettled()
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(adapter.currentStatus).toBe('generating')
+    expect(adapter.getStatus().status).toBe('generating')
+  })
+
+  it('promotes Hermes into waiting_approval when parsed transcript surfaces approval even if detectStatus is still generating', () => {
+    const adapter = buildAdapter('hermes-cli')
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'delete it',
+      startedAt: 10,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+    adapter.runDetectStatus = () => 'generating'
+    adapter.runParseApproval = () => null
+    adapter.parseCurrentTranscript = () => ({
+      status: 'waiting_approval',
+      messages: [
+        { role: 'user', content: 'delete it' },
+        { role: 'assistant', kind: 'terminal', content: '$ rm /tmp/file' },
+      ],
+      activeModal: {
+        message: 'Deleting /tmp/file requires approval. Approve the delete?',
+        buttons: ['Approve delete', 'Do not delete', 'Other (type your answer)'],
+      },
+    })
+
+    adapter.evaluateSettled()
+
+    expect(adapter.currentStatus).toBe('waiting_approval')
+    expect(adapter.activeModal).toEqual({
+      message: 'Deleting /tmp/file requires approval. Approve the delete?',
+      buttons: ['Approve delete', 'Do not delete', 'Other (type your answer)'],
+    })
+  })
+
   it('eventually finishes an idle-looking screen for non-Hermes CLI providers when the settled transcript still has no assistant turn', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-15T15:00:00Z'))
