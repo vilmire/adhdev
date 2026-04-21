@@ -194,7 +194,6 @@ export default function Dashboard() {
         showAllTabs: showAllHiddenTabs,
     } = useHiddenTabs();
     const {
-        chatIdes,
         conversations,
         visibleConversations,
         visibleTabKeys,
@@ -923,7 +922,6 @@ export default function Dashboard() {
                 showMobileChatMode={showMobileChatMode}
                 isMobile={isMobile}
                 activeConv={activeConv}
-                chatIdes={chatIdes}
                 wsStatus={wsStatus}
                 isConnected={isConnected}
                 onOpenHistory={(conversation) => {

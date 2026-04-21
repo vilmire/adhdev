@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import DashboardHeader from '../../../src/components/dashboard/DashboardHeader'
+import DashboardHeader, { getDashboardHeaderConnectionState } from '../../../src/components/dashboard/DashboardHeader'
 import { BaseDaemonProvider } from '../../../src/context/BaseDaemonContext'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
 import type { DashboardNotificationRecord } from '../../../src/utils/dashboard-notifications'
@@ -64,12 +64,10 @@ function renderHeader(overrides: Record<string, unknown> = {}) {
       null,
       React.createElement(DashboardHeader, {
         activeConv,
-        agentCount: 1,
         wsStatus: 'connected',
         isConnected: true,
         conversations: [activeConv, createConversation({ sessionId: 'session-2', tabKey: 'tab-2', title: 'Codex', agentName: 'Codex', agentType: 'codex' })],
         onOpenHistory: () => {},
-        onOpenConversation: () => {},
         onInboxOpenChange: () => {},
         onHiddenOpenChange: () => {},
         inboxOpen: true,
@@ -87,6 +85,86 @@ function renderHeader(overrides: Record<string, unknown> = {}) {
 }
 
 describe('DashboardHeader inbox notifications', () => {
+  it('maps dashboard connection states to explicit English labels without legacy partial/waiting copy', () => {
+    expect(getDashboardHeaderConnectionState({
+      wsStatus: 'disconnected',
+      isConnected: false,
+      daemonCount: 0,
+      p2pStates: {},
+    })).toEqual({
+      tone: 'disconnected',
+      title: 'Disconnected',
+      subtitle: null,
+    })
+
+    expect(getDashboardHeaderConnectionState({
+      wsStatus: 'connected',
+      isConnected: false,
+      daemonCount: 0,
+      p2pStates: {},
+    })).toEqual({
+      tone: 'limited',
+      title: 'Connected to dashboard',
+      subtitle: null,
+    })
+
+    expect(getDashboardHeaderConnectionState({
+      wsStatus: 'connected',
+      isConnected: true,
+      daemonCount: 0,
+      p2pStates: {},
+    })).toEqual({
+      tone: 'connected',
+      title: 'Connected',
+      subtitle: null,
+    })
+
+    expect(getDashboardHeaderConnectionState({
+      wsStatus: 'connected',
+      isConnected: false,
+      daemonCount: 1,
+      p2pStates: { 'machine-1': 'connecting' },
+    })).toEqual({
+      tone: 'limited',
+      title: 'Connected to dashboard',
+      subtitle: 'Connecting to machine...',
+    })
+
+    expect(getDashboardHeaderConnectionState({
+      wsStatus: 'connected',
+      isConnected: true,
+      daemonCount: 1,
+      p2pStates: { 'machine-1': 'connected' },
+    })).toEqual({
+      tone: 'connected',
+      title: 'Connected',
+      subtitle: null,
+    })
+  })
+
+  it('shows transitional machine connection copy only before any P2P connection is established', () => {
+    expect(getDashboardHeaderConnectionState({
+      wsStatus: 'connected',
+      isConnected: false,
+      daemonCount: 1,
+      p2pStates: { 'machine-1': 'connecting' },
+    }).subtitle).toBe('Connecting to machine...')
+
+    expect(getDashboardHeaderConnectionState({
+      wsStatus: 'connected',
+      isConnected: true,
+      daemonCount: 1,
+      p2pStates: { 'machine-1': 'connected' },
+    }).subtitle).toBeNull()
+
+    expect(getDashboardHeaderConnectionState({
+      wsStatus: 'connected',
+      isConnected: false,
+      daemonCount: 1,
+      p2pStates: {},
+    }).subtitle).toBeNull()
+  })
+
   it('renders unread and read notification sections with read/unread/delete actions', () => {
     const html = renderHeader()
 

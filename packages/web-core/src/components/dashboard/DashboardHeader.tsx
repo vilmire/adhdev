@@ -1,7 +1,7 @@
 /**
  * DashboardHeader — Top header bar for Dashboard
  *
- * Shows title, agent count, connection status indicator, and action buttons.
+ * Shows title, connection status indicator, and action buttons.
  * Connection state is abstract — injected by platform (cloud=P2P, standalone=local).
  */
 
@@ -18,7 +18,6 @@ import type { DashboardNotificationRecord } from '../../utils/dashboard-notifica
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
-    agentCount: number;
     wsStatus: string;
     /** Overall connection readiness (green=ready, yellow=partial, red=disconnected) */
     isConnected: boolean;
@@ -46,6 +45,58 @@ export interface DashboardHeaderProps {
     onDeleteNotification: (notificationId: string) => void;
     onOpenNewSession?: () => void;
     actionShortcuts?: Partial<Record<DashboardActionShortcutId, string>>;
+}
+
+type DashboardHeaderConnectionState = {
+    tone: 'connected' | 'limited' | 'disconnected';
+    title: string;
+    subtitle: string | null;
+};
+
+export function getDashboardHeaderConnectionState({
+    wsStatus,
+    isConnected,
+    daemonCount,
+    p2pStates = {},
+}: {
+    wsStatus: string;
+    isConnected: boolean;
+    daemonCount: number;
+    p2pStates?: Record<string, string>;
+}): DashboardHeaderConnectionState {
+    if (wsStatus !== 'connected') {
+        return {
+            tone: 'disconnected',
+            title: 'Disconnected',
+            subtitle: null,
+        };
+    }
+
+    const p2pValues = Object.values(p2pStates);
+    const p2pConnected = p2pValues.filter(state => state === 'connected').length;
+    const p2pConnecting = p2pValues.filter(state => state === 'connecting' || state === 'new' || state === 'checking').length;
+
+    if (daemonCount > 0 && p2pConnecting > 0 && p2pConnected === 0) {
+        return {
+            tone: 'limited',
+            title: 'Connected to dashboard',
+            subtitle: 'Connecting to machine...',
+        };
+    }
+
+    if (isConnected) {
+        return {
+            tone: 'connected',
+            title: 'Connected',
+            subtitle: null,
+        };
+    }
+
+    return {
+        tone: 'limited',
+        title: 'Connected to dashboard',
+        subtitle: null,
+    };
 }
 
 function ShortcutPill({ value }: { value?: string }) {
@@ -107,7 +158,6 @@ function DashboardHeaderNotificationItem({
 
 export default function DashboardHeader({
     activeConv,
-    agentCount,
     wsStatus,
     isConnected,
     conversations,
@@ -142,24 +192,24 @@ export default function DashboardHeader({
     const inboxRef = useRef<HTMLDivElement | null>(null);
     const hiddenRef = useRef<HTMLDivElement | null>(null);
 
-    const dotColor = isConnected ? '#22c55e' : wsStatus === 'connected' ? '#eab308' : '#ef4444';
-    const dotGlow = isConnected ? '0 0 4px #22c55e80' : wsStatus === 'connected' ? '0 0 4px #eab30880' : '0 0 4px #ef444480';
-
-    // Derive connection stage summary
     const daemons = ides.filter(i => i.type === 'adhdev-daemon');
-    const p2pValues = Object.values(p2pStates) as string[];
-    const p2pConnected = p2pValues.filter(s => s === 'connected').length;
-    const p2pConnecting = p2pValues.filter(s => s === 'connecting' || s === 'new' || s === 'checking').length;
-
-    // Build compact status string
-    const getStatusText = () => {
-        if (wsStatus !== 'connected') return null;
-        if (daemons.length === 0) return null;
-        if (p2pConnecting > 0 && p2pConnected === 0) return 'P2P connecting...';
-        if (p2pConnected > 0 && agentCount === 0) return 'Waiting for IDE...';
-        return null;
-    };
-    const statusText = getStatusText();
+    const connectionState = getDashboardHeaderConnectionState({
+        wsStatus,
+        isConnected,
+        daemonCount: daemons.length,
+        p2pStates,
+    });
+    const statusText = connectionState.subtitle;
+    const dotColor = connectionState.tone === 'connected'
+        ? '#22c55e'
+        : connectionState.tone === 'limited'
+            ? '#eab308'
+            : '#ef4444';
+    const dotGlow = connectionState.tone === 'connected'
+        ? '0 0 4px #22c55e80'
+        : connectionState.tone === 'limited'
+            ? '0 0 4px #eab30880'
+            : '0 0 4px #ef444480';
     const unreadNotifications = useMemo(
         () => notifications.filter(notification => !notification.readAt),
         [notifications],
@@ -260,7 +310,7 @@ export default function DashboardHeader({
                         </h1>
                         <div className="header-subtitle flex items-center">
                             <span
-                                title={isConnected ? 'Connected' : wsStatus === 'connected' ? 'Partial' : 'Disconnected'}
+                                title={connectionState.title}
                                 className="header-subtitle-dot inline-block w-1.5 h-1.5 rounded-full shrink-0"
                                 style={{ background: dotColor, boxShadow: dotGlow }}
                             />

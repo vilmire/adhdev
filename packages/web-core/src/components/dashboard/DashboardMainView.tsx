@@ -58,7 +58,6 @@ interface DashboardMainViewProps {
     showMobileChatMode: boolean
     isMobile: boolean
     activeConv?: ActiveConversation
-    chatIdes: DaemonData[]
     wsStatus: string
     isConnected: boolean
     onOpenHistory: (conversation?: ActiveConversation) => void
@@ -152,7 +151,6 @@ export default function DashboardMainView({
     showMobileChatMode,
     isMobile,
     activeConv,
-    chatIdes,
     wsStatus,
     isConnected,
     onOpenHistory,
@@ -522,7 +520,6 @@ export default function DashboardMainView({
             {!showMobileChatMode && (
                 <DashboardHeader
                     activeConv={activeConv}
-                    agentCount={chatIdes.length}
                     wsStatus={wsStatus}
                     isConnected={isConnected}
                     conversations={visibleConversations}
