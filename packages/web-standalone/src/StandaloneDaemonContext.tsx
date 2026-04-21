@@ -276,6 +276,8 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                             typeof msg.text === 'string' ? msg.text : '',
                             typeof msg.seq === 'number' ? msg.seq : 0,
                             !!msg.truncated,
+                            typeof msg.cols === 'number' ? msg.cols : undefined,
+                            typeof msg.rows === 'number' ? msg.rows : undefined,
                         )
                         return
                     }

@@ -81,13 +81,22 @@ class StandaloneConnectionManager {
         this.statusCallbacks.forEach((callback) => callback(daemonId, payload))
     }
 
-    emitRuntimeSnapshot(sessionId: string, text: string, seq = 0, truncated = false): void {
+    emitRuntimeSnapshot(
+        sessionId: string,
+        text: string,
+        seq = 0,
+        truncated = false,
+        cols?: number,
+        rows?: number,
+    ): void {
         this.emitRuntimeEvent(sessionId, {
             type: 'runtime_snapshot',
             sessionId,
             seq,
             text,
             truncated,
+            cols,
+            rows,
         })
     }
 

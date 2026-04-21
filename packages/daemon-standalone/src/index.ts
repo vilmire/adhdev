@@ -1203,11 +1203,12 @@ class StandaloneServer {
     this.wsDaemonMetadataSubscriptions.set(ws, new Map());
     console.log(`[WS] Client connected (total: ${this.clients.size})`);
 
-    // Send initial status immediately
+    // Send initial status immediately. Runtime terminal snapshots stay pull-based
+    // (requestRuntimeSnapshot / runtime events) so standalone matches cloud more closely
+    // and does not seed hidden panes with unsolicited stale buffers on WS connect.
     const status = this.getWsStatus(this.buildSharedSnapshot('live'));
     this.lastWsStatusSignature = this.buildWsStatusSignature(status);
     ws.send(JSON.stringify({ type: 'status', data: status }));
-    void this.pushWsRuntimeSnapshots(ws);
 
     ws.on('message', async (raw) => {
       try {
