@@ -324,6 +324,111 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
     })
   })
 
+  it('promotes adapter state from parsed waiting_approval during read-chat parsing so resolve_action can see the live modal', () => {
+    const adapter = buildAdapter('hermes-cli')
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'run the command',
+      startedAt: 10,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+    adapter.activeModal = null
+    adapter.terminalScreen = {
+      getText: () => '⚠️ Dangerous Command\n❯ Allow once\nAllow for this session\nAdd to permanent allowlist\nDeny',
+    }
+    adapter.parseCurrentTranscript = () => ({
+      status: 'waiting_approval',
+      messages: [
+        { role: 'user', content: 'run the command' },
+        { role: 'assistant', kind: 'system', content: 'Approval requested' },
+      ],
+      activeModal: {
+        message: 'Dangerous command needs approval',
+        buttons: ['Allow once', 'Allow for this session', 'Add to permanent allowlist', 'Deny'],
+      },
+    })
+
+    const parsed = adapter.getScriptParsedStatus()
+
+    expect(parsed.status).toBe('waiting_approval')
+    expect(parsed.activeModal).toEqual({
+      message: 'Dangerous command needs approval',
+      buttons: ['Allow once', 'Allow for this session', 'Add to permanent allowlist', 'Deny'],
+    })
+    expect(adapter.currentStatus).toBe('waiting_approval')
+    expect(adapter.getStatus().status).toBe('waiting_approval')
+    expect(adapter.getStatus().activeModal).toEqual({
+      message: 'Dangerous command needs approval',
+      buttons: ['Allow once', 'Allow for this session', 'Add to permanent allowlist', 'Deny'],
+    })
+  })
+
+  it('projects waiting_approval from activeModal even if the raw adapter status is still generating', () => {
+    const adapter = buildAdapter('hermes-cli')
+    adapter.currentStatus = 'generating'
+    adapter.activeModal = {
+      message: 'Dangerous command needs approval',
+      buttons: ['Allow once', 'Deny'],
+    }
+
+    expect(adapter.getStatus().status).toBe('waiting_approval')
+    expect(adapter.getDebugState().status).toBe('waiting_approval')
+  })
+
+  it('projects waiting_approval from parsed transcript even before adapter.activeModal has been synchronized', () => {
+    const adapter = buildAdapter('hermes-cli')
+    adapter.currentStatus = 'generating'
+    adapter.activeModal = null
+    adapter.terminalScreen = {
+      getText: () => '⚠️ Dangerous Command\n❯ Allow once\nAllow for this session\nAdd to permanent allowlist\nDeny',
+    }
+    adapter.parseCurrentTranscript = () => ({
+      status: 'waiting_approval',
+      messages: [
+        { role: 'user', content: 'run the command' },
+        { role: 'assistant', kind: 'system', content: 'Approval requested' },
+      ],
+      activeModal: {
+        message: 'Dangerous command needs approval',
+        buttons: ['Allow once', 'Allow for this session', 'Add to permanent allowlist', 'Deny'],
+      },
+    })
+
+    expect(adapter.getStatus().status).toBe('waiting_approval')
+    expect(adapter.getStatus().activeModal).toEqual({
+      message: 'Dangerous command needs approval',
+      buttons: ['Allow once', 'Allow for this session', 'Add to permanent allowlist', 'Deny'],
+    })
+  })
+
+  it('resolves approval from parsed transcript even before adapter.activeModal has been synchronized', () => {
+    const adapter = buildAdapter('hermes-cli')
+    const write = vi.fn()
+    adapter.ptyProcess = { write }
+    adapter.currentStatus = 'generating'
+    adapter.activeModal = null
+    adapter.terminalScreen = {
+      getText: () => '⚠️ Dangerous Command\n❯ Allow once\nAllow for this session\nAdd to permanent allowlist\nDeny',
+    }
+    adapter.parseCurrentTranscript = () => ({
+      status: 'waiting_approval',
+      messages: [
+        { role: 'user', content: 'run the command' },
+        { role: 'assistant', kind: 'system', content: 'Approval requested' },
+      ],
+      activeModal: {
+        message: 'Dangerous command needs approval',
+        buttons: ['Allow once', 'Allow for this session', 'Add to permanent allowlist', 'Deny'],
+      },
+    })
+
+    adapter.resolveModal(3)
+
+    expect(write).toHaveBeenCalledWith('\x1B[B\x1B[B\x1B[B\r')
+  })
+
   it('eventually finishes an idle-looking screen for non-Hermes CLI providers when the settled transcript still has no assistant turn', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-15T15:00:00Z'))

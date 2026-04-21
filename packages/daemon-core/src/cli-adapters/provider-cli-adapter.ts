@@ -1492,7 +1492,7 @@ export class ProviderCliAdapter implements CliAdapter {
 
     private projectEffectiveStatus(startupModal: { message: string; buttons: string[] } | null = null): CliSessionStatus['status'] {
         if (this.parseErrorMessage) return 'error';
-        if (startupModal) return 'waiting_approval';
+        if (startupModal || this.activeModal) return 'waiting_approval';
         if (this.isWaitingForResponse && this.currentTurnScope && this.currentStatus === 'idle') return 'generating';
         return this.currentStatus;
     }
@@ -1502,12 +1502,28 @@ export class ProviderCliAdapter implements CliAdapter {
     getStatus(): CliSessionStatus {
         const screenText = this.terminalScreen.getText() || '';
         const startupModal = this.startupParseGate ? this.getStartupConfirmationModal(screenText) : null;
-        const effectiveStatus = this.projectEffectiveStatus(startupModal);
+        let effectiveStatus = this.projectEffectiveStatus(startupModal);
+        let effectiveModal = startupModal || this.activeModal;
+        if (!startupModal && !effectiveModal && typeof this.cliScripts?.parseOutput === 'function') {
+            try {
+                const parsed = this.getScriptParsedStatus();
+                const parsedModal = parsed?.activeModal && Array.isArray(parsed.activeModal.buttons)
+                    && parsed.activeModal.buttons.some((button: any) => typeof button === 'string' && button.trim())
+                    ? parsed.activeModal
+                    : null;
+                if (parsed?.status === 'waiting_approval' && parsedModal) {
+                    effectiveStatus = 'waiting_approval';
+                    effectiveModal = parsedModal;
+                }
+            } catch {
+                // Ignore parse errors here; getScriptParsedStatus surfaces them on richer callers.
+            }
+        }
         return {
             status: effectiveStatus,
             messages: [...this.committedMessages],
             workingDir: this.workingDir,
-            activeModal: startupModal || this.activeModal,
+            activeModal: effectiveModal,
             errorMessage: this.parseErrorMessage || undefined,
             errorReason: this.parseErrorMessage ? 'parse_error' : undefined,
         };
@@ -1565,6 +1581,18 @@ export class ProviderCliAdapter implements CliAdapter {
             this.currentTurnScope,
             screenText,
         );
+        const parsedModal = parsed?.activeModal && Array.isArray(parsed.activeModal.buttons)
+            && parsed.activeModal.buttons.some((button: any) => typeof button === 'string' && button.trim())
+            ? parsed.activeModal
+            : null;
+        if (parsedModal && parsed?.status === 'waiting_approval') {
+            this.activeModal = parsedModal;
+            this.isWaitingForResponse = true;
+            if (this.currentStatus !== 'waiting_approval') {
+                this.setStatus('waiting_approval', 'parsed_waiting_approval');
+                this.onStatusChange?.();
+            }
+        }
         if (this.maybeCommitVisibleIdleTranscript(parsed)) {
             return this.getScriptParsedStatus();
         }
@@ -2219,7 +2247,26 @@ export class ProviderCliAdapter implements CliAdapter {
 
     resolveModal(buttonIndex: number): void {
         const screenText = this.terminalScreen.getText() || '';
-        const modal = this.activeModal || this.getStartupConfirmationModal(screenText);
+        let modal = this.activeModal || this.getStartupConfirmationModal(screenText);
+        if (!modal && typeof this.cliScripts?.parseOutput === 'function') {
+            try {
+                const parsed = this.getScriptParsedStatus();
+                const parsedModal = parsed?.activeModal && Array.isArray(parsed.activeModal.buttons)
+                    && parsed.activeModal.buttons.some((button: any) => typeof button === 'string' && button.trim())
+                    ? parsed.activeModal
+                    : null;
+                if (parsed?.status === 'waiting_approval' && parsedModal) {
+                    modal = parsedModal;
+                    this.activeModal = parsedModal;
+                    if (this.currentStatus !== 'waiting_approval') {
+                        this.setStatus('waiting_approval', 'resolve_modal_parse');
+                        this.onStatusChange?.();
+                    }
+                }
+            } catch {
+                // Ignore parse failures here; resolveModal falls back to current state.
+            }
+        }
         if (!this.ptyProcess || ((this.currentStatus !== 'waiting_approval') && !modal)) return;
         this.clearIdleFinishCandidate('resolve_modal');
         this.recordTrace('resolve_modal', {

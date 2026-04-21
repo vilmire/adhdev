@@ -42,7 +42,9 @@ function getTargetInstance(h: CommandHelpers, args: any): ApprovalSelectableInst
     const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     const sessionId = targetSessionId || h.currentSession?.sessionId || '';
     if (!sessionId) return null;
-    return (h.ctx.instanceManager?.getInstance(sessionId) as ApprovalSelectableInstance | undefined) || null;
+    const session = h.ctx.sessionRegistry?.get(sessionId);
+    const instanceKey = session?.adapterKey || session?.instanceKey || sessionId;
+    return (h.ctx.instanceManager?.getInstance(instanceKey) as ApprovalSelectableInstance | undefined) || null;
 }
 
 function getTargetTransport(h: CommandHelpers, provider?: ProviderModule): SessionTransport | null {
@@ -1238,10 +1240,25 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         }
 
         const status = adapter.getStatus();
-        if (status?.status !== 'waiting_approval') {
+        const targetInstance = getTargetInstance(h, args);
+        const targetState = targetInstance?.getState?.() as { activeChat?: { status?: string; activeModal?: { message?: string; buttons?: string[] } | null } } | undefined;
+        const surfacedModal = targetState?.activeChat?.activeModal && Array.isArray(targetState.activeChat.activeModal.buttons)
+            && targetState.activeChat.activeModal.buttons.some((candidate) => typeof candidate === 'string' && candidate.trim())
+            ? targetState.activeChat.activeModal
+            : null;
+        const statusModal = status?.activeModal && Array.isArray(status.activeModal.buttons)
+            && status.activeModal.buttons.some((candidate) => typeof candidate === 'string' && candidate.trim())
+            ? status.activeModal
+            : null;
+        const effectiveModal = statusModal || surfacedModal;
+        const effectiveStatus = status?.status === 'waiting_approval' || targetState?.activeChat?.status === 'waiting_approval'
+            ? 'waiting_approval'
+            : status?.status;
+        LOG.info('Command', `[resolveAction] CLI PTY gate target=${String(args?.targetSessionId || '')} rawStatus=${String(status?.status || '')} effectiveStatus=${String(effectiveStatus || '')} statusModal=${statusModal ? 'yes' : 'no'} surfacedModal=${surfacedModal ? 'yes' : 'no'} instance=${targetInstance ? 'yes' : 'no'}`);
+        if (effectiveStatus !== 'waiting_approval' && !effectiveModal) {
             return { success: false, error: 'Not in approval state' };
         }
-        const buttons: string[] = status.activeModal?.buttons || ['Allow once', 'Always allow', 'Deny'];
+        const buttons: string[] = effectiveModal?.buttons || ['Allow once', 'Always allow', 'Deny'];
         // Resolve button index: explicit buttonIndex arg → button text match → action fallback
         let buttonIndex = typeof args?.buttonIndex === 'number' ? args.buttonIndex : -1;
         if (buttonIndex < 0) {
