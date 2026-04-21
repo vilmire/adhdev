@@ -31,7 +31,7 @@ import type {
 } from './contracts.js';
 import { validateProviderDefinition } from './provider-schema.js';
 import type { ProviderSourceMode } from '../config/config.js';
-import type { ProviderSourceConfigSnapshot } from '../config/provider-source-config.js';
+import type { ProviderSourceConfigSnapshot, ProviderUserDirSource } from '../config/provider-source-config.js';
 
 interface ProviderAvailabilityState {
   installed: boolean;
@@ -59,6 +59,75 @@ export class ProviderLoader {
 
   private static readonly GITHUB_TARBALL_URL = 'https://github.com/vilmire/adhdev-providers/archive/refs/heads/main.tar.gz';
   private static readonly META_FILE = '.meta.json';
+  private static readonly REPO_PROVIDER_DIRNAME = 'adhdev-providers';
+  private static readonly SIBLING_MARKER_FILE = '.adhdev-provider-root';
+  private static readonly SIBLING_ENV_VAR = 'ADHDEV_USE_SIBLING_PROVIDERS';
+
+  private probeStarts: string[] = [];
+  private siblingLogged = false;
+  private userDirSource: ProviderUserDirSource = 'home-default';
+
+  /** Process-level dedup for stderr sibling-adoption notices (shared across all ProviderLoader instances). */
+  private static siblingStderrLogged: Set<string> = new Set();
+
+  private static looksLikeProviderRoot(candidate: string): boolean {
+    try {
+      if (!fs.existsSync(candidate) || !fs.statSync(candidate).isDirectory()) return false;
+      return ['ide', 'extension', 'cli', 'acp'].some((category) =>
+        fs.existsSync(path.join(candidate, category))
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private static hasProviderRootMarker(candidate: string): boolean {
+    try {
+      return fs.existsSync(path.join(candidate, ProviderLoader.SIBLING_MARKER_FILE));
+    } catch {
+      return false;
+    }
+  }
+
+  private detectDefaultUserDir(): { path: string; source: 'sibling-env' | 'sibling-marker' | 'home-default' } {
+    const fallback = path.join(os.homedir(), '.adhdev', 'providers');
+    const envOptIn = process.env[ProviderLoader.SIBLING_ENV_VAR] === '1';
+    const visited = new Set<string>();
+
+    for (const start of this.probeStarts) {
+      let current = path.resolve(start);
+      while (!visited.has(current)) {
+        visited.add(current);
+        const siblingCandidate = path.join(path.dirname(current), ProviderLoader.REPO_PROVIDER_DIRNAME);
+        if (ProviderLoader.looksLikeProviderRoot(siblingCandidate)) {
+          const hasMarker = ProviderLoader.hasProviderRootMarker(siblingCandidate);
+          if (envOptIn || hasMarker) {
+            const source: 'sibling-env' | 'sibling-marker' = hasMarker ? 'sibling-marker' : 'sibling-env';
+            if (!this.siblingLogged) {
+              this.log(`Using sibling provider checkout (${source}): ${siblingCandidate}`);
+              this.siblingLogged = true;
+            }
+            // Force-surface adoption to stderr once per sibling path per process, so CLI
+            // entry points that suppress logFn still leave a visible trail.
+            if (!ProviderLoader.siblingStderrLogged.has(siblingCandidate)) {
+              ProviderLoader.siblingStderrLogged.add(siblingCandidate);
+              try {
+                process.stderr.write(
+                  `[adhdev] Using sibling adhdev-providers checkout (${source}): ${siblingCandidate}\n`,
+                );
+              } catch { /* ignore */ }
+            }
+            return { path: siblingCandidate, source };
+          }
+        }
+        const parent = path.dirname(current);
+        if (parent === current) break;
+        current = parent;
+      }
+    }
+
+    return { path: fallback, source: 'home-default' };
+  }
 
   constructor(options?: {
     userDir?: string;
@@ -67,12 +136,21 @@ export class ProviderLoader {
     sourceMode?: ProviderSourceMode;
     /** Deprecated alias for sourceMode='no-upstream' */
     disableUpstream?: boolean;
+    /**
+     * Directories from which to walk up looking for a sibling `adhdev-providers`
+     * checkout. Defaults to [process.cwd(), __dirname]. Used by tests for hermetic
+     * probing; production code should leave this unset.
+     */
+    probeStarts?: string[];
   }) {
     this.logFn = options?.logFn || LOG.forComponent('Provider').asLogFn();
+    this.probeStarts = options?.probeStarts ?? [process.cwd(), __dirname];
 
     // Default directory for auto-downloads
     this.defaultProvidersDir = path.join(os.homedir(), '.adhdev', 'providers');
-    this.userDir = this.defaultProvidersDir;
+    const detected = this.detectDefaultUserDir();
+    this.userDir = detected.path;
+    this.userDirSource = detected.source;
     this.upstreamDir = path.join(this.defaultProvidersDir, '.upstream');
     this.disableUpstream = false;
 
@@ -117,6 +195,7 @@ export class ProviderLoader {
       disableUpstream: this.disableUpstream,
       explicitProviderDir: this.explicitProviderDir,
       userDir: this.userDir,
+      userDirSource: this.userDirSource,
       upstreamDir: this.upstreamDir,
       providerRoots: this.getProviderRoots(),
     };
@@ -138,7 +217,14 @@ export class ProviderLoader {
     }
 
     this.sourceMode = nextSourceMode;
-    this.userDir = this.explicitProviderDir || this.defaultProvidersDir;
+    if (this.explicitProviderDir) {
+      this.userDir = this.explicitProviderDir;
+      this.userDirSource = 'explicit';
+    } else {
+      const detected = this.detectDefaultUserDir();
+      this.userDir = detected.path;
+      this.userDirSource = detected.source;
+    }
     this.upstreamDir = path.join(this.defaultProvidersDir, '.upstream');
     this.disableUpstream = this.sourceMode === 'no-upstream';
 

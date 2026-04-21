@@ -1,10 +1,20 @@
 import type { ProviderSourceMode } from './config.js'
 
+/**
+ * How the effective `userDir` was resolved:
+ *  - `explicit`        — the user set `config.providerDir` or passed `userDir`
+ *  - `sibling-env`     — auto-adopted a sibling `adhdev-providers/` via ADHDEV_USE_SIBLING_PROVIDERS=1
+ *  - `sibling-marker`  — auto-adopted a sibling `adhdev-providers/` via a `.adhdev-provider-root` marker file
+ *  - `home-default`    — fell back to `~/.adhdev/providers`
+ */
+export type ProviderUserDirSource = 'explicit' | 'sibling-env' | 'sibling-marker' | 'home-default'
+
 export interface ProviderSourceConfigSnapshot {
   sourceMode: ProviderSourceMode
   disableUpstream: boolean
   explicitProviderDir: string | null
   userDir: string
+  userDirSource: ProviderUserDirSource
   upstreamDir: string
   providerRoots: string[]
 }

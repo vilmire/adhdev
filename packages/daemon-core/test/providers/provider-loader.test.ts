@@ -42,24 +42,92 @@ class TestProviderLoader extends ProviderLoader {
 }
 
 describe('ProviderLoader source root selection', () => {
-  const localRepoPath = path.resolve(__dirname, '../../../../../adhdev-providers');
+  let tmpRoot = '';
+  let projectDir = '';
+  let siblingDir = '';
+  let envBefore: string | undefined;
 
-  afterEach(() => {
-    if (existsSync(localRepoPath)) {
-      rmSync(localRepoPath, { recursive: true, force: true });
-    }
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'adhdev-loader-probe-'));
+    projectDir = join(tmpRoot, 'project');
+    siblingDir = join(tmpRoot, 'adhdev-providers');
+    mkdirSync(projectDir, { recursive: true });
+    envBefore = process.env.ADHDEV_USE_SIBLING_PROVIDERS;
+    delete process.env.ADHDEV_USE_SIBLING_PROVIDERS;
   });
 
-  it('defaults to ~/.adhdev/providers even if a sibling adhdev-providers checkout exists', () => {
-    mkdirSync(localRepoPath, { recursive: true });
+  afterEach(() => {
+    if (envBefore === undefined) {
+      delete process.env.ADHDEV_USE_SIBLING_PROVIDERS;
+    } else {
+      process.env.ADHDEV_USE_SIBLING_PROVIDERS = envBefore;
+    }
+    if (tmpRoot && existsSync(tmpRoot)) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+    tmpRoot = '';
+    projectDir = '';
+    siblingDir = '';
+  });
 
-    const loader = new ProviderLoader();
+  it('ignores a sibling adhdev-providers checkout by default (no marker, no env opt-in)', () => {
+    mkdirSync(join(siblingDir, 'cli'), { recursive: true });
+
+    const loader = new ProviderLoader({ probeStarts: [projectDir] });
 
     expect(loader.getUserDir()).toBe(path.join(homedir(), '.adhdev', 'providers'));
+    expect(loader.getSourceConfig().userDirSource).toBe('home-default');
+  });
+
+  it('adopts a sibling checkout when the .adhdev-provider-root marker is present', () => {
+    mkdirSync(join(siblingDir, 'cli'), { recursive: true });
+    writeFileSync(join(siblingDir, '.adhdev-provider-root'), '', 'utf-8');
+
+    const loader = new ProviderLoader({ probeStarts: [projectDir] });
+
+    expect(loader.getUserDir()).toBe(siblingDir);
+    expect(loader.getSourceConfig().userDirSource).toBe('sibling-marker');
+  });
+
+  it('adopts a sibling checkout when ADHDEV_USE_SIBLING_PROVIDERS=1 is exported', () => {
+    mkdirSync(join(siblingDir, 'cli'), { recursive: true });
+    process.env.ADHDEV_USE_SIBLING_PROVIDERS = '1';
+
+    const loader = new ProviderLoader({ probeStarts: [projectDir] });
+
+    expect(loader.getUserDir()).toBe(siblingDir);
+    expect(loader.getSourceConfig().userDirSource).toBe('sibling-env');
+  });
+
+  it('prefers marker-source annotation when both env opt-in and marker are present', () => {
+    mkdirSync(join(siblingDir, 'cli'), { recursive: true });
+    writeFileSync(join(siblingDir, '.adhdev-provider-root'), '', 'utf-8');
+    process.env.ADHDEV_USE_SIBLING_PROVIDERS = '1';
+
+    const loader = new ProviderLoader({ probeStarts: [projectDir] });
+
+    expect(loader.getSourceConfig().userDirSource).toBe('sibling-marker');
+  });
+
+  it('falls back to ~/.adhdev/providers when no sibling adhdev-providers checkout exists', () => {
+    const loader = new ProviderLoader({ probeStarts: [projectDir] });
+
+    expect(loader.getUserDir()).toBe(path.join(homedir(), '.adhdev', 'providers'));
+    expect(loader.getSourceConfig().userDirSource).toBe('home-default');
+  });
+
+  it('tags userDirSource as "explicit" when config.providerDir is set', () => {
+    const loader = new ProviderLoader({
+      probeStarts: [projectDir],
+      userDir: '/tmp/explicit-root',
+    });
+
+    expect(loader.getSourceConfig().userDirSource).toBe('explicit');
   });
 
   it('applies provider source config live and resets to the default override root when providerDir is cleared', () => {
     const loader = new ProviderLoader({
+      probeStarts: [projectDir],
       userDir: '/tmp/custom-provider-root',
       sourceMode: 'no-upstream',
     });
