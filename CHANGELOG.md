@@ -2,66 +2,50 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **daemon-core**: `ProviderLoader` no longer silently adopts a sibling `adhdev-providers/` checkout. Auto-adoption now requires either `ADHDEV_USE_SIBLING_PROVIDERS=1` or a `.adhdev-provider-root` marker file in the candidate directory, restoring the documented default. When adoption fires, the loader writes a one-shot stderr notice per unique sibling path per process.
+- **web-core**: Unified the CLI terminal input with the shared `ChatInputBar` so pane heights and send-routing stay aligned with the chat view; streamlined Claude CLI bar controls.
+- **web-core**: Clarified dashboard header connection status copy.
+
+### Added
+- **daemon-core**: `ProviderSourceConfigSnapshot.userDirSource` reports how the effective provider root was resolved (`explicit` / `sibling-env` / `sibling-marker` / `home-default`); surfaced in `adhdev daemon:status`.
+
 ## [0.8.93] - 2026-04-21
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Ignore daemon-only cloud status for session staleness so idle UIs no longer age out while the daemon still has a healthy uplink.
 
-### Changed
-- 
 ## [0.8.92] - 2026-04-21
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Retry rejected chat-tail subscriptions so transcript hydration recovers from transient relay drops.
+- **web-core**: Harden compact chat-tail transcript reconciliation against out-of-order stream updates.
+- **daemon-core**: Preserve long Hermes turns in the rolling transcript buffer instead of truncating them mid-thought.
 
-### Changed
-- 
 ## [0.8.91] - 2026-04-21
 
-### Added
-- 
-
 ### Fixed
-- 
+- Align cloud status and metadata loading so the dashboard converges on a consistent view after reconnect.
+- Reduce cloud transport parity gaps between WS metadata and P2P data channels.
+- **daemon-core**: Keep Hermes status aligned with the live transcript and approval state.
 
-### Changed
-- 
 ## [0.8.90] - 2026-04-21
 
-### Added
-- 
-
 ### Fixed
-- 
+- Stabilize the Claude CLI adapter lifecycle around spawn/teardown races.
+- **web-core**: Emit a full snapshot after chat-tail hydrate so late subscribers render from a complete state.
 
-### Changed
-- 
 ## [0.8.89] - 2026-04-21
 
-### Added
-- 
-
 ### Fixed
-- 
+- Stabilize Hermes and Claude CLI runtime handling.
 
-### Changed
-- 
 ## [0.8.88] - 2026-04-20
 
-### Added
-- 
-
-### Fixed
-- 
-
 ### Changed
-- 
+- Version bump only; no user-visible changes.
 ## [0.8.87] - 2026-04-20
 
 ### Changed

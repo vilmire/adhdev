@@ -122,6 +122,12 @@ function getControlOptions(
     return ctrl.options || dynamicOptions[ctrl.id] || [];
 }
 
+// Defensive: claude-cli's provider.json currently does not expose `compact` or
+// `new_session` as bar controls, but its scripts.js implements both (via `/compact`
+// and new_session.js). If a future provider update surfaces them in the schema,
+// they stay hidden from the bar — use the native `/compact` command or the
+// dedicated New action instead. Other entries hide a declared `new_session`
+// control that the upstream provider.json defines but duplicates a native action.
 const HIDE_BAR_CONTROL_IDS_BY_PROVIDER: Record<string, Set<string>> = {
     antigravity: new Set(['new_session']),
     'claude-cli': new Set(['compact', 'new_session']),
