@@ -13,7 +13,7 @@ import { createContext, useContext, useState, useCallback, useMemo, useRef, useE
 import type { DaemonData, SessionEntry, WebVersionUpdateReason } from '../types'
 import { webDebugStore } from '../debug/webDebugStore'
 import { summarizeDaemonEntriesForDebug } from '../debug/entryDebugSummary'
-import { mergeSessionEntryChildren } from '../utils/session-entry-merge'
+import { mergeActiveChatData, mergeSessionEntryChildren } from '../utils/session-entry-merge'
 
 // ─── Types ────────────────────────────────────────────
 
@@ -98,7 +98,7 @@ const ActionsCtx = createContext<BaseDaemonActions>({
  */
 function payloadRichness(ide: DaemonData): number {
     let score = 0;
-    if ('activeChat' in ide) score += 4;      // P2P always has this
+    if (ide.activeChat !== undefined) score += 4;      // P2P/chat-rich payloads carry this explicitly
     if (ide.childSessions?.length) score += 2;  // child session data
     if (ide.workspace) score += 1;             // workspace info
     if (ide.machine) score += 1;      // machine info (daemon entry)
@@ -215,7 +215,8 @@ export function reconcileIdes(
             // Incoming is richer → always overwrite, preserve chats if incoming lacks them
             const chats = (ide.chats?.length) ? ide.chats : existing.chats;
             const childSessions = mergeSessionEntryChildren(existing.childSessions, ide.childSessions)
-            const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, childSessions, _lastUpdate: now })
+            const activeChat = mergeActiveChatData(ide.activeChat, existing.activeChat)
+            const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, childSessions, activeChat, _lastUpdate: now })
             resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now));
         } else if (incomingRichness < existingRichness) {
             // Incoming is weaker → NEVER overwrite core data.
@@ -224,6 +225,31 @@ export function reconcileIdes(
             if (ide.status && ide.status !== existing.status) safeUpdate.status = ide.status;
             if (ide.cdpConnected !== undefined) safeUpdate.cdpConnected = ide.cdpConnected;
             if (ide.chats?.length && !existing.chats?.length) safeUpdate.chats = ide.chats;
+            if (ide.title !== undefined) safeUpdate.title = ide.title;
+            if (ide.workspace !== undefined) safeUpdate.workspace = ide.workspace;
+            if (ide.providerSessionId !== undefined) safeUpdate.providerSessionId = ide.providerSessionId;
+            if (ide.parentSessionId !== undefined) safeUpdate.parentSessionId = ide.parentSessionId;
+            if (ide.sessionKind !== undefined) safeUpdate.sessionKind = ide.sessionKind;
+            if (ide.sessionCapabilities !== undefined) safeUpdate.sessionCapabilities = ide.sessionCapabilities;
+            if (ide.controlValues !== undefined) safeUpdate.controlValues = ide.controlValues;
+            if (ide.providerControls !== undefined) safeUpdate.providerControls = ide.providerControls;
+            if (ide.summaryMetadata !== undefined) safeUpdate.summaryMetadata = ide.summaryMetadata;
+            if (ide.lastMessagePreview !== undefined) safeUpdate.lastMessagePreview = ide.lastMessagePreview;
+            if (ide.lastMessageRole !== undefined) safeUpdate.lastMessageRole = ide.lastMessageRole;
+            if (ide.lastMessageAt !== undefined) safeUpdate.lastMessageAt = ide.lastMessageAt;
+            if (ide.lastMessageHash !== undefined) safeUpdate.lastMessageHash = ide.lastMessageHash;
+            if (ide.lastUpdated !== undefined) safeUpdate.lastUpdated = ide.lastUpdated;
+            if (ide.unread !== undefined) safeUpdate.unread = ide.unread;
+            if (ide.lastSeenAt !== undefined) safeUpdate.lastSeenAt = ide.lastSeenAt;
+            if (ide.inboxBucket !== undefined) safeUpdate.inboxBucket = ide.inboxBucket;
+            if (ide.completionMarker !== undefined) safeUpdate.completionMarker = ide.completionMarker;
+            if (ide.seenCompletionMarker !== undefined) safeUpdate.seenCompletionMarker = ide.seenCompletionMarker;
+            if (ide.surfaceHidden !== undefined) safeUpdate.surfaceHidden = ide.surfaceHidden;
+            if (ide.runtimeKey !== undefined) safeUpdate.runtimeKey = ide.runtimeKey;
+            if (ide.runtimeDisplayName !== undefined) safeUpdate.runtimeDisplayName = ide.runtimeDisplayName;
+            if (ide.runtimeWorkspaceLabel !== undefined) safeUpdate.runtimeWorkspaceLabel = ide.runtimeWorkspaceLabel;
+            if (ide.runtimeWriteOwner !== undefined) safeUpdate.runtimeWriteOwner = ide.runtimeWriteOwner;
+            if (ide.runtimeAttachedClients !== undefined) safeUpdate.runtimeAttachedClients = ide.runtimeAttachedClients;
             
             // Allow server updates to override machineNickname safely even if P2P is active
             if (ide.machineNickname !== undefined && ide.machineNickname !== existing.machineNickname) {
@@ -234,12 +260,13 @@ export function reconcileIdes(
             if (ide.versionMismatch === true) safeUpdate.versionMismatch = true
 
             if (Object.keys(safeUpdate).length > 0) {
-                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...safeUpdate, _lastUpdate: existing._lastUpdate })
+                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...safeUpdate, _lastUpdate: now })
                 resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now));
             } else {
-                preserveReferenceWhenOnlyVolatileFieldsChanged(existing, { ...existing, _lastUpdate: existing._lastUpdate }, now)
+                preserveReferenceWhenOnlyVolatileFieldsChanged(existing, { ...existing, _lastUpdate: now }, now)
             }
-            // Do NOT update _lastUpdate — preserve rich data's timestamp authority
+            // Weak payloads still prove the entry is alive; refresh staleness bookkeeping
+            // without letting sparse fields clobber richer chat state.
         } else {
             // Same richness → use timestamp (standard merge)
             const incomingTs = ide.timestamp || now;
@@ -247,7 +274,8 @@ export function reconcileIdes(
             if (incomingTs >= existingTs) {
                 const chats = (ide.chats?.length) ? ide.chats : existing.chats;
                 const childSessions = mergeSessionEntryChildren(existing.childSessions, ide.childSessions)
-                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, childSessions, _lastUpdate: now })
+                const activeChat = mergeActiveChatData(ide.activeChat, existing.activeChat)
+                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, childSessions, activeChat, _lastUpdate: now })
                 resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now));
             } else {
                 if (ide.chats?.length && !existing.chats?.length) {
@@ -458,6 +486,7 @@ export function expandCompactDaemons(
                 status: ide.status || 'online',
                 daemonId: d.id,
                 cdpConnected: ide.cdpConnected,
+                title: ide.title,
                 workspace: ide.workspace || null,
                 activeChat: ide.activeChat,
                 childSessions,
@@ -495,6 +524,7 @@ export function expandCompactDaemons(
                 daemonId: d.id,
                 instanceId: cli.id,
                 cliName: cli.providerName,
+                title: cli.title,
                 mode: 'chat',
                 workspace: cli.workspace || '',
                 activeChat: cli.activeChat,
@@ -538,6 +568,7 @@ export function expandCompactDaemons(
                 daemonId: d.id,
                 instanceId: acp.id,
                 cliName: acp.providerName,
+                title: acp.title,
                 mode: 'chat',
                 workspace: acp.workspace || '',
                 activeChat: acp.activeChat,

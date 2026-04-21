@@ -225,4 +225,145 @@ describe('expandCompactDaemons', () => {
       providerName: 'Claude Code (VS Code)',
     })
   })
+
+  it('preserves top-level cli activeChat when a compact reconcile update omits activeChat entirely', () => {
+    const rich = expandCompactDaemons([
+      {
+        id: 'machine-4',
+        type: 'adhdev-daemon',
+        timestamp: 400,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Hermes Agent',
+            workspace: '/repo',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Hermes Agent',
+              status: 'idle',
+              messages: [
+                { role: 'user', content: 'hello' },
+                { role: 'assistant', content: 'world' },
+              ],
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const sparse = expandCompactDaemons([
+      {
+        id: 'machine-4',
+        type: 'adhdev-daemon',
+        timestamp: 401,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Hermes Agent',
+            workspace: '/repo',
+            lastMessagePreview: 'world',
+            lastMessageRole: 'assistant',
+            lastMessageAt: 401,
+            lastMessageHash: 'hash-1',
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const reconciled = reconcileIdes(sparse, rich, { authoritativeDaemonIds: ['machine-4'] })
+    const cliEntry = reconciled.find((entry) => entry.id === 'machine-4:cli:cli-1')
+
+    expect(cliEntry?.activeChat?.messages).toEqual([
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'world' },
+    ])
+  })
+
+  it('adopts compact summary metadata updates without discarding an existing top-level cli transcript', () => {
+    const rich = expandCompactDaemons([
+      {
+        id: 'machine-5',
+        type: 'adhdev-daemon',
+        timestamp: 500,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Old Title',
+            workspace: '/old-repo',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Old Title',
+              status: 'idle',
+              messages: [
+                { role: 'user', content: 'hello' },
+                { role: 'assistant', content: 'world' },
+              ],
+              activeModal: null,
+            },
+            summaryMetadata: {
+              items: [{ id: 'model', value: 'old-model' }],
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const sparse = expandCompactDaemons([
+      {
+        id: 'machine-5',
+        type: 'adhdev-daemon',
+        timestamp: 501,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'New Title',
+            workspace: '/new-repo',
+            summaryMetadata: {
+              items: [{ id: 'model', value: 'new-model' }],
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const reconciled = reconcileIdes(sparse, rich, { authoritativeDaemonIds: ['machine-5'] })
+    const cliEntry = reconciled.find((entry) => entry.id === 'machine-5:cli:cli-1')
+
+    expect(cliEntry?.activeChat?.messages).toEqual([
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'world' },
+    ])
+    expect(cliEntry).toMatchObject({
+      title: 'New Title',
+      workspace: '/new-repo',
+      summaryMetadata: {
+        items: [{ id: 'model', value: 'new-model' }],
+      },
+    })
+  })
 })

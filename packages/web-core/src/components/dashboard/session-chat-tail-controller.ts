@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { buildChatMessageSignature } from '@adhdev/daemon-core/chat/chat-signatures'
-import type { ReadChatCursor, ReadChatSyncResult, SessionChatTailUpdate } from '@adhdev/daemon-core'
+import type { ReadChatCursor, ReadChatSyncResult, SessionChatTailUpdate, SubscribeRequest } from '@adhdev/daemon-core'
 import type { ActiveConversation, DashboardMessage } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
@@ -39,6 +39,7 @@ export interface WarmSessionChatTailDescriptor {
 }
 
 const DEFAULT_TAIL_LIMIT = 60
+const CHAT_TAIL_SUBSCRIBE_RETRY_MS = 1_000
 const DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS = 120_000
 const WARM_SESSION_CHAT_TAIL_ACTIVE_STATUSES = new Set([
   'generating',
@@ -143,6 +144,7 @@ export class SessionChatTailController {
   private retainCount = 0
   private loadHistoryPromise: Promise<void> | null = null
   private pendingDisconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private pendingSubscribeRetryTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(options: SessionChatTailControllerOptions) {
     this.manager = options.manager || subscriptionManager
@@ -263,30 +265,56 @@ export class SessionChatTailController {
     return run
   }
 
+  private buildSubscribeRequest(): SubscribeRequest {
+    return {
+      type: 'subscribe',
+      topic: 'session.chat_tail',
+      key: this.subscriptionKey,
+      params: {
+        targetSessionId: this.sessionId,
+        ...(this.historySessionId ? { historySessionId: this.historySessionId } : {}),
+        knownMessageCount: this.snapshot.cursor.knownMessageCount,
+        lastMessageSignature: this.snapshot.cursor.lastMessageSignature,
+        ...(this.snapshot.cursor.tailLimit > 0 ? { tailLimit: this.snapshot.cursor.tailLimit } : {}),
+      },
+    }
+  }
+
+  private clearPendingSubscribeRetry(): void {
+    if (!this.pendingSubscribeRetryTimer) return
+    clearTimeout(this.pendingSubscribeRetryTimer)
+    this.pendingSubscribeRetryTimer = null
+  }
+
+  private scheduleSubscribeRetry(): void {
+    if (this.pendingSubscribeRetryTimer || !this.sendData || !this.daemonId || !this.sessionId || this.retainCount === 0) return
+    this.pendingSubscribeRetryTimer = setTimeout(() => {
+      this.pendingSubscribeRetryTimer = null
+      if (!this.sendData || !this.daemonId || !this.sessionId || this.retainCount === 0) return
+      const accepted = this.sendData(this.daemonId, this.buildSubscribeRequest())
+      if (!accepted) {
+        this.scheduleSubscribeRetry()
+      }
+    }, CHAT_TAIL_SUBSCRIBE_RETRY_MS)
+  }
+
   private connect(): void {
     if (this.transportSubscription || !this.sendData || !this.daemonId || !this.sessionId) return
     this.transportSubscription = this.manager.subscribe(
       { sendData: this.sendData },
       this.daemonId,
-      {
-        type: 'subscribe',
-        topic: 'session.chat_tail',
-        key: this.subscriptionKey,
-        params: {
-          targetSessionId: this.sessionId,
-          ...(this.historySessionId ? { historySessionId: this.historySessionId } : {}),
-          knownMessageCount: this.snapshot.cursor.knownMessageCount,
-          lastMessageSignature: this.snapshot.cursor.lastMessageSignature,
-          ...(this.snapshot.cursor.tailLimit > 0 ? { tailLimit: this.snapshot.cursor.tailLimit } : {}),
-        },
-      },
+      this.buildSubscribeRequest(),
       (update: SessionChatTailUpdate) => {
         this.handleUpdate(update)
       },
     )
+    if (!this.transportSubscription.initialSendAccepted) {
+      this.scheduleSubscribeRetry()
+    }
   }
 
   private disconnect(): void {
+    this.clearPendingSubscribeRetry()
     this.transportSubscription?.()
     this.transportSubscription = null
   }
@@ -307,6 +335,7 @@ export class SessionChatTailController {
   }
 
   private handleUpdate(update: SessionChatTailUpdate): void {
+    this.clearPendingSubscribeRetry()
     const nextMessages = applyReadChatSync(this.snapshot.liveMessages, update)
     const nextCursor: Required<ReadChatCursor> = {
       knownMessageCount: nextMessages.length,

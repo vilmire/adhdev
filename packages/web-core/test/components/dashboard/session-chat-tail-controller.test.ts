@@ -301,6 +301,45 @@ describe('SessionChatTailController registry', () => {
     }
   })
 
+  it('retries the initial subscribe send when the first chat-tail subscribe attempt is rejected by transport', () => {
+    resetSessionChatTailControllersForTest()
+    vi.useFakeTimers()
+    try {
+      const manager = new SubscriptionManager()
+      const sendData = vi.fn()
+        .mockReturnValueOnce(false)
+        .mockReturnValueOnce(true)
+      const controller = getOrCreateSessionChatTailController({
+        manager,
+        sendData,
+        daemonId: 'daemon-1',
+        sessionId: 'session-1',
+        historySessionId: 'history-1',
+        subscriptionKey: 'daemon:daemon-1:session:session-1',
+        tailLimit: 60,
+      })
+
+      controller.retain()
+      expect(sendData).toHaveBeenCalledTimes(1)
+      expect(sendData.mock.calls[0]?.[1]).toMatchObject({
+        type: 'subscribe',
+        topic: 'session.chat_tail',
+        key: 'daemon:daemon-1:session:session-1',
+      })
+
+      vi.advanceTimersByTime(1000)
+
+      expect(sendData).toHaveBeenCalledTimes(2)
+      expect(sendData.mock.calls[1]?.[1]).toMatchObject({
+        type: 'subscribe',
+        topic: 'session.chat_tail',
+        key: 'daemon:daemon-1:session:session-1',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('replays cached transcript state after the background retain cycle releases and later reacquires the same session', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
