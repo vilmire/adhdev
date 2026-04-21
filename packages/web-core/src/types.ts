@@ -112,6 +112,7 @@ export interface BaseDaemonData {
     hostname?: string;
     nickname?: string;
     status: string;
+    title?: string;
     connectedAt?: string;
     uptime?: number;
     agents?: WebAgentInfo[];
