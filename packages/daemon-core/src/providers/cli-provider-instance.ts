@@ -17,7 +17,7 @@ import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
-import { ChatHistoryWriter, readChatHistory } from '../config/chat-history.js';
+import { ChatHistoryWriter, readChatHistory, rebuildHermesSavedHistoryFromCanonicalSession } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
@@ -158,6 +158,7 @@ export class CliProviderInstance implements ProviderInstance {
     private historyWriter: ChatHistoryWriter;
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     private lastPersistedHistoryMessages: PersistableCliHistoryMessage[] = [];
+    private lastCanonicalHermesSyncMtimeMs = 0;
     readonly instanceId: string;
     private suppressIdleHistoryReplay = false;
     private errorMessage: string | undefined = undefined;
@@ -238,34 +239,7 @@ export class CliProviderInstance implements ProviderInstance {
         await this.enforceFreshSessionLaunchIfNeeded();
         this.maybeAppendRuntimeRecoveryMessage(this.adapter.getRuntimeMetadata());
         if (this.providerSessionId) {
-            this.historyWriter.compactHistorySession(this.type, this.providerSessionId);
-            const restoredHistory = readChatHistory(this.type, 0, 200, this.providerSessionId);
-            this.historyWriter.seedSessionHistory(
-                this.type,
-                restoredHistory.messages,
-                this.providerSessionId,
-                this.instanceId,
-            );
-            this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
-                role: message.role,
-                content: message.content,
-                kind: message.kind,
-                senderName: message.senderName,
-                receivedAt: message.receivedAt,
-            }));
-            this.suppressIdleHistoryReplay = restoredHistory.messages.length > 0;
-            if (restoredHistory.messages.length > 0) {
-                this.adapter.seedCommittedMessages(
-                    restoredHistory.messages.map((message) => ({
-                        role: message.role,
-                        content: message.content,
-                        timestamp: message.receivedAt,
-                        receivedAt: message.receivedAt,
-                        kind: message.kind,
-                        senderName: message.senderName,
-                    })),
-                );
-            }
+            this.restorePersistedHistoryFromCurrentSession();
         }
         if (this.providerSessionId && this.launchMode === 'resume') {
             const resumedAt = Date.now();
@@ -401,6 +375,7 @@ export class CliProviderInstance implements ProviderInstance {
                 : [];
         }
         const mergedMessages = this.mergeConversationMessages(parsedMessages);
+        const canonicalHermesBackedHistory = this.syncCanonicalHermesSavedHistoryIfNeeded();
 
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
 
@@ -423,7 +398,7 @@ export class CliProviderInstance implements ProviderInstance {
                 senderName: typeof message.senderName === 'string' ? message.senderName : undefined,
                 receivedAt: typeof message.receivedAt === 'number' ? message.receivedAt : message.timestamp,
             }));
-            if (!shouldSkipReplayPersist && normalizedMessagesToSave.length > 0) {
+            if (!canonicalHermesBackedHistory && !shouldSkipReplayPersist && normalizedMessagesToSave.length > 0) {
                 const incrementalMessages = buildIncrementalHistoryAppendMessages(this.lastPersistedHistoryMessages, normalizedMessagesToSave);
                 this.historyWriter.appendNewMessages(
                     this.type,
@@ -433,7 +408,9 @@ export class CliProviderInstance implements ProviderInstance {
                     this.providerSessionId,
                 );
             }
-            this.lastPersistedHistoryMessages = normalizedMessagesToSave;
+            if (!canonicalHermesBackedHistory) {
+                this.lastPersistedHistoryMessages = normalizedMessagesToSave;
+            }
         }
 
         this.applyProviderResponse(parsedStatus, { phase: 'immediate' });
@@ -949,6 +926,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.providerSessionId = nextSessionId;
         this.historyWriter.promoteHistorySession(this.type, previousHistorySessionId, nextSessionId);
         this.historyWriter.writeSessionStart(this.type, nextSessionId, this.workingDir, this.instanceId);
+        this.restorePersistedHistoryFromCurrentSession();
         this.adapter.updateRuntimeMeta({ providerSessionId: nextSessionId });
         this.onProviderSessionResolved?.({
             instanceId: this.instanceId,
@@ -959,6 +937,63 @@ export class CliProviderInstance implements ProviderInstance {
             previousProviderSessionId,
         });
         LOG.info('CLI', `[${this.type}] discovered provider session id: ${nextSessionId}`);
+    }
+
+    private syncCanonicalHermesSavedHistoryIfNeeded(): boolean {
+        if (this.type !== 'hermes-cli' || !this.providerSessionId) return false;
+        try {
+            const canonicalPath = path.join(os.homedir(), '.hermes', 'sessions', `session_${this.providerSessionId}.json`);
+            if (!fs.existsSync(canonicalPath)) return false;
+            const stat = fs.statSync(canonicalPath);
+            if (stat.mtimeMs <= this.lastCanonicalHermesSyncMtimeMs) return true;
+            const rebuilt = rebuildHermesSavedHistoryFromCanonicalSession(this.providerSessionId);
+            if (!rebuilt) return false;
+            this.lastCanonicalHermesSyncMtimeMs = stat.mtimeMs;
+            const restoredHistory = readChatHistory(this.type, 0, 200, this.providerSessionId);
+            this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
+                role: message.role,
+                content: message.content,
+                kind: message.kind,
+                senderName: message.senderName,
+                receivedAt: message.receivedAt,
+            }));
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    private restorePersistedHistoryFromCurrentSession(): void {
+        if (!this.providerSessionId) return;
+        this.syncCanonicalHermesSavedHistoryIfNeeded();
+        this.historyWriter.compactHistorySession(this.type, this.providerSessionId);
+        const restoredHistory = readChatHistory(this.type, 0, 200, this.providerSessionId);
+        this.historyWriter.seedSessionHistory(
+            this.type,
+            restoredHistory.messages,
+            this.providerSessionId,
+            this.instanceId,
+        );
+        this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+            kind: message.kind,
+            senderName: message.senderName,
+            receivedAt: message.receivedAt,
+        }));
+        this.suppressIdleHistoryReplay = restoredHistory.messages.length > 0;
+        if (restoredHistory.messages.length > 0) {
+            this.adapter.seedCommittedMessages(
+                restoredHistory.messages.map((message) => ({
+                    role: message.role,
+                    content: message.content,
+                    timestamp: message.receivedAt,
+                    receivedAt: message.receivedAt,
+                    kind: message.kind,
+                    senderName: message.senderName,
+                })),
+            );
+        }
     }
 
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionEntry } from '@adhdev/daemon-core'
 import {
+  mergeActiveChatData,
   mergeSessionEntryChildren,
   mergeSessionEntrySummary,
   type ExistingSessionLike,
@@ -103,6 +104,36 @@ describe('session entry merge helpers', () => {
       completionMarker: 'id:msg_7',
       seenCompletionMarker: 'id:msg_1',
     })
+  })
+
+  it('keeps the fuller existing transcript when an incoming update regresses only the last message to a truncated prefix', () => {
+    const fullTail = `Intro\n${'x'.repeat(5200)}\nTAIL_MARKER_VISIBLE`
+    const truncatedTail = `Intro\n${'x'.repeat(5000)}`
+
+    const merged = mergeActiveChatData(
+      {
+        id: 'chat-1',
+        title: 'Claude Code (VS Code)',
+        status: 'generating',
+        messages: [
+          { role: 'user', content: 'show me the full output', id: 'msg-user-1', receivedAt: 1000 },
+          { role: 'assistant', content: truncatedTail, id: 'msg-assistant-1', receivedAt: 2000 },
+        ],
+        activeModal: null,
+      } as any,
+      {
+        id: 'chat-1',
+        title: 'Claude Code (VS Code)',
+        status: 'generating',
+        messages: [
+          { role: 'user', content: 'show me the full output', id: 'msg-user-1', receivedAt: 1000 },
+          { role: 'assistant', content: fullTail, id: 'msg-assistant-1', receivedAt: 2000 },
+        ],
+        activeModal: null,
+      } as any,
+    )
+
+    expect(String(merged?.messages?.[1]?.content || '')).toContain('TAIL_MARKER_VISIBLE')
   })
 
   it('merges child session arrays through the same sparse-preserving contract', () => {

@@ -1,4 +1,5 @@
 import type { SessionEntry } from '@adhdev/daemon-core'
+import { normalizeTextContent } from './text'
 
 export type SessionEntryWithInboxMarkers = SessionEntry & {
   completionMarker?: string
@@ -21,6 +22,44 @@ function hasExplicitProviderName(value: string | null | undefined, providerType:
   return typeof value === 'string' && value.trim().length > 0 && value !== providerType
 }
 
+function getMessageTimestamp(message: { receivedAt?: number | string; timestamp?: number | string } | null | undefined): number {
+  const value = Number(message?.receivedAt ?? message?.timestamp ?? 0)
+  return Number.isFinite(value) ? value : 0
+}
+
+function isTruncatedPrefixRegression(
+  incomingMessages: SessionEntry['activeChat']['messages'],
+  existingMessages: SessionEntry['activeChat']['messages'],
+): boolean {
+  if (!Array.isArray(incomingMessages) || !Array.isArray(existingMessages)) return false
+  if (incomingMessages.length === 0 || existingMessages.length === 0) return false
+  if (incomingMessages.length > existingMessages.length) return false
+
+  const incomingLast = incomingMessages[incomingMessages.length - 1]
+  const existingLast = existingMessages[existingMessages.length - 1]
+  if (!incomingLast || !existingLast) return false
+
+  const incomingRole = String(incomingLast.role || '').toLowerCase()
+  const existingRole = String(existingLast.role || '').toLowerCase()
+  if (!incomingRole || incomingRole !== existingRole) return false
+
+  if (incomingLast.id && existingLast.id && String(incomingLast.id) !== String(existingLast.id)) return false
+  if (typeof incomingLast.index === 'number' && typeof existingLast.index === 'number' && incomingLast.index !== existingLast.index) return false
+
+  const incomingText = normalizeTextContent(incomingLast.content)
+  const existingText = normalizeTextContent(existingLast.content)
+  if (!incomingText || !existingText) return false
+  if (incomingText === existingText) return false
+  if (incomingText.length >= existingText.length) return false
+  if (!existingText.startsWith(incomingText)) return false
+
+  const incomingTs = getMessageTimestamp(incomingLast)
+  const existingTs = getMessageTimestamp(existingLast)
+  if (incomingTs && existingTs && Math.abs(incomingTs - existingTs) > 15_000) return false
+
+  return true
+}
+
 export function mergeActiveChatData(
   incoming: SessionEntry['activeChat'] | null | undefined,
   existing: SessionEntry['activeChat'] | null | undefined,
@@ -28,9 +67,11 @@ export function mergeActiveChatData(
   if (!incoming) return existing ?? null
   if (!existing) return incoming ?? null
 
-  const mergedMessages = Array.isArray(incoming.messages) && incoming.messages.length > 0
-    ? incoming.messages
-    : existing.messages
+  const incomingMessages = Array.isArray(incoming.messages) ? incoming.messages : []
+  const existingMessages = Array.isArray(existing.messages) ? existing.messages : []
+  const mergedMessages = incomingMessages.length > 0
+    ? (isTruncatedPrefixRegression(incomingMessages, existingMessages) ? existingMessages : incomingMessages)
+    : existingMessages
 
   const mergedActiveModal = incoming.activeModal
     || (incoming.status === 'waiting_approval' ? existing.activeModal : null)

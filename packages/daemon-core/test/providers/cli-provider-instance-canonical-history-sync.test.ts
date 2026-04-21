@@ -1,0 +1,101 @@
+import * as fs from 'fs'
+import * as path from 'path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+let mockHomeDir = ''
+
+vi.mock('os', async () => {
+  const actual = await vi.importActual<typeof import('os')>('os')
+  return {
+    ...actual,
+    homedir: () => mockHomeDir,
+  }
+})
+
+function writeCanonicalHermesSession(historySessionId: string, messages: Array<{ role: string; content: string }>) {
+  const hermesDir = path.join(mockHomeDir, '.hermes', 'sessions')
+  fs.mkdirSync(hermesDir, { recursive: true })
+  fs.writeFileSync(path.join(hermesDir, `session_${historySessionId}.json`), JSON.stringify({
+    session_id: historySessionId,
+    session_start: '2026-04-22T00:27:56.853373',
+    last_updated: '2026-04-22T00:29:27.545265',
+    messages,
+  }), 'utf-8')
+}
+
+function readSavedHistoryLines(historySessionId: string): Array<{ role: string; kind?: string; content: string }> {
+  const dir = path.join(mockHomeDir, '.adhdev', 'history', 'hermes-cli')
+  const prefix = `${historySessionId}_`
+  const file = fs.readdirSync(dir).find((entry) => entry.startsWith(prefix) && entry.endsWith('.jsonl'))
+  if (!file) return []
+  return fs.readFileSync(path.join(dir, file), 'utf-8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .map((entry) => ({ role: entry.role, kind: entry.kind, content: entry.content }))
+}
+
+describe('CliProviderInstance canonical Hermes saved-history sync', () => {
+  beforeEach(() => {
+    mockHomeDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-cli-provider-canonical-history-'))
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    if (mockHomeDir) fs.rmSync(mockHomeDir, { recursive: true, force: true })
+    mockHomeDir = ''
+  })
+
+  it('prefers canonical ~/.hermes session history over parsed synthetic terminal/tool history for hermes saved-history', async () => {
+    const historySessionId = '20260422_002711_293d9a'
+    writeCanonicalHermesSession(historySessionId, [
+      { role: 'user', content: 'canonical user prompt' },
+      { role: 'assistant', content: 'canonical assistant reply' },
+      { role: 'tool', content: 'canonical tool output' },
+    ])
+
+    const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
+    const instance = new CliProviderInstance({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      spawn: { command: 'hermes', args: [] },
+    } as any, '/workspaces/adhdev', [], 'runtime-1', undefined, {
+      providerSessionId: historySessionId,
+      launchMode: 'resume',
+    }) as any
+
+    instance.historyWriter = {
+      appendNewMessages: vi.fn(),
+      compactHistorySession: vi.fn(),
+      seedSessionHistory: vi.fn(),
+      appendSystemMarker: vi.fn(),
+      promoteHistorySession: vi.fn(),
+      writeSessionStart: vi.fn(),
+    }
+    instance.adapter = {
+      getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        title: 'Hermes Agent',
+        messages: [
+          { role: 'user', kind: 'standard', content: 'synthetic user prompt', receivedAt: 1000 },
+          { role: 'assistant', kind: 'terminal', senderName: 'Terminal', content: '$ which adhdev', receivedAt: 2000 },
+          { role: 'assistant', kind: 'tool', senderName: 'Tool', content: 'find daemon-*.log', receivedAt: 3000 },
+        ],
+      }),
+      getRuntimeMetadata: () => null,
+      seedCommittedMessages: vi.fn(),
+    }
+
+    instance.getState()
+
+    expect(instance.historyWriter.appendNewMessages).not.toHaveBeenCalled()
+    expect(readSavedHistoryLines(historySessionId)).toEqual([
+      { role: 'user', kind: 'standard', content: 'canonical user prompt' },
+      { role: 'assistant', kind: 'standard', content: 'canonical assistant reply' },
+      { role: 'assistant', kind: 'tool', content: 'canonical tool output' },
+    ])
+  })
+})

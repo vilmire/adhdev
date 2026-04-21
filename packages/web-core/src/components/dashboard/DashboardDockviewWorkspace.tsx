@@ -47,7 +47,7 @@ import { getConversationTabMetaText, getConversationTitle, getRemotePanelTitle }
 import { getConversationNativeTargetSessionId } from './conversation-selectors'
 import { IconExternalWindow, IconArrowBack, IconKeyboard, IconX, IconEyeOff, IconFloat, IconDock } from '../Icons'
 import { buildDashboardDockviewContextMenuItems } from './dockviewContextMenuItems'
-import { shouldAwaitStoredDockviewHydration } from './dashboardDockviewHydration'
+import { shouldAwaitStoredDockviewHydration, shouldDeferDockviewPanelPrune } from './dashboardDockviewHydration'
 import { getPassiveSessionSelectionCommand } from './dashboardSessionCommands'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
 import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
@@ -1685,10 +1685,16 @@ export default function DashboardDockviewWorkspace({
         const previousVisibleTabKeySet = new Set(previousVisibleTabKeys)
         const nextVisibleTabKeys = visibleConversations.map(conversation => conversation.tabKey)
         const nextVisibleTabKeySet = new Set(nextVisibleTabKeys)
+        const shouldSkipPanelPrune = shouldDeferDockviewPanelPrune({
+            previousVisibleConversationCount: previousVisibleTabKeys.length,
+            visibleConversationCount: visibleConversations.length,
+            ides,
+        })
 
         let hiddenStateChanged = false
         for (const tabKey of previousVisibleTabKeys) {
             if (nextVisibleTabKeySet.has(tabKey)) continue
+            if (shouldSkipPanelPrune) continue
             hiddenRestoreStateRef.current[tabKey] = readHiddenRestoreStateFromLayout(tabKey)
             hiddenStateChanged = true
         }
@@ -1696,8 +1702,10 @@ export default function DashboardDockviewWorkspace({
             persistHiddenRestoreState()
         }
 
-        syncDockviewPanels(api, visibleConversations)
-        syncRemotePanels(api, visibleConversations, requestedRemoteIdeId)
+        if (!shouldSkipPanelPrune) {
+            syncDockviewPanels(api, visibleConversations)
+            syncRemotePanels(api, visibleConversations, requestedRemoteIdeId)
+        }
 
         const restoredTabKeys = nextVisibleTabKeys.filter(tabKey => !previousVisibleTabKeySet.has(tabKey))
         let restoredStateConsumed = false

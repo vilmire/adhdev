@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { shouldAwaitStoredDockviewHydration } from '../../../src/components/dashboard/dashboardDockviewHydration'
+import {
+  shouldAwaitStoredDockviewHydration,
+  shouldDeferDockviewPanelPrune,
+} from '../../../src/components/dashboard/dashboardDockviewHydration'
 
 describe('shouldAwaitStoredDockviewHydration', () => {
   it('keeps waiting when a stored layout exists and initial data has not loaded yet', () => {
@@ -77,6 +80,72 @@ describe('shouldAwaitStoredDockviewHydration', () => {
       initialDataLoaded: true,
       visibleConversationCount: 0,
       ides: [],
+    })).toBe(false)
+  })
+})
+
+describe('shouldDeferDockviewPanelPrune', () => {
+  it('keeps existing panels alive during transient reconnect drops when authoritative daemon data still exists', () => {
+    expect(shouldDeferDockviewPanelPrune({
+      previousVisibleConversationCount: 2,
+      visibleConversationCount: 0,
+      ides: [
+        {
+          id: 'daemon-1',
+          type: 'adhdev-daemon',
+          status: 'online',
+          machine: {
+            hostname: 'box',
+            platform: 'darwin',
+            arch: 'arm64',
+            cpus: 8,
+            totalMem: 16,
+            uptime: 1,
+          },
+        },
+      ],
+    })).toBe(true)
+  })
+
+  it('allows prune when there were no prior visible conversations', () => {
+    expect(shouldDeferDockviewPanelPrune({
+      previousVisibleConversationCount: 0,
+      visibleConversationCount: 0,
+      ides: [
+        {
+          id: 'daemon-1',
+          type: 'adhdev-daemon',
+          status: 'online',
+          machine: {
+            hostname: 'box',
+            platform: 'darwin',
+            arch: 'arm64',
+            cpus: 8,
+            totalMem: 16,
+            uptime: 1,
+          },
+        },
+      ],
+    })).toBe(false)
+  })
+
+  it('allows prune once visible conversations still exist', () => {
+    expect(shouldDeferDockviewPanelPrune({
+      previousVisibleConversationCount: 2,
+      visibleConversationCount: 1,
+      ides: [
+        {
+          id: 'daemon-1:cli:session-1',
+          daemonId: 'daemon-1',
+          sessionId: 'session-1',
+          type: 'hermes-cli',
+          agentType: 'hermes-cli',
+          transport: 'pty',
+          sessionKind: 'agent',
+          status: 'idle',
+          workspace: '/tmp',
+        },
+      ],
     })).toBe(false)
   })
 })

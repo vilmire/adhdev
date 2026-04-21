@@ -13,7 +13,6 @@ import {
     getAutoCliTerminalScaleForViewport,
     DEFAULT_MAX_CLI_TERMINAL_SCALE,
     DEFAULT_MIN_CLI_TERMINAL_SCALE,
-    shouldPreferFitCliTerminal,
 } from '../../utils/cli-terminal-scale';
 import type { ActiveConversation } from './types';
 import { getConversationTitle } from './conversation-presenters';
@@ -38,7 +37,7 @@ export default function CliTerminalPane({
     isVisible = true,
     isInputActive = true,
 }: CliTerminalPaneProps) {
-    const { ides } = useBaseDaemons();
+    useBaseDaemons();
     const { sendData } = useTransport();
     const [runtimeReady, setRuntimeReady] = useState(false);
     const [terminalScale, setTerminalScale] = useState(1);
@@ -55,19 +54,13 @@ export default function CliTerminalPane({
     const tabKey = activeConv.tabKey;
     const sessionId = activeConv.sessionId || '';
     const daemonRouteId = activeConv.daemonId || activeConv.routeId?.split(':')[0] || activeConv.routeId || '';
-    const daemonEntry = ides.find(entry => entry.id === daemonRouteId && entry.type === 'adhdev-daemon');
-    const terminalSizingMode = daemonEntry?.terminalSizingMode === 'fit' ? 'fit' : 'measured';
     const sendBlockMessage = getConversationSendBlockMessage(activeConv);
     const inputStatusMessage = !runtimeReady
         ? 'Runtime terminal unavailable'
         : (sendFeedbackMessage || sendBlockMessage);
     const MIN_TERMINAL_SCALE = DEFAULT_MIN_CLI_TERMINAL_SCALE;
     const MAX_TERMINAL_SCALE = DEFAULT_MAX_CLI_TERMINAL_SCALE;
-    const effectiveTerminalSizingMode = terminalSizingMode === 'fit' || shouldPreferFitCliTerminal(terminalViewport.width, terminalViewport.height)
-        ? 'fit'
-        : 'measured';
     const getAutoTerminalScale = () => {
-        if (effectiveTerminalSizingMode === 'fit') return 1;
         return getAutoCliTerminalScaleForViewport(terminalViewport.width, terminalViewport.height, {
             minScale: MIN_TERMINAL_SCALE,
             maxScale: MAX_TERMINAL_SCALE,
@@ -226,7 +219,7 @@ export default function CliTerminalPane({
             setTerminalScale(getAutoTerminalScale());
         };
         applyAutoScale();
-    }, [effectiveTerminalSizingMode, terminalViewport.height, terminalViewport.width]);
+    }, [terminalViewport.height, terminalViewport.width]);
 
     useEffect(() => {
         if (!isVisible) {
@@ -244,6 +237,10 @@ export default function CliTerminalPane({
             seedTerminal(pendingSnapshot.text, pendingSnapshot.seq, pendingSnapshot.cols, pendingSnapshot.rows);
         }
 
+        if (daemonRouteId && sessionId && connectionManager.getState?.(daemonRouteId) === 'connected') {
+            connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId).catch(() => {});
+        }
+
         if (pendingLiveOutputRef.current && flushFrameRef.current === null) {
             flushFrameRef.current = requestAnimationFrame(flushPendingLiveOutput);
         }
@@ -251,7 +248,7 @@ export default function CliTerminalPane({
         requestAnimationFrame(() => {
             terminalRef.current?.bumpResize();
         });
-    }, [isVisible]);
+    }, [daemonRouteId, isVisible, sessionId]);
 
     useEffect(() => {
         return () => {
@@ -279,8 +276,7 @@ export default function CliTerminalPane({
         <>
             {/* Terminal */}
             <div ref={terminalViewportRef} className="flex-1 min-h-0 p-2 bg-[#0f1117] relative">
-                {effectiveTerminalSizingMode === 'measured' && (
-                    <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5">
+                <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5">
                         <button
                             type="button"
                             className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
@@ -304,26 +300,19 @@ export default function CliTerminalPane({
                             +
                         </button>
                     </div>
-                )}
-                <div
-                    className={effectiveTerminalSizingMode === 'fit'
-                        ? 'w-full h-full rounded-lg overflow-hidden'
-                        : 'w-full h-full overflow-x-auto overflow-y-hidden rounded-lg overscroll-contain flex justify-center'}
-                >
+                <div className="w-full h-full overflow-hidden rounded-lg overscroll-contain">
                     <div
-                        style={effectiveTerminalSizingMode === 'fit'
-                            ? { width: '100%', height: '100%' }
-                            : {
-                                width: `${100 / terminalScale}%`,
-                                height: `${100 / terminalScale}%`,
-                                transform: `scale(${terminalScale})`,
-                                transformOrigin: 'top left',
-                            }}
+                        style={{
+                            width: `${100 / terminalScale}%`,
+                            height: `${100 / terminalScale}%`,
+                            transform: `scale(${terminalScale})`,
+                            transformOrigin: 'top left',
+                        }}
                     >
                         <CliTerminal
                             ref={terminalRef}
                             readOnly={!runtimeReady || !isVisible}
-                            sizingMode={effectiveTerminalSizingMode}
+                            sizingMode="measured"
                             onInput={(data) => {
                                 if (!runtimeReady) return;
                                 sendData?.(daemonRouteId, { type: 'pty_input', sessionId, targetSessionId: sessionId, data })

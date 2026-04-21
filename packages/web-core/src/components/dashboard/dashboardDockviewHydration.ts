@@ -7,6 +7,12 @@ export interface StoredDockviewHydrationOptions {
   ides: DaemonData[]
 }
 
+export interface DockviewPanelPruneDeferralOptions {
+  previousVisibleConversationCount: number
+  visibleConversationCount: number
+  ides: DaemonData[]
+}
+
 export function hasAuthoritativeDockviewHydrationData(ides: DaemonData[]) {
   return ides.some((entry) => entry.type !== 'adhdev-daemon')
     || ides.some((entry) => entry.type === 'adhdev-daemon' && !!entry.machine)
@@ -22,4 +28,14 @@ export function shouldAwaitStoredDockviewHydration({
   if (visibleConversationCount > 0) return false
   if (!initialDataLoaded) return true
   return !hasAuthoritativeDockviewHydrationData(ides)
+}
+
+export function shouldDeferDockviewPanelPrune({
+  previousVisibleConversationCount,
+  visibleConversationCount,
+  ides,
+}: DockviewPanelPruneDeferralOptions) {
+  if (visibleConversationCount > 0) return false
+  if (previousVisibleConversationCount <= 0) return false
+  return hasAuthoritativeDockviewHydrationData(ides)
 }
