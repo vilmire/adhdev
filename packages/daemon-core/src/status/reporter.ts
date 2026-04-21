@@ -91,6 +91,11 @@ export class DaemonStatusReporter {
     }
 
     onStatusChange(): void {
+        if (this.deps.p2p?.isConnected) {
+            this.resetP2PHash();
+            this.sendUnifiedStatusReport({ p2pOnly: true, reason: 'status-change' })
+                .catch(e => LOG.warn('Status', `Immediate P2P status send failed: ${e?.message}`));
+        }
         this.throttledReport();
     }
 
@@ -215,10 +220,12 @@ export class DaemonStatusReporter {
 
     async sendUnifiedStatusReport(opts?: { p2pOnly?: boolean; forceServer?: boolean; reason?: string }): Promise<void> {
         const { serverConn, p2p } = this.deps;
-        if (!serverConn?.isConnected()) return;
+        const serverConnected = !!serverConn?.isConnected();
+        const p2pConnected = !!p2p?.isConnected;
+        if (!serverConnected && !p2pConnected) return;
         this.lastStatusSentAt = Date.now();
         const now = this.lastStatusSentAt;
-        const target = opts?.p2pOnly ? 'P2P' : 'P2P+Server';
+        const target = opts?.p2pOnly ? 'P2P' : (serverConnected ? 'P2P+Server' : 'P2P');
 
         const allStates = this.deps.instanceManager.collectAllStates();
         const ideStates = allStates.filter((s): s is IdeProviderState => s.category === 'ide');

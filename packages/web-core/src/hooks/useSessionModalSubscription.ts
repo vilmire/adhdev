@@ -54,6 +54,9 @@ export function useSessionModalSubscription(activeConv: ActiveConversation): Ses
                 })
             },
         )
+        if (!unsubscribe.initialSendAccepted) {
+            setState({})
+        }
         return () => {
             unsubscribe()
         }

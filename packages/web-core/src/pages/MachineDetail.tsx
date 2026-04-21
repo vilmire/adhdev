@@ -18,6 +18,7 @@ import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import { useDaemonMachineRuntimeSubscription } from '../hooks/useDaemonMachineRuntimeSubscription'
+import { useDaemonMachineRuntimeLoader } from '../hooks/useDaemonMachineRuntimeLoader'
 import type { DaemonData } from '../types'
 import { isCliEntry, isAcpEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel, getProviderSummaryLine, getProviderSummaryValue } from '../utils/daemon-utils'
 import { getDashboardActiveTabHref, getDashboardActiveTabKeyForConversation } from '../utils/dashboard-route-paths'
@@ -71,6 +72,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const location = useLocation()
     const { sendCommand: sendDaemonCommand } = useTransport()
     const loadDaemonMetadata = useDaemonMetadataLoader()
+    const loadMachineRuntime = useDaemonMachineRuntimeLoader()
     const daemonCtx = useDaemons()
     const allIdes: DaemonData[] = daemonCtx.ides || []
     const initialLoaded: boolean = daemonCtx.initialLoaded ?? true
@@ -101,6 +103,17 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         if (!needsMetadata) return
         void loadDaemonMetadata(machineId, { minFreshMs: 30_000 }).catch(() => {})
     }, [loadDaemonMetadata, machineEntry, machineId])
+
+    useEffect(() => {
+        if (!machineId || !machineEntry || activeTab !== 'overview') return
+        const info = machineEntry.machine
+        const needsRuntime = typeof info?.cpus !== 'number'
+            || typeof info?.totalMem !== 'number'
+            || typeof info?.arch !== 'string'
+            || typeof info?.release !== 'string'
+        if (!needsRuntime) return
+        void loadMachineRuntime(machineId, { minFreshMs: 30_000 }).catch(() => {})
+    }, [activeTab, loadMachineRuntime, machineEntry, machineId])
 
     useDaemonMachineRuntimeSubscription(
         machineId && activeTab === 'overview' ? [machineId] : [],

@@ -4,6 +4,7 @@ import { isManagedStatusWaiting, isManagedStatusWorking, normalizeManagedStatus 
 import { useDaemons } from '../compat'
 import { useDaemonMachineRuntimeSubscription } from '../hooks/useDaemonMachineRuntimeSubscription'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
+import { useDaemonMachineRuntimeLoader } from '../hooks/useDaemonMachineRuntimeLoader'
 import {
     buildProviderMaps, PLATFORM_ICONS,
     formatUptime, formatBytes,
@@ -66,6 +67,7 @@ export default function MachinesPage() {
     const daemonCtx = useDaemons()
     const { ides: daemons } = daemonCtx
     const loadDaemonMetadata = useDaemonMetadataLoader()
+    const loadMachineRuntime = useDaemonMachineRuntimeLoader()
     const connectionStates = daemonCtx.connectionStates || {}
     const connectionTransports = daemonCtx.connectionTransports || {}
     const { icons: providerIcons, labels: providerLabels } = buildProviderMaps(daemons)
@@ -93,7 +95,17 @@ export default function MachinesPage() {
         for (const daemonId of targets) {
             void loadDaemonMetadata(daemonId, { minFreshMs: 30_000 }).catch(() => {})
         }
-    }, [loadDaemonMetadata, machines])
+
+        for (const machine of machines) {
+            const info = machine.daemonIde.machine
+            const needsRuntime = typeof info?.cpus !== 'number'
+                || typeof info?.totalMem !== 'number'
+                || typeof info?.arch !== 'string'
+                || typeof info?.release !== 'string'
+            if (!needsRuntime) continue
+            void loadMachineRuntime(machine.daemonIde.id, { minFreshMs: 30_000 }).catch(() => {})
+        }
+    }, [loadDaemonMetadata, loadMachineRuntime, machines])
 
     useDaemonMachineRuntimeSubscription(
         machineIdsKey ? machineIdsKey.split('|') : [],

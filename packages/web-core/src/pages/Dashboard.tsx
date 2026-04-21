@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
 import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
+import { useDaemonMachineRuntimeLoader } from '../hooks/useDaemonMachineRuntimeLoader'
 import type { DaemonData } from '../types'
 import { isCliConv, isAcpConv, getCliConversationViewMode } from '../components/dashboard/types'
 import {
@@ -79,6 +80,7 @@ function isP2PLaunchTimeout(error: unknown) {
 export default function Dashboard() {
     const { sendCommand: sendDaemonCommand } = useTransport()
     const loadDaemonMetadata = useDaemonMetadataLoader()
+    const loadMachineRuntime = useDaemonMachineRuntimeLoader()
     const location = useLocation()
     const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
@@ -145,23 +147,35 @@ export default function Dashboard() {
         actionLogCount: actionLogs.length,
     })
 
-    const daemonEntry = ides.find(ide => ide.type === 'adhdev-daemon')
     const machineEntries = useMemo(
         () => ides
             .filter((entry) => entry.type === 'adhdev-daemon')
             .sort(compareMachineEntries),
         [ides],
     )
+    const daemonEntry = machineEntries[0]
     const isStandalone = !!daemonEntry
     useEffect(() => {
-        if (!daemonEntry) return
-        const needsMetadata = !daemonEntry.detectedIdes
-            || !daemonEntry.availableProviders
-            || !daemonEntry.recentLaunches
-            || !daemonEntry.workspaces
-        if (!needsMetadata) return
-        void loadDaemonMetadata(daemonEntry.id, { minFreshMs: 30_000 }).catch(() => {})
-    }, [daemonEntry, loadDaemonMetadata])
+        for (const entry of machineEntries) {
+            const needsMetadata = !entry.detectedIdes
+                || !entry.availableProviders
+                || !entry.recentLaunches
+                || !entry.workspaces
+            if (needsMetadata) {
+                void loadDaemonMetadata(entry.id, { minFreshMs: 30_000 }).catch(() => {})
+            }
+
+            const info = entry.machine
+            const needsRuntime = typeof info?.cpus !== 'number'
+                || typeof info?.totalMem !== 'number'
+                || typeof info?.arch !== 'string'
+                || typeof info?.release !== 'string'
+            if (needsRuntime) {
+                void loadMachineRuntime(entry.id, { minFreshMs: 30_000 }).catch(() => {})
+            }
+        }
+    }, [loadDaemonMetadata, loadMachineRuntime, machineEntries])
+
     const terminalBackend = daemonEntry?.terminalBackend || null
     const terminalBackendMachineLabel = daemonEntry
         ? getMachineDisplayName(daemonEntry, { fallbackId: daemonEntry.id })

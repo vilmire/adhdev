@@ -34,23 +34,26 @@ export function useDaemonMachineRuntimeSubscription(
         const ids = daemonIdsKey ? daemonIdsKey.split('|') : []
         if (ids.length === 0) return
 
-        const unsubs = ids.map((daemonId) => subscriptionManager.subscribe(
-            { sendData },
-            daemonId,
-            {
-                type: 'subscribe',
-                topic: 'machine.runtime',
-                key: `machine:${daemonId}`,
-                params: {
-                    intervalMs: opts?.intervalMs ?? DEFAULT_MACHINE_RUNTIME_REFRESH_MS,
+        const unsubs = ids.map((daemonId) => {
+            const unsubscribe = subscriptionManager.subscribe(
+                { sendData },
+                daemonId,
+                {
+                    type: 'subscribe',
+                    topic: 'machine.runtime',
+                    key: `machine:${daemonId}`,
+                    params: {
+                        intervalMs: opts?.intervalMs ?? DEFAULT_MACHINE_RUNTIME_REFRESH_MS,
+                    },
                 },
-            },
-            (update: MachineRuntimeUpdate) => {
-                const existingDaemon = getIdes().find((entry) => entry.id === daemonId)
-                const entry = buildRuntimeEntry(existingDaemon, daemonId, update)
-                injectEntries([entry])
-            },
-        ))
+                (update: MachineRuntimeUpdate) => {
+                    const existingDaemon = getIdes().find((entry) => entry.id === daemonId)
+                    const entry = buildRuntimeEntry(existingDaemon, daemonId, update)
+                    injectEntries([entry])
+                },
+            )
+            return unsubscribe
+        })
 
         return () => {
             unsubs.forEach((unsubscribe) => unsubscribe())

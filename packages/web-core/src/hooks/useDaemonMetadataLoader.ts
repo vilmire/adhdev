@@ -70,8 +70,7 @@ export function useDaemonMetadataLoader() {
 
         const request = (async () => {
             if (sendData && !metadataSubscriptions.has(daemonId)) {
-                metadataSubscriptions.add(daemonId)
-                subscriptionManager.subscribe(
+                const unsubscribe = subscriptionManager.subscribe(
                     { sendData },
                     daemonId,
                     {
@@ -99,7 +98,13 @@ export function useDaemonMetadataLoader() {
                     },
                 )
 
-                if (!opts?.force) {
+                if (unsubscribe.initialSendAccepted) {
+                    metadataSubscriptions.add(daemonId)
+                } else {
+                    metadataSubscriptions.delete(daemonId)
+                }
+
+                if (!opts?.force && unsubscribe.initialSendAccepted) {
                     const updated = await waitForMetadataUpdate(daemonId, DAEMON_METADATA_SUBSCRIPTION_WAIT_MS)
                     if (updated) return
                 }
