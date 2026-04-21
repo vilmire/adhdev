@@ -5,13 +5,15 @@ All notable changes to ADHDev will be documented in this file.
 ## [0.8.94] - 2026-04-21
 
 ### Added
-- 
+- Added focused daemon-core regressions covering live Hermes approval recovery: parsed waiting-approval projection, parsed approval resolution before adapter modal sync, and command-layer approval fallback when provider state still reports `generating`.
 
 ### Fixed
-- 
+- **daemon-core**: Align Hermes dangerous-command approval resolution with the live surfaced transcript so `resolve_action` can deny/approve when the approval bubble and actionable buttons are already visible, even before adapter-owned modal state fully catches up.
+- **web-core / web-cloud**: Keep explicit chat opens pinned to the latest message instead of reusing stale transcript anchors after hydration.
 
 ### Changed
-- 
+- **daemon-standalone**: Align standalone terminal snapshot flow more closely with cloud by keeping runtime snapshots pull-based instead of seeding hidden panes with unsolicited buffers on websocket connect.
+
 ## [Unreleased]
 
 ### Fixed
