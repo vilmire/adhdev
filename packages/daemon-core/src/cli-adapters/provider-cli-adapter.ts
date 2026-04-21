@@ -178,8 +178,10 @@ export class ProviderCliAdapter implements CliAdapter {
     private accumulatedRawBuffer: string = '';
     /** Current visible terminal screen snapshot */
     private terminalScreen = new TerminalScreen(24, 80);
-    /** Max accumulated buffer size (last 50KB) */
-    private static readonly MAX_ACCUMULATED_BUFFER = 50000;
+    /** Max accumulated buffer size. Sized to comfortably hold a single long
+     *  Hermes turn (tool calls + reasoning + final bubble) without the
+     *  rolling window pushing the turn's ╭─ opening line out of view. */
+    private static readonly MAX_ACCUMULATED_BUFFER = 262144;
     private currentTurnScope: TurnParseScope | null = null;
     private traceEntries: CliTraceEntry[] = [];
     private traceSeq = 0;
@@ -555,8 +557,23 @@ export class ProviderCliAdapter implements CliAdapter {
 
         // Rolling buffers
         this.recentOutputBuffer = (this.recentOutputBuffer + cleanData).slice(-1000);
+        const prevAccumulatedLen = this.accumulatedBuffer.length;
+        const prevAccumulatedRawLen = this.accumulatedRawBuffer.length;
         this.accumulatedBuffer = (this.accumulatedBuffer + cleanData).slice(-ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
         this.accumulatedRawBuffer = (this.accumulatedRawBuffer + rawData).slice(-ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
+        // Keep turn-scope offsets aligned with the truncated buffer so scoped
+        // parses don't lose the beginning of a long turn (e.g. the Hermes
+        // ╭─ opening line) when the rolling window sheds bytes.
+        if (this.currentTurnScope) {
+            const droppedClean = (prevAccumulatedLen + cleanData.length) - this.accumulatedBuffer.length;
+            const droppedRaw = (prevAccumulatedRawLen + rawData.length) - this.accumulatedRawBuffer.length;
+            if (droppedClean > 0) {
+                this.currentTurnScope.bufferStart = Math.max(0, this.currentTurnScope.bufferStart - droppedClean);
+            }
+            if (droppedRaw > 0) {
+                this.currentTurnScope.rawBufferStart = Math.max(0, this.currentTurnScope.rawBufferStart - droppedRaw);
+            }
+        }
 
         this.resolveStartupState('output');
 
