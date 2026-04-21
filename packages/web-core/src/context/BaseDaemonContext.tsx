@@ -288,9 +288,13 @@ export function reconcileIdes(
     // Stale Cleanup
     const incomingIds = new Set(incoming.map(i => i.id))
     const incomingDaemonIds = new Set<string>()
+    const daemonIdsWithSessionEntries = new Set<string>()
     for (const ide of incoming) {
         const did = ide.daemonId || ide.id?.split(':')[0]
         if (did) incomingDaemonIds.add(did)
+        if (did && ide.type !== 'adhdev-daemon') {
+            daemonIdsWithSessionEntries.add(did)
+        }
     }
 
     for (const [key, ide] of resultMap) {
@@ -304,16 +308,20 @@ export function reconcileIdes(
 
         const age = now - (ide._lastUpdate || ide.timestamp || 0)
 
-        if (ide.transport === 'pty' && !incomingIds.has(key) && age > 10_000) {
+        if (ide.transport === 'pty' && daemonIdsWithSessionEntries.has(entryDaemonId) && !incomingIds.has(key) && age > 10_000) {
             resultMap.delete(key)
-        } else if (ide.transport === 'acp' && !incomingIds.has(key) && age > 10_000) {
+        } else if (ide.transport === 'acp' && daemonIdsWithSessionEntries.has(entryDaemonId) && !incomingIds.has(key) && age > 10_000) {
             resultMap.delete(key)
-        } else if (ide.transport === 'cdp-page' && !incomingIds.has(key) && age > 30_000) {
+        } else if (ide.transport === 'cdp-page' && daemonIdsWithSessionEntries.has(entryDaemonId) && !incomingIds.has(key) && age > 30_000) {
             resultMap.delete(key)
         }
     }
 
     for (const [key, ide] of resultMap) {
+        const entryDaemonId = ide.daemonId || key.split(':')[0]
+        if (incomingDaemonIds.has(entryDaemonId) && ide.transport && !daemonIdsWithSessionEntries.has(entryDaemonId)) {
+            continue
+        }
         const age = now - (ide._lastUpdate || ide.timestamp || 0)
         if (age > 300_000 && ide.status !== 'online') {
             resultMap.delete(key)

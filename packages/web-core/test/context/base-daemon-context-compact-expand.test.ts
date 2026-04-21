@@ -366,4 +366,64 @@ describe('expandCompactDaemons', () => {
       },
     })
   })
+
+  it('does not stale-delete live session entries when a cloud daemon_status update only includes daemon-level metadata', () => {
+    const previous = expandCompactDaemons([
+      {
+        id: 'machine-6',
+        type: 'adhdev-daemon',
+        timestamp: 600,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Hermes Agent',
+            workspace: '/repo',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Hermes Agent',
+              status: 'idle',
+              messages: [
+                { role: 'user', content: 'hello' },
+                { role: 'assistant', content: 'world' },
+              ],
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries.map((entry) => (
+      entry.id === 'machine-6:cli:cli-1'
+        ? { ...entry, _lastUpdate: 1 }
+        : entry
+    ))
+
+    const daemonOnly = expandCompactDaemons([
+      {
+        id: 'machine-6',
+        type: 'adhdev-daemon',
+        timestamp: 601,
+        p2p: {
+          available: true,
+          state: 'connected',
+          peers: 2,
+          screenshotActive: false,
+        },
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const reconciled = reconcileIdes(daemonOnly, previous)
+    const cliEntry = reconciled.find((entry) => entry.id === 'machine-6:cli:cli-1')
+
+    expect(cliEntry).toBeTruthy()
+    expect(cliEntry?.activeChat?.messages).toEqual([
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'world' },
+    ])
+  })
 })
