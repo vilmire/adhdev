@@ -49,6 +49,7 @@ import { IconExternalWindow, IconArrowBack, IconKeyboard, IconX, IconEyeOff, Ico
 import { buildDashboardDockviewContextMenuItems } from './dockviewContextMenuItems'
 import { shouldAwaitStoredDockviewHydration } from './dashboardDockviewHydration'
 import { getPassiveSessionSelectionCommand } from './dashboardSessionCommands'
+import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
 import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 
 interface DashboardDockviewWorkspaceProps {
@@ -87,6 +88,7 @@ interface DashboardDockviewWorkspaceProps {
         moveActiveTabToDownPane: () => void
     } | null) => void
     onActiveTabChange: (tabKey: string | null) => void
+    onRequestScrollToBottom?: (tabKey: string | null | undefined, intent: DashboardScrollToBottomIntent) => void
     requestedActiveTabKey?: string | null
     requestedRemoteIdeId?: string | null
     onRequestedActiveTabConsumed?: () => void
@@ -600,6 +602,7 @@ export default function DashboardDockviewWorkspace({
     actionShortcuts,
     registerActionHandlers,
     onActiveTabChange,
+    onRequestScrollToBottom,
     requestedActiveTabKey,
     requestedRemoteIdeId,
     onRequestedActiveTabConsumed,
@@ -648,6 +651,9 @@ export default function DashboardDockviewWorkspace({
     const focusDockview = useCallback(() => {
         apiRef.current?.focus()
     }, [])
+    const requestConversationScrollToBottom = useCallback((tabKey: string | null | undefined, intent: DashboardScrollToBottomIntent) => {
+        onRequestScrollToBottom?.(tabKey, intent)
+    }, [onRequestScrollToBottom])
 
     // ─── Popout Window (tear-off to separate browser window) ─────
 
@@ -975,6 +981,7 @@ export default function DashboardDockviewWorkspace({
         if (!api || !panel) return
         panel.group.model.openPanel(panel)
         panel.api.setActive()
+        requestConversationScrollToBottom(tabKey, 'dockview-shortcut')
         try {
             const location = panel.group.model.location
             if (location.type === 'popout') {
@@ -983,7 +990,7 @@ export default function DashboardDockviewWorkspace({
                 focusOwnerWindow(panel.group.element?.ownerDocument)
             }
         } catch { /* ignore */ }
-    }, [])
+    }, [requestConversationScrollToBottom])
     const activateRelativeTabInGroup = useCallback((direction: -1 | 1) => {
         const api = apiRef.current
         const activePanel = api?.activePanel
@@ -998,7 +1005,10 @@ export default function DashboardDockviewWorkspace({
         if (!nextPanel) return
         nextPanel.group.model.openPanel(nextPanel)
         nextPanel.api.setActive()
-    }, [])
+        if (!isRemotePanelId(nextPanel.id)) {
+            requestConversationScrollToBottom(nextPanel.id, 'dockview-shortcut')
+        }
+    }, [requestConversationScrollToBottom])
     const getAdjacentGroup = useCallback((direction: DockviewPaneDirection) => {
         const api = apiRef.current
         const activeGroup = api?.activeGroup || api?.activePanel?.group
@@ -1070,8 +1080,11 @@ export default function DashboardDockviewWorkspace({
         if (!nextPanel) return
         nextGroup.model.openPanel(nextPanel)
         nextPanel.api.setActive()
+        if (!isRemotePanelId(nextPanel.id)) {
+            requestConversationScrollToBottom(nextPanel.id, 'dockview-focus')
+        }
         focusOwnerWindow(nextGroup.element?.ownerDocument)
-    }, [getAdjacentGroup])
+    }, [getAdjacentGroup, requestConversationScrollToBottom])
     const moveActivePanelToDirection = useCallback((direction: DockviewPaneDirection, options?: { createGroupIfMissing?: boolean }) => {
         const api = apiRef.current
         const activePanel = api?.activePanel
@@ -1088,7 +1101,13 @@ export default function DashboardDockviewWorkspace({
         activePanel.api.moveTo({ group: targetGroup, position: 'center' })
         activePanel.group.model.openPanel(activePanel)
         activePanel.api.setActive()
-    }, [getAdjacentGroup])
+        if (!isRemotePanelId(activePanel.id)) {
+            requestConversationScrollToBottom(
+                activePanel.id,
+                options?.createGroupIfMissing ? 'dockview-split' : 'dockview-move',
+            )
+        }
+    }, [getAdjacentGroup, requestConversationScrollToBottom])
     const {
         isMac,
         tabShortcuts,
@@ -1300,20 +1319,24 @@ export default function DashboardDockviewWorkspace({
         panel.api.setActive()
     }, [])
 
-    const activateRequestedTab = useCallback((tabKey: string | null | undefined) => {
+    const activateRequestedTab = useCallback((
+        tabKey: string | null | undefined,
+        intent: DashboardScrollToBottomIntent = 'requested-tab',
+    ) => {
         if (!tabKey) return false
         const api = apiRef.current
         if (!api) return false
         const panel = api.getPanel(tabKey)
         if (!panel) return false
         activatePanel(panel)
+        requestConversationScrollToBottom(tabKey, intent)
         onRequestedActiveTabConsumed?.()
         return true
-    }, [activatePanel, onRequestedActiveTabConsumed])
+    }, [activatePanel, onRequestedActiveTabConsumed, requestConversationScrollToBottom])
 
     const activateStoredActiveTab = useCallback(() => {
         if (hasRestoredStoredActiveTabRef.current) return false
-        const activated = activateRequestedTab(storedActiveTabIdRef.current)
+        const activated = activateRequestedTab(storedActiveTabIdRef.current, 'stored-layout-restore')
         if (activated) hasRestoredStoredActiveTabRef.current = true
         return activated
     }, [activateRequestedTab])

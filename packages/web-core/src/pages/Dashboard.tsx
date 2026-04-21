@@ -41,6 +41,7 @@ import { getMobileDashboardMode, subscribeMobileDashboardMode } from '../compone
 import { getDashboardWarmChatTailOptions } from '../utils/dashboard-warm-chat-tail'
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
 import { buildConversationIdentity, getConversationHistorySessionId } from '../components/dashboard/conversation-identity'
+import { buildDashboardScrollToBottomRequest, type DashboardScrollToBottomIntent } from '../components/dashboard/dashboard-scroll-to-bottom'
 import { getConversationActiveTabTarget, getConversationMachineId, getConversationProviderType } from '../components/dashboard/conversation-selectors'
 import { getConversationTimestamp } from '../components/dashboard/conversation-sort'
 import { compareMachineEntries, getMachineDisplayName, getProviderSummaryValue, isAcpEntry, isCliEntry } from '../utils/daemon-utils'
@@ -897,6 +898,12 @@ export default function Dashboard() {
         hideConversationByTabKey(conversation.tabKey)
     }, [hideConversationByTabKey])
 
+    const requestScrollToBottom = useCallback((tabKey: string | null | undefined, intent: DashboardScrollToBottomIntent) => {
+        const request = buildDashboardScrollToBottomRequest(tabKey, intent)
+        if (!request) return
+        setScrollToBottomRequest(request)
+    }, [])
+
     return (
         <div className="page-dashboard flex-1 min-h-0 bg-bg-primary text-text-primary flex flex-col overflow-hidden">
 
@@ -973,6 +980,7 @@ export default function Dashboard() {
                 requestedDesktopTabKey={requestedDesktopTabKey}
                 onRequestedDesktopTabConsumed={consumeRequestedActiveTab}
                 onDesktopActiveTabChange={setDesktopActiveTabKey}
+                onRequestScrollToBottom={requestScrollToBottom}
                 onHideConversation={handleHideConversation}
                 onShowHiddenConversation={handleShowHiddenConversation}
                 onShowAllHiddenConversations={showAllHiddenTabs}
@@ -1050,7 +1058,7 @@ export default function Dashboard() {
                         if (matchedConv) {
                             setFocusedGroup(normalizedGroupAssignments.get(matchedConv.tabKey) ?? 0)
                             handleShowHiddenConversation(matchedConv)
-                            setScrollToBottomRequest({ tabKey: matchedConv.tabKey, nonce: Date.now() })
+                            requestScrollToBottom(matchedConv.tabKey, 'toast-open')
                         }
                     }
                 }}

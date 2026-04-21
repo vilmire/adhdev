@@ -16,6 +16,7 @@ import { IconX } from '../Icons'
 import type { DashboardNotificationRecord, DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 import type { LiveSessionInboxState } from './DashboardMobileChatShared'
 import { conversationMatchesTarget } from './conversation-identity'
+import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
 
 type GuideTabId = 'overview' | 'quickstart' | 'shortcuts'
 type ShortcutSectionId = 'all' | 'workspace' | 'panes' | 'approvals'
@@ -102,6 +103,7 @@ interface DashboardMainViewProps {
     requestedDesktopTabKey: string | null
     onRequestedDesktopTabConsumed: () => void
     onDesktopActiveTabChange: React.Dispatch<React.SetStateAction<string | null>>
+    onRequestScrollToBottom: (tabKey: string | null | undefined, intent: DashboardScrollToBottomIntent) => void
     onHideConversation: (conversation: ActiveConversation) => void
     onShowHiddenConversation: (conversation: ActiveConversation) => void
     onShowAllHiddenConversations: () => void
@@ -195,6 +197,7 @@ export default function DashboardMainView({
     requestedDesktopTabKey,
     onRequestedDesktopTabConsumed,
     onDesktopActiveTabChange,
+    onRequestScrollToBottom,
     onHideConversation,
     onShowHiddenConversation,
     onShowAllHiddenConversations,
@@ -256,6 +259,7 @@ export default function DashboardMainView({
             }
             onDesktopActiveTabChange(targetConversation.tabKey)
             dockviewActionHandlersRef.current?.activateConversationTab(targetConversation.tabKey)
+            onRequestScrollToBottom(targetConversation.tabKey, 'notification-open')
         }
 
         onMarkNotificationRead(notification.id)
@@ -275,6 +279,7 @@ export default function DashboardMainView({
         onDesktopActiveTabChange,
         onMarkNotificationRead,
         onMarkNotificationTargetRead,
+        onRequestScrollToBottom,
     ])
     const [guideNudgeVisible, setGuideNudgeVisible] = React.useState(false)
     const [guideTab, setGuideTab] = React.useState<GuideTabId>('quickstart')
@@ -634,6 +639,7 @@ export default function DashboardMainView({
                     onActiveTabChange={onDesktopActiveTabChange}
                     requestedActiveTabKey={requestedDesktopTabKey}
                     onRequestedActiveTabConsumed={onRequestedDesktopTabConsumed}
+                    onRequestScrollToBottom={onRequestScrollToBottom}
                     scrollToBottomRequest={scrollToBottomRequest}
                 />
             )}
@@ -653,6 +659,7 @@ export default function DashboardMainView({
                         setNewSessionOpen(false)
                         onShowHiddenConversation(conversation)
                         onDesktopActiveTabChange(conversation.tabKey)
+                        onRequestScrollToBottom(conversation.tabKey, 'conversation-open')
                     }}
                 />
             )}
