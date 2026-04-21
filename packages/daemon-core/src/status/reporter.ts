@@ -323,6 +323,7 @@ export class DaemonStatusReporter {
             ...wsPayload,
             timestamp: undefined,
         }));
+        if (!serverConnected || !serverConn) return;
         if (!opts?.forceServer && wsHash === this.lastServerStatusHash) {
             LOG.debug('Server', `skip duplicate status_report${opts?.reason ? ` (${opts.reason})` : ''}`);
             return;
