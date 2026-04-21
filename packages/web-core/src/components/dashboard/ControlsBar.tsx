@@ -122,11 +122,12 @@ function getControlOptions(
     return ctrl.options || dynamicOptions[ctrl.id] || [];
 }
 
-const HIDE_NEW_SESSION_BAR_PROVIDERS = new Set([
-    'antigravity',
-    'claude-code-vscode',
-    'codex',
-]);
+const HIDE_BAR_CONTROL_IDS_BY_PROVIDER: Record<string, Set<string>> = {
+    antigravity: new Set(['new_session']),
+    'claude-cli': new Set(['compact', 'new_session']),
+    'claude-code-vscode': new Set(['new_session']),
+    codex: new Set(['new_session']),
+};
 
 export function shouldHideBarControl(
     hostIdeType: string | undefined,
@@ -134,7 +135,7 @@ export function shouldHideBarControl(
     ctrl: ProviderControlSchema,
 ): boolean {
     void hostIdeType;
-    return ctrl.id === 'new_session' && HIDE_NEW_SESSION_BAR_PROVIDERS.has(providerType);
+    return HIDE_BAR_CONTROL_IDS_BY_PROVIDER[providerType]?.has(ctrl.id) === true;
 }
 
 export function getVisibleBarControls(
@@ -429,140 +430,162 @@ export default function ControlsBar({
     };
 
     return (
-        <div className="flex items-center gap-1.5 px-3 py-1 flex-wrap text-[10px] border-t border-border-subtle bg-surface-primary font-[var(--font)]">
-            <span className="text-[9px] font-bold tracking-wide opacity-70" style={{ color: accent }}>
-                {displayLabel}
-            </span>
-            <span className="text-border-subtle text-[10px]">│</span>
+        <div className="border-t border-border-subtle bg-[var(--surface-primary)] px-3 py-2 font-[var(--font)]">
+            <div className="flex items-center gap-2 flex-wrap">
+                <span
+                    className="inline-flex h-7 items-center rounded-full border px-3 text-[11px] font-semibold tracking-[0.02em]"
+                    style={{
+                        borderColor: `${accent}33`,
+                        background: `${accent}12`,
+                        color: accent,
+                    }}
+                >
+                    {displayLabel}
+                </span>
 
-            {barControls.map(ctrl => {
-                const currentValue = String(effectiveValues[ctrl.id] || '');
-                const currentLabel = getControlValueLabel(ctrl, dynamicOptions, currentValue);
-                const isOpen = openDropdown === ctrl.id;
-                const isLoading = loadingOption === ctrl.id;
-                const options = getControlOptions(ctrl, dynamicOptions);
+                {barControls.map(ctrl => {
+                    const currentValue = String(effectiveValues[ctrl.id] || '');
+                    const currentLabel = getControlValueLabel(ctrl, dynamicOptions, currentValue);
+                    const isOpen = openDropdown === ctrl.id;
+                    const isLoading = loadingOption === ctrl.id;
+                    const options = getControlOptions(ctrl, dynamicOptions);
+                    const baseButtonClassName = 'inline-flex h-7 max-w-full items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors whitespace-nowrap';
 
-                switch (ctrl.type) {
-                    case 'select':
-                        return (
-                            <div key={ctrl.id} className="relative">
-                                <span
-                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-xl text-[10px] font-medium cursor-pointer transition-all bg-[var(--surface-tertiary)] whitespace-nowrap max-w-40 overflow-hidden text-ellipsis"
+                    switch (ctrl.type) {
+                        case 'select':
+                            return (
+                                <div key={ctrl.id} className="relative max-w-full">
+                                    <button
+                                        type="button"
+                                        className={`${baseButtonClassName} hover:bg-[var(--surface-tertiary-hover)]`}
+                                        style={{
+                                            borderColor: isOpen ? `${accent}55` : 'var(--border-default)',
+                                            background: isOpen ? `${accent}10` : 'var(--surface-tertiary)',
+                                            color: currentValue ? 'var(--text-primary)' : 'var(--text-muted)',
+                                        }}
+                                        onClick={() => void handleSelectToggle(ctrl)}
+                                        title={ctrl.label}
+                                    >
+                                        {ctrl.icon && <span className="text-[11px] opacity-70">{ctrl.icon}</span>}
+                                        <span className="min-w-0 overflow-hidden text-ellipsis">{isLoading ? 'Loading…' : currentLabel || ctrl.label}</span>
+                                        <span className="text-[9px] opacity-55">▼</span>
+                                    </button>
+                                    {isOpen && options.length > 0 && (
+                                        <>
+                                            <div className="fixed inset-0 z-[59]" onClick={() => setOpenDropdown(null)} />
+                                            <div className="absolute bottom-full left-0 z-[60] mb-2 min-w-44 overflow-y-auto rounded-xl border border-border-subtle bg-[var(--surface-primary)] shadow-[0_-8px_24px_rgba(0,0,0,0.35)] max-h-[240px]">
+                                                <div className="border-b border-border-subtle px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-text-muted">
+                                                    {ctrl.label}
+                                                </div>
+                                                {options.map(opt => (
+                                                    <button
+                                                        key={opt.value}
+                                                        type="button"
+                                                        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-[12px] transition-colors"
+                                                        style={{
+                                                            background: opt.value === currentValue ? `${accent}14` : 'transparent',
+                                                            color: opt.value === currentValue ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                                            borderLeft: opt.value === currentValue ? `2px solid ${accent}` : '2px solid transparent',
+                                                        }}
+                                                        title={opt.description || opt.label}
+                                                        onMouseEnter={e => { e.currentTarget.style.background = `${accent}10`; }}
+                                                        onMouseLeave={e => { e.currentTarget.style.background = opt.value === currentValue ? `${accent}14` : 'transparent'; }}
+                                                        onClick={() => void handleSelectValue(ctrl, opt.value)}
+                                                    >
+                                                        <span className="min-w-0 overflow-hidden text-ellipsis">{opt.label}</span>
+                                                        {opt.value === currentValue && (
+                                                            <span className="shrink-0 text-[11px] font-semibold" style={{ color: accent }}>✓</span>
+                                                        )}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            );
+
+                        case 'cycle':
+                            return (
+                                <button
+                                    key={ctrl.id}
+                                    type="button"
+                                    className={`${baseButtonClassName} hover:bg-[var(--surface-tertiary-hover)]`}
                                     style={{
-                                        borderColor: isOpen ? `${accent}55` : 'transparent',
-                                        border: '1px solid',
+                                        borderColor: 'var(--border-default)',
+                                        background: 'var(--surface-tertiary)',
                                         color: currentValue ? 'var(--text-primary)' : 'var(--text-muted)',
                                     }}
-                                    onClick={() => handleSelectToggle(ctrl)}
+                                    onClick={() => void handleCycleValue(ctrl)}
+                                    title={`Click to cycle: ${options.map(option => option.label).join(' → ')}`}
                                 >
-                                    {ctrl.icon && <span className="text-[9px] opacity-60">{ctrl.icon}</span>}
-                                    {isLoading ? '...' : currentLabel || ctrl.label}
-                                    <span className="text-[7px] opacity-50">▼</span>
+                                    {ctrl.icon && <span className="text-[11px] opacity-70">{ctrl.icon}</span>}
+                                    <span className="min-w-0 overflow-hidden text-ellipsis">{currentLabel || ctrl.label}</span>
+                                    <span className="text-[10px] opacity-55">⟳</span>
+                                </button>
+                            );
+
+                        case 'toggle':
+                            return (
+                                <button
+                                    key={ctrl.id}
+                                    type="button"
+                                    className={`${baseButtonClassName} hover:bg-[var(--surface-tertiary-hover)]`}
+                                    style={{
+                                        borderColor: currentValue ? `${accent}44` : 'var(--border-default)',
+                                        background: currentValue ? `${accent}14` : 'var(--surface-tertiary)',
+                                        color: currentValue ? accent : 'var(--text-muted)',
+                                    }}
+                                    onClick={() => void handleToggleValue(ctrl)}
+                                    aria-pressed={!!currentValue}
+                                >
+                                    {ctrl.icon && <span className="text-[11px] opacity-70">{ctrl.icon}</span>}
+                                    {ctrl.label}
+                                </button>
+                            );
+
+                        case 'action':
+                            return (
+                                <button
+                                    key={ctrl.id}
+                                    type="button"
+                                    className={`${baseButtonClassName} hover:bg-[var(--surface-tertiary-hover)]`}
+                                    style={{
+                                        borderColor: 'var(--border-default)',
+                                        background: 'var(--surface-tertiary)',
+                                        color: 'var(--text-primary)',
+                                    }}
+                                    onClick={() => void handleActionClick(ctrl)}
+                                >
+                                    {ctrl.icon && <span className="text-[11px] opacity-70">{ctrl.icon}</span>}
+                                    <span className="min-w-0 overflow-hidden text-ellipsis">
+                                        {ctrl.resultDisplay === 'inline' && currentValue
+                                            ? `${ctrl.label}: ${currentValue}`
+                                            : ctrl.label}
+                                    </span>
+                                </button>
+                            );
+
+                        case 'display':
+                            return (
+                                <span
+                                    key={ctrl.id}
+                                    className="inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium whitespace-nowrap"
+                                    style={{
+                                        borderColor: 'var(--border-default)',
+                                        background: 'var(--surface-tertiary)',
+                                        color: currentValue ? 'var(--text-primary)' : 'var(--text-muted)',
+                                    }}
+                                >
+                                    {ctrl.icon && <span className="text-[11px] opacity-70">{ctrl.icon}</span>}
+                                    <span className="min-w-0 overflow-hidden text-ellipsis">{currentValue ? `${ctrl.label}: ${currentValue}` : ctrl.label}</span>
                                 </span>
-                                {isOpen && options.length > 0 && (
-                                    <>
-                                        <div className="fixed inset-0 z-[59]" onClick={() => setOpenDropdown(null)} />
-                                        <div className="absolute bottom-full left-0 z-[60] bg-[var(--surface-primary)] border border-border-subtle rounded-lg mb-1 max-h-[220px] overflow-y-auto min-w-40 shadow-[0_-4px_16px_rgba(0,0,0,0.3)]">
-                                            <div className="px-3 py-1.5 text-[9px] font-bold text-text-muted tracking-wider border-b border-border-subtle">
-                                                {ctrl.label.toUpperCase()}
-                                            </div>
-                                            {options.map(opt => (
-                                                <div
-                                                    key={opt.value}
-                                                    className="px-3 py-[7px] text-[11px] cursor-pointer whitespace-nowrap overflow-hidden text-ellipsis"
-                                                    style={{
-                                                        background: opt.value === currentValue ? `${accent}18` : 'transparent',
-                                                        color: opt.value === currentValue ? accent : 'var(--text-secondary)',
-                                                        fontWeight: opt.value === currentValue ? 600 : 400,
-                                                        borderLeft: opt.value === currentValue ? `2px solid ${accent}` : '2px solid transparent',
-                                                    }}
-                                                    title={opt.description || opt.label}
-                                                    onMouseEnter={e => { e.currentTarget.style.background = `${accent}12`; }}
-                                                    onMouseLeave={e => { e.currentTarget.style.background = opt.value === currentValue ? `${accent}18` : 'transparent'; }}
-                                                    onClick={() => handleSelectValue(ctrl, opt.value)}
-                                                >{opt.label}</div>
-                                            ))}
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                        );
+                            );
 
-                    case 'cycle':
-                        return (
-                            <span
-                                key={ctrl.id}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-xl text-[10px] font-medium cursor-pointer transition-all bg-[var(--surface-tertiary)] whitespace-nowrap"
-                                style={{
-                                    border: '1px solid transparent',
-                                    color: currentValue ? 'var(--text-primary)' : 'var(--text-muted)',
-                                }}
-                                onClick={() => handleCycleValue(ctrl)}
-                                title={`Click to cycle: ${options.map(option => option.label).join(' → ')}`}
-                            >
-                                {ctrl.icon && <span className="text-[9px] opacity-60">{ctrl.icon}</span>}
-                                {currentLabel || ctrl.label}
-                                <span className="text-[7px] opacity-50">⟳</span>
-                            </span>
-                        );
-
-                    case 'toggle':
-                        return (
-                            <span
-                                key={ctrl.id}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-xl text-[10px] font-medium cursor-pointer transition-all whitespace-nowrap"
-                                style={{
-                                    border: '1px solid',
-                                    borderColor: currentValue ? `${accent}44` : 'transparent',
-                                    background: currentValue ? `${accent}14` : 'var(--surface-tertiary)',
-                                    color: currentValue ? accent : 'var(--text-muted)',
-                                }}
-                                onClick={() => handleToggleValue(ctrl)}
-                            >
-                                {ctrl.icon && <span className="text-[9px] opacity-60">{ctrl.icon}</span>}
-                                {ctrl.label}
-                            </span>
-                        );
-
-                    case 'action':
-                        return (
-                            <span
-                                key={ctrl.id}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-xl text-[10px] font-medium cursor-pointer transition-all hover:bg-[var(--surface-tertiary-hover)] whitespace-nowrap"
-                                style={{
-                                    border: '1px solid var(--border-default)',
-                                    background: 'var(--surface-tertiary)',
-                                    color: 'var(--text-primary)',
-                                }}
-                                onClick={() => handleActionClick(ctrl)}
-                            >
-                                {ctrl.icon && <span className="text-[9px] opacity-60">{ctrl.icon}</span>}
-                                {ctrl.resultDisplay === 'inline' && currentValue
-                                    ? `${ctrl.label}: ${currentValue}`
-                                    : ctrl.label}
-                            </span>
-                        );
-
-                    case 'display':
-                        return (
-                            <span
-                                key={ctrl.id}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-xl text-[10px] font-medium whitespace-nowrap"
-                                style={{
-                                    border: '1px solid var(--border-default)',
-                                    background: 'var(--surface-tertiary)',
-                                    color: currentValue ? 'var(--text-primary)' : 'var(--text-muted)',
-                                }}
-                            >
-                                {ctrl.icon && <span className="text-[9px] opacity-60">{ctrl.icon}</span>}
-                                {currentValue ? `${ctrl.label}: ${currentValue}` : ctrl.label}
-                            </span>
-                        );
-
-                    default:
-                        return null;
-                }
-            })}
+                        default:
+                            return null;
+                    }
+                })}
+            </div>
         </div>
     );
 }

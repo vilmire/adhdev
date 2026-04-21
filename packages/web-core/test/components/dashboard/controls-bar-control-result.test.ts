@@ -124,7 +124,7 @@ describe('ControlsBar typed controlResult consumption', () => {
     expect(html).toContain('High')
   })
 
-  it('hides the New action for Antigravity, Claude Code (VS Code), and Codex providers', () => {
+  it('hides low-value Claude CLI bar controls plus New for Antigravity, Claude Code (VS Code), and Codex providers', () => {
     const newControl = {
       id: 'new_session',
       type: 'action',
@@ -132,11 +132,20 @@ describe('ControlsBar typed controlResult consumption', () => {
       placement: 'bar',
       invokeScript: 'newSession',
     } satisfies ProviderControlSchema
+    const compactControl = {
+      id: 'compact',
+      type: 'toggle',
+      label: 'Compact',
+      placement: 'bar',
+      setScript: 'setCompact',
+    } satisfies ProviderControlSchema
 
     expect(shouldHideBarControl(undefined, 'antigravity', newControl)).toBe(true)
     expect(shouldHideBarControl(undefined, 'claude-code-vscode', newControl)).toBe(true)
     expect(shouldHideBarControl(undefined, 'codex', newControl)).toBe(true)
     expect(shouldHideBarControl(undefined, 'roo-code', newControl)).toBe(false)
+    expect(shouldHideBarControl(undefined, 'claude-cli', newControl)).toBe(true)
+    expect(shouldHideBarControl(undefined, 'claude-cli', compactControl)).toBe(true)
   })
 
   it('does not render the New action for Antigravity sessions', () => {

@@ -9,6 +9,21 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('sizingMode={sizingMode}')).toBe(true)
   })
 
+  it('reuses the shared ChatInputBar in CliTerminalPane so terminal/chat input height stays aligned', () => {
+    const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
+    expect(source.includes("import ChatInputBar from './ChatInputBar'" ) || source.includes("import ChatInputBar from \"./ChatInputBar\"" )).toBe(true)
+    expect(source.includes('<ChatInputBar')).toBe(true)
+    expect(source.includes('isActive={isInputActive && isVisible}')).toBe(true)
+  })
+
+  it('routes terminal-mode sends through the same handleSendChat path as chat mode', () => {
+    const terminalSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
+    const chatSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/ChatPane.tsx'), 'utf8')
+    expect(chatSource.includes('onSend={handleSendChat}')).toBe(true)
+    expect(terminalSource.includes('return handleSendChat(message);')).toBe(true)
+    expect(terminalSource.includes('if (!runtimeReady || sendBlockMessage) return false;')).toBe(true)
+  })
+
   it('avoids a second outer vertical scrollbar in CliTerminalPane', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
     expect(source.includes('overflow-auto rounded-lg')).toBe(false)

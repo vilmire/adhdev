@@ -85,6 +85,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
                             isSendingChat={isSendingChat}
                             sendFeedbackMessage={sendFeedbackMessage}
                             isVisible={isCliTerminal}
+                            isInputActive={isInputActive}
                         />
                     </div>
                     {!isCliTerminal && (
