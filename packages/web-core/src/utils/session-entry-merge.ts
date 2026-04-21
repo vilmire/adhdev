@@ -18,6 +18,8 @@ export type ExistingSessionLike = Partial<SessionEntryWithInboxMarkers> & {
   seenCompletionMarker?: string
 }
 
+type ActiveChatMessageList = NonNullable<NonNullable<SessionEntry['activeChat']>['messages']>
+
 function hasExplicitProviderName(value: string | null | undefined, providerType: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value !== providerType
 }
@@ -28,8 +30,8 @@ function getMessageTimestamp(message: { receivedAt?: number | string; timestamp?
 }
 
 function isTruncatedPrefixRegression(
-  incomingMessages: SessionEntry['activeChat']['messages'],
-  existingMessages: SessionEntry['activeChat']['messages'],
+  incomingMessages: ActiveChatMessageList | null | undefined,
+  existingMessages: ActiveChatMessageList | null | undefined,
 ): boolean {
   if (!Array.isArray(incomingMessages) || !Array.isArray(existingMessages)) return false
   if (incomingMessages.length === 0 || existingMessages.length === 0) return false
