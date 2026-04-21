@@ -148,6 +148,36 @@ describe('ControlsBar typed controlResult consumption', () => {
     expect(shouldHideBarControl(undefined, 'claude-cli', compactControl)).toBe(true)
   })
 
+  it('treats shouldHideBarControl as host-agnostic so provider rules apply regardless of hostIdeType', () => {
+    const newControl = {
+      id: 'new_session',
+      type: 'action',
+      label: 'New',
+      placement: 'bar',
+      invokeScript: 'newSession',
+    } satisfies ProviderControlSchema
+    const compactControl = {
+      id: 'compact',
+      type: 'toggle',
+      label: 'Compact',
+      placement: 'bar',
+      setScript: 'setCompact',
+    } satisfies ProviderControlSchema
+    const modelControl = {
+      id: 'model',
+      type: 'select',
+      label: 'Model',
+      placement: 'bar',
+    } satisfies ProviderControlSchema
+
+    for (const host of [undefined, 'antigravity', 'claude-code-vscode', 'cursor', 'vscode'] as const) {
+      expect(shouldHideBarControl(host, 'claude-cli', newControl)).toBe(true)
+      expect(shouldHideBarControl(host, 'claude-cli', compactControl)).toBe(true)
+      expect(shouldHideBarControl(host, 'claude-cli', modelControl)).toBe(false)
+      expect(shouldHideBarControl(host, 'roo-code', newControl)).toBe(false)
+    }
+  })
+
   it('does not render the New action for Antigravity sessions', () => {
     const html = renderToStaticMarkup(
       React.createElement(ControlsBar, {

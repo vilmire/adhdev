@@ -16,6 +16,14 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('isActive={isInputActive && isVisible}')).toBe(true)
   })
 
+  it('switches narrow mobile panes to fit sizing and centers measured scaling from the top', () => {
+    const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
+    expect(source.includes('shouldPreferFitCliTerminal')).toBe(true)
+    expect(source.includes("effectiveTerminalSizingMode === 'fit'" )).toBe(true)
+    expect(source.includes("transformOrigin: 'top left'" )).toBe(true)
+    expect(source.includes("flex justify-center" )).toBe(true)
+  })
+
   it('routes terminal-mode sends through the same handleSendChat path as chat mode', () => {
     const terminalSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
     const chatSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/ChatPane.tsx'), 'utf8')

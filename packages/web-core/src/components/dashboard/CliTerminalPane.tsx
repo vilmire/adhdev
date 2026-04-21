@@ -9,7 +9,12 @@ import { connectionManager } from '../../compat';
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import { getConversationSendBlockMessage } from '../../hooks/dashboardCommandUtils';
 import ChatInputBar from './ChatInputBar';
-import { getAutoCliTerminalScaleForWidth, DEFAULT_MAX_CLI_TERMINAL_SCALE, DEFAULT_MIN_CLI_TERMINAL_SCALE } from '../../utils/cli-terminal-scale';
+import {
+    getAutoCliTerminalScaleForViewport,
+    DEFAULT_MAX_CLI_TERMINAL_SCALE,
+    DEFAULT_MIN_CLI_TERMINAL_SCALE,
+    shouldPreferFitCliTerminal,
+} from '../../utils/cli-terminal-scale';
 import type { ActiveConversation } from './types';
 import { getConversationTitle } from './conversation-presenters';
 
@@ -37,6 +42,8 @@ export default function CliTerminalPane({
     const { sendData } = useTransport();
     const [runtimeReady, setRuntimeReady] = useState(false);
     const [terminalScale, setTerminalScale] = useState(1);
+    const [terminalViewport, setTerminalViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+    const terminalViewportRef = useRef<HTMLDivElement | null>(null);
     const terminalScaleTouchedRef = useRef(false);
     const seededSnapshotSeqRef = useRef(0);
     const liveOutputStartedRef = useRef(false);
@@ -56,9 +63,15 @@ export default function CliTerminalPane({
         : (sendFeedbackMessage || sendBlockMessage);
     const MIN_TERMINAL_SCALE = DEFAULT_MIN_CLI_TERMINAL_SCALE;
     const MAX_TERMINAL_SCALE = DEFAULT_MAX_CLI_TERMINAL_SCALE;
+    const effectiveTerminalSizingMode = terminalSizingMode === 'fit' || shouldPreferFitCliTerminal(terminalViewport.width, terminalViewport.height)
+        ? 'fit'
+        : 'measured';
     const getAutoTerminalScale = () => {
-        if (typeof window === 'undefined') return 1;
-        return getAutoCliTerminalScaleForWidth(window.innerWidth || 0, { minScale: MIN_TERMINAL_SCALE });
+        if (effectiveTerminalSizingMode === 'fit') return 1;
+        return getAutoCliTerminalScaleForViewport(terminalViewport.width, terminalViewport.height, {
+            minScale: MIN_TERMINAL_SCALE,
+            maxScale: MAX_TERMINAL_SCALE,
+        });
     };
     const resetRuntimeView = () => {
         seededSnapshotSeqRef.current = 0;
@@ -188,14 +201,32 @@ export default function CliTerminalPane({
     }, [clearToken, tabKey, terminalRef]);
 
     useEffect(() => {
+        const container = terminalViewportRef.current;
+        if (!container || typeof ResizeObserver === 'undefined') return;
+
+        const observer = new ResizeObserver((entries) => {
+            const entry = entries[0];
+            if (!entry) return;
+            const { width, height } = entry.contentRect;
+            setTerminalViewport((current) => {
+                const nextWidth = Math.round(width);
+                const nextHeight = Math.round(height);
+                if (current.width === nextWidth && current.height === nextHeight) return current;
+                return { width: nextWidth, height: nextHeight };
+            });
+        });
+
+        observer.observe(container);
+        return () => observer.disconnect();
+    }, []);
+
+    useEffect(() => {
         const applyAutoScale = () => {
             if (terminalScaleTouchedRef.current) return;
             setTerminalScale(getAutoTerminalScale());
         };
         applyAutoScale();
-        window.addEventListener('resize', applyAutoScale);
-        return () => window.removeEventListener('resize', applyAutoScale);
-    }, []);
+    }, [effectiveTerminalSizingMode, terminalViewport.height, terminalViewport.width]);
 
     useEffect(() => {
         if (!isVisible) {
@@ -247,44 +278,52 @@ export default function CliTerminalPane({
     return (
         <>
             {/* Terminal */}
-            <div className="flex-1 min-h-0 p-2 bg-[#0f1117] relative">
-                <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5">
-                    <button
-                        type="button"
-                        className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
-                        onClick={() => {
-                            terminalScaleTouchedRef.current = true;
-                            setTerminalScale(scale => Math.max(MIN_TERMINAL_SCALE, Number((scale - 0.1).toFixed(2))));
-                        }}
-                        title="Shrink terminal viewport"
-                    >
-                        -
-                    </button>
-                    <button
-                        type="button"
-                        className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
-                        onClick={() => {
-                            terminalScaleTouchedRef.current = true;
-                            setTerminalScale(scale => Math.min(MAX_TERMINAL_SCALE, Number((scale + 0.1).toFixed(2))));
-                        }}
-                        title="Increase terminal viewport"
-                    >
-                        +
-                    </button>
-                </div>
-                <div className="w-full h-full overflow-x-auto overflow-y-hidden rounded-lg overscroll-contain">
+            <div ref={terminalViewportRef} className="flex-1 min-h-0 p-2 bg-[#0f1117] relative">
+                {effectiveTerminalSizingMode === 'measured' && (
+                    <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5">
+                        <button
+                            type="button"
+                            className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
+                            onClick={() => {
+                                terminalScaleTouchedRef.current = true;
+                                setTerminalScale(scale => Math.max(MIN_TERMINAL_SCALE, Number((scale - 0.1).toFixed(2))));
+                            }}
+                            title="Shrink terminal viewport"
+                        >
+                            -
+                        </button>
+                        <button
+                            type="button"
+                            className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
+                            onClick={() => {
+                                terminalScaleTouchedRef.current = true;
+                                setTerminalScale(scale => Math.min(MAX_TERMINAL_SCALE, Number((scale + 0.1).toFixed(2))));
+                            }}
+                            title="Increase terminal viewport"
+                        >
+                            +
+                        </button>
+                    </div>
+                )}
+                <div
+                    className={effectiveTerminalSizingMode === 'fit'
+                        ? 'w-full h-full rounded-lg overflow-hidden'
+                        : 'w-full h-full overflow-x-auto overflow-y-hidden rounded-lg overscroll-contain flex justify-center'}
+                >
                     <div
-                        style={{
-                            width: `${100 / terminalScale}%`,
-                            height: `${100 / terminalScale}%`,
-                            transform: `scale(${terminalScale})`,
-                            transformOrigin: 'top left',
-                        }}
+                        style={effectiveTerminalSizingMode === 'fit'
+                            ? { width: '100%', height: '100%' }
+                            : {
+                                width: `${100 / terminalScale}%`,
+                                height: `${100 / terminalScale}%`,
+                                transform: `scale(${terminalScale})`,
+                                transformOrigin: 'top left',
+                            }}
                     >
                         <CliTerminal
                             ref={terminalRef}
                             readOnly={!runtimeReady || !isVisible}
-                            sizingMode={terminalSizingMode}
+                            sizingMode={effectiveTerminalSizingMode}
                             onInput={(data) => {
                                 if (!runtimeReady) return;
                                 sendData?.(daemonRouteId, { type: 'pty_input', sessionId, targetSessionId: sessionId, data })
