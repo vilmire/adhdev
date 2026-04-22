@@ -16,6 +16,18 @@ Runtime state such as recent activity and saved session metadata lives in:
 ~/.adhdev/state.json
 ```
 
+Standalone network/font preferences live in:
+
+```text
+~/.adhdev/standalone-network.json
+```
+
+Saved chat-history rollups used by the saved-history launcher live under:
+
+```text
+~/.adhdev/history/
+```
+
 Session-host runtime data is stored separately under:
 
 ```text
@@ -65,6 +77,15 @@ Relevant standalone-facing fields:
 | `providerDir` | Optional explicit override root. Set this if you want a local `adhdev-providers` checkout to shadow upstream providers. |
 | `terminalSizingMode` | `measured` by default, or `fit` for the legacy xterm fit path |
 
+Standalone-only preferences stored outside `config.json`:
+
+| File / field | Meaning |
+|-------------|---------|
+| `~/.adhdev/standalone-network.json` → `standaloneBindHost` | Saved default bind host for future standalone launches |
+| `~/.adhdev/standalone-network.json` → `standaloneFontPreferences.chat` | Standalone chat/prose font override |
+| `~/.adhdev/standalone-network.json` → `standaloneFontPreferences.code` | Standalone markdown/code/preformatted font override |
+| `~/.adhdev/standalone-network.json` → `standaloneFontPreferences.terminal` | Standalone terminal/tool-row font override |
+
 ## Practical Self-hosted Settings
 
 If you only care about the settings that most affect day-to-day standalone behavior, focus on these:
@@ -103,7 +124,7 @@ This distinction matters when you are debugging local state drift. Not every run
 
 ## Authentication For Standalone
 
-This page is the canonical reference for standalone auth and saved network defaults.
+This page is the canonical reference for standalone auth, saved network defaults, and standalone-only font preferences.
 
 Standalone now supports two self-hosted auth patterns:
 
@@ -136,6 +157,18 @@ You can also choose the default network bind mode from:
 
 - `Settings` → `Network Access`
 
+Standalone-only font customization lives here:
+
+- `Settings` → `Appearance` → `Fonts`
+
+That section lets you save separate font stacks for:
+
+- chat text
+- markdown code / preformatted output
+- terminal transcript cards and tool rows
+
+Those font overrides apply only to the standalone dashboard. They do not affect the cloud dashboard.
+
 That setting controls whether future standalone launches default to localhost-only or all-interfaces bind mode, without requiring `--host` every time.
 
 Practical meaning:
@@ -144,7 +177,7 @@ Practical meaning:
 - `0.0.0.0` / all interfaces = other devices on the same LAN can also open it
 - if you save `0.0.0.0` and do not configure token auth or a dashboard password, standalone warns because the dashboard is exposed to the LAN without protection
 
-The standalone password and network-default preference are stored only in local standalone state under `~/.adhdev/` and are not part of cloud auth.
+The standalone password, saved bind-host preference, and standalone font overrides are stored only in local standalone state under `~/.adhdev/` and are not part of cloud auth.
 
 When standalone is bound to `0.0.0.0` without either token auth or password auth, startup logs and the dashboard settings page show a warning because anyone on the same LAN can open the dashboard until auth is enabled.
 
@@ -179,6 +212,8 @@ They are also printed to stdout when the standalone server runs in the foregroun
 If you are operating self-hosted seriously, these other local state areas are worth knowing:
 
 - `~/.adhdev/session-host/adhdev-standalone/runtimes/` for hosted runtime snapshots
+- `~/.adhdev/history/` for saved chat-history rollups and the saved-history index
+- `~/.adhdev/standalone-network.json` for saved bind-host and standalone font preferences
 - `~/.adhdev/terminal-mux/workspaces/` for mux workspace layouts
 - `~/.adhdev/terminal-mux/state.json` for last-workspace client state
 

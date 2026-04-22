@@ -70,6 +70,16 @@ The standalone UI already includes both settings surfaces:
   - disable password
 - `Settings` → `Network Access`
   - save default localhost-only vs all-interfaces bind mode for future launches
+- `Settings` → `Appearance` → `Fonts`
+  - standalone-only overrides for chat text, markdown/code blocks, and terminal/tool rows
+  - saved alongside standalone network preferences under `~/.adhdev/standalone-network.json`
+
+Current standalone UX defaults:
+
+- ordinary CLI and ACP launches start fresh by default
+- use `Open saved history` when you want continuity in the same provider conversation
+- hosted runtime recovery is a separate interruption flow, not part of the ordinary new-session CTA
+- if the local dashboard drops its websocket connection, the banner now exposes `Reconnect now`
 
 Canonical self-hosted docs:
 
@@ -152,6 +162,7 @@ See:
 
 - [Self-hosted setup](docs/self-hosted/setup.md)
 - [Self-hosted local API](docs/self-hosted/local-api.md)
+- [Self-hosted session host](docs/self-hosted/session-host.md)
 - [Compatibility & caveats](https://docs.adhf.dev/guide/compatibility)
 
 ## Development

@@ -5,50 +5,54 @@ All notable changes to ADHDev will be documented in this file.
 ## [0.8.100] - 2026-04-22
 
 ### Added
-- 
+- **web-core**: Added a `Reconnect now` action to the disconnected/offline dashboard banner so local and shared dashboard surfaces can retry the server connection without a full page refresh.
 
 ### Fixed
-- 
+- **daemon-core**: Restored Hermes approval gating so waiting approvals stay actionable instead of slipping into an already-running state.
+- **terminal-render-web / web-core**: Reduced the default CLI terminal rows again and corrected measured zoom hit-testing so pointer interaction matches the scaled terminal viewport.
 
 ### Changed
-- 
+- README now leads with the concrete self-hosted product value: one local dashboard for IDE and CLI agents with no cloud dependency.
 ## [0.8.99] - 2026-04-22
 
 ### Added
-- 
+- **daemon-core / web-core**: Added native-backed saved-history indexing and a simpler launch flow so the dashboard can start fresh by default while still offering saved-history continuity when you explicitly choose it.
 
 ### Fixed
-- 
+- **web-core / terminal-render-web**: Scale measured terminal rendering from the actual viewport size so the browser terminal stays aligned after layout changes.
 
 ### Changed
-- 
+- The new-session flow now treats hosted-runtime recovery as a separate interruption path instead of mixing it into ordinary launch.
 ## [0.8.98] - 2026-04-22
 
 ### Added
-- 
+- **session-host**: Exposed a browser-safe defaults entry so web surfaces can consume the shared default sizing/runtime helpers without unsafe imports.
 
 ### Fixed
-- 
+- **terminal-render-web / web-core**: Raised the default CLI terminal height to 48 rows before the later measured-layout follow-up.
+- **web-core**: Unified the dashboard new-session CTA copy so the launch affordance is consistent across dashboard entry points.
 
 ### Changed
-- 
+- Continued tightening the shared launch/recovery surface around the dashboard new-session UX.
 ## [0.8.97] - 2026-04-22
 
 ### Added
 - 
 
 ### Fixed
-- 
+- **daemon-core**: Guarded CLI auto-approve re-entry so held keys and repeated events no longer spam duplicate approvals.
+- **daemon-core / web-core**: Render daemon-owned chat transcripts directly instead of rewriting them again on the frontend, preserving the canonical transcript shape.
 
 ### Changed
-- 
+- **web-core**: Removed now-unused frontend transcript merge helpers after the daemon-owned transcript path became canonical.
 ## [0.8.96] - 2026-04-22
 
 ### Added
 - 
 
 ### Fixed
-- 
+- **web-core**: Tightened active-chat merge typing so transcript hydration stays aligned with the daemon-owned session shape.
+- **daemon-core**: Restored the full canonical Hermes resume history instead of collapsing recovery into an incomplete conversation view.
 
 ### Changed
 - 
@@ -61,7 +65,7 @@ All notable changes to ADHDev will be documented in this file.
 - 
 
 ### Changed
-- 
+- Version bump only; no OSS runtime behavior changed beyond recording the prior release notes in the changelog.
 ## [0.8.94] - 2026-04-21
 
 ### Added

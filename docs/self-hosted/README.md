@@ -14,6 +14,7 @@ Use self-hosted when you want:
 - LAN-only browser access
 - local scripting against the standalone API
 - no cloud account dependency
+- fresh-by-default local launches with explicit saved-history resume when you want continuity
 
 Self-hosted does **not** include the hosted cloud features such as:
 
@@ -36,6 +37,14 @@ If you are running self-hosted as a serious local control plane, these are the t
 
 - [Session Host](session-host.md)
 - [Terminal Mux](terminal-mux.md)
+
+## Current Standalone UX Defaults
+
+- ordinary CLI/ACP launches start fresh by default
+- use `Open saved history` when you want to continue the same provider conversation
+- use hosted runtime recovery only after interruptions; it is no longer mixed into the normal new-session flow
+- the local dashboard settings now also include standalone-only font overrides under `Appearance` → `Fonts`
+- if the local websocket drops, the dashboard banner exposes `Reconnect now`
 
 ## Quick Comparison
 

@@ -120,6 +120,22 @@ Common end-user patterns:
 - want to open it from a laptop/tablet on the same Wi-Fi → use `--host`, then set a dashboard password from `Settings` → `Dashboard Security`
 - want scripts/curl to access it reliably → use `--token`
 
+## Dashboard Launch And Recovery Flow
+
+Current standalone launch behavior is intentionally split by job:
+
+- `Start fresh` is the default for ordinary CLI/ACP launches
+- `Open saved history` is the continuity path when you want to re-enter the same provider conversation
+- hosted runtime recovery is the interruption fallback when a long-lived runtime survived but needs explicit recovery
+
+Practical rule of thumb:
+
+- want a new conversation in the same workspace → start fresh
+- want the same provider-side conversation and transcript continuity → open saved history
+- want to repair an interrupted long-lived runtime → use the hosted runtime recovery surface from the machine detail/session-host flow
+
+If the standalone dashboard temporarily loses its local websocket connection, the top connection banner now offers `Reconnect now` so you can retry the server link without a full page refresh.
+
 ## Architecture
 
 ```

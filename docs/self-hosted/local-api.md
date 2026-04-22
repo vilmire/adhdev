@@ -136,6 +136,7 @@ POST /api/v1/standalone/preferences
 Reads or updates standalone-local preferences such as:
 
 - saved default bind host (`127.0.0.1` vs `0.0.0.0`)
+- standalone font preferences for chat/code/terminal surfaces
 - whether token auth is configured
 - whether dashboard password auth is configured
 - whether the saved/current host mode should surface a LAN/public warning
@@ -146,6 +147,11 @@ Example response:
 {
   "standaloneBindHost": "0.0.0.0",
   "currentBindHost": "127.0.0.1",
+  "standaloneFontPreferences": {
+    "chat": { "preset": "pretendard" },
+    "code": { "preset": "jetbrains-mono" },
+    "terminal": { "preset": "berkeley-mono" }
+  },
   "hasPasswordAuth": true,
   "hasTokenAuth": false,
   "publicHostWarning": false
@@ -159,9 +165,16 @@ POST /api/v1/standalone/preferences
 Content-Type: application/json
 
 {
-  "standaloneBindHost": "0.0.0.0"
+  "standaloneBindHost": "0.0.0.0",
+  "standaloneFontPreferences": {
+    "chat": { "preset": "system-ui" },
+    "code": { "preset": "fira-code" },
+    "terminal": { "preset": "custom", "customFamily": "\"Berkeley Mono\", \"SF Mono\", monospace" }
+  }
 }
 ```
+
+These preferences persist to the standalone-local preference file and are reflected by the `Settings` → `Network Access` and `Settings` → `Appearance` → `Fonts` sections in the standalone dashboard.
 
 ### Workspace Mux State
 
@@ -332,7 +345,7 @@ Practical examples:
 
 - use `/auth/session` to decide whether the local dashboard should show a password prompt
 - use `/auth/password` to set, rotate, or clear the local dashboard password
-- use `/api/v1/standalone/preferences` to read or change the saved default bind host
+- use `/api/v1/standalone/preferences` to read or change the saved default bind host and standalone font preferences
 
 ## Practical Rules
 
