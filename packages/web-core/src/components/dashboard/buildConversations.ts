@@ -50,25 +50,6 @@ function getConversationTabKey(sessionId: string | undefined, fallbackKey: strin
     return sessionId || fallbackKey;
 }
 
-function getLocalMessages(
-    localUserMessages: Record<string, LocalUserMessage[]>,
-    keys: Array<string | undefined>,
-) {
-    const seen = new Set<string>();
-    const merged: LocalUserMessage[] = [];
-
-    for (const key of keys) {
-        if (!key) continue;
-        for (const msg of localUserMessages[key] || []) {
-            const dedupKey = msg._localId || `${msg.role}:${msg.timestamp}:${msg.content}`;
-            if (seen.has(dedupKey)) continue;
-            seen.add(dedupKey);
-            merged.push(msg);
-        }
-    }
-
-    return merged.sort((a, b) => a.timestamp - b.timestamp);
-}
 
 export function buildMachineNameMap(allIdes: DaemonData[] = []): Record<string, string> {
     const machineNames: Record<string, string> = {};
@@ -95,19 +76,19 @@ export function getIdeConversationBuildContext(
 
 export function buildScopedIdeConversations(
     ide: DaemonData,
-    localUserMessages: Record<string, LocalUserMessage[]>,
+    _localUserMessages: Record<string, LocalUserMessage[]>,
     options: SharedConversationBuildContextOptions = {},
 ): ActiveConversation[] {
     return buildIdeConversations(
         ide,
-        localUserMessages,
+        _localUserMessages,
         getIdeConversationBuildContext(ide, options),
     );
 }
 
 export function buildIdeConversations(
     ide: DaemonData,
-    localUserMessages: Record<string, LocalUserMessage[]>,
+    _localUserMessages: Record<string, LocalUserMessage[]>,
     context: BuildConversationContext = {},
 ): ActiveConversation[] {
     const results: ActiveConversation[] = [];

@@ -17,8 +17,6 @@ export type ExistingSessionLike = Partial<SessionEntryWithInboxMarkers> & {
   seenCompletionMarker?: string
 }
 
-type ActiveChatMessageList = NonNullable<NonNullable<SessionEntry['activeChat']>['messages']>
-
 function hasExplicitProviderName(value: string | null | undefined, providerType: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value !== providerType
 }
