@@ -152,6 +152,8 @@ export class CliProviderInstance implements ProviderInstance {
     private generatingDebounceTimer: NodeJS.Timeout | null = null;
     private generatingDebouncePending: { chatTitle: string; timestamp: number } | null = null;
     private lastApprovalEventAt = 0;
+    private autoApproveBusy = false;
+    private autoApproveBusyTimer: NodeJS.Timeout | null = null;
     private controlValues: Record<string, string | number | boolean> = {};
     private summaryMetadata: unknown = undefined;
     private appliedEffectKeys = new Set<string>();
@@ -542,7 +544,17 @@ export class CliProviderInstance implements ProviderInstance {
         const parsedStatus = this.adapter.getScriptParsedStatus?.() || null;
         const rawStatus = adapterStatus.status;
         const autoApproveActive = rawStatus === 'waiting_approval' && this.shouldAutoApprove();
-        if (autoApproveActive) {
+        // Guard re-entry: onStatusChange can fire multiple times while the modal
+        // is still on screen (before the PTY absorbs the approval key). Without this
+        // flag, we'd write the approval key repeatedly — stray keys then leak into
+        // the text input once Claude Code dismisses the modal.
+        if (autoApproveActive && !this.autoApproveBusy) {
+            this.autoApproveBusy = true;
+            if (this.autoApproveBusyTimer) clearTimeout(this.autoApproveBusyTimer);
+            this.autoApproveBusyTimer = setTimeout(() => {
+                this.autoApproveBusy = false;
+                this.autoApproveBusyTimer = null;
+            }, 2000);
             const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(adapterStatus.activeModal?.buttons, this.provider);
             this.recordAutoApproval(adapterStatus.activeModal?.message, buttonLabel, now);
             setTimeout(() => {
