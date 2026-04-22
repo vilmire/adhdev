@@ -730,64 +730,33 @@ describe('expandCompactDaemons', () => {
     expect(ideEntry?.childSessions?.map((child) => child.id)).toEqual(['child-1'])
   })
 
-  it('allows authoritative updates to remove all IDE child sessions', () => {
+  it('preserves entry reference when only timestamps change on large chat payloads', () => {
     const previous = expandCompactDaemons([
       {
-        id: 'machine-10',
+        id: 'machine-11',
         type: 'adhdev-daemon',
-        timestamp: 910,
+        timestamp: 920,
         sessions: [
           {
-            id: 'ide-1',
+            id: 'cli-1',
             parentId: null,
-            providerType: 'cursor',
-            providerName: 'Cursor',
-            kind: 'workspace',
-            transport: 'cdp-page',
-            status: 'idle',
-            title: 'Workspace',
-            activeChat: {
-              id: 'native-chat',
-              title: 'Workspace',
-              status: 'idle',
-              messages: [],
-              activeModal: null,
-            },
-          },
-          {
-            id: 'child-1',
-            parentId: 'ide-1',
-            providerType: 'claude-code-vscode',
-            providerName: 'Claude Code',
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
             kind: 'agent',
-            transport: 'cdp-webview',
+            transport: 'pty',
             status: 'idle',
-            title: 'Claude Code',
-          },
-        ],
-      },
-    ] as CompactDaemonCompat[]).entries
-
-    const authoritative = expandCompactDaemons([
-      {
-        id: 'machine-10',
-        type: 'adhdev-daemon',
-        timestamp: 911,
-        sessions: [
-          {
-            id: 'ide-1',
-            parentId: null,
-            providerType: 'cursor',
-            providerName: 'Cursor',
-            kind: 'workspace',
-            transport: 'cdp-page',
-            status: 'idle',
-            title: 'Workspace',
+            title: 'Hermes Agent',
+            workspace: '/repo-a',
             activeChat: {
-              id: 'native-chat',
-              title: 'Workspace',
+              id: 'chat-1',
+              title: 'Hermes Agent',
               status: 'idle',
-              messages: [],
+              messages: Array.from({ length: 120 }, (_, index) => ({
+                id: `msg-${index}`,
+                role: index % 2 === 0 ? 'user' : 'assistant',
+                content: `long message ${index} ${'x'.repeat(200)}`,
+                timestamp: 1_000 + index,
+              })),
               activeModal: null,
             },
           },
@@ -795,9 +764,113 @@ describe('expandCompactDaemons', () => {
       },
     ] as CompactDaemonCompat[]).entries
 
-    const reconciled = reconcileIdes(authoritative, previous, { authoritativeDaemonIds: ['machine-10'] })
-    const ideEntry = reconciled.find((entry) => entry.id === 'machine-10:ide:ide-1')
+    const previousCliEntry = previous.find((entry) => entry.id === 'machine-11:cli:cli-1')
 
-    expect(ideEntry?.childSessions ?? []).toEqual([])
+    const next = expandCompactDaemons([
+      {
+        id: 'machine-11',
+        type: 'adhdev-daemon',
+        timestamp: 921,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Hermes Agent',
+            workspace: '/repo-a',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Hermes Agent',
+              status: 'idle',
+              messages: Array.from({ length: 120 }, (_, index) => ({
+                id: `msg-${index}`,
+                role: index % 2 === 0 ? 'user' : 'assistant',
+                content: `long message ${index} ${'x'.repeat(200)}`,
+                timestamp: 1_000 + index,
+              })),
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const reconciled = reconcileIdes(next, previous)
+    const reconciledCliEntry = reconciled.find((entry) => entry.id === 'machine-11:cli:cli-1')
+
+    expect(reconciledCliEntry).toBe(previousCliEntry)
+    expect(reconciledCliEntry?.timestamp).toBe(921)
+  })
+
+  it('replaces entry reference when chat message content changes', () => {
+    const previous = expandCompactDaemons([
+      {
+        id: 'machine-12',
+        type: 'adhdev-daemon',
+        timestamp: 930,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Hermes Agent',
+            workspace: '/repo-a',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Hermes Agent',
+              status: 'idle',
+              messages: [{ id: 'msg-1', role: 'assistant', content: 'before', timestamp: 10 }],
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const previousCliEntry = previous.find((entry) => entry.id === 'machine-12:cli:cli-1')
+
+    const next = expandCompactDaemons([
+      {
+        id: 'machine-12',
+        type: 'adhdev-daemon',
+        timestamp: 931,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Hermes Agent',
+            workspace: '/repo-a',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Hermes Agent',
+              status: 'idle',
+              messages: [{ id: 'msg-1', role: 'assistant', content: 'after', timestamp: 11 }],
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const reconciled = reconcileIdes(next, previous)
+    const reconciledCliEntry = reconciled.find((entry) => entry.id === 'machine-12:cli:cli-1')
+
+    expect(reconciledCliEntry).not.toBe(previousCliEntry)
+    expect(reconciledCliEntry?.activeChat?.messages).toEqual([
+      { id: 'msg-1', role: 'assistant', content: 'after', timestamp: 11 },
+    ])
   })
 })

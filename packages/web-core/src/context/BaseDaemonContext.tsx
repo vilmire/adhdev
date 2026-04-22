@@ -138,12 +138,80 @@ function mergeDaemonVersionFlags(existing: DaemonData, incoming: DaemonData, mer
     return next
 }
 
+function hashRenderText(value: string): string {
+    let hash = 0x811c9dc5
+    for (let i = 0; i < value.length; i += 1) {
+        hash ^= value.charCodeAt(i)
+        hash = Math.imul(hash, 0x01000193) >>> 0
+    }
+    return hash.toString(16).padStart(8, '0')
+}
+
+function summarizeRenderableMessage(message: unknown): string {
+    if (!message || typeof message !== 'object') return ''
+    const record = message as Record<string, unknown>
+    const contentHash = hashRenderText(normalizeTextContent(record.content).slice(0, 512))
+    return [
+        String(record.id || ''),
+        String(record._localId || ''),
+        String(record._turnKey || ''),
+        String(record.index ?? ''),
+        String(record.role || ''),
+        String(record.receivedAt ?? record.timestamp ?? ''),
+        contentHash,
+    ].join(':')
+}
+
+function summarizeMessageList(messages: unknown): unknown {
+    if (!Array.isArray(messages)) return messages
+    let aggregate = 0x811c9dc5
+    for (const message of messages) {
+        const summary = summarizeRenderableMessage(message)
+        for (let i = 0; i < summary.length; i += 1) {
+            aggregate ^= summary.charCodeAt(i)
+            aggregate = Math.imul(aggregate, 0x01000193) >>> 0
+        }
+    }
+    return {
+        count: messages.length,
+        hash: aggregate.toString(16).padStart(8, '0'),
+        first: summarizeRenderableMessage(messages[0]),
+        last: summarizeRenderableMessage(messages[messages.length - 1]),
+    }
+}
+
+function isActiveChatLike(value: unknown): value is Record<string, unknown> {
+    return !!value
+        && typeof value === 'object'
+        && ('messages' in (value as Record<string, unknown>))
+        && (
+            'activeModal' in (value as Record<string, unknown>)
+            || 'inputContent' in (value as Record<string, unknown>)
+            || 'status' in (value as Record<string, unknown>)
+        )
+}
+
 function stripVolatileEntryFields(value: unknown): unknown {
     if (Array.isArray(value)) {
         return value.map(stripVolatileEntryFields)
     }
     if (!value || typeof value !== 'object') {
         return value
+    }
+
+    if (isActiveChatLike(value)) {
+        const record = value as Record<string, unknown>
+        return Object.fromEntries(
+            Object.entries(record)
+                .filter(([key]) => key !== 'timestamp' && key !== '_lastUpdate')
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([key, nested]) => [
+                    key,
+                    key === 'messages'
+                        ? summarizeMessageList(nested)
+                        : stripVolatileEntryFields(nested),
+                ]),
+        )
     }
 
     return Object.fromEntries(
