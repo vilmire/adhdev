@@ -106,6 +106,48 @@ describe('waitForCliAdapterReady', () => {
 })
 
 describe('CliProviderInstance provider session recovery', () => {
+  it('uses provider autoApprove defaults when runtime settings omit the field', () => {
+    const disabledByDefault = new CliProviderInstance({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      spawn: { command: 'hermes', args: [] },
+      settings: {
+        autoApprove: {
+          type: 'boolean',
+          default: false,
+          public: true,
+          label: 'Auto Approve',
+        },
+      },
+    } as any, '/tmp/project') as any
+    disabledByDefault.settings = {}
+
+    const enabledByDefault = new CliProviderInstance({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      spawn: { command: 'test', args: [] },
+      settings: {
+        autoApprove: {
+          type: 'boolean',
+          default: true,
+          public: true,
+          label: 'Auto Approve',
+        },
+      },
+    } as any, '/tmp/project') as any
+    enabledByDefault.settings = {}
+
+    expect(disabledByDefault.shouldAutoApprove()).toBe(false)
+    expect(enabledByDefault.shouldAutoApprove()).toBe(true)
+
+    disabledByDefault.settings = { autoApprove: true }
+    enabledByDefault.settings = { autoApprove: false }
+    expect(disabledByDefault.shouldAutoApprove()).toBe(true)
+    expect(enabledByDefault.shouldAutoApprove()).toBe(false)
+  })
+
   it('does not adopt a probed hermes saved-history session id during a fresh launch', async () => {
     const instance = new CliProviderInstance({
       type: 'hermes-cli',

@@ -807,7 +807,14 @@ export class CliProviderInstance implements ProviderInstance {
     get cliName(): string { return this.provider.name; }
 
     private shouldAutoApprove(): boolean {
-        return this.settings.autoApprove !== false;
+        if (typeof this.settings.autoApprove === 'boolean') {
+            return this.settings.autoApprove;
+        }
+        const providerDefault = this.provider.settings?.autoApprove?.default;
+        if (typeof providerDefault === 'boolean') {
+            return providerDefault;
+        }
+        return false;
     }
 
     private recordAutoApproval(modalMessage?: string, buttonLabel?: string, now = Date.now()): void {

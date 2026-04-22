@@ -137,4 +137,32 @@ describe('chat subscription update helpers', () => {
     expect(duplicate.update).toBeNull()
     expect(duplicate.lastDeliveredSignature).toBe(first.lastDeliveredSignature)
   })
+
+  it('normalizes modal updates to waiting_approval when actionable buttons exist', () => {
+    const prepared = prepareSessionModalUpdate({
+      key: 'modal-approval',
+      sessionId: 'session-approval',
+      seq: 0,
+      timestamp: 333,
+      lastDeliveredSignature: '',
+      status: 'generating',
+      title: 'Repo Thread',
+      activeModal: {
+        message: 'Approve dangerous command?',
+        buttons: ['Allow once', 'Deny'],
+      },
+    })
+
+    expect(prepared.update).toMatchObject({
+      topic: 'session.modal',
+      key: 'modal-approval',
+      sessionId: 'session-approval',
+      status: 'waiting_approval',
+      title: 'Repo Thread',
+      modalMessage: 'Approve dangerous command?',
+      modalButtons: ['Allow once', 'Deny'],
+      seq: 1,
+      timestamp: 333,
+    })
+  })
 })

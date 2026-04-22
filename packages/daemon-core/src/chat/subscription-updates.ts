@@ -9,6 +9,7 @@ import {
   buildChatTailDeliverySignature,
   buildSessionModalDeliverySignature,
 } from './chat-signatures.js'
+import { normalizeManagedStatus } from '../status/normalize.js'
 
 export interface ChatTailSubscriptionCursor {
   knownMessageCount: number
@@ -186,9 +187,12 @@ export function prepareSessionModalUpdate(
   input: PrepareSessionModalUpdateInput,
 ): PreparedSessionModalUpdate {
   const { modalMessage, modalButtons } = normalizeSessionModalFields(input.activeModal)
+  const status = normalizeManagedStatus(input.status, {
+    activeModal: modalButtons.length > 0 ? { buttons: modalButtons } : null,
+  })
   const deliverySignature = buildSessionModalDeliverySignature({
     sessionId: input.sessionId,
-    status: input.status,
+    status,
     ...(input.title ? { title: input.title } : {}),
     ...(modalMessage ? { modalMessage } : {}),
     ...(modalButtons.length > 0 ? { modalButtons } : {}),
@@ -210,7 +214,7 @@ export function prepareSessionModalUpdate(
       topic: 'session.modal',
       key: input.key,
       sessionId: input.sessionId,
-      status: input.status,
+      status,
       ...(input.title ? { title: input.title } : {}),
       ...(modalMessage ? { modalMessage } : {}),
       ...(modalButtons.length > 0 ? { modalButtons } : {}),
