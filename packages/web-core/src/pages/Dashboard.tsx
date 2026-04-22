@@ -907,7 +907,11 @@ export default function Dashboard() {
     return (
         <div className="page-dashboard flex-1 min-h-0 bg-bg-primary text-text-primary flex flex-col overflow-hidden">
 
-            <ConnectionBanner wsStatus={wsStatus} showReconnected={showReconnected} />
+            <ConnectionBanner
+                wsStatus={wsStatus}
+                showReconnected={showReconnected}
+                onReconnect={daemonCtx.retryServerConnection}
+            />
             <TerminalBackendBanner
                 terminalBackend={terminalBackend}
                 isStandalone={isStandalone}

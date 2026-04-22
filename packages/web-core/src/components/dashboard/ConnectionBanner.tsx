@@ -7,9 +7,10 @@ export interface ConnectionBannerProps {
     showReconnected: boolean;
     /** Login page URL — only shown when provided (cloud-only) */
     loginUrl?: string;
+    onReconnect?: () => void;
 }
 
-export default function ConnectionBanner({ wsStatus, showReconnected, loginUrl }: ConnectionBannerProps) {
+export default function ConnectionBanner({ wsStatus, showReconnected, loginUrl, onReconnect }: ConnectionBannerProps) {
     const showDisconnected = wsStatus === 'disconnected' || wsStatus === 'reconnecting' || wsStatus === 'offline' || wsStatus === 'auth_failed';
 
     const bannerColor = wsStatus === 'auth_failed' ? 'red' : wsStatus === 'offline' ? 'orange' : 'accent';
@@ -59,6 +60,16 @@ export default function ConnectionBanner({ wsStatus, showReconnected, loginUrl }
                                 <a href={loginUrl} className="text-inherit underline">Log in again</a>
                             </>
                         ) : 'Connection failed — please restart the server.'
+                    )}
+                    {onReconnect && wsStatus !== 'auth_failed' && (
+                        <button
+                            type="button"
+                            className="ml-3 px-2.5 py-1 rounded-md border border-current/30 text-[12px] font-semibold hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
+                            onClick={onReconnect}
+                            disabled={wsStatus === 'offline'}
+                        >
+                            Reconnect now
+                        </button>
                     )}
                 </div>
             )}

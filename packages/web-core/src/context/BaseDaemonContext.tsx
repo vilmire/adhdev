@@ -40,6 +40,7 @@ export interface BaseDaemonContextValue {
     connectionTransports: Record<string, string> // machineId → 'relay' | 'direct' | ...
     showReconnected: boolean
     retryConnection?: (machineId: string) => void
+    retryServerConnection?: () => void
     /** User display name for chat messages */
     userName?: string
     setUserName?: (name: string) => void
@@ -622,6 +623,7 @@ export interface ConnectionOverrides {
     connectionTransports?: Record<string, string>
     showReconnected?: boolean
     retryConnection?: (machineId: string) => void
+    retryServerConnection?: () => void
     isP2PActive?: boolean
     p2pStates?: Record<string, string>
     userRole?: string
@@ -691,6 +693,7 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
         connectionTransports: co?.connectionTransports ?? {},
         showReconnected: co?.showReconnected ?? false,
         retryConnection: co?.retryConnection,
+        retryServerConnection: co?.retryServerConnection,
         // Cloud-specific
         isP2PActive: co?.isP2PActive ?? false,
         p2pStates: co?.p2pStates ?? {},
@@ -708,6 +711,7 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
         co?.connectionTransports,
         co?.showReconnected,
         co?.retryConnection,
+        co?.retryServerConnection,
         co?.isP2PActive,
         co?.p2pStates,
         co?.userRole,
