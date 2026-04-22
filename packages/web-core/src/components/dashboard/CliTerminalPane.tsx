@@ -311,7 +311,7 @@ export default function CliTerminalPane({
                             onClick={() => {
                                 terminalScaleTouchedRef.current = true;
                                 setTerminalScale(scale => {
-                                    const nextScale = Math.max(MIN_TERMINAL_SCALE, Number((scale - 0.1).toFixed(2)));
+                                    const nextScale = Math.max(fittedTerminalScale, Number((scale - 0.1).toFixed(2)));
                                     if (nextScale > fittedTerminalScale) anchorZoomViewportBottomLeft();
                                     return nextScale;
                                 });

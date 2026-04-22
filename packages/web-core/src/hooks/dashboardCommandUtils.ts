@@ -47,13 +47,7 @@ export function getConversationSendBlockMessage(
         return 'Resolve the pending approval prompt before sending another message.'
     }
 
-    switch (conv.status) {
-        case 'waiting_approval':
-        case 'waiting_for_user_input':
-            return 'Resolve the pending approval prompt before sending another message.'
-        default:
-            return null
-    }
+    return null
 }
 
 export function getInlineSendFailureMessage(error: unknown): string {

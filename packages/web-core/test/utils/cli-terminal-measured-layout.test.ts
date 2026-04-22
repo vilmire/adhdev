@@ -42,7 +42,7 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(terminalSource.includes('if (!runtimeReady || sendBlockMessage) return false;')).toBe(true)
   })
 
-  it('uses measured renderer viewport overflow only when manually zoomed in and sizes the pan surface from scaled intrinsic dimensions', () => {
+  it('uses measured renderer viewport overflow only when manually zoomed in, sizes the pan surface from scaled intrinsic dimensions, and never shrinks below the fitted scale', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
     expect(source.includes('const fittedTerminalScale = getAutoTerminalScale();')).toBe(true)
     expect(source.includes('const isManualZoomedIn = terminalScaleTouchedRef.current && terminalScale > fittedTerminalScale;')).toBe(true)
@@ -50,6 +50,8 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('const scaledTerminalWidth = Number.isFinite(terminalIntrinsicViewport.width) && terminalIntrinsicViewport.width > 0')).toBe(true)
     expect(source.includes('const scaledTerminalHeight = Number.isFinite(terminalIntrinsicViewport.height) && terminalIntrinsicViewport.height > 0')).toBe(true)
     expect(source.includes('scrollTop = scroller.scrollHeight - scroller.clientHeight')).toBe(true)
+    expect(source.includes('const nextScale = Math.max(fittedTerminalScale, Number((scale - 0.1).toFixed(2)));')).toBe(true)
+    expect(source.includes('const nextScale = Math.max(MIN_TERMINAL_SCALE, Number((scale - 0.1).toFixed(2)));')).toBe(false)
   })
 
   it('updates xterm font size in place so zoom changes do not rebuild the live terminal surface', () => {

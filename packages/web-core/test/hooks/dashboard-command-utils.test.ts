@@ -10,9 +10,19 @@ describe('dashboard command utils send-state helpers', () => {
       .toBeNull()
   })
 
-  it('maps pending approval to a non-transcript input warning', () => {
+  it('maps pending approval to a non-transcript input warning when actionable modal buttons are present', () => {
     expect(getConversationSendBlockMessage({ status: 'idle', modalButtons: ['Approve'] } as any))
       .toBe('Resolve the pending approval prompt before sending another message.')
+  })
+
+  it('does not pre-block sends from status alone when waiting approval state has no actionable modal buttons', () => {
+    expect(getConversationSendBlockMessage({ status: 'waiting_approval', modalButtons: undefined } as any))
+      .toBeNull()
+  })
+
+  it('does not mislabel waiting_for_user_input as a pending approval block', () => {
+    expect(getConversationSendBlockMessage({ status: 'waiting_for_user_input', modalButtons: undefined } as any))
+      .toBeNull()
   })
 
   it('normalizes PTY busy errors into friendly inline copy', () => {
