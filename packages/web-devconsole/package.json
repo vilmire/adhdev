@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/web-devconsole",
-  "version": "0.8.100",
+  "version": "0.8.101",
   "private": true,
   "type": "module",
   "scripts": {
