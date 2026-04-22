@@ -949,7 +949,7 @@ export class CliProviderInstance implements ProviderInstance {
             const rebuilt = rebuildHermesSavedHistoryFromCanonicalSession(this.providerSessionId);
             if (!rebuilt) return false;
             this.lastCanonicalHermesSyncMtimeMs = stat.mtimeMs;
-            const restoredHistory = readChatHistory(this.type, 0, 200, this.providerSessionId);
+            const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId);
             this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
                 role: message.role,
                 content: message.content,
@@ -967,7 +967,7 @@ export class CliProviderInstance implements ProviderInstance {
         if (!this.providerSessionId) return;
         this.syncCanonicalHermesSavedHistoryIfNeeded();
         this.historyWriter.compactHistorySession(this.type, this.providerSessionId);
-        const restoredHistory = readChatHistory(this.type, 0, 200, this.providerSessionId);
+        const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId);
         this.historyWriter.seedSessionHistory(
             this.type,
             restoredHistory.messages,

@@ -98,4 +98,56 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       { role: 'assistant', kind: 'tool', content: 'canonical tool output' },
     ])
   })
+
+  it('seeds the full canonical Hermes transcript instead of truncating resume history to 200 messages', async () => {
+    const historySessionId = '20260422_002711_293d9a'
+    const canonicalMessages = Array.from({ length: 333 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `canonical message ${index + 1}`,
+    }))
+    writeCanonicalHermesSession(historySessionId, canonicalMessages)
+
+    const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
+    const instance = new CliProviderInstance({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      spawn: { command: 'hermes', args: [] },
+    } as any, '/workspaces/adhdev', [], 'runtime-1', undefined, {
+      providerSessionId: historySessionId,
+      launchMode: 'resume',
+    }) as any
+
+    instance.historyWriter = {
+      appendNewMessages: vi.fn(),
+      compactHistorySession: vi.fn(),
+      seedSessionHistory: vi.fn(),
+      appendSystemMarker: vi.fn(),
+      promoteHistorySession: vi.fn(),
+      writeSessionStart: vi.fn(),
+    }
+    instance.adapter = {
+      getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        title: 'Hermes Agent',
+        messages: [],
+      }),
+      getRuntimeMetadata: () => null,
+      seedCommittedMessages: vi.fn(),
+    }
+
+    instance.restorePersistedHistoryFromCurrentSession()
+
+    const seededHistory = vi.mocked(instance.historyWriter.seedSessionHistory).mock.calls[0]?.[1]
+    expect(Array.isArray(seededHistory)).toBe(true)
+    expect(seededHistory).toHaveLength(333)
+    expect(String(seededHistory?.[0]?.content || '')).toBe('canonical message 1')
+    expect(String(seededHistory?.[332]?.content || '')).toBe('canonical message 333')
+
+    const seededCommitted = vi.mocked(instance.adapter.seedCommittedMessages).mock.calls[0]?.[0]
+    expect(Array.isArray(seededCommitted)).toBe(true)
+    expect(seededCommitted).toHaveLength(333)
+    expect(String(seededCommitted?.[332]?.content || '')).toBe('canonical message 333')
+  })
 })
