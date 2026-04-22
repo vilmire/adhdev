@@ -6,7 +6,6 @@ import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
 import { getConversationHistorySessionId } from './conversation-identity'
 import { getConversationDaemonRouteId } from './conversation-selectors'
-import { dedupeOptimisticMessages } from './message-utils'
 
 export interface SessionChatTailSnapshot {
   liveMessages: DashboardMessage[]
@@ -107,25 +106,16 @@ export function applyReadChatSync(
     case 'noop':
       return previousMessages
     case 'append':
-      return dedupeOptimisticMessages([...previousMessages, ...incomingMessages])
+      return [...previousMessages, ...incomingMessages]
     case 'replace_tail': {
       const replaceFrom = Math.max(0, Math.min(Number(result.replaceFrom ?? previousMessages.length), previousMessages.length))
-      return dedupeOptimisticMessages([
+      return [
         ...previousMessages.slice(0, replaceFrom),
         ...incomingMessages,
-      ])
+      ]
     }
-    case 'full': {
-      const totalMessages = Math.max(Number(result.totalMessages || 0), incomingMessages.length)
-      if (totalMessages > incomingMessages.length && previousMessages.length > incomingMessages.length) {
-        const preserveCount = Math.max(0, totalMessages - incomingMessages.length)
-        return dedupeOptimisticMessages([
-          ...previousMessages.slice(0, preserveCount),
-          ...incomingMessages,
-        ])
-      }
+    case 'full':
       return incomingMessages
-    }
     default:
       return incomingMessages
   }
@@ -187,8 +177,7 @@ export class SessionChatTailController {
   hydrateLiveMessages(messages: DashboardMessage[]): void {
     const incoming = Array.isArray(messages) ? messages : []
     if (incoming.length === 0) return
-    const nextMessages = dedupeOptimisticMessages([...incoming, ...this.snapshot.liveMessages])
-    if (nextMessages.length < incoming.length) return
+    const nextMessages = incoming
     const nextCursor = buildReadChatCursor(nextMessages, this.snapshot.cursor.tailLimit)
     const unchanged = buildChatSnapshotSignature(this.snapshot.liveMessages)
       === buildChatSnapshotSignature(nextMessages)

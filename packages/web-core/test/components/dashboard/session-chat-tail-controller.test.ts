@@ -384,7 +384,7 @@ describe('SessionChatTailController registry', () => {
     )
   })
 
-  it('preserves earlier seeded transcript messages when a full tail refresh only returns the recent slice', () => {
+  it('replaces the live transcript with the daemon-provided full tail refresh as-is', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
     const controller = getOrCreateSessionChatTailController({
@@ -416,8 +416,6 @@ describe('SessionChatTailController registry', () => {
     }))
 
     expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
-      'old-1',
-      'old-2',
       'new-1',
       'new-2',
       'new-3',

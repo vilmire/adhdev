@@ -106,7 +106,7 @@ describe('session entry merge helpers', () => {
     })
   })
 
-  it('keeps the fuller existing transcript when an incoming update regresses only the last message to a truncated prefix', () => {
+  it('uses the incoming transcript as-is when an incoming update regresses only the last message to a truncated prefix', () => {
     const fullTail = `Intro\n${'x'.repeat(5200)}\nTAIL_MARKER_VISIBLE`
     const truncatedTail = `Intro\n${'x'.repeat(5000)}`
 
@@ -133,7 +133,7 @@ describe('session entry merge helpers', () => {
       } as any,
     )
 
-    expect(String(merged?.messages?.[1]?.content || '')).toContain('TAIL_MARKER_VISIBLE')
+    expect(String(merged?.messages?.[1]?.content || '')).toBe(truncatedTail)
   })
 
   it('merges child session arrays through the same sparse-preserving contract', () => {

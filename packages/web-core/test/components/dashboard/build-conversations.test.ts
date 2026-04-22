@@ -203,10 +203,10 @@ describe('build conversations shared context', () => {
         })
     })
 
-    it('keeps optimistic local user messages visible for native CLI conversations until the runtime transcript confirms them', () => {
+    it('renders only daemon-provided native CLI transcript messages without frontend local message overlays', () => {
         const cli = createIdeEntry({
-            id: 'machine-1:cli:cli-2',
-            sessionId: 'cli-2',
+            id: 'cli-2',
+            daemonId: 'machine-1',
             type: 'hermes-cli',
             transport: 'pty',
             cliName: 'Hermes Agent',
@@ -235,7 +235,7 @@ describe('build conversations shared context', () => {
         expect(conversations).toHaveLength(1)
         expect(conversations[0]?.messages).toEqual([
             { role: 'assistant', content: 'Existing reply', receivedAt: 1000 },
-            { role: 'user', content: 'Follow-up prompt', timestamp: 2000, _localId: 'local-cli-1' },
         ])
     })
 })
+

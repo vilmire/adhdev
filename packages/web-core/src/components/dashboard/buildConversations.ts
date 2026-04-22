@@ -10,7 +10,7 @@ import { deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, get
 import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation, DashboardMessage } from './types';
-import { filterUnconfirmedLocalMessages, type LocalUserMessage } from './message-utils';
+import type { LocalUserMessage } from './message-utils';
 export type { LocalUserMessage } from './message-utils';
 
 interface BuildConversationContext {
@@ -188,8 +188,6 @@ export function buildIdeConversations(
             ? ''
             : title;
         const nativeServerMsgs = chat.messages || [];
-        const nativeLocalMsgs = getLocalMessages(localUserMessages, [ide.id, nativeSessionId]);
-        const nativePendingLocal = filterUnconfirmedLocalMessages(nativeServerMsgs, nativeLocalMsgs);
         results.push({
             routeId: ide.id,
             sessionId: nativeSessionId,
@@ -203,7 +201,7 @@ export function buildIdeConversations(
             agentType: nativeProviderType,
             status: agentStatus,
             title: effectiveNativeTitle,
-            messages: [...nativeServerMsgs, ...nativePendingLocal],
+            messages: nativeServerMsgs,
             resume: ide.resume,
             hostIdeType: !isCliConv(ide) && !isAcpConv(ide) ? ide.type : undefined,
             workspaceName,
@@ -240,14 +238,11 @@ export function buildIdeConversations(
         const streamTitle = (stream.title && String(stream.title).trim()) || '';
         const effectiveStreamTitle = isGenericAgentTitle(streamTitle, stream.agentName, stream.agentType) ? '' : streamTitle;
         const serverMsgs = stream.messages || [];
-        const localMsgs = getLocalMessages(localUserMessages, [streamTabKey, stream.sessionId, stream.instanceId]);
-        const pendingLocal = filterUnconfirmedLocalMessages(serverMsgs, localMsgs);
         const hasMeaningfulStream =
             stream.transport === 'cdp-webview'
             || !!stream.sessionId
             || !!stream.providerSessionId
             || serverMsgs.length > 0
-            || pendingLocal.length > 0
             || hasModal
             || !!effectiveStreamTitle
             || !['idle', 'panel_hidden', 'disconnected', 'not_monitored'].includes(streamStatus);
@@ -265,7 +260,7 @@ export function buildIdeConversations(
             agentType: stream.agentType,
             status: streamStatus,
             title: effectiveStreamTitle,
-            messages: [...serverMsgs, ...pendingLocal],
+            messages: serverMsgs,
             hostIdeType: ide.type,
             workspaceName,
             displayPrimary: effectiveStreamTitle || workspaceName || stream.agentName || ideLabel,

@@ -220,6 +220,34 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
     expect(result.messages[1].content).toBe('done later')
   })
 
+  it('adopts a richer parsed idle Hermes transcript when message count is unchanged but the final assistant turn is fuller', () => {
+    const adapter = buildAdapter('hermes-cli')
+    adapter.committedMessages = [
+      { role: 'user', content: 'hello', timestamp: 1 },
+      { role: 'assistant', content: 'partial answer', timestamp: 2 },
+    ]
+    adapter.syncMessageViews()
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.currentTurnScope = null
+    adapter.activeModal = null
+    adapter.parseCurrentTranscript = () => ({
+      status: 'idle',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'partial answer with the full tail visible now' },
+      ],
+    })
+
+    const result = adapter.getScriptParsedStatus()
+
+    expect(adapter.committedMessages).toHaveLength(2)
+    expect(adapter.committedMessages[1].content).toBe('partial answer with the full tail visible now')
+    expect(result.status).toBe('idle')
+    expect(result.messages).toHaveLength(2)
+    expect(result.messages[1].content).toBe('partial answer with the full tail visible now')
+  })
+
   it('adopts a richer parsed idle Hermes transcript when the turn scope is already cleared but stale generating state is still hanging around', () => {
     const adapter = buildAdapter('hermes-cli')
     adapter.committedMessages = [{ role: 'user', content: 'hello', timestamp: 1 }]

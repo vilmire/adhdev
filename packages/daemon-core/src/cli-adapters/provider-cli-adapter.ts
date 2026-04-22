@@ -94,6 +94,38 @@ interface IdleFinishCandidate {
     assistantLength: number;
 }
 
+function normalizeComparableTranscriptText(value: unknown): string {
+    return sanitizeTerminalText(String(value || ''))
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function parsedTranscriptIsRicherThanCommitted(
+    parsedMessages: Array<{ role?: string; content?: unknown; id?: string; index?: number }> | null | undefined,
+    committedMessages: Array<{ role?: string; content?: unknown; id?: string; index?: number }> | null | undefined,
+): boolean {
+    if (!Array.isArray(parsedMessages) || !Array.isArray(committedMessages)) return false;
+    if (parsedMessages.length > committedMessages.length) return true;
+    if (parsedMessages.length !== committedMessages.length) return false;
+
+    for (let index = 0; index < parsedMessages.length; index += 1) {
+        const parsed = parsedMessages[index];
+        const committed = committedMessages[index];
+        if (!parsed || !committed) return false;
+        if ((parsed.role || '') !== (committed.role || '')) return false;
+        if (parsed.id && committed.id && String(parsed.id) !== String(committed.id)) return false;
+        if (typeof parsed.index === 'number' && typeof committed.index === 'number' && parsed.index !== committed.index) return false;
+
+        const parsedText = normalizeComparableTranscriptText(parsed.content);
+        const committedText = normalizeComparableTranscriptText(committed.content);
+        if (!parsedText || !committedText || parsedText === committedText) continue;
+        if (parsedText.length > committedText.length && parsedText.startsWith(committedText)) return true;
+        return false;
+    }
+
+    return false;
+}
+
 // ─── Adapter ────────────────────────────────────────
 
 export class ProviderCliAdapter implements CliAdapter {
@@ -1621,7 +1653,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 !this.currentTurnScope
                 && !this.activeModal
                 && !!parsedLastAssistant
-                && parsedHydratedMessages.length > committedHydratedMessages.length
+                && parsedTranscriptIsRicherThanCommitted(parsedHydratedMessages, committedHydratedMessages)
                 && (
                     this.currentStatus === 'idle'
                     || (

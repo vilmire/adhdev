@@ -15,11 +15,7 @@ import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader';
 import { useDevRenderTrace } from '../../hooks/useDevRenderTrace';
 import { IconPlug, IconEye, IconFolder } from '../Icons';
 import {
-    dedupeOptimisticMessages,
-    excludeMessagesPresentInLiveFeed,
     getMessageTimestamp,
-    mergeLiveChatMessages,
-    sortMessagesChronologically,
 } from './message-utils';
 import {
     getConversationControlsContext,
@@ -98,7 +94,10 @@ export default function ChatPane({
     const historyMessages = chatTailState.historyMessages;
     const hasMoreHistory = chatTailState.hasMoreHistory;
     const loadError = chatTailState.historyError;
-    const liveMessages = mergeLiveChatMessages(chatTailState.liveMessages, activeConv.messages);
+    const liveMessages = chatTailState.liveMessages.length > 0
+        ? chatTailState.liveMessages
+        : activeConv.messages;
+
     useEffect(() => {
         setVisibleLiveCount(defaultVisibleLiveMessages);
     }, [defaultVisibleLiveMessages, tabKey]);
@@ -150,28 +149,11 @@ export default function ChatPane({
         const visibleLiveMessages = hiddenLiveCount > 0
             ? liveMessages.slice(-visibleLiveCount)
             : liveMessages;
-        if (historyMessages.length === 0) {
-            const dedupedLiveMessages = sortMessagesChronologically(dedupeOptimisticMessages(visibleLiveMessages));
-            const liveReceivedAtMap: Record<string, number> = {};
-            dedupedLiveMessages.forEach((message, index: number) => {
-                const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;
-                let receivedAt = getMessageTimestamp(message) || receivedAtCache.current.get(messageKey) || 0;
-                if (!receivedAt) {
-                    receivedAt = Date.now();
-                    receivedAtCache.current.set(messageKey, receivedAt);
-                }
-                liveReceivedAtMap[getChatMessageStableKey(message, index)] = receivedAt;
-            });
-            return { allMessages: dedupedLiveMessages, receivedAtMap: liveReceivedAtMap };
-        }
-
-        // Dedup: exclude history messages already visible in live feed
-        const uniqueHistory = excludeMessagesPresentInLiveFeed(historyMessages, visibleLiveMessages);
-        const mergedMessages = sortMessagesChronologically(
-            dedupeOptimisticMessages([...uniqueHistory, ...visibleLiveMessages]),
-        );
+        const allMessages = historyMessages.length === 0
+            ? visibleLiveMessages
+            : [...historyMessages, ...visibleLiveMessages];
         const nextReceivedAtMap: Record<string, number> = {};
-        mergedMessages.forEach((message, index: number) => {
+        allMessages.forEach((message, index: number) => {
             const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;
             let receivedAt = getMessageTimestamp(message) || receivedAtCache.current.get(messageKey) || 0;
             if (!receivedAt) {
@@ -180,7 +162,7 @@ export default function ChatPane({
             }
             nextReceivedAtMap[getChatMessageStableKey(message, index)] = receivedAt;
         });
-        return { allMessages: mergedMessages, receivedAtMap: nextReceivedAtMap };
+        return { allMessages, receivedAtMap: nextReceivedAtMap };
     }, [activeConv.tabKey, hiddenLiveCount, historyMessages, liveMessages, visibleLiveCount]);
     const visibleActionLogs = useMemo(
         () => actionLogs
