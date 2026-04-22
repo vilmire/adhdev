@@ -1,4 +1,4 @@
-export const DEFAULT_MIN_CLI_TERMINAL_SCALE = 0.6
+export const DEFAULT_MIN_CLI_TERMINAL_SCALE = 0.5
 export const DEFAULT_MAX_CLI_TERMINAL_SCALE = 1.15
 
 function clamp(value: number, min: number, max: number): number {

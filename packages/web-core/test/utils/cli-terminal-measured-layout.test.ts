@@ -80,4 +80,20 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('rows: DEFAULT_SESSION_HOST_ROWS')).toBe(true)
     expect(source.includes('cols: DEFAULT_SESSION_HOST_COLS')).toBe(true)
   })
+
+  it('reports measured xterm viewport dimensions back to the dashboard so autoscale can fit the real terminal surface', () => {
+    const terminalSource = fs.readFileSync(path.join(import.meta.dirname, '../../../terminal-render-web/src/index.tsx'), 'utf8')
+    const paneSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
+
+    expect(terminalSource.includes('onViewportMetrics?: (metrics: { width: number; height: number }) => void')).toBe(true)
+    expect(terminalSource.includes("containerRef.current?.querySelector('.xterm-viewport')")).toBe(true)
+    expect(terminalSource.includes('onViewportMetricsRef.current?.({ width, height })')).toBe(true)
+
+    expect(paneSource.includes('const [terminalIntrinsicViewport, setTerminalIntrinsicViewport]')).toBe(true)
+    expect(paneSource.includes('const intrinsicWidth = terminalIntrinsicViewport.width')).toBe(true)
+    expect(paneSource.includes('const intrinsicHeight = terminalIntrinsicViewport.height')).toBe(true)
+    expect(paneSource.includes('const widthRatio = terminalViewport.width / intrinsicWidth')).toBe(true)
+    expect(paneSource.includes('const heightRatio = terminalViewport.height / intrinsicHeight')).toBe(true)
+    expect(paneSource.includes('onViewportMetrics={setTerminalIntrinsicViewport}')).toBe(true)
+  })
 })

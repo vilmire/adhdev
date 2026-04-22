@@ -23,6 +23,7 @@ export interface TerminalRendererHandle {
 export interface GhosttyTerminalViewProps {
   onInput: (data: string) => void;
   onResize?: (cols: number, rows: number) => void;
+  onViewportMetrics?: (metrics: { width: number; height: number }) => void;
   fontSize?: number;
   readOnly?: boolean;
   /**
@@ -91,7 +92,7 @@ const TERMINAL_CHROME_CSS = `
 let rendererRuntimeLogged = false;
 
 export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTerminalViewProps>(
-  ({ onInput, onResize, fontSize = 13, readOnly = false, sizingMode = 'measured', className, style }, ref) => {
+  ({ onInput, onResize, onViewportMetrics, fontSize = 13, readOnly = false, sizingMode = 'measured', className, style }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
@@ -99,6 +100,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
     const pendingWritesRef = useRef<string[]>([]);
     const onInputRef = useRef(onInput);
     const onResizeRef = useRef(onResize);
+    const onViewportMetricsRef = useRef(onViewportMetrics);
     const readOnlyRef = useRef(readOnly);
     const lastReportedSizeRef = useRef<{ cols: number; rows: number } | null>(null);
     const [ready, setReady] = useState(false);
@@ -121,6 +123,16 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
 
     useEffect(() => { onInputRef.current = onInput; }, [onInput]);
     useEffect(() => { onResizeRef.current = onResize; }, [onResize]);
+    useEffect(() => { onViewportMetricsRef.current = onViewportMetrics; }, [onViewportMetrics]);
+
+    const reportViewportMetrics = () => {
+      const viewport = containerRef.current?.querySelector('.xterm-viewport') as HTMLElement | null;
+      if (!viewport) return;
+      const width = Math.round(viewport.clientWidth || viewport.scrollWidth || 0);
+      const height = Math.round(viewport.clientHeight || viewport.scrollHeight || 0);
+      if (width <= 0 || height <= 0) return;
+      onViewportMetricsRef.current?.({ width, height });
+    };
 
     useEffect(() => {
       readOnlyRef.current = readOnly;
@@ -151,6 +163,9 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         if (terminalRef.current) {
           terminalRef.current.resize(cols, rows);
           lastReportedSizeRef.current = { cols, rows };
+          requestAnimationFrame(() => {
+            reportViewportMetrics();
+          });
         }
       },
       fit: () => applyFitIfEnabled(true),
@@ -225,6 +240,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         requestAnimationFrame(() => {
           try {
             applyFitIfEnabled(true);
+            reportViewportMetrics();
             setReady(true);
             if (!readOnlyRef.current) term.focus();
             for (const chunk of pendingWritesRef.current) term.write(chunk);

@@ -7,10 +7,10 @@ import {
 
 describe('cli terminal scale helpers', () => {
   it('starts mobile terminal view at the minimum zoom for phone-sized widths', () => {
-    expect(getAutoCliTerminalScaleForWidth(360)).toBe(0.6)
-    expect(getAutoCliTerminalScaleForWidth(390)).toBe(0.6)
-    expect(getAutoCliTerminalScaleForWidth(430)).toBe(0.6)
-    expect(getAutoCliTerminalScaleForWidth(480)).toBe(0.6)
+    expect(getAutoCliTerminalScaleForWidth(360)).toBe(0.5)
+    expect(getAutoCliTerminalScaleForWidth(390)).toBe(0.5)
+    expect(getAutoCliTerminalScaleForWidth(430)).toBe(0.5)
+    expect(getAutoCliTerminalScaleForWidth(480)).toBe(0.5)
   })
 
   it('keeps desktop-sized widths at the normal scale', () => {

@@ -10,7 +10,6 @@ import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import { getConversationSendBlockMessage } from '../../hooks/dashboardCommandUtils';
 import ChatInputBar from './ChatInputBar';
 import {
-    getAutoCliTerminalScaleForViewport,
     DEFAULT_MAX_CLI_TERMINAL_SCALE,
     DEFAULT_MIN_CLI_TERMINAL_SCALE,
 } from '../../utils/cli-terminal-scale';
@@ -42,6 +41,7 @@ export default function CliTerminalPane({
     const [runtimeReady, setRuntimeReady] = useState(false);
     const [terminalScale, setTerminalScale] = useState(1);
     const [terminalViewport, setTerminalViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+    const [terminalIntrinsicViewport, setTerminalIntrinsicViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const terminalViewportRef = useRef<HTMLDivElement | null>(null);
     const terminalScaleTouchedRef = useRef(false);
     const seededSnapshotSeqRef = useRef(0);
@@ -61,10 +61,15 @@ export default function CliTerminalPane({
     const MIN_TERMINAL_SCALE = DEFAULT_MIN_CLI_TERMINAL_SCALE;
     const MAX_TERMINAL_SCALE = DEFAULT_MAX_CLI_TERMINAL_SCALE;
     const getAutoTerminalScale = () => {
-        return getAutoCliTerminalScaleForViewport(terminalViewport.width, terminalViewport.height, {
-            minScale: MIN_TERMINAL_SCALE,
-            maxScale: MAX_TERMINAL_SCALE,
-        });
+        const intrinsicWidth = terminalIntrinsicViewport.width;
+        const intrinsicHeight = terminalIntrinsicViewport.height;
+        if (!Number.isFinite(terminalViewport.width) || terminalViewport.width <= 0) return 1;
+        if (!Number.isFinite(terminalViewport.height) || terminalViewport.height <= 0) return 1;
+        if (!Number.isFinite(intrinsicWidth) || intrinsicWidth <= 0) return 1;
+        if (!Number.isFinite(intrinsicHeight) || intrinsicHeight <= 0) return 1;
+        const widthRatio = terminalViewport.width / intrinsicWidth;
+        const heightRatio = terminalViewport.height / intrinsicHeight;
+        return Number(Math.min(MAX_TERMINAL_SCALE, Math.max(MIN_TERMINAL_SCALE, Math.min(widthRatio, heightRatio))).toFixed(2));
     };
     const resetRuntimeView = () => {
         seededSnapshotSeqRef.current = 0;
@@ -219,7 +224,7 @@ export default function CliTerminalPane({
             setTerminalScale(getAutoTerminalScale());
         };
         applyAutoScale();
-    }, [terminalViewport.height, terminalViewport.width]);
+    }, [terminalIntrinsicViewport.height, terminalIntrinsicViewport.width, terminalViewport.height, terminalViewport.width]);
 
     useEffect(() => {
         if (!isVisible) {
@@ -313,6 +318,7 @@ export default function CliTerminalPane({
                             ref={terminalRef}
                             readOnly={!runtimeReady || !isVisible}
                             sizingMode="measured"
+                            onViewportMetrics={setTerminalIntrinsicViewport}
                             onInput={(data) => {
                                 if (!runtimeReady) return;
                                 sendData?.(daemonRouteId, { type: 'pty_input', sessionId, targetSessionId: sessionId, data })
