@@ -10,6 +10,12 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./defaults": {
+      "types": "./dist/defaults.d.ts",
+      "import": "./dist/defaults.mjs",
+      "require": "./dist/defaults.js",
+      "default": "./dist/defaults.js"
     }
   },
   "scripts": {
