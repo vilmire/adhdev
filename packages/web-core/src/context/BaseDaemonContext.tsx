@@ -14,6 +14,7 @@ import type { DaemonData, SessionEntry, WebVersionUpdateReason } from '../types'
 import { webDebugStore } from '../debug/webDebugStore'
 import { summarizeDaemonEntriesForDebug } from '../debug/entryDebugSummary'
 import { mergeActiveChatData, mergeSessionEntryChildren } from '../utils/session-entry-merge'
+import { normalizeTextContent } from '../utils/text'
 
 // ─── Types ────────────────────────────────────────────
 
@@ -208,6 +209,8 @@ export function reconcileIdes(
 
         const incomingRichness = payloadRichness(ide);
         const existingRichness = payloadRichness(existing);
+        const entryDaemonId = ide.daemonId || ide.id?.split(':')[0] || ide.id
+        const preserveMissingChildSessions = !authoritativeDaemonIds.has(entryDaemonId)
 
         // RULE 1: Rich payload always wins over weak payload (regardless of timestamp)
         // This is the core fix: WS compact data (richness=0) can never overwrite
@@ -215,7 +218,9 @@ export function reconcileIdes(
         if (incomingRichness > existingRichness) {
             // Incoming is richer → always overwrite, preserve chats if incoming lacks them
             const chats = (ide.chats?.length) ? ide.chats : existing.chats;
-            const childSessions = mergeSessionEntryChildren(existing.childSessions, ide.childSessions)
+            const childSessions = mergeSessionEntryChildren(existing.childSessions, ide.childSessions, {
+                preserveMissing: preserveMissingChildSessions,
+            })
             const activeChat = mergeActiveChatData(ide.activeChat, existing.activeChat)
             const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, childSessions, activeChat, _lastUpdate: now })
             resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now));
@@ -225,6 +230,11 @@ export function reconcileIdes(
             const safeUpdate: Partial<DaemonData> = {};
             if (ide.status && ide.status !== existing.status) safeUpdate.status = ide.status;
             if (ide.cdpConnected !== undefined) safeUpdate.cdpConnected = ide.cdpConnected;
+            if (ide.childSessions !== undefined) {
+                safeUpdate.childSessions = mergeSessionEntryChildren(existing.childSessions, ide.childSessions, {
+                    preserveMissing: preserveMissingChildSessions,
+                })
+            }
             if (ide.chats?.length && !existing.chats?.length) safeUpdate.chats = ide.chats;
             if (ide.title !== undefined) safeUpdate.title = ide.title;
             if (ide.workspace !== undefined) safeUpdate.workspace = ide.workspace;
@@ -274,7 +284,9 @@ export function reconcileIdes(
             const existingTs = existing._lastUpdate || existing.timestamp || 0;
             if (incomingTs >= existingTs) {
                 const chats = (ide.chats?.length) ? ide.chats : existing.chats;
-                const childSessions = mergeSessionEntryChildren(existing.childSessions, ide.childSessions)
+                const childSessions = mergeSessionEntryChildren(existing.childSessions, ide.childSessions, {
+                    preserveMissing: preserveMissingChildSessions,
+                })
                 const activeChat = mergeActiveChatData(ide.activeChat, existing.activeChat)
                 const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, childSessions, activeChat, _lastUpdate: now })
                 resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now));
@@ -309,11 +321,11 @@ export function reconcileIdes(
 
         const age = now - (ide._lastUpdate || ide.timestamp || 0)
 
-        if (ide.transport === 'pty' && daemonIdsWithSessionEntries.has(entryDaemonId) && !incomingIds.has(key) && age > 10_000) {
+        if (ide.transport === 'pty' && authoritativeDaemonIds.has(entryDaemonId) && daemonIdsWithSessionEntries.has(entryDaemonId) && !incomingIds.has(key) && age > 10_000) {
             resultMap.delete(key)
-        } else if (ide.transport === 'acp' && daemonIdsWithSessionEntries.has(entryDaemonId) && !incomingIds.has(key) && age > 10_000) {
+        } else if (ide.transport === 'acp' && authoritativeDaemonIds.has(entryDaemonId) && daemonIdsWithSessionEntries.has(entryDaemonId) && !incomingIds.has(key) && age > 10_000) {
             resultMap.delete(key)
-        } else if (ide.transport === 'cdp-page' && daemonIdsWithSessionEntries.has(entryDaemonId) && !incomingIds.has(key) && age > 30_000) {
+        } else if (ide.transport === 'cdp-page' && authoritativeDaemonIds.has(entryDaemonId) && daemonIdsWithSessionEntries.has(entryDaemonId) && !incomingIds.has(key) && age > 30_000) {
             resultMap.delete(key)
         }
     }

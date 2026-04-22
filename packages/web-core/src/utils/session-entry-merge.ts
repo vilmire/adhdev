@@ -100,14 +100,30 @@ export function mergeSessionEntrySummary(
 export function mergeSessionEntryChildren(
   existingChildren: SessionEntryWithInboxMarkers[] | undefined,
   incomingChildren: SessionEntryWithInboxMarkers[] | undefined,
+  options?: { preserveMissing?: boolean },
 ): SessionEntryWithInboxMarkers[] | undefined {
-  if (!incomingChildren?.length) return existingChildren
+  if (!incomingChildren?.length) {
+    if (options?.preserveMissing === false && Array.isArray(incomingChildren)) {
+      return incomingChildren
+    }
+    return existingChildren
+  }
   if (!existingChildren?.length) return incomingChildren
 
-  const existingById = new Map(existingChildren.map((child) => [child.id, child]))
-  return incomingChildren.map((child) => {
-    const existing = existingById.get(child.id)
+  const mergedChildren = incomingChildren.map((child) => {
+    const existing = existingChildren.find((entry) => entry.id === child.id)
     if (!existing) return child
     return mergeSessionEntrySummary(child, existing)
   })
+
+  if (options?.preserveMissing !== false) {
+    const incomingIds = new Set(incomingChildren.map((child) => child.id))
+    for (const existing of existingChildren) {
+      if (!incomingIds.has(existing.id)) {
+        mergedChildren.push(existing)
+      }
+    }
+  }
+
+  return mergedChildren
 }

@@ -426,4 +426,378 @@ describe('expandCompactDaemons', () => {
       { role: 'assistant', content: 'world' },
     ])
   })
+
+  it('does not prune a missing sibling session from a non-authoritative partial update', () => {
+    const previous = expandCompactDaemons([
+      {
+        id: 'machine-7',
+        type: 'adhdev-daemon',
+        timestamp: 700,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Hermes Agent',
+            workspace: '/repo-a',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Hermes Agent',
+              status: 'idle',
+              messages: [{ role: 'assistant', content: 'kept-a' }],
+              activeModal: null,
+            },
+          },
+          {
+            id: 'cli-2',
+            parentId: null,
+            providerType: 'codex-cli',
+            providerName: 'Codex CLI',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Codex CLI',
+            workspace: '/repo-b',
+            activeChat: {
+              id: 'chat-2',
+              title: 'Codex CLI',
+              status: 'idle',
+              messages: [{ role: 'assistant', content: 'kept-b' }],
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries.map((entry) => (
+      entry.type === 'adhdev-daemon'
+        ? { ...entry, _lastUpdate: Date.now() - 5_000 }
+        : { ...entry, _lastUpdate: Date.now() - 1_000 }
+    ))
+
+    const partial = expandCompactDaemons([
+      {
+        id: 'machine-7',
+        type: 'adhdev-daemon',
+        timestamp: Date.now(),
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Hermes Agent',
+            workspace: '/repo-a',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Hermes Agent',
+              status: 'idle',
+              messages: [{ role: 'assistant', content: 'fresh-a' }],
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const reconciled = reconcileIdes(partial, previous)
+
+    expect(reconciled.find((entry) => entry.id === 'machine-7:cli:cli-1')?.activeChat?.messages).toEqual([
+      { role: 'assistant', content: 'fresh-a' },
+    ])
+    expect(reconciled.find((entry) => entry.id === 'machine-7:cli:cli-2')).toBeTruthy()
+    expect(reconciled.find((entry) => entry.id === 'machine-7:cli:cli-2')?.activeChat?.messages).toEqual([
+      { role: 'assistant', content: 'kept-b' },
+    ])
+  })
+
+  it('preserves existing IDE child sessions when an incoming update only includes a subset', () => {
+    const previous = expandCompactDaemons([
+      {
+        id: 'machine-8',
+        type: 'adhdev-daemon',
+        timestamp: 800,
+        sessions: [
+          {
+            id: 'ide-1',
+            parentId: null,
+            providerType: 'cursor',
+            providerName: 'Cursor',
+            kind: 'workspace',
+            transport: 'cdp-page',
+            status: 'idle',
+            title: 'Workspace',
+            activeChat: {
+              id: 'native-chat',
+              title: 'Workspace',
+              status: 'idle',
+              messages: [],
+              activeModal: null,
+            },
+          },
+          {
+            id: 'child-1',
+            parentId: 'ide-1',
+            providerType: 'claude-code-vscode',
+            providerName: 'Claude Code',
+            kind: 'agent',
+            transport: 'cdp-webview',
+            status: 'running',
+            title: 'Claude Code',
+            activeChat: {
+              id: 'child-chat-1',
+              title: 'Claude Code',
+              status: 'running',
+              messages: [{ role: 'assistant', content: 'child-one' }],
+              activeModal: null,
+            },
+          },
+          {
+            id: 'child-2',
+            parentId: 'ide-1',
+            providerType: 'roo-code',
+            providerName: 'Roo Code',
+            kind: 'agent',
+            transport: 'cdp-webview',
+            status: 'idle',
+            title: 'Roo Code',
+            activeChat: {
+              id: 'child-chat-2',
+              title: 'Roo Code',
+              status: 'idle',
+              messages: [{ role: 'assistant', content: 'child-two' }],
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const partial = expandCompactDaemons([
+      {
+        id: 'machine-8',
+        type: 'adhdev-daemon',
+        timestamp: 801,
+        sessions: [
+          {
+            id: 'ide-1',
+            parentId: null,
+            providerType: 'cursor',
+            providerName: 'Cursor',
+            kind: 'workspace',
+            transport: 'cdp-page',
+            status: 'idle',
+            title: 'Workspace',
+            activeChat: {
+              id: 'native-chat',
+              title: 'Workspace',
+              status: 'idle',
+              messages: [],
+              activeModal: null,
+            },
+          },
+          {
+            id: 'child-1',
+            parentId: 'ide-1',
+            providerType: 'claude-code-vscode',
+            providerName: 'Claude Code',
+            kind: 'agent',
+            transport: 'cdp-webview',
+            status: 'idle',
+            title: 'Claude Code',
+            activeChat: {
+              id: 'child-chat-1',
+              title: 'Claude Code',
+              status: 'idle',
+              messages: [{ role: 'assistant', content: 'child-one-fresh' }],
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const reconciled = reconcileIdes(partial, previous)
+    const ideEntry = reconciled.find((entry) => entry.id === 'machine-8:ide:ide-1')
+
+    expect(ideEntry?.childSessions?.map((child) => child.id)).toEqual(['child-1', 'child-2'])
+    expect(ideEntry?.childSessions?.find((child) => child.id === 'child-1')).toMatchObject({
+      id: 'child-1',
+      providerName: 'Claude Code',
+      status: 'idle',
+    })
+    expect(ideEntry?.childSessions?.find((child) => child.id === 'child-2')).toMatchObject({
+      id: 'child-2',
+      providerName: 'Roo Code',
+      status: 'idle',
+    })
+  })
+
+  it('allows authoritative updates to remove missing IDE child sessions', () => {
+    const previous = expandCompactDaemons([
+      {
+        id: 'machine-9',
+        type: 'adhdev-daemon',
+        timestamp: 900,
+        sessions: [
+          {
+            id: 'ide-1',
+            parentId: null,
+            providerType: 'cursor',
+            providerName: 'Cursor',
+            kind: 'workspace',
+            transport: 'cdp-page',
+            status: 'idle',
+            title: 'Workspace',
+            activeChat: {
+              id: 'native-chat',
+              title: 'Workspace',
+              status: 'idle',
+              messages: [],
+              activeModal: null,
+            },
+          },
+          {
+            id: 'child-1',
+            parentId: 'ide-1',
+            providerType: 'claude-code-vscode',
+            providerName: 'Claude Code',
+            kind: 'agent',
+            transport: 'cdp-webview',
+            status: 'idle',
+            title: 'Claude Code',
+          },
+          {
+            id: 'child-2',
+            parentId: 'ide-1',
+            providerType: 'roo-code',
+            providerName: 'Roo Code',
+            kind: 'agent',
+            transport: 'cdp-webview',
+            status: 'idle',
+            title: 'Roo Code',
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const authoritative = expandCompactDaemons([
+      {
+        id: 'machine-9',
+        type: 'adhdev-daemon',
+        timestamp: 901,
+        sessions: [
+          {
+            id: 'ide-1',
+            parentId: null,
+            providerType: 'cursor',
+            providerName: 'Cursor',
+            kind: 'workspace',
+            transport: 'cdp-page',
+            status: 'idle',
+            title: 'Workspace',
+            activeChat: {
+              id: 'native-chat',
+              title: 'Workspace',
+              status: 'idle',
+              messages: [],
+              activeModal: null,
+            },
+          },
+          {
+            id: 'child-1',
+            parentId: 'ide-1',
+            providerType: 'claude-code-vscode',
+            providerName: 'Claude Code',
+            kind: 'agent',
+            transport: 'cdp-webview',
+            status: 'idle',
+            title: 'Claude Code',
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const reconciled = reconcileIdes(authoritative, previous, { authoritativeDaemonIds: ['machine-9'] })
+    const ideEntry = reconciled.find((entry) => entry.id === 'machine-9:ide:ide-1')
+
+    expect(ideEntry?.childSessions?.map((child) => child.id)).toEqual(['child-1'])
+  })
+
+  it('allows authoritative updates to remove all IDE child sessions', () => {
+    const previous = expandCompactDaemons([
+      {
+        id: 'machine-10',
+        type: 'adhdev-daemon',
+        timestamp: 910,
+        sessions: [
+          {
+            id: 'ide-1',
+            parentId: null,
+            providerType: 'cursor',
+            providerName: 'Cursor',
+            kind: 'workspace',
+            transport: 'cdp-page',
+            status: 'idle',
+            title: 'Workspace',
+            activeChat: {
+              id: 'native-chat',
+              title: 'Workspace',
+              status: 'idle',
+              messages: [],
+              activeModal: null,
+            },
+          },
+          {
+            id: 'child-1',
+            parentId: 'ide-1',
+            providerType: 'claude-code-vscode',
+            providerName: 'Claude Code',
+            kind: 'agent',
+            transport: 'cdp-webview',
+            status: 'idle',
+            title: 'Claude Code',
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const authoritative = expandCompactDaemons([
+      {
+        id: 'machine-10',
+        type: 'adhdev-daemon',
+        timestamp: 911,
+        sessions: [
+          {
+            id: 'ide-1',
+            parentId: null,
+            providerType: 'cursor',
+            providerName: 'Cursor',
+            kind: 'workspace',
+            transport: 'cdp-page',
+            status: 'idle',
+            title: 'Workspace',
+            activeChat: {
+              id: 'native-chat',
+              title: 'Workspace',
+              status: 'idle',
+              messages: [],
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const reconciled = reconcileIdes(authoritative, previous, { authoritativeDaemonIds: ['machine-10'] })
+    const ideEntry = reconciled.find((entry) => entry.id === 'machine-10:ide:ide-1')
+
+    expect(ideEntry?.childSessions ?? []).toEqual([])
+  })
 })
