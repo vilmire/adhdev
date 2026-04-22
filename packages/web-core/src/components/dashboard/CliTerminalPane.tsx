@@ -61,24 +61,32 @@ export default function CliTerminalPane({
         : (sendFeedbackMessage || sendBlockMessage);
     const MIN_TERMINAL_SCALE = DEFAULT_MIN_CLI_TERMINAL_SCALE;
     const MAX_TERMINAL_SCALE = DEFAULT_MAX_CLI_TERMINAL_SCALE;
+    const safeTerminalScale = Number.isFinite(terminalScale) && terminalScale > 0 ? terminalScale : 1;
     const getAutoTerminalScale = () => {
-        const intrinsicWidth = terminalIntrinsicViewport.width;
-        const intrinsicHeight = terminalIntrinsicViewport.height;
+        const renderedWidth = terminalIntrinsicViewport.width;
+        const renderedHeight = terminalIntrinsicViewport.height;
         if (!Number.isFinite(terminalViewport.width) || terminalViewport.width <= 0) return 1;
         if (!Number.isFinite(terminalViewport.height) || terminalViewport.height <= 0) return 1;
-        if (!Number.isFinite(intrinsicWidth) || intrinsicWidth <= 0) return 1;
-        if (!Number.isFinite(intrinsicHeight) || intrinsicHeight <= 0) return 1;
-        const widthRatio = terminalViewport.width / intrinsicWidth;
-        const heightRatio = terminalViewport.height / intrinsicHeight;
+        if (!Number.isFinite(renderedWidth) || renderedWidth <= 0) return 1;
+        if (!Number.isFinite(renderedHeight) || renderedHeight <= 0) return 1;
+        const unscaledWidth = renderedWidth / safeTerminalScale;
+        const unscaledHeight = renderedHeight / safeTerminalScale;
+        if (!Number.isFinite(unscaledWidth) || unscaledWidth <= 0) return 1;
+        if (!Number.isFinite(unscaledHeight) || unscaledHeight <= 0) return 1;
+        const widthRatio = terminalViewport.width / unscaledWidth;
+        const heightRatio = terminalViewport.height / unscaledHeight;
         return Number(Math.min(MAX_TERMINAL_SCALE, Math.max(MIN_TERMINAL_SCALE, Math.min(widthRatio, heightRatio))).toFixed(2));
     };
     const fittedTerminalScale = getAutoTerminalScale();
     const isManualZoomedIn = terminalScaleTouchedRef.current && terminalScale > fittedTerminalScale;
-    const scaledTerminalWidth = Number.isFinite(terminalIntrinsicViewport.width) && terminalIntrinsicViewport.width > 0
-        ? Math.max(terminalViewport.width, Math.round(terminalIntrinsicViewport.width * terminalScale))
+    const terminalFontSize = Number((13 * terminalScale).toFixed(2));
+    const hasOverflowedTerminalSurface = terminalIntrinsicViewport.width > terminalViewport.width + 1
+        || terminalIntrinsicViewport.height > terminalViewport.height + 1;
+    const renderedTerminalWidth = terminalIntrinsicViewport.width > 0
+        ? Math.max(terminalViewport.width, Math.round(terminalIntrinsicViewport.width))
         : terminalViewport.width;
-    const scaledTerminalHeight = Number.isFinite(terminalIntrinsicViewport.height) && terminalIntrinsicViewport.height > 0
-        ? Math.max(terminalViewport.height, Math.round(terminalIntrinsicViewport.height * terminalScale))
+    const renderedTerminalHeight = terminalIntrinsicViewport.height > 0
+        ? Math.max(terminalViewport.height, Math.round(terminalIntrinsicViewport.height))
         : terminalViewport.height;
 
     const anchorZoomViewportBottomLeft = () => {
@@ -242,7 +250,12 @@ export default function CliTerminalPane({
             setTerminalScale(getAutoTerminalScale());
         };
         applyAutoScale();
-    }, [terminalIntrinsicViewport.height, terminalIntrinsicViewport.width, terminalViewport.height, terminalViewport.width]);
+    }, [safeTerminalScale, terminalIntrinsicViewport.height, terminalIntrinsicViewport.width, terminalViewport.height, terminalViewport.width]);
+
+    useEffect(() => {
+        if (!isManualZoomedIn && !hasOverflowedTerminalSurface) return;
+        anchorZoomViewportBottomLeft();
+    }, [hasOverflowedTerminalSurface, isManualZoomedIn, renderedTerminalHeight, renderedTerminalWidth]);
 
     useEffect(() => {
         if (!isVisible) {
@@ -333,12 +346,12 @@ export default function CliTerminalPane({
                     </div>
                 <div
                     ref={terminalPanSurfaceRef}
-                    className={isManualZoomedIn ? 'w-full h-full overflow-auto rounded-lg overscroll-contain' : 'w-full h-full overflow-hidden rounded-lg overscroll-contain'}
+                    className={hasOverflowedTerminalSurface ? 'w-full h-full overflow-auto rounded-lg overscroll-contain' : 'w-full h-full overflow-hidden rounded-lg overscroll-contain'}
                 >
                     <div
                         style={{
-                            width: scaledTerminalWidth > 0 ? `${scaledTerminalWidth}px` : '100%',
-                            height: scaledTerminalHeight > 0 ? `${scaledTerminalHeight}px` : '100%',
+                            width: renderedTerminalWidth > 0 ? `${renderedTerminalWidth}px` : '100%',
+                            height: renderedTerminalHeight > 0 ? `${renderedTerminalHeight}px` : '100%',
                             minWidth: '100%',
                             minHeight: '100%',
                             position: 'relative',
@@ -351,13 +364,13 @@ export default function CliTerminalPane({
                                 position: 'absolute',
                                 left: 0,
                                 bottom: 0,
-                                zoom: terminalScale,
                             }}
                         >
                             <CliTerminal
                                 ref={terminalRef}
                                 readOnly={!runtimeReady || !isVisible}
                                 sizingMode="measured"
+                                fontSize={terminalFontSize}
                                 onViewportMetrics={setTerminalIntrinsicViewport}
                                 onInput={(data) => {
                                     if (!runtimeReady) return;

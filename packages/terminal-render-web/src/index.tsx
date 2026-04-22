@@ -270,7 +270,28 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         terminalRef.current = null;
         fitAddonRef.current = null;
       };
-    }, [fontSize, sizingMode]);
+    }, [sizingMode]);
+
+    useEffect(() => {
+      const term = terminalRef.current;
+      if (!term) return;
+      if (term.options.fontSize === fontSize) {
+        requestAnimationFrame(() => {
+          reportViewportMetrics();
+        });
+        return;
+      }
+
+      try {
+        term.options.fontSize = fontSize;
+        term.refresh(0, Math.max(0, term.rows - 1));
+      } catch {}
+
+      requestAnimationFrame(() => {
+        applyFitIfEnabled(true);
+        reportViewportMetrics();
+      });
+    }, [fontSize]);
 
     useEffect(() => {
       if (sizingMode !== 'fit') return;
