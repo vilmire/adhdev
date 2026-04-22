@@ -1,10 +1,14 @@
 import * as fs from 'fs';
 import * as os from 'os';
-import * as path from 'path';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
 import type { CreateSessionPayload } from '@adhdev/session-host-core';
-import { sanitizeSpawnEnv, ensureNodePtySpawnHelperPermissions } from '@adhdev/session-host-core';
+import {
+  sanitizeSpawnEnv,
+  ensureNodePtySpawnHelperPermissions,
+  resolveSessionHostCols,
+  resolveSessionHostRows,
+} from '@adhdev/session-host-core';
 
 type TerminalMirrorHandle = {
   write(data: string | Uint8Array): void;
@@ -219,8 +223,8 @@ export class PtySessionRuntime {
   constructor(options: PtyRuntimeOptions) {
     this.sessionId = options.sessionId;
     this.payload = options.payload;
-    this.cols = options.payload.cols || 80;
-    this.rows = options.payload.rows || 24;
+    this.cols = resolveSessionHostCols(options.payload.cols);
+    this.rows = resolveSessionHostRows(options.payload.rows);
     this.onDataCallback = options.onData;
     this.onExitCallback = options.onExit;
   }

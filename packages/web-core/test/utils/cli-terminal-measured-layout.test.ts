@@ -64,4 +64,20 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('scrollbar-width: thin')).toBe(true)
     expect(source.includes('::-webkit-scrollbar-thumb')).toBe(true)
   })
+
+  it('marks the xterm viewport as touch-scrollable on mobile instead of requiring scrollbar dragging', () => {
+    const source = fs.readFileSync(path.join(import.meta.dirname, '../../../terminal-render-web/src/index.tsx'), 'utf8')
+    expect(source.includes('-webkit-overflow-scrolling: touch')).toBe(true)
+    expect(source.includes('touch-action: pan-y')).toBe(true)
+  })
+
+  it('uses shared terminal size constants and boots the browser terminal at 80x48', () => {
+    const source = fs.readFileSync(path.join(import.meta.dirname, '../../../terminal-render-web/src/index.tsx'), 'utf8')
+    expect(source.includes("DEFAULT_SESSION_HOST_COLS")).toBe(true)
+    expect(source.includes("DEFAULT_SESSION_HOST_ROWS")).toBe(true)
+    expect(source.includes("const DEFAULT_TERMINAL_ROWS = 24;")).toBe(false)
+    expect(source.includes("const DEFAULT_TERMINAL_COLS = 80;")).toBe(false)
+    expect(source.includes('rows: DEFAULT_SESSION_HOST_ROWS')).toBe(true)
+    expect(source.includes('cols: DEFAULT_SESSION_HOST_COLS')).toBe(true)
+  })
 })

@@ -9,6 +9,7 @@ import type {
   SessionHostRecord,
 } from './types.js';
 import { SessionRingBuffer } from './buffer.js';
+import { resolveSessionHostCols, resolveSessionHostRows } from './defaults.js';
 import { buildRuntimeDisplayName, buildRuntimeKey, getWorkspaceLabel } from './runtime-labels.js';
 
 interface SessionRuntimeState {
@@ -61,8 +62,8 @@ export class SessionHostRegistry {
     };
 
     record.meta = {
-      sessionHostCols: payload.cols || 80,
-      sessionHostRows: payload.rows || 24,
+      sessionHostCols: resolveSessionHostCols(payload.cols),
+      sessionHostRows: resolveSessionHostRows(payload.rows),
       ...record.meta,
     };
 

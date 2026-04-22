@@ -66,6 +66,12 @@ export {
 } from './ipc.js';
 export type { SessionHostClientOptions, SessionHostEndpoint } from './ipc.js';
 export {
+  DEFAULT_SESSION_HOST_COLS,
+  DEFAULT_SESSION_HOST_ROWS,
+  resolveSessionHostCols,
+  resolveSessionHostRows,
+} from './defaults.js';
+export {
   sanitizeSpawnEnv,
   applyTerminalColorEnv,
   ensureNodePtySpawnHelperPermissions,

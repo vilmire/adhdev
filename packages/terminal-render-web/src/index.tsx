@@ -9,6 +9,7 @@ import '@xterm/xterm/css/xterm.css';
 import { Terminal } from '@xterm/xterm';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { FitAddon } from '@xterm/addon-fit';
+import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
 
 export interface TerminalRendererHandle {
   write: (data: string) => void;
@@ -33,9 +34,6 @@ export interface GhosttyTerminalViewProps {
   className?: string;
   style?: React.CSSProperties;
 }
-
-const DEFAULT_TERMINAL_COLS = 80;
-const DEFAULT_TERMINAL_ROWS = 24;
 
 type RendererKind = 'webgl' | 'dom';
 
@@ -69,6 +67,8 @@ const TERMINAL_CHROME_CSS = `
     scrollbar-width: thin;
     scrollbar-color: rgba(137, 180, 250, 0.45) rgba(255, 255, 255, 0.04);
     overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
   }
 
   .adhdev-terminal-renderer .xterm-viewport::-webkit-scrollbar {
@@ -167,8 +167,8 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         if (cancelled) return;
 
         const term = new Terminal({
-          cols: DEFAULT_TERMINAL_COLS,
-          rows: DEFAULT_TERMINAL_ROWS,
+          cols: DEFAULT_SESSION_HOST_COLS,
+          rows: DEFAULT_SESSION_HOST_ROWS,
           cursorBlink: true,
           cursorStyle: 'bar',
           cursorWidth: 8,

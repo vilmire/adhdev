@@ -6,6 +6,8 @@ import {
   createLineParser,
   createResponseEnvelope,
   getDefaultSessionHostEndpoint,
+  resolveSessionHostCols,
+  resolveSessionHostRows,
 } from '@adhdev/session-host-core';
 import type {
   CreateSessionPayload,
@@ -784,8 +786,8 @@ export class SessionHostServer extends EventEmitter {
       category: record.category,
       workspace: record.workspace,
       launchCommand: record.launchCommand,
-      cols: typeof record.meta?.sessionHostCols === 'number' ? (record.meta.sessionHostCols as number) : 80,
-      rows: typeof record.meta?.sessionHostRows === 'number' ? (record.meta.sessionHostRows as number) : 24,
+      cols: resolveSessionHostCols(typeof record.meta?.sessionHostCols === 'number' ? record.meta.sessionHostCols as number : undefined),
+      rows: resolveSessionHostRows(typeof record.meta?.sessionHostRows === 'number' ? record.meta.sessionHostRows as number : undefined),
       meta: record.meta,
     };
   }

@@ -1,5 +1,6 @@
 import * as os from 'os';
 import * as path from 'path';
+import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
 import type { PtySpawnOptions, PtyRuntimeTransport } from './pty-transport.js';
 import type { TerminalScreen } from './terminal-screen.js';
 import {
@@ -72,8 +73,8 @@ export function resolveCliSpawnPlan(options: {
         isWin,
         useShell,
         ptyOptions: {
-            cols: 80,
-            rows: 24,
+            cols: DEFAULT_SESSION_HOST_COLS,
+            rows: DEFAULT_SESSION_HOST_ROWS,
             cwd: workingDir,
             env: buildCliSpawnEnv(process.env, spawnConfig.env),
         },
