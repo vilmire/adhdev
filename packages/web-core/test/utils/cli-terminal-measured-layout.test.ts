@@ -16,14 +16,14 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('isActive={isInputActive && isVisible}')).toBe(true)
   })
 
-  it('keeps dashboard terminal panes in measured sizing without fit fallbacks and avoids CSS zoom-based viewport scaling', () => {
+  it('keeps dashboard terminal panes in measured sizing without fit fallbacks and keeps zoom in the pane wrapper instead of xterm font-size feedback', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
     expect(source.includes('shouldPreferFitCliTerminal')).toBe(false)
     expect(source.includes("effectiveTerminalSizingMode === 'fit'")).toBe(false)
-    expect(source.includes('zoom: terminalScale')).toBe(false)
+    expect(source.includes('zoom: terminalScale')).toBe(true)
     expect(source.includes('transform: `scale(${terminalScale})`')).toBe(false)
-    expect(source.includes('fontSize={terminalFontSize}')).toBe(true)
-    expect(source.includes('const terminalFontSize = Number((13 * terminalScale).toFixed(2));')).toBe(true)
+    expect(source.includes('fontSize={terminalFontSize}')).toBe(false)
+    expect(source.includes('const terminalFontSize = Number((13 * terminalScale).toFixed(2));')).toBe(false)
   })
 
   it('always requests a fresh runtime snapshot after replaying a hidden buffered snapshot on visibility restore', () => {
@@ -42,13 +42,13 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(terminalSource.includes('if (!runtimeReady || sendBlockMessage) return false;')).toBe(true)
   })
 
-  it('uses measured renderer viewport overflow instead of precomputing CSS zoomed surface dimensions', () => {
+  it('uses measured renderer viewport overflow only when manually zoomed in and sizes the pan surface from scaled intrinsic dimensions', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
     expect(source.includes('const fittedTerminalScale = getAutoTerminalScale();')).toBe(true)
-    expect(source.includes('const hasOverflowedTerminalSurface = terminalIntrinsicViewport.width > terminalViewport.width + 1')).toBe(true)
-    expect(source.includes("hasOverflowedTerminalSurface ? 'w-full h-full overflow-auto rounded-lg overscroll-contain' : 'w-full h-full overflow-hidden rounded-lg overscroll-contain'")).toBe(true)
-    expect(source.includes('const renderedTerminalWidth = terminalIntrinsicViewport.width > 0')).toBe(true)
-    expect(source.includes('const renderedTerminalHeight = terminalIntrinsicViewport.height > 0')).toBe(true)
+    expect(source.includes('const isManualZoomedIn = terminalScaleTouchedRef.current && terminalScale > fittedTerminalScale;')).toBe(true)
+    expect(source.includes("isManualZoomedIn ? 'w-full h-full overflow-auto rounded-lg overscroll-contain' : 'w-full h-full overflow-hidden rounded-lg overscroll-contain'")).toBe(true)
+    expect(source.includes('const scaledTerminalWidth = Number.isFinite(terminalIntrinsicViewport.width) && terminalIntrinsicViewport.width > 0')).toBe(true)
+    expect(source.includes('const scaledTerminalHeight = Number.isFinite(terminalIntrinsicViewport.height) && terminalIntrinsicViewport.height > 0')).toBe(true)
     expect(source.includes('scrollTop = scroller.scrollHeight - scroller.clientHeight')).toBe(true)
   })
 
@@ -92,7 +92,7 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('cols: DEFAULT_SESSION_HOST_COLS')).toBe(true)
   })
 
-  it('reports measured xterm viewport dimensions back to the dashboard so autoscale can fit the real terminal surface', () => {
+  it('reports measured xterm viewport dimensions back to the dashboard so autoscale can fit the real terminal surface without feeding back through current font size', () => {
     const terminalSource = fs.readFileSync(path.join(import.meta.dirname, '../../../terminal-render-web/src/index.tsx'), 'utf8')
     const paneSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
 
@@ -101,12 +101,12 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(terminalSource.includes('onViewportMetricsRef.current?.({ width, height })')).toBe(true)
 
     expect(paneSource.includes('const [terminalIntrinsicViewport, setTerminalIntrinsicViewport]')).toBe(true)
-    expect(paneSource.includes('const renderedWidth = terminalIntrinsicViewport.width')).toBe(true)
-    expect(paneSource.includes('const renderedHeight = terminalIntrinsicViewport.height')).toBe(true)
-    expect(paneSource.includes('const unscaledWidth = renderedWidth / safeTerminalScale')).toBe(true)
-    expect(paneSource.includes('const unscaledHeight = renderedHeight / safeTerminalScale')).toBe(true)
-    expect(paneSource.includes('const widthRatio = terminalViewport.width / unscaledWidth')).toBe(true)
-    expect(paneSource.includes('const heightRatio = terminalViewport.height / unscaledHeight')).toBe(true)
+    expect(paneSource.includes('const intrinsicWidth = terminalIntrinsicViewport.width')).toBe(true)
+    expect(paneSource.includes('const intrinsicHeight = terminalIntrinsicViewport.height')).toBe(true)
+    expect(paneSource.includes('const widthRatio = terminalViewport.width / intrinsicWidth')).toBe(true)
+    expect(paneSource.includes('const heightRatio = terminalViewport.height / intrinsicHeight')).toBe(true)
+    expect(paneSource.includes('const unscaledWidth = renderedWidth / safeTerminalScale')).toBe(false)
+    expect(paneSource.includes('const unscaledHeight = renderedHeight / safeTerminalScale')).toBe(false)
     expect(paneSource.includes('onViewportMetrics={setTerminalIntrinsicViewport}')).toBe(true)
   })
 })
