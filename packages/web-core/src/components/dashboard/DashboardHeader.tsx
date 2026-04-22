@@ -12,6 +12,7 @@ import { IconBell, IconChat, IconScroll, IconMonitor, IconEyeOff, IconX, IconPlu
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import CliViewModeToggle from './CliViewModeToggle';
 import { getConversationMetaText, getConversationTitle } from './conversation-presenters';
+import { DASHBOARD_NEW_SESSION_LABEL } from './dashboard-session-cta';
 import type { DashboardActionShortcutId } from '../../hooks/useActionShortcuts';
 import { formatRelativeTime } from '../../utils/time';
 import type { DashboardNotificationRecord } from '../../utils/dashboard-notifications';
@@ -324,8 +325,8 @@ export default function DashboardHeader({
                                     type="button"
                                     onClick={onOpenNewSession}
                                     className="btn btn-secondary btn-sm ml-2"
-                                    title="Start or recover a session"
-                                    aria-label="Start or recover a session"
+                                    title={DASHBOARD_NEW_SESSION_LABEL}
+                                    aria-label={DASHBOARD_NEW_SESSION_LABEL}
                                 >
                                     <IconPlus size={14} />
                                 </button>

@@ -4,6 +4,10 @@ import { formatRelativeTime, getConversationViewStates, type MobileConversationL
 import type { ActiveConversation } from './types'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 import { getConversationMetaText, getConversationStatusHint, getConversationTitle } from './conversation-presenters'
+import {
+    DASHBOARD_NEW_SESSION_DESCRIPTION,
+    DASHBOARD_NEW_SESSION_LABEL,
+} from './dashboard-session-cta'
 
 interface DashboardMobileChatInboxProps {
     section: DashboardMobileSection
@@ -411,8 +415,21 @@ export default function DashboardMobileChatInbox({
                                         </div>
                                     }
                                     title="No conversations yet"
-                                    subtitle="Your machines are available. Open a machine, wait for P2P to connect, then launch your first IDE, CLI, or ACP session."
-                                />
+                                    subtitle={DASHBOARD_NEW_SESSION_DESCRIPTION}
+                                >
+                                    {onOpenNewSession && (
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary btn-sm inline-flex items-center gap-2 mt-4"
+                                            onClick={onOpenNewSession}
+                                            aria-label={DASHBOARD_NEW_SESSION_LABEL}
+                                            title={DASHBOARD_NEW_SESSION_LABEL}
+                                        >
+                                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                            <span>{DASHBOARD_NEW_SESSION_LABEL}</span>
+                                        </button>
+                                    )}
+                                </MobileEmptyHero>
                             )
                         ) : (
                             <div className="py-8 text-center text-sm font-medium text-text-muted">
@@ -462,12 +479,13 @@ export default function DashboardMobileChatInbox({
                 )}
             </div>
 
-            {section === 'chats' && onOpenNewSession && (
+            {section === 'chats' && onOpenNewSession && hasAnyConversation && (
                 <button
                     className="fixed right-5 bottom-[calc(env(safe-area-inset-bottom,0px)+64px+20px)] z-50 flex items-center justify-center w-14 h-14 rounded-full hover:scale-105 active:scale-95 transition-transform"
                     style={{ background: 'var(--accent-primary)', color: 'var(--accent-on-primary)', boxShadow: 'var(--shadow-md)' }}
                     onClick={onOpenNewSession}
-                    aria-label="Start new session"
+                    aria-label={DASHBOARD_NEW_SESSION_LABEL}
+                    title={DASHBOARD_NEW_SESSION_LABEL}
                 >
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                 </button>

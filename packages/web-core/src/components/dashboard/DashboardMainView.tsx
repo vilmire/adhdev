@@ -612,6 +612,7 @@ export default function DashboardMainView({
                     groupTabOrders={groupTabOrders}
                     setGroupTabOrders={setGroupTabOrders}
                     toggleHiddenTab={toggleHiddenTab}
+                    onOpenNewSession={() => setNewSessionOpen(true)}
                     allowTabShortcuts={false}
                     notificationStateBySessionId={notificationStateBySessionId}
                     liveSessionInboxState={liveSessionInboxState}
@@ -634,13 +635,14 @@ export default function DashboardMainView({
                     registerActionHandlers={handlers => {
                         dockviewActionHandlersRef.current = handlers
                     }}
-                    notificationStateBySessionId={notificationStateBySessionId}
-                    liveSessionInboxState={liveSessionInboxState}
                     onActiveTabChange={onDesktopActiveTabChange}
                     requestedActiveTabKey={requestedDesktopTabKey}
                     onRequestedActiveTabConsumed={onRequestedDesktopTabConsumed}
                     onRequestScrollToBottom={onRequestScrollToBottom}
                     scrollToBottomRequest={scrollToBottomRequest}
+                    onOpenNewSession={() => setNewSessionOpen(true)}
+                    notificationStateBySessionId={notificationStateBySessionId}
+                    liveSessionInboxState={liveSessionInboxState}
                 />
             )}
             {newSessionOpen && (

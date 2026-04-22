@@ -88,6 +88,7 @@ interface DashboardDockviewWorkspaceProps {
         moveActiveTabToDownPane: () => void
     } | null) => void
     onActiveTabChange: (tabKey: string | null) => void
+    onOpenNewSession?: () => void
     onRequestScrollToBottom?: (tabKey: string | null | undefined, intent: DashboardScrollToBottomIntent) => void
     requestedActiveTabKey?: string | null
     requestedRemoteIdeId?: string | null
@@ -105,6 +106,7 @@ interface DashboardDockviewContextValue {
     ides: DaemonData[]
     isStandalone: boolean
     hasRegisteredMachines: boolean
+    onOpenNewSession?: () => void
     liveSessionInboxState: Map<string, LiveSessionInboxState>
     notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
@@ -373,6 +375,7 @@ function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDo
                     isSplitMode={false}
                     isStandalone={ctx.isStandalone}
                     hasRegisteredMachines={ctx.hasRegisteredMachines}
+                    onOpenNewSession={ctx.onOpenNewSession}
                     suppressGuide={ctx.hasDetachedConversationPanels}
                 />
             </div>
@@ -454,6 +457,7 @@ function DashboardDockviewWatermark() {
                 isSplitMode={false}
                 isStandalone={ctx.isStandalone}
                 hasRegisteredMachines={ctx.hasRegisteredMachines}
+                onOpenNewSession={ctx.onOpenNewSession}
                 suppressGuide={ctx.hasDetachedConversationPanels}
             />
         </div>
@@ -602,6 +606,7 @@ export default function DashboardDockviewWorkspace({
     actionShortcuts,
     registerActionHandlers,
     onActiveTabChange,
+    onOpenNewSession,
     onRequestScrollToBottom,
     requestedActiveTabKey,
     requestedRemoteIdeId,
@@ -1262,6 +1267,7 @@ export default function DashboardDockviewWorkspace({
         ides,
         isStandalone,
         hasRegisteredMachines,
+        onOpenNewSession,
         liveSessionInboxState,
         notificationStateBySessionId,
         sendDaemonCommand,
@@ -1285,6 +1291,7 @@ export default function DashboardDockviewWorkspace({
         ides,
         isStandalone,
         hasRegisteredMachines,
+        onOpenNewSession,
         liveSessionInboxState,
         notificationStateBySessionId,
         sendDaemonCommand,

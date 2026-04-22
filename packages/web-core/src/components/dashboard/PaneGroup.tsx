@@ -60,6 +60,7 @@ export interface PaneGroupProps {
     /** Whether this group is the focused/active group (split mode) */
     isFocused?: boolean;
     allowTabShortcuts?: boolean;
+    onOpenNewSession?: () => void;
     notificationStateBySessionId?: Map<string, DashboardNotificationSessionState>;
     liveSessionInboxState: Map<string, LiveSessionInboxState>;
 }
@@ -80,6 +81,7 @@ export default function PaneGroup({
     onHideTab,
     isFocused,
     allowTabShortcuts = true,
+    onOpenNewSession,
     notificationStateBySessionId,
     liveSessionInboxState,
 }: PaneGroupProps) {
@@ -218,6 +220,7 @@ export default function PaneGroup({
                             isSplitMode={isSplitMode}
                             isStandalone={isStandalone}
                             hasRegisteredMachines={hasRegisteredMachines}
+                            onOpenNewSession={onOpenNewSession}
                         />
                     </div>
                 ) : (

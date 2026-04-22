@@ -2,6 +2,7 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import DashboardHeader, { getDashboardHeaderConnectionState } from '../../../src/components/dashboard/DashboardHeader'
+import { DASHBOARD_NEW_SESSION_LABEL } from '../../../src/components/dashboard/dashboard-session-cta'
 import { BaseDaemonProvider } from '../../../src/context/BaseDaemonContext'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
 import type { DashboardNotificationRecord } from '../../../src/utils/dashboard-notifications'
@@ -78,6 +79,7 @@ function renderHeader(overrides: Record<string, unknown> = {}) {
         onMarkNotificationRead: () => {},
         onMarkNotificationUnread: () => {},
         onDeleteNotification: () => {},
+        onOpenNewSession: () => {},
         ...overrides,
       }),
     ),
@@ -175,6 +177,7 @@ describe('DashboardHeader inbox notifications', () => {
     expect(html).toContain('Mark read')
     expect(html).toContain('Mark unread')
     expect(html).toContain('Delete')
+    expect(html).toContain(DASHBOARD_NEW_SESSION_LABEL)
     expect(html).toContain('>1<')
   })
 })

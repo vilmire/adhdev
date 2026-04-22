@@ -1,4 +1,6 @@
+import { IconPlus } from '../Icons'
 import InstallCommand from '../InstallCommand'
+import { DASHBOARD_NEW_SESSION_DESCRIPTION, DASHBOARD_NEW_SESSION_LABEL } from './dashboard-session-cta'
 
 interface PaneGroupEmptyStateProps {
     conversationsCount: number
@@ -6,6 +8,7 @@ interface PaneGroupEmptyStateProps {
     isStandalone: boolean
     hasRegisteredMachines?: boolean
     suppressGuide?: boolean
+    onOpenNewSession?: () => void
 }
 
 export default function PaneGroupEmptyState({
@@ -14,21 +17,23 @@ export default function PaneGroupEmptyState({
     isStandalone,
     hasRegisteredMachines = false,
     suppressGuide = false,
+    onOpenNewSession,
 }: PaneGroupEmptyStateProps) {
     if (suppressGuide) {
         return <div className="text-sm text-text-muted opacity-0 select-none" aria-hidden="true">No active agent</div>
     }
 
     const shouldShowInstallCta = !isStandalone && !hasRegisteredMachines
-    const title = isStandalone
-        ? 'Waiting for your daemon'
-        : hasRegisteredMachines
-            ? 'No conversations yet'
+    const canStartSession = hasRegisteredMachines && !!onOpenNewSession
+    const title = hasRegisteredMachines
+        ? 'No conversations yet'
+        : isStandalone
+            ? 'Waiting for your daemon'
             : 'Connect your machines'
-    const description = isStandalone
-        ? 'Start the ADHDev daemon to connect this dashboard. Once it is online, you can open an IDE or launch CLI and ACP sessions.'
-        : hasRegisteredMachines
-            ? 'Your machines are connected. Open a machine, choose a workspace, then launch an IDE, CLI, or ACP session.'
+    const description = hasRegisteredMachines
+        ? DASHBOARD_NEW_SESSION_DESCRIPTION
+        : isStandalone
+            ? 'Start the ADHDev daemon to connect this dashboard. Once it is online, you can open an IDE or launch CLI and ACP sessions.'
             : 'Install ADHDev on a machine, sign in, and it will show up here.'
 
     if (conversationsCount === 0 && !isSplitMode) {
@@ -44,6 +49,20 @@ export default function PaneGroupEmptyState({
                     <p className="text-[14px] text-text-secondary mb-8 leading-relaxed max-w-md mx-auto">
                         {description}
                     </p>
+                    {canStartSession && (
+                        <div className="flex items-center justify-center mb-4">
+                            <button
+                                type="button"
+                                onClick={onOpenNewSession}
+                                className="btn btn-secondary btn-sm inline-flex items-center gap-2"
+                                title={DASHBOARD_NEW_SESSION_LABEL}
+                                aria-label={DASHBOARD_NEW_SESSION_LABEL}
+                            >
+                                <IconPlus size={14} />
+                                <span>{DASHBOARD_NEW_SESSION_LABEL}</span>
+                            </button>
+                        </div>
+                    )}
                     {shouldShowInstallCta && (
                         <InstallCommand />
                     )}

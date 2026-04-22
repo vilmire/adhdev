@@ -31,6 +31,7 @@ interface DashboardPaneWorkspaceProps {
     groupTabOrders: Record<number, string[]>
     setGroupTabOrders: React.Dispatch<React.SetStateAction<Record<number, string[]>>>
     toggleHiddenTab: (tabKey: string) => void
+    onOpenNewSession?: () => void
     allowTabShortcuts?: boolean
     notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
     liveSessionInboxState: Map<string, LiveSessionInboxState>
@@ -62,6 +63,7 @@ export default function DashboardPaneWorkspace({
     groupTabOrders,
     setGroupTabOrders,
     toggleHiddenTab,
+    onOpenNewSession,
     allowTabShortcuts = true,
     notificationStateBySessionId,
     liveSessionInboxState,
@@ -129,6 +131,7 @@ export default function DashboardPaneWorkspace({
                                 return { ...prev, [groupIndex]: order }
                             })}
                             onHideTab={toggleHiddenTab}
+                            onOpenNewSession={onOpenNewSession}
                             allowTabShortcuts={allowTabShortcuts}
                             notificationStateBySessionId={notificationStateBySessionId}
                             liveSessionInboxState={liveSessionInboxState}
