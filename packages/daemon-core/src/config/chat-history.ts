@@ -1295,9 +1295,17 @@ function extractCanonicalHermesMessageTimestamp(message: Record<string, unknown>
     return fallbackTs;
 }
 
-function readExistingHermesSessionStartRecord(historySessionId: string): HistoryMessage | null {
+function extractTimestampValue(value: unknown): number {
+    const numericTimestamp = Number(value || 0);
+    if (Number.isFinite(numericTimestamp) && numericTimestamp > 0) return numericTimestamp;
+    const stringTimestamp = typeof value === 'string' ? Date.parse(value) : NaN;
+    if (Number.isFinite(stringTimestamp) && stringTimestamp > 0) return stringTimestamp;
+    return 0;
+}
+
+function readExistingSessionStartRecord(agentType: string, historySessionId: string): HistoryMessage | null {
     try {
-        const dir = path.join(HISTORY_DIR, 'hermes-cli');
+        const dir = path.join(HISTORY_DIR, agentType);
         if (!fs.existsSync(dir)) return null;
         const files = listHistoryFiles(dir, historySessionId).sort();
         for (const file of files) {
@@ -1320,6 +1328,28 @@ function readExistingHermesSessionStartRecord(historySessionId: string): History
     }
 }
 
+function rewriteCanonicalSavedHistory(agentType: string, historySessionId: string, records: HistoryMessage[]): boolean {
+    if (records.length === 0) return false;
+    try {
+        const dir = path.join(HISTORY_DIR, agentType);
+        fs.mkdirSync(dir, { recursive: true });
+        const prefix = `${historySessionId.replace(/[^a-zA-Z0-9_-]/g, '_')}_`;
+        for (const file of fs.readdirSync(dir)) {
+            if (file.startsWith(prefix) && file.endsWith('.jsonl')) {
+                fs.unlinkSync(path.join(dir, file));
+            }
+        }
+        const targetDate = new Date(records[records.length - 1].receivedAt || Date.now()).toISOString().slice(0, 10);
+        const filePath = path.join(dir, `${prefix}${targetDate}.jsonl`);
+        fs.writeFileSync(filePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`, 'utf-8');
+        invalidatePersistedSavedHistoryIndex(agentType, dir);
+        savedHistorySessionCache.delete(agentType.replace(/[^a-zA-Z0-9_-]/g, '_'));
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 export function rebuildHermesSavedHistoryFromCanonicalSession(historySessionId: string): boolean {
     const normalizedSessionId = normalizeSavedHistorySessionId('hermes-cli', historySessionId);
     if (!normalizedSessionId) return false;
@@ -1335,7 +1365,7 @@ export function rebuildHermesSavedHistoryFromCanonicalSession(historySessionId: 
         const canonicalMessages = Array.isArray(raw.messages) ? raw.messages : [];
         const dir = path.join(HISTORY_DIR, 'hermes-cli');
         fs.mkdirSync(dir, { recursive: true });
-        const existingSessionStart = readExistingHermesSessionStartRecord(normalizedSessionId);
+        const existingSessionStart = readExistingSessionStartRecord('hermes-cli', normalizedSessionId);
         const records: HistoryMessage[] = [];
         if (existingSessionStart) {
             records.push({
@@ -1392,21 +1422,184 @@ export function rebuildHermesSavedHistoryFromCanonicalSession(historySessionId: 
             }
         }
 
-        if (records.length === 0) return false;
+        return rewriteCanonicalSavedHistory('hermes-cli', normalizedSessionId, records);
+    } catch {
+        return false;
+    }
+}
 
-        const prefix = `${normalizedSessionId.replace(/[^a-zA-Z0-9_-]/g, '_')}_`;
-        for (const file of fs.readdirSync(dir)) {
-            if (file.startsWith(prefix) && file.endsWith('.jsonl')) {
-                fs.unlinkSync(path.join(dir, file));
+function resolveClaudeProjectTranscriptPath(historySessionId: string, workspace?: string): string | null {
+    const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
+    if (!fs.existsSync(claudeProjectsDir)) return null;
+    const normalizedWorkspace = typeof workspace === 'string' ? workspace.trim() : '';
+    if (normalizedWorkspace) {
+        const directPath = path.join(claudeProjectsDir, normalizedWorkspace.replace(/[\\/]/g, '-'), `${historySessionId}.jsonl`);
+        if (fs.existsSync(directPath)) return directPath;
+    }
+    const stack = [claudeProjectsDir];
+    while (stack.length > 0) {
+        const current = stack.pop();
+        if (!current) continue;
+        for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+            const entryPath = path.join(current, entry.name);
+            if (entry.isDirectory()) {
+                stack.push(entryPath);
+                continue;
+            }
+            if (entry.isFile() && entry.name === `${historySessionId}.jsonl`) {
+                return entryPath;
+            }
+        }
+    }
+    return null;
+}
+
+function extractClaudeAssistantContentParts(content: unknown): Array<{ content: string; kind: 'standard' | 'tool'; senderName?: string; role?: 'assistant' }> {
+    if (typeof content === 'string') {
+        const trimmed = content.trim();
+        return trimmed ? [{ content: trimmed, kind: 'standard', role: 'assistant' }] : [];
+    }
+    if (!Array.isArray(content)) return [];
+    const parts: Array<{ content: string; kind: 'standard' | 'tool'; senderName?: string; role?: 'assistant' }> = [];
+    for (const block of content) {
+        if (!block || typeof block !== 'object') continue;
+        const record = block as Record<string, unknown>;
+        const type = String(record.type || '').trim();
+        if (type === 'text') {
+            const text = String(record.text || '').trim();
+            if (text) parts.push({ content: text, kind: 'standard', role: 'assistant' });
+            continue;
+        }
+        if (type === 'tool_use') {
+            const name = String(record.name || '').trim() || 'Tool';
+            const input = record.input && typeof record.input === 'object'
+                ? record.input as Record<string, unknown>
+                : null;
+            const command = input ? String(input.command || '').trim() : '';
+            const summary = command ? `${name}: ${command}` : name;
+            if (summary) parts.push({ content: summary, kind: 'tool', senderName: 'Tool', role: 'assistant' });
+        }
+    }
+    return parts;
+}
+
+function extractClaudeUserContentParts(content: unknown): Array<{ role: 'user' | 'assistant'; content: string; kind: 'standard' | 'tool'; senderName?: string }> {
+    if (typeof content === 'string') {
+        const trimmed = content.trim();
+        return trimmed ? [{ role: 'user', content: trimmed, kind: 'standard' }] : [];
+    }
+    if (!Array.isArray(content)) return [];
+    const parts: Array<{ role: 'user' | 'assistant'; content: string; kind: 'standard' | 'tool'; senderName?: string }> = [];
+    for (const block of content) {
+        if (!block || typeof block !== 'object') continue;
+        const record = block as Record<string, unknown>;
+        const type = String(record.type || '').trim();
+        if (type === 'text') {
+            const text = String(record.text || '').trim();
+            if (text) parts.push({ role: 'user', content: text, kind: 'standard' });
+            continue;
+        }
+        if (type === 'tool_result') {
+            const rawContent = record.content;
+            const text = typeof rawContent === 'string'
+                ? rawContent.trim()
+                : Array.isArray(rawContent)
+                    ? rawContent
+                        .map((entry) => {
+                            if (typeof entry === 'string') return entry.trim();
+                            if (!entry || typeof entry !== 'object') return '';
+                            const nested = entry as Record<string, unknown>;
+                            if (typeof nested.text === 'string') return nested.text.trim();
+                            if (typeof nested.content === 'string') return nested.content.trim();
+                            return '';
+                        })
+                        .filter(Boolean)
+                        .join('\n')
+                : '';
+            if (text) parts.push({ role: 'assistant', content: text, kind: 'tool', senderName: 'Tool' });
+        }
+    }
+    return parts;
+}
+
+export function rebuildClaudeSavedHistoryFromNativeProject(historySessionId: string, workspace?: string): boolean {
+    const normalizedSessionId = normalizeSavedHistorySessionId('claude-cli', historySessionId);
+    if (!normalizedSessionId) return false;
+
+    try {
+        const transcriptPath = resolveClaudeProjectTranscriptPath(normalizedSessionId, workspace);
+        if (!transcriptPath) return false;
+        const lines = fs.readFileSync(transcriptPath, 'utf-8').split('\n').filter(Boolean);
+        const records: HistoryMessage[] = [];
+        const existingSessionStart = readExistingSessionStartRecord('claude-cli', normalizedSessionId);
+        if (existingSessionStart) {
+            records.push({
+                ...existingSessionStart,
+                historySessionId: normalizedSessionId,
+            });
+        }
+        let fallbackTs = Date.now();
+        for (const line of lines) {
+            let parsed: Record<string, unknown> | null = null;
+            try {
+                parsed = JSON.parse(line) as Record<string, unknown>;
+            } catch {
+                parsed = null;
+            }
+            if (!parsed) continue;
+            const parsedSessionId = String(parsed.sessionId || '').trim();
+            if (parsedSessionId && parsedSessionId !== normalizedSessionId) continue;
+            const receivedAt = extractTimestampValue(parsed.timestamp) || fallbackTs;
+            fallbackTs = receivedAt + 1;
+            const parsedWorkspace = String(parsed.cwd || workspace || '').trim();
+            if (records.length === 0 && parsedWorkspace) {
+                records.push({
+                    ts: new Date(receivedAt).toISOString(),
+                    receivedAt,
+                    role: 'system',
+                    kind: 'session_start',
+                    content: parsedWorkspace,
+                    agent: 'claude-cli',
+                    historySessionId: normalizedSessionId,
+                    workspace: parsedWorkspace,
+                });
+            }
+            const type = String(parsed.type || '').trim();
+            const message = parsed.message && typeof parsed.message === 'object'
+                ? parsed.message as Record<string, unknown>
+                : null;
+            if (type === 'user' && message) {
+                for (const part of extractClaudeUserContentParts(message.content)) {
+                    records.push({
+                        ts: new Date(receivedAt).toISOString(),
+                        receivedAt,
+                        role: part.role,
+                        content: part.content,
+                        kind: part.kind,
+                        senderName: part.senderName,
+                        agent: 'claude-cli',
+                        historySessionId: normalizedSessionId,
+                    });
+                }
+                continue;
+            }
+            if (type === 'assistant' && message) {
+                for (const part of extractClaudeAssistantContentParts(message.content)) {
+                    records.push({
+                        ts: new Date(receivedAt).toISOString(),
+                        receivedAt,
+                        role: 'assistant',
+                        content: part.content,
+                        kind: part.kind,
+                        senderName: part.senderName,
+                        agent: 'claude-cli',
+                        historySessionId: normalizedSessionId,
+                    });
+                }
             }
         }
 
-        const targetDate = new Date(records[records.length - 1].receivedAt || Date.now()).toISOString().slice(0, 10);
-        const filePath = path.join(dir, `${prefix}${targetDate}.jsonl`);
-        fs.writeFileSync(filePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`, 'utf-8');
-        invalidatePersistedSavedHistoryIndex('hermes-cli', dir);
-        savedHistorySessionCache.delete('hermes-cli');
-        return true;
+        return rewriteCanonicalSavedHistory('claude-cli', normalizedSessionId, records);
     } catch {
         return false;
     }

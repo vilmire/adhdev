@@ -3,18 +3,15 @@ import type { DaemonData } from '../../types'
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader'
 import { compareMachineEntries, getMachineDisplayName, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
 import {
-    getHostedRuntimeReviewButtonLabel,
     getLaunchPrimaryActionLabel,
     getLaunchPrimaryBusyLabel,
 } from '../../utils/dashboard-launch-copy'
-import { IconFolder, IconPlay, IconServer, IconX } from '../Icons'
+import { IconFolder, IconPlay, IconX } from '../Icons'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
 import { collectBrowsePathCandidates, getDefaultBrowseStartPath, type BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
 import HistoryModal from './HistoryModal'
 import type { ActiveConversation } from './types'
-import DashboardMobileSessionHostSheet from './DashboardMobileSessionHostSheet'
-import { getMobileMachineConnectionLabel } from './dashboard-mobile-chat-mode-helpers'
 import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state'
 import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-load-state'
 import SavedHistoryLaunchSection from '../SavedHistoryLaunchSection'
@@ -40,7 +37,6 @@ interface SavedSessionOption {
 
 interface DashboardNewSessionDialogProps {
     machines: DaemonData[]
-    conversations: ActiveConversation[]
     ides: DaemonData[]
     onClose: () => void
     onBrowseDirectory: (machineId: string, path: string) => Promise<BrowseDirectoryResult>
@@ -59,8 +55,6 @@ interface DashboardNewSessionDialogProps {
         },
     ) => Promise<{ ok: boolean; error?: string }>
     onListSavedSessions: (machineId: string, providerType: string) => Promise<SavedSessionOption[]>
-    sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
-    onOpenConversation: (conversation: ActiveConversation) => void
 }
 
 function getDefaultLaunchKind(machine: DaemonData | undefined) {
@@ -83,7 +77,6 @@ function normalizePath(path: string | null | undefined) {
 
 export default function DashboardNewSessionDialog({
     machines,
-    conversations,
     ides,
     onClose,
     onBrowseDirectory,
@@ -91,8 +84,6 @@ export default function DashboardNewSessionDialog({
     onLaunchIde,
     onLaunchProvider,
     onListSavedSessions,
-    sendDaemonCommand,
-    onOpenConversation,
 }: DashboardNewSessionDialogProps) {
     const loadDaemonMetadata = useDaemonMetadataLoader()
     const sortedMachines = useMemo(
@@ -122,7 +113,6 @@ export default function DashboardNewSessionDialog({
     const [savedSessionsError, setSavedSessionsError] = useState('')
     const [resumeHistoryOpen, setResumeHistoryOpen] = useState(false)
     const [resumeHistoryFilters, setResumeHistoryFilters] = useState<SavedHistoryFilterState>(() => createSavedHistoryFilterState())
-    const [sessionHostOpen, setSessionHostOpen] = useState(false)
     const [resumingSavedSessionId, setResumingSavedSessionId] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState('')
@@ -485,10 +475,10 @@ export default function DashboardNewSessionDialog({
                     <div className="flex items-start justify-between gap-3 px-4 py-4 sm:px-5 border-b border-border-subtle shrink-0">
                         <div className="min-w-0">
                             <h2 id="dashboard-new-title" className="m-0 text-base font-semibold text-text-primary">
-                                Start or recover session
+                                Start session
                             </h2>
                             <p className="m-0 mt-1 text-xs leading-relaxed text-text-muted">
-                                Pick a machine and workspace, then choose whether to start fresh, resume saved history, or recover a hosted runtime.
+                                Pick a machine and workspace, then choose whether to start fresh or resume saved history.
                             </p>
                         </div>
                         <button
@@ -516,25 +506,6 @@ export default function DashboardNewSessionDialog({
                                 ))}
                             </select>
                         </LaunchSectionCard>
-
-                        {activeKind === 'cli' && (
-                            <LaunchSectionCard
-                                title="Hosted runtimes"
-                                description="Review live runtimes, recovery snapshots, and recover or restart options without leaving this launch flow."
-                                action={(
-                                    <button
-                                        type="button"
-                                        className="btn btn-secondary btn-sm"
-                                        disabled={busy || !selectedMachine}
-                                        onClick={() => setSessionHostOpen(true)}
-                                    >
-                                        <IconServer size={14} />
-                                        {getHostedRuntimeReviewButtonLabel()}
-                                    </button>
-                                )}
-                            >
-                            </LaunchSectionCard>
-                        )}
 
                         <LaunchSectionCard
                             title="Workspace"
@@ -793,29 +764,6 @@ export default function DashboardNewSessionDialog({
                             ))
                         })
                     }}
-                />
-            )}
-            {sessionHostOpen && selectedMachine && (
-                <DashboardMobileSessionHostSheet
-                    machineCards={[{
-                        id: selectedMachine.id,
-                        label: getMachineDisplayName(selectedMachine, { fallbackId: selectedMachine.id }),
-                        subtitle: [selectedMachine.platform || 'machine', getMobileMachineConnectionLabel(selectedMachine)].filter(Boolean).join(' · '),
-                        unread: 0,
-                        total: 0,
-                        latestConversation: null,
-                        preview: '',
-                    }]}
-                    conversations={conversations}
-                    ides={ides}
-                    initialMachineId={selectedMachine.id}
-                    sendDaemonCommand={sendDaemonCommand}
-                    onOpenConversation={(conversation) => {
-                        setSessionHostOpen(false)
-                        onClose()
-                        onOpenConversation(conversation)
-                    }}
-                    onClose={() => setSessionHostOpen(false)}
                 />
             )}
         </>

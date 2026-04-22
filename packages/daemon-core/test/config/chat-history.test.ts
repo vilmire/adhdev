@@ -82,6 +82,16 @@ function waitForChild(child: ReturnType<typeof spawn>): Promise<{ code: number |
   })
 }
 
+function writeCanonicalClaudeProjectSession(workspace: string, historySessionId: string, lines: unknown[]) {
+  const projectDir = path.join(mockHomeDir, '.claude', 'projects', workspace.replace(/[\\/]/g, '-'))
+  fs.mkdirSync(projectDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(projectDir, `${historySessionId}.jsonl`),
+    `${lines.map(line => JSON.stringify(line)).join('\n')}\n`,
+    'utf-8',
+  )
+}
+
 describe('chat-history config helpers', () => {
   beforeEach(() => {
     mockHomeDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-chat-history-'))
@@ -228,6 +238,54 @@ describe('chat-history config helpers', () => {
       { role: 'user', kind: 'standard', content: 'canonical user prompt' },
       { role: 'assistant', kind: 'standard', content: 'canonical assistant reply' },
       { role: 'assistant', kind: 'tool', content: 'canonical tool output' },
+    ])
+  })
+
+  it('rebuilds claude saved history from the native ~/.claude project transcript', async () => {
+    const workspace = '/workspaces/adhdev'
+    const historySessionId = '12345678-1234-4234-9234-1234567890ab'
+    writeHistorySession('claude-cli', historySessionId, 1)
+    writeCanonicalClaudeProjectSession(workspace, historySessionId, [
+      {
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'text', text: 'native claude user prompt' }] },
+        timestamp: '2026-04-22T08:34:55.724Z',
+        sessionId: historySessionId,
+        cwd: workspace,
+      },
+      {
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'pwd' } }] },
+        timestamp: '2026-04-22T08:35:00.848Z',
+        sessionId: historySessionId,
+        cwd: workspace,
+      },
+      {
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'tool_result', content: [{ type: 'text', text: '/workspaces/adhdev' }], is_error: false }] },
+        timestamp: '2026-04-22T08:35:01.026Z',
+        sessionId: historySessionId,
+        cwd: workspace,
+      },
+      {
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'native claude assistant reply' }] },
+        timestamp: '2026-04-22T08:35:02.105Z',
+        sessionId: historySessionId,
+        cwd: workspace,
+      },
+    ])
+
+    const { rebuildClaudeSavedHistoryFromNativeProject, readChatHistory } = await import('../../src/config/chat-history.js')
+    expect(rebuildClaudeSavedHistoryFromNativeProject(historySessionId, workspace)).toBe(true)
+
+    const rebuilt = readChatHistory('claude-cli', 0, 20, historySessionId)
+    expect(rebuilt.messages.map(message => ({ role: message.role, kind: message.kind, content: message.content }))).toEqual([
+      { role: 'system', kind: 'session_start', content: workspace },
+      { role: 'user', kind: 'standard', content: 'native claude user prompt' },
+      { role: 'assistant', kind: 'tool', content: 'Bash: pwd' },
+      { role: 'assistant', kind: 'tool', content: '/workspaces/adhdev' },
+      { role: 'assistant', kind: 'standard', content: 'native claude assistant reply' },
     ])
   })
 
