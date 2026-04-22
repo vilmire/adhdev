@@ -10,7 +10,7 @@ import {
 import { resolveCliSpawnPlan } from '../../src/cli-adapters/provider-cli-runtime'
 
 describe('CLI PTY default terminal sizing', () => {
-  it('defaults provider PTYs to 80x48', () => {
+  it('defaults provider PTYs to 80x32', () => {
     const plan = resolveCliSpawnPlan({
       provider: {
         spawn: {
@@ -24,7 +24,7 @@ describe('CLI PTY default terminal sizing', () => {
     })
 
     expect(plan.ptyOptions.cols).toBe(80)
-    expect(plan.ptyOptions.rows).toBe(48)
+    expect(plan.ptyOptions.rows).toBe(32)
   })
 
   it('normalizes invalid or fractional session-host dimensions back to safe shared defaults', () => {
@@ -36,7 +36,7 @@ describe('CLI PTY default terminal sizing', () => {
     expect(resolveSessionHostRows(undefined)).toBe(DEFAULT_SESSION_HOST_ROWS)
     expect(resolveSessionHostRows(0)).toBe(DEFAULT_SESSION_HOST_ROWS)
     expect(resolveSessionHostRows(Number.NaN)).toBe(DEFAULT_SESSION_HOST_ROWS)
-    expect(resolveSessionHostRows(48.8)).toBe(48)
+    expect(resolveSessionHostRows(32.8)).toBe(32)
   })
 
   it('uses shared session-host defaults/helpers instead of repeating literal PTY defaults across runtime entrypoints', () => {

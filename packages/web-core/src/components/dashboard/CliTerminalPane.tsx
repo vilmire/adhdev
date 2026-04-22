@@ -43,6 +43,7 @@ export default function CliTerminalPane({
     const [terminalViewport, setTerminalViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const [terminalIntrinsicViewport, setTerminalIntrinsicViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const terminalViewportRef = useRef<HTMLDivElement | null>(null);
+    const terminalPanSurfaceRef = useRef<HTMLDivElement | null>(null);
     const terminalScaleTouchedRef = useRef(false);
     const seededSnapshotSeqRef = useRef(0);
     const liveOutputStartedRef = useRef(false);
@@ -70,6 +71,23 @@ export default function CliTerminalPane({
         const widthRatio = terminalViewport.width / intrinsicWidth;
         const heightRatio = terminalViewport.height / intrinsicHeight;
         return Number(Math.min(MAX_TERMINAL_SCALE, Math.max(MIN_TERMINAL_SCALE, Math.min(widthRatio, heightRatio))).toFixed(2));
+    };
+    const fittedTerminalScale = getAutoTerminalScale();
+    const isManualZoomedIn = terminalScaleTouchedRef.current && terminalScale > fittedTerminalScale;
+    const scaledTerminalWidth = Number.isFinite(terminalIntrinsicViewport.width) && terminalIntrinsicViewport.width > 0
+        ? Math.max(terminalViewport.width, Math.round(terminalIntrinsicViewport.width * terminalScale))
+        : terminalViewport.width;
+    const scaledTerminalHeight = Number.isFinite(terminalIntrinsicViewport.height) && terminalIntrinsicViewport.height > 0
+        ? Math.max(terminalViewport.height, Math.round(terminalIntrinsicViewport.height * terminalScale))
+        : terminalViewport.height;
+
+    const anchorZoomViewportBottomLeft = () => {
+        requestAnimationFrame(() => {
+            const scroller = terminalPanSurfaceRef.current;
+            if (!scroller) return;
+            scroller.scrollLeft = 0;
+            scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight;
+        });
     };
     const resetRuntimeView = () => {
         seededSnapshotSeqRef.current = 0;
@@ -287,7 +305,11 @@ export default function CliTerminalPane({
                             className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
                             onClick={() => {
                                 terminalScaleTouchedRef.current = true;
-                                setTerminalScale(scale => Math.max(MIN_TERMINAL_SCALE, Number((scale - 0.1).toFixed(2))));
+                                setTerminalScale(scale => {
+                                    const nextScale = Math.max(MIN_TERMINAL_SCALE, Number((scale - 0.1).toFixed(2)));
+                                    if (nextScale > fittedTerminalScale) anchorZoomViewportBottomLeft();
+                                    return nextScale;
+                                });
                             }}
                             title="Shrink terminal viewport"
                         >
@@ -298,32 +320,51 @@ export default function CliTerminalPane({
                             className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
                             onClick={() => {
                                 terminalScaleTouchedRef.current = true;
-                                setTerminalScale(scale => Math.min(MAX_TERMINAL_SCALE, Number((scale + 0.1).toFixed(2))));
+                                setTerminalScale(scale => {
+                                    const nextScale = Math.min(MAX_TERMINAL_SCALE, Number((scale + 0.1).toFixed(2)));
+                                    if (nextScale > fittedTerminalScale) anchorZoomViewportBottomLeft();
+                                    return nextScale;
+                                });
                             }}
                             title="Increase terminal viewport"
                         >
                             +
                         </button>
                     </div>
-                <div className="w-full h-full overflow-hidden rounded-lg overscroll-contain">
+                <div
+                    ref={terminalPanSurfaceRef}
+                    className={isManualZoomedIn ? 'w-full h-full overflow-auto rounded-lg overscroll-contain' : 'w-full h-full overflow-hidden rounded-lg overscroll-contain'}
+                >
                     <div
                         style={{
-                            width: `${100 / terminalScale}%`,
-                            height: `${100 / terminalScale}%`,
-                            transform: `scale(${terminalScale})`,
-                            transformOrigin: 'top left',
+                            width: scaledTerminalWidth > 0 ? `${scaledTerminalWidth}px` : '100%',
+                            height: scaledTerminalHeight > 0 ? `${scaledTerminalHeight}px` : '100%',
+                            minWidth: '100%',
+                            minHeight: '100%',
+                            position: 'relative',
                         }}
                     >
-                        <CliTerminal
-                            ref={terminalRef}
-                            readOnly={!runtimeReady || !isVisible}
-                            sizingMode="measured"
-                            onViewportMetrics={setTerminalIntrinsicViewport}
-                            onInput={(data) => {
-                                if (!runtimeReady) return;
-                                sendData?.(daemonRouteId, { type: 'pty_input', sessionId, targetSessionId: sessionId, data })
+                        <div
+                            style={{
+                                width: terminalIntrinsicViewport.width > 0 ? `${terminalIntrinsicViewport.width}px` : '100%',
+                                height: terminalIntrinsicViewport.height > 0 ? `${terminalIntrinsicViewport.height}px` : '100%',
+                                position: 'absolute',
+                                left: 0,
+                                bottom: 0,
+                                zoom: terminalScale,
                             }}
-                        />
+                        >
+                            <CliTerminal
+                                ref={terminalRef}
+                                readOnly={!runtimeReady || !isVisible}
+                                sizingMode="measured"
+                                onViewportMetrics={setTerminalIntrinsicViewport}
+                                onInput={(data) => {
+                                    if (!runtimeReady) return;
+                                    sendData?.(daemonRouteId, { type: 'pty_input', sessionId, targetSessionId: sessionId, data })
+                                }}
+                            />
+                        </div>
                     </div>
                 </div>
                 {!runtimeReady && (

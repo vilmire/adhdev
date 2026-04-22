@@ -1,5 +1,5 @@
 export const DEFAULT_SESSION_HOST_COLS = 80;
-export const DEFAULT_SESSION_HOST_ROWS = 48;
+export const DEFAULT_SESSION_HOST_ROWS = 32;
 
 function normalizeSessionHostDimension(value: number | undefined, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;

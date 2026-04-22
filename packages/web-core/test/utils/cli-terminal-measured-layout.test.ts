@@ -16,14 +16,14 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('isActive={isInputActive && isVisible}')).toBe(true)
   })
 
-  it('keeps dashboard terminal panes in measured sizing without fit fallbacks and top-left aligns the scaled surface', () => {
+  it('keeps dashboard terminal panes in measured sizing without fit fallbacks and avoids transform-based zoom that breaks drag hit-testing', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
     expect(source.includes('shouldPreferFitCliTerminal')).toBe(false)
     expect(source.includes("effectiveTerminalSizingMode === 'fit'")).toBe(false)
-    expect(source.includes("transformOrigin: 'top left'")).toBe(true)
+    expect(source.includes("zoom: terminalScale")).toBe(true)
+    expect(source.includes('transform: `scale(${terminalScale})`')).toBe(false)
     expect(source.includes('flex justify-center')).toBe(false)
     expect(source.includes('overflow-x-auto overflow-y-hidden rounded-lg overscroll-contain flex justify-center')).toBe(false)
-    expect(source.includes("'w-full h-full overflow-hidden rounded-lg'" ) || source.includes('w-full h-full overflow-hidden rounded-lg')).toBe(true)
   })
 
   it('always requests a fresh runtime snapshot after replaying a hidden buffered snapshot on visibility restore', () => {
@@ -42,11 +42,12 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(terminalSource.includes('if (!runtimeReady || sendBlockMessage) return false;')).toBe(true)
   })
 
-  it('avoids outer terminal pane scrolling so xterm viewport remains the only scrollbar owner', () => {
+  it('uses an outer pan surface when manual zoom grows beyond the fitted terminal scale', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
-    expect(source.includes('overflow-auto rounded-lg')).toBe(false)
-    expect(source.includes('overflow-x-auto overflow-y-hidden')).toBe(false)
-    expect(source.includes('overflow-hidden rounded-lg')).toBe(true)
+    expect(source.includes('const fittedTerminalScale = getAutoTerminalScale();')).toBe(true)
+    expect(source.includes('const isManualZoomedIn = terminalScaleTouchedRef.current && terminalScale > fittedTerminalScale;')).toBe(true)
+    expect(source.includes("isManualZoomedIn ? 'w-full h-full overflow-auto rounded-lg overscroll-contain' : 'w-full h-full overflow-hidden rounded-lg overscroll-contain'")).toBe(true)
+    expect(source.includes('scrollTop = scroller.scrollHeight - scroller.clientHeight')).toBe(true)
   })
 
   it('tunes xterm scrolling instead of relying on outer container scrolling', () => {
@@ -71,7 +72,7 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('touch-action: pan-y')).toBe(true)
   })
 
-  it('uses shared terminal size constants and boots the browser terminal at 80x48', () => {
+  it('uses shared terminal size constants and boots the browser terminal at 80x32', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../../terminal-render-web/src/index.tsx'), 'utf8')
     expect(source.includes("DEFAULT_SESSION_HOST_COLS")).toBe(true)
     expect(source.includes("DEFAULT_SESSION_HOST_ROWS")).toBe(true)
