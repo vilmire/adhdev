@@ -4,15 +4,15 @@
 [![CI](https://github.com/vilmire/adhdev/actions/workflows/ci.yml/badge.svg)](https://github.com/vilmire/adhdev/actions)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-ADHDev Self-Hosted is the open-source, local-first edition of ADHDev.
+A local-first dashboard for monitoring and controlling AI coding agents. See every active IDE agent (Cursor, VS Code, Windsurf, and more) and CLI agent (Claude Code, Codex, Gemini CLI) from one browser tab — no cloud account, no remote server, all running on your machine.
 
-This repo contains:
+This repo contains the open-source, self-hosted edition:
 
 - the standalone local server and dashboard
 - the shared daemon/runtime packages used by both standalone and cloud
 - the session-host and terminal-mux stack for hosted CLI runtimes
 
-This repository is for the self-hosted and standalone path. Hosted cloud operations are not part of this repository.
+Hosted cloud operations are not part of this repository.
 
 ## What It Runs
 
