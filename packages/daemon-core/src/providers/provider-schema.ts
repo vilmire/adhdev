@@ -37,6 +37,7 @@ const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'canonicalHistory',
   'autoFixProfile',
   'ideLevelScripts',
+  'allowInputDuringGeneration',
   'scripts',
   'vscodeCommands',
   'inputMethod',

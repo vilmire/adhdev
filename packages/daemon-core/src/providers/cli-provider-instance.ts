@@ -161,6 +161,16 @@ export class CliProviderInstance implements ProviderInstance {
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     private lastPersistedHistoryMessages: PersistableCliHistoryMessage[] = [];
     private lastCanonicalHermesSyncMtimeMs = 0;
+    private lastCanonicalHermesExistCheckAt = 0;
+    private lastCanonicalHermesWatchPath: string | undefined = undefined;
+    private lastCanonicalClaudeRebuildMtimeMs = 0;
+    private lastCanonicalClaudeCheckAt = 0;
+    private cachedSqliteDb: {
+        prepare(sql: string): { get(...values: Array<string | number>): unknown };
+        close(): void;
+    } | null = null;
+    private cachedSqliteDbPath: string | null = null;
+    private cachedSqliteDbMissingUntil = 0;
     readonly instanceId: string;
     private suppressIdleHistoryReplay = false;
     private errorMessage: string | undefined = undefined;
@@ -281,7 +291,13 @@ export class CliProviderInstance implements ProviderInstance {
         timestampFormat?: 'unix_ms' | 'unix_s' | 'iso';
     }): string | null {
         const resolvedDbPath = probe.dbPath.replace(/^~/, os.homedir());
-        if (!fs.existsSync(resolvedDbPath)) return null;
+        // Skip existsSync if we already confirmed DB is missing (cache for 10s)
+        const now = Date.now();
+        if (this.cachedSqliteDbMissingUntil > now) return null;
+        if (!fs.existsSync(resolvedDbPath)) {
+            this.cachedSqliteDbMissingUntil = now + 10_000;
+            return null;
+        }
 
         const directories = this.getProbeDirectories();
         const minCreatedAt = Math.max(0, this.startedAt - 60_000);
@@ -486,6 +502,9 @@ export class CliProviderInstance implements ProviderInstance {
         this.adapter.shutdown();
         this.monitor.reset();
         this.appliedEffectKeys.clear();
+        try { this.cachedSqliteDb?.close(); } catch { /* noop */ }
+        this.cachedSqliteDb = null;
+        this.cachedSqliteDbPath = null;
     }
 
     private completedDebounceTimer: NodeJS.Timeout | null = null;
@@ -944,13 +963,38 @@ export class CliProviderInstance implements ProviderInstance {
                 const watchPath = canonicalHistory.watchPath
                     .replace(/^~/, os.homedir())
                     .replace('{{sessionId}}', this.providerSessionId);
-                if (!fs.existsSync(watchPath)) return false;
+                // Throttle existsSync: check file existence at most once per 2s
+                const now = Date.now();
+                if (watchPath !== this.lastCanonicalHermesWatchPath || now - this.lastCanonicalHermesExistCheckAt >= 2_000) {
+                    this.lastCanonicalHermesWatchPath = watchPath;
+                    this.lastCanonicalHermesExistCheckAt = now;
+                    if (!fs.existsSync(watchPath)) return false;
+                } else if (this.lastCanonicalHermesSyncMtimeMs === 0) {
+                    // First check: file existence not yet confirmed, must verify
+                    if (!fs.existsSync(watchPath)) return false;
+                }
                 const stat = fs.statSync(watchPath);
                 if (stat.mtimeMs <= this.lastCanonicalHermesSyncMtimeMs) return true;
                 rebuilt = rebuildHermesSavedHistoryFromCanonicalSession(this.providerSessionId);
                 if (rebuilt) this.lastCanonicalHermesSyncMtimeMs = stat.mtimeMs;
             } else if (canonicalHistory.format === 'claude-jsonl') {
+                // Throttle: only check for changes at most once per 2s
+                const now = Date.now();
+                if (now - this.lastCanonicalClaudeCheckAt < 2_000 && this.lastCanonicalClaudeRebuildMtimeMs !== 0) {
+                    return true;
+                }
+                this.lastCanonicalClaudeCheckAt = now;
+                // Only rebuild if the transcript file has changed since last rebuild
+                const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
+                const workspaceSegment = typeof this.workingDir === 'string'
+                    ? this.workingDir.replace(/[\\/]/g, '-').replace(/^-+/, '')
+                    : '';
+                const transcriptFile = path.join(claudeProjectsDir, workspaceSegment, `${this.providerSessionId}.jsonl`);
+                let transcriptMtime = 0;
+                try { transcriptMtime = fs.statSync(transcriptFile).mtimeMs; } catch { /* not found yet */ }
+                if (transcriptMtime > 0 && transcriptMtime <= this.lastCanonicalClaudeRebuildMtimeMs) return true;
                 rebuilt = rebuildClaudeSavedHistoryFromNativeProject(this.providerSessionId, this.workingDir);
+                if (rebuilt) this.lastCanonicalClaudeRebuildMtimeMs = transcriptMtime || Date.now();
             }
             if (!rebuilt) return false;
             const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId, 0, this.provider.historyBehavior);
@@ -1023,24 +1067,24 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     private querySqliteText(dbPath: string, query: string, params: Array<string | number>): string | null {
-        let db: {
-            prepare(sql: string): { get(...values: Array<string | number>): unknown };
-            close(): void;
-        } | null = null;
         try {
-            const DatabaseSync = getDatabaseSync();
-            db = new DatabaseSync(dbPath, { readOnly: true });
-            const row = db.prepare(query).get(...params) as { id?: unknown } | undefined;
+            if (this.cachedSqliteDb === null || this.cachedSqliteDbPath !== dbPath) {
+                try { this.cachedSqliteDb?.close(); } catch { /* noop */ }
+                this.cachedSqliteDb = null;
+                this.cachedSqliteDbPath = null;
+                const DatabaseSync = getDatabaseSync();
+                this.cachedSqliteDb = new DatabaseSync(dbPath, { readOnly: true });
+                this.cachedSqliteDbPath = dbPath;
+            }
+            const row = this.cachedSqliteDb!.prepare(query).get(...params) as { id?: unknown } | undefined;
             const sessionId = typeof row?.id === 'string' ? row.id.trim() : '';
             return sessionId || null;
         } catch {
+            // Close cached connection on error so we retry fresh next tick
+            try { this.cachedSqliteDb?.close(); } catch { /* noop */ }
+            this.cachedSqliteDb = null;
+            this.cachedSqliteDbPath = null;
             return null;
-        } finally {
-            try {
-                db?.close();
-            } catch {
-                // noop
-            }
         }
     }
 }
