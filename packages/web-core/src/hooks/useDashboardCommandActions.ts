@@ -36,7 +36,7 @@ interface LaunchProviderOptions {
 }
 
 interface UseDashboardCommandActionsOptions {
-  sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
+  sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
   trackPendingLaunch: (launch: DashboardLaunchTracker) => void
   onOpenSession: (sessionId: string) => void
   activeConv: ActiveConversation | undefined
