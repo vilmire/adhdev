@@ -131,8 +131,8 @@ function expandResumeArgs(template: string[] | undefined, sessionId: string): st
     return template.map((part) => part === '{{id}}' ? sessionId : part);
 }
 
-function readCodexResumeSessionId(args: string[]): string | undefined {
-    const resumeIndex = args.findIndex((arg) => arg === 'resume' || arg === 'fork');
+function readSubcommandSessionId(args: string[], subcommands: string[]): string | undefined {
+    const resumeIndex = args.findIndex((arg) => subcommands.includes(arg));
     if (resumeIndex < 0) return undefined;
     const candidate = args[resumeIndex + 1];
     if (!candidate || candidate.startsWith('-')) return undefined;
@@ -140,9 +140,11 @@ function readCodexResumeSessionId(args: string[]): string | undefined {
 }
 
 function detectExplicitProviderSessionId(
-    normalizedType: string,
+    provider: ProviderModule | undefined,
     args: string[],
 ): { providerSessionId?: string; launchMode: CliLaunchMode } {
+    const resume = provider?.resume;
+
     const explicitResumeId = readArgValue(args, ['--resume', '-r']);
     if (explicitResumeId) {
         return { providerSessionId: explicitResumeId, launchMode: 'resume' };
@@ -158,10 +160,10 @@ function detectExplicitProviderSessionId(
 
     const explicitSessionId = readArgValue(args, ['--session-id']);
     if (explicitSessionId) {
-        if (normalizedType === 'goose-cli' && !hasArg(args, ['--resume', '-r'])) {
+        if (resume?.sessionIdIsNewByDefault && !hasArg(args, ['--resume', '-r'])) {
             return { launchMode: 'manual' };
         }
-        const isResume = normalizedType === 'goose-cli'
+        const isResume = resume?.sessionIdIsNewByDefault
             ? hasArg(args, ['--resume', '-r'])
             : (hasArg(args, ['--continue']) || hasArg(args, ['--resume', '-r']));
         return {
@@ -170,10 +172,11 @@ function detectExplicitProviderSessionId(
         };
     }
 
-    if (normalizedType === 'codex-cli') {
-        const codexSessionId = readCodexResumeSessionId(args);
-        if (codexSessionId) {
-            return { providerSessionId: codexSessionId, launchMode: 'resume' };
+    const subcommands = resume?.sessionIdFromSubcommand;
+    if (Array.isArray(subcommands) && subcommands.length > 0) {
+        const subcommandSessionId = readSubcommandSessionId(args, subcommands);
+        if (subcommandSessionId) {
+            return { providerSessionId: subcommandSessionId, launchMode: 'resume' };
         }
     }
 
@@ -200,12 +203,18 @@ export function resolveCliSessionBinding(
         return { cliArgs: baseArgs, launchMode: 'manual' };
     }
 
-    const explicit = detectExplicitProviderSessionId(normalizedType, baseArgs || []);
+    const explicit = detectExplicitProviderSessionId(provider, baseArgs || []);
     if (explicit.providerSessionId) {
         return {
             cliArgs: baseArgs,
             providerSessionId: explicit.providerSessionId,
             launchMode: explicit.launchMode,
+        };
+    }
+    if (explicit.launchMode === 'manual' && hasArg(baseArgs || [], ['--session-id'])) {
+        return {
+            cliArgs: baseArgs,
+            launchMode: 'manual',
         };
     }
 

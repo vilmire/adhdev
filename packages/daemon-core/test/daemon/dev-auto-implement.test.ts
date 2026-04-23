@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import path from 'node:path'
 import os from 'node:os'
 import { ProviderLoader } from '../../src/providers/provider-loader.js'
-import { resolveAutoImplWritableProviderDir } from '../../src/daemon/dev-auto-implement.js'
+import { resolveAutoImplWritableProviderDir, shouldScheduleAutoStopOnQuiet } from '../../src/daemon/dev-auto-implement.js'
 import type { DevServerContext } from '../../src/daemon/dev-server-types.js'
 
 function writeProvider(root: string, category: string, type: string, data: Record<string, unknown>) {
@@ -58,5 +58,14 @@ describe('resolveAutoImplWritableProviderDir', () => {
     } finally {
       rmSync(tempRoot, { recursive: true, force: true })
     }
+  })
+})
+
+describe('shouldScheduleAutoStopOnQuiet', () => {
+  it('uses provider autoImpl.autoStopOnQuiet instead of command-specific codex checks', () => {
+    expect(shouldScheduleAutoStopOnQuiet({ verification: true, autoImpl: { autoStopOnQuiet: true } as any })).toBe(true)
+    expect(shouldScheduleAutoStopOnQuiet({ verification: true, autoImpl: { autoStopOnQuiet: false } as any })).toBe(false)
+    expect(shouldScheduleAutoStopOnQuiet({ verification: true, autoImpl: undefined })).toBe(false)
+    expect(shouldScheduleAutoStopOnQuiet({ verification: false, autoImpl: { autoStopOnQuiet: true } as any })).toBe(false)
   })
 })

@@ -67,20 +67,18 @@ function tryKillAutoImplProcess(processRef: ChildProcess | null, signal: NodeJS.
   }
 }
 
+export function shouldScheduleAutoStopOnQuiet(options: {
+  verification?: unknown;
+  autoImpl?: { autoStopOnQuiet?: boolean } | null;
+}): boolean {
+  return !!options.verification && options.autoImpl?.autoStopOnQuiet === true;
+}
+
 export function getDefaultAutoImplReference(ctx: DevServerContext, category: string, type: string): string {
-  if (category === 'cli') {
-    return type === 'codex-cli' ? 'claude-cli' : 'codex-cli';
-  }
-  if (category === 'extension') {
-    const preferred = ['claude-code-vscode', 'codex', 'cline', 'roo-code'];
-    for (const ref of preferred) {
-      if (ref === type) continue;
-      if (ctx.providerLoader.resolve(ref) || ctx.providerLoader.getMeta(ref)) return ref;
-    }
-    const all = ctx.providerLoader.getAll();
-    const fb = all.find((p: any) => p.category === 'extension' && p.type !== type);
-    if (fb?.type) return fb.type;
-  }
+  const all = ctx.providerLoader.getAll();
+  // Pick any other provider in the same category as a reference
+  const sameCategoryOther = all.find((p: any) => p.category === category && p.type !== type);
+  if (sameCategoryOther?.type) return sameCategoryOther.type;
   return 'antigravity';
 }
 
@@ -424,49 +422,43 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
       return;
     }
 
-    // ─── CLI Agent: stdin pipe approach ───
+    // ─── CLI Agent: declarative autoImpl config from provider.json ───
     const command: string = spawn.command;
+    const autoImpl = spawn.autoImpl;
     // Strip interactive-only flags for auto-implement (non-interactive mode)
     const interactiveFlags = ['--yolo', '--interactive', '-i'];
     const baseArgs: string[] = [...(spawn.args || [])].filter((a: string) => !interactiveFlags.includes(a));
 
-    // 6. Construct the complete shell command per-agent
+    // 6. Construct the complete shell command from provider.json autoImpl config
     let shellCmd: string;
     const isWin = os.platform() === 'win32';
     const escapeArg = (a: string) => isWin ? `"${a.replace(/"/g, '""')}"` : `'${a.replace(/'/g, "'\\''")}'`;
 
-    if (command === 'claude') {
-      // Claude Code: autonomous agent mode (no --print), skip permissions, prompt via meta-prompt
-      const args = [...baseArgs, '--dangerously-skip-permissions'];
-      if (model) args.push('--model', model);
-      const escapedArgs = args.map(escapeArg).join(' ');
-      const metaPrompt = `Read the file at ${promptFile} and follow ALL the instructions. Implement the specific function requested, then test it via CDP curl targeting 127.0.0.1:19280, wait for confirmation of success, and then close. DO NOT start working on other features not listed in the prompt constraint.`;
-      shellCmd = `${command} ${escapedArgs} -p ${escapeArg(metaPrompt)}`;
-    } else if (command === 'gemini') {
-      // Gemini CLI: non-interactive prompt mode
-      // We can't use @file syntax (causes Parts object parsing bug) or $(cat) (arg too long).
-      // Solution: meta-prompt that tells Gemini to read the instructions file itself.
-      const args = [...baseArgs, '-y', '-s', 'false'];
-      if (model) args.push('-m', model);
-      const escapedArgs = args.map(escapeArg).join(' ');
-      const metaPrompt = `Read the file at ${promptFile} and follow ALL the instructions in it exactly. Do not ask questions, just execute.`;
-      shellCmd = `${command} ${escapedArgs} -p ${escapeArg(metaPrompt)}`;
+    const promptMode = autoImpl?.promptMode ?? 'stdin';
+    const extraArgs = autoImpl?.extraArgs ?? [];
+    const rawMetaPrompt = autoImpl?.metaPrompt
+      ? autoImpl.metaPrompt.replace('{{promptFile}}', promptFile)
+      : `Read the file at ${promptFile} and follow ALL the instructions in it exactly. Do not ask questions, just execute.`;
 
-    } else if (command === 'codex') {
-      const args = ['exec', ...baseArgs];
-      if (!args.includes('--dangerously-bypass-approvals-and-sandbox')) {
-        args.push('--dangerously-bypass-approvals-and-sandbox');
-      }
-      if (!args.includes('--skip-git-repo-check')) {
-        args.push('--skip-git-repo-check');
+    if (promptMode === 'flag') {
+      const flag = autoImpl?.promptFlag ?? '-p';
+      const args = [...baseArgs, ...extraArgs];
+      if (model) args.push('--model', model);
+      const escapedArgs = args.map(escapeArg).join(' ');
+      shellCmd = `${command} ${escapedArgs} ${flag} ${escapeArg(rawMetaPrompt)}`;
+    } else if (promptMode === 'subcommand') {
+      const subcommand = autoImpl?.subcommand ?? '';
+      const args = subcommand ? [subcommand, ...baseArgs] : [...baseArgs];
+      for (const extra of extraArgs) {
+        if (!args.includes(extra)) args.push(extra);
       }
       if (model) args.push('--model', model);
       const escapedArgs = args.map(escapeArg).join(' ');
-      const metaPrompt = `Read the file at ${promptFile} and follow ALL instructions strictly. DO NOT spend time exploring the filesystem or other providers. You have full authority to implement ALL required script files and independently test them against 127.0.0.1:19280 via CDP CURL. Upon complete validation of ALL assigned files, print exactly "_PIPELINE_COMPLETE_SIGNAL_" to gracefully close the pipeline. DO NOT WAIT FOR APPROVAL, execute completely autonomously.`;
-      shellCmd = `${command} ${escapedArgs} ${escapeArg(metaPrompt)}`;
+      shellCmd = `${command} ${escapedArgs} ${escapeArg(rawMetaPrompt)}`;
     } else {
-      // Generic fallback: pipe prompt via stdin
-      const escapedArgs = baseArgs.map(escapeArg).join(' ');
+      // stdin fallback (generic)
+      const args = [...baseArgs, ...extraArgs];
+      const escapedArgs = args.map(escapeArg).join(' ');
       if (isWin) {
         shellCmd = `type "${promptFile}" | ${command} ${escapedArgs}`;
       } else {
@@ -503,10 +495,9 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
         shell: false,
         timeout: 900000,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { 
-          ...process.env, 
+        env: {
+          ...process.env,
           ...(spawn.env || {}),
-          ...(command === 'gemini' ? { SANDBOX: '1', GEMINI_CLI_NO_RELAUNCH: '1' } : {}),
         },
       });
       child.on('error', (err: Error) => {
@@ -582,7 +573,7 @@ export async function handleAutoImplement(ctx: DevServerContext, type: string, r
     };
 
     const scheduleAutoStopForVerification = () => {
-      if (!verification || command !== 'codex' || completionSignalSeen || autoStopIssued) return;
+      if (!shouldScheduleAutoStopOnQuiet({ verification, autoImpl }) || completionSignalSeen || autoStopIssued) return;
       const elapsed = Date.now() - spawnedAt;
       if (elapsed < 30000) return;
       clearAutoStopTimer();
