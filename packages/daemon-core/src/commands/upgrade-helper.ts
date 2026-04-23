@@ -15,6 +15,18 @@ export interface DaemonUpgradeHelperPayload {
   sessionHostAppName?: string;
 }
 
+export interface CurrentGlobalInstallSurface {
+  npmExecutable: string;
+  packageRoot: string | null;
+  installPrefix: string | null;
+}
+
+export interface PinnedGlobalInstallCommand {
+  command: string;
+  args: string[];
+  surface: CurrentGlobalInstallSurface;
+}
+
 function getUpgradeLogPath(): string {
   const home = os.homedir();
   const dir = path.join(home, '.adhdev');
@@ -31,8 +43,105 @@ function appendUpgradeLog(message: string): void {
   }
 }
 
-function getNpmExecutable(): string {
+function resolveSiblingNpmExecutable(nodeExecutable: string): string {
+  const binDir = path.dirname(nodeExecutable);
+  const candidates = process.platform === 'win32'
+    ? ['npm.cmd', 'npm.exe', 'npm']
+    : ['npm'];
+  for (const candidate of candidates) {
+    const candidatePath = path.join(binDir, candidate);
+    if (fs.existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
   return 'npm';
+}
+
+function findCurrentPackageRoot(currentCliPath: string | undefined, packageName: string): string | null {
+  if (!currentCliPath) return null;
+
+  let resolvedPath = currentCliPath;
+  try {
+    resolvedPath = fs.realpathSync.native(currentCliPath);
+  } catch {
+    // keep the original path when realpath is unavailable
+  }
+
+  let currentDir = resolvedPath;
+  try {
+    if (fs.statSync(resolvedPath).isFile()) {
+      currentDir = path.dirname(resolvedPath);
+    }
+  } catch {
+    currentDir = path.dirname(resolvedPath);
+  }
+
+  while (true) {
+    const packageJsonPath = path.join(currentDir, 'package.json');
+    try {
+      if (fs.existsSync(packageJsonPath)) {
+        const parsed = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+        if (parsed?.name === packageName) {
+          const normalized = currentDir.replace(/\\/g, '/');
+          return normalized.includes('/node_modules/') ? currentDir : null;
+        }
+      }
+    } catch {
+      // ignore malformed package metadata while scanning upward
+    }
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      return null;
+    }
+    currentDir = parentDir;
+  }
+}
+
+function resolveInstallPrefixFromPackageRoot(packageRoot: string, packageName: string): string | null {
+  const nodeModulesDir = packageName.startsWith('@')
+    ? path.dirname(path.dirname(packageRoot))
+    : path.dirname(packageRoot);
+  if (path.basename(nodeModulesDir) !== 'node_modules') {
+    return null;
+  }
+
+  const maybeLibDir = path.dirname(nodeModulesDir);
+  if (path.basename(maybeLibDir) === 'lib') {
+    return path.dirname(maybeLibDir);
+  }
+  return maybeLibDir;
+}
+
+export function resolveCurrentGlobalInstallSurface(options: {
+  packageName: string;
+  currentCliPath?: string;
+  nodeExecutable?: string;
+}): CurrentGlobalInstallSurface {
+  const packageRoot = findCurrentPackageRoot(options.currentCliPath || process.argv[1], options.packageName);
+  return {
+    npmExecutable: resolveSiblingNpmExecutable(options.nodeExecutable || process.execPath),
+    packageRoot,
+    installPrefix: packageRoot ? resolveInstallPrefixFromPackageRoot(packageRoot, options.packageName) : null,
+  };
+}
+
+export function buildPinnedGlobalInstallCommand(options: {
+  packageName: string;
+  targetVersion: string;
+  currentCliPath?: string;
+  nodeExecutable?: string;
+}): PinnedGlobalInstallCommand {
+  const surface = resolveCurrentGlobalInstallSurface(options);
+  const args = ['install', '-g', `${options.packageName}@${options.targetVersion || 'latest'}`, '--force'];
+  if (surface.installPrefix) {
+    args.push('--prefix', surface.installPrefix);
+  }
+  return {
+    command: surface.npmExecutable,
+    args,
+    surface,
+  };
 }
 
 function getNpmExecOptions(): { shell: boolean } {
@@ -107,11 +216,13 @@ function removeDaemonPidFile(): void {
   }
 }
 
-function cleanupStaleGlobalInstallDirs(pkgName: string): void {
+function cleanupStaleGlobalInstallDirs(pkgName: string, surface: CurrentGlobalInstallSurface): void {
   const npmExecOpts = getNpmExecOptions();
-  const npmRoot = execFileSync(getNpmExecutable(), ['root', '-g'], { encoding: 'utf8', ...npmExecOpts }).trim();
+  const prefixArgs = surface.installPrefix ? ['--prefix', surface.installPrefix] : [];
+  const npmRoot = execFileSync(surface.npmExecutable, ['root', '-g', ...prefixArgs], { encoding: 'utf8', ...npmExecOpts }).trim();
   if (!npmRoot) return;
-  const npmPrefix = execFileSync(getNpmExecutable(), ['prefix', '-g'], { encoding: 'utf8', ...npmExecOpts }).trim();
+  const npmPrefix = surface.installPrefix
+    || execFileSync(surface.npmExecutable, ['prefix', '-g', ...prefixArgs], { encoding: 'utf8', ...npmExecOpts }).trim();
   const binDir = process.platform === 'win32' ? npmPrefix : path.join(npmPrefix, 'bin');
   const packageBaseName = pkgName.startsWith('@') ? pkgName.split('/')[1] : pkgName;
   const binNames = new Set<string>([packageBaseName]);
@@ -138,7 +249,7 @@ function cleanupStaleGlobalInstallDirs(pkgName: string): void {
 
   if (fs.existsSync(binDir)) {
     for (const entry of fs.readdirSync(binDir)) {
-      if (![...binNames].some((name) => entry.startsWith(`.${name}-`))) continue;
+      if (!Array.from(binNames).some((name) => entry.startsWith(`.${name}-`))) continue;
       fs.rmSync(path.join(binDir, entry), { recursive: true, force: true });
       appendUpgradeLog(`Removed stale bin staging entry: ${path.join(binDir, entry)}`);
     }
@@ -160,7 +271,15 @@ export function spawnDetachedDaemonUpgradeHelper(payload: DaemonUpgradeHelperPay
 async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Promise<void> {
   const restartArgv = Array.isArray(payload.restartArgv) ? payload.restartArgv : [];
   const sessionHostAppName = payload.sessionHostAppName || process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev';
+  const installCommand = buildPinnedGlobalInstallCommand({
+    packageName: payload.packageName,
+    targetVersion: payload.targetVersion,
+  });
   appendUpgradeLog(`Upgrade helper started for ${payload.packageName}@${payload.targetVersion}`);
+  appendUpgradeLog(`Using npm executable: ${installCommand.command}`);
+  if (installCommand.surface.installPrefix) {
+    appendUpgradeLog(`Pinned install prefix: ${installCommand.surface.installPrefix}`);
+  }
 
   if (Number.isFinite(payload.parentPid) && payload.parentPid > 0) {
     appendUpgradeLog(`Waiting for parent pid ${payload.parentPid} to exit`);
@@ -169,13 +288,13 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
 
   stopSessionHostProcesses(sessionHostAppName);
   removeDaemonPidFile();
-  cleanupStaleGlobalInstallDirs(payload.packageName);
+  cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
 
   const spec = `${payload.packageName}@${payload.targetVersion || 'latest'}`;
   appendUpgradeLog(`Installing ${spec}`);
   const installOutput = execFileSync(
-    getNpmExecutable(),
-    ['install', '-g', spec, '--force'],
+    installCommand.command,
+    installCommand.args,
     {
       encoding: 'utf8',
       stdio: 'pipe',
@@ -192,7 +311,7 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
   // processes have exited.
   if (process.platform === 'win32') {
     await new Promise((resolve) => setTimeout(resolve, 500));
-    cleanupStaleGlobalInstallDirs(payload.packageName);
+    cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
     appendUpgradeLog('Post-install staging cleanup complete');
   }
 
