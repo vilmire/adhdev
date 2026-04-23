@@ -713,7 +713,6 @@ export class ProviderCliAdapter implements CliAdapter {
             return true;
         }
         return /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(text)
-            || /(^|\n)\s*[▶→❯›>]\s*(?:Plan, search, build anything|Add a follow-up)\b/im.test(text)
             || /⏎\s+send/i.test(text)
             || /\?\s*for\s*shortcuts/i.test(text)
             || /Type your message(?:\s+or\s+@path\/to\/file)?/i.test(text)
@@ -862,71 +861,6 @@ export class ProviderCliAdapter implements CliAdapter {
         return looksLikeConfirmOnlyLabel(buttonLabel);
     }
 
-    private normalizeVisibleModalLabel(label: string): string {
-        return String(label || '')
-            .replace(/^[▶→❯›>]+\s*/, '')
-            .replace(/^\[[^\]]+\]\s*/, '')
-            .replace(/\s+\((?:shift\+tab|tab|esc(?:\s+or\s+[^)]+)?|[a-z])\)\s*$/i, '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .toLowerCase()
-            .replace(/^trust\b.*\bworkspace\b/i, 'trust this workspace')
-            .replace(/^run\b.*\bonce\b/i, 'run (once)')
-            .replace(/^add\b.*\ballowlist\b/i, 'add to allowlist')
-            .replace(/^auto-?run\b.*/i, 'auto-run everything')
-            .replace(/^skip\b.*/i, 'skip')
-            .replace(/^quit\b.*/i, 'quit');
-    }
-
-    private mapVisibleModalHotkey(hotkey: string): string | null {
-        const normalized = String(hotkey || '').trim().toLowerCase();
-        if (!normalized) return null;
-        if (normalized === 'tab') return '\t';
-        if (normalized === 'shift+tab') return '\x1b[Z';
-        if (normalized === 'enter') return '\r';
-        const escFallback = normalized.match(/^esc(?:\s+or\s+([a-z]))?$/i);
-        if (escFallback) return escFallback[1] || '\x1b';
-        if (/^[a-z]$/i.test(normalized)) return normalized;
-        return null;
-    }
-
-    private inferModalSelectionKey(
-        modal: { message: string; buttons: string[] } | null,
-        buttonIndex: number,
-        screenText: string,
-    ): string | null {
-        if (!modal || !Array.isArray(modal.buttons) || buttonIndex < 0 || buttonIndex >= modal.buttons.length) {
-            return null;
-        }
-        const targetLabel = this.normalizeVisibleModalLabel(String(modal.buttons[buttonIndex] || ''));
-        if (!targetLabel) return null;
-
-        const lines = sanitizeTerminalText(String(screenText || ''))
-            .split(/\r\n|\n|\r/g)
-            .map(line => line.trim())
-            .filter(Boolean);
-
-        for (const line of lines) {
-            const bracketMatch = line.match(/^(?:[▶→❯›>]\s*)?\[([^\]]+)\]\s+(.+)$/i);
-            if (bracketMatch) {
-                const candidateLabel = this.normalizeVisibleModalLabel(bracketMatch[2]);
-                if (candidateLabel === targetLabel) {
-                    return this.mapVisibleModalHotkey(bracketMatch[1]);
-                }
-            }
-
-            const suffixMatch = line.match(/^(?:[▶→❯›>]\s*)?(.+?)\s+\((shift\+tab|tab|esc(?:\s+or\s+[^)]+)?|[a-z])\)\s*$/i);
-            if (suffixMatch) {
-                const candidateLabel = this.normalizeVisibleModalLabel(suffixMatch[1]);
-                if (candidateLabel === targetLabel) {
-                    return this.mapVisibleModalHotkey(suffixMatch[2]);
-                }
-            }
-        }
-
-        return null;
-    }
-
     private async waitForInteractivePrompt(maxWaitMs = 5000): Promise<void> {
         const startedAt = Date.now();
         let loggedWait = false;
@@ -1065,33 +999,6 @@ export class ProviderCliAdapter implements CliAdapter {
                 lastOutputAt: this.lastOutputAt,
             })
             : [];
-        if (
-            !modal
-            && !this.currentTurnScope
-            && scriptStatus === 'idle'
-            && this.currentStatus === 'waiting_approval'
-            && this.looksLikeVisibleIdlePrompt(screenText)
-        ) {
-            this.activeModal = null;
-            this.isWaitingForResponse = false;
-            this.responseBuffer = '';
-            this.responseSettleIgnoreUntil = 0;
-            this.submitRetryUsed = false;
-            this.submitRetryPromptSnippet = '';
-            this.finishRetryCount = 0;
-            this.clearIdleFinishCandidate('stale_startup_approval_cleared');
-            if (this.approvalExitTimeout) {
-                clearTimeout(this.approvalExitTimeout);
-                this.approvalExitTimeout = null;
-            }
-            this.setStatus('idle', 'stale_startup_approval_cleared');
-            this.recordTrace('stale_startup_approval_cleared', {
-                screenText: summarizeCliTraceText(screenText, 600),
-                tail: summarizeCliTraceText(tail, 400),
-            });
-            this.onStatusChange?.();
-            return;
-        }
         if (this.maybeCommitVisibleIdleTranscript(parsedTranscript)) {
             return;
         }
@@ -1669,15 +1576,6 @@ export class ProviderCliAdapter implements CliAdapter {
         const startupModal = this.startupParseGate ? this.getStartupConfirmationModal(screenText) : null;
         let effectiveStatus = this.projectEffectiveStatus(startupModal);
         let effectiveModal = startupModal || this.activeModal;
-        if (
-            !startupModal
-            && !effectiveModal
-            && effectiveStatus === 'waiting_approval'
-            && this.looksLikeVisibleIdlePrompt(screenText)
-            && !this.currentTurnScope
-        ) {
-            effectiveStatus = 'idle';
-        }
         if (!startupModal && !effectiveModal && typeof this.cliScripts?.parseOutput === 'function') {
             try {
                 const parsed = this.getScriptParsedStatus();
@@ -2452,11 +2350,8 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         this.setStatus('generating', 'approval_resolved');
         this.onStatusChange?.();
-        const inferredSelectionKey = this.inferModalSelectionKey(modal, buttonIndex, screenText);
         const startupTrustModal = /Quick safety check|project trust|Confirm Claude Code project trust|trust (?:this project|the contents of this directory|the files in this folder)/i.test(String(modal?.message || ''));
-        if (inferredSelectionKey) {
-            this.ptyProcess.write(inferredSelectionKey);
-        } else if (startupTrustModal && buttonIndex in this.approvalKeys) {
+        if (startupTrustModal && buttonIndex in this.approvalKeys) {
             this.ptyProcess.write(`${this.approvalKeys[buttonIndex]}\r`);
         } else if (this.shouldResolveModalWithEnter(modal, buttonIndex)) {
             this.ptyProcess.write('\r');
@@ -2482,17 +2377,7 @@ export class ProviderCliAdapter implements CliAdapter {
     getDebugState(): Record<string, any> {
         const screenText = sanitizeTerminalText(this.terminalScreen.getText());
         const startupModal = this.startupParseGate ? this.getStartupConfirmationModal(screenText) : null;
-        let effectiveStatus = this.projectEffectiveStatus(startupModal);
-        const effectiveModal = startupModal || this.activeModal;
-        if (
-            !startupModal
-            && !effectiveModal
-            && effectiveStatus === 'waiting_approval'
-            && this.looksLikeVisibleIdlePrompt(screenText)
-            && !this.currentTurnScope
-        ) {
-            effectiveStatus = 'idle';
-        }
+        const effectiveStatus = this.projectEffectiveStatus(startupModal);
         const effectiveReady = this.ready || !!startupModal;
         return {
             type: this.cliType,
@@ -2522,7 +2407,7 @@ export class ProviderCliAdapter implements CliAdapter {
             lastScreenChangeAt: this.lastScreenChangeAt,
             lastScreenSnapshot: this.lastScreenSnapshot.slice(-500),
             isWaitingForResponse: this.isWaitingForResponse,
-            activeModal: effectiveModal,
+            activeModal: startupModal || this.activeModal,
             lastApprovalResolvedAt: this.lastApprovalResolvedAt,
             sendDelayMs: this.sendDelayMs,
             sendKey: this.sendKey,
