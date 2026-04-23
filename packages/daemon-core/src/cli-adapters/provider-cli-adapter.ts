@@ -636,6 +636,10 @@ export class ProviderCliAdapter implements CliAdapter {
             this.activeModal = startupModal;
             this.setStatus('waiting_approval', `startup_ready:${trigger}`);
         } else {
+            if (this.currentStatus === 'waiting_approval' || this.activeModal) {
+                this.lastApprovalResolvedAt = Date.now();
+            }
+            this.activeModal = null;
             this.setStatus('idle', `startup_ready:${trigger}`);
         }
         LOG.info(
@@ -1529,6 +1533,42 @@ export class ProviderCliAdapter implements CliAdapter {
         return this.currentStatus;
     }
 
+    private suppressStaleParsedApproval(
+        parsed: any,
+        recentBuffer: string,
+        screenText: string,
+    ): any {
+        const actionableParsedModal = parsed?.activeModal && Array.isArray(parsed.activeModal.buttons)
+            && parsed.activeModal.buttons.some((button: any) => typeof button === 'string' && button.trim())
+            ? parsed.activeModal
+            : null;
+        if (!parsed || parsed?.status !== 'waiting_approval' || !actionableParsedModal) {
+            return parsed;
+        }
+
+        const inApprovalCooldown = this.lastApprovalResolvedAt > 0
+            && (Date.now() - this.lastApprovalResolvedAt) < this.timeouts.approvalCooldown;
+        if (!inApprovalCooldown) {
+            return parsed;
+        }
+
+        const startupModal = this.getStartupConfirmationModal(screenText || '');
+        const visibleModal = this.runParseApproval(recentBuffer) || startupModal;
+        if (visibleModal) {
+            return parsed;
+        }
+
+        const detectedStatus = this.runDetectStatus(recentBuffer);
+        const fallbackStatus = detectedStatus && detectedStatus !== 'waiting_approval'
+            ? detectedStatus
+            : ((this.isWaitingForResponse || this.currentTurnScope) ? 'generating' : (this.currentStatus === 'waiting_approval' ? 'idle' : this.currentStatus));
+        return {
+            ...parsed,
+            status: fallbackStatus,
+            activeModal: null,
+        };
+    }
+
  // ─── Public API (CliAdapter) ───────────────────
 
     getStatus(): CliSessionStatus {
@@ -1820,15 +1860,16 @@ export class ProviderCliAdapter implements CliAdapter {
             if (parsed && refinedStatus && parsed.status !== refinedStatus) {
                 parsed.status = refinedStatus;
             }
+            const normalizedParsed = this.suppressStaleParsedApproval(parsed, input.recentBuffer, input.screenText);
             const promptForTrim = scope?.prompt || getLastUserPromptText(baseMessages);
-            if (parsed && Array.isArray(parsed.messages) && promptForTrim) {
-                const lastAssistant = [...parsed.messages].reverse().find((message: any) => message?.role === 'assistant' && typeof message.content === 'string');
+            if (normalizedParsed && Array.isArray(normalizedParsed.messages) && promptForTrim) {
+                const lastAssistant = [...normalizedParsed.messages].reverse().find((message: any) => message?.role === 'assistant' && typeof message.content === 'string');
                 if (lastAssistant) {
                     lastAssistant.content = trimPromptEchoPrefix(lastAssistant.content, promptForTrim);
                 }
             }
             this.parseErrorMessage = null;
-            return parsed;
+            return normalizedParsed;
         } catch (e: any) {
             const message = e?.message || String(e);
             this.parseErrorMessage = message;
