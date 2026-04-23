@@ -39,8 +39,8 @@ export function isConversationHidden(hiddenTabs: Set<string>, target: Conversati
 export function useHiddenTabs() {
     const [hiddenTabs, setHiddenTabs] = useState<Set<string>>(loadHidden);
 
-    /** Toggle a single tab's visibility */
-    const toggleTab = useCallback((targetKey: string) => {
+    const toggleTarget = useCallback((target: ConversationTarget) => {
+        const targetKey = getHiddenConversationStorageKey(target)
         setHiddenTabs(prev => {
             const next = new Set(prev);
             if (next.has(targetKey)) next.delete(targetKey);
@@ -50,8 +50,8 @@ export function useHiddenTabs() {
         });
     }, []);
 
-    /** Hide a tab */
-    const hideTab = useCallback((targetKey: string) => {
+    const hideTarget = useCallback((target: ConversationTarget) => {
+        const targetKey = getHiddenConversationStorageKey(target)
         setHiddenTabs(prev => {
             if (prev.has(targetKey)) return prev;
             const next = new Set(prev);
@@ -61,8 +61,8 @@ export function useHiddenTabs() {
         });
     }, []);
 
-    /** Show a tab */
-    const showTab = useCallback((targetKey: string) => {
+    const showTarget = useCallback((target: ConversationTarget) => {
+        const targetKey = getHiddenConversationStorageKey(target)
         setHiddenTabs(prev => {
             if (!prev.has(targetKey)) return prev;
             const next = new Set(prev);
@@ -104,5 +104,5 @@ export function useHiddenTabs() {
 
     const isHidden = useCallback((target: ConversationTarget) => isConversationHidden(hiddenTabs, target), [hiddenTabs]);
 
-    return { hiddenTabs, toggleTab, hideTab, showTab, showAllTabs, hideAllForDaemon, showAllForDaemon, isHidden };
+    return { hiddenTabs, toggleTarget, hideTarget, showTarget, showAllTabs, hideAllForDaemon, showAllForDaemon, isHidden };
 }

@@ -29,11 +29,11 @@ import RemoteView from '../RemoteView'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 import { useIdeRemoteStream } from '../../hooks/useIdeRemoteStream'
 import {
-    getDashboardLayoutProfile,
     readDashboardDockviewHiddenRestoreState,
     readDashboardDockviewStoredLayout,
     writeDashboardDockviewHiddenRestoreState,
     writeDashboardDockviewStoredLayout,
+    type DashboardLayoutProfile,
     type DashboardStoredHiddenTabLocation,
 } from '../../utils/dashboardLayoutStorage'
 import { getConversationInboxSurfaceState, type LiveSessionInboxState } from './DashboardMobileChatShared'
@@ -50,7 +50,6 @@ import { buildDashboardDockviewContextMenuItems } from './dockviewContextMenuIte
 import { shouldAwaitStoredDockviewHydration, shouldDeferDockviewPanelPrune } from './dashboardDockviewHydration'
 import { getPassiveSessionSelectionCommand } from './dashboardSessionCommands'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
-import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 
 interface DashboardDockviewWorkspaceProps {
     visibleConversations: ActiveConversation[]
@@ -58,7 +57,6 @@ interface DashboardDockviewWorkspaceProps {
     ides: DaemonData[]
     actionLogs: { routeId: string; text: string; timestamp: number }[]
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
-    setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
     setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
     hasRegisteredMachines: boolean
@@ -94,8 +92,8 @@ interface DashboardDockviewWorkspaceProps {
     requestedRemoteIdeId?: string | null
     onRequestedActiveTabConsumed?: () => void
     scrollToBottomRequest?: { tabKey: string; nonce: number } | null
-    notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
     liveSessionInboxState: Map<string, LiveSessionInboxState>
+    layoutProfile: DashboardLayoutProfile
 }
 
 interface DashboardDockviewContextValue {
@@ -108,10 +106,8 @@ interface DashboardDockviewContextValue {
     hasRegisteredMachines: boolean
     onOpenNewSession?: () => void
     liveSessionInboxState: Map<string, LiveSessionInboxState>
-    notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
-    setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
     toggleHiddenTab: (tabKey: string) => void
     userName?: string
     scrollToBottomRequest?: { tabKey: string; nonce: number } | null
@@ -336,7 +332,6 @@ function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDo
     const cmds = useDashboardConversationCommands({
         sendDaemonCommand: ctx.sendDaemonCommand,
         activeConv,
-        setLocalUserMessages: ctx.setLocalUserMessages,
         setActionLogs: ctx.setActionLogs,
         isStandalone: ctx.isStandalone,
     })
@@ -525,7 +520,6 @@ function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardDockview
 
     const surfaceState = getConversationInboxSurfaceState(conversation, ctx.liveSessionInboxState, {
         isOpenConversation: isActive,
-        notificationStateBySessionId: ctx.notificationStateBySessionId,
     })
     
     const isReconnecting = surfaceState.isReconnecting
@@ -596,7 +590,6 @@ export default function DashboardDockviewWorkspace({
     ides,
     actionLogs,
     sendDaemonCommand,
-    setLocalUserMessages,
     setActionLogs,
     isStandalone,
     hasRegisteredMachines,
@@ -612,8 +605,8 @@ export default function DashboardDockviewWorkspace({
     requestedRemoteIdeId,
     onRequestedActiveTabConsumed,
     scrollToBottomRequest,
-    notificationStateBySessionId,
     liveSessionInboxState,
+    layoutProfile,
 }: DashboardDockviewWorkspaceProps) {
     const { theme } = useTheme()
     const { sendCommand } = useTransport()
@@ -629,10 +622,6 @@ export default function DashboardDockviewWorkspace({
     const [isShowingDockviewOverlay, setIsShowingDockviewOverlay] = useState(false)
     const [popoutWindowRevision, setPopoutWindowRevision] = useState(0)
     const overlayCleanupTimeoutRef = useRef<number | null>(null)
-    const layoutProfile = useMemo(
-        () => getDashboardLayoutProfile(typeof window !== 'undefined' ? window.innerWidth : 1280),
-        [],
-    )
     const hiddenRestoreStateRef = useRef<Record<string, DashboardStoredHiddenTabLocation>>(
         typeof window === 'undefined' ? {} : readDashboardDockviewHiddenRestoreState(layoutProfile),
     )
@@ -1269,11 +1258,9 @@ export default function DashboardDockviewWorkspace({
         hasRegisteredMachines,
         onOpenNewSession,
         liveSessionInboxState,
-        notificationStateBySessionId,
-        sendDaemonCommand,
+            sendDaemonCommand,
         setActionLogs,
-        setLocalUserMessages,
-        toggleHiddenTab: hideConversationTab,
+            toggleHiddenTab: hideConversationTab,
         userName,
         scrollToBottomRequest,
         tabShortcuts,
@@ -1293,11 +1280,9 @@ export default function DashboardDockviewWorkspace({
         hasRegisteredMachines,
         onOpenNewSession,
         liveSessionInboxState,
-        notificationStateBySessionId,
-        sendDaemonCommand,
+            sendDaemonCommand,
         setActionLogs,
-        setLocalUserMessages,
-        hideConversationTab,
+            hideConversationTab,
         userName,
         scrollToBottomRequest,
         tabShortcuts,

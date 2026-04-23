@@ -6,146 +6,122 @@ import DashboardRemoteDialog from './DashboardRemoteDialog'
 import type { ActiveConversation } from './types'
 import { isAcpConv, isCliConv } from './types'
 import HistoryModal, { type SavedSessionHistoryEntry } from './HistoryModal'
-import { createSavedHistoryFilterState } from '../../utils/saved-history-filter-state'
+import type { SavedHistoryFilterState } from '../../utils/saved-history-filter-state'
 import CliStopDialog from './CliStopDialog'
 import ToastContainer, { type Toast } from './ToastContainer'
 
 interface DashboardOverlaysProps {
-    historyModalOpen: boolean
-    historyTargetConv?: ActiveConversation
-    ides: DaemonData[]
-    isHistoryCreatingChat: boolean
-    isHistoryRefreshingHistory: boolean
-    savedHistorySessions: SavedSessionHistoryEntry[]
-    isSavedHistoryLoading: boolean
-    isResumingSavedHistorySessionId: string | null
-    onCloseHistory: () => void
-    onNewHistoryChat: () => void
-    onSwitchHistorySession: (routeId: string, sessionId: string) => void
-    onRefreshHistory: () => void
-    onResumeSavedHistorySession: (session: SavedSessionHistoryEntry) => void
-    remoteDialogConv: ActiveConversation | null
-    remoteDialogIdeEntry?: DaemonData
-    connectionStates: Record<string, any>
-    actionLogs: { routeId: string; text: string; timestamp: number }[]
-    localUserMessages: Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>
-    sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
-    setLocalUserMessages: React.Dispatch<React.SetStateAction<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>>
-    setActionLogs: React.Dispatch<React.SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
-    isStandalone: boolean
-    userName?: string
-    onOpenRemoteHistory: (conversation?: ActiveConversation) => void
-    onRemoteConversationChange: React.Dispatch<React.SetStateAction<ActiveConversation | null>>
-    onCloseRemoteDialog: () => void
-    cliStopDialogOpen: boolean
-    cliStopTargetConv?: ActiveConversation | null
-    onCancelCliStop: () => void
-    onStopCliNow: () => void | Promise<void>
-    onSaveCliAndStop: () => void | Promise<void>
-    toasts: Toast[]
-    onDismissToast: (id: number) => void
-    onClickToast?: (toast: Toast) => void
-    showOnboarding: boolean
-    onCloseOnboarding: () => void
+    historyModal: {
+        open: boolean
+        targetConv?: ActiveConversation
+        ides: DaemonData[]
+        isCreatingChat: boolean
+        isRefreshingHistory: boolean
+        savedSessions: SavedSessionHistoryEntry[]
+        savedHistoryFilters: SavedHistoryFilterState
+        onSavedHistoryFiltersChange: (next: SavedHistoryFilterState) => void
+        isSavedSessionsLoading: boolean
+        isResumingSavedSessionId: string | null
+        onClose: () => void
+        onNewChat: () => void
+        onSwitchSession: (routeId: string, sessionId: string) => void
+        onRefreshHistory: () => void
+        onResumeSavedSession: (session: SavedSessionHistoryEntry) => void
+    }
+    remoteDialog: {
+        conversation: ActiveConversation | null
+        ideEntry?: DaemonData
+        ides: DaemonData[]
+        connectionStates: Record<string, any>
+        actionLogs: { routeId: string; text: string; timestamp: number }[]
+        sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
+        setActionLogs: React.Dispatch<React.SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
+        isStandalone: boolean
+        userName?: string
+        onOpenHistory: (conversation?: ActiveConversation) => void
+        onConversationChange: React.Dispatch<React.SetStateAction<ActiveConversation | null>>
+        onClose: () => void
+    }
+    cliStopDialog: {
+        open: boolean
+        targetConv?: ActiveConversation | null
+        onCancel: () => void
+        onStopNow: () => void | Promise<void>
+        onSaveAndStop: () => void | Promise<void>
+    }
+    toastOverlay: {
+        toasts: Toast[]
+        onDismiss: (id: number) => void
+        onClick?: (toast: Toast) => void
+    }
+    onboarding: {
+        open: boolean
+        onClose: () => void
+    }
 }
 
 export default function DashboardOverlays({
-    historyModalOpen,
-    historyTargetConv,
-    ides,
-    isHistoryCreatingChat,
-    isHistoryRefreshingHistory,
-    savedHistorySessions,
-    isSavedHistoryLoading,
-    isResumingSavedHistorySessionId,
-    onCloseHistory,
-    onNewHistoryChat,
-    onSwitchHistorySession,
-    onRefreshHistory,
-    onResumeSavedHistorySession,
-    remoteDialogConv,
-    remoteDialogIdeEntry,
-    connectionStates,
-    actionLogs,
-    localUserMessages,
-    sendDaemonCommand,
-    setLocalUserMessages,
-    setActionLogs,
-    isStandalone,
-    userName,
-    onOpenRemoteHistory,
-    onRemoteConversationChange,
-    onCloseRemoteDialog,
-    cliStopDialogOpen,
-    cliStopTargetConv,
-    onCancelCliStop,
-    onStopCliNow,
-    onSaveCliAndStop,
-    toasts,
-    onDismissToast,
-    onClickToast,
-    showOnboarding,
-    onCloseOnboarding,
+    historyModal,
+    remoteDialog,
+    cliStopDialog,
+    toastOverlay,
+    onboarding,
 }: DashboardOverlaysProps) {
-    const [savedHistoryFilters, setSavedHistoryFilters] = React.useState(() => createSavedHistoryFilterState())
-
     return (
         <>
-            {historyModalOpen && historyTargetConv && (
+            {historyModal.open && historyModal.targetConv && (
                 <HistoryModal
-                    activeConv={historyTargetConv}
-                    ides={ides}
-                    isCreatingChat={isHistoryCreatingChat}
-                    isRefreshingHistory={isHistoryRefreshingHistory}
-                    savedSessions={savedHistorySessions}
-                    isSavedSessionsLoading={isSavedHistoryLoading}
-                    isResumingSavedSessionId={isResumingSavedHistorySessionId}
-                    savedHistoryFilters={savedHistoryFilters}
-                    onSavedHistoryFiltersChange={setSavedHistoryFilters}
-                    onClose={onCloseHistory}
-                    onNewChat={onNewHistoryChat}
-                    onSwitchSession={onSwitchHistorySession}
-                    onRefreshHistory={onRefreshHistory}
-                    onResumeSavedSession={onResumeSavedHistorySession}
+                    activeConv={historyModal.targetConv}
+                    ides={historyModal.ides}
+                    isCreatingChat={historyModal.isCreatingChat}
+                    isRefreshingHistory={historyModal.isRefreshingHistory}
+                    savedSessions={historyModal.savedSessions}
+                    isSavedSessionsLoading={historyModal.isSavedSessionsLoading}
+                    isResumingSavedSessionId={historyModal.isResumingSavedSessionId}
+                    savedHistoryFilters={historyModal.savedHistoryFilters}
+                    onSavedHistoryFiltersChange={historyModal.onSavedHistoryFiltersChange}
+                    onClose={historyModal.onClose}
+                    onNewChat={historyModal.onNewChat}
+                    onSwitchSession={historyModal.onSwitchSession}
+                    onRefreshHistory={historyModal.onRefreshHistory}
+                    onResumeSavedSession={historyModal.onResumeSavedSession}
                 />
             )}
 
-            {remoteDialogConv && (
+            {remoteDialog.conversation && (
                 <DashboardRemoteDialog
-                    activeConv={remoteDialogConv}
-                    ideEntry={remoteDialogIdeEntry}
-                    ides={ides}
-                    connectionStates={connectionStates}
-                    actionLogs={actionLogs}
-                    localUserMessages={localUserMessages}
-                    sendDaemonCommand={sendDaemonCommand}
-                    setLocalUserMessages={setLocalUserMessages}
-                    setActionLogs={setActionLogs}
-                    isStandalone={isStandalone}
-                    userName={userName}
-                    onOpenHistory={onOpenRemoteHistory}
-                    onConversationChange={onRemoteConversationChange}
-                    onClose={onCloseRemoteDialog}
+                    activeConv={remoteDialog.conversation}
+                    ideEntry={remoteDialog.ideEntry}
+                    ides={remoteDialog.ides}
+                    connectionStates={remoteDialog.connectionStates}
+                    actionLogs={remoteDialog.actionLogs}
+                    sendDaemonCommand={remoteDialog.sendDaemonCommand}
+                    setActionLogs={remoteDialog.setActionLogs}
+                    isStandalone={remoteDialog.isStandalone}
+                    userName={remoteDialog.userName}
+                    onOpenHistory={remoteDialog.onOpenHistory}
+                    onConversationChange={remoteDialog.onConversationChange}
+                    onClose={remoteDialog.onClose}
                 />
             )}
 
-            {cliStopDialogOpen && cliStopTargetConv && (isCliConv(cliStopTargetConv) || isAcpConv(cliStopTargetConv)) && (
+            {cliStopDialog.open && cliStopDialog.targetConv && (isCliConv(cliStopDialog.targetConv) || isAcpConv(cliStopDialog.targetConv)) && (
                 <CliStopDialog
-                    activeConv={cliStopTargetConv}
-                    canSaveAndStop={isCliConv(cliStopTargetConv) && !isAcpConv(cliStopTargetConv) && !!cliStopTargetConv.resume?.supported}
-                    onCancel={onCancelCliStop}
-                    onStopNow={onStopCliNow}
-                    onSaveAndStop={onSaveCliAndStop}
+                    activeConv={cliStopDialog.targetConv}
+                    canSaveAndStop={isCliConv(cliStopDialog.targetConv) && !isAcpConv(cliStopDialog.targetConv) && !!cliStopDialog.targetConv.resume?.supported}
+                    onCancel={cliStopDialog.onCancel}
+                    onStopNow={cliStopDialog.onStopNow}
+                    onSaveAndStop={cliStopDialog.onSaveAndStop}
                 />
             )}
 
             <ToastContainer
-                toasts={toasts}
-                onDismiss={onDismissToast}
-                onClickToast={onClickToast}
+                toasts={toastOverlay.toasts}
+                onDismiss={toastOverlay.onDismiss}
+                onClickToast={toastOverlay.onClick}
             />
 
-            {showOnboarding && <OnboardingModal onClose={onCloseOnboarding} />}
+            {onboarding.open && <OnboardingModal onClose={onboarding.onClose} />}
         </>
     )
 }

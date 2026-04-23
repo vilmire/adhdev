@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
+    type DashboardLayoutProfile,
     getDashboardLayoutProfile,
     getEmptyDashboardStoredLayout,
     readDashboardStoredLayout,
     writeDashboardStoredLayout,
 } from '../utils/dashboardLayoutStorage'
+
+function sameIndexedTabOrder(current: string[] | undefined, next: string[]) {
+    if (!current) return next.length === 0
+    return current.length === next.length && current.every((tabKey, index) => tabKey === next[index])
+}
 
 export function useDashboardGroupState() {
     const [layoutProfile] = useState(() =>
@@ -56,19 +62,74 @@ export function useDashboardGroupState() {
         return () => mq.removeEventListener('change', handler)
     }, [])
 
+    const updateGroupAssignments = useCallback((next: Map<string, number> | ((prev: Map<string, number>) => Map<string, number>)) => {
+        setGroupAssignments(next)
+    }, [])
+
+    const updateFocusedGroup = useCallback((next: number | ((prev: number) => number)) => {
+        setFocusedGroup(next)
+    }, [])
+
+    const updateGroupActiveTabIds = useCallback((
+        next: Record<number, string | null> | ((prev: Record<number, string | null>) => Record<number, string | null>),
+    ) => {
+        setGroupActiveTabIds(next)
+    }, [])
+
+    const updateGroupTabOrders = useCallback((
+        next: Record<number, string[]> | ((prev: Record<number, string[]>) => Record<number, string[]>),
+    ) => {
+        setGroupTabOrders(next)
+    }, [])
+
+    const updateGroupSizes = useCallback((next: number[] | ((prev: number[]) => number[])) => {
+        setGroupSizes(next)
+    }, [])
+
+    const focusGroup = useCallback((groupIndex: number) => {
+        updateFocusedGroup(groupIndex)
+    }, [updateFocusedGroup])
+
+    const setGroupActiveTab = useCallback((groupIndex: number, tabKey: string | null) => {
+        setGroupActiveTabIds(prev => {
+            if ((prev[groupIndex] ?? null) === (tabKey ?? null)) return prev
+            return { ...prev, [groupIndex]: tabKey }
+        })
+    }, [])
+
+    const setGroupTabOrder = useCallback((groupIndex: number, order: string[]) => {
+        setGroupTabOrders(prev => {
+            const current = prev[groupIndex]
+            if (sameIndexedTabOrder(current, order)) return prev
+            return { ...prev, [groupIndex]: order }
+        })
+    }, [])
+
+    const focusConversationTab = useCallback((tabKey: string, groupAssignments: Map<string, number>) => {
+        const targetGroup = groupAssignments.get(tabKey) ?? 0
+        setGroupActiveTab(targetGroup, tabKey)
+        focusGroup(targetGroup)
+        return targetGroup
+    }, [focusGroup, setGroupActiveTab])
+
     return {
+        layoutProfile: layoutProfile as DashboardLayoutProfile,
         groupAssignments,
-        setGroupAssignments,
+        updateGroupAssignments,
         focusedGroup,
-        setFocusedGroup,
+        updateFocusedGroup,
+        focusGroup,
         groupActiveTabIds,
-        setGroupActiveTabIds,
+        updateGroupActiveTabIds,
+        setGroupActiveTab,
         groupTabOrders,
-        setGroupTabOrders,
+        updateGroupTabOrders,
+        setGroupTabOrder,
         groupSizes,
-        setGroupSizes,
+        updateGroupSizes,
         isMobile,
         hasHydratedStoredLayout,
         hydrateStoredLayout,
+        focusConversationTab,
     }
 }

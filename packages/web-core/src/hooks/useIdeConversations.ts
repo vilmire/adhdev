@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { buildMachineNameMap, buildScopedIdeConversations, type LocalUserMessage } from '../components/dashboard/buildConversations'
+import { buildMachineNameMap, buildScopedIdeConversations } from '../components/dashboard/buildConversations'
 import { conversationMatchesTarget } from '../components/dashboard/conversation-identity'
 import { getConversationNotificationLabel } from '../components/dashboard/conversation-presenters'
 import { getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
@@ -9,7 +9,6 @@ interface UseIdeConversationsOptions {
     ideData: DaemonData | undefined
     allIdes: DaemonData[]
     connectionStates: Record<string, string>
-    localUserMessages: Record<string, LocalUserMessage[]>
     ideName: string
     preferredTabKey?: string
 }
@@ -18,7 +17,6 @@ export function useIdeConversations({
     ideData,
     allIdes,
     connectionStates,
-    localUserMessages,
     ideName,
     preferredTabKey,
 }: UseIdeConversationsOptions) {
@@ -27,12 +25,12 @@ export function useIdeConversations({
 
     const conversations = useMemo(() => {
         if (!ideData) return []
-        return buildScopedIdeConversations(ideData, localUserMessages, {
+        return buildScopedIdeConversations(ideData, {
             machineNames,
             connectionStates,
             defaultConnectionState: 'new',
         })
-    }, [ideData, localUserMessages, machineNames, connectionStates])
+    }, [ideData, machineNames, connectionStates])
 
     const nativeConv = useMemo(
         () => conversations.find(conversation => conversation.streamSource === 'native'),

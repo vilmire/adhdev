@@ -7,8 +7,7 @@
  * Channels:
  *   1. Toasts (in-app)
  *   2. Browser Notifications (Notification API)
- *   3. System Chat Messages (injected into chat pane)
- *   4. Web Push (server-side, via UserSession — not managed here)
+ *   3. Web Push (server-side, via UserSession — not managed here)
  */
 
 import { formatIdeType, getMachineDisplayName } from '../utils/daemon-utils'
@@ -18,7 +17,6 @@ import type { DaemonData, DashboardStatusEventPayload } from '../types'
 import {
     buildApprovalToastDescriptors,
     buildViewRequestToastActions,
-    formatApprovalSystemMessage,
     formatApprovalToastMessage,
 } from './event-manager-helpers'
 
@@ -42,16 +40,7 @@ export interface ToastConfig {
     duration?: number // ms before auto-dismiss (default 5000)
 }
 
-export interface SystemMessage {
-    role: 'system'
-    timestamp: number
-    content: string
-    _localId: string
-}
-
 export type ToastCallback = (toast: ToastConfig) => void
-export type SystemMessageCallback = (targetKey: string, msg: SystemMessage) => void
-export type ClearSystemMessageCallback = (targetKey: string, localIdPrefix: string) => void
 export type DesktopNotificationCallback = (title: string, body: string, tag: string) => void
 export type ResolveActionFn = (routeId: string, action: string, payload: Record<string, any>) => void
 export type ViewRequestRespondFn = (orgId: string, requestId: string, action: 'approve' | 'reject') => Promise<any>
@@ -69,8 +58,6 @@ class EventManager {
 
     // Registered callbacks
     private toastCallbacks: ToastCallback[] = []
-    private systemMessageCallbacks: SystemMessageCallback[] = []
-    private clearSystemMessageCallbacks: ClearSystemMessageCallback[] = []
     private resolveActionFn: ResolveActionFn | null = null
     private viewRequestRespondFn: ViewRequestRespondFn | null = null
 
@@ -84,22 +71,6 @@ class EventManager {
         this.toastCallbacks.push(callback)
         return () => {
             this.toastCallbacks = this.toastCallbacks.filter(cb => cb !== callback)
-        }
-    }
-
-    /** Register a system message callback. Returns unsubscribe function. */
-    onSystemMessage(callback: SystemMessageCallback): () => void {
-        this.systemMessageCallbacks.push(callback)
-        return () => {
-            this.systemMessageCallbacks = this.systemMessageCallbacks.filter(cb => cb !== callback)
-        }
-    }
-
-    /** Register callback to clear system messages by prefix. Returns unsubscribe function. */
-    onClearSystemMessage(callback: ClearSystemMessageCallback): () => void {
-        this.clearSystemMessageCallbacks.push(callback)
-        return () => {
-            this.clearSystemMessageCallbacks = this.clearSystemMessageCallbacks.filter(cb => cb !== callback)
         }
     }
 
@@ -131,10 +102,6 @@ class EventManager {
             duration: 5000,
             ...opts,
         })
-    }
-
-    private emitSystemMessage(targetKey: string, msg: SystemMessage): void {
-        for (const cb of this.systemMessageCallbacks) cb(targetKey, msg)
     }
 
     // ─── Deduplication ────────────────────────────
@@ -260,17 +227,6 @@ class EventManager {
         } else if (payload.event === 'agent:waiting_approval') {
             msg = `⚡ ${ideLabel} approval needed`
             type = 'warning'
-
-            // Approval banner already renders the modal/buttons in chat.
-            // Keep the system bubble only as a fallback when no actionable buttons exist.
-            if (conversationKey && !payload.modalButtons?.length) {
-                this.emitSystemMessage(conversationKey, {
-                    role: 'system',
-                    timestamp: eventTimestamp,
-                    content: formatApprovalSystemMessage(payload.modalMessage, payload.modalButtons),
-                    _localId: `sys_approval_${eventTimestamp}`,
-                })
-            }
 
             // Inline action toast with modal buttons
             if (payload.modalButtons?.length && this.resolveActionFn) {

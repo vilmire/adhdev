@@ -3,7 +3,6 @@ import {
     buildApprovalToastDescriptors,
     buildViewRequestToastActions,
     cleanApprovalButtonText,
-    formatApprovalSystemMessage,
     formatApprovalToastMessage,
 } from '../../src/managers/event-manager-helpers'
 
@@ -40,12 +39,12 @@ describe('event-manager-helpers', () => {
         ])
     })
 
-    it('formats approval fallback text for bubble and toast contexts', () => {
-        expect(formatApprovalSystemMessage('Need confirmation', ['Run', 'Cancel']))
-            .toBe('⚡ Approval requested: Need confirmation\n[Run] [Cancel]')
-
+    it('formats approval toast text for modal message and fallback contexts', () => {
         expect(formatApprovalToastMessage('MacBook/Cursor', 'Line 1\nLine 2', 'fallback'))
             .toBe('⚡ MacBook/Cursor: Line 1 Line 2')
+
+        expect(formatApprovalToastMessage('MacBook/Cursor', undefined, 'fallback'))
+            .toBe('fallback')
     })
 
     it('wires view request actions to the provided responder', async () => {

@@ -312,7 +312,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         const connectionState = daemonCtx.connectionStates?.[machineId || ''] || undefined
         return allIdes
             .filter(entry => entry.daemonId === machineId && entry.type !== 'adhdev-daemon')
-            .flatMap(entry => buildScopedIdeConversations(entry, {}, {
+            .flatMap(entry => buildScopedIdeConversations(entry, {
                 connectionStates: machineId && connectionState ? { [machineId]: connectionState } : undefined,
                 defaultConnectionState: connectionState,
             }))

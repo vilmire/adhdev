@@ -24,7 +24,6 @@ import { buildMobileMachineCards, buildSelectedMachineRecentLaunches } from './d
 import { useDashboardMobileChatEffects } from './useDashboardMobileChatEffects'
 import { useDashboardMobileMachineActions } from './useDashboardMobileMachineActions'
 import { useDashboardMobileNavigationController } from './useDashboardMobileNavigationController'
-import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 
 declare const __APP_VERSION__: string
 
@@ -34,7 +33,6 @@ interface DashboardMobileChatModeProps {
     ides: DaemonData[]
     actionLogs: { routeId: string; text: string; timestamp: number }[]
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
-    setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
     setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
     userName?: string
@@ -53,9 +51,7 @@ interface DashboardMobileChatModeProps {
     onShowAllHiddenConversations: () => void
     onHideConversation?: (conversation: ActiveConversation) => void
     onOpenNewSession?: () => void
-    notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
     liveSessionInboxState: Map<string, LiveSessionInboxState>
-    onMarkNotificationTargetRead: (target: { sessionId?: string; providerSessionId?: string; tabKey?: string; routeId?: string }, readAt?: number) => void
 }
 
 function getAvatarText(primary: string) {
@@ -78,7 +74,6 @@ export default function DashboardMobileChatMode({
     ides,
     actionLogs,
     sendDaemonCommand,
-    setLocalUserMessages,
     setActionLogs,
     isStandalone,
     userName,
@@ -97,9 +92,7 @@ export default function DashboardMobileChatMode({
     onShowAllHiddenConversations,
     onHideConversation,
     onOpenNewSession,
-    notificationStateBySessionId,
     liveSessionInboxState,
-    onMarkNotificationTargetRead,
 }: DashboardMobileChatModeProps) {
     const [selectedTabKey, setSelectedTabKey] = useState<string | null>(() => conversations[0]?.tabKey || null)
     const [screen, setScreen] = useState<'inbox' | 'chat' | 'machine'>(() => (conversations[0] ? 'chat' : 'inbox'))
@@ -134,8 +127,7 @@ export default function DashboardMobileChatMode({
     const cmds = useDashboardConversationCommands({
         sendDaemonCommand,
         activeConv: selectedConversation || undefined,
-        setLocalUserMessages,
-        setActionLogs,
+            setActionLogs,
         isStandalone,
     })
     const machineActions = useDashboardMobileMachineActions({
@@ -150,10 +142,10 @@ export default function DashboardMobileChatMode({
         const surfaceState = getConversationInboxSurfaceState(conversation, liveSessionInboxState, {
             hideOpenTaskCompleteUnread: true,
             isOpenConversation,
-            notificationStateBySessionId,
         })
         const timestamp = getConversationTimestamp(conversation)
         const preview = getConversationPreviewText(conversation)
+
         return {
             conversation,
             timestamp,
@@ -163,7 +155,7 @@ export default function DashboardMobileChatMode({
             isWorking: surfaceState.isWorking,
             inboxBucket: surfaceState.inboxBucket,
         }
-    }), [conversations, liveSessionInboxState, notificationStateBySessionId, screen, selectedConversation])
+    }), [conversations, liveSessionInboxState, screen, selectedConversation])
     const { markConversationRead } = useDashboardMobileChatEffects({
         conversations,
         machineEntries,
@@ -185,7 +177,6 @@ export default function DashboardMobileChatMode({
         setSection,
         setMachineBackTarget,
         resetMachineAction: machineActions.resetMachineAction,
-        markNotificationTargetRead: onMarkNotificationTargetRead,
     })
     const navigation = useDashboardMobileNavigationController({
         conversations,

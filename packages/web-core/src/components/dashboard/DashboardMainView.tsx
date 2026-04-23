@@ -13,13 +13,14 @@ import { useActionShortcuts, type DashboardActionShortcutDefinition } from '../.
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
 import type { BrowseDirectoryResult } from '../machine/workspaceBrowse'
 import { IconX } from '../Icons'
-import type { DashboardNotificationRecord, DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
+import type { DashboardNotificationRecord } from '../../utils/dashboard-notifications'
+import type { DashboardLayoutProfile } from '../../utils/dashboardLayoutStorage'
+import { useDashboardMainViewUiState, type DashboardMainViewShortcutSectionId } from '../../hooks/useDashboardMainViewUiState'
 import type { LiveSessionInboxState } from './DashboardMobileChatShared'
 import { conversationMatchesTarget } from './conversation-identity'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
 
-type GuideTabId = 'overview' | 'quickstart' | 'shortcuts'
-type ShortcutSectionId = 'all' | 'workspace' | 'panes' | 'approvals'
+type ShortcutSectionId = DashboardMainViewShortcutSectionId
 
 function getShortcutSection(action: DashboardActionShortcutDefinition): ShortcutSectionId {
     switch (action.id) {
@@ -71,7 +72,6 @@ interface DashboardMainViewProps {
     ides: DaemonData[]
     actionLogs: { routeId: string; text: string; timestamp: number }[]
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
-    setLocalUserMessages: React.Dispatch<React.SetStateAction<Record<string, any[]>>>
     setActionLogs: React.Dispatch<React.SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
     initialDataLoaded: boolean
@@ -89,26 +89,27 @@ interface DashboardMainViewProps {
     groupedConvs: ActiveConversation[][]
     clearedTabs: Record<string, number>
     focusedGroup: number
-    setFocusedGroup: React.Dispatch<React.SetStateAction<number>>
+    focusGroup: (groupIndex: number) => void
     moveTabToGroup: (tabKey: string, nextGroupIndex: number) => void
     splitTabRelative: (tabKey: string, targetGroup: number, side: 'left' | 'right') => void
     closeGroup: (groupIndex: number) => void
     handleResizeStart: (dividerIdx: number, event: React.MouseEvent) => void
     groupActiveTabIds: Record<number, string | null>
-    setGroupActiveTabIds: React.Dispatch<React.SetStateAction<Record<number, string | null>>>
+    setGroupActiveTab: (groupIndex: number, tabKey: string | null) => void
     groupTabOrders: Record<number, string[]>
-    setGroupTabOrders: React.Dispatch<React.SetStateAction<Record<number, string[]>>>
+    setGroupTabOrder: (groupIndex: number, order: string[]) => void
     toggleHiddenTab: (tabKey: string) => void
     visibleConversations: ActiveConversation[]
     requestedDesktopTabKey: string | null
     onRequestedDesktopTabConsumed: () => void
-    onDesktopActiveTabChange: React.Dispatch<React.SetStateAction<string | null>>
+    onDesktopActiveTabChange: (tabKey: string | null) => void
     onRequestScrollToBottom: (tabKey: string | null | undefined, intent: DashboardScrollToBottomIntent) => void
     onHideConversation: (conversation: ActiveConversation) => void
     onShowHiddenConversation: (conversation: ActiveConversation) => void
     onShowAllHiddenConversations: () => void
     scrollToBottomRequest?: { tabKey: string; nonce: number } | null
     machineEntries: DaemonData[]
+    layoutProfile: DashboardLayoutProfile
     onBrowseMachineDirectory: (machineId: string, path: string) => Promise<BrowseDirectoryResult>
     onSaveMachineWorkspace: (machineId: string, path: string) => Promise<{ ok: boolean; error?: string }>
     onLaunchMachineIde: (machineId: string, ideType: string, opts?: { workspacePath?: string | null }) => Promise<{ ok: boolean; error?: string }>
@@ -141,12 +142,10 @@ interface DashboardMainViewProps {
     }>>
     notifications: DashboardNotificationRecord[]
     notificationUnreadCount: number
-    notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
     liveSessionInboxState: Map<string, LiveSessionInboxState>
     onMarkNotificationRead: (notificationId: string) => void
     onMarkNotificationUnread: (notificationId: string) => void
     onDeleteNotification: (notificationId: string) => void
-    onMarkNotificationTargetRead: (target: { sessionId?: string; providerSessionId?: string; tabKey?: string; routeId?: string }, readAt?: number) => void
 }
 
 export default function DashboardMainView({
@@ -165,7 +164,6 @@ export default function DashboardMainView({
     ides,
     actionLogs,
     sendDaemonCommand,
-    setLocalUserMessages,
     setActionLogs,
     isStandalone,
     initialDataLoaded,
@@ -183,15 +181,15 @@ export default function DashboardMainView({
     groupedConvs,
     clearedTabs,
     focusedGroup,
-    setFocusedGroup,
+    focusGroup,
     moveTabToGroup,
     splitTabRelative,
     closeGroup,
     handleResizeStart,
     groupActiveTabIds,
-    setGroupActiveTabIds,
+    setGroupActiveTab,
     groupTabOrders,
-    setGroupTabOrders,
+    setGroupTabOrder,
     toggleHiddenTab,
     visibleConversations,
     requestedDesktopTabKey,
@@ -203,6 +201,7 @@ export default function DashboardMainView({
     onShowAllHiddenConversations,
     scrollToBottomRequest,
     machineEntries,
+    layoutProfile,
     onBrowseMachineDirectory,
     onSaveMachineWorkspace,
     onLaunchMachineIde,
@@ -210,12 +209,10 @@ export default function DashboardMainView({
     onListMachineSavedSessions,
     notifications,
     notificationUnreadCount,
-    notificationStateBySessionId,
     liveSessionInboxState,
     onMarkNotificationRead,
     onMarkNotificationUnread,
     onDeleteNotification,
-    onMarkNotificationTargetRead,
 }: DashboardMainViewProps) {
     const dockviewActionHandlersRef = React.useRef<{
         setShortcutForActiveTab: () => void
@@ -238,10 +235,28 @@ export default function DashboardMainView({
         moveActiveTabToUpPane: () => void
         moveActiveTabToDownPane: () => void
     } | null>(null)
-    const [inboxOpen, setInboxOpen] = React.useState(false)
-    const [hiddenOpen, setHiddenOpen] = React.useState(false)
-    const [shortcutHelpOpen, setShortcutHelpOpen] = React.useState(false)
-    const [newSessionOpen, setNewSessionOpen] = React.useState(false)
+    const {
+        inboxOpen,
+        hiddenOpen,
+        shortcutHelpOpen,
+        newSessionOpen,
+        guideNudgeVisible,
+        guideTab,
+        shortcutSection,
+        isDesktopDashboard,
+        setGuideTab,
+        setShortcutSection,
+        handleInboxOpenChange,
+        handleHiddenOpenChange,
+        handleOpenShortcutHelp,
+        closeShortcutHelp,
+        openNewSession,
+        closeNewSession,
+    } = useDashboardMainViewUiState({
+        isMobile,
+        showMobileChatMode,
+        visibleConversationCount: visibleConversations.length,
+    })
 
     const handleShowHiddenConversationWithRestore = React.useCallback((conversation: ActiveConversation) => {
         flushSync(() => {
@@ -263,53 +278,21 @@ export default function DashboardMainView({
         }
 
         onMarkNotificationRead(notification.id)
-        if (notification.sessionId || notification.providerSessionId || notification.tabKey || notification.routeId) {
-            onMarkNotificationTargetRead({
-                sessionId: notification.sessionId,
-                providerSessionId: notification.providerSessionId,
-                tabKey: notification.tabKey,
-                routeId: notification.routeId,
-            })
-        }
-        setInboxOpen(false)
+        handleInboxOpenChange(false)
     }, [
         handleShowHiddenConversationWithRestore,
         hiddenConversations,
         mobileChatConversations,
         onDesktopActiveTabChange,
         onMarkNotificationRead,
-        onMarkNotificationTargetRead,
         onRequestScrollToBottom,
     ])
-    const [guideNudgeVisible, setGuideNudgeVisible] = React.useState(false)
-    const [guideTab, setGuideTab] = React.useState<GuideTabId>('quickstart')
-    const [shortcutSection, setShortcutSection] = React.useState<ShortcutSectionId>('workspace')
-    const isDesktopDashboard = !showMobileChatMode && !isMobile
-
-    const handleInboxOpenChange = React.useCallback((next: boolean) => {
-        setInboxOpen(next)
-        if (next) setHiddenOpen(false)
-    }, [])
-
-    const handleHiddenOpenChange = React.useCallback((next: boolean) => {
-        setHiddenOpen(next)
-        if (next) setInboxOpen(false)
-    }, [])
-
     const handleResetAllPanelsToMain = React.useCallback(() => {
         const confirmed = window.confirm('Move every floating or popout panel back into the main dashboard grid?')
         if (!confirmed) return
         dockviewActionHandlersRef.current?.resetAllPanelsToMain()
-        setHiddenOpen(false)
-    }, [])
-
-    const handleOpenShortcutHelp = React.useCallback(() => {
-        setGuideTab(visibleConversations.length === 0 ? 'quickstart' : 'shortcuts')
-        setShortcutSection('workspace')
-        setShortcutHelpOpen(true)
-        setInboxOpen(false)
-        setHiddenOpen(false)
-    }, [visibleConversations.length])
+        handleHiddenOpenChange(false)
+    }, [handleHiddenOpenChange])
 
     const handleApprovalShortcut = React.useCallback(async (buttonIndex: number) => {
         if (!activeConv) return
@@ -450,10 +433,10 @@ export default function DashboardMainView({
     })
 
     const handleCloseShortcutHelp = React.useCallback(() => {
-        setShortcutHelpOpen(false)
+        closeShortcutHelp()
         setShortcutListening(null)
         setShortcutListeningDraft([])
-    }, [setShortcutListening, setShortcutListeningDraft])
+    }, [closeShortcutHelp, setShortcutListening, setShortcutListeningDraft])
 
     const filteredActionDefinitions = React.useMemo(
         () => shortcutSection === 'all'
@@ -508,18 +491,6 @@ export default function DashboardMainView({
         return () => window.removeEventListener('keydown', handleKeyDown, true)
     }, [handleCloseShortcutHelp, shortcutHelpOpen, shortcutListening])
 
-    React.useEffect(() => {
-        if (!isDesktopDashboard) {
-            setGuideNudgeVisible(false)
-            return
-        }
-        setGuideNudgeVisible(true)
-        const timer = window.setTimeout(() => {
-            setGuideNudgeVisible(false)
-        }, 10000)
-        return () => window.clearTimeout(timer)
-    }, [isDesktopDashboard])
-
     return (
         <>
             {!showMobileChatMode && (
@@ -544,7 +515,7 @@ export default function DashboardMainView({
                     onInboxOpenChange={handleInboxOpenChange}
                     hiddenOpen={hiddenOpen}
                     onHiddenOpenChange={handleHiddenOpenChange}
-                    onOpenNewSession={!isMobile ? () => setNewSessionOpen(true) : undefined}
+                    onOpenNewSession={!isMobile ? openNewSession : undefined}
                     actionShortcuts={actionShortcuts}
                     onOpenRemote={() => {
                         if (!activeConv || isCliConv(activeConv) || isAcpConv(activeConv)) return
@@ -563,7 +534,6 @@ export default function DashboardMainView({
                     ides={ides}
                     actionLogs={actionLogs}
                     sendDaemonCommand={sendDaemonCommand}
-                    setLocalUserMessages={setLocalUserMessages}
                     setActionLogs={setActionLogs}
                     isStandalone={isStandalone}
                     userName={userName}
@@ -580,10 +550,8 @@ export default function DashboardMainView({
                     isConnected={isConnected}
                     onShowHiddenConversation={handleShowHiddenConversationWithRestore}
                     onShowAllHiddenConversations={onShowAllHiddenConversations}
-                    onOpenNewSession={() => setNewSessionOpen(true)}
-                    notificationStateBySessionId={notificationStateBySessionId}
+                    onOpenNewSession={openNewSession}
                     liveSessionInboxState={liveSessionInboxState}
-                    onMarkNotificationTargetRead={onMarkNotificationTargetRead}
                 />
             ) : isMobile ? (
                 <DashboardPaneWorkspace
@@ -596,25 +564,23 @@ export default function DashboardMainView({
                     ides={ides}
                     actionLogs={actionLogs}
                     sendDaemonCommand={sendDaemonCommand}
-                    setLocalUserMessages={setLocalUserMessages}
                     setActionLogs={setActionLogs}
                     isStandalone={isStandalone}
                     hasRegisteredMachines={machineEntries.length > 0}
                     userName={userName}
                     focusedGroup={focusedGroup}
-                    setFocusedGroup={setFocusedGroup}
+                    focusGroup={focusGroup}
                     moveTabToGroup={moveTabToGroup}
                     splitTabRelative={splitTabRelative}
                     closeGroup={closeGroup}
                     handleResizeStart={handleResizeStart}
                     groupActiveTabIds={groupActiveTabIds}
-                    setGroupActiveTabIds={setGroupActiveTabIds}
+                    setGroupActiveTab={setGroupActiveTab}
                     groupTabOrders={groupTabOrders}
-                    setGroupTabOrders={setGroupTabOrders}
+                    setGroupTabOrder={setGroupTabOrder}
                     toggleHiddenTab={toggleHiddenTab}
-                    onOpenNewSession={() => setNewSessionOpen(true)}
+                    onOpenNewSession={openNewSession}
                     allowTabShortcuts={false}
-                    notificationStateBySessionId={notificationStateBySessionId}
                     liveSessionInboxState={liveSessionInboxState}
                 />
             ) : (
@@ -624,7 +590,6 @@ export default function DashboardMainView({
                     ides={ides}
                     actionLogs={actionLogs}
                     sendDaemonCommand={sendDaemonCommand}
-                    setLocalUserMessages={setLocalUserMessages}
                     setActionLogs={setActionLogs}
                     isStandalone={isStandalone}
                     hasRegisteredMachines={machineEntries.length > 0}
@@ -640,16 +605,16 @@ export default function DashboardMainView({
                     onRequestedActiveTabConsumed={onRequestedDesktopTabConsumed}
                     onRequestScrollToBottom={onRequestScrollToBottom}
                     scrollToBottomRequest={scrollToBottomRequest}
-                    onOpenNewSession={() => setNewSessionOpen(true)}
-                    notificationStateBySessionId={notificationStateBySessionId}
+                    onOpenNewSession={openNewSession}
                     liveSessionInboxState={liveSessionInboxState}
+                    layoutProfile={layoutProfile}
                 />
             )}
             {newSessionOpen && (
                 <DashboardNewSessionDialog
                     machines={machineEntries}
                     ides={ides}
-                    onClose={() => setNewSessionOpen(false)}
+                    onClose={closeNewSession}
                     onBrowseDirectory={onBrowseMachineDirectory}
                     onSaveWorkspace={onSaveMachineWorkspace}
                     onLaunchIde={onLaunchMachineIde}

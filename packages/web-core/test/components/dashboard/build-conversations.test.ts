@@ -40,7 +40,7 @@ describe('build conversations shared context', () => {
 
     it('builds conversations through the shared scoped helper', () => {
         const ide = createIdeEntry()
-        const conversations = buildScopedIdeConversations(ide, {}, {
+        const conversations = buildScopedIdeConversations(ide, {
             machineNames: { 'machine-1': 'Studio Mac' },
             connectionStates: { 'machine-1': 'connected' },
             defaultConnectionState: 'new',
@@ -68,7 +68,7 @@ describe('build conversations shared context', () => {
             },
         })
 
-        const conversations = buildScopedIdeConversations(ide, {}, {
+        const conversations = buildScopedIdeConversations(ide, {
             machineNames: { 'machine-1': 'Studio Mac' },
             connectionStates: { 'machine-1': 'connected' },
             defaultConnectionState: 'new',
@@ -111,7 +111,7 @@ describe('build conversations shared context', () => {
             }],
         })
 
-        const conversations = buildScopedIdeConversations(ide, {}, {
+        const conversations = buildScopedIdeConversations(ide, {
             machineNames: { 'machine-1': 'Studio Mac' },
             connectionStates: { 'machine-1': 'connected' },
             defaultConnectionState: 'new',
@@ -158,7 +158,7 @@ describe('build conversations shared context', () => {
             }],
         })
 
-        const conversations = buildScopedIdeConversations(ide, {}, {
+        const conversations = buildScopedIdeConversations(ide, {
             machineNames: { 'machine-1': 'Studio Mac' },
             connectionStates: { 'machine-1': 'connected' },
             defaultConnectionState: 'new',
@@ -189,7 +189,7 @@ describe('build conversations shared context', () => {
             },
         })
 
-        const conversations = buildScopedIdeConversations(cli, {}, {
+        const conversations = buildScopedIdeConversations(cli, {
             machineNames: { 'machine-1': 'Studio Mac' },
             connectionStates: { 'machine-1': 'connected' },
             defaultConnectionState: 'new',
@@ -223,10 +223,6 @@ describe('build conversations shared context', () => {
         })
 
         const conversations = buildScopedIdeConversations(cli, {
-            'cli-2': [
-                { role: 'user', content: 'Follow-up prompt', timestamp: 2000, _localId: 'local-cli-1' },
-            ],
-        }, {
             machineNames: { 'machine-1': 'Studio Mac' },
             connectionStates: { 'machine-1': 'connected' },
             defaultConnectionState: 'new',

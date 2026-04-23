@@ -242,6 +242,156 @@ function preserveReferenceWhenOnlyVolatileFieldsChanged(existing: DaemonData, ne
     return existing
 }
 
+function getEntryDaemonId(entry: Pick<DaemonData, 'daemonId' | 'id'>): string {
+    return entry.daemonId || entry.id?.split(':')[0] || entry.id
+}
+
+function copyDefinedField<K extends keyof DaemonData>(
+    target: Partial<DaemonData>,
+    source: DaemonData,
+    key: K,
+): void {
+    if (source[key] !== undefined) {
+        target[key] = source[key] as DaemonData[K]
+    }
+}
+
+function buildMergedRichEntry(
+    existing: DaemonData,
+    incoming: DaemonData,
+    now: number,
+    preserveMissingChildSessions: boolean,
+): DaemonData {
+    const chats = (incoming.chats?.length) ? incoming.chats : existing.chats
+    const childSessions = mergeSessionEntryChildren(existing.childSessions, incoming.childSessions, {
+        preserveMissing: preserveMissingChildSessions,
+    })
+    const activeChat = mergeActiveChatData(incoming.activeChat, existing.activeChat)
+    return mergeDaemonVersionFlags(existing, incoming, {
+        ...existing,
+        ...incoming,
+        chats,
+        childSessions,
+        activeChat,
+        _lastUpdate: now,
+    })
+}
+
+function buildWeakMetadataUpdate(
+    existing: DaemonData,
+    incoming: DaemonData,
+    preserveMissingChildSessions: boolean,
+): Partial<DaemonData> {
+    const safeUpdate: Partial<DaemonData> = {}
+
+    if (incoming.status && incoming.status !== existing.status) safeUpdate.status = incoming.status
+    if (incoming.cdpConnected !== undefined) safeUpdate.cdpConnected = incoming.cdpConnected
+    if (incoming.childSessions !== undefined) {
+        safeUpdate.childSessions = mergeSessionEntryChildren(existing.childSessions, incoming.childSessions, {
+            preserveMissing: preserveMissingChildSessions,
+        })
+    }
+    if (incoming.chats?.length && !existing.chats?.length) safeUpdate.chats = incoming.chats
+
+    for (const key of [
+        'title',
+        'workspace',
+        'providerSessionId',
+        'parentSessionId',
+        'sessionKind',
+        'sessionCapabilities',
+        'controlValues',
+        'providerControls',
+        'summaryMetadata',
+        'lastMessagePreview',
+        'lastMessageRole',
+        'lastMessageAt',
+        'lastMessageHash',
+        'lastUpdated',
+        'unread',
+        'lastSeenAt',
+        'inboxBucket',
+        'completionMarker',
+        'seenCompletionMarker',
+        'surfaceHidden',
+        'runtimeKey',
+        'runtimeDisplayName',
+        'runtimeWorkspaceLabel',
+        'runtimeWriteOwner',
+        'runtimeAttachedClients',
+        'version',
+        'serverVersion',
+    ] as const) {
+        copyDefinedField(safeUpdate, incoming, key)
+    }
+
+    if (incoming.machineNickname !== undefined && incoming.machineNickname !== existing.machineNickname) {
+        safeUpdate.machineNickname = incoming.machineNickname
+    }
+    if (incoming.versionMismatch === true) safeUpdate.versionMismatch = true
+
+    return safeUpdate
+}
+
+function mergeWeakEntry(
+    existing: DaemonData,
+    incoming: DaemonData,
+    now: number,
+    preserveMissingChildSessions: boolean,
+): DaemonData {
+    const safeUpdate = buildWeakMetadataUpdate(existing, incoming, preserveMissingChildSessions)
+    const merged = Object.keys(safeUpdate).length > 0
+        ? mergeDaemonVersionFlags(existing, incoming, { ...existing, ...safeUpdate, _lastUpdate: now })
+        : { ...existing, _lastUpdate: now }
+    return preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now)
+}
+
+function collectIncomingDaemonSets(incoming: DaemonData[]) {
+    const incomingIds = new Set(incoming.map((entry) => entry.id))
+    const incomingDaemonIds = new Set<string>()
+    const daemonIdsWithSessionEntries = new Set<string>()
+
+    for (const entry of incoming) {
+        const daemonId = getEntryDaemonId(entry)
+        if (daemonId) incomingDaemonIds.add(daemonId)
+        if (daemonId && entry.type !== 'adhdev-daemon') {
+            daemonIdsWithSessionEntries.add(daemonId)
+        }
+    }
+
+    return { incomingIds, incomingDaemonIds, daemonIdsWithSessionEntries }
+}
+
+function shouldDropMissingAuthoritativeTransportEntry(
+    entry: DaemonData,
+    daemonId: string,
+    age: number,
+    incomingIds: Set<string>,
+    authoritativeDaemonIds: Set<string>,
+    daemonIdsWithSessionEntries: Set<string>,
+): boolean {
+    if (!authoritativeDaemonIds.has(daemonId)) return false
+    if (!daemonIdsWithSessionEntries.has(daemonId)) return false
+    if (incomingIds.has(entry.id)) return false
+
+    if (entry.transport === 'pty' || entry.transport === 'acp') {
+        return age > 10_000
+    }
+    if (entry.transport === 'cdp-page') {
+        return age > 30_000
+    }
+    return false
+}
+
+function shouldSkipAgeCleanupForDaemonOnlyUpdate(
+    entry: DaemonData,
+    daemonId: string,
+    incomingDaemonIds: Set<string>,
+    daemonIdsWithSessionEntries: Set<string>,
+): boolean {
+    return !!(incomingDaemonIds.has(daemonId) && entry.transport && !daemonIdsWithSessionEntries.has(daemonId))
+}
+
 /**
  * reconcileIdes — merge IDE status with richness-aware priority.
  *
@@ -267,6 +417,8 @@ export function reconcileIdes(
         resultMap.set(ide.id, ide)
     }
 
+    const { incomingIds, incomingDaemonIds, daemonIdsWithSessionEntries } = collectIncomingDaemonSets(incoming)
+
     for (const ide of incoming) {
         const existing = resultMap.get(ide.id)
 
@@ -275,106 +427,32 @@ export function reconcileIdes(
             continue
         }
 
-        const incomingRichness = payloadRichness(ide);
-        const existingRichness = payloadRichness(existing);
-        const entryDaemonId = ide.daemonId || ide.id?.split(':')[0] || ide.id
+        const incomingRichness = payloadRichness(ide)
+        const existingRichness = payloadRichness(existing)
+        const entryDaemonId = getEntryDaemonId(ide)
         const preserveMissingChildSessions = !authoritativeDaemonIds.has(entryDaemonId)
 
-        // RULE 1: Rich payload always wins over weak payload (regardless of timestamp)
-        // This is the core fix: WS compact data (richness=0) can never overwrite
-        // P2P data (richness>0) that contains actual chat messages.
         if (incomingRichness > existingRichness) {
-            // Incoming is richer → always overwrite, preserve chats if incoming lacks them
-            const chats = (ide.chats?.length) ? ide.chats : existing.chats;
-            const childSessions = mergeSessionEntryChildren(existing.childSessions, ide.childSessions, {
-                preserveMissing: preserveMissingChildSessions,
-            })
-            const activeChat = mergeActiveChatData(ide.activeChat, existing.activeChat)
-            const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, childSessions, activeChat, _lastUpdate: now })
-            resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now));
-        } else if (incomingRichness < existingRichness) {
-            // Incoming is weaker → NEVER overwrite core data.
-            // Only merge non-destructive routing metadata (status, cdpConnected, timestamp).
-            const safeUpdate: Partial<DaemonData> = {};
-            if (ide.status && ide.status !== existing.status) safeUpdate.status = ide.status;
-            if (ide.cdpConnected !== undefined) safeUpdate.cdpConnected = ide.cdpConnected;
-            if (ide.childSessions !== undefined) {
-                safeUpdate.childSessions = mergeSessionEntryChildren(existing.childSessions, ide.childSessions, {
-                    preserveMissing: preserveMissingChildSessions,
-                })
-            }
-            if (ide.chats?.length && !existing.chats?.length) safeUpdate.chats = ide.chats;
-            if (ide.title !== undefined) safeUpdate.title = ide.title;
-            if (ide.workspace !== undefined) safeUpdate.workspace = ide.workspace;
-            if (ide.providerSessionId !== undefined) safeUpdate.providerSessionId = ide.providerSessionId;
-            if (ide.parentSessionId !== undefined) safeUpdate.parentSessionId = ide.parentSessionId;
-            if (ide.sessionKind !== undefined) safeUpdate.sessionKind = ide.sessionKind;
-            if (ide.sessionCapabilities !== undefined) safeUpdate.sessionCapabilities = ide.sessionCapabilities;
-            if (ide.controlValues !== undefined) safeUpdate.controlValues = ide.controlValues;
-            if (ide.providerControls !== undefined) safeUpdate.providerControls = ide.providerControls;
-            if (ide.summaryMetadata !== undefined) safeUpdate.summaryMetadata = ide.summaryMetadata;
-            if (ide.lastMessagePreview !== undefined) safeUpdate.lastMessagePreview = ide.lastMessagePreview;
-            if (ide.lastMessageRole !== undefined) safeUpdate.lastMessageRole = ide.lastMessageRole;
-            if (ide.lastMessageAt !== undefined) safeUpdate.lastMessageAt = ide.lastMessageAt;
-            if (ide.lastMessageHash !== undefined) safeUpdate.lastMessageHash = ide.lastMessageHash;
-            if (ide.lastUpdated !== undefined) safeUpdate.lastUpdated = ide.lastUpdated;
-            if (ide.unread !== undefined) safeUpdate.unread = ide.unread;
-            if (ide.lastSeenAt !== undefined) safeUpdate.lastSeenAt = ide.lastSeenAt;
-            if (ide.inboxBucket !== undefined) safeUpdate.inboxBucket = ide.inboxBucket;
-            if (ide.completionMarker !== undefined) safeUpdate.completionMarker = ide.completionMarker;
-            if (ide.seenCompletionMarker !== undefined) safeUpdate.seenCompletionMarker = ide.seenCompletionMarker;
-            if (ide.surfaceHidden !== undefined) safeUpdate.surfaceHidden = ide.surfaceHidden;
-            if (ide.runtimeKey !== undefined) safeUpdate.runtimeKey = ide.runtimeKey;
-            if (ide.runtimeDisplayName !== undefined) safeUpdate.runtimeDisplayName = ide.runtimeDisplayName;
-            if (ide.runtimeWorkspaceLabel !== undefined) safeUpdate.runtimeWorkspaceLabel = ide.runtimeWorkspaceLabel;
-            if (ide.runtimeWriteOwner !== undefined) safeUpdate.runtimeWriteOwner = ide.runtimeWriteOwner;
-            if (ide.runtimeAttachedClients !== undefined) safeUpdate.runtimeAttachedClients = ide.runtimeAttachedClients;
-            
-            // Allow server updates to override machineNickname safely even if P2P is active
-            if (ide.machineNickname !== undefined && ide.machineNickname !== existing.machineNickname) {
-                safeUpdate.machineNickname = ide.machineNickname;
-            }
-            if (ide.version !== undefined) safeUpdate.version = ide.version
-            if (ide.serverVersion !== undefined) safeUpdate.serverVersion = ide.serverVersion
-            if (ide.versionMismatch === true) safeUpdate.versionMismatch = true
-
-            if (Object.keys(safeUpdate).length > 0) {
-                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...safeUpdate, _lastUpdate: now })
-                resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now));
-            } else {
-                preserveReferenceWhenOnlyVolatileFieldsChanged(existing, { ...existing, _lastUpdate: now }, now)
-            }
-            // Weak payloads still prove the entry is alive; refresh staleness bookkeeping
-            // without letting sparse fields clobber richer chat state.
-        } else {
-            // Same richness → use timestamp (standard merge)
-            const incomingTs = ide.timestamp || now;
-            const existingTs = existing._lastUpdate || existing.timestamp || 0;
-            if (incomingTs >= existingTs) {
-                const chats = (ide.chats?.length) ? ide.chats : existing.chats;
-                const childSessions = mergeSessionEntryChildren(existing.childSessions, ide.childSessions, {
-                    preserveMissing: preserveMissingChildSessions,
-                })
-                const activeChat = mergeActiveChatData(ide.activeChat, existing.activeChat)
-                const merged = mergeDaemonVersionFlags(existing, ide, { ...existing, ...ide, chats, childSessions, activeChat, _lastUpdate: now })
-                resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now));
-            } else {
-                if (ide.chats?.length && !existing.chats?.length) {
-                    resultMap.set(ide.id, { ...existing, chats: ide.chats });
-                }
-            }
+            const merged = buildMergedRichEntry(existing, ide, now, preserveMissingChildSessions)
+            resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now))
+            continue
         }
-    }
 
-    // Stale Cleanup
-    const incomingIds = new Set(incoming.map(i => i.id))
-    const incomingDaemonIds = new Set<string>()
-    const daemonIdsWithSessionEntries = new Set<string>()
-    for (const ide of incoming) {
-        const did = ide.daemonId || ide.id?.split(':')[0]
-        if (did) incomingDaemonIds.add(did)
-        if (did && ide.type !== 'adhdev-daemon') {
-            daemonIdsWithSessionEntries.add(did)
+        if (incomingRichness < existingRichness) {
+            resultMap.set(ide.id, mergeWeakEntry(existing, ide, now, preserveMissingChildSessions))
+            continue
+        }
+
+        const incomingTs = ide.timestamp || now
+        const existingTs = existing._lastUpdate || existing.timestamp || 0
+        if (incomingTs >= existingTs) {
+            const merged = buildMergedRichEntry(existing, ide, now, preserveMissingChildSessions)
+            resultMap.set(ide.id, preserveReferenceWhenOnlyVolatileFieldsChanged(existing, merged, now))
+            continue
+        }
+
+        if (ide.chats?.length && !existing.chats?.length) {
+            resultMap.set(ide.id, { ...existing, chats: ide.chats })
         }
     }
 
@@ -388,19 +466,21 @@ export function reconcileIdes(
         }
 
         const age = now - (ide._lastUpdate || ide.timestamp || 0)
-
-        if (ide.transport === 'pty' && authoritativeDaemonIds.has(entryDaemonId) && daemonIdsWithSessionEntries.has(entryDaemonId) && !incomingIds.has(key) && age > 10_000) {
-            resultMap.delete(key)
-        } else if (ide.transport === 'acp' && authoritativeDaemonIds.has(entryDaemonId) && daemonIdsWithSessionEntries.has(entryDaemonId) && !incomingIds.has(key) && age > 10_000) {
-            resultMap.delete(key)
-        } else if (ide.transport === 'cdp-page' && authoritativeDaemonIds.has(entryDaemonId) && daemonIdsWithSessionEntries.has(entryDaemonId) && !incomingIds.has(key) && age > 30_000) {
+        if (shouldDropMissingAuthoritativeTransportEntry(
+            ide,
+            entryDaemonId,
+            age,
+            incomingIds,
+            authoritativeDaemonIds,
+            daemonIdsWithSessionEntries,
+        )) {
             resultMap.delete(key)
         }
     }
 
     for (const [key, ide] of resultMap) {
         const entryDaemonId = ide.daemonId || key.split(':')[0]
-        if (incomingDaemonIds.has(entryDaemonId) && ide.transport && !daemonIdsWithSessionEntries.has(entryDaemonId)) {
+        if (shouldSkipAgeCleanupForDaemonOnlyUpdate(ide, entryDaemonId, incomingDaemonIds, daemonIdsWithSessionEntries)) {
             continue
         }
         const age = now - (ide._lastUpdate || ide.timestamp || 0)

@@ -71,6 +71,7 @@ export type {
   ProviderState,
   ProviderStatus,
   ProviderErrorReason,
+  SessionActiveChatData,
   ActiveChatData,
   IdeProviderState,
   CliProviderState,

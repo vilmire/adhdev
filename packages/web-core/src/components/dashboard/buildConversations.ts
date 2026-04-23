@@ -1,7 +1,7 @@
 /**
  * buildConversations — Convert raw DaemonData[] (ides) into ActiveConversation[]
  *
- * Pure function: ides + local pending messages → flat conversation list.
+ * Pure function: daemon/session state → flat conversation list.
  * Reusable across Dashboard, mobile views, widgets, etc.
  */
 import type { DaemonData } from '../../types';
@@ -10,8 +10,6 @@ import { deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, get
 import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation, DashboardMessage } from './types';
-import type { LocalUserMessage } from './message-utils';
-export type { LocalUserMessage } from './message-utils';
 
 interface BuildConversationContext {
     machineName?: string;
@@ -76,19 +74,16 @@ export function getIdeConversationBuildContext(
 
 export function buildScopedIdeConversations(
     ide: DaemonData,
-    _localUserMessages: Record<string, LocalUserMessage[]>,
     options: SharedConversationBuildContextOptions = {},
 ): ActiveConversation[] {
     return buildIdeConversations(
         ide,
-        _localUserMessages,
         getIdeConversationBuildContext(ide, options),
     );
 }
 
 export function buildIdeConversations(
     ide: DaemonData,
-    _localUserMessages: Record<string, LocalUserMessage[]>,
     context: BuildConversationContext = {},
 ): ActiveConversation[] {
     const results: ActiveConversation[] = [];
@@ -294,15 +289,14 @@ export function buildIdeConversations(
 
 // ─── Main conversion function ────────────────────────────────
 
-/** Derive ActiveConversation[] from ides + localUserMessages */
+/** Derive ActiveConversation[] from daemon/session entries. */
 export function buildConversations(
     chatIdes: DaemonData[],
-    localUserMessages: Record<string, LocalUserMessage[]>,
     allIdes?: DaemonData[],
     connectionStates?: Record<string, string>,
 ): ActiveConversation[] {
     const machineNames = buildMachineNameMap(allIdes);
-    return chatIdes.flatMap((ide) => buildScopedIdeConversations(ide, localUserMessages, {
+    return chatIdes.flatMap((ide) => buildScopedIdeConversations(ide, {
         machineNames,
         connectionStates,
         defaultConnectionState: 'new',

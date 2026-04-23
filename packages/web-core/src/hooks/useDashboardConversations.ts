@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef } from 'react'
-import { buildMachineNameMap, buildScopedIdeConversations, getIdeConversationBuildContext, type LocalUserMessage } from '../components/dashboard/buildConversations'
+import { buildMachineNameMap, buildScopedIdeConversations, getIdeConversationBuildContext } from '../components/dashboard/buildConversations'
 import { buildConversationLookupKeys } from '../components/dashboard/conversation-identity'
 import { compareConversationRecency, getConversationSortTimestamp, getPreferredConversationForIde } from '../components/dashboard/conversation-sort'
 import type { ActiveConversation, DashboardMessage } from '../components/dashboard/types'
@@ -7,15 +7,9 @@ import type { DaemonData } from '../types'
 import { normalizeTextContent } from '../utils/text'
 import { isConversationHidden } from './useHiddenTabs'
 
-type LocalMessageRef = {
-    key: string
-    ref: LocalUserMessage[] | undefined
-}
-
 interface UseDashboardConversationsOptions {
     ides: DaemonData[]
     connectionStates: Record<string, string>
-    localUserMessages: Record<string, LocalUserMessage[]>
     clearedTabs: Record<string, number>
     hiddenTabs: Set<string>
 }
@@ -116,39 +110,11 @@ function applyClearedConversationState(conversations: ActiveConversation[], clea
     })
 }
 
-function getCachedLocalMessageRefs(
-    ide: DaemonData,
-    localUserMessages: Record<string, LocalUserMessage[]>,
-): LocalMessageRef[] {
-    const refs: LocalMessageRef[] = []
-    const nativeSessionId = ide.sessionId || ide.instanceId
-    refs.push({ key: ide.id, ref: localUserMessages[ide.id] })
-    if (nativeSessionId) refs.push({ key: nativeSessionId, ref: localUserMessages[nativeSessionId] })
-
-    for (const child of ide.childSessions || []) {
-        const streamKey = child.id || child.providerType
-        const tabKey = `${ide.id}:${streamKey}`
-        refs.push({ key: tabKey, ref: localUserMessages[tabKey] })
-        refs.push({ key: child.id, ref: localUserMessages[child.id] })
-    }
-
-    return refs
-}
-
-function sameLocalMessageRefs(prev: LocalMessageRef[], next: LocalMessageRef[]) {
-    if (prev.length !== next.length) return false
-    for (let i = 0; i < prev.length; i += 1) {
-        if (prev[i].key !== next[i].key || prev[i].ref !== next[i].ref) return false
-    }
-    return true
-}
-
 type ConversationCacheEntry = {
     ide: DaemonData
     sourceSignature: string
     connectionState: string
     machineName?: string
-    localRefs: LocalMessageRef[]
     conversations: ActiveConversation[]
 }
 
@@ -199,7 +165,6 @@ function getConversationSortSignature(conversation: ActiveConversation) {
 export function useDashboardConversations({
     ides,
     connectionStates,
-    localUserMessages,
     clearedTabs,
     hiddenTabs,
 }: UseDashboardConversationsOptions) {
@@ -221,7 +186,6 @@ export function useDashboardConversations({
                 connectionStates,
                 defaultConnectionState: 'new',
             })
-            const localRefs = getCachedLocalMessageRefs(ide, localUserMessages)
             const sourceSignature = buildConversationSourceSignature(ide)
             const cached = cacheRef.current.get(ide.id)
 
@@ -231,14 +195,13 @@ export function useDashboardConversations({
                 && cached.sourceSignature === sourceSignature
                 && cached.connectionState === connectionState
                 && cached.machineName === machineName
-                && sameLocalMessageRefs(cached.localRefs, localRefs)
             ) {
                 nextCache.set(ide.id, cached)
                 nextConversations.push(...cached.conversations)
                 continue
             }
 
-            const conversations = buildScopedIdeConversations(ide, localUserMessages, {
+            const conversations = buildScopedIdeConversations(ide, {
                 machineNames,
                 connectionStates,
                 defaultConnectionState: 'new',
@@ -248,7 +211,6 @@ export function useDashboardConversations({
                 sourceSignature,
                 connectionState,
                 machineName,
-                localRefs,
                 conversations,
             }
             nextCache.set(ide.id, entry)
@@ -278,7 +240,7 @@ export function useDashboardConversations({
         ))
         sortCacheRef.current = nextSortCache
         return sorted
-    }, [chatIdes, localUserMessages, connectionStates, machineNames])
+    }, [chatIdes, connectionStates, machineNames])
 
     const conversations = useMemo(() => {
         const next = applyClearedConversationState(baseConversations, clearedTabs)

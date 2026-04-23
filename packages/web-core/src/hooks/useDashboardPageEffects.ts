@@ -1,4 +1,4 @@
-import { useEffect, useRef, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useRef } from 'react'
 import type { SetURLSearchParams } from 'react-router-dom'
 import type { ActiveConversation } from '../components/dashboard/types'
 import { getConversationHistoryLookupIds } from '../components/dashboard/conversation-identity'
@@ -21,8 +21,7 @@ interface UseDashboardPageEffectsOptions {
     normalizedGroupAssignments: Map<string, number>
     hasHydratedStoredLayout: boolean
     hydrateStoredLayout: () => void
-    setGroupActiveTabIds: Dispatch<SetStateAction<Record<number, string | null>>>
-    setFocusedGroup: Dispatch<SetStateAction<number>>
+    focusConversationTab: (tabKey: string, groupAssignments: Map<string, number>) => number
     setSearchParams: SetURLSearchParams
     historyModalOpen: boolean
     activeConv: ActiveConversation | undefined
@@ -38,8 +37,7 @@ export function useDashboardPageEffects({
     normalizedGroupAssignments,
     hasHydratedStoredLayout,
     hydrateStoredLayout,
-    setGroupActiveTabIds,
-    setFocusedGroup,
+    focusConversationTab,
     setSearchParams,
     historyModalOpen,
     activeConv,
@@ -63,9 +61,7 @@ export function useDashboardPageEffects({
         const match = resolveConversationBySessionId(urlActiveTab)
         if (!match) return
 
-        const targetGroup = normalizedGroupAssignments.get(match.tabKey) ?? 0
-        setGroupActiveTabIds(prev => ({ ...prev, [targetGroup]: match.tabKey }))
-        setFocusedGroup(targetGroup)
+        focusConversationTab(match.tabKey, normalizedGroupAssignments)
         urlTabAppliedRef.current = true
         initialLayoutAppliedRef.current = true
 
@@ -86,8 +82,7 @@ export function useDashboardPageEffects({
         normalizedGroupAssignments,
         hasHydratedStoredLayout,
         hydrateStoredLayout,
-        setGroupActiveTabIds,
-        setFocusedGroup,
+        focusConversationTab,
         setSearchParams,
     ])
 

@@ -1,9 +1,8 @@
 import { useEffect } from 'react'
 import { dashboardWS } from '../compat'
 import { eventManager } from '../managers/EventManager'
-import type { StatusEventPayload, SystemMessage, ToastConfig } from '../managers/EventManager'
+import type { StatusEventPayload, ToastConfig } from '../managers/EventManager'
 import type { Toast } from '../context/BaseDaemonContext'
-import type { LocalUserMessage } from '../components/dashboard/buildConversations'
 import type { ActiveConversation } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
 
@@ -11,7 +10,6 @@ interface UseDashboardEventManagerOptions {
     ides: DaemonData[]
     sendDaemonCommand: (routeId: string, cmd: string, payload?: Record<string, unknown>) => Promise<any>
     setToasts: React.Dispatch<React.SetStateAction<Toast[]>>
-    setLocalUserMessages: React.Dispatch<React.SetStateAction<Record<string, LocalUserMessage[]>>>
     resolveConversationByTarget: (target: string | null | undefined) => ActiveConversation | undefined
 }
 
@@ -19,7 +17,6 @@ export function useDashboardEventManager({
     ides,
     sendDaemonCommand,
     setToasts,
-    setLocalUserMessages,
     resolveConversationByTarget,
 }: UseDashboardEventManagerOptions) {
     useEffect(() => {
@@ -50,44 +47,10 @@ export function useDashboardEventManager({
             setTimeout(() => setToasts(prev => prev.filter(t => t.id !== toast.id)), dur)
         })
 
-        const unsubSysMsg = eventManager.onSystemMessage((targetKey: string, msg: SystemMessage) => {
-            const matchedConv = resolveConversationByTarget(targetKey)
-            const isApprovalSystemMessage = msg._localId?.startsWith('sys_approval_')
-            const hasLiveApprovalUi = !!(
-                matchedConv
-                && (
-                    matchedConv.status === 'waiting_approval'
-                    || matchedConv.modalButtons?.length
-                    || matchedConv.modalMessage
-                )
-            )
-            if (isApprovalSystemMessage && hasLiveApprovalUi) {
-                return
-            }
-            setLocalUserMessages(prev => ({
-                ...prev,
-                [targetKey]: [...(prev[targetKey] || []), msg],
-            }))
-        })
-
-        const unsubClearSysMsg = eventManager.onClearSystemMessage((targetKey: string, prefix: string) => {
-            setLocalUserMessages(prev => {
-                if (!prev[targetKey]?.length) return prev
-                return {
-                    ...prev,
-                    [targetKey]: prev[targetKey].filter(
-                        (message) => !(message.role === 'system' && message._localId?.startsWith(prefix)),
-                    ),
-                }
-            })
-        })
-
         return () => {
             unsubToast()
-            unsubSysMsg()
-            unsubClearSysMsg()
         }
-    }, [setToasts, setLocalUserMessages])
+    }, [setToasts])
 
     useEffect(() => {
         const unsubWS = dashboardWS.on('status_event', (payload: StatusEventPayload) => {

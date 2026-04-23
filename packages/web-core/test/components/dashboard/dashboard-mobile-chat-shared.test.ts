@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
-import type { DashboardNotificationSessionState } from '../../../src/utils/dashboard-notifications'
 import type { LiveSessionInboxState } from '../../../src/components/dashboard/DashboardMobileChatShared'
 import {
   getConversationInboxSurfaceState,
@@ -40,38 +39,24 @@ function createLiveState(overrides: Partial<LiveSessionInboxState> = {}): LiveSe
     lastUpdated: 100,
     inboxBucket: 'task_complete',
     surfaceHidden: false,
-    ...overrides,
-  }
-}
-
-function createNotificationState(overrides: Partial<DashboardNotificationSessionState> = {}): DashboardNotificationSessionState {
-  return {
-    unreadCount: 1,
-    latestNotificationAt: 100,
-    latestRecordId: 'task_complete|provider-1|hash-1|100',
+    completionMarker: 'turn:1',
+    seenCompletionMarker: '',
     ...overrides,
   }
 }
 
 describe('DashboardMobileChatShared', () => {
-  it('keeps task-complete unread state aligned with notification state across surfaces', () => {
+  it('treats daemon live unread state as the only task-complete unread authority across surfaces', () => {
     const conversation = createConversation()
     const liveState = new Map<string, LiveSessionInboxState>([
       ['session-1', createLiveState({ unread: false })],
     ])
-    const notificationStateBySessionId = new Map<string, DashboardNotificationSessionState>([
-      ['session-1', createNotificationState({ unreadCount: 1 })],
-    ])
 
-    const surfaceState = getConversationInboxSurfaceState(conversation, liveState, {
-      notificationStateBySessionId,
-    })
+    const surfaceState = getConversationInboxSurfaceState(conversation, liveState)
 
-    expect(surfaceState.unread).toBe(true)
-    expect(surfaceState.inboxBucket).toBe('task_complete')
-    expect(isConversationTaskCompleteUnread(conversation, liveState, {
-      notificationStateBySessionId,
-    })).toBe(true)
+    expect(surfaceState.unread).toBe(false)
+    expect(surfaceState.inboxBucket).toBe('idle')
+    expect(isConversationTaskCompleteUnread(conversation, liveState)).toBe(false)
   })
 
   it('hides task-complete unread state for the currently open conversation', () => {

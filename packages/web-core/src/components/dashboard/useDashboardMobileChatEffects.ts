@@ -29,7 +29,6 @@ interface UseDashboardMobileChatEffectsOptions {
     setSection: (value: DashboardMobileSection) => void
     setMachineBackTarget: (value: 'inbox' | 'chat') => void
     resetMachineAction: () => void
-    markNotificationTargetRead: (target: { sessionId?: string; providerSessionId?: string; tabKey?: string; routeId?: string }, readAt?: number) => void
 }
 
 function logMobileReadDebug(event: string, payload: Record<string, unknown>) {
@@ -65,7 +64,6 @@ export function useDashboardMobileChatEffects({
     setSection,
     setMachineBackTarget,
     resetMachineAction,
-    markNotificationTargetRead,
 }: UseDashboardMobileChatEffectsOptions) {
     const lastAutoReadKeyRef = useRef<string | null>(null)
 
@@ -84,12 +82,6 @@ export function useDashboardMobileChatEffects({
             activityAt: getConversationTimestamp(conversation),
             readAt,
         })
-        markNotificationTargetRead({
-            sessionId: conversation.sessionId,
-            providerSessionId: conversation.providerSessionId,
-            tabKey: conversation.tabKey,
-            routeId: conversation.routeId,
-        }, readAt)
         void sendDaemonCommand(getConversationMachineId(conversation) || conversation.routeId, 'mark_session_seen', {
             sessionId: conversation.sessionId,
             seenAt: readAt,

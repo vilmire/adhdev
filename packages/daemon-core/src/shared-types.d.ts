@@ -13,6 +13,9 @@ export type { ProviderErrorReason } from './providers/provider-instance.js';
 import type { ActiveChatData as _ActiveChatData, ProviderErrorReason as _ProviderErrorReason } from './providers/provider-instance.js';
 import type { WorkspaceEntry } from './config/workspaces.js';
 import type { ProviderResumeCapability } from './providers/contracts.js';
+export interface SessionActiveChatData extends Omit<_ActiveChatData, 'messages'> {
+    messages?: _ActiveChatData['messages'];
+}
 export type { WorkspaceEntry } from './config/workspaces.js';
 /** Agent stream snapshot carried by flattened UI entries. */
 export interface AgentSessionStream {
@@ -179,7 +182,7 @@ export interface SessionEntry {
     runtimeWriteOwner?: RuntimeWriteOwner | null;
     runtimeAttachedClients?: RuntimeAttachedClient[];
     resume?: ProviderResumeCapability;
-    activeChat: _ActiveChatData | null;
+    activeChat: SessionActiveChatData | null;
     capabilities?: SessionCapability[];
     cdpConnected?: boolean;
     /** Dynamic control current values (generic key-value) */

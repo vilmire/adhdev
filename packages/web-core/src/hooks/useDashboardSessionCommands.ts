@@ -10,7 +10,6 @@ interface UseDashboardSessionCommandsOptions {
     chats?: DaemonData['chats']
     updateRouteChats: (routeId: string, chats: DaemonData['chats']) => void
     setToasts: DashboardToastSetter
-    setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
     setClearedTabs: Dispatch<SetStateAction<Record<string, number>>>
 }
 
@@ -36,7 +35,6 @@ export function useDashboardSessionCommands({
     chats,
     updateRouteChats,
     setToasts,
-    setLocalUserMessages,
     setClearedTabs,
 }: UseDashboardSessionCommandsOptions) {
     const [isCreatingChat, setIsCreatingChat] = useState(false)
@@ -89,13 +87,12 @@ export function useDashboardSessionCommands({
                 ...getProviderArgs(activeConv),
             })
             setClearedTabs(prev => ({ ...prev, [activeConv.tabKey]: Date.now() }))
-            setLocalUserMessages(prev => ({ ...prev, [activeConv.tabKey]: [] }))
         } catch (e) {
             console.error('New chat failed', e)
         } finally {
             setIsCreatingChat(false)
         }
-    }, [activeConv, isCreatingChat, sendDaemonCommand, setClearedTabs, setLocalUserMessages])
+    }, [activeConv, isCreatingChat, sendDaemonCommand, setClearedTabs])
 
     const handleRefreshHistory = useCallback(async () => {
         if (!activeConv || isRefreshingHistory) return

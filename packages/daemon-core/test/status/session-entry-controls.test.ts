@@ -171,6 +171,39 @@ describe('buildSessionEntries control schema output', () => {
     expect(sessions[0]).not.toHaveProperty('currentPlan')
   })
 
+  it('omits transcript messages from live session snapshots while preserving active chat metadata', () => {
+    const sessions = buildSessionEntries([
+      {
+        category: 'cli',
+        type: 'hermes-cli',
+        name: 'Hermes Agent',
+        instanceId: 'cli-live-chat',
+        status: 'generating',
+        workspace: '/repo',
+        mode: 'chat',
+        activeChat: {
+          id: 'chat-1',
+          title: 'Hermes Agent',
+          status: 'generating',
+          messages: [
+            { role: 'user', content: 'hello' },
+            { role: 'assistant', content: 'world' },
+          ],
+          activeModal: null,
+        },
+        controlValues: {},
+        providerControls: undefined,
+      } as any,
+    ], new Map(), { profile: 'live' })
+
+    expect(sessions[0]?.activeChat).toMatchObject({
+      id: 'chat-1',
+      title: 'Hermes Agent',
+      status: 'generating',
+    })
+    expect(sessions[0]?.activeChat).not.toHaveProperty('messages')
+  })
+
   it('preserves providerSessionId on extension child sessions', () => {
     const sessions = buildSessionEntries([
       {

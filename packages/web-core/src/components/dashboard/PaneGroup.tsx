@@ -14,7 +14,6 @@ import { isConversationTaskCompleteUnread, type LiveSessionInboxState } from './
 import { getCliConversationViewMode, isAcpConv } from './types'
 import type { ActiveConversation } from './types'
 import type { DaemonData } from '../../types'
-import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 import type { CliTerminalHandle } from '../CliTerminal'
 import PaneGroupContent from './PaneGroupContent'
 import PaneGroupDropOverlay from './PaneGroupDropOverlay'
@@ -31,7 +30,6 @@ export interface PaneGroupProps {
     actionLogs: { routeId: string; text: string; timestamp: number }[];
     /** Dashboard-level state setters */
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>;
-    setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>;
     setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>;
     isStandalone: boolean;
     hasRegisteredMachines?: boolean;
@@ -61,7 +59,6 @@ export interface PaneGroupProps {
     isFocused?: boolean;
     allowTabShortcuts?: boolean;
     onOpenNewSession?: () => void;
-    notificationStateBySessionId?: Map<string, DashboardNotificationSessionState>;
     liveSessionInboxState: Map<string, LiveSessionInboxState>;
 }
 
@@ -69,7 +66,7 @@ export default function PaneGroup({
     conversations, ides,
     clearedTabs,
     actionLogs,
-    sendDaemonCommand, setLocalUserMessages, setActionLogs,
+    sendDaemonCommand, setActionLogs,
     isStandalone, hasRegisteredMachines, userName,
     groupIndex, onFocus,
     isSplitMode, numGroups, onMoveTab, onReceiveTab,
@@ -82,7 +79,6 @@ export default function PaneGroup({
     isFocused,
     allowTabShortcuts = true,
     onOpenNewSession,
-    notificationStateBySessionId,
     liveSessionInboxState,
 }: PaneGroupProps) {
     const { sendCommand } = useTransport()
@@ -110,7 +106,6 @@ export default function PaneGroup({
     const cmds = useDashboardConversationCommands({
         sendDaemonCommand,
         activeConv,
-        setLocalUserMessages,
         setActionLogs,
         isStandalone,
     })
@@ -148,8 +143,7 @@ export default function PaneGroup({
             sortedConversations
                 .filter(conversation => isConversationTaskCompleteUnread(conversation, liveSessionInboxState, {
                     isOpenConversation: conversation.tabKey === activeTabId,
-                    notificationStateBySessionId,
-                }))
+                                }))
                 .map(conversation => conversation.tabKey),
         ),
         [activeTabId, liveSessionInboxState, sortedConversations],

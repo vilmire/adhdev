@@ -45,6 +45,10 @@ import type { ActiveChatData as _ActiveChatData, ProviderErrorReason as _Provide
 import type { WorkspaceEntry } from './config/workspaces.js';
 import type { ProviderResumeCapability } from './providers/contracts.js';
 
+export interface SessionActiveChatData extends Omit<_ActiveChatData, 'messages'> {
+    messages?: _ActiveChatData['messages'];
+}
+
 // Re-export WorkspaceEntry for downstream consumers
 export type { WorkspaceEntry } from './config/workspaces.js';
 
@@ -320,7 +324,7 @@ export interface SessionEntry {
     runtimeRestoredFromStorage?: boolean;
     runtimeRecoveryState?: string | null;
     resume?: ProviderResumeCapability;
-    activeChat: _ActiveChatData | null;
+    activeChat: SessionActiveChatData | null;
     capabilities?: SessionCapability[];
     cdpConnected?: boolean;
     /** Dynamic control current values (generic key-value) */

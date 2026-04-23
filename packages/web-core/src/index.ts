@@ -114,7 +114,7 @@ export type { SupportedEntry, ProviderVerification, ProviderVerificationStatus, 
 
 // ── Managers ──
 export { eventManager } from './managers/EventManager'
-export type { StatusEventPayload, ToastConfig, SystemMessage, ToastAction, ViewRequestRespondFn } from './managers/EventManager'
+export type { StatusEventPayload, ToastConfig, ToastAction, ViewRequestRespondFn } from './managers/EventManager'
 export { subscriptionManager } from './managers/SubscriptionManager'
 export type { SubscriptionTransport } from './managers/SubscriptionManager'
 export { webDebugStore, createWebDebugStore } from './debug/webDebugStore'

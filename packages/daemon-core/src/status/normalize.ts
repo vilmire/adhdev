@@ -1,4 +1,5 @@
 import type { ActiveChatData } from '../providers/provider-instance.js';
+import type { SessionActiveChatData } from '../shared-types.js';
 
 export type ManagedStatus =
     | 'idle'
@@ -174,16 +175,19 @@ export function isManagedStatusWaiting(
 export function normalizeActiveChatData<T extends ActiveChatData | null | undefined>(
     activeChat: T,
     options: NormalizeActiveChatOptions = FULL_STATUS_ACTIVE_CHAT_OPTIONS,
-): T {
-    if (!activeChat) return activeChat;
+): T extends null | undefined ? T : SessionActiveChatData {
+    if (!activeChat) return activeChat as T extends null | undefined ? T : SessionActiveChatData;
     const resolvedOptions: Required<NormalizeActiveChatOptions> = {
         ...FULL_STATUS_ACTIVE_CHAT_OPTIONS,
         ...options,
     };
-    return {
-        ...activeChat,
+    const {
+        messages: _messages,
+        ...rest
+    } = activeChat;
+    const normalized: SessionActiveChatData = {
+        ...rest,
         status: normalizeManagedStatus(activeChat.status, { activeModal: activeChat.activeModal }),
-        messages: trimMessagesForStatus(activeChat.messages, resolvedOptions) as T extends { messages: infer M } ? M : never,
         activeModal: resolvedOptions.includeActiveModal && activeChat.activeModal ? {
             message: truncateString(activeChat.activeModal.message || '', STATUS_MODAL_MESSAGE_LIMIT),
             buttons: (activeChat.activeModal.buttons || []).map((button) =>
@@ -193,5 +197,9 @@ export function normalizeActiveChatData<T extends ActiveChatData | null | undefi
         inputContent: resolvedOptions.includeInputContent && activeChat.inputContent
             ? truncateString(activeChat.inputContent, 2 * 1024)
             : undefined,
-    } as T;
+    };
+    if (resolvedOptions.includeMessages) {
+        normalized.messages = trimMessagesForStatus(activeChat.messages, resolvedOptions) as SessionActiveChatData['messages'];
+    }
+    return normalized as T extends null | undefined ? T : SessionActiveChatData;
 }

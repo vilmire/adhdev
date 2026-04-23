@@ -48,14 +48,6 @@ export function buildApprovalToastDescriptors(buttons: string[]): ApprovalToastD
     }))
 }
 
-export function formatApprovalSystemMessage(modalMessage?: string, modalButtons?: string[]): string {
-    const modalText = modalMessage || 'Approval requested'
-    const buttons = modalButtons?.length
-        ? modalButtons.map((button) => `[${button}]`).join(' ')
-        : '[Approve] [Reject]'
-    return `⚡ Approval requested: ${modalText}\n${buttons}`
-}
-
 export function formatApprovalToastMessage(ideLabel: string, modalMessage: string | undefined, fallbackMessage: string): string {
     if (!modalMessage) return fallbackMessage
     return `⚡ ${ideLabel}: ${modalMessage.replace(/[\n\r]+/g, ' ').slice(0, 80)}`

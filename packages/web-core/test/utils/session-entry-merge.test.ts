@@ -55,14 +55,13 @@ describe('session entry merge helpers', () => {
     })
   })
 
-  it('preserves existing active chat transcript and approval modal when incoming sparse update omits them', () => {
+  it('preserves existing active chat transcript and approval modal when incoming sparse update omits transcript bodies', () => {
     const merged = mergeSessionEntrySummary(createSession({
       status: 'waiting_approval',
       activeChat: {
         id: 'chat-1',
         title: 'Claude Code (VS Code)',
         status: 'waiting_approval',
-        messages: [],
         activeModal: null,
       } as any,
     }), {
@@ -106,7 +105,33 @@ describe('session entry merge helpers', () => {
     })
   })
 
-  it('uses the incoming transcript as-is when an incoming update regresses only the last message to a truncated prefix', () => {
+  it('preserves the existing transcript when an incoming metadata update omits messages entirely', () => {
+    const merged = mergeActiveChatData(
+      {
+        id: 'chat-1',
+        title: 'Claude Code (VS Code)',
+        status: 'idle',
+        activeModal: null,
+      } as any,
+      {
+        id: 'chat-1',
+        title: 'Claude Code (VS Code)',
+        status: 'generating',
+        messages: [
+          { role: 'user', content: 'hello', id: 'msg-user-1', receivedAt: 1000 },
+          { role: 'assistant', content: 'world', id: 'msg-assistant-1', receivedAt: 2000 },
+        ],
+        activeModal: null,
+      } as any,
+    )
+
+    expect(merged?.messages).toEqual([
+      { role: 'user', content: 'hello', id: 'msg-user-1', receivedAt: 1000 },
+      { role: 'assistant', content: 'world', id: 'msg-assistant-1', receivedAt: 2000 },
+    ])
+  })
+
+  it('uses the incoming transcript as-is when the incoming update explicitly provides messages', () => {
     const fullTail = `Intro\n${'x'.repeat(5200)}\nTAIL_MARKER_VISIBLE`
     const truncatedTail = `Intro\n${'x'.repeat(5000)}`
 
@@ -134,6 +159,29 @@ describe('session entry merge helpers', () => {
     )
 
     expect(String(merged?.messages?.[1]?.content || '')).toBe(truncatedTail)
+  })
+
+  it('allows an explicit empty incoming transcript to clear previous messages', () => {
+    const merged = mergeActiveChatData(
+      {
+        id: 'chat-1',
+        title: 'Claude Code (VS Code)',
+        status: 'idle',
+        messages: [],
+        activeModal: null,
+      } as any,
+      {
+        id: 'chat-1',
+        title: 'Claude Code (VS Code)',
+        status: 'idle',
+        messages: [
+          { role: 'assistant', content: 'old message', id: 'msg-old-1', receivedAt: 1000 },
+        ],
+        activeModal: null,
+      } as any,
+    )
+
+    expect(merged?.messages).toEqual([])
   })
 
   it('merges child session arrays through the same sparse-preserving contract', () => {

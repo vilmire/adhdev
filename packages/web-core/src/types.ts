@@ -7,7 +7,6 @@ import type {
     MachineInfo,
     DetectedIdeInfo,
     WorkspaceEntry,
-    ActiveChatData,
     AvailableProviderInfo,
     ProviderResumeCapability,
     SessionEntry,
@@ -120,7 +119,7 @@ export interface BaseDaemonData {
     activeFile?: string | null;
     terminals?: number;
     chats?: WebChatInfo[];
-    activeChat?: ActiveChatData | null;
+    activeChat?: SessionEntry['activeChat'];
     workspace?: string | null;
     runtimeKey?: string;
     runtimeDisplayName?: string;

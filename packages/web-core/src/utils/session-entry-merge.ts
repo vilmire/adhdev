@@ -21,6 +21,10 @@ function hasExplicitProviderName(value: string | null | undefined, providerType:
   return typeof value === 'string' && value.trim().length > 0 && value !== providerType
 }
 
+function hasOwnProperty(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key)
+}
+
 export function mergeActiveChatData(
   incoming: SessionEntry['activeChat'] | null | undefined,
   existing: SessionEntry['activeChat'] | null | undefined,
@@ -28,22 +32,29 @@ export function mergeActiveChatData(
   if (!incoming) return existing ?? null
   if (!existing) return incoming ?? null
 
-  const incomingMessages = Array.isArray(incoming.messages) ? incoming.messages : []
-  const existingMessages = Array.isArray(existing.messages) ? existing.messages : []
-  const mergedMessages = incomingMessages.length > 0
-    ? incomingMessages
-    : existingMessages
+  const incomingHasMessages = hasOwnProperty(incoming, 'messages')
+  const mergedMessages = incomingHasMessages
+    ? (Array.isArray(incoming.messages) ? incoming.messages : [])
+    : existing.messages
 
   const mergedActiveModal = incoming.activeModal
     || (incoming.status === 'waiting_approval' ? existing.activeModal : null)
 
-  return {
+  const merged = {
     ...existing,
     ...incoming,
-    messages: mergedMessages,
     activeModal: mergedActiveModal,
     inputContent: incoming.inputContent ?? existing.inputContent,
   }
+
+  if (incomingHasMessages) {
+    return {
+      ...merged,
+      messages: mergedMessages,
+    }
+  }
+
+  return merged
 }
 
 export function mergeSessionEntrySummary(

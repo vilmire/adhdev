@@ -6,7 +6,6 @@ import { getExplicitSessionRevealCommand } from '../components/dashboard/dashboa
 interface UseDashboardConversationCommandsOptions {
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
     activeConv: ActiveConversation | undefined
-    setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
     setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
 }
@@ -82,7 +81,6 @@ function getActionFailureText(buttonText: string, error?: unknown): string {
 export function useDashboardConversationCommands({
     sendDaemonCommand,
     activeConv,
-    setLocalUserMessages,
     setActionLogs,
     isStandalone: _isStandalone,
 }: UseDashboardConversationCommandsOptions) {
@@ -126,26 +124,10 @@ export function useDashboardConversationCommands({
         setSendFeedbackMessage(null)
         lastSendRef.current = attempt
 
-        const localId = `${now}-${Math.random().toString(36).slice(2, 8)}`
-        const userMsg = { role: 'user', content: message, timestamp: now, _localId: localId }
-        const useLocalPendingMessage = true
-        if (useLocalPendingMessage) {
-            setLocalUserMessages(prev => ({
-                ...prev,
-                [attempt.tabKey]: [...(prev[attempt.tabKey] || []), userMsg],
-            }))
-        }
-
         try {
             const routeTarget = getRouteTarget(activeConv)
             if (!routeTarget) {
                 lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
-                if (useLocalPendingMessage) {
-                    setLocalUserMessages(prev => ({
-                        ...prev,
-                        [attempt.tabKey]: (prev[attempt.tabKey] || []).filter(entry => entry._localId !== localId),
-                    }))
-                }
                 setSendFeedbackMessage('Unable to send message right now.')
                 return false
             }
@@ -156,11 +138,7 @@ export function useDashboardConversationCommands({
             })
             const res = unwrapCommandResult(raw)
 
-            if (useLocalPendingMessage && res?.deduplicated) {
-                setLocalUserMessages(prev => ({
-                    ...prev,
-                    [attempt.tabKey]: (prev[attempt.tabKey] || []).filter(entry => entry._localId !== localId),
-                }))
+            if (res?.deduplicated) {
                 setSendFeedbackMessage(null)
                 return true
             }
@@ -173,16 +151,6 @@ export function useDashboardConversationCommands({
                 throw new Error(res?.error || 'Send failed')
             }
 
-            setTimeout(() => {
-                const cutoff = Date.now() - 60000
-                setLocalUserMessages(prev => {
-                    const messages = prev[attempt.tabKey]
-                    if (!messages) return prev
-                    const filtered = messages.filter(entry => entry.timestamp > cutoff)
-                    if (filtered.length === messages.length) return prev
-                    return { ...prev, [attempt.tabKey]: filtered }
-                })
-            }, 60000)
             setSendFeedbackMessage(null)
             return true
         } catch (e) {
@@ -193,19 +161,13 @@ export function useDashboardConversationCommands({
                 console.warn('Send blocked/failed', e)
             }
             lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
-            if (useLocalPendingMessage) {
-                setLocalUserMessages(prev => ({
-                    ...prev,
-                    [attempt.tabKey]: (prev[attempt.tabKey] || []).filter(entry => entry._localId !== localId),
-                }))
-            }
             setSendFeedbackMessage(getInlineSendFailureMessage(e))
             return false
         } finally {
             sendInFlightRef.current = false
             setIsSendingChat(false)
         }
-    }, [activeConv, sendDaemonCommand, setActionLogs, setLocalUserMessages])
+    }, [activeConv, sendDaemonCommand])
 
     const handleRelaunch = useCallback(async () => {
         if (!activeConv) return

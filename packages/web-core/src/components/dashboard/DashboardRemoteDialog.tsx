@@ -28,9 +28,7 @@ interface DashboardRemoteDialogProps {
     ides: DaemonData[]
     connectionStates: Record<string, string>
     actionLogs: { routeId: string; text: string; timestamp: number }[]
-    localUserMessages: Record<string, any[]>
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
-    setLocalUserMessages: Dispatch<SetStateAction<Record<string, any[]>>>
     setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
     userName?: string
@@ -45,9 +43,7 @@ export default function DashboardRemoteDialog({
     ides,
     connectionStates,
     actionLogs,
-    localUserMessages,
     sendDaemonCommand,
-    setLocalUserMessages,
     setActionLogs,
     isStandalone,
     userName,
@@ -76,7 +72,6 @@ export default function DashboardRemoteDialog({
         ideData: activeIdeEntry,
         allIdes: ides,
         connectionStates,
-        localUserMessages,
         ideName: ideDisplayName || 'IDE',
         preferredTabKey: isNativeConversation(activeConv) ? undefined : activeConv.tabKey,
     })
@@ -152,7 +147,6 @@ export default function DashboardRemoteDialog({
     const cmds = useDashboardConversationCommands({
         sendDaemonCommand,
         activeConv: modalAwareConv,
-        setLocalUserMessages,
         setActionLogs,
         isStandalone,
     })

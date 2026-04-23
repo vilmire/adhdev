@@ -267,7 +267,7 @@ describe('statusPayloadToEntries', () => {
         expect(entries[3].runtimeAttachedClients ?? []).toEqual([]);
     });
 
-    it('preserves existing active chat messages and approval buttons when live snapshots omit them', () => {
+    it('preserves existing active chat messages and approval buttons when live snapshots omit transcript bodies', () => {
         const entries = statusPayloadToEntries(createPayload({
             sessions: [createSession({
                 id: 'cli-keep-chat',
@@ -278,7 +278,6 @@ describe('statusPayloadToEntries', () => {
                     id: 'chat-1',
                     title: 'Hermes Agent',
                     status: 'waiting_approval',
-                    messages: [],
                     activeModal: null,
                 } as any,
             })],

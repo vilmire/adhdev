@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, type Dispatch, type MouseEvent as ReactMouseEvent, type SetStateAction } from 'react'
+import { useCallback, useEffect, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
 import {
     arraysEqual,
@@ -12,13 +12,16 @@ import {
 
 interface UseDashboardSplitViewOptions {
     groupAssignments: Map<string, number>
-    setGroupAssignments: Dispatch<SetStateAction<Map<string, number>>>
-    focusedGroup: number
-    setFocusedGroup: Dispatch<SetStateAction<number>>
-    setGroupActiveTabIds: Dispatch<SetStateAction<Record<number, string | null>>>
-    setGroupTabOrders: Dispatch<SetStateAction<Record<number, string[]>>>
+    updateGroupAssignments: (next: Map<string, number> | ((prev: Map<string, number>) => Map<string, number>)) => void
+    updateFocusedGroup: (next: number | ((prev: number) => number)) => void
+    updateGroupActiveTabIds: (
+        next: Record<number, string | null> | ((prev: Record<number, string | null>) => Record<number, string | null>),
+    ) => void
+    updateGroupTabOrders: (
+        next: Record<number, string[]> | ((prev: Record<number, string[]>) => Record<number, string[]>),
+    ) => void
     groupSizes: number[]
-    setGroupSizes: Dispatch<SetStateAction<number[]>>
+    updateGroupSizes: (next: number[] | ((prev: number[]) => number[])) => void
     isMobile: boolean
     visibleConversations: ActiveConversation[]
     visibleTabKeys: string[]
@@ -39,12 +42,12 @@ function buildDefaultSizes(count: number) {
 
 export function useDashboardSplitView({
     groupAssignments,
-    setGroupAssignments,
-    setFocusedGroup,
-    setGroupActiveTabIds,
-    setGroupTabOrders,
+    updateGroupAssignments,
+    updateFocusedGroup,
+    updateGroupActiveTabIds,
+    updateGroupTabOrders,
     groupSizes,
-    setGroupSizes,
+    updateGroupSizes,
     isMobile,
     visibleConversations,
     visibleTabKeys,
@@ -65,18 +68,18 @@ export function useDashboardSplitView({
     const isSplitMode = numGroups > 1
 
     const moveTabToGroup = useCallback((tabKey: string, targetGroup: number) => {
-        setGroupAssignments(prev => {
+        updateGroupAssignments(prev => {
             const next = new Map(deriveNormalizedGroupLayout(prev, visibleTabKeys).assignments)
             if (targetGroup === 0) next.delete(tabKey)
             else next.set(tabKey, targetGroup)
             return next
         })
-        setGroupActiveTabIds(prev => ({ ...prev, [targetGroup]: tabKey }))
-        setFocusedGroup(targetGroup)
-    }, [setGroupAssignments, visibleTabKeys, setGroupActiveTabIds, setFocusedGroup])
+        updateGroupActiveTabIds(prev => ({ ...prev, [targetGroup]: tabKey }))
+        updateFocusedGroup(targetGroup)
+    }, [updateGroupAssignments, visibleTabKeys, updateGroupActiveTabIds, updateFocusedGroup])
 
     const closeGroup = useCallback((groupIdx: number) => {
-        setGroupAssignments(prev => {
+        updateGroupAssignments(prev => {
             const current = deriveNormalizedGroupLayout(prev, visibleTabKeys).assignments
             const next = new Map<string, number>()
             for (const [key, g] of current) {
@@ -86,15 +89,15 @@ export function useDashboardSplitView({
             }
             return next
         })
-        setGroupSizes(prev => {
+        updateGroupSizes(prev => {
             if (prev.length <= 1) return []
             const next = [...prev]
             next.splice(groupIdx, 1)
             const total = next.reduce((sum, size) => sum + size, 0)
             return total > 0 ? next.map(size => (size / total) * 100) : []
         })
-        setFocusedGroup(0)
-    }, [setGroupAssignments, visibleTabKeys, setGroupSizes, setFocusedGroup])
+        updateFocusedGroup(0)
+    }, [updateGroupAssignments, visibleTabKeys, updateGroupSizes, updateFocusedGroup])
 
     const handleResizeStart = useCallback((dividerIdx: number, e: ReactMouseEvent) => {
         e.preventDefault()
@@ -113,7 +116,7 @@ export function useDashboardSplitView({
             const next = [...startSizes]
             next[dividerIdx] = Math.max(15, startSizes[dividerIdx] + pctDelta)
             next[dividerIdx + 1] = Math.max(15, startSizes[dividerIdx + 1] - pctDelta)
-            setGroupSizes(next)
+            updateGroupSizes(next)
         }
 
         const onUp = () => {
@@ -127,14 +130,14 @@ export function useDashboardSplitView({
         document.body.style.userSelect = 'none'
         document.addEventListener('mousemove', onMove)
         document.addEventListener('mouseup', onUp)
-    }, [groupSizes, numGroups, setGroupSizes])
+    }, [groupSizes, numGroups, updateGroupSizes])
 
     const splitTabRelative = useCallback((tabKey: string, targetGroup: number, side: 'left' | 'right') => {
         if (numGroups >= 4) return
 
         const insertIndex = side === 'left' ? targetGroup : targetGroup + 1
 
-        setGroupAssignments(prev => {
+        updateGroupAssignments(prev => {
             const current = deriveNormalizedGroupLayout(prev, visibleTabKeys).assignments
             const next = new Map<string, number>()
             for (const conv of visibleConversations) {
@@ -146,7 +149,7 @@ export function useDashboardSplitView({
             return next
         })
 
-        setGroupSizes(prev => {
+        updateGroupSizes(prev => {
             const base = prev.length === numGroups ? [...prev] : buildDefaultSizes(numGroups)
             const targetSize = base[targetGroup] ?? (100 / numGroups)
             const kept = Math.max(15, targetSize / 2)
@@ -158,64 +161,64 @@ export function useDashboardSplitView({
             return next.map(size => (size / total) * 100)
         })
 
-        setGroupActiveTabIds(prev => {
+        updateGroupActiveTabIds(prev => {
             const next = shiftIndexedRecordRight(prev, insertIndex)
             next[insertIndex] = tabKey
             return next
         })
 
-        setGroupTabOrders(prev => {
+        updateGroupTabOrders(prev => {
             const next = shiftIndexedRecordRight(prev, insertIndex)
             next[insertIndex] = [tabKey]
             return next
         })
 
-        setFocusedGroup(insertIndex)
+        updateFocusedGroup(insertIndex)
     }, [
         numGroups,
-        setGroupAssignments,
+        updateGroupAssignments,
         visibleTabKeys,
         visibleConversations,
-        setGroupSizes,
-        setGroupActiveTabIds,
-        setGroupTabOrders,
-        setFocusedGroup,
+        updateGroupSizes,
+        updateGroupActiveTabIds,
+        updateGroupTabOrders,
+        updateFocusedGroup,
     ])
 
     useEffect(() => {
         if (mapsEqual(groupAssignments, normalizedGroupAssignments)) return
-        setGroupAssignments(normalizedGroupAssignments)
-    }, [groupAssignments, normalizedGroupAssignments, setGroupAssignments])
+        updateGroupAssignments(normalizedGroupAssignments)
+    }, [groupAssignments, normalizedGroupAssignments, updateGroupAssignments])
 
     useEffect(() => {
         const { mapping, usedGroups } = normalizedGroupLayout
 
-        setGroupActiveTabIds(prev => {
+        updateGroupActiveTabIds(prev => {
             const next = remapIndexedRecord(prev, mapping)
             return indexedRecordEqual(prev, next) ? prev : next
         })
 
-        setGroupTabOrders(prev => {
+        updateGroupTabOrders(prev => {
             const next = remapIndexedRecord(prev, mapping)
             return indexedRecordEqual(prev, next) ? prev : next
         })
 
-        setFocusedGroup(prev => {
+        updateFocusedGroup(prev => {
             const next = isMobile ? 0 : remapFocusedGroup(prev, usedGroups, mapping)
             return prev === next ? prev : next
         })
 
-        setGroupSizes(prev => {
+        updateGroupSizes(prev => {
             const next = isMobile ? [] : normalizeGroupSizes(prev, usedGroups, normalizedGroupLayout.groupCount)
             return arraysEqual(prev, next) ? prev : next
         })
     }, [
         normalizedGroupLayout,
         isMobile,
-        setGroupActiveTabIds,
-        setGroupTabOrders,
-        setFocusedGroup,
-        setGroupSizes,
+        updateGroupActiveTabIds,
+        updateGroupTabOrders,
+        updateFocusedGroup,
+        updateGroupSizes,
     ])
 
     const groupedConvs = useMemo(() => {
@@ -229,9 +232,9 @@ export function useDashboardSplitView({
     }, [visibleConversations, normalizedGroupAssignments, numGroups])
 
     const clearAllSplits = useCallback(() => {
-        setGroupAssignments(new Map())
-        setFocusedGroup(0)
-    }, [setGroupAssignments, setFocusedGroup])
+        updateGroupAssignments(new Map())
+        updateFocusedGroup(0)
+    }, [updateGroupAssignments, updateFocusedGroup])
 
     return {
         containerRef,

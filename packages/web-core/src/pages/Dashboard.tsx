@@ -9,74 +9,43 @@ import type { DaemonData } from '../types'
 import { isCliConv, isAcpConv, getCliConversationViewMode } from '../components/dashboard/types'
 import {
     applyCliViewModeOverrides,
-    getCliViewModeForSession,
-    isExpectedCliViewModeTransportError,
     reconcileCliViewModeOverrides,
-    shouldRetainOptimisticCliViewModeOverrideOnError,
 } from '../components/dashboard/cliViewModeOverrides'
 import { useWarmSessionChatTailControllers } from '../components/dashboard/session-chat-tail-controller'
-import { useHiddenTabs, getHiddenConversationStorageKey, isConversationHidden } from '../hooks/useHiddenTabs'
+import { useHiddenTabs, isConversationHidden } from '../hooks/useHiddenTabs'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
 import { useDashboardActiveTabRequests } from '../hooks/useDashboardActiveTabRequests'
 import { useDashboardEventManager } from '../hooks/useDashboardEventManager'
 import { useDashboardGroupState } from '../hooks/useDashboardGroupState'
 import { useDashboardPageEffects } from '../hooks/useDashboardPageEffects'
-import { useDashboardRemoteDialogState } from '../hooks/useDashboardRemoteDialogState'
 import { useDashboardSessionCommands } from '../hooks/useDashboardSessionCommands'
 import { useDashboardSplitView } from '../hooks/useDashboardSplitView'
 import { useDashboardVersionBanner } from '../hooks/useDashboardVersionBanner'
 import { useDevRenderTrace } from '../hooks/useDevRenderTrace'
 import { useDashboardNotifications } from '../hooks/useDashboardNotifications'
+import { useDashboardNotificationActions } from '../hooks/useDashboardNotificationActions'
+import { useDashboardCommandActions } from '../hooks/useDashboardCommandActions'
+import { useDashboardDesktopWorkspaceState } from '../hooks/useDashboardDesktopWorkspaceState'
+import { useDashboardHistoryModalState } from '../hooks/useDashboardHistoryModalState'
+import { useDashboardOverlayDialogsState } from '../hooks/useDashboardOverlayDialogsState'
+import { useDashboardPendingLaunch } from '../hooks/useDashboardPendingLaunch'
 
 import ConnectionBanner from '../components/dashboard/ConnectionBanner'
 import TerminalBackendBanner from '../components/dashboard/TerminalBackendBanner'
 import DashboardMainView from '../components/dashboard/DashboardMainView'
 import DashboardOverlays from '../components/dashboard/DashboardOverlays'
-import type { SavedSessionHistoryEntry } from '../components/dashboard/HistoryModal'
 import DashboardVersionBanner from '../components/dashboard/DashboardVersionBanner'
 import type { Toast } from '../components/dashboard/ToastContainer'
 import type { DashboardMobileSection } from '../components/dashboard/DashboardMobileBottomNav'
 import { getMobileDashboardMode, subscribeMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
 import { getDashboardWarmChatTailOptions } from '../utils/dashboard-warm-chat-tail'
 import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
-import { buildConversationIdentity, getConversationHistorySessionId } from '../components/dashboard/conversation-identity'
-import { buildDashboardScrollToBottomRequest, type DashboardScrollToBottomIntent } from '../components/dashboard/dashboard-scroll-to-bottom'
-import { getConversationActiveTabTarget, getConversationMachineId, getConversationProviderType } from '../components/dashboard/conversation-selectors'
+import { getConversationHistorySessionId } from '../components/dashboard/conversation-identity'
 import { getConversationTimestamp } from '../components/dashboard/conversation-sort'
-import { compareMachineEntries, getMachineDisplayName, getProviderSummaryValue, isAcpEntry, isCliEntry } from '../utils/daemon-utils'
-import { resolveDashboardSessionTargetFromEntry } from '../utils/dashboard-route-paths'
+import { compareMachineEntries, getMachineDisplayName } from '../utils/daemon-utils'
 import { getDesktopAutoReadPlan, getDesktopAutoReadScheduleDecision } from '../utils/dashboard-auto-read'
-import { browseMachineDirectories } from '../components/machine/workspaceBrowse'
-import type { WorkspaceLaunchKind } from './machine/types'
 
-interface PendingDashboardLaunch {
-    machineId: string
-    kind: WorkspaceLaunchKind
-    providerType: string
-    workspacePath?: string | null
-    resumeSessionId?: string | null
-    startedAt: number
-}
-
-function getRouteMachineId(id: string | null | undefined) {
-    if (!id) return ''
-    const value = String(id)
-    return value.includes(':') ? value.split(':')[0] || value : value
-}
-
-function normalizeWorkspacePath(path: string | null | undefined) {
-    return String(path || '')
-        .trim()
-        .replace(/\\/g, '/')
-        .replace(/\/+$/, '')
-        .toLowerCase()
-}
-
-function isP2PLaunchTimeout(error: unknown) {
-    const message = error instanceof Error ? error.message : String(error || '')
-    return message.includes('P2P command timeout')
-}
 
 export default function Dashboard() {
     const { sendCommand: sendDaemonCommand } = useTransport()
@@ -104,27 +73,26 @@ export default function Dashboard() {
     const connectionStates = daemonCtx.connectionStates || {}
     const showReconnected = daemonCtx.showReconnected || false
     const {
+        layoutProfile,
         groupAssignments,
-        setGroupAssignments,
+        updateGroupAssignments,
         focusedGroup,
-        setFocusedGroup,
+        updateFocusedGroup,
+        focusGroup,
         groupActiveTabIds,
-        setGroupActiveTabIds,
+        updateGroupActiveTabIds,
+        setGroupActiveTab,
         groupTabOrders,
-        setGroupTabOrders,
+        updateGroupTabOrders,
+        setGroupTabOrder,
         groupSizes,
-        setGroupSizes,
+        updateGroupSizes,
         isMobile,
         hasHydratedStoredLayout,
         hydrateStoredLayout,
+        focusConversationTab,
     } = useDashboardGroupState()
 
-    const [historyModalOpen, setHistoryModalOpen] = useState(false)
-    const [cliStopDialogOpen, setCliStopDialogOpen] = useState(false)
-    const [cliStopTargetConv, setCliStopTargetConv] = useState<import('../components/dashboard/types').ActiveConversation | null>(null)
-    const [savedHistorySessions, setSavedHistorySessions] = useState<SavedSessionHistoryEntry[]>([])
-    const [isSavedHistoryLoading, setIsSavedHistoryLoading] = useState(false)
-    const [resumingSavedHistorySessionId, setResumingSavedHistorySessionId] = useState<string | null>(null)
     const [mobileViewMode, setMobileViewMode] = useState<'chat' | 'workspace'>(() => getMobileDashboardMode())
     useEffect(() => subscribeMobileDashboardMode(setMobileViewMode), [])
     const warmChatTailOptions = useMemo(
@@ -132,19 +100,13 @@ export default function Dashboard() {
         [isMobile, mobileViewMode],
     )
     const [actionLogs, setActionLogs] = useState<{ routeId: string; text: string; timestamp: number }[]>([])
-    const [localUserMessages, setLocalUserMessages] = useState<Record<string, { role: string; content: string; timestamp: number; _localId: string }[]>>({})
     const [cliViewModeOverrides, setCliViewModeOverrides] = useState<Record<string, 'chat' | 'terminal'>>({})
     const [clearedTabs, setClearedTabs] = useState<Record<string, number>>({})
-    const [desktopActiveTabKey, setDesktopActiveTabKey] = useState<string | null>(null)
-    const [scrollToBottomRequest, setScrollToBottomRequest] = useState<{ tabKey: string; nonce: number } | null>(null)
-    const [pendingDashboardLaunch, setPendingDashboardLaunch] = useState<PendingDashboardLaunch | null>(null)
-    const savedHistoryRefreshKeyRef = useRef<string | null>(null)
     useDevRenderTrace('Dashboard', {
         ideCount: ides.length,
         toastCount: toasts.length,
         focusedGroup,
         groupCount: Object.keys(groupAssignments).length,
-        localMessageTabs: Object.keys(localUserMessages).length,
         actionLogCount: actionLogs.length,
     })
 
@@ -189,9 +151,9 @@ export default function Dashboard() {
     // ─── Hidden Tabs ───
     const {
         hiddenTabs,
-        hideTab: hideDashboardTab,
-        toggleTab: toggleHiddenTab,
-        showTab: showHiddenTab,
+        hideTarget: hideHiddenConversation,
+        toggleTarget: toggleHiddenConversation,
+        showTarget: showHiddenConversation,
         showAllTabs: showAllHiddenTabs,
     } = useHiddenTabs();
     const {
@@ -203,26 +165,13 @@ export default function Dashboard() {
     } = useDashboardConversations({
         ides: effectiveIdes,
         connectionStates,
-        localUserMessages,
         clearedTabs,
         hiddenTabs,
     })
-    const hiddenConversationKeyByTabKey = useMemo(
-        () => new Map(conversations.map(conversation => [conversation.tabKey, getHiddenConversationStorageKey(conversation)])),
+    const conversationByTabKey = useMemo(
+        () => new Map(conversations.map(conversation => [conversation.tabKey, conversation])),
         [conversations],
     )
-    const hideConversationByTabKey = useCallback((tabKey: string) => {
-        const targetKey = hiddenConversationKeyByTabKey.get(tabKey) || getHiddenConversationStorageKey({ tabKey })
-        hideDashboardTab(targetKey)
-    }, [hiddenConversationKeyByTabKey, hideDashboardTab])
-    const toggleHiddenConversationByTabKey = useCallback((tabKey: string) => {
-        const targetKey = hiddenConversationKeyByTabKey.get(tabKey) || getHiddenConversationStorageKey({ tabKey })
-        toggleHiddenTab(targetKey)
-    }, [hiddenConversationKeyByTabKey, toggleHiddenTab])
-    const showConversationByTabKey = useCallback((tabKey: string) => {
-        const targetKey = hiddenConversationKeyByTabKey.get(tabKey) || getHiddenConversationStorageKey({ tabKey })
-        showHiddenTab(targetKey)
-    }, [hiddenConversationKeyByTabKey, showHiddenTab])
     useWarmSessionChatTailControllers(visibleConversations, warmChatTailOptions)
     useEffect(() => {
         if (Object.keys(cliViewModeOverrides).length === 0) return
@@ -235,43 +184,18 @@ export default function Dashboard() {
     const {
         notifications,
         unreadCount: notificationUnreadCount,
-        notificationStateBySessionId,
-        markRead: markDashboardNotificationRead,
-        markUnread: markDashboardNotificationUnread,
-        markTargetRead: markDashboardNotificationTargetRead,
-        deleteNotification: deleteDashboardNotification,
     } = useDashboardNotifications({
         conversations,
         liveSessionInboxState,
     })
-    const handleMarkDashboardNotificationRead = useCallback((notificationId: string) => {
-        const notification = notifications.find(record => record.id === notificationId)
-        const readAt = Math.max(Date.now(), notification?.updatedAt || 0)
-        markDashboardNotificationRead(notificationId, readAt)
-        if (!notification?.sessionId) return
-        void sendDaemonCommand(notification.machineId || notification.routeId, 'mark_session_seen', {
-            sessionId: notification.sessionId,
-            seenAt: readAt,
-        }).catch(() => {})
-    }, [markDashboardNotificationRead, notifications, sendDaemonCommand])
-    const handleMarkDashboardNotificationUnread = useCallback((notificationId: string) => {
-        const notification = notifications.find(record => record.id === notificationId)
-        markDashboardNotificationUnread(notificationId)
-        if (!notification?.sessionId) return
-        void sendDaemonCommand(notification.machineId || notification.routeId, 'mark_notification_unread', {
-            sessionId: notification.sessionId,
-            notificationId: notification.id,
-        }).catch(() => {})
-    }, [markDashboardNotificationUnread, notifications, sendDaemonCommand])
-    const handleDeleteDashboardNotification = useCallback((notificationId: string) => {
-        const notification = notifications.find(record => record.id === notificationId)
-        deleteDashboardNotification(notificationId)
-        if (!notification?.sessionId) return
-        void sendDaemonCommand(notification.machineId || notification.routeId, 'delete_notification', {
-            sessionId: notification.sessionId,
-            notificationId: notification.id,
-        }).catch(() => {})
-    }, [deleteDashboardNotification, notifications, sendDaemonCommand])
+    const {
+        handleMarkDashboardNotificationRead,
+        handleMarkDashboardNotificationUnread,
+        handleDeleteDashboardNotification,
+    } = useDashboardNotificationActions({
+        notifications,
+        sendDaemonCommand,
+    })
     const lastDesktopAutoReadKeyRef = useRef<string | null>(null)
     const pendingDesktopAutoReadKeyRef = useRef<string | null>(null)
     const pendingDesktopAutoReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -290,33 +214,32 @@ export default function Dashboard() {
         splitTabRelative,
     } = useDashboardSplitView({
         groupAssignments,
-        setGroupAssignments,
-        focusedGroup,
-        setFocusedGroup,
-        setGroupActiveTabIds,
-        setGroupTabOrders,
+        updateGroupAssignments,
+        updateFocusedGroup,
+        updateGroupActiveTabIds,
+        updateGroupTabOrders,
         groupSizes,
-        setGroupSizes,
+        updateGroupSizes,
         isMobile,
         visibleConversations,
         visibleTabKeys,
     })
 
-    const activeConv = useMemo(() => {
-        if (!isMobile) {
-            if (desktopActiveTabKey) {
-                const found = conversations.find(conversation => conversation.tabKey === desktopActiveTabKey)
-                if (found) return found
-            }
-            return visibleConversations[0]
-        }
-        const focusedTabKey = groupActiveTabIds[focusedGroup]
-        if (focusedTabKey) {
-            const found = conversations.find(conversation => conversation.tabKey === focusedTabKey)
-            if (found) return found
-        }
-        return groupedConvs[focusedGroup]?.[0] || groupedConvs[0]?.[0]
-    }, [desktopActiveTabKey, isMobile, groupActiveTabIds, focusedGroup, conversations, groupedConvs, visibleConversations])
+    const {
+        activeConv,
+        openDesktopConversation,
+        requestScrollToBottom,
+        scrollToBottomRequest,
+        setDesktopActiveTab,
+    } = useDashboardDesktopWorkspaceState({
+        isMobile,
+        conversations,
+        visibleConversations,
+        groupActiveTabIds,
+        focusedGroup,
+        groupedConvs,
+        setSearchParams,
+    })
 
     useEffect(() => {
         const clearPendingDesktopAutoRead = () => {
@@ -371,7 +294,6 @@ export default function Dashboard() {
         if (!scheduleDecision.shouldSchedule) return
         if (scheduleDecision.shouldCancelPending) clearPendingDesktopAutoRead()
 
-        const activeConvIdentity = buildConversationIdentity(activeConv)
         const doMarkSeen = () => {
             if (document.visibilityState !== 'visible') return
             if (lastDesktopAutoReadKeyRef.current === autoReadKey) return
@@ -385,10 +307,6 @@ export default function Dashboard() {
             }
 
             const readAt = autoReadPlan.readAt
-            markDashboardNotificationTargetRead({
-                ...activeConvIdentity,
-            }, readAt)
-
             void sendDaemonCommand(activeConv.daemonId || activeConv.routeId, 'mark_session_seen', {
                 sessionId: activeConv.sessionId,
                 seenAt: readAt,
@@ -424,7 +342,7 @@ export default function Dashboard() {
         }
         pendingDesktopAutoReadVisibilityHandlerRef.current = onVisible
         document.addEventListener('visibilitychange', onVisible)
-    }, [activeConv, isMobile, liveSessionInboxState, markDashboardNotificationTargetRead, sendDaemonCommand])
+    }, [activeConv, isMobile, liveSessionInboxState, sendDaemonCommand])
 
     useEffect(() => () => {
         if (pendingDesktopAutoReadTimerRef.current) clearTimeout(pendingDesktopAutoReadTimerRef.current)
@@ -452,7 +370,12 @@ export default function Dashboard() {
         setRemoteDialogActiveConv,
         openRemoteDialog,
         closeRemoteDialog,
-    } = useDashboardRemoteDialogState({
+        cliStopDialogOpen,
+        cliStopTargetConv,
+        requestCliStop,
+        cancelCliStop,
+        confirmCliStop,
+    } = useDashboardOverlayDialogsState({
         isMobile,
         location,
         navigate,
@@ -461,16 +384,40 @@ export default function Dashboard() {
         conversations,
         ides,
         resolveConversationByTarget,
+        activeConv,
+        sendDaemonCommand,
     })
 
-    const historyTargetConv = (remoteDialogActiveConv || remoteDialogConv) || activeConv
-    const isSavedSessionHistoryTarget = !!historyTargetConv && isCliConv(historyTargetConv) && !isAcpConv(historyTargetConv)
-    const savedHistoryRefreshKey = useMemo(() => {
-        if (!historyTargetConv || !isSavedSessionHistoryTarget) return null
-        const routeTarget = historyTargetConv.daemonId || historyTargetConv.routeId || ''
-        const providerType = getConversationProviderType(historyTargetConv)
-        return `${routeTarget}:${providerType}`
-    }, [historyTargetConv, isSavedSessionHistoryTarget])
+    const {
+        historyModalOpen,
+        openHistoryModal,
+        closeHistoryModal,
+        historyTargetConv,
+        isSavedSessionHistoryTarget,
+        isHistoryCreatingChat,
+        isHistoryRefreshingHistory,
+        handleHistorySwitchSession,
+        handleHistoryNewChat,
+        handleHistoryRefresh,
+        savedHistorySessions,
+        savedHistoryFilters,
+        setSavedHistoryFilters,
+        isSavedHistoryLoading,
+        resumingSavedHistorySessionId,
+        handleRefreshSavedHistory,
+        handleResumeSavedHistorySession,
+    } = useDashboardHistoryModalState({
+        activeConv,
+        remoteDialogConv,
+        remoteDialogActiveConv,
+        ides,
+        sendDaemonCommand,
+        updateRouteChats,
+        setToasts,
+        setClearedTabs,
+        setSearchParams,
+    })
+
     const mobileChatConversations = useMemo(
         () => visibleConversations,
         [visibleConversations],
@@ -487,181 +434,29 @@ export default function Dashboard() {
         setSearchParams(next, { replace: true })
     }, [searchParams, setSearchParams])
 
-    const handleBrowseMachineDirectory = useCallback(async (machineId: string, path: string) => (
-        browseMachineDirectories(sendDaemonCommand, machineId, path)
-    ), [sendDaemonCommand])
+    const {
+        trackPendingLaunch,
+    } = useDashboardPendingLaunch({
+        ides,
+        conversations,
+        onOpenSession: handleRequestOpenSession,
+    })
 
-    const handleSaveMachineWorkspace = useCallback(async (machineId: string, path: string) => {
-        if (!path.trim()) return { ok: false, error: 'Choose a workspace path first.' }
-        try {
-            const res: any = await sendDaemonCommand(machineId, 'workspace_add', { path: path.trim() })
-            if (res?.success) return { ok: true }
-            return { ok: false, error: res?.error || 'Could not save workspace' }
-        } catch (error) {
-            return { ok: false, error: error instanceof Error ? error.message : 'Could not save workspace' }
-        }
-    }, [sendDaemonCommand])
-
-    const handleLaunchMachineIde = useCallback(async (machineId: string, ideType: string, opts?: { workspacePath?: string | null }) => {
-        try {
-            const payload: Record<string, unknown> = { ideType, enableCdp: true }
-            if (opts?.workspacePath?.trim()) payload.workspace = opts.workspacePath.trim()
-            const res: any = await sendDaemonCommand(machineId, 'launch_ide', payload)
-            if (!res?.success && res?.success !== undefined) {
-                return { ok: false, error: res?.error || 'Could not launch IDE' }
-            }
-            setPendingDashboardLaunch({
-                machineId,
-                kind: 'ide',
-                providerType: ideType,
-                workspacePath: opts?.workspacePath || null,
-                startedAt: Date.now(),
-            })
-            return { ok: true }
-        } catch (error) {
-            return { ok: false, error: error instanceof Error ? error.message : 'Could not launch IDE' }
-        }
-    }, [sendDaemonCommand])
-
-    const handleLaunchMachineProvider = useCallback(async (
-        machineId: string,
-        kind: 'cli' | 'acp',
-        providerType: string,
-        opts?: {
-            workspaceId?: string | null
-            workspacePath?: string | null
-            resumeSessionId?: string | null
-            cliArgs?: string[]
-            initialModel?: string | null
-        },
-    ) => {
-        const startedAt = Date.now()
-        try {
-            const payload: Record<string, unknown> = { cliType: providerType }
-            if (opts?.workspacePath?.trim()) payload.dir = opts.workspacePath.trim()
-            else if (opts?.workspaceId) payload.workspaceId = opts.workspaceId
-            if (opts?.resumeSessionId?.trim()) payload.resumeSessionId = opts.resumeSessionId.trim()
-            if (Array.isArray(opts?.cliArgs) && opts.cliArgs.length > 0) payload.cliArgs = opts.cliArgs
-            if (opts?.initialModel?.trim()) payload.initialModel = opts.initialModel.trim()
-            const res: any = await sendDaemonCommand(machineId, 'launch_cli', payload)
-            const result = res?.result || res
-            const launchedSessionId = result?.sessionId || result?.id
-            if (res?.success && launchedSessionId) {
-                handleRequestOpenSession(launchedSessionId)
-                return { ok: true }
-            }
-            if (res?.success) {
-                setPendingDashboardLaunch({
-                    machineId,
-                    kind,
-                    providerType,
-                    workspacePath: opts?.workspacePath || null,
-                    resumeSessionId: opts?.resumeSessionId || null,
-                    startedAt,
-                })
-                return { ok: true }
-            }
-            return { ok: false, error: res?.error || result?.error || `Could not launch ${kind.toUpperCase()} session` }
-        } catch (error) {
-            if (isP2PLaunchTimeout(error)) {
-                setPendingDashboardLaunch({
-                    machineId,
-                    kind,
-                    providerType,
-                    workspacePath: opts?.workspacePath || null,
-                    resumeSessionId: opts?.resumeSessionId || null,
-                    startedAt,
-                })
-                return { ok: true }
-            }
-            return { ok: false, error: error instanceof Error ? error.message : `Could not launch ${kind.toUpperCase()} session` }
-        }
-    }, [handleRequestOpenSession, sendDaemonCommand])
-
-    const handleListMachineSavedSessions = useCallback(async (
-        machineId: string,
-        providerType: string,
-    ): Promise<SavedSessionHistoryEntry[]> => {
-        if (!machineId || !providerType) return []
-        try {
-            const raw: any = await sendDaemonCommand(machineId, 'list_saved_sessions', {
-                providerType,
-                kind: 'cli',
-                limit: 30,
-            })
-            const result = raw?.result ?? raw
-            return Array.isArray(result?.sessions) ? result.sessions : []
-        } catch (error) {
-            console.error('List saved sessions failed', error)
-            return []
-        }
-    }, [sendDaemonCommand])
-
-    useEffect(() => {
-        if (!pendingDashboardLaunch) return
-
-        const normalizedTargetWorkspace = normalizeWorkspacePath(pendingDashboardLaunch.workspacePath)
-        const matchingEntry = ides.find((entry) => {
-            if (!entry || entry.type === 'adhdev-daemon') return false
-            const entryMachineId = getRouteMachineId(entry.daemonId || entry.id)
-            if (entryMachineId !== pendingDashboardLaunch.machineId) return false
-
-            const entryKind: WorkspaceLaunchKind = isCliEntry(entry)
-                ? 'cli'
-                : isAcpEntry(entry)
-                    ? 'acp'
-                    : 'ide'
-            if (entryKind !== pendingDashboardLaunch.kind) return false
-
-            const entryProviderType = String(entry.agentType || entry.type || '')
-            if (entryProviderType !== pendingDashboardLaunch.providerType) return false
-
-            if (pendingDashboardLaunch.resumeSessionId) {
-                const entryProviderSessionId = String(entry.providerSessionId || '')
-                return entryProviderSessionId === pendingDashboardLaunch.resumeSessionId
-            }
-
-            if (normalizedTargetWorkspace) {
-                const entryWorkspace = normalizeWorkspacePath(entry.workspace || entry.runtimeWorkspaceLabel)
-                if (!entryWorkspace) return false
-                return entryWorkspace === normalizedTargetWorkspace
-            }
-
-            const activityAt = Number(
-                entry.lastUpdated
-                || entry._lastUpdate
-                || entry.timestamp
-                || entry.activeChat?.messages?.at?.(-1)?.timestamp
-                || 0,
-            )
-            return activityAt >= (pendingDashboardLaunch.startedAt - 5_000)
-        })
-
-        if (!matchingEntry) return
-
-        const targetSessionId = resolveDashboardSessionTargetFromEntry({
-            entrySessionId: matchingEntry.sessionId,
-            entryInstanceId: matchingEntry.instanceId,
-            entryRouteId: matchingEntry.id,
-            conversations,
-        })
-
-        if (!targetSessionId) return
-
-        setPendingDashboardLaunch(null)
-        handleRequestOpenSession(targetSessionId)
-    }, [conversations, handleRequestOpenSession, ides, pendingDashboardLaunch])
-
-    useEffect(() => {
-        if (!pendingDashboardLaunch) return
-        const timeout = window.setTimeout(() => {
-            setPendingDashboardLaunch(current => {
-                if (!current || current.startedAt !== pendingDashboardLaunch.startedAt) return current
-                return null
-            })
-        }, 45_000)
-        return () => window.clearTimeout(timeout)
-    }, [pendingDashboardLaunch])
+    const {
+        handleBrowseMachineDirectory,
+        handleSaveMachineWorkspace,
+        handleLaunchMachineIde,
+        handleLaunchMachineProvider,
+        handleListMachineSavedSessions,
+        setActiveCliViewMode,
+    } = useDashboardCommandActions({
+        sendDaemonCommand,
+        trackPendingLaunch,
+        onOpenSession: handleRequestOpenSession,
+        activeConv,
+        ides,
+        setCliViewModeOverrides,
+    })
 
     useDashboardConversationMeta({
         visibleConversations,
@@ -674,7 +469,6 @@ export default function Dashboard() {
         ides,
         sendDaemonCommand,
         setToasts,
-        setLocalUserMessages,
         resolveConversationByTarget,
     })
 
@@ -688,94 +482,8 @@ export default function Dashboard() {
         chats: ides.find(entry => entry.id === activeConv?.routeId)?.chats,
         updateRouteChats,
         setToasts,
-        setLocalUserMessages,
         setClearedTabs,
     })
-
-    const {
-        isCreatingChat: isHistoryCreatingChat,
-        isRefreshingHistory: isHistoryRefreshingHistory,
-        handleSwitchSession: handleHistorySwitchSession,
-        handleNewChat: handleHistoryNewChat,
-        handleRefreshHistory: handleHistoryRefresh,
-    } = useDashboardSessionCommands({
-        sendDaemonCommand,
-        activeConv: historyTargetConv,
-        chats: ides.find(entry => entry.id === historyTargetConv?.routeId)?.chats,
-        updateRouteChats,
-        setToasts,
-        setLocalUserMessages,
-        setClearedTabs,
-    })
-
-    const handleRefreshSavedHistory = useCallback(async () => {
-        if (!historyTargetConv || !isSavedSessionHistoryTarget || isSavedHistoryLoading) return
-        setIsSavedHistoryLoading(true)
-        try {
-            const routeTarget = historyTargetConv.daemonId || historyTargetConv.routeId
-            const providerType = getConversationProviderType(historyTargetConv)
-            const raw: any = await sendDaemonCommand(routeTarget, 'list_saved_sessions', {
-                agentType: providerType,
-                providerType,
-                kind: 'cli',
-                limit: 50,
-            })
-            const result = raw?.result ?? raw
-            setSavedHistorySessions(Array.isArray(result?.sessions) ? result.sessions : [])
-        } catch (error) {
-            console.error('Refresh saved sessions failed', error)
-            setSavedHistorySessions([])
-        } finally {
-            setIsSavedHistoryLoading(false)
-        }
-    }, [historyTargetConv, isSavedHistoryLoading, isSavedSessionHistoryTarget, sendDaemonCommand])
-
-    useEffect(() => {
-        if (!historyModalOpen) {
-            savedHistoryRefreshKeyRef.current = null
-            return
-        }
-        if (!isSavedSessionHistoryTarget) {
-            savedHistoryRefreshKeyRef.current = null
-            setSavedHistorySessions([])
-            setIsSavedHistoryLoading(false)
-            return
-        }
-        if (!savedHistoryRefreshKey || isSavedHistoryLoading) return
-        if (savedHistoryRefreshKeyRef.current === savedHistoryRefreshKey) return
-        savedHistoryRefreshKeyRef.current = savedHistoryRefreshKey
-        void handleRefreshSavedHistory()
-    }, [handleRefreshSavedHistory, historyModalOpen, isSavedHistoryLoading, isSavedSessionHistoryTarget, savedHistoryRefreshKey])
-
-    const handleResumeSavedHistorySession = useCallback(async (session: SavedSessionHistoryEntry) => {
-        if (!historyTargetConv || !isSavedSessionHistoryTarget) return
-        if (!session.providerSessionId || !session.workspace) return
-        const routeTarget = historyTargetConv.daemonId || historyTargetConv.routeId
-        const cliType = getConversationProviderType(historyTargetConv)
-        try {
-            setResumingSavedHistorySessionId(session.providerSessionId)
-            const raw: any = await sendDaemonCommand(routeTarget, 'launch_cli', {
-                cliType,
-                dir: session.workspace,
-                resumeSessionId: session.providerSessionId,
-                initialModel: getProviderSummaryValue(session.summaryMetadata, 'model', { preferShortValue: true }) || undefined,
-            })
-            const result = raw?.result ?? raw
-            const nextSessionId = typeof result?.sessionId === 'string' ? result.sessionId : typeof result?.id === 'string' ? result.id : ''
-            if (nextSessionId) {
-                setSearchParams(prev => {
-                    const next = new URLSearchParams(prev)
-                    next.set('activeTab', nextSessionId)
-                    return next
-                }, { replace: true })
-            }
-            setHistoryModalOpen(false)
-        } catch (error) {
-            console.error('Resume saved session failed', error)
-        } finally {
-            setResumingSavedHistorySessionId(null)
-        }
-    }, [historyTargetConv, isSavedSessionHistoryTarget, sendDaemonCommand, setSearchParams])
 
     useDashboardPageEffects({
         urlActiveTab: isMobile && !showMobileChatMode ? urlActiveTab : null,
@@ -784,8 +492,7 @@ export default function Dashboard() {
         normalizedGroupAssignments,
         hasHydratedStoredLayout: isMobile && !showMobileChatMode ? hasHydratedStoredLayout : true,
         hydrateStoredLayout: isMobile && !showMobileChatMode ? hydrateStoredLayout : (() => {}),
-        setGroupActiveTabIds,
-        setFocusedGroup,
+        focusConversationTab,
         setSearchParams,
         historyModalOpen,
         activeConv,
@@ -794,76 +501,10 @@ export default function Dashboard() {
         handleRefreshHistory,
     })
 
-    const performActiveCliStop = useCallback(async (
-        mode: 'hard' | 'save',
-        conversation?: import('../components/dashboard/types').ActiveConversation | null,
-    ) => {
-        const targetConv = conversation || cliStopTargetConv || activeConv
-        if (!targetConv || (!isCliConv(targetConv) && !isAcpConv(targetConv))) return
-        const cliType = getConversationProviderType(targetConv)
-        const daemonId = targetConv.routeId || targetConv.daemonId || ''
-        try {
-            await sendDaemonCommand(daemonId, 'stop_cli', {
-                cliType,
-                targetSessionId: targetConv.sessionId,
-                mode,
-            })
-        } catch (e: any) {
-            console.error('Stop CLI failed:', e)
-        }
-    }, [activeConv, cliStopTargetConv, sendDaemonCommand])
-
-    const handleActiveCliStop = useCallback(async (conversation?: import('../components/dashboard/types').ActiveConversation) => {
-        const targetConv = conversation || activeConv
-        if (!targetConv || (!isCliConv(targetConv) && !isAcpConv(targetConv))) return
-        setCliStopTargetConv(targetConv)
-        setCliStopDialogOpen(true)
-    }, [activeConv])
-
     const activeCliViewMode = useMemo(() => {
         if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return null
         return getCliConversationViewMode(activeConv)
     }, [activeConv])
-
-    const setActiveCliViewMode = useCallback(async (mode: 'chat' | 'terminal') => {
-        if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return
-        const currentMode = getCliConversationViewMode(activeConv)
-        if (currentMode === mode) return
-        const sessionId = activeConv.sessionId
-        if (sessionId) {
-            setCliViewModeOverrides((prev) => ({ ...prev, [sessionId]: mode }))
-        }
-        try {
-            await sendDaemonCommand(getConversationMachineId(activeConv) || activeConv.routeId, 'set_cli_view_mode', {
-                targetSessionId: activeConv.sessionId,
-                cliType: getConversationProviderType(activeConv),
-                mode,
-            })
-        } catch (error) {
-            const shouldRetainOverride = shouldRetainOptimisticCliViewModeOverrideOnError(error)
-            if (sessionId && !shouldRetainOverride) {
-                setCliViewModeOverrides((prev) => {
-                    const next = { ...prev }
-                    if (currentMode === getCliViewModeForSession(ides, sessionId)) {
-                        delete next[sessionId]
-                    } else {
-                        next[sessionId] = currentMode
-                    }
-                    return next
-                })
-            }
-            if (!isExpectedCliViewModeTransportError(error)) {
-                console.error('Failed to switch CLI view mode:', error)
-            } else {
-                console.warn(
-                    shouldRetainOverride
-                        ? 'CLI view mode result was lost after send; keeping optimistic mode override:'
-                        : 'Skipped CLI view mode switch:',
-                    error instanceof Error ? error.message : String(error),
-                )
-            }
-        }
-    }, [activeConv, ides, sendDaemonCommand])
 
     const {
         versionMismatchDaemons,
@@ -878,31 +519,14 @@ export default function Dashboard() {
         sendDaemonCommand,
     })
 
-    const handleOpenDesktopConversation = useCallback((conversation: import('../components/dashboard/types').ActiveConversation) => {
-        setDesktopActiveTabKey(conversation.tabKey)
-        setSearchParams(prev => {
-            const next = new URLSearchParams(prev)
-            const activeTabTarget = getConversationActiveTabTarget(conversation)
-            if (activeTabTarget) next.set('activeTab', activeTabTarget)
-            else next.delete('activeTab')
-            return next
-        }, { replace: true })
-    }, [setSearchParams])
-
     const handleShowHiddenConversation = useCallback((conversation: import('../components/dashboard/types').ActiveConversation) => {
-        showConversationByTabKey(conversation.tabKey)
-        handleOpenDesktopConversation(conversation)
-    }, [handleOpenDesktopConversation, showConversationByTabKey])
+        showHiddenConversation(conversation)
+        openDesktopConversation(conversation)
+    }, [openDesktopConversation, showHiddenConversation])
 
     const handleHideConversation = useCallback((conversation: import('../components/dashboard/types').ActiveConversation) => {
-        hideConversationByTabKey(conversation.tabKey)
-    }, [hideConversationByTabKey])
-
-    const requestScrollToBottom = useCallback((tabKey: string | null | undefined, intent: DashboardScrollToBottomIntent) => {
-        const request = buildDashboardScrollToBottomRequest(tabKey, intent)
-        if (!request) return
-        setScrollToBottomRequest(request)
-    }, [])
+        hideHiddenConversation(conversation)
+    }, [hideHiddenConversation])
 
     return (
         <div className="page-dashboard flex-1 min-h-0 bg-bg-primary text-text-primary flex flex-col overflow-hidden">
@@ -937,17 +561,16 @@ export default function Dashboard() {
                 isConnected={isConnected}
                 onOpenHistory={(conversation) => {
                     if (conversation) setRemoteDialogActiveConv(conversation)
-                    setHistoryModalOpen(true)
+                    openHistoryModal()
                 }}
                 onOpenRemote={openRemoteDialog}
-                onStopCli={handleActiveCliStop}
+                onStopCli={requestCliStop}
                 activeCliViewMode={activeCliViewMode}
                 onSetActiveCliViewMode={setActiveCliViewMode}
                 mobileChatConversations={mobileChatConversations}
                 ides={ides}
                 actionLogs={actionLogs}
                 sendDaemonCommand={sendDaemonCommand}
-                setLocalUserMessages={setLocalUserMessages}
                 setActionLogs={setActionLogs}
                 isStandalone={isStandalone}
                 initialDataLoaded={initialLoaded}
@@ -969,27 +592,28 @@ export default function Dashboard() {
                 groupedConvs={groupedConvs}
                 clearedTabs={clearedTabs}
                 focusedGroup={focusedGroup}
-                setFocusedGroup={setFocusedGroup}
+                focusGroup={focusGroup}
                 moveTabToGroup={moveTabToGroup}
                 splitTabRelative={splitTabRelative}
                 closeGroup={closeGroup}
                 handleResizeStart={handleResizeStart}
                 groupActiveTabIds={groupActiveTabIds}
-                setGroupActiveTabIds={setGroupActiveTabIds}
+                setGroupActiveTab={setGroupActiveTab}
                 groupTabOrders={groupTabOrders}
-                setGroupTabOrders={setGroupTabOrders}
-                toggleHiddenTab={toggleHiddenConversationByTabKey}
+                setGroupTabOrder={setGroupTabOrder}
+                toggleHiddenTab={(tabKey) => toggleHiddenConversation(conversationByTabKey.get(tabKey) || { tabKey })}
                 visibleConversations={visibleConversations}
                 hiddenConversations={hiddenConversations}
                 requestedDesktopTabKey={requestedDesktopTabKey}
                 onRequestedDesktopTabConsumed={consumeRequestedActiveTab}
-                onDesktopActiveTabChange={setDesktopActiveTabKey}
+                onDesktopActiveTabChange={setDesktopActiveTab}
                 onRequestScrollToBottom={requestScrollToBottom}
                 onHideConversation={handleHideConversation}
                 onShowHiddenConversation={handleShowHiddenConversation}
                 onShowAllHiddenConversations={showAllHiddenTabs}
                 scrollToBottomRequest={scrollToBottomRequest}
                 machineEntries={machineEntries}
+                layoutProfile={layoutProfile}
                 onBrowseMachineDirectory={handleBrowseMachineDirectory}
                 onSaveMachineWorkspace={handleSaveMachineWorkspace}
                 onLaunchMachineIde={handleLaunchMachineIde}
@@ -997,79 +621,81 @@ export default function Dashboard() {
                 onListMachineSavedSessions={handleListMachineSavedSessions}
                 notifications={notifications}
                 notificationUnreadCount={notificationUnreadCount}
-                notificationStateBySessionId={notificationStateBySessionId}
                 liveSessionInboxState={liveSessionInboxState}
                 onMarkNotificationRead={handleMarkDashboardNotificationRead}
                 onMarkNotificationUnread={handleMarkDashboardNotificationUnread}
                 onDeleteNotification={handleDeleteDashboardNotification}
-                onMarkNotificationTargetRead={markDashboardNotificationTargetRead}
             />
 
             <style>{`
                 body { overflow: hidden; overscroll-behavior: none; }
 `}</style>
             <DashboardOverlays
-                historyModalOpen={historyModalOpen}
-                historyTargetConv={historyTargetConv}
-                ides={ides}
-                isHistoryCreatingChat={isHistoryCreatingChat}
-                isHistoryRefreshingHistory={isSavedSessionHistoryTarget ? false : isHistoryRefreshingHistory}
-                savedHistorySessions={savedHistorySessions}
-                isSavedHistoryLoading={isSavedHistoryLoading}
-                isResumingSavedHistorySessionId={resumingSavedHistorySessionId}
-                onCloseHistory={() => setHistoryModalOpen(false)}
-                onNewHistoryChat={handleHistoryNewChat}
-                onSwitchHistorySession={handleHistorySwitchSession}
-                onRefreshHistory={isSavedSessionHistoryTarget ? handleRefreshSavedHistory : handleHistoryRefresh}
-                onResumeSavedHistorySession={handleResumeSavedHistorySession}
-                remoteDialogConv={remoteDialogConv}
-                remoteDialogIdeEntry={remoteDialogIdeEntry}
-                connectionStates={connectionStates}
-                actionLogs={actionLogs}
-                localUserMessages={localUserMessages}
-                sendDaemonCommand={sendDaemonCommand}
-                setLocalUserMessages={setLocalUserMessages}
-                setActionLogs={setActionLogs}
-                isStandalone={isStandalone}
-                userName={daemonCtx.userName}
-                onOpenRemoteHistory={(conversation) => {
-                    if (conversation) setRemoteDialogActiveConv(conversation)
-                    setHistoryModalOpen(true)
+                historyModal={{
+                    open: historyModalOpen,
+                    targetConv: historyTargetConv,
+                    ides,
+                    isCreatingChat: isHistoryCreatingChat,
+                    isRefreshingHistory: isSavedSessionHistoryTarget ? false : isHistoryRefreshingHistory,
+                    savedSessions: savedHistorySessions,
+                    savedHistoryFilters,
+                    onSavedHistoryFiltersChange: setSavedHistoryFilters,
+                    isSavedSessionsLoading: isSavedHistoryLoading,
+                    isResumingSavedSessionId: resumingSavedHistorySessionId,
+                    onClose: closeHistoryModal,
+                    onNewChat: handleHistoryNewChat,
+                    onSwitchSession: handleHistorySwitchSession,
+                    onRefreshHistory: isSavedSessionHistoryTarget ? handleRefreshSavedHistory : handleHistoryRefresh,
+                    onResumeSavedSession: handleResumeSavedHistorySession,
                 }}
-                onRemoteConversationChange={setRemoteDialogActiveConv}
-                onCloseRemoteDialog={closeRemoteDialog}
-                cliStopDialogOpen={cliStopDialogOpen}
-                cliStopTargetConv={cliStopTargetConv}
-                onCancelCliStop={() => {
-                    setCliStopDialogOpen(false)
-                    setCliStopTargetConv(null)
+                remoteDialog={{
+                    conversation: remoteDialogConv,
+                    ideEntry: remoteDialogIdeEntry,
+                    ides,
+                    connectionStates,
+                    actionLogs,
+                    sendDaemonCommand,
+                    setActionLogs,
+                    isStandalone,
+                    userName: daemonCtx.userName,
+                    onOpenHistory: (conversation) => {
+                        if (conversation) setRemoteDialogActiveConv(conversation)
+                        openHistoryModal()
+                    },
+                    onConversationChange: setRemoteDialogActiveConv,
+                    onClose: closeRemoteDialog,
                 }}
-                onStopCliNow={async () => {
-                    setCliStopDialogOpen(false)
-                    await performActiveCliStop('hard', cliStopTargetConv)
-                    setCliStopTargetConv(null)
+                cliStopDialog={{
+                    open: cliStopDialogOpen,
+                    targetConv: cliStopTargetConv,
+                    onCancel: cancelCliStop,
+                    onStopNow: async () => {
+                        await confirmCliStop('hard')
+                    },
+                    onSaveAndStop: async () => {
+                        await confirmCliStop('save')
+                    },
                 }}
-                onSaveCliAndStop={async () => {
-                    setCliStopDialogOpen(false)
-                    await performActiveCliStop('save', cliStopTargetConv)
-                    setCliStopTargetConv(null)
-                }}
-                toasts={toasts}
-                onDismissToast={(id) => setToasts(prev => prev.filter(t => t.id !== id))}
-                onClickToast={(toast) => {
-                    if (toast.targetKey) {
-                        const matchedConv = resolveConversationByTarget(toast.targetKey)
-                        if (matchedConv) {
-                            setFocusedGroup(normalizedGroupAssignments.get(matchedConv.tabKey) ?? 0)
-                            handleShowHiddenConversation(matchedConv)
-                            requestScrollToBottom(matchedConv.tabKey, 'toast-open')
+                toastOverlay={{
+                    toasts,
+                    onDismiss: (id) => setToasts(prev => prev.filter(t => t.id !== id)),
+                    onClick: (toast) => {
+                        if (toast.targetKey) {
+                            const matchedConv = resolveConversationByTarget(toast.targetKey)
+                            if (matchedConv) {
+                                focusConversationTab(matchedConv.tabKey, normalizedGroupAssignments)
+                                handleShowHiddenConversation(matchedConv)
+                                requestScrollToBottom(matchedConv.tabKey, 'toast-open')
+                            }
                         }
-                    }
+                    },
                 }}
-                showOnboarding={showOnboarding}
-                onCloseOnboarding={() => {
-                    try { localStorage.setItem('adhdev_onboarding_v1', 'done') } catch {}
-                    setShowOnboarding(false)
+                onboarding={{
+                    open: showOnboarding,
+                    onClose: () => {
+                        try { localStorage.setItem('adhdev_onboarding_v1', 'done') } catch {}
+                        setShowOnboarding(false)
+                    },
                 }}
             />
         </div>

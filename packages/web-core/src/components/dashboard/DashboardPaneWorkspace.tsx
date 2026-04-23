@@ -1,7 +1,6 @@
 import React from 'react'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
-import type { DashboardNotificationSessionState } from '../../utils/dashboard-notifications'
 import type { LiveSessionInboxState } from './DashboardMobileChatShared'
 import PaneGroup from './PaneGroup'
 
@@ -15,25 +14,23 @@ interface DashboardPaneWorkspaceProps {
     ides: DaemonData[]
     actionLogs: { routeId: string; text: string; timestamp: number }[]
     sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
-    setLocalUserMessages: React.Dispatch<React.SetStateAction<Record<string, any[]>>>
     setActionLogs: React.Dispatch<React.SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
     isStandalone: boolean
     hasRegisteredMachines: boolean
     userName?: string
     focusedGroup: number
-    setFocusedGroup: React.Dispatch<React.SetStateAction<number>>
+    focusGroup: (groupIndex: number) => void
     moveTabToGroup: (tabKey: string, targetGroup: number) => void
     splitTabRelative: (tabKey: string, targetGroup: number, side: 'left' | 'right') => void
     closeGroup: (groupIdx: number) => void
     handleResizeStart: (dividerIdx: number, event: React.MouseEvent) => void
     groupActiveTabIds: Record<number, string | null>
-    setGroupActiveTabIds: React.Dispatch<React.SetStateAction<Record<number, string | null>>>
+    setGroupActiveTab: (groupIndex: number, tabKey: string | null) => void
     groupTabOrders: Record<number, string[]>
-    setGroupTabOrders: React.Dispatch<React.SetStateAction<Record<number, string[]>>>
+    setGroupTabOrder: (groupIndex: number, order: string[]) => void
     toggleHiddenTab: (tabKey: string) => void
     onOpenNewSession?: () => void
     allowTabShortcuts?: boolean
-    notificationStateBySessionId: Map<string, DashboardNotificationSessionState>
     liveSessionInboxState: Map<string, LiveSessionInboxState>
 }
 
@@ -47,25 +44,23 @@ export default function DashboardPaneWorkspace({
     ides,
     actionLogs,
     sendDaemonCommand,
-    setLocalUserMessages,
     setActionLogs,
     isStandalone,
     hasRegisteredMachines,
     userName,
     focusedGroup,
-    setFocusedGroup,
+    focusGroup,
     moveTabToGroup,
     splitTabRelative,
     closeGroup,
     handleResizeStart,
     groupActiveTabIds,
-    setGroupActiveTabIds,
+    setGroupActiveTab,
     groupTabOrders,
-    setGroupTabOrders,
+    setGroupTabOrder,
     toggleHiddenTab,
     onOpenNewSession,
     allowTabShortcuts = true,
-    notificationStateBySessionId,
     liveSessionInboxState,
 }: DashboardPaneWorkspaceProps) {
     return (
@@ -100,14 +95,13 @@ export default function DashboardPaneWorkspace({
                             ides={ides}
                             actionLogs={actionLogs}
                             sendDaemonCommand={sendDaemonCommand}
-                            setLocalUserMessages={setLocalUserMessages}
                             setActionLogs={setActionLogs}
                             isStandalone={isStandalone}
                             hasRegisteredMachines={hasRegisteredMachines}
                             userName={userName}
                             groupIndex={groupIndex}
                             isFocused={isSplitMode && focusedGroup === groupIndex}
-                            onFocus={() => setFocusedGroup(groupIndex)}
+                            onFocus={() => focusGroup(groupIndex)}
                             isSplitMode={isSplitMode}
                             numGroups={numGroups}
                             onMoveTab={(tabKey, direction) => {
@@ -117,23 +111,13 @@ export default function DashboardPaneWorkspace({
                                 else if (direction === 'split-right' && numGroups < 4) splitTabRelative(tabKey, groupIndex, 'right')
                             }}
                             onReceiveTab={tabKey => moveTabToGroup(tabKey, groupIndex)}
-                            onActiveTabChange={tabKey => setGroupActiveTabIds(prev => {
-                                if ((prev[groupIndex] ?? null) === (tabKey ?? null)) return prev
-                                return { ...prev, [groupIndex]: tabKey }
-                            })}
+                            onActiveTabChange={tabKey => setGroupActiveTab(groupIndex, tabKey)}
                             initialActiveTabId={groupActiveTabIds[groupIndex]}
                             initialTabOrder={groupTabOrders[groupIndex]}
-                            onTabOrderChange={order => setGroupTabOrders(prev => {
-                                const current = prev[groupIndex] || []
-                                if (current.length === order.length && current.every((tabKey, index) => tabKey === order[index])) {
-                                    return prev
-                                }
-                                return { ...prev, [groupIndex]: order }
-                            })}
+                            onTabOrderChange={order => setGroupTabOrder(groupIndex, order)}
                             onHideTab={toggleHiddenTab}
                             onOpenNewSession={onOpenNewSession}
                             allowTabShortcuts={allowTabShortcuts}
-                            notificationStateBySessionId={notificationStateBySessionId}
                             liveSessionInboxState={liveSessionInboxState}
                         />
                     </React.Fragment>
