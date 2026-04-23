@@ -2,6 +2,19 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.9.2] - 2026-04-23
+
+### Added
+- **web-core**: Added focused regressions for detached popout chrome cleanup and the explicit PTY transport contract used by measured terminal surfaces.
+
+### Fixed
+- **terminal-render-web / web-core**: Removed subtle measured-terminal right-edge clipping, exposed horizontal pan when the measured surface really overflows, and kept non-overflow slack intentionally centered in browser layouts.
+- **web-core / web-standalone**: Restored standalone browser terminal input by routing PTY writes through an explicit transport contract instead of relying on subscription-shaped `sendData` behavior.
+- **web-core**: Deduplicated detached popout headers and hardened detached-window terminal rendering so new-window terminals stay visually fresh.
+
+### Changed
+- **web-core / web-cloud / web-standalone**: Split terminal transport responsibilities more explicitly with a dedicated `sendPtyInput` path while preserving cloud direct PTY delivery and standalone command routing.
+
 ## [0.9.1] - 2026-04-23
 
 ### Added
