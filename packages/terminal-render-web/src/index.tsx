@@ -63,6 +63,9 @@ const TERMINAL_THEME = {
   brightWhite: '#a6adc8',
 };
 
+const TERMINAL_CHROME_PADDING_Y = 8;
+const TERMINAL_CHROME_PADDING_X = 14;
+
 const TERMINAL_CHROME_CSS = `
   .adhdev-terminal-renderer .xterm-viewport {
     scrollbar-width: thin;
@@ -126,11 +129,15 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
     useEffect(() => { onViewportMetricsRef.current = onViewportMetrics; }, [onViewportMetrics]);
 
     const reportViewportMetrics = () => {
+      const screen = containerRef.current?.querySelector('.xterm-screen') as HTMLElement | null;
       const viewport = containerRef.current?.querySelector('.xterm-viewport') as HTMLElement | null;
-      if (!viewport) return;
-      const width = Math.round(viewport.clientWidth || viewport.scrollWidth || 0);
-      const height = Math.round(viewport.clientHeight || viewport.scrollHeight || 0);
+      const target = screen || viewport;
+      if (!target) return;
+      let width = Math.max(target.clientWidth || 0, target.scrollWidth || 0);
+      let height = Math.max(target.clientHeight || 0, target.scrollHeight || 0);
       if (width <= 0 || height <= 0) return;
+      width += TERMINAL_CHROME_PADDING_X * 2;
+      height += TERMINAL_CHROME_PADDING_Y * 2;
       onViewportMetricsRef.current?.({ width, height });
     };
 
@@ -216,15 +223,21 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         }
 
         // WebGL → DOM fallback
+        const ownerWindow = containerRef.current?.ownerDocument?.defaultView;
+        const isDetachedPopoutWindow = ownerWindow?.location?.pathname === '/popout.html'
+          || ownerWindow?.location?.pathname?.endsWith('/popout.html')
+          || !!ownerWindow?.opener;
         let kind: RendererKind = 'dom';
-        try {
-          const webglAddon = new WebglAddon();
-          webglAddon.onContextLoss(() => {
-            webglAddon.dispose();
-          });
-          term.loadAddon(webglAddon);
-          kind = 'webgl';
-        } catch {}
+        if (!isDetachedPopoutWindow) {
+          try {
+            const webglAddon = new WebglAddon();
+            webglAddon.onContextLoss(() => {
+              webglAddon.dispose();
+            });
+            term.loadAddon(webglAddon);
+            kind = 'webgl';
+          } catch {}
+        }
 
         if (!rendererRuntimeLogged) {
           rendererRuntimeLogged = true;
@@ -323,7 +336,6 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
       <>
         <style>{TERMINAL_CHROME_CSS}</style>
         <div
-          ref={containerRef}
           data-terminal-renderer={rendererKind || 'pending'}
           className={['adhdev-terminal-renderer', className].filter(Boolean).join(' ')}
           style={{
@@ -331,13 +343,23 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
             height: '100%',
             overflow: 'hidden',
             background: TERMINAL_THEME.background,
-            padding: '8px 10px',
+            padding: `${TERMINAL_CHROME_PADDING_Y}px ${TERMINAL_CHROME_PADDING_X}px`,
             boxSizing: 'border-box',
             opacity: ready ? 1 : 0,
             transition: 'opacity 200ms ease',
             ...style,
           }}
-        />
+        >
+          <div
+            ref={containerRef}
+            className="adhdev-terminal-renderer-mount h-full w-full"
+            style={{
+              width: '100%',
+              height: '100%',
+              overflow: 'hidden',
+            }}
+          />
+        </div>
       </>
     );
   },

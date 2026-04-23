@@ -37,7 +37,7 @@ export default function CliTerminalPane({
     isInputActive = true,
 }: CliTerminalPaneProps) {
     useBaseDaemons();
-    const { sendData } = useTransport();
+    const { sendPtyInput } = useTransport();
     const [runtimeReady, setRuntimeReady] = useState(false);
     const [terminalScale, setTerminalScale] = useState(1);
     const [terminalViewport, setTerminalViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -61,25 +61,42 @@ export default function CliTerminalPane({
         : (sendFeedbackMessage || sendBlockMessage);
     const MIN_TERMINAL_SCALE = DEFAULT_MIN_CLI_TERMINAL_SCALE;
     const MAX_TERMINAL_SCALE = DEFAULT_MAX_CLI_TERMINAL_SCALE;
+    const safeTerminalScale = Number.isFinite(terminalScale) && terminalScale > 0 ? terminalScale : 1;
+    const terminalFontSize = Number((13 * terminalScale).toFixed(2));
     const getAutoTerminalScale = () => {
-        const intrinsicWidth = terminalIntrinsicViewport.width;
-        const intrinsicHeight = terminalIntrinsicViewport.height;
+        const renderedWidth = terminalIntrinsicViewport.width > 0 ? Math.max(terminalViewport.width, Math.round(terminalIntrinsicViewport.width)) : terminalViewport.width;
+        const renderedHeight = terminalIntrinsicViewport.height > 0 ? Math.max(terminalViewport.height, Math.round(terminalIntrinsicViewport.height)) : terminalViewport.height;
         if (!Number.isFinite(terminalViewport.width) || terminalViewport.width <= 0) return 1;
         if (!Number.isFinite(terminalViewport.height) || terminalViewport.height <= 0) return 1;
-        if (!Number.isFinite(intrinsicWidth) || intrinsicWidth <= 0) return 1;
-        if (!Number.isFinite(intrinsicHeight) || intrinsicHeight <= 0) return 1;
-        const widthRatio = terminalViewport.width / intrinsicWidth;
-        const heightRatio = terminalViewport.height / intrinsicHeight;
+        if (!Number.isFinite(renderedWidth) || renderedWidth <= 0) return 1;
+        if (!Number.isFinite(renderedHeight) || renderedHeight <= 0) return 1;
+        const unscaledWidth = renderedWidth / safeTerminalScale;
+        const unscaledHeight = renderedHeight / safeTerminalScale;
+        if (!Number.isFinite(unscaledWidth) || unscaledWidth <= 0) return 1;
+        if (!Number.isFinite(unscaledHeight) || unscaledHeight <= 0) return 1;
+        const widthRatio = terminalViewport.width / unscaledWidth;
+        const heightRatio = terminalViewport.height / unscaledHeight;
         return Number(Math.min(MAX_TERMINAL_SCALE, Math.max(MIN_TERMINAL_SCALE, Math.min(widthRatio, heightRatio))).toFixed(2));
     };
     const fittedTerminalScale = getAutoTerminalScale();
     const isManualZoomedIn = terminalScaleTouchedRef.current && terminalScale > fittedTerminalScale;
-    const scaledTerminalWidth = Number.isFinite(terminalIntrinsicViewport.width) && terminalIntrinsicViewport.width > 0
-        ? Math.max(terminalViewport.width, Math.round(terminalIntrinsicViewport.width * terminalScale))
+    const hasOverflowedTerminalSurface = terminalIntrinsicViewport.width > terminalViewport.width + 1
+        || terminalIntrinsicViewport.height > terminalViewport.height + 1;
+    const renderedTerminalWidth = terminalIntrinsicViewport.width > 0
+        ? Math.max(terminalViewport.width, Math.round(terminalIntrinsicViewport.width))
         : terminalViewport.width;
-    const scaledTerminalHeight = Number.isFinite(terminalIntrinsicViewport.height) && terminalIntrinsicViewport.height > 0
-        ? Math.max(terminalViewport.height, Math.round(terminalIntrinsicViewport.height * terminalScale))
+    const renderedTerminalHeight = terminalIntrinsicViewport.height > 0
+        ? Math.max(terminalViewport.height, Math.round(terminalIntrinsicViewport.height))
         : terminalViewport.height;
+    const terminalSurfaceWidth = terminalIntrinsicViewport.width > 0
+        ? Math.round(terminalIntrinsicViewport.width)
+        : renderedTerminalWidth;
+    const terminalSurfaceHeight = terminalIntrinsicViewport.height > 0
+        ? Math.round(terminalIntrinsicViewport.height)
+        : renderedTerminalHeight;
+    const shouldCenterTerminalSurface = !hasOverflowedTerminalSurface
+        && terminalSurfaceWidth > 0
+        && terminalViewport.width - terminalSurfaceWidth > 24;
 
     const anchorZoomViewportBottomLeft = () => {
         requestAnimationFrame(() => {
@@ -245,9 +262,9 @@ export default function CliTerminalPane({
     }, [terminalIntrinsicViewport.height, terminalIntrinsicViewport.width, terminalViewport.height, terminalViewport.width]);
 
     useEffect(() => {
-        if (!isManualZoomedIn) return;
+        if (!hasOverflowedTerminalSurface && !isManualZoomedIn) return;
         anchorZoomViewportBottomLeft();
-    }, [isManualZoomedIn, scaledTerminalHeight, scaledTerminalWidth]);
+    }, [hasOverflowedTerminalSurface, isManualZoomedIn, renderedTerminalHeight, renderedTerminalWidth]);
 
     useEffect(() => {
         if (!isVisible) {
@@ -338,35 +355,41 @@ export default function CliTerminalPane({
                     </div>
                 <div
                     ref={terminalPanSurfaceRef}
-                    className={isManualZoomedIn ? 'w-full h-full overflow-auto rounded-lg overscroll-contain' : 'w-full h-full overflow-hidden rounded-lg overscroll-contain'}
+                    className={hasOverflowedTerminalSurface ? 'w-full h-full overflow-x-auto overflow-y-hidden rounded-lg overscroll-contain' : 'w-full h-full overflow-hidden rounded-lg overscroll-contain'}
+                    style={{
+                        display: shouldCenterTerminalSurface ? 'flex' : 'block',
+                        justifyContent: shouldCenterTerminalSurface ? 'center' : undefined,
+                    }}
                 >
                     <div
                         style={{
-                            width: scaledTerminalWidth > 0 ? `${scaledTerminalWidth}px` : '100%',
-                            height: scaledTerminalHeight > 0 ? `${scaledTerminalHeight}px` : '100%',
-                            minWidth: '100%',
-                            minHeight: '100%',
+                            width: shouldCenterTerminalSurface && terminalSurfaceWidth > 0 ? `${terminalSurfaceWidth}px` : renderedTerminalWidth > 0 ? `${renderedTerminalWidth}px` : '100%',
+                            height: shouldCenterTerminalSurface && terminalSurfaceHeight > 0 ? `${terminalSurfaceHeight}px` : renderedTerminalHeight > 0 ? `${renderedTerminalHeight}px` : '100%',
+                            minWidth: shouldCenterTerminalSurface ? `${terminalSurfaceWidth}px` : '100%',
+                            minHeight: shouldCenterTerminalSurface ? `${terminalSurfaceHeight}px` : '100%',
+                            maxWidth: shouldCenterTerminalSurface ? '100%' : 'none',
                             position: 'relative',
                         }}
                     >
                         <div
                             style={{
-                                width: terminalIntrinsicViewport.width > 0 ? `${terminalIntrinsicViewport.width}px` : '100%',
-                                height: terminalIntrinsicViewport.height > 0 ? `${terminalIntrinsicViewport.height}px` : '100%',
+                                width: '100%',
+                                height: '100%',
                                 position: 'absolute',
                                 left: 0,
                                 bottom: 0,
-                                zoom: terminalScale,
                             }}
                         >
                             <CliTerminal
                                 ref={terminalRef}
                                 readOnly={!runtimeReady || !isVisible}
                                 sizingMode="measured"
+                                fontSize={terminalFontSize}
                                 onViewportMetrics={setTerminalIntrinsicViewport}
                                 onInput={(data) => {
                                     if (!runtimeReady) return;
-                                    sendData?.(daemonRouteId, { type: 'pty_input', sessionId, targetSessionId: sessionId, data })
+                                    const sent = sendPtyInput?.(daemonRouteId, sessionId, data) ?? false;
+                                    if (!sent) return;
                                 }}
                             />
                         </div>

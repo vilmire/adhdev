@@ -26,6 +26,7 @@ describe('cli terminal scale helpers', () => {
     expect(getAutoCliTerminalScaleForViewport(390, 640)).toBe(0.82)
     expect(getAutoCliTerminalScaleForViewport(390, 520)).toBe(0.68)
     expect(getAutoCliTerminalScaleForViewport(960, 720)).toBe(1)
+    expect(getAutoCliTerminalScaleForViewport(1440, 900)).toBe(1.25)
   })
 
   it('prefers fit mode for narrow mobile and portrait panes', () => {

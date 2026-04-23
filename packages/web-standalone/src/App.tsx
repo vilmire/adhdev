@@ -6,7 +6,7 @@
  */
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { StandaloneDaemonProvider, sendCommandViaWs, sendDataViaWs } from './StandaloneDaemonContext'
+import { StandaloneDaemonProvider, sendCommandViaWs, sendDataViaWs, sendPtyInputViaWs } from './StandaloneDaemonContext'
 import { getStandaloneToken, standaloneFetch, stripStandaloneTokenFromLocation, type StandaloneAuthSessionStatus, type StandalonePreferencesStatus } from './standalone-auth-client'
 import {
     applyStandaloneFontPreferences,
@@ -178,6 +178,7 @@ export default function App() {
     const transportValue = useMemo(() => ({
         sendCommand: sendCommandViaWs,
         sendData: sendDataViaWs,
+        sendPtyInput: sendPtyInputViaWs,
     }), [])
 
     return (

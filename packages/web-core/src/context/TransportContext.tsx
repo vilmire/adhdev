@@ -13,6 +13,9 @@ export interface TransportContextValue {
     /** Send data directly via connection (returns false if unsupported) */
     sendData?: (daemonId: string, data: any) => boolean
 
+    /** Send raw PTY input via the transport's explicit terminal-input path */
+    sendPtyInput?: (daemonId: string, sessionId: string, data: string) => boolean
+
     /** Check connection state */
     isConnected?: (daemonId: string) => boolean
 

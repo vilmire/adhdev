@@ -104,6 +104,24 @@ export function sendDataViaWs(_daemonId: string, data: SubscribeRequest | Unsubs
     }
 }
 
+export function sendPtyInputViaWs(daemonId: string, sessionId: string, data: string): boolean {
+    const ws = _wsInstance
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false
+    const route = applyRouteTarget(daemonId, { sessionId, targetSessionId: sessionId, data })
+    try {
+        ws.send(JSON.stringify({
+            type: 'command',
+            data: {
+                type: 'pty_input',
+                payload: route.payload,
+            },
+        }))
+        return true
+    } catch {
+        return false
+    }
+}
+
 /**
  * WS-based connection adapter — implements the same interface as
  * connectionManager connections so dashboard/remote flows work without platform-specific code.

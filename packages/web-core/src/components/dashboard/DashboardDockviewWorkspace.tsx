@@ -910,12 +910,11 @@ export default function DashboardDockviewWorkspace({
 
             ownerDoc.title = `${title} — ADHDev`
 
-            let header = ownerDoc.getElementById('adhdev-popout-header')
-            if (!(header instanceof HTMLElement)) {
-                header = ownerDoc.createElement('div')
-                header.id = 'adhdev-popout-header'
-                ownerDoc.body.appendChild(header)
-            }
+            const existingHeaders = Array.from(ownerDoc.querySelectorAll<HTMLElement>('#adhdev-popout-header'))
+            for (const existingHeader of existingHeaders) existingHeader.remove()
+            const header = ownerDoc.createElement('div')
+            header.id = 'adhdev-popout-header'
+            ownerDoc.body.appendChild(header)
 
             header.setAttribute('style', [
                 'position:absolute',
