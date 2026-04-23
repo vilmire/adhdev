@@ -260,37 +260,12 @@ export class CliProviderInstance implements ProviderInstance {
 
     async onTick(): Promise<void> {
         if (this.providerSessionId) return;
-        if (this.type === 'hermes-cli' && this.launchMode === 'new') return;
+        if (this.provider.resume?.skipProbeOnNewSession && this.launchMode === 'new') return;
 
-        let probedSessionId: string | null = null;
-
-        // Prefer declarative probe from provider.json schema
         const probeConfig = this.provider.sessionProbe;
-        if (probeConfig) {
-            probedSessionId = this.probeSessionIdFromConfig(probeConfig);
-        } else {
-            // Legacy hardcoded probes (backward compat until providers migrate)
-            if (this.type === 'opencode-cli') {
-                probedSessionId = this.probeSessionIdFromConfig({
-                    dbPath: '~/.local/share/opencode/opencode.db',
-                    query: 'select id from session where directory in ({dirs}) and time_created >= ? and time_archived is null order by time_updated desc limit 1',
-                    timestampFormat: 'unix_ms',
-                });
-            } else if (this.type === 'codex-cli') {
-                probedSessionId = this.probeSessionIdFromConfig({
-                    dbPath: '~/.codex/state_5.sqlite',
-                    query: 'select id from threads where cwd in ({dirs}) and updated_at >= ? and archived = 0 order by updated_at desc limit 1',
-                    timestampFormat: 'unix_s',
-                });
-            } else if (this.type === 'goose-cli') {
-                probedSessionId = this.probeSessionIdFromConfig({
-                    dbPath: '~/.local/share/goose/sessions/sessions.db',
-                    query: 'select id from sessions where working_dir in ({dirs}) and created_at >= ? order by updated_at desc limit 1',
-                    timestampFormat: 'iso',
-                });
-            }
-        }
+        if (!probeConfig) return;
 
+        const probedSessionId = this.probeSessionIdFromConfig(probeConfig);
         if (probedSessionId) {
             this.promoteProviderSessionId(probedSessionId);
         }
@@ -355,7 +330,7 @@ export class CliProviderInstance implements ProviderInstance {
             ? 'error'
             : (autoApproveActive ? 'generating' : adapterStatus.status);
         const parsedProviderSessionId = normalizeProviderSessionId(
-            this.type,
+            this.provider,
             typeof parsedStatus?.providerSessionId === 'string' ? parsedStatus.providerSessionId : '',
         );
         if (parsedProviderSessionId) {
@@ -684,7 +659,7 @@ export class CliProviderInstance implements ProviderInstance {
         if (!data || typeof data !== 'object') return;
 
         const patchedProviderSessionId = normalizeProviderSessionId(
-            this.type,
+            this.provider,
             typeof data.providerSessionId === 'string' ? data.providerSessionId : '',
         );
         if (patchedProviderSessionId) {
@@ -960,53 +935,43 @@ export class CliProviderInstance implements ProviderInstance {
 
     private syncCanonicalSavedHistoryIfNeeded(): boolean {
         if (!this.providerSessionId) return false;
-        if (this.type === 'hermes-cli') {
-            try {
-                const canonicalPath = path.join(os.homedir(), '.hermes', 'sessions', `session_${this.providerSessionId}.json`);
-                if (!fs.existsSync(canonicalPath)) return false;
-                const stat = fs.statSync(canonicalPath);
+        const canonicalHistory = this.provider.canonicalHistory;
+        if (!canonicalHistory) return false;
+
+        try {
+            let rebuilt = false;
+            if (canonicalHistory.format === 'hermes-json') {
+                const watchPath = canonicalHistory.watchPath
+                    .replace(/^~/, os.homedir())
+                    .replace('{{sessionId}}', this.providerSessionId);
+                if (!fs.existsSync(watchPath)) return false;
+                const stat = fs.statSync(watchPath);
                 if (stat.mtimeMs <= this.lastCanonicalHermesSyncMtimeMs) return true;
-                const rebuilt = rebuildHermesSavedHistoryFromCanonicalSession(this.providerSessionId);
-                if (!rebuilt) return false;
-                this.lastCanonicalHermesSyncMtimeMs = stat.mtimeMs;
-                const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId);
-                this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
-                    role: message.role,
-                    content: message.content,
-                    kind: message.kind,
-                    senderName: message.senderName,
-                    receivedAt: message.receivedAt,
-                }));
-                return true;
-            } catch {
-                return false;
+                rebuilt = rebuildHermesSavedHistoryFromCanonicalSession(this.providerSessionId);
+                if (rebuilt) this.lastCanonicalHermesSyncMtimeMs = stat.mtimeMs;
+            } else if (canonicalHistory.format === 'claude-jsonl') {
+                rebuilt = rebuildClaudeSavedHistoryFromNativeProject(this.providerSessionId, this.workingDir);
             }
+            if (!rebuilt) return false;
+            const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId, 0, this.provider.historyBehavior);
+            this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
+                role: message.role,
+                content: message.content,
+                kind: message.kind,
+                senderName: message.senderName,
+                receivedAt: message.receivedAt,
+            }));
+            return true;
+        } catch {
+            return false;
         }
-        if (this.type === 'claude-cli') {
-            try {
-                const rebuilt = rebuildClaudeSavedHistoryFromNativeProject(this.providerSessionId, this.workingDir);
-                if (!rebuilt) return false;
-                const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId);
-                this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
-                    role: message.role,
-                    content: message.content,
-                    kind: message.kind,
-                    senderName: message.senderName,
-                    receivedAt: message.receivedAt,
-                }));
-                return true;
-            } catch {
-                return false;
-            }
-        }
-        return false;
     }
 
     private restorePersistedHistoryFromCurrentSession(): void {
         if (!this.providerSessionId) return;
         this.syncCanonicalSavedHistoryIfNeeded();
-        this.historyWriter.compactHistorySession(this.type, this.providerSessionId);
-        const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId);
+        this.historyWriter.compactHistorySession(this.type, this.providerSessionId, this.provider.historyBehavior);
+        const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId, 0, this.provider.historyBehavior);
         this.historyWriter.seedSessionHistory(
             this.type,
             restoredHistory.messages,

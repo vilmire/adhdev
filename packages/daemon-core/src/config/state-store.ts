@@ -12,7 +12,6 @@ import { join } from 'path';
 import { getConfigDir } from './config.js';
 import type { RecentActivityEntry } from './recent-activity.js';
 import type { SavedProviderSessionEntry } from './saved-sessions.js';
-import { isLegacyVolatileSessionReadKey, normalizeProviderSessionId } from '../providers/provider-session-id.js';
 
 export interface DaemonState {
     /** Unified recent activity across IDE / CLI / ACP launch flows */
@@ -52,38 +51,31 @@ function normalizeState(raw: unknown): DaemonState {
     const recentActivity = (Array.isArray(parsed.recentActivity) ? parsed.recentActivity : [])
         .filter((entry): entry is RecentActivityEntry => {
             if (!isPlainObject(entry)) return false;
-            const normalizedId = normalizeProviderSessionId(
-                typeof entry.providerType === 'string' ? entry.providerType : '',
-                typeof entry.providerSessionId === 'string' ? entry.providerSessionId : '',
-            );
-            if (typeof entry.providerSessionId === 'string' && !normalizedId) return false;
+            if (typeof entry.providerSessionId === 'string' && !entry.providerSessionId.trim()) return false;
             return true;
         });
 
     const savedProviderSessions = (Array.isArray(parsed.savedProviderSessions) ? parsed.savedProviderSessions : [])
         .filter((entry): entry is SavedProviderSessionEntry => {
             if (!isPlainObject(entry)) return false;
-            return !!normalizeProviderSessionId(
-                typeof entry.providerType === 'string' ? entry.providerType : '',
-                typeof entry.providerSessionId === 'string' ? entry.providerSessionId : '',
-            );
+            return typeof entry.providerSessionId === 'string' && !!entry.providerSessionId.trim();
         });
 
     const sessionReads = Object.fromEntries(
         Object.entries(isPlainObject(parsed.sessionReads) ? parsed.sessionReads : {})
-            .filter(([key, value]) => !isLegacyVolatileSessionReadKey(key) && typeof value === 'number' && Number.isFinite(value as number))
+            .filter(([, value]) => typeof value === 'number' && Number.isFinite(value as number))
     );
     const sessionReadMarkers = Object.fromEntries(
         Object.entries(isPlainObject(parsed.sessionReadMarkers) ? parsed.sessionReadMarkers : {})
-            .filter(([key, value]) => !isLegacyVolatileSessionReadKey(key) && typeof value === 'string')
+            .filter(([, value]) => typeof value === 'string')
     );
     const sessionNotificationDismissals = Object.fromEntries(
         Object.entries(isPlainObject(parsed.sessionNotificationDismissals) ? parsed.sessionNotificationDismissals : {})
-            .filter(([key, value]) => !isLegacyVolatileSessionReadKey(key) && typeof value === 'string' && value.length > 0)
+            .filter(([, value]) => typeof value === 'string' && value.length > 0)
     );
     const sessionNotificationUnreadOverrides = Object.fromEntries(
         Object.entries(isPlainObject(parsed.sessionNotificationUnreadOverrides) ? parsed.sessionNotificationUnreadOverrides : {})
-            .filter(([key, value]) => !isLegacyVolatileSessionReadKey(key) && typeof value === 'string' && value.length > 0)
+            .filter(([, value]) => typeof value === 'string' && value.length > 0)
     );
 
     return {

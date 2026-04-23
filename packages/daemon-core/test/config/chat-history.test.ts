@@ -469,12 +469,14 @@ describe('chat-history config helpers', () => {
     })
   })
 
-  it('skips invalid legacy Hermes saved-history filenames when listing resumable sessions', async () => {
+  it('lists all non-empty saved-history sessions regardless of provider-specific ID format', async () => {
     writeHistorySession('hermes-cli', '20260417_101010_alpha', 1)
     writeHistorySession('hermes-cli', 'vi', 3)
     const { listSavedHistorySessions } = await import('../../src/config/chat-history.js')
 
     const listed = listSavedHistorySessions('hermes-cli')
-    expect(listed.sessions.map(session => session.historySessionId)).toEqual(['20260417_101010_alpha'])
+    // Session ID format validation is the responsibility of the provider's sessionIdPattern,
+    // not the history store. Both sessions are returned; callers filter by pattern if needed.
+    expect(listed.sessions.map(session => session.historySessionId).sort()).toEqual(['20260417_101010_alpha', 'vi'])
   })
 })

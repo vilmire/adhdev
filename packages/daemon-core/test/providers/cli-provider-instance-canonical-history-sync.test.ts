@@ -71,6 +71,10 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       name: 'Hermes Agent',
       category: 'cli',
       spawn: { command: 'hermes', args: [] },
+      canonicalHistory: {
+        format: 'hermes-json',
+        watchPath: '~/.hermes/sessions/session_{{sessionId}}.json',
+      },
     } as any, '/workspaces/adhdev', [], 'runtime-1', undefined, {
       providerSessionId: historySessionId,
       launchMode: 'resume',
@@ -149,6 +153,10 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       name: 'Claude Code',
       category: 'cli',
       spawn: { command: 'claude', args: [] },
+      canonicalHistory: {
+        format: 'claude-jsonl',
+        watchPath: '~/.claude/projects/{{workspace}}/{{sessionId}}.jsonl',
+      },
     } as any, workspace, [], 'runtime-1', undefined, {
       providerSessionId: historySessionId,
       launchMode: 'resume',
@@ -202,6 +210,10 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       name: 'Hermes Agent',
       category: 'cli',
       spawn: { command: 'hermes', args: [] },
+      canonicalHistory: {
+        format: 'hermes-json',
+        watchPath: '~/.hermes/sessions/session_{{sessionId}}.json',
+      },
     } as any, '/workspaces/adhdev', [], 'runtime-1', undefined, {
       providerSessionId: historySessionId,
       launchMode: 'resume',

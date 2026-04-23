@@ -13,7 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { buildRuntimeSystemChatMessage } from '../providers/chat-message-normalization.js';
-import { normalizeProviderSessionId } from '../providers/provider-session-id.js';
+import type { ProviderHistoryBehavior } from '../providers/contracts.js';
 
 const HISTORY_DIR = path.join(os.homedir(), '.adhdev', 'history');
 const RETAIN_DAYS = 30;
@@ -72,24 +72,27 @@ interface HistoryMessage {
     workspace?: string;   // Working directory at session start (kind: 'session_start' only)
 }
 
-const CODEX_STARTER_PROMPT_RE = /^(?:[›❯]\s*)?(?:Find and fix a bug in @filename|Improve documentation in @filename|Write tests for @filename|Explain this codebase|Summarize recent commits|Implement \{feature\}|Use \/skills(?: to list available skills)?|Run \/review on my current changes)$/i;
-
 function normalizeHistoryComparable(text: string): string {
     return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
-function cleanupHistoryContent(agentType: string, role: HistoryMessage['role'], content: string): string {
+function cleanupHistoryContent(agentType: string, role: HistoryMessage['role'], content: string, historyBehavior?: ProviderHistoryBehavior): string {
     let value = String(content || '').replace(/\r\n/g, '\n').trim();
     if (!value) return '';
 
-    if (agentType === 'codex-cli' && role === 'assistant') {
-        const filtered = value
-            .split('\n')
-            .filter((line) => !CODEX_STARTER_PROMPT_RE.test(line.trim()))
-            .join('\n')
-            .replace(/\n{3,}/g, '\n\n')
-            .trim();
-        value = filtered;
+    if (role === 'assistant' && historyBehavior?.filterAssistantPatterns?.length) {
+        const filters = historyBehavior.filterAssistantPatterns.map((p) => {
+            try { return new RegExp(p, 'i'); } catch { return null; }
+        }).filter(Boolean) as RegExp[];
+        if (filters.length > 0) {
+            const filtered = value
+                .split('\n')
+                .filter((line) => !filters.some((re) => re.test(line.trim())))
+                .join('\n')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+            value = filtered;
+        }
     }
 
     return value;
@@ -121,8 +124,8 @@ function isAdjacentHistoryDuplicate(
     return buildHistoryMessageSignature(agentType, previous) === buildHistoryMessageSignature(agentType, next);
 }
 
-function collapseReplayAssistantTurns(agentType: string, messages: HistoryMessage[]): HistoryMessage[] {
-    if (agentType !== 'codex-cli') return messages;
+function collapseReplayAssistantTurns(messages: HistoryMessage[], historyBehavior?: ProviderHistoryBehavior): HistoryMessage[] {
+    if (!historyBehavior?.collapseConsecutiveAssistantTurns) return messages;
 
     const collapsed: HistoryMessage[] = [];
     let sawAssistantSinceLastUser = false;
@@ -257,17 +260,13 @@ function listHistoryFiles(dir: string, historySessionId?: string): string[] {
         .reverse();
 }
 
-function normalizeSavedHistorySessionId(agentType: string, historySessionId: string): string {
-    const normalizedId = String(historySessionId || '').trim();
-    if (!normalizedId) return '';
-    const strictProviderId = normalizeProviderSessionId(agentType, normalizedId);
-    if (strictProviderId) return strictProviderId;
-    return agentType === 'hermes-cli' ? '' : normalizedId;
+function normalizeSavedHistorySessionId(historySessionId: string): string {
+    return String(historySessionId || '').trim();
 }
 
-function extractSavedHistorySessionIdFromFile(agentType: string, file: string): string {
+function extractSavedHistorySessionIdFromFile(file: string): string {
     const match = file.match(/^([A-Za-z0-9_-]+)_\d{4}-\d{2}-\d{2}\.jsonl$/);
-    return normalizeSavedHistorySessionId(agentType, match?.[1] || '');
+    return normalizeSavedHistorySessionId(match?.[1] || '');
 }
 
 function buildSavedHistoryFileSignatureMap(dir: string, files: string[]): Map<string, string> {
@@ -484,7 +483,7 @@ function persistSavedHistoryFileSummaryEntry(agentType: string, dir: string, fil
 }
 
 function updateSavedHistoryIndexForSessionStart(agentType: string, dir: string, file: string, historySessionId: string, workspace: string): void {
-    const normalizedSessionId = normalizeSavedHistorySessionId(agentType, historySessionId);
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
     const normalizedWorkspace = String(workspace || '').trim();
     if (!normalizedSessionId || !normalizedWorkspace) return;
     persistSavedHistoryFileSummaryEntry(agentType, dir, file, (currentSummary) => ({
@@ -506,7 +505,7 @@ function updateSavedHistoryIndexForAppendedMessages(
     historySessionId: string | undefined,
     messages: HistoryMessage[],
 ): void {
-    const normalizedSessionId = normalizeSavedHistorySessionId(agentType, historySessionId || '');
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || '');
     if (!normalizedSessionId || messages.length === 0) return;
     persistSavedHistoryFileSummaryEntry(agentType, dir, file, (currentSummary) => {
         const nextSummary: SavedHistoryFileSummary = {
@@ -546,8 +545,8 @@ function updateSavedHistoryIndexForAppendedMessages(
     });
 }
 
-function computeSavedHistoryFileSummary(agentType: string, dir: string, file: string): SavedHistoryFileSummary | null {
-    const historySessionId = extractSavedHistorySessionIdFromFile(agentType, file);
+function computeSavedHistoryFileSummary(dir: string, file: string): SavedHistoryFileSummary | null {
+    const historySessionId = extractSavedHistorySessionIdFromFile(file);
     if (!historySessionId) return null;
 
     const filePath = path.join(dir, file);
@@ -660,7 +659,7 @@ function computeSavedHistorySessionSummaries(
             : persisted?.signature === signature
                 ? persisted
                 : null;
-        const fileSummary = reusableEntry?.summary || computeSavedHistoryFileSummary(agentType, dir, file);
+        const fileSummary = reusableEntry?.summary || computeSavedHistoryFileSummary(dir, file);
         const nextEntry: SavedHistoryFileSummaryCacheEntry = reusableEntry || {
             signature,
             summary: fileSummary,
@@ -1027,7 +1026,7 @@ export class ChatHistoryWriter {
         }
     }
 
-    compactHistorySession(agentType: string, historySessionId: string): void {
+    compactHistorySession(agentType: string, historySessionId: string, historyBehavior?: ProviderHistoryBehavior): void {
         const sessionId = String(historySessionId || '').trim();
         if (!sessionId) return;
 
@@ -1072,7 +1071,7 @@ export class ChatHistoryWriter {
                     dedupedAdjacent.push(entry);
                     if (entry.role !== 'system') lastTurn = entry;
                 }
-                const collapsed = collapseReplayAssistantTurns(agentType, dedupedAdjacent);
+                const collapsed = collapseReplayAssistantTurns(dedupedAdjacent, historyBehavior);
                 if (collapsed.length === 0) {
                     fs.unlinkSync(filePath);
                     continue;
@@ -1145,6 +1144,7 @@ export function readChatHistory(
     limit: number = 30,
     historySessionId?: string,
     excludeRecentCount: number = 0,
+    historyBehavior?: ProviderHistoryBehavior,
 ): { messages: HistoryMessage[]; hasMore: boolean } {
     try {
         const sanitized = agentType.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -1185,7 +1185,7 @@ export function readChatHistory(
             chronological.push(message);
             if (message.role !== 'system') lastTurn = message;
         }
-        const collapsed = collapseReplayAssistantTurns(agentType, chronological);
+        const collapsed = collapseReplayAssistantTurns(chronological, historyBehavior);
 
  // Page backwards from the newest saved messages while keeping the returned
  // slice in chronological order for prepend-based UI rendering.
@@ -1206,6 +1206,7 @@ export function readChatHistory(
 export function listSavedHistorySessions(
     agentType: string,
     options: { offset?: number; limit?: number } = {},
+    historyBehavior?: ProviderHistoryBehavior,
 ): { sessions: SavedHistorySessionSummary[]; hasMore: boolean } {
     try {
         const sanitized = agentType.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -1351,7 +1352,7 @@ function rewriteCanonicalSavedHistory(agentType: string, historySessionId: strin
 }
 
 export function rebuildHermesSavedHistoryFromCanonicalSession(historySessionId: string): boolean {
-    const normalizedSessionId = normalizeSavedHistorySessionId('hermes-cli', historySessionId);
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
     if (!normalizedSessionId) return false;
 
     try {
@@ -1523,7 +1524,7 @@ function extractClaudeUserContentParts(content: unknown): Array<{ role: 'user' |
 }
 
 export function rebuildClaudeSavedHistoryFromNativeProject(historySessionId: string, workspace?: string): boolean {
-    const normalizedSessionId = normalizeSavedHistorySessionId('claude-cli', historySessionId);
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
     if (!normalizedSessionId) return false;
 
     try {

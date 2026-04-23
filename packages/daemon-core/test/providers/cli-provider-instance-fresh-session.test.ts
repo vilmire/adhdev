@@ -154,6 +154,10 @@ describe('CliProviderInstance provider session recovery', () => {
       name: 'Hermes Agent',
       category: 'cli',
       spawn: { command: 'hermes', args: [] },
+      resume: {
+        supported: true,
+        skipProbeOnNewSession: true,
+      },
       sessionProbe: {
         dbPath: '~/.hermes/sessions.db',
         query: 'select id from sessions where cwd in ({dirs}) order by updated_at desc limit 1',

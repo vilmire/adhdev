@@ -418,6 +418,13 @@ export interface ProviderModule {
   extensionIdPattern_flags?: string;
   compatibility?: ProviderCompatibilityEntry[];
   defaultScriptDir?: string;
+  /**
+   * Scripts that can run at the IDE main-page level (not just inside the extension webview session frame).
+   * Default: ['listModes', 'setMode', 'listModels', 'setModel'].
+   * Add extra scripts here if the provider supports them at the IDE level (e.g. 'setModelGui').
+   * Replaces hardcoded claude-code-vscode special-case in stream-commands.ts.
+   */
+  ideLevelScripts?: string[];
 
  // ─── CLI category only ───
   binary?: string;
@@ -426,6 +433,8 @@ export interface ProviderModule {
     args?: string[];
     shell?: boolean;
     env?: Record<string, string>;
+    /** Auto-implement spawn config — controls how this provider is invoked for autonomous script generation */
+    autoImpl?: ProviderAutoImplSpawnConfig;
   };
   /** Delay before submitting typed CLI input (provider-specific TUI tuning) */
   sendDelayMs?: number;
@@ -451,6 +460,24 @@ export interface ProviderModule {
   allowInputDuringGeneration?: boolean;
   /** Approval button priority hints used when auto-approve must pick a positive action */
   approvalPositiveHints?: string[];
+  /**
+   * Regex pattern (as string) that a valid provider session ID must match.
+   * If set and the ID doesn't match, it is rejected (treated as invalid).
+   * Replaces hardcoded HERMES_SESSION_ID_RE / CLAUDE_SESSION_ID_RE checks.
+   */
+  sessionIdPattern?: string;
+  /** History behavior config — controls message filtering and collapse during replay */
+  historyBehavior?: ProviderHistoryBehavior;
+  /**
+   * Canonical history sync config — for providers that maintain native history files.
+   * When set, daemon syncs from native format into ADHDev JSONL store on each tick.
+   */
+  canonicalHistory?: ProviderCanonicalHistoryConfig;
+  /**
+   * Auto-fix verification profile — provider-specific test expectations for `provider fix`.
+   * If not set, provider fix runs without pre/post verification.
+   */
+  autoFixProfile?: ProviderAutoFixProfile;
 
  // ─── CDP scripts (ide/extension category) ───
   scripts?: ProviderScripts;
@@ -538,6 +565,94 @@ export interface ProviderResumeCapability {
   resumeSessionArgs?: string[];
   newSessionArgs?: string[];
   sessionIdFormat?: 'uuid' | 'string';
+  /** Skip session ID probing when launchMode is 'new' — for providers that manage their own session IDs on new sessions */
+  skipProbeOnNewSession?: boolean;
+  /**
+   * Subcommands that carry a session ID as their next positional argument.
+   * e.g. ['resume', 'fork'] for codex-cli (codex resume <id> / codex fork <id>).
+   * Replaces the hardcoded readCodexResumeSessionId check in cli-manager.ts.
+   */
+  sessionIdFromSubcommand?: string[];
+  /**
+   * When --session-id is present without an explicit resume flag, treat as 'new' rather than 'resume'.
+   * e.g. goose-cli passes --session-id on new sessions but requires --resume/-r to actually resume.
+   * Replaces the hardcoded goose-cli check in cli-manager.ts.
+   */
+  sessionIdIsNewByDefault?: boolean;
+}
+
+/**
+ * History behavior config — controls how history messages are processed for this provider.
+ * Replaces hardcoded agentType checks in chat-history.ts.
+ */
+export interface ProviderHistoryBehavior {
+  /** Collapse consecutive assistant turns during history replay (e.g. codex-cli shows replayed intermediate turns) */
+  collapseConsecutiveAssistantTurns?: boolean;
+  /** Regex patterns (as strings) to filter out from assistant messages — e.g. CLI starter prompt suggestions */
+  filterAssistantPatterns?: string[];
+  /** If true, session ID must match sessionIdPattern exactly — reject and return '' if it doesn't match */
+  requireStrictSessionIdFormat?: boolean;
+}
+
+/**
+ * Canonical history sync config — for providers that maintain their own native history files.
+ * When set, daemon syncs from the provider's native format into the ADHDev JSONL store.
+ * Replaces hardcoded hermes-cli / claude-cli checks in cli-provider-instance.ts.
+ */
+export interface ProviderCanonicalHistoryConfig {
+  /**
+   * Native history format.
+   * - 'hermes-json': single JSON file per session (~/.hermes/sessions/session_{{sessionId}}.json)
+   * - 'claude-jsonl': JSONL transcript under ~/.claude/projects/
+   */
+  format: 'hermes-json' | 'claude-jsonl';
+  /**
+   * Path to the native history file. Supports ~ and {{sessionId}} placeholder.
+   * e.g. "~/.hermes/sessions/session_{{sessionId}}.json"
+   */
+  watchPath: string;
+}
+
+/**
+ * Auto-implement spawn config — controls how the provider is spawned for autonomous AI-driven
+ * provider script implementation (dev-auto-implement.ts).
+ * Replaces hardcoded per-command branching.
+ */
+export interface ProviderAutoImplSpawnConfig {
+  /**
+   * How the meta-prompt is passed to the agent.
+   * - 'flag': passed via a CLI flag (e.g. `claude -p "..."`)
+   * - 'stdin': piped via stdin (generic fallback)
+   * - 'subcommand': prepended as a subcommand (e.g. `codex exec "..."`)
+   */
+  promptMode: 'flag' | 'stdin' | 'subcommand';
+  /** CLI flag used to pass the prompt (promptMode: 'flag') — e.g. '-p' */
+  promptFlag?: string;
+  /** Subcommand prepended before the prompt (promptMode: 'subcommand') — e.g. 'exec' */
+  subcommand?: string;
+  /** Extra args appended in auto-impl mode — e.g. ['--dangerously-skip-permissions'] */
+  extraArgs?: string[];
+  /** Custom meta-prompt template; use {{promptFile}} placeholder. If omitted, generic prompt is used. */
+  metaPrompt?: string;
+  /**
+   * If true, schedule an auto-stop timer when the agent output goes quiet during verification.
+   * Replaces the hardcoded `command !== 'codex'` check in dev-auto-implement.ts.
+   */
+  autoStopOnQuiet?: boolean;
+}
+
+/**
+ * Auto-fix verification profile — provider-specific test expectations for `provider fix`.
+ * Replaces the hardcoded CLI_AUTO_FIX_VERIFICATION_PROFILES record in provider-commands.ts.
+ */
+export interface ProviderAutoFixProfile {
+  fixtureName: string;
+  description: string;
+  inspectFields?: string[];
+  focusAreas?: string[];
+  lastAssistantMustContainAny?: string[];
+  lastAssistantMustNotContainAny?: string[];
+  timeoutMs?: number;
 }
 
 /**
