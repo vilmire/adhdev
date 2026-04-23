@@ -5,13 +5,16 @@ All notable changes to ADHDev will be documented in this file.
 ## [0.9.1] - 2026-04-23
 
 ### Added
-- 
+- **web-core**: Added focused architectural boundary regressions covering daemon-authority notifications, dashboard/root state extraction, hidden-tab/group-layout API boundaries, overlay dialog/history boundaries, and the final command-action/render-hub cleanup seams.
 
 ### Fixed
-- 
+- **daemon-core**: Clear stale CLI approval state so previously actionable approval prompts do not linger after the live runtime state has already moved on.
+- **web-core**: Treat live dashboard status as metadata-only and preserve transcript authority on explicit transcript-bearing paths instead of broad frontend merge heuristics.
+- **web-core**: Remove browser-local transcript/notification overlays so dashboard unread/read/history/task-complete behavior stays daemon-owned.
 
 ### Changed
-- 
+- **web-core**: Simplified dashboard state boundaries by moving local orchestration/state blobs behind dedicated hooks and reducing `Dashboard.tsx` to composition/wiring-oriented responsibilities.
+- **web-core**: Kept `DashboardOverlays` as a thin render hub while grouping props by overlay surface instead of maintaining one large flat prop contract.
 ## [0.9.0] - 2026-04-23
 
 ### Added
