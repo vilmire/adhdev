@@ -93,10 +93,7 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
 
         useEffect(() => {
             if (!LoadedTerminal) return;
-            const frame = requestAnimationFrame(() => {
-                flushPending();
-            });
-            return () => cancelAnimationFrame(frame);
+            flushPending();
         }, [LoadedTerminal]);
 
         useEffect(() => {

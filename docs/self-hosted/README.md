@@ -65,3 +65,4 @@ If you are running self-hosted as a serious local control plane, these are the t
 - Cloud-focused guides may mention features that do not apply to standalone.
 - When in doubt, treat this section as the canonical standalone reference set.
 - The pages in this section intentionally go deeper than the cloud guides because standalone users often need local operator workflows.
+- Known limitation: detached `Open in new window` terminal popouts can appear visually stale in Safari even while the underlying runtime is still generating. Chrome popouts and same-window/floating terminal views are the current reliable paths. This appears related to Safari/WebKit popup/background-window rendering behavior and is documented for a later fix.

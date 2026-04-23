@@ -50,7 +50,34 @@ export default function CliTerminalPane({
     const pendingLiveOutputRef = useRef('');
     const pendingHiddenSnapshotRef = useRef<{ text: string; seq: number; cols?: number; rows?: number } | null>(null);
     const pendingHiddenClearRef = useRef(false);
-    const flushFrameRef = useRef<number | null>(null);
+    const flushFrameRef = useRef<{ ownerWindow: Window; frameId: number } | null>(null);
+    const MAX_TERMINAL_WRITE_CHARS_PER_FRAME = 32 * 1024;
+
+    const getOwnerWindow = () => terminalViewportRef.current?.ownerDocument?.defaultView
+        || terminalPanSurfaceRef.current?.ownerDocument?.defaultView
+        || window;
+    const scheduleInOwnerWindow = (callback: FrameRequestCallback) => {
+        const ownerWindow = getOwnerWindow();
+        return {
+            ownerWindow,
+            frameId: ownerWindow.requestAnimationFrame(callback),
+        };
+    };
+    const cancelScheduledFrame = () => {
+        const pendingFrame = flushFrameRef.current;
+        if (!pendingFrame) return;
+        try {
+            pendingFrame.ownerWindow.cancelAnimationFrame(pendingFrame.frameId);
+        } catch {}
+        flushFrameRef.current = null;
+    };
+    const scheduleFlushPendingLiveOutput = () => {
+        if (!isVisible) return;
+        if (flushFrameRef.current !== null) return;
+        flushFrameRef.current = scheduleInOwnerWindow(() => {
+            flushPendingLiveOutput();
+        });
+    };
 
     const tabKey = activeConv.tabKey;
     const sessionId = activeConv.sessionId || '';
@@ -94,12 +121,9 @@ export default function CliTerminalPane({
     const terminalSurfaceHeight = terminalIntrinsicViewport.height > 0
         ? Math.round(terminalIntrinsicViewport.height)
         : renderedTerminalHeight;
-    const shouldCenterTerminalSurface = !hasOverflowedTerminalSurface
-        && terminalSurfaceWidth > 0
-        && terminalViewport.width - terminalSurfaceWidth > 24;
 
     const anchorZoomViewportBottomLeft = () => {
-        requestAnimationFrame(() => {
+        scheduleInOwnerWindow(() => {
             const scroller = terminalPanSurfaceRef.current;
             if (!scroller) return;
             scroller.scrollLeft = 0;
@@ -113,8 +137,7 @@ export default function CliTerminalPane({
         pendingHiddenSnapshotRef.current = null;
         pendingHiddenClearRef.current = false;
         if (flushFrameRef.current !== null) {
-            cancelAnimationFrame(flushFrameRef.current);
-            flushFrameRef.current = null;
+            cancelScheduledFrame();
         }
         setRuntimeReady(false);
         terminalRef.current?.reset?.();
@@ -127,8 +150,7 @@ export default function CliTerminalPane({
         pendingHiddenSnapshotRef.current = null;
         pendingHiddenClearRef.current = false;
         if (flushFrameRef.current !== null) {
-            cancelAnimationFrame(flushFrameRef.current);
-            flushFrameRef.current = null;
+            cancelScheduledFrame();
         }
         setRuntimeReady(true);
         terminalRef.current?.reset?.();
@@ -137,18 +159,20 @@ export default function CliTerminalPane({
     const flushPendingLiveOutput = () => {
         flushFrameRef.current = null;
         if (!isVisible) return;
-        const chunk = pendingLiveOutputRef.current;
-        if (!chunk) return;
-        pendingLiveOutputRef.current = '';
-        terminalRef.current?.write(chunk);
+        const queuedOutput = pendingLiveOutputRef.current;
+        if (!queuedOutput) return;
+        const nextChunk = queuedOutput.slice(0, MAX_TERMINAL_WRITE_CHARS_PER_FRAME);
+        pendingLiveOutputRef.current = queuedOutput.slice(nextChunk.length);
+        terminalRef.current?.write(nextChunk);
+        if (pendingLiveOutputRef.current.length > 0) {
+            scheduleFlushPendingLiveOutput();
+        }
     };
 
     const enqueueTerminalWrite = (data: string) => {
         if (!data) return;
         pendingLiveOutputRef.current += data;
-        if (!isVisible) return;
-        if (flushFrameRef.current !== null) return;
-        flushFrameRef.current = requestAnimationFrame(flushPendingLiveOutput);
+        scheduleFlushPendingLiveOutput();
     };
 
     const seedTerminal = (text: string, seq = 0, cols?: number, rows?: number) => {
@@ -159,8 +183,9 @@ export default function CliTerminalPane({
         if (typeof cols === 'number' && typeof rows === 'number' && cols > 0 && rows > 0) {
             terminalRef.current?.resize?.(cols, rows);
         }
+        pendingLiveOutputRef.current = '';
         terminalRef.current?.reset?.();
-        if (text) terminalRef.current?.write(text);
+        if (text) enqueueTerminalWrite(text);
     };
 
     useEffect(() => {
@@ -235,9 +260,10 @@ export default function CliTerminalPane({
 
     useEffect(() => {
         const container = terminalViewportRef.current;
-        if (!container || typeof ResizeObserver === 'undefined') return;
+        const ResizeObserverCtor = container?.ownerDocument?.defaultView?.ResizeObserver;
+        if (!container || !ResizeObserverCtor) return;
 
-        const observer = new ResizeObserver((entries) => {
+        const observer = new ResizeObserverCtor((entries) => {
             const entry = entries[0];
             if (!entry) return;
             const { width, height } = entry.contentRect;
@@ -287,10 +313,10 @@ export default function CliTerminalPane({
         }
 
         if (pendingLiveOutputRef.current && flushFrameRef.current === null) {
-            flushFrameRef.current = requestAnimationFrame(flushPendingLiveOutput);
+            scheduleFlushPendingLiveOutput();
         }
 
-        requestAnimationFrame(() => {
+        scheduleInOwnerWindow(() => {
             terminalRef.current?.bumpResize();
         });
     }, [daemonRouteId, isVisible, sessionId]);
@@ -298,8 +324,7 @@ export default function CliTerminalPane({
     useEffect(() => {
         return () => {
             if (flushFrameRef.current !== null) {
-                cancelAnimationFrame(flushFrameRef.current);
-                flushFrameRef.current = null;
+                cancelScheduledFrame();
             }
         };
     }, []);
@@ -311,9 +336,15 @@ export default function CliTerminalPane({
             if (!runtimeReady) return;
             terminalRef.current?.bumpResize();
         };
-        window.addEventListener('adhdev:fit-cli-terminal', handleFit as EventListener);
+        const ownerWindow = getOwnerWindow();
+        const targets = ownerWindow === window ? [window] : [window, ownerWindow];
+        for (const target of targets) {
+            target.addEventListener('adhdev:fit-cli-terminal', handleFit as EventListener);
+        }
         return () => {
-            window.removeEventListener('adhdev:fit-cli-terminal', handleFit as EventListener);
+            for (const target of targets) {
+                target.removeEventListener('adhdev:fit-cli-terminal', handleFit as EventListener);
+            }
         };
     }, [runtimeReady, sessionId, terminalRef]);
 
@@ -357,17 +388,17 @@ export default function CliTerminalPane({
                     ref={terminalPanSurfaceRef}
                     className={hasOverflowedTerminalSurface ? 'w-full h-full overflow-x-auto overflow-y-hidden rounded-lg overscroll-contain' : 'w-full h-full overflow-hidden rounded-lg overscroll-contain'}
                     style={{
-                        display: shouldCenterTerminalSurface ? 'flex' : 'block',
-                        justifyContent: shouldCenterTerminalSurface ? 'center' : undefined,
+                        display: 'flex',
+                        justifyContent: 'flex-start',
+                        alignItems: 'flex-end',
                     }}
                 >
                     <div
                         style={{
-                            width: shouldCenterTerminalSurface && terminalSurfaceWidth > 0 ? `${terminalSurfaceWidth}px` : renderedTerminalWidth > 0 ? `${renderedTerminalWidth}px` : '100%',
-                            height: shouldCenterTerminalSurface && terminalSurfaceHeight > 0 ? `${terminalSurfaceHeight}px` : renderedTerminalHeight > 0 ? `${renderedTerminalHeight}px` : '100%',
-                            minWidth: shouldCenterTerminalSurface ? `${terminalSurfaceWidth}px` : '100%',
-                            minHeight: shouldCenterTerminalSurface ? `${terminalSurfaceHeight}px` : '100%',
-                            maxWidth: shouldCenterTerminalSurface ? '100%' : 'none',
+                            width: terminalSurfaceWidth > 0 ? `${terminalSurfaceWidth}px` : renderedTerminalWidth > 0 ? `${renderedTerminalWidth}px` : '100%',
+                            height: terminalSurfaceHeight > 0 ? `${terminalSurfaceHeight}px` : renderedTerminalHeight > 0 ? `${renderedTerminalHeight}px` : '100%',
+                            minWidth: terminalSurfaceWidth > 0 ? `${terminalSurfaceWidth}px` : '100%',
+                            minHeight: terminalSurfaceHeight > 0 ? `${terminalSurfaceHeight}px` : '100%',
                             position: 'relative',
                         }}
                     >

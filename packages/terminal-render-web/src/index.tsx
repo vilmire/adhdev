@@ -109,6 +109,12 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
     const [ready, setReady] = useState(false);
     const [rendererKind, setRendererKind] = useState<RendererKind | null>(null);
 
+    const getOwnerWindow = () => containerRef.current?.ownerDocument?.defaultView || window;
+    const scheduleInOwnerWindow = (callback: FrameRequestCallback) => {
+      const ownerWindow = getOwnerWindow();
+      return ownerWindow.requestAnimationFrame(callback);
+    };
+
     const applyFitIfEnabled = (force = false) => {
       if (sizingMode !== 'fit') return;
       try {
@@ -141,12 +147,21 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
       onViewportMetricsRef.current?.({ width, height });
     };
 
+    const refreshTerminalSurface = () => {
+      const term = terminalRef.current;
+      if (!term) return;
+      try {
+        term.refresh(0, Math.max(0, term.rows - 1));
+      } catch {}
+      reportViewportMetrics();
+    };
+
     useEffect(() => {
       readOnlyRef.current = readOnly;
       if (!readOnly) return;
       try { terminalRef.current?.blur(); } catch {}
       try {
-        const activeElement = document.activeElement;
+        const activeElement = containerRef.current?.ownerDocument?.activeElement;
         if (activeElement instanceof HTMLElement && containerRef.current?.contains(activeElement)) {
           activeElement.blur();
         }
@@ -170,13 +185,18 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         if (terminalRef.current) {
           terminalRef.current.resize(cols, rows);
           lastReportedSizeRef.current = { cols, rows };
-          requestAnimationFrame(() => {
+          scheduleInOwnerWindow(() => {
             reportViewportMetrics();
           });
         }
       },
       fit: () => applyFitIfEnabled(true),
-      bumpResize: () => applyFitIfEnabled(false),
+      bumpResize: () => {
+        if (sizingMode === 'fit') applyFitIfEnabled(false);
+        else scheduleInOwnerWindow(() => {
+          refreshTerminalSurface();
+        });
+      },
     }), []);
 
     useEffect(() => {
@@ -250,7 +270,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           onInputRef.current(data);
         });
 
-        requestAnimationFrame(() => {
+        scheduleInOwnerWindow(() => {
           try {
             applyFitIfEnabled(true);
             reportViewportMetrics();
@@ -289,7 +309,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
       const term = terminalRef.current;
       if (!term) return;
       if (term.options.fontSize === fontSize) {
-        requestAnimationFrame(() => {
+        scheduleInOwnerWindow(() => {
           reportViewportMetrics();
         });
         return;
@@ -300,7 +320,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         term.refresh(0, Math.max(0, term.rows - 1));
       } catch {}
 
-      requestAnimationFrame(() => {
+      scheduleInOwnerWindow(() => {
         applyFitIfEnabled(true);
         reportViewportMetrics();
       });
@@ -309,14 +329,15 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
     useEffect(() => {
       if (sizingMode !== 'fit') return;
       const container = containerRef.current;
-      if (!container || typeof ResizeObserver === 'undefined') return;
+      const ResizeObserverCtor = container?.ownerDocument?.defaultView?.ResizeObserver;
+      if (!container || !ResizeObserverCtor) return;
 
-      const observer = new ResizeObserver((entries) => {
+      const observer = new ResizeObserverCtor((entries) => {
         const entry = entries[0];
         if (!entry) return;
         const { width, height } = entry.contentRect;
         if (width <= 0 || height <= 0) return;
-        requestAnimationFrame(() => {
+        scheduleInOwnerWindow(() => {
           applyFitIfEnabled(false);
         });
       });
@@ -331,6 +352,29 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         }
       };
     }, [sizingMode]);
+
+    useEffect(() => {
+      const ownerWindow = containerRef.current?.ownerDocument?.defaultView;
+      const ownerDoc = containerRef.current?.ownerDocument;
+      if (!ownerWindow || !ownerDoc) return;
+
+      const repaint = () => {
+        scheduleInOwnerWindow(() => {
+          refreshTerminalSurface();
+        });
+      };
+
+      ownerWindow.addEventListener('focus', repaint);
+      ownerWindow.addEventListener('resize', repaint);
+      ownerWindow.addEventListener('pageshow', repaint);
+      ownerDoc.addEventListener('visibilitychange', repaint);
+      return () => {
+        ownerWindow.removeEventListener('focus', repaint);
+        ownerWindow.removeEventListener('resize', repaint);
+        ownerWindow.removeEventListener('pageshow', repaint);
+        ownerDoc.removeEventListener('visibilitychange', repaint);
+      };
+    }, [rendererKind, sizingMode]);
 
     return (
       <>

@@ -3,10 +3,12 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 describe('CLI terminal measured layout plumbing', () => {
-  it('passes sizingMode through the lazy CliTerminal wrapper', () => {
+  it('passes sizingMode through the lazy CliTerminal wrapper and flushes pending terminal work without relying on the opener window rAF', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/CliTerminal.tsx'), 'utf8')
     expect(source.includes("sizingMode = 'measured'") || source.includes("sizingMode='measured'")).toBe(true)
     expect(source.includes('sizingMode={sizingMode}')).toBe(true)
+    expect(source.includes('const frame = requestAnimationFrame(() =>')).toBe(false)
+    expect(source.includes('flushPending();')).toBe(true)
   })
 
   it('reuses the shared ChatInputBar in CliTerminalPane so terminal/chat input height stays aligned', () => {
@@ -26,12 +28,17 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('const terminalFontSize = Number((13 * terminalScale).toFixed(2));')).toBe(true)
   })
 
-  it('always requests a fresh runtime snapshot after replaying a hidden buffered snapshot on visibility restore', () => {
+  it('always requests a fresh runtime snapshot after replaying a hidden buffered snapshot on visibility restore, and replays large terminal buffers in frame-sized chunks instead of one giant write', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
     expect(source.includes('const pendingSnapshot = pendingHiddenSnapshotRef.current;')).toBe(true)
     expect(source.includes('seedTerminal(pendingSnapshot.text, pendingSnapshot.seq, pendingSnapshot.cols, pendingSnapshot.rows);')).toBe(true)
     expect(source.includes('connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId).catch(() => {});')).toBe(true)
     expect(source.includes('} else if (daemonRouteId && connectionManager.getState?.(daemonRouteId) === \'connected\') {')).toBe(false)
+    expect(source.includes('const MAX_TERMINAL_WRITE_CHARS_PER_FRAME = 32 * 1024;')).toBe(true)
+    expect(source.includes('const nextChunk = queuedOutput.slice(0, MAX_TERMINAL_WRITE_CHARS_PER_FRAME);')).toBe(true)
+    expect(source.includes('pendingLiveOutputRef.current = queuedOutput.slice(nextChunk.length);')).toBe(true)
+    expect(source.includes('if (pendingLiveOutputRef.current.length > 0) {')).toBe(true)
+    expect(source.includes('scheduleFlushPendingLiveOutput();')).toBe(true)
   })
 
   it('routes terminal-mode sends through the same handleSendChat path as chat mode', () => {
@@ -42,29 +49,30 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(terminalSource.includes('if (!runtimeReady || sendBlockMessage) return false;')).toBe(true)
   })
 
-  it('uses measured renderer overflow to decide pan/scroll ownership, centers non-overflow terminal slack intentionally, exposes horizontal pan when needed, sizes the pan surface from rendered terminal dimensions, and never shrinks below the fitted scale', () => {
+  it('uses measured renderer overflow to decide pan/scroll ownership, anchors the terminal surface bottom-left without centering slack, exposes horizontal pan when needed, sizes the pan surface from rendered terminal dimensions, and never shrinks below the fitted scale', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
     expect(source.includes('const fittedTerminalScale = getAutoTerminalScale();')).toBe(true)
     expect(source.includes('const safeTerminalScale = Number.isFinite(terminalScale) && terminalScale > 0 ? terminalScale : 1;')).toBe(true)
     expect(source.includes('const isManualZoomedIn = terminalScaleTouchedRef.current && terminalScale > fittedTerminalScale;')).toBe(true)
     expect(source.includes('const hasOverflowedTerminalSurface = terminalIntrinsicViewport.width > terminalViewport.width + 1')).toBe(true)
-    expect(source.includes('const shouldCenterTerminalSurface = !hasOverflowedTerminalSurface')).toBe(true)
+    expect(source.includes('const shouldCenterTerminalSurface')).toBe(false)
     expect(source.includes("hasOverflowedTerminalSurface ? 'w-full h-full overflow-x-auto overflow-y-hidden rounded-lg overscroll-contain' : 'w-full h-full overflow-hidden rounded-lg overscroll-contain'")).toBe(true)
-    expect(source.includes("display: shouldCenterTerminalSurface ? 'flex' : 'block'")).toBe(true)
-    expect(source.includes("justifyContent: shouldCenterTerminalSurface ? 'center' : undefined")).toBe(true)
+    expect(source.includes("display: 'flex'")).toBe(true)
+    expect(source.includes("justifyContent: 'flex-start'")).toBe(true)
+    expect(source.includes("alignItems: 'flex-end'")).toBe(true)
     expect(source.includes('const renderedTerminalWidth = terminalIntrinsicViewport.width > 0')).toBe(true)
     expect(source.includes('const renderedTerminalHeight = terminalIntrinsicViewport.height > 0')).toBe(true)
     expect(source.includes('const terminalSurfaceWidth = terminalIntrinsicViewport.width > 0')).toBe(true)
     expect(source.includes('const terminalSurfaceHeight = terminalIntrinsicViewport.height > 0')).toBe(true)
-    expect(source.includes("minWidth: shouldCenterTerminalSurface ? `${terminalSurfaceWidth}px` : '100%'")).toBe(true)
-    expect(source.includes("minHeight: shouldCenterTerminalSurface ? `${terminalSurfaceHeight}px` : '100%'")).toBe(true)
-    expect(source.includes("maxWidth: shouldCenterTerminalSurface ? '100%' : 'none'")).toBe(true)
+    expect(source.includes("minWidth: terminalSurfaceWidth > 0 ? `${terminalSurfaceWidth}px` : '100%'")).toBe(true)
+    expect(source.includes("minHeight: terminalSurfaceHeight > 0 ? `${terminalSurfaceHeight}px` : '100%'")).toBe(true)
+    expect(source.includes("maxWidth: shouldCenterTerminalSurface ? '100%' : 'none'")).toBe(false)
     expect(source.includes('scrollTop = scroller.scrollHeight - scroller.clientHeight')).toBe(true)
     expect(source.includes('const nextScale = Math.max(fittedTerminalScale, Number((scale - 0.1).toFixed(2)));')).toBe(true)
     expect(source.includes('const nextScale = Math.max(MIN_TERMINAL_SCALE, Number((scale - 0.1).toFixed(2)));')).toBe(false)
   })
 
-  it('updates xterm font size in place so zoom changes do not rebuild the live terminal surface and avoids WebGL in detached popout documents', () => {
+  it('updates xterm font size in place, keeps detached popouts off WebGL, and drives repaint scheduling through the popout owner window', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../../terminal-render-web/src/index.tsx'), 'utf8')
     expect(source.includes('term.options.fontSize = fontSize')).toBe(true)
     expect(source.includes('term.refresh(0, Math.max(0, term.rows - 1));')).toBe(true)
@@ -76,6 +84,14 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('|| !!ownerWindow?.opener;')).toBe(true)
     expect(source.includes('if (!isDetachedPopoutWindow) {')).toBe(true)
     expect(source.includes('const webglAddon = new WebglAddon();')).toBe(true)
+    expect(source.includes('const getOwnerWindow = () => containerRef.current?.ownerDocument?.defaultView || window;')).toBe(true)
+    expect(source.includes('return ownerWindow.requestAnimationFrame(callback);')).toBe(true)
+    expect(source.includes('const activeElement = containerRef.current?.ownerDocument?.activeElement;')).toBe(true)
+    expect(source.includes('const ResizeObserverCtor = container?.ownerDocument?.defaultView?.ResizeObserver;')).toBe(true)
+    expect(source.includes("ownerWindow.addEventListener('pageshow', repaint);")).toBe(true)
+    expect(source.includes("ownerDoc.addEventListener('visibilitychange', repaint);")).toBe(true)
+    expect(source.includes("if (sizingMode === 'fit') applyFitIfEnabled(false);")).toBe(true)
+    expect(source.includes('refreshTerminalSurface();')).toBe(true)
   })
 
   it('tunes xterm scrolling instead of relying on outer container scrolling', () => {
@@ -112,7 +128,7 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('cols: DEFAULT_SESSION_HOST_COLS')).toBe(true)
   })
 
-  it('reports measured xterm viewport dimensions back to the dashboard so autoscale can fit the real terminal surface without feeding back through already-scaled dimensions', () => {
+  it('reports measured xterm viewport dimensions back to the dashboard so autoscale can fit the real terminal surface without feeding back through already-scaled dimensions, and keeps detached popout scheduling/observers on the owner window', () => {
     const terminalSource = fs.readFileSync(path.join(import.meta.dirname, '../../../terminal-render-web/src/index.tsx'), 'utf8')
     const paneSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
 
@@ -126,6 +142,10 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(terminalSource.includes('width += TERMINAL_CHROME_PADDING_X * 2')).toBe(true)
     expect(terminalSource.includes('height += TERMINAL_CHROME_PADDING_Y * 2')).toBe(true)
     expect(terminalSource.includes('onViewportMetricsRef.current?.({ width, height })')).toBe(true)
+    expect(terminalSource.includes('const getOwnerWindow = () => containerRef.current?.ownerDocument?.defaultView || window;')).toBe(true)
+    expect(terminalSource.includes('return ownerWindow.requestAnimationFrame(callback);')).toBe(true)
+    expect(terminalSource.includes('const activeElement = containerRef.current?.ownerDocument?.activeElement;')).toBe(true)
+    expect(terminalSource.includes('const ResizeObserverCtor = container?.ownerDocument?.defaultView?.ResizeObserver;')).toBe(true)
 
     expect(paneSource.includes('const [terminalIntrinsicViewport, setTerminalIntrinsicViewport]')).toBe(true)
     expect(paneSource.includes('const renderedWidth = terminalIntrinsicViewport.width > 0 ? Math.max(terminalViewport.width, Math.round(terminalIntrinsicViewport.width)) : terminalViewport.width')).toBe(true)
@@ -135,5 +155,8 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(paneSource.includes('const widthRatio = terminalViewport.width / intrinsicWidth')).toBe(false)
     expect(paneSource.includes('const heightRatio = terminalViewport.height / intrinsicHeight')).toBe(false)
     expect(paneSource.includes('onViewportMetrics={setTerminalIntrinsicViewport}')).toBe(true)
+    expect(paneSource.includes('const getOwnerWindow = () => terminalViewportRef.current?.ownerDocument?.defaultView')).toBe(true)
+    expect(paneSource.includes('frameId: ownerWindow.requestAnimationFrame(callback),')).toBe(true)
+    expect(paneSource.includes('const ResizeObserverCtor = container?.ownerDocument?.defaultView?.ResizeObserver;')).toBe(true)
   })
 })
