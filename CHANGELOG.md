@@ -2,6 +2,19 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.9.5] - 2026-04-24
+
+### Added
+- **web-core**: Added focused regressions covering owner-window scheduling for detached popouts and chunked browser terminal replay under heavy CLI output.
+
+### Fixed
+- **terminal-render-web / web-core**: Replayed browser terminal output in bounded chunks so heavy multi-CLI backlogs stop blocking input behind giant xterm writes.
+- **terminal-render-web / web-core**: Moved detached popout terminal scheduling, focus, and resize handling onto the popup window/document realm instead of the opener window.
+- **daemon-core**: Hardened CLI fresh-session defaults, provider session-id validation, and saved-history persistence behavior for Hermes and related CLI runtimes.
+
+### Changed
+- **docs**: Documented the current Safari detached-popout terminal limitation in the self-hosted standalone reference while keeping Chrome/same-window paths as the recommended workaround.
+
 ## [0.9.4] - 2026-04-23
 
 ### Added
