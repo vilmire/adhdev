@@ -330,14 +330,25 @@ export const PROVIDER_VERIFICATION: ProviderVerificationMap = {
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "cursor-cli": {
-    "status": "unverified",
-    "testedOn": [],
-    "testedVersions": [],
-    "validatedFlows": [],
-    "lastValidated": null,
-    "notes": "",
-    "evidence": "",
-    "owner": "community",
+    "status": "partial",
+    "testedOn": [
+      "macOS 26.4"
+    ],
+    "testedVersions": [
+      "Cursor 3.0.16",
+      "cursor-agent 2026.04.17-787b533"
+    ],
+    "validatedFlows": [
+      "launch",
+      "send_chat",
+      "read_chat",
+      "resume",
+      "list_models"
+    ],
+    "lastValidated": "2026-04-23",
+    "notes": "Provider root was updated to launch `cursor agent` instead of the obsolete standalone `agent` binary. Fresh launch via ADHDev plus headless send/read, explicit UUID resume, plan mode, and model listing were validated locally after Cursor login. Interactive in-session `/model` switching now has provider controls/scripts but still needs a direct ADHDev live-session validation before this provider can move beyond partial.",
+    "evidence": "Manual local validation with `adhdev launch cursor-cli`, `cursor agent --print`, `cursor agent --resume`, `cursor agent --list-models`, and provider contract tests on 2026-04-23",
+    "owner": "core",
     "source": "docs/site/data/provider-catalog.mjs"
   },
   "gemini-cli": {
@@ -852,7 +863,7 @@ export const PROVIDER_VERIFICATION_STATUS: Record<string, ProviderVerificationSt
   "aider-cli": "unverified",
   "claude-cli": "partial",
   "codex-cli": "partial",
-  "cursor-cli": "unverified",
+  "cursor-cli": "partial",
   "gemini-cli": "unverified",
   "github-copilot-cli": "unverified",
   "goose-cli": "unverified",
