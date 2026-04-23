@@ -45,6 +45,7 @@ import { getConversationHistorySessionId } from '../components/dashboard/convers
 import { getConversationTimestamp } from '../components/dashboard/conversation-sort'
 import { compareMachineEntries, getMachineDisplayName } from '../utils/daemon-utils'
 import { getDesktopAutoReadPlan, getDesktopAutoReadScheduleDecision } from '../utils/dashboard-auto-read'
+import { getDashboardMachineRefreshTargets } from '../utils/dashboard-machine-refresh'
 
 
 export default function Dashboard() {
@@ -119,23 +120,14 @@ export default function Dashboard() {
     const daemonEntry = machineEntries[0]
     const isStandalone = !!daemonEntry
     useEffect(() => {
-        for (const entry of machineEntries) {
-            const needsMetadata = !entry.detectedIdes
-                || !entry.availableProviders
-                || !entry.recentLaunches
-                || !entry.workspaces
-            if (needsMetadata) {
-                void loadDaemonMetadata(entry.id, { minFreshMs: 30_000 }).catch(() => {})
-            }
+        const { metadataDaemonIds, runtimeDaemonIds } = getDashboardMachineRefreshTargets(machineEntries)
 
-            const info = entry.machine
-            const needsRuntime = typeof info?.cpus !== 'number'
-                || typeof info?.totalMem !== 'number'
-                || typeof info?.arch !== 'string'
-                || typeof info?.release !== 'string'
-            if (needsRuntime) {
-                void loadMachineRuntime(entry.id, { minFreshMs: 30_000 }).catch(() => {})
-            }
+        for (const daemonId of metadataDaemonIds) {
+            void loadDaemonMetadata(daemonId, { minFreshMs: 30_000 }).catch(() => {})
+        }
+
+        for (const daemonId of runtimeDaemonIds) {
+            void loadMachineRuntime(daemonId, { minFreshMs: 30_000 }).catch(() => {})
         }
     }, [loadDaemonMetadata, loadMachineRuntime, machineEntries])
 
