@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/daemon-core",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "ADHDev daemon core \u2014 CDP, IDE detection, providers, command execution",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
