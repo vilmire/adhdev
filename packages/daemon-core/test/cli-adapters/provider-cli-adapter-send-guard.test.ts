@@ -102,6 +102,22 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('interrupt now\r')
   })
 
+  it('does not block a new prompt solely because approval state is surfaced', async () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'waiting_approval'
+    adapter.isWaitingForResponse = false
+    adapter.activeModal = {
+      message: 'Approval requested',
+      buttons: ['Allow once', 'Deny'],
+    }
+    adapter.terminalScreen = {
+      getText: () => '⚠️ Dangerous Command\nAllow once\nDeny\n❯\n'
+    }
+
+    await expect(adapter.sendMessage('continue anyway')).resolves.toBeUndefined()
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('continue anyway\r')
+  })
+
   it('resolves the synthetic Claude startup trust modal with numeric selection plus enter', () => {
     const adapter = new ProviderCliAdapter({
       type: 'claude-cli',

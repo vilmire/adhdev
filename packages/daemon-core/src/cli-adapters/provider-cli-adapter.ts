@@ -1962,11 +1962,6 @@ export class ProviderCliAdapter implements CliAdapter {
                 throw new Error(`${this.cliName} is still processing the previous prompt`);
             }
         }
-        const blockingModal = this.activeModal || this.getStartupConfirmationModal(this.terminalScreen.getText() || '');
-        if (blockingModal || this.currentStatus === 'waiting_approval') {
-            throw new Error(`${this.cliName} is awaiting confirmation before it can accept a prompt`);
-        }
-
         this.isWaitingForResponse = true;
         this.responseBuffer = '';
         this.finishRetryCount = 0;
