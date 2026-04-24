@@ -49,7 +49,7 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(terminalSource.includes('if (!runtimeReady || sendBlockMessage) return false;')).toBe(true)
   })
 
-  it('uses measured renderer overflow to decide pan/scroll ownership, anchors the terminal surface bottom-left without centering slack, exposes horizontal pan when needed, sizes the pan surface from rendered terminal dimensions, and never shrinks below the fitted scale', () => {
+  it('uses measured renderer overflow to decide pan/scroll ownership, anchors the terminal surface bottom-left without centering slack, exposes horizontal pan when needed, sizes the pan surface from rendered terminal dimensions, and avoids eager auto-grow after the first fit', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
     expect(source.includes('const fittedTerminalScale = getAutoTerminalScale();')).toBe(true)
     expect(source.includes('const safeTerminalScale = Number.isFinite(terminalScale) && terminalScale > 0 ? terminalScale : 1;')).toBe(true)
@@ -64,12 +64,18 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('const renderedTerminalHeight = terminalIntrinsicViewport.height > 0')).toBe(true)
     expect(source.includes('const terminalSurfaceWidth = terminalIntrinsicViewport.width > 0')).toBe(true)
     expect(source.includes('const terminalSurfaceHeight = terminalIntrinsicViewport.height > 0')).toBe(true)
-    expect(source.includes("minWidth: terminalSurfaceWidth > 0 ? `${terminalSurfaceWidth}px` : '100%'")).toBe(true)
-    expect(source.includes("minHeight: terminalSurfaceHeight > 0 ? `${terminalSurfaceHeight}px` : '100%'")).toBe(true)
-    expect(source.includes("maxWidth: shouldCenterTerminalSurface ? '100%' : 'none'")).toBe(false)
+    expect(source.includes("minWidth: terminalSurfaceWidth > 0 ? `${terminalSurfaceWidth}px` : '100%'" )).toBe(true)
+    expect(source.includes("minHeight: terminalSurfaceHeight > 0 ? `${terminalSurfaceHeight}px` : '100%'" )).toBe(true)
+    expect(source.includes("maxWidth: shouldCenterTerminalSurface ? '100%' : 'none'" )).toBe(false)
     expect(source.includes('scrollTop = scroller.scrollHeight - scroller.clientHeight')).toBe(true)
     expect(source.includes('const nextScale = Math.max(fittedTerminalScale, Number((scale - 0.1).toFixed(2)));')).toBe(true)
     expect(source.includes('const nextScale = Math.max(MIN_TERMINAL_SCALE, Number((scale - 0.1).toFixed(2)));')).toBe(false)
+    expect(source.includes('const TERMINAL_AUTO_SCALE_CHANGE_THRESHOLD = 0.05;')).toBe(true)
+    expect(source.includes('const terminalAutoScaleInitializedRef = useRef(false);')).toBe(true)
+    expect(source.includes('setTerminalScale(getAutoTerminalScale());')).toBe(false)
+    expect(source.includes('if (!terminalAutoScaleInitializedRef.current) {')).toBe(true)
+    expect(source.includes('const shouldAutoShrink = nextScale < currentScale - TERMINAL_AUTO_SCALE_CHANGE_THRESHOLD;')).toBe(true)
+    expect(source.includes('return shouldAutoShrink ? nextScale : currentScale;')).toBe(true)
   })
 
   it('updates xterm font size in place, keeps detached popouts off WebGL, and drives repaint scheduling through the popout owner window', () => {

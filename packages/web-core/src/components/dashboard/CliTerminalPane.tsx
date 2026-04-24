@@ -45,6 +45,7 @@ export default function CliTerminalPane({
     const terminalViewportRef = useRef<HTMLDivElement | null>(null);
     const terminalPanSurfaceRef = useRef<HTMLDivElement | null>(null);
     const terminalScaleTouchedRef = useRef(false);
+    const terminalAutoScaleInitializedRef = useRef(false);
     const seededSnapshotSeqRef = useRef(0);
     const liveOutputStartedRef = useRef(false);
     const pendingLiveOutputRef = useRef('');
@@ -88,6 +89,7 @@ export default function CliTerminalPane({
         : (sendFeedbackMessage || sendBlockMessage);
     const MIN_TERMINAL_SCALE = DEFAULT_MIN_CLI_TERMINAL_SCALE;
     const MAX_TERMINAL_SCALE = DEFAULT_MAX_CLI_TERMINAL_SCALE;
+    const TERMINAL_AUTO_SCALE_CHANGE_THRESHOLD = 0.05;
     const safeTerminalScale = Number.isFinite(terminalScale) && terminalScale > 0 ? terminalScale : 1;
     const terminalFontSize = Number((13 * terminalScale).toFixed(2));
     const getAutoTerminalScale = () => {
@@ -136,6 +138,10 @@ export default function CliTerminalPane({
         pendingLiveOutputRef.current = '';
         pendingHiddenSnapshotRef.current = null;
         pendingHiddenClearRef.current = false;
+        if (!terminalScaleTouchedRef.current) {
+            terminalAutoScaleInitializedRef.current = false;
+            setTerminalScale(1);
+        }
         if (flushFrameRef.current !== null) {
             cancelScheduledFrame();
         }
@@ -280,11 +286,17 @@ export default function CliTerminalPane({
     }, []);
 
     useEffect(() => {
-        const applyAutoScale = () => {
-            if (terminalScaleTouchedRef.current) return;
-            setTerminalScale(getAutoTerminalScale());
-        };
-        applyAutoScale();
+        if (terminalScaleTouchedRef.current) return;
+        const nextScale = getAutoTerminalScale();
+        if (!Number.isFinite(nextScale) || nextScale <= 0) return;
+        setTerminalScale((currentScale) => {
+            if (!terminalAutoScaleInitializedRef.current) {
+                terminalAutoScaleInitializedRef.current = true;
+                return nextScale;
+            }
+            const shouldAutoShrink = nextScale < currentScale - TERMINAL_AUTO_SCALE_CHANGE_THRESHOLD;
+            return shouldAutoShrink ? nextScale : currentScale;
+        });
     }, [terminalIntrinsicViewport.height, terminalIntrinsicViewport.width, terminalViewport.height, terminalViewport.width]);
 
     useEffect(() => {
