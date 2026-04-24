@@ -14,6 +14,7 @@ describe('dashboard overlays prop boundary cleanup', () => {
     expect(overlaysSource).toContain('historyModal: {')
     expect(overlaysSource).toContain('remoteDialog: {')
     expect(overlaysSource).toContain('cliStopDialog: {')
+    expect(overlaysSource).toContain('connectionBanner: {')
     expect(overlaysSource).toContain('toastOverlay: {')
     expect(overlaysSource).toContain('onboarding: {')
 
@@ -21,8 +22,10 @@ describe('dashboard overlays prop boundary cleanup', () => {
     expect(dashboardSource).toContain('historyModal={{')
     expect(dashboardSource).toContain('remoteDialog={{')
     expect(dashboardSource).toContain('cliStopDialog={{')
+    expect(dashboardSource).toContain('connectionBanner={{')
     expect(dashboardSource).toContain('toastOverlay={{')
     expect(dashboardSource).toContain('onboarding={{')
+    expect(dashboardSource).not.toContain('<ConnectionBanner')
     expect(dashboardSource).not.toContain('historyModalOpen={historyModalOpen}')
     expect(dashboardSource).not.toContain('remoteDialogConv={remoteDialogConv}')
     expect(dashboardSource).not.toContain('cliStopDialogOpen={cliStopDialogOpen}')

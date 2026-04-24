@@ -31,7 +31,6 @@ import { useDashboardHistoryModalState } from '../hooks/useDashboardHistoryModal
 import { useDashboardOverlayDialogsState } from '../hooks/useDashboardOverlayDialogsState'
 import { useDashboardPendingLaunch } from '../hooks/useDashboardPendingLaunch'
 
-import ConnectionBanner from '../components/dashboard/ConnectionBanner'
 import TerminalBackendBanner from '../components/dashboard/TerminalBackendBanner'
 import DashboardMainView from '../components/dashboard/DashboardMainView'
 import DashboardOverlays from '../components/dashboard/DashboardOverlays'
@@ -523,11 +522,6 @@ export default function Dashboard() {
     return (
         <div className="page-dashboard flex-1 min-h-0 bg-bg-primary text-text-primary flex flex-col overflow-hidden">
 
-            <ConnectionBanner
-                wsStatus={wsStatus}
-                showReconnected={showReconnected}
-                onReconnect={daemonCtx.retryServerConnection}
-            />
             <TerminalBackendBanner
                 terminalBackend={terminalBackend}
                 isStandalone={isStandalone}
@@ -667,6 +661,11 @@ export default function Dashboard() {
                     onSaveAndStop: async () => {
                         await confirmCliStop('save')
                     },
+                }}
+                connectionBanner={{
+                    wsStatus,
+                    showReconnected,
+                    onReconnect: daemonCtx.retryServerConnection,
                 }}
                 toastOverlay={{
                     toasts,

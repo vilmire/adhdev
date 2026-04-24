@@ -2,6 +2,7 @@ import React from 'react'
 
 import type { DaemonData } from '../../types'
 import OnboardingModal from '../OnboardingModal'
+import ConnectionBanner from './ConnectionBanner'
 import DashboardRemoteDialog from './DashboardRemoteDialog'
 import type { ActiveConversation } from './types'
 import { isAcpConv, isCliConv } from './types'
@@ -49,6 +50,12 @@ interface DashboardOverlaysProps {
         onStopNow: () => void | Promise<void>
         onSaveAndStop: () => void | Promise<void>
     }
+    connectionBanner: {
+        wsStatus: string
+        showReconnected: boolean
+        loginUrl?: string
+        onReconnect?: () => void
+    }
     toastOverlay: {
         toasts: Toast[]
         onDismiss: (id: number) => void
@@ -64,11 +71,19 @@ export default function DashboardOverlays({
     historyModal,
     remoteDialog,
     cliStopDialog,
+    connectionBanner,
     toastOverlay,
     onboarding,
 }: DashboardOverlaysProps) {
     return (
         <>
+            <ConnectionBanner
+                wsStatus={connectionBanner.wsStatus}
+                showReconnected={connectionBanner.showReconnected}
+                loginUrl={connectionBanner.loginUrl}
+                onReconnect={connectionBanner.onReconnect}
+            />
+
             {historyModal.open && historyModal.targetConv && (
                 <HistoryModal
                     activeConv={historyModal.targetConv}

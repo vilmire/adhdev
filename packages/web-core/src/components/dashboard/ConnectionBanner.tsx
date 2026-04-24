@@ -30,53 +30,65 @@ export default function ConnectionBanner({ wsStatus, showReconnected, loginUrl, 
         accent: 'var(--accent-primary-light)',
     };
 
+    const overlayClassName = 'fixed left-1/2 top-4 z-[1400] flex items-center justify-center pointer-events-none';
+    const overlayStyle = {
+        top: 'calc(env(safe-area-inset-top, 0px) + 16px)',
+        transform: 'translateX(-50%)',
+    } as const;
+
     return (
         <>
             {showDisconnected && (
-                <div
-                    className="py-2.5 px-5 text-[13px] font-semibold flex items-center gap-2.5 justify-center"
-                    style={{
-                        background: gradients[bannerColor],
-                        borderBottom: borders[bannerColor],
-                        color: colors[bannerColor],
-                    }}
-                >
-                    <img
-                        src="/otter-logo.png" alt=""
-                        className="w-5 h-5"
+                <div className={overlayClassName} style={overlayStyle}>
+                    <div
+                        className="pointer-events-auto max-w-[min(720px,calc(100vw-24px))] rounded-2xl border px-4 py-3 text-[13px] font-semibold flex items-center gap-2.5 justify-center shadow-[0_18px_40px_rgba(2,6,23,0.24)] backdrop-blur-xl"
                         style={{
-                            opacity: wsStatus === 'auth_failed' ? 0.6 : 1,
-                            animation: wsStatus === 'auth_failed' ? undefined : 'pulse 2s ease-in-out infinite',
-                            filter: wsStatus === 'auth_failed' ? 'grayscale(1)' : undefined,
+                            background: gradients[bannerColor],
+                            border: borders[bannerColor],
+                            color: colors[bannerColor],
                         }}
-                    />
-                    {wsStatus === 'offline' && 'Network offline — waiting for connection...'}
-                    {wsStatus === 'disconnected' && 'Reconnecting to server...'}
-                    {wsStatus === 'reconnecting' && 'Reconnecting to server...'}
-                    {wsStatus === 'auth_failed' && (
-                        loginUrl ? (
-                            <>
-                                Session expired.{' '}
-                                <a href={loginUrl} className="text-inherit underline">Log in again</a>
-                            </>
-                        ) : 'Connection failed — please restart the server.'
-                    )}
-                    {onReconnect && wsStatus !== 'auth_failed' && (
-                        <button
-                            type="button"
-                            className="ml-3 px-2.5 py-1 rounded-md border border-current/30 text-[12px] font-semibold hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
-                            onClick={onReconnect}
-                            disabled={wsStatus === 'offline'}
-                        >
-                            Reconnect now
-                        </button>
-                    )}
+                    >
+                        <img
+                            src="/otter-logo.png" alt=""
+                            className="w-5 h-5 shrink-0"
+                            style={{
+                                opacity: wsStatus === 'auth_failed' ? 0.6 : 1,
+                                animation: wsStatus === 'auth_failed' ? undefined : 'pulse 2s ease-in-out infinite',
+                                filter: wsStatus === 'auth_failed' ? 'grayscale(1)' : undefined,
+                            }}
+                        />
+                        <span className="min-w-0 text-center">
+                            {wsStatus === 'offline' && 'Network offline — waiting for connection...'}
+                            {wsStatus === 'disconnected' && 'Reconnecting to server...'}
+                            {wsStatus === 'reconnecting' && 'Reconnecting to server...'}
+                            {wsStatus === 'auth_failed' && (
+                                loginUrl ? (
+                                    <>
+                                        Session expired.{' '}
+                                        <a href={loginUrl} className="text-inherit underline">Log in again</a>
+                                    </>
+                                ) : 'Connection failed — please restart the server.'
+                            )}
+                        </span>
+                        {onReconnect && wsStatus !== 'auth_failed' && (
+                            <button
+                                type="button"
+                                className="ml-1 shrink-0 px-2.5 py-1 rounded-md border border-current/30 text-[12px] font-semibold hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
+                                onClick={onReconnect}
+                                disabled={wsStatus === 'offline'}
+                            >
+                                Reconnect now
+                            </button>
+                        )}
+                    </div>
                 </div>
             )}
             {showReconnected && wsStatus === 'connected' && (
-                <div className="py-2 px-4 text-xs font-semibold flex items-center gap-2 justify-center bg-gradient-to-r from-green-500/[0.12] to-green-500/[0.04] text-green-400 border-b border-green-500/15 animate-[fadeIn_0.3s_ease]">
-                    <img src="/otter-logo.png" alt="" className="w-4 h-4" />
-                    Connected
+                <div className={overlayClassName} style={overlayStyle}>
+                    <div className="pointer-events-none rounded-2xl border px-4 py-2 text-xs font-semibold flex items-center gap-2 justify-center bg-gradient-to-r from-green-500/[0.12] to-green-500/[0.04] text-green-400 border-green-500/15 shadow-[0_18px_40px_rgba(2,6,23,0.2)] backdrop-blur-xl animate-[fadeIn_0.3s_ease]">
+                        <img src="/otter-logo.png" alt="" className="w-4 h-4" />
+                        Connected
+                    </div>
                 </div>
             )}
         </>
