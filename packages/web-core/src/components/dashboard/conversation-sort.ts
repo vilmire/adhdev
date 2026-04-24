@@ -13,11 +13,13 @@ function parseMessageTimestamp(value: unknown): number {
 export function getConversationTimestamp(conversation: ActiveConversation): number {
     const lastMessage: DashboardMessage | undefined = [...conversation.messages].reverse().find((message) => !message?._localId)
         || conversation.messages[conversation.messages.length - 1]
-    return (
-        conversation.lastMessageAt
-        || parseMessageTimestamp(lastMessage?.receivedAt)
+    const summaryAt = typeof conversation.lastMessageAt === 'number' && Number.isFinite(conversation.lastMessageAt)
+        ? conversation.lastMessageAt
+        : 0
+    const messageAt = parseMessageTimestamp(lastMessage?.receivedAt)
+        || parseMessageTimestamp(lastMessage?.timestamp)
         || 0
-    )
+    return Math.max(summaryAt, messageAt)
 }
 
 export function getConversationActivityAt(conversation: ActiveConversation, lastUpdated = 0): number {

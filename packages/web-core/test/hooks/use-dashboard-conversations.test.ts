@@ -193,6 +193,58 @@ describe('buildConversationSourceSignature', () => {
         const after = buildConversationSourceSignature(entry)
         expect(after).not.toBe(before)
     })
+    it('changes when top-level compact last-message summary changes without transcript body', () => {
+        const entry = createCliEntry({
+            activeChat: undefined,
+            lastMessagePreview: 'older preview',
+            lastMessageAt: 1000,
+            lastMessageHash: undefined,
+            lastUpdated: undefined,
+        })
+        const before = buildConversationSourceSignature(entry)
+
+        entry.lastMessagePreview = 'newer preview'
+        entry.lastMessageAt = 2000
+
+        const after = buildConversationSourceSignature(entry)
+        expect(after).not.toBe(before)
+    })
+
+    it('changes when child compact last-message summary changes without transcript body', () => {
+        const entry = createCliEntry({
+            transport: 'cdp-page',
+            type: 'cursor',
+            activeChat: undefined,
+            childSessions: [
+                {
+                    id: 'agent-1',
+                    parentId: 'cursor-1',
+                    providerType: 'codex',
+                    providerName: 'Codex',
+                    kind: 'agent',
+                    transport: 'cdp-webview',
+                    status: 'idle',
+                    title: 'Codex',
+                    workspace: '/repo',
+                    activeChat: undefined,
+                    capabilities: [],
+                    lastMessagePreview: 'older child preview',
+                    lastMessageAt: 1000,
+                },
+            ],
+            lastMessageHash: undefined,
+            lastUpdated: undefined,
+        })
+        const before = buildConversationSourceSignature(entry)
+
+        const child = entry.childSessions?.[0]
+        if (!child) throw new Error('missing child session')
+        child.lastMessagePreview = 'newer child preview'
+        child.lastMessageAt = 2000
+
+        const after = buildConversationSourceSignature(entry)
+        expect(after).not.toBe(before)
+    })
 })
 
 describe('buildConversationTargetMap', () => {

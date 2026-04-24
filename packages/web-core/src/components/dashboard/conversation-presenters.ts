@@ -1,6 +1,6 @@
 import { formatIdeType } from '../../utils/daemon-utils'
 import { normalizeTextContent } from '../../utils/text'
-import type { ActiveConversation } from './types'
+import type { ActiveConversation, DashboardMessage } from './types'
 import { getConversationViewStates } from './DashboardMobileChatShared'
 import {
     getConversationDisplayLabel,
@@ -9,6 +9,26 @@ import {
     getConversationNotificationLabel as getConversationNotificationDisplayLabel,
     getConversationProviderLabel,
 } from './conversation-selectors'
+
+function parseConversationMessageTimestamp(value: unknown): number {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'string') {
+        const parsed = Date.parse(value)
+        if (Number.isFinite(parsed)) return parsed
+    }
+    return 0
+}
+
+function getLastNonLocalMessage(messages: DashboardMessage[]): DashboardMessage | undefined {
+    return [...messages].reverse().find((message) => !message?._localId)
+        || messages[messages.length - 1]
+}
+
+function getMessageActivityAt(message: DashboardMessage | undefined): number {
+    return parseConversationMessageTimestamp(message?.receivedAt)
+        || parseConversationMessageTimestamp(message?.timestamp)
+        || 0
+}
 
 export function getConversationTitle(conversation: ActiveConversation): string {
     return getConversationDisplayLabel(conversation)
@@ -19,11 +39,17 @@ export function getConversationMetaText(conversation: ActiveConversation): strin
 }
 
 export function getConversationPreviewText(conversation: ActiveConversation): string {
-    if (conversation.lastMessagePreview) return conversation.lastMessagePreview
-    const lastMessage = [...conversation.messages].reverse().find((message) => !message?._localId)
-        || conversation.messages[conversation.messages.length - 1]
-    const preview = normalizeTextContent(lastMessage?.content)
-    if (preview) return preview
+    const lastMessage = getLastNonLocalMessage(conversation.messages)
+    const messagePreview = normalizeTextContent(lastMessage?.content)
+    const messageAt = getMessageActivityAt(lastMessage)
+    const summaryPreview = normalizeTextContent(conversation.lastMessagePreview)
+    const summaryAt = typeof conversation.lastMessageAt === 'number' && Number.isFinite(conversation.lastMessageAt)
+        ? conversation.lastMessageAt
+        : 0
+
+    if (summaryPreview && (!messagePreview || (summaryAt > 0 && summaryAt >= messageAt))) return summaryPreview
+    if (messagePreview) return messagePreview
+    if (summaryPreview) return summaryPreview
     if (conversation.title) return conversation.title
     return getConversationMetaText(conversation) || 'No messages yet'
 }

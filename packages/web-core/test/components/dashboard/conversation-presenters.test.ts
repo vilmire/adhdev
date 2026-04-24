@@ -90,4 +90,28 @@ describe('conversation presenters', () => {
         expect(getConversationPreviewText(withTitle)).toBe('Named thread')
         expect(getConversationNotificationLabel(withTitle)).toBe('Named thread')
     })
+
+    it('uses richer transcript text when stale compact preview is older than the latest message', () => {
+        const conversation = createConversation({
+            lastMessagePreview: 'Older compact preview',
+            lastMessageAt: 1000,
+            messages: [
+                { role: 'assistant', content: 'Latest transcript bubble', receivedAt: 2000 },
+            ],
+        })
+
+        expect(getConversationPreviewText(conversation)).toBe('Latest transcript bubble')
+    })
+
+    it('uses compact preview when it is newer than the local transcript tail', () => {
+        const conversation = createConversation({
+            lastMessagePreview: 'Newest compact preview',
+            lastMessageAt: 3000,
+            messages: [
+                { role: 'assistant', content: 'Older transcript bubble', receivedAt: 2000 },
+            ],
+        })
+
+        expect(getConversationPreviewText(conversation)).toBe('Newest compact preview')
+    })
 })
