@@ -16,6 +16,23 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes("import ChatInputBar from './ChatInputBar'") || source.includes("import ChatInputBar from \"./ChatInputBar\"")).toBe(true)
     expect(source.includes('<ChatInputBar')).toBe(true)
     expect(source.includes('isActive={isInputActive && isVisible}')).toBe(true)
+    expect(source.includes('animateVisibility={false}')).toBe(true)
+  })
+
+  it('keeps CLI chat and terminal panes mounted in the same measured slot instead of display-none toggling the terminal', () => {
+    const paneGroupSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/PaneGroupContent.tsx'), 'utf8')
+    const chatPaneSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/ChatPane.tsx'), 'utf8')
+
+    expect(paneGroupSource.includes("display: isCliTerminal ? 'flex' : 'none'")).toBe(false)
+    expect(paneGroupSource.includes('{!isCliTerminal && (')).toBe(false)
+    expect(paneGroupSource.includes("visibility: showTerminalPane ? 'visible' : 'hidden'")).toBe(true)
+    expect(paneGroupSource.includes("visibility: showChatPane ? 'visible' : 'hidden'")).toBe(true)
+    expect(paneGroupSource.includes('isVisible={isCliTerminal}')).toBe(true)
+    expect(paneGroupSource.includes('isVisible={showChatPane}')).toBe(true)
+    expect(paneGroupSource.includes('isInputActive={isInputActive && isCliTerminal}')).toBe(true)
+    expect(paneGroupSource.includes('isInputActive={isInputActive && showChatPane}')).toBe(true)
+    expect(chatPaneSource.includes('isVisible?: boolean')).toBe(true)
+    expect(chatPaneSource.includes('enabled: isVisible && !!activeConv.sessionId')).toBe(true)
   })
 
   it('keeps dashboard terminal panes in measured sizing without fit fallbacks and drives zoom through renderer font-size feedback instead of pane CSS zoom', () => {

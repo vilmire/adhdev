@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import type { ActiveConversation } from './types'
 import type { DaemonData } from '../../types'
@@ -46,6 +46,39 @@ const PaneGroupContent = memo(function PaneGroupContent({
     scrollToBottomRequestNonce,
     isInputActive = true,
 }: PaneGroupContentProps) {
+    const [terminalRevealReady, setTerminalRevealReady] = useState(isCliTerminal)
+    const previousIsCliTerminalRef = useRef(isCliTerminal)
+
+    useEffect(() => {
+        const wasCliTerminal = previousIsCliTerminalRef.current
+        previousIsCliTerminalRef.current = isCliTerminal
+
+        if (!isCliTerminal) {
+            setTerminalRevealReady(false)
+            return
+        }
+
+        if (wasCliTerminal) {
+            setTerminalRevealReady(true)
+            return
+        }
+
+        setTerminalRevealReady(false)
+        let frameA = 0
+        let frameB = 0
+        frameA = window.requestAnimationFrame(() => {
+            frameB = window.requestAnimationFrame(() => {
+                setTerminalRevealReady(true)
+            })
+        })
+        return () => {
+            window.cancelAnimationFrame(frameA)
+            window.cancelAnimationFrame(frameB)
+        }
+    }, [isCliTerminal])
+
+    const showTerminalPane = isCliTerminal && terminalRevealReady
+    const showChatPane = !isCliTerminal || !terminalRevealReady
     const modalState = useSessionModalSubscription(activeConv)
     const effectiveConv: ActiveConversation = (
         modalState.status || modalState.modalMessage || modalState.modalButtons
@@ -75,8 +108,20 @@ const PaneGroupContent = memo(function PaneGroupContent({
             ) : null}
 
             {effectiveConv.transport === 'pty' ? (
-                <>
-                    <div style={{ display: isCliTerminal ? 'flex' : 'none', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
+                <div style={{ position: 'relative', minHeight: 0, flex: '1 1 0%', width: '100%', overflow: 'hidden' }}>
+                    <div
+                        aria-hidden={!isCliTerminal}
+                        style={{
+                            position: 'absolute',
+                            inset: 0,
+                            display: 'flex',
+                            minHeight: 0,
+                            width: '100%',
+                            flexDirection: 'column',
+                            visibility: showTerminalPane ? 'visible' : 'hidden',
+                            pointerEvents: showTerminalPane ? 'auto' : 'none',
+                        }}
+                    >
                         <CliTerminalPane
                             activeConv={effectiveConv}
                             clearToken={clearToken}
@@ -85,27 +130,38 @@ const PaneGroupContent = memo(function PaneGroupContent({
                             isSendingChat={isSendingChat}
                             sendFeedbackMessage={sendFeedbackMessage}
                             isVisible={isCliTerminal}
-                            isInputActive={isInputActive}
+                            isInputActive={isInputActive && isCliTerminal}
                         />
                     </div>
-                    {!isCliTerminal && (
-                        <div style={{ display: 'flex', minHeight: 0, flex: '1 1 0%', width: '100%', flexDirection: 'column' }}>
-                            <ChatPane
-                                activeConv={effectiveConv}
-                                ideEntry={ideEntry}
-                                handleSendChat={handleSendChat}
-                                isSendingChat={isSendingChat}
-                                sendFeedbackMessage={sendFeedbackMessage}
-                                handleFocusAgent={handleFocusAgent}
-                                isFocusingAgent={isFocusingAgent}
-                                actionLogs={actionLogs}
-                                userName={userName}
-                                scrollToBottomRequestNonce={scrollToBottomRequestNonce}
-                                isInputActive={isInputActive}
-                            />
-                        </div>
-                    )}
-                </>
+                    <div
+                        aria-hidden={isCliTerminal}
+                        style={{
+                            position: 'absolute',
+                            inset: 0,
+                            display: 'flex',
+                            minHeight: 0,
+                            width: '100%',
+                            flexDirection: 'column',
+                            visibility: showChatPane ? 'visible' : 'hidden',
+                            pointerEvents: showChatPane ? 'auto' : 'none',
+                        }}
+                    >
+                        <ChatPane
+                            activeConv={effectiveConv}
+                            ideEntry={ideEntry}
+                            handleSendChat={handleSendChat}
+                            isSendingChat={isSendingChat}
+                            sendFeedbackMessage={sendFeedbackMessage}
+                            handleFocusAgent={handleFocusAgent}
+                            isFocusingAgent={isFocusingAgent}
+                            actionLogs={actionLogs}
+                            userName={userName}
+                            scrollToBottomRequestNonce={scrollToBottomRequestNonce}
+                            isInputActive={isInputActive && showChatPane}
+                            isVisible={showChatPane}
+                        />
+                    </div>
+                </div>
             ) : (
                 <ChatPane
                     activeConv={effectiveConv}

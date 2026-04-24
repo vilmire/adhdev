@@ -1,4 +1,6 @@
 import React from 'react'
+import fs from 'node:fs'
+import path from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import ChatInputBar, { shouldDisableChatSendButton } from '../../../src/components/dashboard/ChatInputBar'
@@ -81,5 +83,24 @@ describe('ChatInputBar send-state copy', () => {
     expect(html).toContain('opacity:1')
     expect(html).toContain('pointer-events:auto')
     expect(html).toContain('title="Send message to Hermes Agent"')
+  })
+
+  it('can disable visibility animation for measured terminal view transitions', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ChatInputBar, {
+        contextKey: 'tab-1',
+        panelLabel: 'Hermes Agent',
+        isSending: false,
+        isBusy: false,
+        onSend: vi.fn(async () => true),
+        isActive: true,
+        animateVisibility: false,
+      }),
+    )
+    const source = fs.readFileSync(path.join(import.meta.dirname, '../../../src/components/dashboard/ChatInputBar.tsx'), 'utf8')
+
+    expect(html).toContain('class="dashboard-input-area bg-[var(--surface-primary)] shrink-0 overflow-hidden"')
+    expect(html).not.toContain('class="dashboard-input-area bg-[var(--surface-primary)] shrink-0 overflow-hidden transition-all duration-200 ease-out"')
+    expect(source).toContain('focus({ preventScroll: true })')
   })
 })

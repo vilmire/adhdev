@@ -10,6 +10,7 @@ interface ChatInputBarProps {
     onSend: (message: string) => Promise<boolean>;
     isActive?: boolean;
     showControlsToggle?: boolean;
+    animateVisibility?: boolean;
 }
 
 export function shouldDisableChatSendButton({
@@ -31,6 +32,7 @@ const ChatInputBar = memo(function ChatInputBar({
     onSend,
     isActive = true,
     showControlsToggle = false,
+    animateVisibility = true,
 }: ChatInputBarProps) {
     const chatInputRef = useRef<HTMLInputElement>(null);
     const [draftInput, setDraftInput] = useState('');
@@ -42,7 +44,7 @@ const ChatInputBar = memo(function ChatInputBar({
 
     useEffect(() => {
         if (!isActive) return;
-        chatInputRef.current?.focus();
+        chatInputRef.current?.focus({ preventScroll: true });
     }, [contextKey, isActive]);
 
     const submitDraft = async () => {
@@ -56,7 +58,10 @@ const ChatInputBar = memo(function ChatInputBar({
 
     return (
         <div
-            className="dashboard-input-area bg-[var(--surface-primary)] shrink-0 overflow-hidden transition-all duration-200 ease-out"
+            className={[
+                'dashboard-input-area bg-[var(--surface-primary)] shrink-0 overflow-hidden',
+                animateVisibility ? 'transition-all duration-200 ease-out' : '',
+            ].filter(Boolean).join(' ')}
             style={{
                 borderTop: isActive ? '1px solid var(--border-subtle)' : '1px solid transparent',
                 maxHeight: isActive ? 72 : 0,

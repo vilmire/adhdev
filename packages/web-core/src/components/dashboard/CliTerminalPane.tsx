@@ -457,6 +457,7 @@ export default function CliTerminalPane({
                 }}
                 isActive={isInputActive && isVisible}
                 showControlsToggle={false}
+                animateVisibility={false}
             />
         </>
     );

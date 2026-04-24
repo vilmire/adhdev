@@ -42,6 +42,7 @@ export interface ChatPaneProps {
     showMetaChips?: boolean;
     scrollToBottomRequestNonce?: number;
     isInputActive?: boolean;
+    isVisible?: boolean;
 }
 
 const LIVE_MESSAGE_PAGE_SIZE = 60;
@@ -55,6 +56,7 @@ export default function ChatPane({
     showMetaChips = false,
     scrollToBottomRequestNonce,
     isInputActive = true,
+    isVisible = true,
 }: ChatPaneProps) {
     const receivedAtCache = useRef<Map<string, number>>(new Map());
     const loadDaemonMetadata = useDaemonMetadataLoader();
@@ -84,7 +86,7 @@ export default function ChatPane({
         isCliLike: controlsContext.isCli || controlsContext.isAcp,
     })
     const chatTailState = useSessionChatTailController(activeConv, {
-        enabled: !!activeConv.sessionId,
+        enabled: isVisible && !!activeConv.sessionId,
         tailLimit: defaultChatTailHydrateLimit,
     })
 
