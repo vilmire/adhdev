@@ -6,7 +6,11 @@ import { getConversationTimestamp } from './conversation-sort'
 import { getConversationMachineId } from './conversation-selectors'
 import { getConversationTitle } from './conversation-presenters'
 
-type MobileChatScreen = 'inbox' | 'chat' | 'machine'
+export type MobileChatScreen = 'inbox' | 'chat' | 'machine'
+
+export function shouldReturnToInboxWhenSelectedConversationIsMissing(screen: MobileChatScreen) {
+    return screen === 'chat'
+}
 
 interface UseDashboardMobileChatEffectsOptions {
     conversations: ActiveConversation[]
@@ -102,7 +106,9 @@ export function useDashboardMobileChatEffects({
 
     useEffect(() => {
         if (!selectedConversation) {
-            setScreen('inbox')
+            if (shouldReturnToInboxWhenSelectedConversationIsMissing(screen)) {
+                setScreen('inbox')
+            }
             setSelectedTabKey(conversations[0]?.tabKey || null)
             lastAutoReadKeyRef.current = null
             return

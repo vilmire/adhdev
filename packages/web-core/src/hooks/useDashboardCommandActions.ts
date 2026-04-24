@@ -1,13 +1,9 @@
 import { useCallback, type Dispatch, type SetStateAction } from 'react'
 
 import type { ActiveConversation } from '../components/dashboard/types'
-import { getCliConversationViewMode, isAcpConv, isCliConv } from '../components/dashboard/types'
 import {
-  getCliViewModeForSession,
-  isExpectedCliViewModeTransportError,
-  shouldRetainOptimisticCliViewModeOverrideOnError,
+  switchCliConversationViewModeOptimistically,
 } from '../components/dashboard/cliViewModeOverrides'
-import { getConversationMachineId, getConversationProviderType } from '../components/dashboard/conversation-selectors'
 import { browseMachineDirectories, type BrowseDirectoryResult } from '../components/machine/workspaceBrowse'
 import type { SavedSessionHistoryEntry } from '../components/dashboard/HistoryModal'
 import type { DaemonData } from '../types'
@@ -161,43 +157,13 @@ export function useDashboardCommandActions({
   }, [sendDaemonCommand])
 
   const setActiveCliViewMode = useCallback(async (mode: 'chat' | 'terminal') => {
-    if (!activeConv || !isCliConv(activeConv) || isAcpConv(activeConv)) return
-    const currentMode = getCliConversationViewMode(activeConv)
-    if (currentMode === mode) return
-    const sessionId = activeConv.sessionId
-    if (sessionId) {
-      setCliViewModeOverrides((prev) => ({ ...prev, [sessionId]: mode }))
-    }
-    try {
-      await sendDaemonCommand(getConversationMachineId(activeConv) || activeConv.routeId, 'set_cli_view_mode', {
-        targetSessionId: activeConv.sessionId,
-        cliType: getConversationProviderType(activeConv),
-        mode,
-      })
-    } catch (error) {
-      const shouldRetainOverride = shouldRetainOptimisticCliViewModeOverrideOnError(error)
-      if (sessionId && !shouldRetainOverride) {
-        setCliViewModeOverrides((prev) => {
-          const next = { ...prev }
-          if (currentMode === getCliViewModeForSession(ides, sessionId)) {
-            delete next[sessionId]
-          } else {
-            next[sessionId] = currentMode
-          }
-          return next
-        })
-      }
-      if (!isExpectedCliViewModeTransportError(error)) {
-        console.error('Failed to switch CLI view mode:', error)
-      } else {
-        console.warn(
-          shouldRetainOverride
-            ? 'CLI view mode result was lost after send; keeping optimistic mode override:'
-            : 'Skipped CLI view mode switch:',
-          error instanceof Error ? error.message : String(error),
-        )
-      }
-    }
+    await switchCliConversationViewModeOptimistically({
+      conversation: activeConv,
+      mode,
+      ides,
+      sendDaemonCommand,
+      setCliViewModeOverrides,
+    })
   }, [activeConv, ides, sendDaemonCommand, setCliViewModeOverrides])
 
   return {

@@ -558,6 +558,7 @@ export default function Dashboard() {
                 actionLogs={actionLogs}
                 sendDaemonCommand={sendDaemonCommand}
                 setActionLogs={setActionLogs}
+                setCliViewModeOverrides={setCliViewModeOverrides}
                 isStandalone={isStandalone}
                 initialDataLoaded={initialLoaded}
                 userName={daemonCtx.userName}

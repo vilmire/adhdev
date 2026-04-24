@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   applyCliViewModeOverrides,
   getCliViewModeForSession,
   isExpectedCliViewModeTransportError,
   shouldRetainOptimisticCliViewModeOverrideOnError,
   reconcileCliViewModeOverrides,
+  switchCliConversationViewModeOptimistically,
+  type CliViewModeOverrideMap,
 } from '../../../src/components/dashboard/cliViewModeOverrides'
+import type { ActiveConversation } from '../../../src/components/dashboard/types'
 import type { DaemonData } from '../../../src/types'
 
 function createEntry(overrides: Partial<DaemonData> = {}): DaemonData {
@@ -23,6 +26,39 @@ function createEntry(overrides: Partial<DaemonData> = {}): DaemonData {
     activeChat: { id: 'chat-1', title: 'Hermes Agent', status: 'idle', messages: [], activeModal: null },
     timestamp: 1,
     ...overrides,
+  }
+}
+
+function createConversation(overrides: Partial<ActiveConversation> = {}): ActiveConversation {
+  return {
+    routeId: 'machine-1:cli:cli-1',
+    daemonId: 'machine-1',
+    sessionId: 'cli-1',
+    transport: 'pty',
+    mode: 'chat',
+    agentName: 'Hermes Agent',
+    agentType: 'hermes-cli',
+    status: 'idle',
+    title: 'Hermes Agent',
+    messages: [],
+    workspaceName: '/repo',
+    displayPrimary: 'Hermes Agent',
+    displaySecondary: 'machine-1',
+    streamSource: 'native',
+    tabKey: 'tab-1',
+    ...overrides,
+  }
+}
+
+function createOverrideHarness(initial: CliViewModeOverrideMap = {}) {
+  let overrides = { ...initial }
+  return {
+    read: () => overrides,
+    set: (update: CliViewModeOverrideMap | ((prev: CliViewModeOverrideMap) => CliViewModeOverrideMap)) => {
+      overrides = typeof update === 'function'
+        ? update(overrides)
+        : update
+    },
   }
 }
 
@@ -115,5 +151,55 @@ describe('cliViewModeOverrides', () => {
     expect(shouldRetainOptimisticCliViewModeOverrideOnError(new Error('P2P receiver stopped'))).toBe(true)
     expect(shouldRetainOptimisticCliViewModeOverrideOnError(new Error('P2P not connected'))).toBe(false)
     expect(shouldRetainOptimisticCliViewModeOverrideOnError(new Error('P2P channel not open'))).toBe(false)
+  })
+
+  it('applies an optimistic override immediately when switching a CLI conversation view mode', async () => {
+    const overrides = createOverrideHarness()
+    const sendDaemonCommand = vi.fn().mockResolvedValue({ ok: true })
+
+    await switchCliConversationViewModeOptimistically({
+      conversation: createConversation(),
+      mode: 'terminal',
+      ides: [createEntry()],
+      sendDaemonCommand,
+      setCliViewModeOverrides: overrides.set,
+    })
+
+    expect(overrides.read()).toEqual({ 'cli-1': 'terminal' })
+    expect(sendDaemonCommand).toHaveBeenCalledWith('machine-1', 'set_cli_view_mode', {
+      targetSessionId: 'cli-1',
+      cliType: 'hermes-cli',
+      mode: 'terminal',
+    })
+  })
+
+  it('rolls back the optimistic override when the command fails before reaching the runtime', async () => {
+    const overrides = createOverrideHarness()
+    const sendDaemonCommand = vi.fn().mockRejectedValue(new Error('P2P not connected'))
+
+    await switchCliConversationViewModeOptimistically({
+      conversation: createConversation(),
+      mode: 'terminal',
+      ides: [createEntry({ mode: 'chat' })],
+      sendDaemonCommand,
+      setCliViewModeOverrides: overrides.set,
+    })
+
+    expect(overrides.read()).toEqual({})
+  })
+
+  it('keeps the optimistic override when the transport fails after the command may already have landed', async () => {
+    const overrides = createOverrideHarness()
+    const sendDaemonCommand = vi.fn().mockRejectedValue(new Error('P2P command timeout (30s)'))
+
+    await switchCliConversationViewModeOptimistically({
+      conversation: createConversation(),
+      mode: 'terminal',
+      ides: [createEntry({ mode: 'chat' })],
+      sendDaemonCommand,
+      setCliViewModeOverrides: overrides.set,
+    })
+
+    expect(overrides.read()).toEqual({ 'cli-1': 'terminal' })
   })
 })

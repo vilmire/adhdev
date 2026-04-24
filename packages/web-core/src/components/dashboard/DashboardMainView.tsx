@@ -73,6 +73,7 @@ interface DashboardMainViewProps {
     actionLogs: { routeId: string; text: string; timestamp: number }[]
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     setActionLogs: React.Dispatch<React.SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
+    setCliViewModeOverrides: React.Dispatch<React.SetStateAction<Record<string, 'chat' | 'terminal'>>>
     isStandalone: boolean
     initialDataLoaded: boolean
     userName?: string
@@ -165,6 +166,7 @@ export default function DashboardMainView({
     actionLogs,
     sendDaemonCommand,
     setActionLogs,
+    setCliViewModeOverrides,
     isStandalone,
     initialDataLoaded,
     userName,
@@ -535,6 +537,7 @@ export default function DashboardMainView({
                     actionLogs={actionLogs}
                     sendDaemonCommand={sendDaemonCommand}
                     setActionLogs={setActionLogs}
+                    setCliViewModeOverrides={setCliViewModeOverrides}
                     isStandalone={isStandalone}
                     userName={userName}
                     requestedActiveTabKey={requestedMobileTabKey}

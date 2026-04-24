@@ -1,8 +1,11 @@
 import type { SessionEntry } from '@adhdev/daemon-core'
+import type { Dispatch, SetStateAction } from 'react'
 import type { DaemonData } from '../../types'
-import type { CliConversationViewMode } from './types'
+import { getConversationMachineId, getConversationProviderType } from './conversation-selectors'
+import type { ActiveConversation, CliConversationViewMode } from './types'
+import { getCliConversationViewMode, isAcpConv, isCliConv } from './types'
 
-type CliViewModeOverrideMap = Record<string, CliConversationViewMode>
+export type CliViewModeOverrideMap = Record<string, CliConversationViewMode>
 
 function getCliViewModeErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error || '')
@@ -23,6 +26,64 @@ export function shouldRetainOptimisticCliViewModeOverrideOnError(error: unknown)
   return message.includes('P2P command timeout')
     || message.includes('P2P data channel closed')
     || message.includes('P2P receiver stopped')
+}
+
+interface SwitchCliConversationViewModeOptions {
+  conversation: ActiveConversation | null | undefined
+  mode: CliConversationViewMode
+  ides: DaemonData[]
+  sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
+  setCliViewModeOverrides: Dispatch<SetStateAction<CliViewModeOverrideMap>>
+}
+
+export async function switchCliConversationViewModeOptimistically({
+  conversation,
+  mode,
+  ides,
+  sendDaemonCommand,
+  setCliViewModeOverrides,
+}: SwitchCliConversationViewModeOptions): Promise<void> {
+  if (!conversation || !isCliConv(conversation) || isAcpConv(conversation)) return
+
+  const currentMode = getCliConversationViewMode(conversation)
+  if (currentMode === mode) return
+
+  const sessionId = conversation.sessionId
+  if (sessionId) {
+    setCliViewModeOverrides((prev) => ({ ...prev, [sessionId]: mode }))
+  }
+
+  try {
+    await sendDaemonCommand(getConversationMachineId(conversation) || conversation.routeId, 'set_cli_view_mode', {
+      targetSessionId: conversation.sessionId,
+      cliType: getConversationProviderType(conversation),
+      mode,
+    })
+  } catch (error) {
+    const shouldRetainOverride = shouldRetainOptimisticCliViewModeOverrideOnError(error)
+    if (sessionId && !shouldRetainOverride) {
+      setCliViewModeOverrides((prev) => {
+        const next = { ...prev }
+        if (currentMode === getCliViewModeForSession(ides, sessionId)) {
+          delete next[sessionId]
+        } else {
+          next[sessionId] = currentMode
+        }
+        return next
+      })
+    }
+
+    if (!isExpectedCliViewModeTransportError(error)) {
+      console.error('Failed to switch CLI view mode:', error)
+    } else {
+      console.warn(
+        shouldRetainOverride
+          ? 'CLI view mode result was lost after send; keeping optimistic mode override:'
+          : 'Skipped CLI view mode switch:',
+        error instanceof Error ? error.message : String(error),
+      )
+    }
+  }
 }
 
 function applySessionModeOverride<T extends { id?: string; sessionId?: string; transport?: SessionEntry['transport']; mode?: 'terminal' | 'chat' }>(

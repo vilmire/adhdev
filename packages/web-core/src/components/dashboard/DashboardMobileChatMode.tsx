@@ -5,10 +5,7 @@ import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
 import { getCliConversationViewMode, isAcpConv, isCliConv } from './types'
-import {
-    isExpectedCliViewModeTransportError,
-    shouldRetainOptimisticCliViewModeOverrideOnError,
-} from './cliViewModeOverrides'
+import { switchCliConversationViewModeOptimistically } from './cliViewModeOverrides'
 import { useDashboardConversationCommands } from '../../hooks/useDashboardConversationCommands'
 import DashboardMobileChatRoom from './DashboardMobileChatRoom'
 import DashboardMobileChatInbox from './DashboardMobileChatInbox'
@@ -17,7 +14,7 @@ import type { DashboardMobileSection } from './DashboardMobileBottomNav'
 import { getConversationTimestamp } from './conversation-sort'
 import type { LiveSessionInboxState, MobileConversationListItem, MobileMachineCard } from './DashboardMobileChatShared'
 import { getConversationInboxSurfaceState } from './DashboardMobileChatShared'
-import { getConversationMachineId, getConversationProviderType } from './conversation-selectors'
+import { getConversationMachineId } from './conversation-selectors'
 import { getConversationPreviewText } from './conversation-presenters'
 import { compareMachineEntries } from '../../utils/daemon-utils'
 import { buildMobileMachineCards, buildSelectedMachineRecentLaunches } from './dashboard-mobile-chat-mode-helpers'
@@ -52,6 +49,7 @@ interface DashboardMobileChatModeProps {
     onHideConversation?: (conversation: ActiveConversation) => void
     onOpenNewSession?: () => void
     liveSessionInboxState: Map<string, LiveSessionInboxState>
+    setCliViewModeOverrides: Dispatch<SetStateAction<Record<string, 'chat' | 'terminal'>>>
 }
 
 function getAvatarText(primary: string) {
@@ -93,6 +91,7 @@ export default function DashboardMobileChatMode({
     onHideConversation,
     onOpenNewSession,
     liveSessionInboxState,
+    setCliViewModeOverrides,
 }: DashboardMobileChatModeProps) {
     const [selectedTabKey, setSelectedTabKey] = useState<string | null>(() => conversations[0]?.tabKey || null)
     const [screen, setScreen] = useState<'inbox' | 'chat' | 'machine'>(() => (conversations[0] ? 'chat' : 'inbox'))
@@ -279,27 +278,13 @@ export default function DashboardMobileChatMode({
                     onStopCli={onStopCli}
                     cliViewMode={selectedCliViewMode}
                     onSetCliViewMode={async mode => {
-                        if (!selectedConversation) return
-                        if (selectedCliViewMode === mode) return
-                        try {
-                            await sendDaemonCommand(getConversationMachineId(selectedConversation) || selectedConversation.routeId, 'set_cli_view_mode', {
-                                targetSessionId: selectedConversation.sessionId,
-                                cliType: getConversationProviderType(selectedConversation),
-                                mode,
-                            })
-                        } catch (error) {
-                            const shouldRetainOverride = shouldRetainOptimisticCliViewModeOverrideOnError(error)
-                            if (!isExpectedCliViewModeTransportError(error)) {
-                                console.error('Failed to switch CLI view mode:', error)
-                            } else {
-                                console.warn(
-                                    shouldRetainOverride
-                                        ? 'CLI view mode result was lost after send; keeping optimistic mobile mode override:'
-                                        : 'Skipped CLI view mode switch:',
-                                    error instanceof Error ? error.message : String(error),
-                                )
-                            }
-                        }
+                        await switchCliConversationViewModeOptimistically({
+                            conversation: selectedConversation,
+                            mode,
+                            ides,
+                            sendDaemonCommand,
+                            setCliViewModeOverrides,
+                        })
                     }}
                     handleSendChat={cmds.handleSendChat}
                     handleFocusAgent={cmds.handleFocusAgent}
