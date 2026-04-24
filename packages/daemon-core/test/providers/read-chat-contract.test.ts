@@ -2,22 +2,26 @@ import { describe, expect, it } from 'vitest'
 import { validateReadChatResultPayload } from '../../src/providers/read-chat-contract.js'
 
 describe('read chat contract validation', () => {
-  it('accepts canonical read chat payloads', () => {
+  it('accepts canonical read chat payloads plus additive transcript identity fields', () => {
     expect(validateReadChatResultPayload({
       id: 'active',
       title: 'Hermes Agent',
       status: 'idle',
+      currentTurnId: 'turn-1',
+      turnStatus: 'complete',
       messages: [
-        { role: 'user', content: 'hello' },
-        { role: 'assistant', content: [{ type: 'text', text: 'hi' }], _turnKey: 'turn-1' },
+        { role: 'user', content: 'hello', bubbleId: 'bubble-user-1', providerUnitKey: 'provider:user:1', bubbleState: 'final' },
+        { role: 'assistant', content: [{ type: 'text', text: 'hi' }], _turnKey: 'turn-1', bubbleId: 'bubble-assistant-1', providerUnitKey: 'provider:assistant:1', bubbleState: 'streaming' },
       ],
       activeModal: null,
       controlValues: { model: 'sonnet', compact: true },
     }, 'test')).toMatchObject({
       status: 'idle',
+      currentTurnId: 'turn-1',
+      turnStatus: 'complete',
       messages: [
-        { role: 'user', content: 'hello' },
-        { role: 'assistant', content: [{ type: 'text', text: 'hi' }], _turnKey: 'turn-1' },
+        { role: 'user', content: 'hello', bubbleId: 'bubble-user-1', providerUnitKey: 'provider:user:1', bubbleState: 'final' },
+        { role: 'assistant', content: [{ type: 'text', text: 'hi' }], _turnKey: 'turn-1', bubbleId: 'bubble-assistant-1', providerUnitKey: 'provider:assistant:1', bubbleState: 'streaming' },
       ],
       controlValues: { model: 'sonnet', compact: true },
     })

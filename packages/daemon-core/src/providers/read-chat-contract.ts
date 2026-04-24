@@ -1,12 +1,15 @@
 import type { MessagePart, ModalInfo, ReadChatResult } from './contracts.js'
 import { normalizeMessageParts } from './contracts.js'
-import type { ChatMessage } from '../types.js'
+import type { ChatBubbleState, ChatMessage } from '../types.js'
 
 const VALID_STATUSES = ['idle', 'generating', 'waiting_approval', 'error', 'panel_hidden', 'streaming', 'long_generating'] as const
 const VALID_ROLES = ['user', 'assistant', 'system', 'human'] as const
+const VALID_BUBBLE_STATES = ['draft', 'streaming', 'final', 'removed'] as const
+const VALID_TURN_STATUSES = ['open', 'waiting_approval', 'complete', 'error'] as const
 
 type ValidStatus = typeof VALID_STATUSES[number]
 type ValidRole = typeof VALID_ROLES[number]
+type ValidTurnStatus = typeof VALID_TURN_STATUSES[number]
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -30,6 +33,20 @@ function validateRole(role: unknown, source: string, index: number): ValidRole {
   return role as ValidRole
 }
 
+function validateBubbleState(state: unknown, source: string, index: number): ChatBubbleState {
+  if (typeof state !== 'string' || !VALID_BUBBLE_STATES.includes(state as ChatBubbleState)) {
+    throw new Error(`${source}: messages[${index}].bubbleState must be one of ${VALID_BUBBLE_STATES.join(', ')}`)
+  }
+  return state as ChatBubbleState
+}
+
+function validateTurnStatus(turnStatus: unknown, source: string): ValidTurnStatus {
+  if (typeof turnStatus !== 'string' || !VALID_TURN_STATUSES.includes(turnStatus as ValidTurnStatus)) {
+    throw new Error(`${source}: turnStatus must be one of ${VALID_TURN_STATUSES.join(', ')}`)
+  }
+  return turnStatus as ValidTurnStatus
+}
+
 function validateMessageContent(content: unknown, source: string, index: number): string | MessagePart[] {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) return normalizeMessageParts(content as any)
@@ -48,6 +65,9 @@ function validateMessage(message: unknown, source: string, index: number): ChatM
 
   if (typeof message.kind === 'string') normalized.kind = message.kind as any
   if (typeof message.id === 'string') normalized.id = message.id
+  if (typeof message.bubbleId === 'string') normalized.bubbleId = message.bubbleId
+  if (typeof message.providerUnitKey === 'string') normalized.providerUnitKey = message.providerUnitKey
+  if (message.bubbleState !== undefined) normalized.bubbleState = validateBubbleState(message.bubbleState, source, index)
   if (isFiniteNumber(message.index)) normalized.index = message.index
   if (isFiniteNumber(message.timestamp)) normalized.timestamp = message.timestamp
   if (isFiniteNumber(message.receivedAt)) normalized.receivedAt = message.receivedAt
@@ -122,6 +142,8 @@ export function validateReadChatResultPayload(raw: unknown, source = 'read_chat'
   if (activeModal !== undefined) normalized.activeModal = activeModal
   if (typeof raw.id === 'string') normalized.id = raw.id
   if (typeof raw.title === 'string') normalized.title = raw.title
+  if (typeof raw.currentTurnId === 'string') normalized.currentTurnId = raw.currentTurnId
+  if (raw.turnStatus !== undefined) normalized.turnStatus = validateTurnStatus(raw.turnStatus, source)
   if (typeof raw.agentType === 'string') normalized.agentType = raw.agentType
   if (typeof raw.agentName === 'string') normalized.agentName = raw.agentName
   if (typeof raw.extensionId === 'string') normalized.extensionId = raw.extensionId

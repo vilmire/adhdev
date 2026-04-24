@@ -3,7 +3,7 @@
  *
  * Core logic for daemon: CDP, Provider, IDE detection, CLI/ACP adapters and more.
  */
-export type { ChatMessage, ExtensionInfo, CommandResult as CoreCommandResult, ProviderConfig, DaemonEvent, StatusResponse, SystemInfo, DetectedIde, ProviderInfo, AgentEntry, } from './types.js';
+export type { ChatBubbleState, ChatMessage, ExtensionInfo, CommandResult as CoreCommandResult, ProviderConfig, DaemonEvent, StatusResponse, SystemInfo, DetectedIde, ProviderInfo, AgentEntry, } from './types.js';
 export type { SessionEntry, CompactSessionEntry, CompactDaemonEntry, SessionTransport, SessionKind, SessionCapability, AgentSessionStream, ReadChatCursor, ReadChatSyncMode, ReadChatSyncResult, TransportTopic, SessionChatTailSubscriptionParams, MachineRuntimeSubscriptionParams, SessionHostDiagnosticsSubscriptionParams, SessionModalSubscriptionParams, DaemonMetadataSubscriptionParams, SessionChatTailUpdate, MachineRuntimeUpdate, SessionHostDiagnosticsUpdate, SessionModalUpdate, DaemonMetadataUpdate, TopicUpdateEnvelope, SubscribeRequest, UnsubscribeRequest, StandaloneWsStatusPayload, AvailableProviderInfo, AcpConfigOption, AcpMode, ProviderControlSchema, StatusReportPayload, MachineInfo, SessionHostDiagnosticsSnapshot, SessionHostRecord, SessionHostWriteOwner, SessionHostAttachedClient, SessionHostLogEntry, SessionHostRequestTrace, SessionHostRuntimeTransition, DetectedIdeInfo, WorkspaceEntry, ProviderSummaryItem, ProviderSummaryMetadata, ProviderState, ProviderStatus, ProviderErrorReason, ActiveChatData, IdeProviderState, CliProviderState, AcpProviderState, ExtensionProviderState, } from './shared-types.js';
 import type { RuntimeWriteOwner as _RuntimeWriteOwner } from './shared-types-extra.js';
 import type { RuntimeAttachedClient as _RuntimeAttachedClient } from './shared-types-extra.js';
@@ -65,7 +65,7 @@ export { ProviderInstanceManager } from './providers/provider-instance-manager.j
 export { IdeProviderInstance } from './providers/ide-provider-instance.js';
 export { CliProviderInstance } from './providers/cli-provider-instance.js';
 export { AcpProviderInstance } from './providers/acp-provider-instance.js';
-export type { ProviderModule, CdpTargetFilter, ProviderResumeCapability } from './providers/contracts.js';
+export type { ProviderModule, CdpTargetFilter, ProviderResumeCapability, ReadChatTurnStatus } from './providers/contracts.js';
 export { VersionArchive, detectAllVersions } from './providers/version-archive.js';
 export type { ProviderVersionInfo, VersionHistory } from './providers/version-archive.js';
 export { DevServer } from './daemon/dev-server.js';

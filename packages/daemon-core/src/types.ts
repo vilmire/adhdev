@@ -26,12 +26,20 @@ export interface StatusResponse extends StatusReportPayload {
 
 // ── Chat Message ──
 
+export type ChatBubbleState = 'draft' | 'streaming' | 'final' | 'removed';
+
 export interface ChatMessage {
   role: string;       // 'user' | 'assistant' | 'system' | 'human'
   /** Plain text (legacy) or canonical message parts */
   content: string | MessagePart[];
   kind?: ChatMessageKind;      // built-ins: standard | thought | tool | terminal | system; custom kinds allowed
   id?: string;
+  /** Stable daemon-owned bubble identity when available. */
+  bubbleId?: string;
+  /** Stable provider-local unit identity used to reconcile legacy providers during migration. */
+  providerUnitKey?: string;
+  /** Bubble lifecycle state for transcript-authority migration. */
+  bubbleState?: ChatBubbleState;
   index?: number;
   timestamp?: number;
   receivedAt?: number;

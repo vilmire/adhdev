@@ -8,6 +8,7 @@ export type {
   ProviderScripts,
   ResolvedProvider,
   ReadChatResult,
+  ReadChatTurnStatus,
   ChatMessage,
   AgentStatus,
   ModalInfo,

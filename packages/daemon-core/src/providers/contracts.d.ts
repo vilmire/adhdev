@@ -7,6 +7,7 @@
  * - User custom providers use the same contracts
  */
 import type { ProviderSummaryMetadata } from '../shared-types.js';
+export type ReadChatTurnStatus = 'open' | 'waiting_approval' | 'complete' | 'error';
 export interface ReadChatResult {
     messages: ChatMessage[];
     status: AgentStatus;
@@ -14,6 +15,9 @@ export interface ReadChatResult {
     /** IDE/Extension only: session info */
     id?: string;
     title?: string;
+    /** Authoritative transcript turn identity when available. */
+    currentTurnId?: string;
+    turnStatus?: ReadChatTurnStatus;
     /** Extension only: additional metadata */
     agentType?: string;
     agentName?: string;

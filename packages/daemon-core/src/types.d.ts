@@ -19,12 +19,19 @@ export interface StatusResponse extends StatusReportPayload {
     /** System info (legacy compat) */
     system?: SystemInfo;
 }
+export type ChatBubbleState = 'draft' | 'streaming' | 'final' | 'removed';
 export interface ChatMessage {
     role: string;
     /** Plain text (legacy) or rich content blocks (ACP standard) */
     content: string | ContentBlock[];
     kind?: string;
     id?: string;
+    /** Stable daemon-owned bubble identity when available. */
+    bubbleId?: string;
+    /** Stable provider-local unit identity used to reconcile legacy providers during migration. */
+    providerUnitKey?: string;
+    /** Bubble lifecycle state for transcript-authority migration. */
+    bubbleState?: ChatBubbleState;
     index?: number;
     timestamp?: number;
     receivedAt?: number;
