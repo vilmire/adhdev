@@ -50,6 +50,8 @@ export interface ChatMessageListProps {
     /** Error message to show on load button (e.g. retry hint) */
     loadError?: string;
     scrollToBottomRequestNonce?: number;
+    /** Whether this chat pane is currently visible to the user. Hidden-but-mounted panes re-scroll on reveal. */
+    isVisible?: boolean;
 }
 
 export interface ChatMessageListRef {
@@ -78,6 +80,13 @@ export function buildChatScrollFingerprint(messages: ChatMessage[]): string {
     if (!Array.isArray(messages) || messages.length === 0) return '0:empty';
     const lastMessage = messages[messages.length - 1];
     return `${messages.length}:${buildChatMessageSignature(lastMessage)}`;
+}
+
+export function shouldAutoScrollOnChatVisibilityChange(
+    previousIsVisible: boolean,
+    nextIsVisible: boolean,
+): boolean {
+    return !previousIsVisible && nextIsVisible;
 }
 
 function restoreChatScrollSnapshot(el: HTMLDivElement, snapshot: ChatScrollSnapshot): void {
@@ -424,7 +433,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
 // ─── Component ────────────────────────────────
 
 const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(function ChatMessageList(
-    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce },
+    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true },
     ref
 ) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -441,6 +450,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
     const userScrolledUp = useRef(false);
     const restoredInitialScrollRef = useRef(false);
+    const previousIsVisibleRef = useRef(isVisible);
 
     /** Check if user is near bottom of scroll */
     const isNearBottom = () => {
@@ -495,6 +505,19 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         });
     }, [scrollToBottom]);
 
+    const openBottomAutoScrollWindow = useCallback(() => {
+        userScrolledUp.current = false;
+        contextAutoScrollRef.current = true;
+        restoredInitialScrollRef.current = true;
+        if (contextAutoScrollTimerRef.current != null) {
+            window.clearTimeout(contextAutoScrollTimerRef.current);
+        }
+        contextAutoScrollTimerRef.current = window.setTimeout(() => {
+            contextAutoScrollRef.current = false;
+            contextAutoScrollTimerRef.current = null;
+        }, 180);
+    }, []);
+
     // Auto-scroll: On new message / streaming update / tab switch
     useEffect(() => {
         const isFirstMount = !mountedRef.current;
@@ -536,20 +559,21 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
     useEffect(() => {
         if (!scrollToBottomRequestNonce) return;
-        userScrolledUp.current = false;
-        contextAutoScrollRef.current = true;
-        restoredInitialScrollRef.current = true;
-        if (contextAutoScrollTimerRef.current != null) {
-            window.clearTimeout(contextAutoScrollTimerRef.current);
-        }
-        contextAutoScrollTimerRef.current = window.setTimeout(() => {
-            contextAutoScrollRef.current = false;
-            contextAutoScrollTimerRef.current = null;
-        }, 180);
+        openBottomAutoScrollWindow();
         if (!hasSelectionRef.current) {
             scheduleScrollToBottom('auto');
         }
-    }, [scheduleScrollToBottom, scrollToBottomRequestNonce]);
+    }, [openBottomAutoScrollWindow, scheduleScrollToBottom, scrollToBottomRequestNonce]);
+
+    useEffect(() => {
+        const wasVisible = previousIsVisibleRef.current;
+        previousIsVisibleRef.current = isVisible;
+        if (!shouldAutoScrollOnChatVisibilityChange(wasVisible, isVisible)) return;
+        openBottomAutoScrollWindow();
+        if (!hasSelectionRef.current) {
+            scheduleScrollToBottom('auto');
+        }
+    }, [isVisible, openBottomAutoScrollWindow, scheduleScrollToBottom]);
 
     useEffect(() => () => {
         saveScrollSnapshot();
@@ -797,6 +821,7 @@ const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     && prev.hiddenLiveCount === next.hiddenLiveCount
     && prev.loadError === next.loadError
     && prev.scrollToBottomRequestNonce === next.scrollToBottomRequestNonce
+    && prev.isVisible === next.isVisible
 ));
 
 export default MemoizedChatMessageList;

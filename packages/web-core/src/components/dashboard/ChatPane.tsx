@@ -255,6 +255,7 @@ export default function ChatPane({
                 loadError={loadError ?? undefined}
                 emptyState={emptyState}
                 scrollToBottomRequestNonce={scrollToBottomRequestNonce}
+                isVisible={isVisible}
             />
 
             <ChatControlsSection

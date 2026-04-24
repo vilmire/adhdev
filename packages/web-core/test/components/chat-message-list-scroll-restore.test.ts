@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildChatScrollFingerprint, shouldRestoreChatScrollSnapshot } from '../../src/components/ChatMessageList'
+import { buildChatScrollFingerprint, shouldRestoreChatScrollSnapshot, shouldAutoScrollOnChatVisibilityChange } from '../../src/components/ChatMessageList'
 
 describe('ChatMessageList scroll snapshot restore', () => {
   it('does not restore an old scroll snapshot when newer chat content arrived for the same context', () => {
@@ -33,5 +33,11 @@ describe('ChatMessageList scroll snapshot restore', () => {
     ])
 
     expect(first).not.toBe(second)
+  })
+
+  it('requests a bottom scroll when a hidden chat pane becomes visible again', () => {
+    expect(shouldAutoScrollOnChatVisibilityChange(false, true)).toBe(true)
+    expect(shouldAutoScrollOnChatVisibilityChange(true, true)).toBe(false)
+    expect(shouldAutoScrollOnChatVisibilityChange(true, false)).toBe(false)
   })
 })
