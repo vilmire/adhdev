@@ -94,6 +94,18 @@ interface IdleFinishCandidate {
     assistantLength: number;
 }
 
+interface SettledEvalContext {
+    now: number;
+    screenText: string;
+    modal: any;
+    scriptStatus: string;
+    parsedTranscript: any;
+    parsedMessages: CliChatMessage[];
+    lastParsedAssistant: CliChatMessage | undefined;
+    parsedShowsLiveAssistantProgress: boolean;
+    prevStatus: string;
+}
+
 function normalizeComparableTranscriptText(value: unknown): string {
     return sanitizeTerminalText(String(value || ''))
         .replace(/\s+/g, ' ')
@@ -625,7 +637,7 @@ export class ProviderCliAdapter implements CliAdapter {
         const stableMs = this.lastScreenChangeAt ? (now - this.lastScreenChangeAt) : 0;
         if (stableMs < 2000) return;
 
-        const startupModal = this.getStartupConfirmationModal(screenText);
+        const startupModal = this.runParseApproval(this.recentOutputBuffer);
         this.startupParseGate = false;
         if (this.startupSettleTimer) {
             clearTimeout(this.startupSettleTimer);
@@ -689,8 +701,7 @@ export class ProviderCliAdapter implements CliAdapter {
             if (this.currentStatus !== 'waiting_approval') return;
             const tail = this.recentOutputBuffer;
             const screenText = this.terminalScreen.getText() || '';
-            const startupModal = this.getStartupConfirmationModal(screenText);
-            const modal = this.runParseApproval(tail) || startupModal;
+            const modal = this.runParseApproval(tail);
             const stillWaiting = this.runDetectStatus(tail) === 'waiting_approval' || !!modal;
             if (stillWaiting) {
                 this.activeModal = modal || this.activeModal || { message: 'Approval required', buttons: ['Allow', 'Deny'] };
@@ -706,103 +717,13 @@ export class ProviderCliAdapter implements CliAdapter {
         }, 60000);
     }
 
-    private looksLikeVisibleIdlePrompt(screenText: string): boolean {
-        const text = String(screenText || '');
-        if (!text.trim()) return false;
-        if (this.cliType === 'codex-cli' && /(^|\n)\s*[❯›>]\s+(?:Find and fix a bug in @filename|Improve documentation in @filename|Use \/skills|Write tests for @filename|Explain this codebase|Summarize recent commits|Implement \{feature\}|Run \/review on my current changes)(?:\n|$)/im.test(text)) {
-            return true;
-        }
-        return /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(text)
-            || /⏎\s+send/i.test(text)
-            || /\?\s*for\s*shortcuts/i.test(text)
-            || /Type your message(?:\s+or\s+@path\/to\/file)?/i.test(text)
-            || /workspace\s*\(\/directory\)/i.test(text)
-            || /for\s*shortcuts/i.test(text);
-    }
-
-    private findLastMatchingLineIndex(lines: string[], predicate: (line: string) => boolean): number {
-        for (let index = lines.length - 1; index >= 0; index -= 1) {
-            if (predicate(lines[index])) return index;
-        }
-        return -1;
-    }
-
-    private looksLikeClaudeGeneratingLine(line: string): boolean {
-        const trimmed = String(line || '').trim();
-        if (!trimmed) return false;
-        if (/^⏵⏵\s+accept edits on/i.test(trimmed)) return false;
-        if (/esc to (cancel|interrupt|stop)/i.test(trimmed)) return true;
-        if (/^[✻✶✳✢✽⠂⠐⠒⠓⠦⠴⠶⠷⠿]+\s+\S+.*\b(?:thinking|thought for \d+s?)\b/i.test(trimmed)) return true;
-        if (/^[✻✶✳✢✽⠂⠐⠒⠓⠦⠴⠶⠷⠿]+\s+[A-Z][A-Za-z-]{3,}ing\b.*(?:…|\.{3})/u.test(trimmed)) return true;
-        if (/^[⏺•]\s+(?:Reading|Writing|Editing|Searching|Inspecting|Planning|Analyzing|Synthesizing|Drafting|Running|Listing|Scanning|Matching)\b.*(?:…|\.{3})/i.test(trimmed)) {
-            return /ctrl\+o to expand/i.test(trimmed)
-                || /\b\d+\s+(?:file|files|pattern|patterns|director(?:y|ies)|match|matches|result|results)\b/i.test(trimmed);
-        }
-        return false;
-    }
-
-    private detectClaudeGeneratingOverride(screenText: string, tail: string): boolean {
-        if (this.cliType !== 'claude-cli') return false;
-
-        const source = sanitizeTerminalText(screenText || tail || '');
-        if (!source.trim()) return false;
-
-        const allLines = source
-            .split(/\r\n|\n|\r/g)
-            .map(line => line.trim())
-            .filter(Boolean);
-        if (allLines.length === 0) return false;
-
-        const recentLines = allLines.slice(-12);
-        const promptIndex = this.findLastMatchingLineIndex(recentLines, (line) => /^[❯›>]\s*$/.test(line));
-        const activeRegion = promptIndex >= 0 ? recentLines.slice(Math.max(0, promptIndex - 2), promptIndex) : recentLines;
-        if (activeRegion.length === 0) return false;
-
-        return activeRegion.some((line) => this.looksLikeClaudeGeneratingLine(line));
-    }
-
-    private refineDetectedStatus(status: string | null, tail: string, screenText?: string): string | null {
-        if (this.startupParseGate) {
-            return this.getStartupConfirmationModal(screenText || '')
-                ? 'waiting_approval'
-                : 'starting';
-        }
-        if (status === 'waiting_approval') return status;
-        if (this.detectClaudeGeneratingOverride(screenText || '', tail)) return 'generating';
-        return status;
-    }
-
-    private looksLikeVisibleAssistantCandidate(screenText: string): boolean {
-        const lines = sanitizeTerminalText(String(screenText || '')).split(/\r\n|\n|\r/g);
-        for (const line of lines) {
-            const trimmed = String(line || '').trim();
-            if (!trimmed) continue;
-            if (/^➜\s+\S+/.test(trimmed)) continue;
-            if (/^Update available!/i.test(trimmed)) continue;
-            if (/Claude Code v\d/i.test(trimmed)) continue;
-            if (/^⏵⏵\s+accept edits on/i.test(trimmed)) continue;
-            if (/^[◐◑◒◓◴◵◶◷◸◹◺◿].*\/effort/i.test(trimmed)) continue;
-            if (/^[✻✶✳✢✽⠂⠐⠒⠓⠦⠴⠶⠷⠿]+$/.test(trimmed)) continue;
-            if (/esc to (cancel|interrupt|stop)/i.test(trimmed)) continue;
-            const assistantMatch = trimmed.match(/^⏺\s+(.+)$/);
-            if (!assistantMatch) continue;
-            const content = assistantMatch[1].trim();
-            if (!content) continue;
-            if (/^(?:Bash|Read|Write|Edit|MultiEdit|Task|Glob|Grep|LS|NotebookEdit)\(/.test(content)) continue;
-            if (/This command requires approval|Do you want to proceed|Allow once|Always allow/i.test(content)) continue;
-            return true;
-        }
-        return false;
-    }
-
     private shouldRetryFinishResponse(commitResult: { hasAssistant: boolean; assistantContent: string }): boolean {
         if (!this.currentTurnScope) return false;
         if (this.currentStatus === 'waiting_approval' || this.activeModal) return false;
         if (this.finishRetryCount >= ProviderCliAdapter.MAX_FINISH_RETRIES) return false;
         if (commitResult.hasAssistant && commitResult.assistantContent.trim()) return false;
 
-        const screenText = this.terminalScreen.getText() || '';
-        if (!this.looksLikeVisibleAssistantCandidate(screenText)) return false;
+        if (this.runDetectStatus(this.recentOutputBuffer) !== 'idle') return false;
 
         const now = Date.now();
         const quietForMs = this.lastNonEmptyOutputAt ? (now - this.lastNonEmptyOutputAt) : Number.MAX_SAFE_INTEGER;
@@ -831,27 +752,6 @@ export class ProviderCliAdapter implements CliAdapter {
         return false;
     }
 
-    private getStartupConfirmationModal(screenText: string): { message: string; buttons: string[] } | null {
-        const text = sanitizeTerminalText(String(screenText || ''));
-        if (!text.trim()) return null;
-
-        if (this.cliType === 'claude-cli') {
-            const hasTrustPrompt = /Quick safety check/i.test(text)
-                || /Is this a project you trust/i.test(text)
-                || /Do you trust (?:this project|the contents of this directory|the files in this folder)/i.test(text);
-            const hasConfirmFooter = /Press Enter to (?:continue|confirm)/i.test(text)
-                || /Enter to confirm/i.test(text)
-                || /Esc to (?:cancel|exit)/i.test(text);
-            if (hasTrustPrompt || (hasConfirmFooter && /trust/i.test(text))) {
-                return {
-                    message: 'Confirm Claude Code project trust',
-                    buttons: ['Continue'],
-                };
-            }
-        }
-
-        return null;
-    }
 
     private shouldResolveModalWithEnter(modal: { message: string; buttons: string[] } | null, buttonIndex: number): boolean {
         if (!modal || buttonIndex !== 0) return false;
@@ -868,15 +768,13 @@ export class ProviderCliAdapter implements CliAdapter {
         while (Date.now() - startedAt < maxWaitMs) {
             this.resolveStartupState('interactive_wait');
             const screenText = this.terminalScreen.getText() || '';
-            const hasPrompt = this.looksLikeVisibleIdlePrompt(screenText);
             const stableMs = this.lastScreenChangeAt ? (Date.now() - this.lastScreenChangeAt) : 0;
             const recentlyOutput = this.lastNonEmptyOutputAt ? (Date.now() - this.lastNonEmptyOutputAt) : Number.MAX_SAFE_INTEGER;
             const status = this.runDetectStatus(this.recentOutputBuffer) || this.currentStatus;
             const startupLikelyActive = /Welcome back|Tips for getting|Recent activity|Claude Code v\d/i.test(screenText);
-            const interactiveReady = hasPrompt
+            const interactiveReady = status === 'idle'
                 && stableMs >= 700
-                && recentlyOutput >= 350
-                && status !== 'generating';
+                && recentlyOutput >= 350;
 
             if (interactiveReady) {
                 if (loggedWait) {
@@ -892,7 +790,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 loggedWait = true;
                 LOG.info(
                     'CLI',
-                    `[${this.cliType}] Waiting for interactive prompt: hasPrompt=${hasPrompt} stableMs=${stableMs} recentOutputMs=${recentlyOutput} status=${status} startup=${startupLikelyActive} screen=${JSON.stringify(summarizeCliTraceText(screenText, 220)).slice(0, 260)}`
+                    `[${this.cliType}] Waiting for interactive prompt: status=${status} stableMs=${stableMs} recentOutputMs=${recentlyOutput} startup=${startupLikelyActive} screen=${JSON.stringify(summarizeCliTraceText(screenText, 220)).slice(0, 260)}`
                 );
             }
             await new Promise(resolve => setTimeout(resolve, 50));
@@ -905,17 +803,31 @@ export class ProviderCliAdapter implements CliAdapter {
         );
     }
 
-    private clearStaleIdleResponseGuard(reason: string): boolean {
-        const screenText = this.terminalScreen.getText() || '';
-        const visibleIdlePrompt = this.looksLikeVisibleIdlePrompt(screenText);
-        const blockingModal = this.activeModal || this.getStartupConfirmationModal(screenText);
-        if (!this.isWaitingForResponse || this.currentStatus !== 'idle' || !visibleIdlePrompt || !!blockingModal) {
-            return false;
-        }
+    private trimLastAssistantEcho(messages: CliChatMessage[], prompt: string | undefined): void {
+        if (!prompt) return;
+        const last = [...messages].reverse().find((m) => m.role === 'assistant' && typeof m.content === 'string');
+        if (last) last.content = trimPromptEchoPrefix(last.content, prompt);
+    }
+
+    private clearAllTimers(): void {
         if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
         if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
         if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
+        if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
         if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
+        if (this.settleTimer) { clearTimeout(this.settleTimer); this.settleTimer = null; }
+        if (this.pendingScriptStatusTimer) { clearTimeout(this.pendingScriptStatusTimer); this.pendingScriptStatusTimer = null; }
+        if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
+        if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
+    }
+
+    private clearStaleIdleResponseGuard(reason: string): boolean {
+        const blockingModal = this.activeModal || this.runParseApproval(this.recentOutputBuffer);
+        const isIdle = this.runDetectStatus(this.recentOutputBuffer) === 'idle';
+        if (!this.isWaitingForResponse || this.currentStatus !== 'idle' || !isIdle || !!blockingModal) {
+            return false;
+        }
+        this.clearAllTimers();
         this.clearIdleFinishCandidate(reason);
         this.responseBuffer = '';
         this.isWaitingForResponse = false;
@@ -925,10 +837,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.finishRetryCount = 0;
         this.currentTurnScope = null;
         this.activeModal = null;
-        this.recordTrace('stale_idle_response_cleared', {
-            reason,
-            screenText: summarizeCliTraceText(screenText, 240),
-        });
+        this.recordTrace('stale_idle_response_cleared', { reason });
         return true;
     }
 
@@ -975,7 +884,6 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.startupParseGate) {
             return;
         }
-        const startupModal = this.getStartupConfirmationModal(screenText);
         const parsedTranscript = this.parseCurrentTranscript(
             this.committedMessages,
             this.responseBuffer,
@@ -984,14 +892,8 @@ export class ProviderCliAdapter implements CliAdapter {
         const parsedModal = parsedTranscript?.activeModal && Array.isArray(parsedTranscript.activeModal.buttons) && parsedTranscript.activeModal.buttons.some((button: any) => typeof button === 'string' && button.trim())
             ? parsedTranscript.activeModal
             : null;
-        const modal = this.runParseApproval(tail) || parsedModal || startupModal;
-        const rawScriptStatus = this.runDetectStatus(tail);
-        // detectStatus is the primary authority for status, but if the parsed transcript
-        // already surfaced actionable approval buttons, promote that state so runtime
-        // status and resolve_action stay aligned with the visible prompt.
-        const scriptStatus = startupModal
-            ? 'waiting_approval'
-            : (parsedModal && parsedTranscript?.status === 'waiting_approval' ? 'waiting_approval' : rawScriptStatus);
+        const modal = this.runParseApproval(tail) || parsedModal;
+        const scriptStatus = this.runDetectStatus(tail);
         const parsedMessages = Array.isArray(parsedTranscript?.messages)
             ? normalizeCliParsedMessages(parsedTranscript.messages, {
                 committedMessages: this.committedMessages,
@@ -1059,16 +961,60 @@ export class ProviderCliAdapter implements CliAdapter {
         if (!scriptStatus) return;
 
         const prevStatus = this.currentStatus;
+        const ctx: SettledEvalContext = { now, screenText, modal, scriptStatus, parsedTranscript, parsedMessages, lastParsedAssistant, parsedShowsLiveAssistantProgress, prevStatus };
 
-        const clearPendingScriptStatus = () => {
+        if (!this.applyPendingScriptStatusDebounce(ctx)) return;
+
+        const recentInteractiveActivity = this.hasRecentInteractiveActivity(now);
+        LOG.info(
+            'CLI',
+            `[${this.cliType}] settled diagnostics prompt=${JSON.stringify(this.currentTurnScope?.prompt || '').slice(0, 140)} scriptStatus=${String(scriptStatus || '')} parsedStatus=${String(parsedTranscript?.status || '')} parsedMsgCount=${parsedMessages.length} lastParsedAssistant=${JSON.stringify(summarizeCliTraceText(lastParsedAssistant?.content || '', 120)).slice(0, 160)} responseBuffer=${JSON.stringify(summarizeCliTraceText(this.responseBuffer, 160)).slice(0, 220)} screen=${JSON.stringify(summarizeCliTraceText(screenText, 160)).slice(0, 220)}`
+        );
+
+        const shouldHoldGenerating =
+            scriptStatus === 'idle'
+            && this.isWaitingForResponse
+            && !modal
+            && recentInteractiveActivity
+            && !(parsedTranscript?.status === 'idle' && !!lastParsedAssistant);
+
+        if (shouldHoldGenerating) {
+            this.applyHoldGenerating(ctx, recentInteractiveActivity);
+            return;
+        }
+
+        if (scriptStatus === 'waiting_approval') {
+            this.applyWaitingApproval(ctx);
+            return;
+        }
+
+        if (scriptStatus === 'generating') {
+            this.applyGenerating(ctx);
+            return;
+        }
+
+        if (scriptStatus === 'idle') {
+            this.applyIdle(ctx, now);
+        }
+    }
+
+    // Returns false if the caller should bail out (debounce pending).
+    private applyPendingScriptStatusDebounce(ctx: SettledEvalContext): boolean {
+        const { now, scriptStatus, prevStatus } = ctx;
+        const shouldDebounce =
+            prevStatus === 'idle'
+            && !this.isWaitingForResponse
+            && !this.currentTurnScope
+            && (scriptStatus === 'generating' || scriptStatus === 'waiting_approval');
+
+        if (!shouldDebounce) {
             this.pendingScriptStatus = null;
             this.pendingScriptStatusSince = 0;
-            if (this.pendingScriptStatusTimer) {
-                clearTimeout(this.pendingScriptStatusTimer);
-                this.pendingScriptStatusTimer = null;
-            }
-        };
-        const armPendingScriptStatus = (delayMs: number) => {
+            if (this.pendingScriptStatusTimer) { clearTimeout(this.pendingScriptStatusTimer); this.pendingScriptStatusTimer = null; }
+            return true;
+        }
+
+        const armPending = (delayMs: number) => {
             if (this.pendingScriptStatusTimer) clearTimeout(this.pendingScriptStatusTimer);
             this.pendingScriptStatusTimer = setTimeout(() => {
                 this.pendingScriptStatusTimer = null;
@@ -1076,229 +1022,198 @@ export class ProviderCliAdapter implements CliAdapter {
                 this.evaluateSettled();
             }, delayMs);
         };
-        const shouldDebouncePromotion = (status: string) =>
-            prevStatus === 'idle'
-            && !this.isWaitingForResponse
-            && !this.currentTurnScope
-            && (status === 'generating' || status === 'waiting_approval');
 
-        if (shouldDebouncePromotion(scriptStatus)) {
-            if (this.pendingScriptStatus !== scriptStatus) {
-                this.pendingScriptStatus = scriptStatus as 'generating' | 'waiting_approval';
-                this.pendingScriptStatusSince = now;
-                armPendingScriptStatus(ProviderCliAdapter.SCRIPT_STATUS_DEBOUNCE_MS);
-                return;
-            }
-            const elapsed = now - this.pendingScriptStatusSince;
-            if (elapsed < ProviderCliAdapter.SCRIPT_STATUS_DEBOUNCE_MS) {
-                armPendingScriptStatus(ProviderCliAdapter.SCRIPT_STATUS_DEBOUNCE_MS - elapsed);
-                return;
-            }
-        } else {
-            clearPendingScriptStatus();
+        if (this.pendingScriptStatus !== scriptStatus) {
+            this.pendingScriptStatus = scriptStatus as 'generating' | 'waiting_approval';
+            this.pendingScriptStatusSince = now;
+            armPending(ProviderCliAdapter.SCRIPT_STATUS_DEBOUNCE_MS);
+            return false;
         }
-
-        const recentInteractiveActivity = this.hasRecentInteractiveActivity(now);
-        const statusActivityHoldMs = this.getStatusActivityHoldMs();
-        const visibleIdlePrompt = this.looksLikeVisibleIdlePrompt(screenText);
-        const visibleAssistantCandidate = this.looksLikeVisibleAssistantCandidate(screenText);
-        if (this.currentTurnScope && this.cliType === 'claude-cli') {
-            LOG.info(
-                'CLI',
-                `[${this.cliType}] settled diagnostics prompt=${JSON.stringify(this.currentTurnScope.prompt).slice(0, 140)} scriptStatus=${String(scriptStatus || '')} parsedStatus=${String(parsedTranscript?.status || '')} parsedMsgCount=${parsedMessages.length} lastParsedAssistant=${JSON.stringify(summarizeCliTraceText(lastParsedAssistant?.content || '', 120)).slice(0, 160)} visibleIdlePrompt=${String(visibleIdlePrompt)} visibleAssistantCandidate=${String(visibleAssistantCandidate)} responseBuffer=${JSON.stringify(summarizeCliTraceText(this.responseBuffer, 160)).slice(0, 220)} screen=${JSON.stringify(summarizeCliTraceText(screenText, 160)).slice(0, 220)}`
-            );
+        const elapsed = now - this.pendingScriptStatusSince;
+        if (elapsed < ProviderCliAdapter.SCRIPT_STATUS_DEBOUNCE_MS) {
+            armPending(ProviderCliAdapter.SCRIPT_STATUS_DEBOUNCE_MS - elapsed);
+            return false;
         }
-        const shouldHoldGenerating =
-            scriptStatus === 'idle'
-            && this.isWaitingForResponse
-            && !modal
-            && recentInteractiveActivity
-            && !(visibleIdlePrompt && visibleAssistantCandidate)
-            && !(parsedTranscript?.status === 'idle' && !!lastParsedAssistant);
+        return true;
+    }
 
-        if (shouldHoldGenerating) {
-            this.clearIdleFinishCandidate('hold_generating_recent_activity');
-            this.setStatus('generating', 'recent_activity_hold');
-            if (this.idleTimeout) clearTimeout(this.idleTimeout);
-            this.idleTimeout = setTimeout(() => {
-                if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
-                    if (this.shouldDeferIdleTimeoutFinish()) return;
-                    this.finishResponse();
-                }
-            }, this.timeouts.generatingIdle);
-            this.recordTrace('hold_generating_recent_activity', {
-                scriptStatus,
-                recentInteractiveActivity,
-                lastNonEmptyOutputAt: this.lastNonEmptyOutputAt,
-                lastScreenChangeAt: this.lastScreenChangeAt,
-                holdMs: statusActivityHoldMs,
-                ...buildCliTraceParseSnapshot({
-                    accumulatedBuffer: this.accumulatedBuffer,
-                    accumulatedRawBuffer: this.accumulatedRawBuffer,
-                    responseBuffer: this.responseBuffer,
-                    partialResponse: this.responseBuffer,
-                    scope: this.currentTurnScope,
-                }),
-            });
-            this.onStatusChange?.();
-            return;
-        }
+    private applyHoldGenerating(ctx: SettledEvalContext, recentInteractiveActivity: boolean): void {
+        const { scriptStatus } = ctx;
+        this.clearIdleFinishCandidate('hold_generating_recent_activity');
+        this.setStatus('generating', 'recent_activity_hold');
+        if (this.idleTimeout) clearTimeout(this.idleTimeout);
+        this.idleTimeout = setTimeout(() => {
+            if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
+                if (this.shouldDeferIdleTimeoutFinish()) return;
+                this.finishResponse();
+            }
+        }, this.timeouts.generatingIdle);
+        this.recordTrace('hold_generating_recent_activity', {
+            scriptStatus,
+            recentInteractiveActivity,
+            lastNonEmptyOutputAt: this.lastNonEmptyOutputAt,
+            lastScreenChangeAt: this.lastScreenChangeAt,
+            holdMs: this.getStatusActivityHoldMs(),
+            ...buildCliTraceParseSnapshot({
+                accumulatedBuffer: this.accumulatedBuffer,
+                accumulatedRawBuffer: this.accumulatedRawBuffer,
+                responseBuffer: this.responseBuffer,
+                partialResponse: this.responseBuffer,
+                scope: this.currentTurnScope,
+            }),
+        });
+        this.onStatusChange?.();
+    }
 
-        if (scriptStatus === 'waiting_approval') {
-            this.clearIdleFinishCandidate('waiting_approval');
-            const inCooldown = this.lastApprovalResolvedAt && (Date.now() - this.lastApprovalResolvedAt) < this.timeouts.approvalCooldown;
-            const visibleIdlePrompt = this.looksLikeVisibleIdlePrompt(screenText);
-            if ((inCooldown || visibleIdlePrompt) && !modal) {
-                if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
-                this.activeModal = null;
-                if (this.isWaitingForResponse) {
-                    this.setStatus('generating', inCooldown ? 'approval_cooldown_ignore' : 'approval_prompt_gone');
-                    if (this.idleTimeout) clearTimeout(this.idleTimeout);
-                    this.idleTimeout = setTimeout(() => {
-                        if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
-                            if (this.shouldDeferIdleTimeoutFinish()) return;
-                            this.finishResponse();
-                        }
-                    }, this.timeouts.generatingIdle);
-                } else {
-                    this.setStatus('idle', inCooldown ? 'approval_cooldown_ignore' : 'approval_prompt_gone');
-                }
-                this.onStatusChange?.();
-                return;
-            }
-            if (!inCooldown) {
-                this.isWaitingForResponse = true;
-                this.setStatus('waiting_approval', 'script_detect');
-
-                // Use parseApproval script for modal info
-                this.activeModal = modal || { message: 'Approval required', buttons: ['Allow', 'Deny'] };
-
-                if (this.idleTimeout) clearTimeout(this.idleTimeout);
-                this.armApprovalExitTimeout();
-                this.onStatusChange?.();
-                return;
-            }
-        }
-
-        if (scriptStatus === 'generating') {
-            this.clearIdleFinishCandidate('generating');
-            const effectiveScreenText = screenText || this.accumulatedBuffer;
-            const noActiveTurn = !this.currentTurnScope;
-            const looksIdleChrome = /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(effectiveScreenText)
-                || (/accept edits on/i.test(effectiveScreenText)
-                    && (/Update available!/i.test(screenText)
-                        || /\/effort/i.test(screenText)
-                        || /^.*➜\s+\S+/m.test(effectiveScreenText)));
-            if (prevStatus === 'idle' && !this.isWaitingForResponse && noActiveTurn && !modal && looksIdleChrome && !parsedShowsLiveAssistantProgress) {
-                return;
-            }
-            if (prevStatus === 'waiting_approval') {
-                // Transitioned out of approval → generating
-                if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
-                this.activeModal = null;
-                this.lastApprovalResolvedAt = Date.now();
-            }
-            if (!this.isWaitingForResponse) {
-                this.isWaitingForResponse = true;
-                this.responseBuffer = '';
-            }
-            this.setStatus('generating', 'script_detect');
-            // Reset idle timeout
-            if (this.idleTimeout) clearTimeout(this.idleTimeout);
-            this.idleTimeout = setTimeout(() => {
-                if (this.isWaitingForResponse) {
-                    if (this.shouldDeferIdleTimeoutFinish()) return;
-                    this.finishResponse();
-                }
-            }, this.timeouts.generatingIdle);
-            this.onStatusChange?.();
-            return;
-        }
-
-        if (scriptStatus === 'idle') {
-            if (prevStatus === 'waiting_approval') {
-                if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
-                this.activeModal = null;
-                this.lastApprovalResolvedAt = Date.now();
-            }
+    private applyWaitingApproval(ctx: SettledEvalContext): void {
+        const { modal } = ctx;
+        this.clearIdleFinishCandidate('waiting_approval');
+        const inCooldown = this.lastApprovalResolvedAt && (Date.now() - this.lastApprovalResolvedAt) < this.timeouts.approvalCooldown;
+        if (inCooldown && !modal) {
+            if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
+            this.activeModal = null;
             if (this.isWaitingForResponse) {
-                const visibleIdlePrompt = this.looksLikeVisibleIdlePrompt(screenText);
-                const quietForMs = this.lastNonEmptyOutputAt ? (now - this.lastNonEmptyOutputAt) : Number.MAX_SAFE_INTEGER;
-                const screenStableMs = this.lastScreenChangeAt ? (now - this.lastScreenChangeAt) : 0;
-                const hasAssistantTurn = !!lastParsedAssistant;
-                const assistantLength = lastParsedAssistant?.content?.length || 0;
-                const idleFinishConfirmMs = this.getIdleFinishConfirmMs();
-                const idleQuietThresholdMs = Math.max(idleFinishConfirmMs, this.timeouts.outputSettle);
-                const idleStableThresholdMs = idleFinishConfirmMs;
-                const idleReady = visibleIdlePrompt
-                    && !modal
-                    && hasAssistantTurn
-                    && quietForMs >= idleQuietThresholdMs
-                    && screenStableMs >= idleStableThresholdMs;
-                const candidate = this.idleFinishCandidate;
-                const candidateQuiet = !!candidate
-                    && candidate.responseEpoch === this.responseEpoch
-                    && candidate.lastOutputAt === this.lastOutputAt
-                    && candidate.lastScreenChangeAt === this.lastScreenChangeAt
-                    && assistantLength >= candidate.assistantLength
-                    && (now - candidate.armedAt) >= idleFinishConfirmMs;
-                const canFinishImmediately = idleReady && candidateQuiet;
-
-                this.recordTrace('idle_decision', {
-                    visibleIdlePrompt,
-                    quietForMs,
-                    screenStableMs,
-                    hasAssistantTurn,
-                    assistantLength,
-                    hasModal: !!modal,
-                    idleQuietThresholdMs,
-                    idleStableThresholdMs,
-                    idleReady,
-                    idleFinishConfirmMs,
-                    idleFinishCandidate: candidate,
-                    candidateQuiet,
-                    canFinishImmediately,
-                    submitPendingUntil: this.submitPendingUntil,
-                    responseSettleIgnoreUntil: this.responseSettleIgnoreUntil,
-                    ...buildCliTraceParseSnapshot({
-                        accumulatedBuffer: this.accumulatedBuffer,
-                        accumulatedRawBuffer: this.accumulatedRawBuffer,
-                        responseBuffer: this.responseBuffer,
-                        partialResponse: this.responseBuffer,
-                        scope: this.currentTurnScope,
-                    }),
-                });
-
-                if (canFinishImmediately) {
-                    this.clearIdleFinishCandidate('finish_response');
-                    if (this.idleTimeout) clearTimeout(this.idleTimeout);
-                    this.finishResponse();
-                    return;
-                }
-
-                if (idleReady) {
-                    if (!candidate) {
-                        this.armIdleFinishCandidate(assistantLength);
-                        return;
-                    }
-                } else {
-                    this.clearIdleFinishCandidate('idle_not_ready');
-                }
-
+                this.setStatus('generating', inCooldown ? 'approval_cooldown_ignore' : 'approval_prompt_gone');
                 if (this.idleTimeout) clearTimeout(this.idleTimeout);
                 this.idleTimeout = setTimeout(() => {
                     if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
                         if (this.shouldDeferIdleTimeoutFinish()) return;
-                        this.clearIdleFinishCandidate('idle_timeout_finish');
                         this.finishResponse();
                     }
-                }, this.timeouts.idleFinish);
-            } else if (prevStatus !== 'idle') {
+                }, this.timeouts.generatingIdle);
+            } else {
+                this.setStatus('idle', inCooldown ? 'approval_cooldown_ignore' : 'approval_prompt_gone');
+            }
+            this.onStatusChange?.();
+            return;
+        }
+        if (!inCooldown) {
+            this.isWaitingForResponse = true;
+            this.setStatus('waiting_approval', 'script_detect');
+            // Use parseApproval script for modal info
+            this.activeModal = modal || { message: 'Approval required', buttons: ['Allow', 'Deny'] };
+            if (this.idleTimeout) clearTimeout(this.idleTimeout);
+            this.armApprovalExitTimeout();
+            this.onStatusChange?.();
+        }
+    }
+
+    private applyGenerating(ctx: SettledEvalContext): void {
+        const { screenText, modal, parsedShowsLiveAssistantProgress, prevStatus } = ctx;
+        this.clearIdleFinishCandidate('generating');
+        const effectiveScreenText = screenText || this.accumulatedBuffer;
+        const noActiveTurn = !this.currentTurnScope;
+        const looksIdleChrome = /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(effectiveScreenText)
+            || (/accept edits on/i.test(effectiveScreenText)
+                && (/Update available!/i.test(screenText)
+                    || /\/effort/i.test(screenText)
+                    || /^.*➜\s+\S+/m.test(effectiveScreenText)));
+        if (prevStatus === 'idle' && !this.isWaitingForResponse && noActiveTurn && !modal && looksIdleChrome && !parsedShowsLiveAssistantProgress) {
+            return;
+        }
+        if (prevStatus === 'waiting_approval') {
+            // Transitioned out of approval → generating
+            if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
+            this.activeModal = null;
+            this.lastApprovalResolvedAt = Date.now();
+        }
+        if (!this.isWaitingForResponse) {
+            this.isWaitingForResponse = true;
+            this.responseBuffer = '';
+        }
+        this.setStatus('generating', 'script_detect');
+        // Reset idle timeout
+        if (this.idleTimeout) clearTimeout(this.idleTimeout);
+        this.idleTimeout = setTimeout(() => {
+            if (this.isWaitingForResponse) {
+                if (this.shouldDeferIdleTimeoutFinish()) return;
+                this.finishResponse();
+            }
+        }, this.timeouts.generatingIdle);
+        this.onStatusChange?.();
+    }
+
+    private applyIdle(ctx: SettledEvalContext, now: number): void {
+        const { screenText, modal, lastParsedAssistant, prevStatus } = ctx;
+        if (prevStatus === 'waiting_approval') {
+            if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
+            this.activeModal = null;
+            this.lastApprovalResolvedAt = Date.now();
+        }
+        if (!this.isWaitingForResponse) {
+            if (prevStatus !== 'idle') {
                 this.clearIdleFinishCandidate('idle_without_response');
                 this.setStatus('idle', 'script_detect');
                 this.onStatusChange?.();
             }
+            return;
         }
+        const quietForMs = this.lastNonEmptyOutputAt ? (now - this.lastNonEmptyOutputAt) : Number.MAX_SAFE_INTEGER;
+        const screenStableMs = this.lastScreenChangeAt ? (now - this.lastScreenChangeAt) : 0;
+        const hasAssistantTurn = !!lastParsedAssistant;
+        const assistantLength = lastParsedAssistant?.content?.length || 0;
+        const idleFinishConfirmMs = this.getIdleFinishConfirmMs();
+        const idleQuietThresholdMs = Math.max(idleFinishConfirmMs, this.timeouts.outputSettle);
+        const idleReady = !modal
+            && hasAssistantTurn
+            && quietForMs >= idleQuietThresholdMs
+            && screenStableMs >= idleFinishConfirmMs;
+        const candidate = this.idleFinishCandidate;
+        const candidateQuiet = !!candidate
+            && candidate.responseEpoch === this.responseEpoch
+            && candidate.lastOutputAt === this.lastOutputAt
+            && candidate.lastScreenChangeAt === this.lastScreenChangeAt
+            && assistantLength >= candidate.assistantLength
+            && (now - candidate.armedAt) >= idleFinishConfirmMs;
+
+        this.recordTrace('idle_decision', {
+            quietForMs,
+            screenStableMs,
+            hasAssistantTurn,
+            assistantLength,
+            hasModal: !!modal,
+            idleQuietThresholdMs,
+            idleStableThresholdMs: idleFinishConfirmMs,
+            idleReady,
+            idleFinishConfirmMs,
+            idleFinishCandidate: candidate,
+            candidateQuiet,
+            canFinishImmediately: idleReady && candidateQuiet,
+            submitPendingUntil: this.submitPendingUntil,
+            responseSettleIgnoreUntil: this.responseSettleIgnoreUntil,
+            ...buildCliTraceParseSnapshot({
+                accumulatedBuffer: this.accumulatedBuffer,
+                accumulatedRawBuffer: this.accumulatedRawBuffer,
+                responseBuffer: this.responseBuffer,
+                partialResponse: this.responseBuffer,
+                scope: this.currentTurnScope,
+            }),
+        });
+
+        if (idleReady && candidateQuiet) {
+            this.clearIdleFinishCandidate('finish_response');
+            if (this.idleTimeout) clearTimeout(this.idleTimeout);
+            this.finishResponse();
+            return;
+        }
+
+        if (idleReady) {
+            if (!candidate) {
+                this.armIdleFinishCandidate(assistantLength);
+                return;
+            }
+        } else {
+            this.clearIdleFinishCandidate('idle_not_ready');
+        }
+
+        if (this.idleTimeout) clearTimeout(this.idleTimeout);
+        this.idleTimeout = setTimeout(() => {
+            if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
+                if (this.shouldDeferIdleTimeoutFinish()) return;
+                this.clearIdleFinishCandidate('idle_timeout_finish');
+                this.finishResponse();
+            }
+        }, this.timeouts.idleFinish);
     }
 
     private finishResponse(): void {
@@ -1338,12 +1253,7 @@ export class ProviderCliAdapter implements CliAdapter {
             }, ProviderCliAdapter.FINISH_RETRY_DELAY_MS);
             return;
         }
-        if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
-        if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
-        if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
-        if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
-        if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
-
+        this.clearAllTimers();
         this.responseBuffer = '';
         this.isWaitingForResponse = false;
         this.responseSettleIgnoreUntil = 0;
@@ -1356,10 +1266,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.onStatusChange?.();
     }
 
-    private maybeCommitVisibleIdleTranscript(
-        parsed: any,
-        options?: { requireVisibleAssistantCandidate?: boolean; screenText?: string },
-    ): boolean {
+    private maybeCommitVisibleIdleTranscript(parsed: any): boolean {
         const allowImmediateScriptIdleCommit = this.provider.allowInputDuringGeneration === true;
         if (!allowImmediateScriptIdleCommit) return false;
         if (
@@ -1374,13 +1281,6 @@ export class ProviderCliAdapter implements CliAdapter {
             return false;
         }
 
-        if (options?.requireVisibleAssistantCandidate) {
-            const candidateText = options.screenText || this.terminalScreen.getText() || '';
-            if (!this.looksLikeVisibleAssistantCandidate(candidateText)) {
-                return false;
-            }
-        }
-
         const hydratedForIdleCommit = normalizeCliParsedMessages(parsed.messages, {
             committedMessages: this.committedMessages,
             scope: this.currentTurnScope,
@@ -1390,18 +1290,8 @@ export class ProviderCliAdapter implements CliAdapter {
         if (!visibleAssistant) return false;
 
         this.committedMessages = hydratedForIdleCommit;
-        const promptForTrim = this.currentTurnScope?.prompt || getLastUserPromptText(this.committedMessages);
-        if (promptForTrim) {
-            const lastAssistantForTrim = [...this.committedMessages].reverse().find((message) => message.role === 'assistant');
-            if (lastAssistantForTrim) {
-                lastAssistantForTrim.content = trimPromptEchoPrefix(lastAssistantForTrim.content, promptForTrim);
-            }
-        }
-        if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
-        if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
-        if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
-        if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
-        if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
+        this.trimLastAssistantEcho(this.committedMessages, this.currentTurnScope?.prompt || getLastUserPromptText(this.committedMessages));
+        this.clearAllTimers();
         this.syncMessageViews();
         this.responseBuffer = '';
         this.isWaitingForResponse = false;
@@ -1432,13 +1322,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 scope: this.currentTurnScope,
                 lastOutputAt: this.lastOutputAt,
             });
-            const promptForTrim = this.currentTurnScope?.prompt || getLastUserPromptText(this.committedMessages);
-            if (promptForTrim) {
-                const lastAssistantForTrim = [...this.committedMessages].reverse().find((message) => message.role === 'assistant');
-                if (lastAssistantForTrim) {
-                    lastAssistantForTrim.content = trimPromptEchoPrefix(lastAssistantForTrim.content, promptForTrim);
-                }
-            }
+            this.trimLastAssistantEcho(this.committedMessages, this.currentTurnScope?.prompt || getLastUserPromptText(this.committedMessages));
             this.syncMessageViews();
             const lastAssistant = [...this.committedMessages].reverse().find((message) => message.role === 'assistant');
             if (this.currentTurnScope) {
@@ -1499,7 +1383,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 screen: buildCliScreenSnapshot(screenText),
                 tailScreen: buildCliScreenSnapshot(text.slice(-500)),
             });
-            return this.refineDetectedStatus(status, text, screenText || '');
+            return status;
         } catch (e: any) {
             LOG.warn('CLI', `[${this.cliType}] detectStatus error: ${e.message}`);
             return null;
@@ -1552,8 +1436,7 @@ export class ProviderCliAdapter implements CliAdapter {
             return parsed;
         }
 
-        const startupModal = this.getStartupConfirmationModal(screenText || '');
-        const visibleModal = this.runParseApproval(recentBuffer) || startupModal;
+        const visibleModal = this.runParseApproval(recentBuffer);
         if (visibleModal) {
             return parsed;
         }
@@ -1572,8 +1455,7 @@ export class ProviderCliAdapter implements CliAdapter {
  // ─── Public API (CliAdapter) ───────────────────
 
     getStatus(): CliSessionStatus {
-        const screenText = this.terminalScreen.getText() || '';
-        const startupModal = this.startupParseGate ? this.getStartupConfirmationModal(screenText) : null;
+        const startupModal = this.startupParseGate ? this.runParseApproval(this.recentOutputBuffer) : null;
         let effectiveStatus = this.projectEffectiveStatus(startupModal);
         let effectiveModal = startupModal || this.activeModal;
         if (!startupModal && !effectiveModal && typeof this.cliScripts?.parseOutput === 'function') {
@@ -1688,7 +1570,6 @@ export class ProviderCliAdapter implements CliAdapter {
                     : message.timestamp,
             }));
             const parsedLastAssistant = [...parsedHydratedMessages].reverse().find((message) => message.role === 'assistant' && typeof message.content === 'string' && message.content.trim());
-            const visibleIdlePrompt = this.looksLikeVisibleIdlePrompt(screenText);
             const shouldAdoptParsedIdleReplay =
                 !this.currentTurnScope
                 && !this.activeModal
@@ -1700,7 +1581,7 @@ export class ProviderCliAdapter implements CliAdapter {
                         this.currentStatus === 'generating'
                         && this.isWaitingForResponse
                         && parsed.status === 'idle'
-                        && visibleIdlePrompt
+                        && this.runDetectStatus(this.recentOutputBuffer) === 'idle'
                     )
                 );
             if (shouldAdoptParsedIdleReplay) {
@@ -1856,17 +1737,9 @@ export class ProviderCliAdapter implements CliAdapter {
             if (parsed && typeof parsed === 'object') {
                 Object.assign(parsed, validateReadChatResultPayload(parsed, `${this.cliType} parseOutput`));
             }
-            const refinedStatus = this.refineDetectedStatus(typeof parsed?.status === 'string' ? parsed.status : null, input.recentBuffer, input.screenText);
-            if (parsed && refinedStatus && parsed.status !== refinedStatus) {
-                parsed.status = refinedStatus;
-            }
             const normalizedParsed = this.suppressStaleParsedApproval(parsed, input.recentBuffer, input.screenText);
-            const promptForTrim = scope?.prompt || getLastUserPromptText(baseMessages);
-            if (normalizedParsed && Array.isArray(normalizedParsed.messages) && promptForTrim) {
-                const lastAssistant = [...normalizedParsed.messages].reverse().find((message: any) => message?.role === 'assistant' && typeof message.content === 'string');
-                if (lastAssistant) {
-                    lastAssistant.content = trimPromptEchoPrefix(lastAssistant.content, promptForTrim);
-                }
+            if (normalizedParsed && Array.isArray(normalizedParsed.messages)) {
+                this.trimLastAssistantEcho(normalizedParsed.messages, scope?.prompt || getLastUserPromptText(baseMessages));
             }
             this.parseErrorMessage = null;
             return normalizedParsed;
@@ -1923,9 +1796,7 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         if (!this.ready) {
             this.resolveStartupState('send_precheck');
-            const screenText = this.terminalScreen.getText() || '';
-            const hasPrompt = this.looksLikeVisibleIdlePrompt(screenText);
-            if (hasPrompt && this.currentStatus === 'idle') {
+            if (this.runDetectStatus(this.recentOutputBuffer) === 'idle' && this.currentStatus === 'idle') {
                 this.ready = true;
                 this.startupParseGate = false;
                 LOG.info('CLI', `[${this.cliType}] sendMessage recovered idle prompt readiness`);
@@ -2223,17 +2094,9 @@ export class ProviderCliAdapter implements CliAdapter {
 
     shutdown(): void {
         this.clearIdleFinishCandidate('shutdown');
-        if (this.settleTimer) { clearTimeout(this.settleTimer); this.settleTimer = null; }
-        if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
-        if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
-        if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
-        if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
-        if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
-        if (this.pendingScriptStatusTimer) { clearTimeout(this.pendingScriptStatusTimer); this.pendingScriptStatusTimer = null; }
-        if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
+        this.clearAllTimers();
         this.pendingOutputParseBuffer = '';
         this.pendingTerminalQueryTail = '';
-        if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
         this.ptyOutputBuffer = '';
         this.finishRetryCount = 0;
         if (this.ptyProcess) {
@@ -2252,17 +2115,9 @@ export class ProviderCliAdapter implements CliAdapter {
 
     detach(): void {
         this.clearIdleFinishCandidate('detach');
-        if (this.settleTimer) { clearTimeout(this.settleTimer); this.settleTimer = null; }
-        if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
-        if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
-        if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
-        if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
-        if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
-        if (this.pendingScriptStatusTimer) { clearTimeout(this.pendingScriptStatusTimer); this.pendingScriptStatusTimer = null; }
-        if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
+        this.clearAllTimers();
         this.pendingOutputParseBuffer = '';
         this.pendingTerminalQueryTail = '';
-        if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
         this.ptyOutputBuffer = '';
         this.finishRetryCount = 0;
         if (this.ptyProcess) {
@@ -2314,8 +2169,7 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     resolveModal(buttonIndex: number): void {
-        const screenText = this.terminalScreen.getText() || '';
-        let modal = this.activeModal || this.getStartupConfirmationModal(screenText);
+        let modal = this.activeModal || this.runParseApproval(this.recentOutputBuffer);
         if (!modal && typeof this.cliScripts?.parseOutput === 'function') {
             try {
                 const parsed = this.getScriptParsedStatus();
@@ -2376,7 +2230,7 @@ export class ProviderCliAdapter implements CliAdapter {
 
     getDebugState(): Record<string, any> {
         const screenText = sanitizeTerminalText(this.terminalScreen.getText());
-        const startupModal = this.startupParseGate ? this.getStartupConfirmationModal(screenText) : null;
+        const startupModal = this.startupParseGate ? this.runParseApproval(this.recentOutputBuffer) : null;
         const effectiveStatus = this.projectEffectiveStatus(startupModal);
         const effectiveReady = this.ready || !!startupModal;
         return {
