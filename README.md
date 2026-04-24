@@ -4,13 +4,9 @@
 [![CI](https://github.com/vilmire/adhdev/actions/workflows/ci.yml/badge.svg)](https://github.com/vilmire/adhdev/actions)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-ADHDev Self-Hosted is the local command center for AI coding agents running in your IDEs, CLIs, and hosted runtimes. Watch active sessions, inspect chat and terminal state, approve or nudge work, and reopen saved history from the dashboard — all on your own machine, with no cloud account and no hosted control plane required.
+ADHDev Self-Hosted is a self-hosted dashboard for monitoring and controlling AI coding agents running in IDEs, CLIs, and hosted runtimes. It provides a local web UI for inspecting active sessions, viewing chat and terminal state, approving or interrupting work, and reopening saved history.
 
-Why people open it:
-
-- One dashboard for Cursor, VS Code, Claude Code, Codex, Gemini CLI, and long-lived hosted runtimes
-- One place to inspect live context before you approve, interrupt, or continue work
-- One self-hosted stack you can keep local by default, then expose to your LAN only when you choose
+For the standalone path, everything runs on your machine. No cloud account or hosted control plane is required.
 
 This repo contains the open-source, self-hosted edition:
 
@@ -22,32 +18,24 @@ Hosted cloud operations are not part of this repository.
 
 ## Screenshots
 
-Real product shots from the landing page, because a README for a dashboard should actually show the dashboard:
-
 <p align="center">
   <img src="docs/assets/readme/landing-command-center-demo-poster.jpg" alt="ADHDev desktop dashboard switching between chat and terminal views, floating a panel, and splitting the workspace" width="100%" />
 </p>
-<p align="center"><em><strong>Command center:</strong> keep multiple agent sessions visible, reconfigure the live workspace, and stay in control without tab-hopping across tools.</em></p>
 
 <table>
   <tr>
-    <td width="50%" valign="top">
+    <td width="50%" align="center" valign="top">
       <img src="docs/assets/readme/landing-desktop-detail.jpg" alt="ADHDev desktop session detail view showing chat, code, and terminal state together" width="100%" />
-      <strong>Desktop detail</strong><br />
-      Open one session and see the full working surface at once: conversation, code, terminal output, and current agent state.
     </td>
-    <td width="50%" valign="top">
+    <td width="50%" align="center" valign="top">
       <img src="docs/assets/readme/landing-mobile-notification-demo-poster.jpg" alt="ADHDev completion notification demo showing when to come back to a running session" width="100%" />
-      <strong>Done alerts</strong><br />
-      Step away, let the session keep running, and come back only when the dashboard tells you the work is ready.
     </td>
   </tr>
 </table>
 
 <p align="center">
-  <img src="docs/assets/readme/landing-mobile-resume-demo-poster.jpg" alt="ADHDev mobile resume flow reopening a saved session from a phone" width="360" />
+  <img src="docs/assets/readme/landing-mobile-resume-demo-poster.jpg" alt="ADHDev mobile resume flow reopening a saved session from a phone" width="320" />
 </p>
-<p align="center"><em><strong>Mobile resume:</strong> reopen the exact saved thread from your phone instead of starting a fresh scratch chat.</em></p>
 
 ## What It Runs
 
