@@ -162,8 +162,16 @@ function summarizeRenderableMessage(message: unknown): string {
     ].join(':')
 }
 
-function summarizeMessageList(messages: unknown): unknown {
+function summarizeMessageList(messages: unknown, sharedMessageArrays?: WeakSet<unknown[]>): unknown {
     if (!Array.isArray(messages)) return messages
+    if (sharedMessageArrays?.has(messages)) {
+        // Metadata-only live status merges preserve the already loaded transcript array by reference.
+        // In that path the message bodies cannot affect equivalence, so avoid re-hashing long chats.
+        return {
+            count: messages.length,
+            sharedRef: true,
+        }
+    }
     let aggregate = 0x811c9dc5
     for (const message of messages) {
         const summary = summarizeRenderableMessage(message)
@@ -191,9 +199,36 @@ function isActiveChatLike(value: unknown): value is Record<string, unknown> {
         )
 }
 
-function stripVolatileEntryFields(value: unknown): unknown {
+function collectSharedActiveChatMessageArrays(existing: unknown, next: unknown, shared: WeakSet<unknown[]>): void {
+    if (!existing || !next || typeof existing !== 'object' || typeof next !== 'object') return
+
+    if (isActiveChatLike(existing) && isActiveChatLike(next)) {
+        const existingMessages = existing.messages
+        if (Array.isArray(existingMessages) && existingMessages === next.messages) {
+            shared.add(existingMessages)
+        }
+    }
+
+    if (Array.isArray(existing) && Array.isArray(next)) {
+        const length = Math.min(existing.length, next.length)
+        for (let i = 0; i < length; i += 1) {
+            collectSharedActiveChatMessageArrays(existing[i], next[i], shared)
+        }
+        return
+    }
+
+    const existingRecord = existing as Record<string, unknown>
+    const nextRecord = next as Record<string, unknown>
+    const keys = new Set([...Object.keys(existingRecord), ...Object.keys(nextRecord)])
+    for (const key of keys) {
+        if (key === 'messages') continue
+        collectSharedActiveChatMessageArrays(existingRecord[key], nextRecord[key], shared)
+    }
+}
+
+function stripVolatileEntryFields(value: unknown, sharedMessageArrays?: WeakSet<unknown[]>): unknown {
     if (Array.isArray(value)) {
-        return value.map(stripVolatileEntryFields)
+        return value.map((nested) => stripVolatileEntryFields(nested, sharedMessageArrays))
     }
     if (!value || typeof value !== 'object') {
         return value
@@ -208,8 +243,8 @@ function stripVolatileEntryFields(value: unknown): unknown {
                 .map(([key, nested]) => [
                     key,
                     key === 'messages'
-                        ? summarizeMessageList(nested)
-                        : stripVolatileEntryFields(nested),
+                        ? summarizeMessageList(nested, sharedMessageArrays)
+                        : stripVolatileEntryFields(nested, sharedMessageArrays),
                 ]),
         )
     }
@@ -218,13 +253,15 @@ function stripVolatileEntryFields(value: unknown): unknown {
         Object.entries(value as Record<string, unknown>)
             .filter(([key]) => key !== 'timestamp' && key !== '_lastUpdate')
             .sort(([a], [b]) => a.localeCompare(b))
-            .map(([key, nested]) => [key, stripVolatileEntryFields(nested)]),
+            .map(([key, nested]) => [key, stripVolatileEntryFields(nested, sharedMessageArrays)]),
     )
 }
 
 function areEntriesRenderEquivalent(existing: DaemonData, next: DaemonData): boolean {
     try {
-        return JSON.stringify(stripVolatileEntryFields(existing)) === JSON.stringify(stripVolatileEntryFields(next))
+        const sharedMessageArrays = new WeakSet<unknown[]>()
+        collectSharedActiveChatMessageArrays(existing, next, sharedMessageArrays)
+        return JSON.stringify(stripVolatileEntryFields(existing, sharedMessageArrays)) === JSON.stringify(stripVolatileEntryFields(next, sharedMessageArrays))
     } catch {
         return false
     }

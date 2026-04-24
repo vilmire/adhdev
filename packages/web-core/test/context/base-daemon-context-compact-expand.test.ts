@@ -806,6 +806,83 @@ describe('expandCompactDaemons', () => {
     expect(reconciledCliEntry?.timestamp).toBe(921)
   })
 
+  it('preserves loaded chat reference for metadata-only live updates without reading message bodies', () => {
+    const messageWithExpensiveBody: { id: string; role: string; timestamp: number; content?: string } = {
+      id: 'msg-1',
+      role: 'assistant',
+      timestamp: 10,
+    }
+    Object.defineProperty(messageWithExpensiveBody, 'content', {
+      enumerable: true,
+      get() {
+        throw new Error('message content should not be read for metadata-only status equivalence')
+      },
+    })
+
+    const previous = expandCompactDaemons([
+      {
+        id: 'machine-12-fast',
+        type: 'adhdev-daemon',
+        timestamp: 930,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Hermes Agent',
+            workspace: '/repo-a',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Hermes Agent',
+              status: 'idle',
+              messages: [messageWithExpensiveBody as any],
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const previousCliEntry = previous.find((entry) => entry.id === 'machine-12-fast:cli:cli-1')
+
+    const next = expandCompactDaemons([
+      {
+        id: 'machine-12-fast',
+        type: 'adhdev-daemon',
+        timestamp: 931,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Hermes Agent',
+            workspace: '/repo-a',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Hermes Agent',
+              status: 'idle',
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const reconciled = reconcileIdes(next, previous)
+    const reconciledCliEntry = reconciled.find((entry) => entry.id === 'machine-12-fast:cli:cli-1')
+
+    expect(reconciledCliEntry).toBe(previousCliEntry)
+    expect(reconciledCliEntry?.timestamp).toBe(931)
+  })
+
   it('replaces entry reference when chat message content changes', () => {
     const previous = expandCompactDaemons([
       {
