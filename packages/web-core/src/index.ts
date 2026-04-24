@@ -126,6 +126,8 @@ export { cn } from './lib/utils'
 // ── UI Components ──
 export { PageHeader } from './components/ui/PageHeader'
 export { default as AppPage } from './components/ui/AppPage'
+export { default as AppShell } from './components/app/AppShell'
+export type { AppShellNavItem, AppShellNavSection } from './components/app/AppShell'
 export { Section } from './components/ui/Section'
 export { EmptyState } from './components/ui/EmptyState'
 export { AlertBanner } from './components/ui/AlertBanner'

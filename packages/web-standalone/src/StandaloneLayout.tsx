@@ -1,12 +1,11 @@
 /**
  * StandaloneLayout — Sidebar + Main content wrapper
  *
- * Mirrors cloud Layout structure but simplified for standalone.
- * Uses shared Icons and ThemeToggle from web-core.
+ * Uses shared AppShell from web-core and keeps only standalone-specific nav/footer content here.
  */
-import { useState } from 'react'
+import { useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { IconDashboard, IconServer, IconInfo, IconSettings, IconBook, IconX, ThemeToggle } from '@adhdev/web-core'
+import { AppShell, type AppShellNavItem, IconDashboard, IconServer, IconInfo, IconSettings, IconBook } from '@adhdev/web-core'
 
 interface LayoutProps {
     children: React.ReactNode
@@ -21,127 +20,60 @@ const NAV_ITEMS = [
 export default function StandaloneLayout({ children }: LayoutProps) {
     const navigate = useNavigate()
     const location = useLocation()
-    const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-    const [collapsed, setCollapsed] = useState(() => {
-        try { return localStorage.getItem('sidebar-collapsed') === '1'; } catch { return false; }
-    })
 
-    const handleNav = (path: string) => {
-        navigate(path)
-        setMobileMenuOpen(false)
-    }
+    const navItems = useMemo<AppShellNavItem[]>(() => (
+        NAV_ITEMS.map(item => ({
+            ...item,
+            active: location.pathname.startsWith(item.path),
+            onSelect: () => navigate(item.path),
+        }))
+    ), [location.pathname, navigate])
 
-    const toggleCollapsed = () => {
-        setCollapsed(prev => {
-            const next = !prev
-            try { localStorage.setItem('sidebar-collapsed', next ? '1' : '0'); } catch {}
-            return next
-        })
-    }
-
-    const navItemClass = (path: string) =>
-        `nav-item${location.pathname.startsWith(path) ? ' active' : ''} cursor-pointer ${collapsed ? 'justify-center py-2.5 px-0' : ''}`
+    const footerItems = useMemo<AppShellNavItem[]>(() => ([
+        {
+            id: 'docs',
+            label: <><span>Docs</span><span className="ml-auto text-[9px] text-text-muted">↗</span></>,
+            icon: <IconBook />,
+            onSelect: () => window.open('https://docs.adhf.dev', '_blank'),
+            title: 'Docs',
+        },
+        {
+            id: 'about',
+            label: 'About',
+            icon: <IconInfo />,
+            active: location.pathname === '/about',
+            onSelect: () => navigate('/about'),
+            title: 'About',
+        },
+    ]), [location.pathname, navigate])
 
     return (
-        <div className={`app-layout${mobileMenuOpen ? ' mobile-menu-open' : ''}${collapsed ? ' sidebar-collapsed' : ''}`}>
-            {/* Mobile menu button */}
-            <button
-                type="button"
-                className="mobile-menu-btn"
-                aria-label="Open menu"
-                onClick={() => setMobileMenuOpen(true)}
-            >
-                <span className="mobile-menu-icon" />
-                <span className="mobile-menu-icon" />
-                <span className="mobile-menu-icon" />
-            </button>
-
-            {/* Overlay */}
-            {mobileMenuOpen && (
-                <div
-                    className="sidebar-overlay"
-                    role="button"
-                    tabIndex={0}
-                    aria-label="Close menu"
-                    onClick={() => setMobileMenuOpen(false)}
-                    onKeyDown={(e) => e.key === 'Escape' && setMobileMenuOpen(false)}
-                />
+        <AppShell
+            brand={({ collapsed }) => (
+                <>
+                    <img src="/otter-logo.png" alt="ADHDev" className="w-7 h-7" />
+                    {!collapsed && <span>ADHDev</span>}
+                </>
             )}
-
-            <aside className={`sidebar ${mobileMenuOpen ? 'sidebar-open' : ''}`}>
-                <div className="sidebar-header">
-                    <div className={`sidebar-logo ${collapsed ? 'justify-center gap-0' : ''}`}>
-                        <img src="/otter-logo.png" alt="ADHDev" className="w-7 h-7" />
-                        {!collapsed && <span>ADHDev</span>}
-                    </div>
-                    <button
-                        type="button"
-                        className="sidebar-close-btn"
-                        aria-label="Close menu"
-                        onClick={() => setMobileMenuOpen(false)}
-                    >
-                        <IconX size={16} />
-                    </button>
+            navItems={navItems}
+            footerItems={footerItems}
+            footerInfo={({ collapsed }) => !collapsed ? (
+                <div className="px-3 py-2 text-xs text-text-muted">
+                    Selfhost v{__APP_VERSION__}
                 </div>
-
-                <nav className="sidebar-nav">
-                    {NAV_ITEMS.map((item) => (
-                        <div
-                            key={item.id}
-                            className={navItemClass(item.path)}
-                            id={`nav-${item.id}`}
-                            onClick={() => handleNav(item.path)}
-                            title={collapsed ? item.label : undefined}
-                        >
-                            <span className="nav-icon">{item.icon}</span>
-                            {!collapsed && item.label}
-                        </div>
-                    ))}
-                </nav>
-
-                <div className="border-t border-border-subtle pt-4 mt-2">
-                    <div
-                        className={`nav-item cursor-pointer ${collapsed ? 'justify-center py-2.5 px-0' : ''}`}
-                        id="nav-docs"
-                        onClick={() => window.open('https://docs.adhf.dev', '_blank')}
-                        title={collapsed ? 'Docs' : undefined}
-                    >
-                        <span className="nav-icon"><IconBook /></span>
-                        {!collapsed && <>Docs<span className="ml-auto text-[9px] text-text-muted">↗</span></>}
-                    </div>
-                    <div
-                        className={`nav-item cursor-pointer${location.pathname === '/about' ? ' active' : ''} ${collapsed ? 'justify-center py-2.5 px-0' : ''}`}
-                        id="nav-about"
-                        onClick={() => navigate('/about')}
-                        title={collapsed ? 'About' : undefined}
-                    >
-                        <span className="nav-icon"><IconInfo /></span>
-                        {!collapsed && 'About'}
-                    </div>
-                    {!collapsed && (
-                        <div className="px-3 py-2 text-xs text-text-muted">
-                            Selfhost v{__APP_VERSION__}
-                        </div>
-                    )}
-                    {/* Theme toggle */}
-                    <ThemeToggle collapsed={collapsed} />
-                    {/* Collapse toggle */}
-                    <div
-                        className={`nav-item cursor-pointer ${collapsed ? 'justify-center py-2.5 px-0' : 'mt-1'}`}
-                        onClick={toggleCollapsed}
-                        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                    >
-                        <span className="nav-icon text-base">{collapsed ? '›' : '‹'}</span>
-                        {!collapsed && <span className="text-xs">Collapse</span>}
-                    </div>
+            ) : null}
+            footerActions={({ collapsed, toggleCollapsed }) => (
+                <div
+                    className={`nav-item cursor-pointer ${collapsed ? 'justify-center py-2.5 px-0' : 'mt-1'}`}
+                    onClick={toggleCollapsed}
+                    title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                >
+                    <span className="nav-icon text-base">{collapsed ? '›' : '‹'}</span>
+                    {!collapsed && <span className="text-xs">Collapse</span>}
                 </div>
-            </aside>
-
-            <main className="main-content relative">
-                <div className="main-content-inner">
-                    {children}
-                </div>
-            </main>
-        </div>
+            )}
+        >
+            {children}
+        </AppShell>
     )
 }
