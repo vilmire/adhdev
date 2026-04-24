@@ -8,9 +8,15 @@ import { DEFAULT_MACHINE_RUNTIME_FRESH_MS } from '../utils/daemon-timing'
 const runtimeInFlight = new Map<string, Promise<void>>()
 const runtimeLoadedAt = new Map<string, number>()
 
+// Transport shape note — see TransportContext.sendCommand docs.
+// Standalone returns the daemon's raw response, Cloud wraps it as { success, result }.
+// Accept both shapes here; otherwise Cloud dashboard sees undefined.
 function unwrapMachineRuntime(raw: unknown): { machine: MachineInfo; timestamp?: number } | null {
     if (!raw || typeof raw !== 'object') return null
-    const body = raw as Record<string, unknown>
+    const outer = raw as Record<string, unknown>
+    const body = (outer.result && typeof outer.result === 'object'
+        ? outer.result as Record<string, unknown>
+        : outer)
     const machine = body.machine
     if (!machine || typeof machine !== 'object') return null
     return {

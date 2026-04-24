@@ -36,27 +36,43 @@ function isControlScalarValue(value: unknown): value is ControlScalarValue {
     return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 }
 
+// Transport shape note — see TransportContext.sendCommand docs.
+// Standalone resolves the daemon's raw response (e.g. { success, controlResult, ... }).
+// Cloud (sendDaemonCommand in packages/web-cloud/src/api.ts) wraps it once:
+//   { success: true, result: <daemon response> }
+// Every helper that reads fields from a command response MUST accept both shapes,
+// or the Cloud dashboard will silently see `undefined` where Standalone works.
+function getCommandBody(response: unknown): Record<string, unknown> | null {
+    if (!isRecord(response)) return null;
+    if (isRecord(response.result)) return response.result;
+    return response;
+}
+
 export function extractControlListResult(response: unknown): ControlListResult | null {
-    if (!isRecord(response) || !isRecord(response.controlResult) || !Array.isArray(response.controlResult.options)) {
+    const body = getCommandBody(response);
+    if (!body || !isRecord(body.controlResult) || !Array.isArray(body.controlResult.options)) {
         return null;
     }
-    return response.controlResult as unknown as ControlListResult;
+    return body.controlResult as unknown as ControlListResult;
 }
 
 export function extractControlMutationResult(response: unknown): ControlMutationResult | null {
-    if (!isRecord(response) || !isRecord(response.controlResult) || typeof response.controlResult.ok !== 'boolean') {
+    const body = getCommandBody(response);
+    if (!body || !isRecord(body.controlResult) || typeof body.controlResult.ok !== 'boolean') {
         return null;
     }
-    return response.controlResult as unknown as ControlMutationResult;
+    return body.controlResult as unknown as ControlMutationResult;
 }
 
 function getResponseError(response: unknown): string | undefined {
-    if (!isRecord(response) || typeof response.error !== 'string' || !response.error.trim()) return undefined;
-    return response.error;
+    const body = getCommandBody(response);
+    if (!body || typeof body.error !== 'string' || !body.error.trim()) return undefined;
+    return body.error;
 }
 
 function isExplicitFailure(response: unknown): boolean {
-    return isRecord(response) && response.success === false;
+    const body = getCommandBody(response);
+    return !!body && body.success === false;
 }
 
 function applyControlEffects(effects: ControlEffect[] | undefined): void {

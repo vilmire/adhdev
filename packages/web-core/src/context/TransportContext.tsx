@@ -7,7 +7,21 @@
 import { createContext, useContext, type ReactNode } from 'react'
 
 export interface TransportContextValue {
-    /** Send command to daemon */
+    /**
+     * Send command to daemon.
+     *
+     * ⚠️ Response shape differs by transport and all call sites MUST handle both:
+     *   - Standalone (sendCommandViaWs): resolves the daemon's raw response, e.g.
+     *       { success: true, controlResult: { ... }, ... }
+     *   - Cloud (sendDaemonCommand): wraps the P2P response once, e.g.
+     *       { success: true, result: { success: true, controlResult: { ... }, ... } }
+     *
+     * When reading fields off the response, either:
+     *   (1) use an extractor that falls back `response.<field> ?? response.result?.<field>`,
+     *   (2) or start from the inner body: `const body = response?.result ?? response`.
+     * Historical bug: model selector in ControlsBar silently returned empty because
+     * it only inspected `response.controlResult` and missed the Cloud wrapper.
+     */
     sendCommand: (daemonId: string, type: string, payload?: any) => Promise<any>
 
     /** Send data directly via connection (returns false if unsupported) */

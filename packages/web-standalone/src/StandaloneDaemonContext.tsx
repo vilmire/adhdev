@@ -65,7 +65,14 @@ function mapStandaloneConnectionState(status: ConnectionStatus): ConnectionStatu
     return status === 'connected' ? 'connected' : status
 }
 
-/** Send a command via the shared WS connection. Commands must never bypass WS. */
+/**
+ * Send a command via the shared WS connection. Commands must never bypass WS.
+ *
+ * Returns the daemon's raw response (e.g. `{ success, controlResult, ... }`).
+ * Cloud's `sendDaemonCommand` wraps the same response in `{ success, result }`,
+ * so helpers in `@adhdev/web-core` that consume command responses MUST accept
+ * both shapes — see TransportContext.sendCommand docs.
+ */
 export async function sendCommandViaWs(
     daemonId: string, command: string, data?: Record<string, unknown>
 ): Promise<any> {

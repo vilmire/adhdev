@@ -309,6 +309,30 @@ describe('ControlsBar typed controlResult consumption', () => {
     })).toBeNull()
   })
 
+  // Cloud's sendDaemonCommand wraps the daemon response in `{ success, result }`.
+  // Standalone passes the raw daemon response. Both shapes must resolve identically
+  // — otherwise the control bar silently renders an empty dropdown on Cloud.
+  it('extracts typed list results wrapped in a Cloud-style { result } envelope', () => {
+    const typedResult: ControlListResult = {
+      options: [{ value: 'sonnet', label: 'sonnet' }],
+      currentValue: 'sonnet',
+    }
+
+    expect(extractControlListResult({
+      success: true,
+      result: { success: true, controlResult: typedResult },
+    })).toEqual(typedResult)
+  })
+
+  it('extracts typed mutation results wrapped in a Cloud-style { result } envelope', () => {
+    const typedSet: ControlSetResult = { ok: true, currentValue: 'plan' }
+
+    expect(extractControlMutationResult({
+      success: true,
+      result: { success: true, controlResult: typedSet },
+    })).toEqual(typedSet)
+  })
+
   it('does not let stale list-script currentValue override an existing control value', () => {
     expect(shouldAdoptListedCurrentValue('default', 'sonnet')).toBe(false)
     expect(shouldAdoptListedCurrentValue('opus', 'sonnet')).toBe(false)
