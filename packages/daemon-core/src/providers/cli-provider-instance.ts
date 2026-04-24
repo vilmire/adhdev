@@ -576,7 +576,7 @@ export class CliProviderInstance implements ProviderInstance {
                 }
 
                 if (!this.generatingStartedAt) this.generatingStartedAt = now;
-                // Defer the generating_started event — if idle comes back within 1s,
+                // Defer the generating_started event — if idle comes back within 3s,
                 // the whole started→completed pair was a false positive from PTY noise
                 if (this.generatingDebounceTimer) clearTimeout(this.generatingDebounceTimer);
                 this.generatingDebouncePending = { chatTitle, timestamp: now };
@@ -586,7 +586,7 @@ export class CliProviderInstance implements ProviderInstance {
                         this.generatingDebouncePending = null;
                     }
                     this.generatingDebounceTimer = null;
-                }, 1000);
+                }, 3000);
             } else if (newStatus === 'waiting_approval') {
                 this.suppressIdleHistoryReplay = false;
                 // Flush pending generating_started if debounce still pending
@@ -626,7 +626,7 @@ export class CliProviderInstance implements ProviderInstance {
                     this.generatingDebouncePending = null;
                     this.generatingStartedAt = 0;
                 } else {
-                    // Debounce completed — wait 2s, if still idle then emit
+                    // Debounce completed — wait 3s, if still idle then emit
                     if (this.completedDebounceTimer) clearTimeout(this.completedDebounceTimer);
                     this.completedDebouncePending = { chatTitle, duration, timestamp: now };
                     this.completedDebounceTimer = setTimeout(() => {
@@ -637,7 +637,7 @@ export class CliProviderInstance implements ProviderInstance {
                             this.generatingStartedAt = 0;
                         }
                         this.completedDebounceTimer = null;
-                    }, 2000);
+                    }, 3000);
                 }
             } else if (newStatus === 'stopped') {
                 // Cancel any pending debounce

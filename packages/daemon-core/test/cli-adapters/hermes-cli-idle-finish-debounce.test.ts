@@ -313,7 +313,7 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
     })
 
     adapter.evaluateSettled()
-    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(3_000)
 
     expect(adapter.currentStatus).toBe('generating')
     expect(adapter.getStatus().status).toBe('generating')

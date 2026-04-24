@@ -350,7 +350,7 @@ export class ProviderCliAdapter implements CliAdapter {
     private readonly sendDelayMs: number;
     private readonly sendKey: string;
     private readonly submitStrategy: 'wait_for_echo' | 'immediate';
-    private static readonly SCRIPT_STATUS_DEBOUNCE_MS = 1000;
+    private static readonly SCRIPT_STATUS_DEBOUNCE_MS = 3000;
 
     constructor(
         provider: CliProviderModule,
