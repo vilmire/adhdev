@@ -325,6 +325,41 @@ export class SessionChatTailController {
 
   private handleUpdate(update: SessionChatTailUpdate): void {
     this.clearPendingSubscribeRetry()
+
+    // Guard: if the daemon's last-message signature already matches our current
+    // last message, liveMessages is already up to date (hydrateLiveMessages may
+    // have pre-populated it from the status report with messages the daemon would
+    // otherwise re-deliver as append/replace_tail, causing duplicates).
+    // Skip the sync but advance the cursor so reconnects use the correct position.
+    const updateLastSig = typeof update.lastMessageSignature === 'string'
+      ? update.lastMessageSignature
+      : ''
+    const currentLastSig = buildLastMessageSignature(
+      this.snapshot.liveMessages[this.snapshot.liveMessages.length - 1],
+    )
+    if (update.syncMode !== 'full' && updateLastSig && currentLastSig === updateLastSig) {
+      const advancedCount = Math.max(
+        this.snapshot.cursor.knownMessageCount,
+        Number(update.totalMessages || 0),
+      )
+      const advancedCursor: Required<ReadChatCursor> = {
+        knownMessageCount: advancedCount,
+        lastMessageSignature: updateLastSig,
+        tailLimit: this.snapshot.cursor.tailLimit,
+      }
+      const cursorUnchanged =
+        this.snapshot.cursor.knownMessageCount === advancedCursor.knownMessageCount
+        && this.snapshot.cursor.lastMessageSignature === advancedCursor.lastMessageSignature
+      if (!cursorUnchanged) {
+        this.snapshot = { ...this.snapshot, cursor: advancedCursor }
+        this.manager.updateParams('session.chat_tail', this.subscriptionKey, {
+          knownMessageCount: advancedCursor.knownMessageCount,
+          lastMessageSignature: advancedCursor.lastMessageSignature,
+        })
+      }
+      return
+    }
+
     const nextMessages = applyReadChatSync(this.snapshot.liveMessages, update)
     const nextCursor: Required<ReadChatCursor> = {
       knownMessageCount: nextMessages.length,
