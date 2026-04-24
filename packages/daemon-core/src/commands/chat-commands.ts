@@ -1255,26 +1255,24 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
             ? 'waiting_approval'
             : status?.status;
         LOG.info('Command', `[resolveAction] CLI PTY gate target=${String(args?.targetSessionId || '')} rawStatus=${String(status?.status || '')} effectiveStatus=${String(effectiveStatus || '')} statusModal=${statusModal ? 'yes' : 'no'} surfacedModal=${surfacedModal ? 'yes' : 'no'} instance=${targetInstance ? 'yes' : 'no'}`);
-        if (effectiveStatus !== 'waiting_approval' && !effectiveModal) {
+        if (!effectiveModal) {
             return { success: false, error: 'Not in approval state' };
         }
-        const buttons: string[] = effectiveModal?.buttons || ['Allow once', 'Always allow', 'Deny'];
-        // Resolve button index: explicit buttonIndex arg → button text match → action fallback
+        const buttons: string[] = effectiveModal.buttons;
+        // Resolve button index: explicit buttonIndex arg → exact text match → explicit action mapping
         let buttonIndex = typeof args?.buttonIndex === 'number' ? args.buttonIndex : -1;
-        if (buttonIndex < 0) {
+        if (buttonIndex < 0 && button) {
             const btnLower = button.toLowerCase();
             buttonIndex = buttons.findIndex(b => b.toLowerCase().includes(btnLower));
         }
+        if (buttonIndex < 0 && (action === 'reject' || action === 'deny')) {
+            buttonIndex = buttons.findIndex(b => /deny|reject|no/i.test(b));
+        }
+        if (buttonIndex < 0 && (action === 'always' || /always/i.test(button))) {
+            buttonIndex = buttons.findIndex(b => /always/i.test(b));
+        }
         if (buttonIndex < 0) {
-            if (action === 'reject' || action === 'deny') {
-                buttonIndex = buttons.findIndex(b => /deny|reject|no/i.test(b));
-                if (buttonIndex < 0) buttonIndex = buttons.length - 1;
-            } else if (action === 'always' || /always/i.test(button)) {
-                buttonIndex = buttons.findIndex(b => /always/i.test(b));
-                if (buttonIndex < 0) buttonIndex = 1;
-            } else {
-                buttonIndex = 0; // approve → first option (default selected)
-            }
+            return { success: false, error: 'Approval action did not match any visible button' };
         }
         if (typeof adapter.resolveModal === 'function') {
             adapter.resolveModal(buttonIndex);

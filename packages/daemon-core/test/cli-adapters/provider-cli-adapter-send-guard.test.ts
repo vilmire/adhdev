@@ -52,6 +52,8 @@ describe('ProviderCliAdapter sendMessage guard', () => {
   it('clears a stale waiting guard when the UI is already back at an idle prompt', async () => {
     const adapter = buildAdapter()
     adapter.currentStatus = 'idle'
+    adapter.recentOutputBuffer = '❯\n'
+    adapter.runDetectStatus = vi.fn(() => 'idle')
     adapter.terminalScreen = { getText: () => '❯\n' }
 
     await expect(adapter.sendMessage('next prompt')).resolves.toBeUndefined()
@@ -95,6 +97,29 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('\r')
   })
 
+  it('does not retry submit when parseApproval already reports a visible approval menu', async () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.scripts = undefined
+    adapter.runDetectStatus = vi.fn(() => 'idle')
+    adapter.runParseApproval = vi.fn(() => ({
+      message: 'Confirm the pending action',
+      buttons: ['Continue', 'Cancel'],
+    }))
+    adapter.terminalScreen = {
+      getText: () => '❯ Reply with BEGIN, then the numbers 1 through 40 with one number per line, then END.\n1. Continue\n2. Cancel\nEnter to confirm\n'
+    }
+
+    const sendPromise = adapter.sendMessage('Reply with BEGIN, then the numbers 1 through 40 with one number per line, then END.')
+    await vi.runAllTicks()
+    adapter.responseBuffer = 'Reply with BEGIN, then the numbers 1 through 40 with one number per line, then END.'
+    await vi.advanceTimersByTimeAsync(1000)
+    await expect(sendPromise).resolves.toBeUndefined()
+    expect(adapter.ptyProcess.write).toHaveBeenCalledTimes(1)
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('Reply with BEGIN, then the numbers 1 through 40 with one number per line, then END.\r')
+  })
+
   it('allows an intervention prompt during generation for providers that explicitly opt in', async () => {
     const adapter = buildAdapter({ allowInputDuringGeneration: true })
 
@@ -118,19 +143,19 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('continue anyway\r')
   })
 
-  it('resolves the synthetic Claude startup trust modal with numeric selection plus enter', () => {
+  it('resolves numeric approval menus with an explicit confirm prompt using selection plus enter', () => {
     const adapter = new ProviderCliAdapter({
-      type: 'claude-cli',
-      name: 'Claude Code',
+      type: 'menu-cli',
+      name: 'Menu CLI',
       category: 'cli',
-      binary: 'claude',
+      binary: 'menu-cli',
       spawn: {
-        command: 'claude',
+        command: 'menu-cli',
         args: [],
         shell: true,
         env: {},
       },
-      approvalKeys: { 0: '1', 1: '2' },
+      approvalKeys: { 0: '1\r', 1: '2\r' },
       scripts: {
         detectStatus: () => 'waiting_approval',
         parseApproval: () => null,
@@ -139,14 +164,59 @@ describe('ProviderCliAdapter sendMessage guard', () => {
 
     adapter.ptyProcess = { write: vi.fn() }
     adapter.currentStatus = 'waiting_approval'
-    adapter.activeModal = null
+    adapter.activeModal = {
+      message: 'Choose access level',
+      buttons: ['Trust this workspace', 'Exit'],
+    }
+    adapter.recentOutputBuffer = 'Choose access level\n❯ 1. Trust this workspace\n2. Exit\nEnter to confirm\n'
     adapter.terminalScreen = {
-      getText: () => 'Quick safety check\nClaude Code\'ll be able to read, edit, and execute files here.\n❯ 1. Yes, I trust this folder\n2. No, exit\nEnter to confirm'
+      getText: () => 'Choose access level\n❯ 1. Trust this workspace\n2. Exit\nEnter to confirm'
     }
 
     adapter.resolveModal(0)
 
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('1\r')
+  })
+
+  it('does not synthesize a generic approval modal when detectStatus says waiting_approval but parseApproval returns null', () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'delete it',
+      startedAt: 10,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+    adapter.activeModal = null
+    adapter.runDetectStatus = () => 'waiting_approval'
+    adapter.runParseApproval = () => null
+    adapter.parseCurrentTranscript = () => ({
+      status: 'waiting_approval',
+      messages: [
+        { role: 'user', content: 'delete it' },
+      ],
+      activeModal: null,
+    })
+
+    adapter.evaluateSettled()
+
+    expect(adapter.currentStatus).toBe('generating')
+    expect(adapter.activeModal).toBeNull()
+  })
+
+  it('does not synthesize a generic resolveAction prompt when the provider does not supply a resolver script', async () => {
+    const adapter = buildAdapter()
+    adapter.sendMessage = vi.fn().mockResolvedValue(undefined)
+    adapter.cliScripts = {}
+
+    await adapter.resolveAction({
+      title: 'Lint error',
+      explanation: 'unused variable',
+      message: 'fix it',
+    })
+
+    expect(adapter.sendMessage).not.toHaveBeenCalled()
   })
 
   it('suppresses stale parsed approval state during the post-approval cooldown once the live screen no longer shows a modal', () => {

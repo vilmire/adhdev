@@ -32,7 +32,6 @@ import {
     extractPromptRetrySnippet,
     getLastUserPromptText,
     listCliScriptNames,
-    looksLikeConfirmOnlyLabel,
     normalizePromptText,
     normalizeScreenSnapshot,
     promptLikelyVisible,
@@ -704,7 +703,14 @@ export class ProviderCliAdapter implements CliAdapter {
             const modal = this.runParseApproval(tail);
             const stillWaiting = this.runDetectStatus(tail) === 'waiting_approval' || !!modal;
             if (stillWaiting) {
-                this.activeModal = modal || this.activeModal || { message: 'Approval required', buttons: ['Allow', 'Deny'] };
+                if (!modal) {
+                    LOG.warn('CLI', `[${this.cliType}] approval timeout check found no actionable modal; keeping approval state fail-closed`);
+                    this.activeModal = null;
+                    this.onStatusChange?.();
+                    this.armApprovalExitTimeout();
+                    return;
+                }
+                this.activeModal = modal;
                 this.onStatusChange?.();
                 this.armApprovalExitTimeout();
                 return;
@@ -753,14 +759,6 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
 
-    private shouldResolveModalWithEnter(modal: { message: string; buttons: string[] } | null, buttonIndex: number): boolean {
-        if (!modal || buttonIndex !== 0) return false;
-        const buttons = Array.isArray(modal.buttons) ? modal.buttons : [];
-        if (buttons.length !== 1) return false;
-        const buttonLabel = String(buttons[0] || '').trim();
-        return looksLikeConfirmOnlyLabel(buttonLabel);
-    }
-
     private async waitForInteractivePrompt(maxWaitMs = 5000): Promise<void> {
         const startedAt = Date.now();
         let loggedWait = false;
@@ -771,7 +769,6 @@ export class ProviderCliAdapter implements CliAdapter {
             const stableMs = this.lastScreenChangeAt ? (Date.now() - this.lastScreenChangeAt) : 0;
             const recentlyOutput = this.lastNonEmptyOutputAt ? (Date.now() - this.lastNonEmptyOutputAt) : Number.MAX_SAFE_INTEGER;
             const status = this.runDetectStatus(this.recentOutputBuffer) || this.currentStatus;
-            const startupLikelyActive = /Welcome back|Tips for getting|Recent activity|Claude Code v\d/i.test(screenText);
             const interactiveReady = status === 'idle'
                 && stableMs >= 700
                 && recentlyOutput >= 350;
@@ -780,7 +777,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 if (loggedWait) {
                     LOG.info(
                         'CLI',
-                        `[${this.cliType}] Interactive prompt ready after ${Date.now() - startedAt}ms (stableMs=${stableMs}, recentOutputMs=${recentlyOutput}, startup=${startupLikelyActive})`
+                        `[${this.cliType}] Interactive prompt ready after ${Date.now() - startedAt}ms (stableMs=${stableMs}, recentOutputMs=${recentlyOutput})`
                     );
                 }
                 return;
@@ -790,7 +787,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 loggedWait = true;
                 LOG.info(
                     'CLI',
-                    `[${this.cliType}] Waiting for interactive prompt: status=${status} stableMs=${stableMs} recentOutputMs=${recentlyOutput} startup=${startupLikelyActive} screen=${JSON.stringify(summarizeCliTraceText(screenText, 220)).slice(0, 260)}`
+                    `[${this.cliType}] Waiting for interactive prompt: status=${status} stableMs=${stableMs} recentOutputMs=${recentlyOutput} screen=${JSON.stringify(summarizeCliTraceText(screenText, 220)).slice(0, 260)}`
                 );
             }
             await new Promise(resolve => setTimeout(resolve, 50));
@@ -1088,10 +1085,13 @@ export class ProviderCliAdapter implements CliAdapter {
             return;
         }
         if (!inCooldown) {
+            if (!modal) {
+                LOG.warn('CLI', `[${this.cliType}] detectStatus reported waiting_approval without parseApproval modal; ignoring non-actionable approval state`);
+                return;
+            }
             this.isWaitingForResponse = true;
             this.setStatus('waiting_approval', 'script_detect');
-            // Use parseApproval script for modal info
-            this.activeModal = modal || { message: 'Approval required', buttons: ['Allow', 'Deny'] };
+            this.activeModal = modal;
             if (this.idleTimeout) clearTimeout(this.idleTimeout);
             this.armApprovalExitTimeout();
             this.onStatusChange?.();
@@ -1442,12 +1442,12 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         const detectedStatus = this.runDetectStatus(recentBuffer);
-        const fallbackStatus = detectedStatus && detectedStatus !== 'waiting_approval'
+        const resolvedStatus = detectedStatus && detectedStatus !== 'waiting_approval'
             ? detectedStatus
             : ((this.isWaitingForResponse || this.currentTurnScope) ? 'generating' : (this.currentStatus === 'waiting_approval' ? 'idle' : this.currentStatus));
         return {
             ...parsed,
-            status: fallbackStatus,
+            status: resolvedStatus,
             activeModal: null,
         };
     }
@@ -1769,13 +1769,11 @@ export class ProviderCliAdapter implements CliAdapter {
                 LOG.warn('CLI', `[${this.cliType}] resolveAction error: ${e.message}`);
             }
         }
-        if (!promptText && data) {
-            // Default fallback
-            promptText = `Please fix the following issue:\n${data.title || ''}\n${data.explanation || ''}\n\n${data.message || ''}`.trim();
+        if (!promptText) {
+            LOG.warn('CLI', `[${this.cliType}] resolveAction skipped: provider script did not supply a prompt`);
+            return;
         }
-        if (promptText) {
-            await this.sendMessage(promptText);
-        }
+        await this.sendMessage(promptText);
     }
 
     async sendMessage(text: string): Promise<void> {
@@ -1909,7 +1907,10 @@ export class ProviderCliAdapter implements CliAdapter {
                     if (this.hasMeaningfulResponseBuffer(normalizedPromptSnippet)) return;
                     const screenText = this.terminalScreen.getText();
                     if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
-                    if (/Esc to interrupt|Do you want to proceed|This command requires approval|Allow Codex to|Approve and run now|Always approve this session|Running…|Running\.\.\./i.test(screenText)) return;
+                    const liveApproval = this.runParseApproval(screenText) || this.runParseApproval(this.recentOutputBuffer);
+                    if (liveApproval) return;
+                    const liveStatus = this.runDetectStatus(screenText) || this.runDetectStatus(this.recentOutputBuffer);
+                    if (liveStatus === 'generating' || liveStatus === 'waiting_approval') return;
                     this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
                     LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt ${attempt})`);
                     this.recordTrace('submit_write', {
@@ -1947,6 +1948,10 @@ export class ProviderCliAdapter implements CliAdapter {
                     if (this.hasMeaningfulResponseBuffer(normalizedPromptSnippet)) return;
                     const screenText = this.terminalScreen.getText();
                     if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
+                    const liveApproval = this.runParseApproval(screenText) || this.runParseApproval(this.recentOutputBuffer);
+                    if (liveApproval) return;
+                    const liveStatus = this.runDetectStatus(screenText) || this.runDetectStatus(this.recentOutputBuffer);
+                    if (liveStatus === 'generating' || liveStatus === 'waiting_approval') return;
                     LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt 1)`);
                     this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
                     this.recordTrace('submit_write', {
@@ -2204,12 +2209,7 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         this.setStatus('generating', 'approval_resolved');
         this.onStatusChange?.();
-        const startupTrustModal = /Quick safety check|project trust|Confirm Claude Code project trust|trust (?:this project|the contents of this directory|the files in this folder)/i.test(String(modal?.message || ''));
-        if (startupTrustModal && buttonIndex in this.approvalKeys) {
-            this.ptyProcess.write(`${this.approvalKeys[buttonIndex]}\r`);
-        } else if (this.shouldResolveModalWithEnter(modal, buttonIndex)) {
-            this.ptyProcess.write('\r');
-        } else if (buttonIndex in this.approvalKeys) {
+        if (buttonIndex in this.approvalKeys) {
             this.ptyProcess.write(this.approvalKeys[buttonIndex]);
         } else {
             const DOWN = '\x1B[B';

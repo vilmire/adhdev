@@ -1,12 +1,47 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { ProviderCliAdapter } from '../../src/cli-adapters/provider-cli-adapter.js'
-import { buildCliParseInput } from '../../src/cli-adapters/provider-cli-parse.js'
+import { buildCliParseInput, normalizeCliParsedMessages } from '../../src/cli-adapters/provider-cli-parse.js'
+import { normalizeComparableMessageContent } from '../../src/cli-adapters/provider-cli-shared.js'
 import { LOG } from '../../src/logging/logger.js'
 import { resetDebugRuntimeConfig, resolveDebugRuntimeConfig, setDebugRuntimeConfig } from '../../src/logging/debug-config.js'
 
 describe('ProviderCliAdapter message fallback shaping', () => {
   afterEach(() => {
     resetDebugRuntimeConfig()
+  })
+
+  it('normalizes wrapped assistant prose to the same comparable text as its reflowed form', () => {
+    const wrapped = [
+      'I created and executed tmp/adhdev_cli_verify.py, a small Python script that',
+      'printed the current working directory, the square sequence 1,4,9,16,25, and a co',
+      'mpact JSON representation of those same square values.',
+    ].join('\n')
+    const reflowed = 'I created and executed tmp/adhdev_cli_verify.py, a small Python script that printed the current working directory, the square sequence 1,4,9,16,25, and a compact JSON representation of those same square values.'
+
+    expect(normalizeComparableMessageContent(wrapped)).toBe(normalizeComparableMessageContent(reflowed))
+  })
+
+  it('dedupes consecutive assistant messages when they only differ by wrap formatting', () => {
+    const wrapped = [
+      'I created and executed tmp/adhdev_cli_verify.py, a small Python script that',
+      'printed the current working directory, the square sequence 1,4,9,16,25, and a co',
+      'mpact JSON representation of those same square values.',
+    ].join('\n')
+    const reflowed = 'I created and executed tmp/adhdev_cli_verify.py, a small Python script that printed the current working directory, the square sequence 1,4,9,16,25, and a compact JSON representation of those same square values.'
+
+    const normalized = normalizeCliParsedMessages([
+      { role: 'user', content: 'follow-up prompt' },
+      { role: 'assistant', content: wrapped },
+      { role: 'assistant', content: reflowed },
+    ], {
+      committedMessages: [],
+      scope: null,
+      lastOutputAt: 123,
+      now: 123,
+    })
+
+    expect(normalized).toHaveLength(2)
+    expect(normalized[1]?.content).toBe(reflowed)
   })
 
   it('logs unresolved missing CLI scripts as info instead of warning noise', () => {

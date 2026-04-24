@@ -94,6 +94,51 @@ export function hydrateCliParsedMessages(
         });
 }
 
+function chooseMoreComparableCliMessage(left: CliChatMessage, right: CliChatMessage): CliChatMessage {
+    const leftComparable = normalizeComparableMessageContent(left.content || '');
+    const rightComparable = normalizeComparableMessageContent(right.content || '');
+
+    if (leftComparable && leftComparable === rightComparable) {
+        const leftNewlines = String(left.content || '').split(/\r\n|\n|\r/g).length - 1;
+        const rightNewlines = String(right.content || '').split(/\r\n|\n|\r/g).length - 1;
+        return rightNewlines < leftNewlines ? right : left;
+    }
+
+    return rightComparable.length > leftComparable.length ? right : left;
+}
+
+function dedupeConsecutiveComparableCliMessages(messages: CliChatMessage[]): CliChatMessage[] {
+    const deduped: CliChatMessage[] = [];
+
+    for (const message of messages) {
+        const current = {
+            ...message,
+            content: typeof message.content === 'string' ? message.content : String(message.content || ''),
+        } as CliChatMessage;
+        const previous = deduped[deduped.length - 1];
+        if (!previous) {
+            deduped.push(current);
+            continue;
+        }
+
+        const previousComparable = normalizeComparableMessageContent(previous.content || '');
+        const currentComparable = normalizeComparableMessageContent(current.content || '');
+        const sameRole = previous.role === current.role;
+        const sameKind = (previous.kind || 'standard') === (current.kind || 'standard');
+        const sameSender = (previous.senderName || '') === (current.senderName || '');
+        const comparableMatch = previousComparable && previousComparable === currentComparable;
+
+        if (sameRole && sameKind && sameSender && comparableMatch) {
+            deduped[deduped.length - 1] = chooseMoreComparableCliMessage(previous, current);
+            continue;
+        }
+
+        deduped.push(current);
+    }
+
+    return deduped;
+}
+
 export function normalizeCliParsedMessages(
     parsedMessages: any[],
     options: {
@@ -103,7 +148,7 @@ export function normalizeCliParsedMessages(
         now?: number;
     },
 ): CliChatMessage[] {
-    return hydrateCliParsedMessages(parsedMessages, options).map((message) => ({
+    return dedupeConsecutiveComparableCliMessages(hydrateCliParsedMessages(parsedMessages, options).map((message) => ({
         role: message.role,
         content: message.content,
         timestamp: message.timestamp,
@@ -113,7 +158,7 @@ export function normalizeCliParsedMessages(
         index: message.index,
         meta: message.meta,
         senderName: message.senderName,
-    }));
+    })));
 }
 
 export function buildCliParseInput(options: {

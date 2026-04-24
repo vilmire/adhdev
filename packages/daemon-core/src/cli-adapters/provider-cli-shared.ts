@@ -373,8 +373,58 @@ export function normalizeScreenSnapshot(text: string): string {
         .trim();
 }
 
+const COMMON_COMPARABLE_WRAP_WORDS = new Set([
+    'a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'from', 'in', 'into', 'is', 'it', 'of', 'on', 'or', 'that', 'the', 'their', 'then', 'this', 'to', 'was', 'with',
+]);
+
+function shouldReflowComparableMessageLines(lines: string[]): boolean {
+    return Array.isArray(lines)
+        && lines.length > 1
+        && lines.slice(0, -1).every((line) => String(line || '').trim().length >= 48)
+        && !lines.some((line) => /^```/.test(line))
+        && !lines.some((line) => /^\|/.test(line))
+        && !lines.some((line) => /^\s*(?:[-*+] |\d+\.\s)/.test(line));
+}
+
+function joinComparableMessageLines(lines: string[]): string {
+    return lines.reduce((acc, line) => {
+        const next = String(line || '').trim();
+        if (!next) return acc;
+        if (!acc) return next;
+
+        if (/[,\d]$/.test(acc) && /^\d/.test(next)) {
+            return `${acc}${next}`;
+        }
+
+        if (/[A-Za-z]$/.test(acc) && /^\d/.test(next)) {
+            return `${acc}${next}`;
+        }
+
+        const fragmentMatch = acc.match(/([A-Za-z]{1,4})$/);
+        const fragment = fragmentMatch ? fragmentMatch[1].toLowerCase() : '';
+        if (/^[a-z]/.test(next) && fragment && !COMMON_COMPARABLE_WRAP_WORDS.has(fragment)) {
+            return `${acc}${next}`;
+        }
+
+        return `${acc} ${next}`;
+    }, '')
+        .replace(/\s+([,.;:!?])/g, '$1')
+        .replace(/(\d)\s+,/g, '$1,')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
 export function normalizeComparableMessageContent(text: string): string {
-    return String(text || '')
+    const lines = String(text || '')
+        .split(/\r\n|\n|\r/g)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+    if (lines.length === 0) return '';
+    if (shouldReflowComparableMessageLines(lines)) {
+        return joinComparableMessageLines(lines);
+    }
+    return lines.join(' ')
         .replace(/\s+/g, ' ')
         .trim();
 }
@@ -412,10 +462,6 @@ export function getLastUserPromptText(messages: Array<{ role?: string; content?:
         }
     }
     return '';
-}
-
-export function looksLikeConfirmOnlyLabel(label: string): boolean {
-    return /^(?:continue|confirm|ok|yes|trust|proceed|enter)$/i.test(String(label || '').trim());
 }
 
 function parsePatternEntry(x: unknown): RegExp | null {

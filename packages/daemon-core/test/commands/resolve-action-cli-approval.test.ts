@@ -48,4 +48,54 @@ describe('handleResolveAction for CLI approval state', () => {
     expect(result).toEqual({ success: true, buttonIndex: 3, button: 'Deny' })
     expect(resolveModal).toHaveBeenCalledWith(3)
   })
+
+  it('fails closed when action mapping cannot identify a matching button', async () => {
+    const resolveModal = vi.fn()
+    const adapter = {
+      getStatus: () => ({
+        status: 'waiting_approval',
+        messages: [],
+        activeModal: {
+          message: 'Choose access level',
+          buttons: ['Trust this workspace', 'Exit'],
+        },
+      }),
+      resolveModal,
+      writeRaw: vi.fn(),
+    }
+
+    const result = await handleResolveAction({
+      getProvider: () => ({ type: 'menu-cli', category: 'cli' }),
+      getCliAdapter: () => adapter as any,
+      getCdp: () => null,
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      currentSession: { transport: 'pty', providerType: 'menu-cli', sessionId: 'sess-1' },
+      currentProviderType: 'menu-cli',
+      currentManagerKey: undefined,
+      agentStream: null,
+      ctx: {
+        instanceManager: {
+          getInstance: () => ({
+            getState: () => ({
+              activeChat: {
+                status: 'waiting_approval',
+                activeModal: {
+                  message: 'Choose access level',
+                  buttons: ['Trust this workspace', 'Exit'],
+                },
+              },
+            }),
+          }),
+        },
+      },
+    } as any, {
+      targetSessionId: 'sess-1',
+      agentType: 'menu-cli',
+      action: 'deny',
+    })
+
+    expect(result).toEqual({ success: false, error: 'Approval action did not match any visible button' })
+    expect(resolveModal).not.toHaveBeenCalled()
+  })
 })
