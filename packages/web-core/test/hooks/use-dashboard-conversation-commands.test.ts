@@ -3,6 +3,7 @@ import {
   clearRecentSendOnFailure,
   shouldBlockConversationSend,
   shouldSuppressRecentDuplicateSend,
+  unwrapCommandResult,
 } from '../../src/hooks/useDashboardConversationCommands'
 
 describe('useDashboardConversationCommands send dedupe helpers', () => {
@@ -28,5 +29,19 @@ describe('useDashboardConversationCommands send dedupe helpers', () => {
 
   it('still blocks sends when the conversation is in an approval-gated state', () => {
     expect(shouldBlockConversationSend({ hasMessage: true, blockedMessage: 'Resolve approval', sendInFlight: false })).toBe(true)
+  })
+})
+
+describe('useDashboardConversationCommands command response unwrapping', () => {
+  it('unwraps cloud wrapped send_chat success while preserving standalone raw success', () => {
+    expect(unwrapCommandResult({ success: true, result: { success: true, sent: true } })).toEqual({ success: true, sent: true })
+    expect(unwrapCommandResult({ success: true, sent: true })).toEqual({ success: true, sent: true })
+  })
+
+  it('unwraps cloud wrapped send_chat failure so callers surface the inner error', () => {
+    expect(unwrapCommandResult({ success: true, result: { success: false, error: 'provider failed' } })).toEqual({
+      success: false,
+      error: 'provider failed',
+    })
   })
 })

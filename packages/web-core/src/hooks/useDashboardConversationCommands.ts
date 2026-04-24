@@ -51,7 +51,7 @@ export function clearRecentSendOnFailure(
         : lastSend
 }
 
-function unwrapCommandResult(raw: any): any {
+export function unwrapCommandResult(raw: any): any {
     if (!raw || typeof raw !== 'object') return raw
     if (raw.result && typeof raw.result === 'object') return raw.result
     return raw

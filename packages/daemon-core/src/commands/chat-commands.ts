@@ -18,6 +18,7 @@ import type { ReadChatCursor, ReadChatSyncMode, SessionTransport } from '../shar
 import { normalizeChatMessages } from '../providers/chat-message-normalization.js';
 
 const RECENT_SEND_WINDOW_MS = 1200;
+export const READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS = 25_000;
 const recentSendByTarget = new Map<string, number>();
 
 interface ApprovalSelectableInstance extends ProviderInstance {
@@ -400,7 +401,7 @@ function didProviderConfirmSend(result: any): boolean {
 
 async function readExtensionChatState(h: CommandHelpers): Promise<any | null> {
     try {
-        const evalResult = await h.evaluateProviderScript('readChat', undefined, 50000);
+        const evalResult = await h.evaluateProviderScript('readChat', undefined, READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS);
         if (!evalResult?.result) return null;
         const parsed = parseMaybeJson(evalResult.result);
         return parsed && typeof parsed === 'object' ? parsed : null;
@@ -513,7 +514,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ? parsedRecord.providerSessionId
                 : undefined;
             if (status) {
-                LOG.info('Command', `[read_chat] cli-like resolved provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord?.status || '')} shouldPreferAdapterMessages=${String(shouldPreferAdapterMessages)} adapterMsgCount=${Array.isArray(adapterStatus.messages) ? adapterStatus.messages.length : 0} parsedMsgCount=${Array.isArray(parsedRecord?.messages) ? parsedRecord.messages.length : 0} returnedMsgCount=${Array.isArray((status as any).messages) ? (status as any).messages.length : 0}`);
+                LOG.debug('Command', `[read_chat] cli-like resolved provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord?.status || '')} shouldPreferAdapterMessages=${String(shouldPreferAdapterMessages)} adapterMsgCount=${Array.isArray(adapterStatus.messages) ? adapterStatus.messages.length : 0} parsedMsgCount=${Array.isArray(parsedRecord?.messages) ? parsedRecord.messages.length : 0} returnedMsgCount=${Array.isArray((status as any).messages) ? (status as any).messages.length : 0}`);
                 return buildReadChatCommandResult({
                     messages: (status as any).messages || [],
                     status: status.status,
@@ -540,7 +541,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
     // Extension transport: evaluateInSession
     if (isExtensionTransport(transport)) {
         try {
-            const evalResult = await h.evaluateProviderScript('readChat', undefined, 50000);
+            const evalResult = await h.evaluateProviderScript('readChat', undefined, READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS);
             if (evalResult?.result) {
                 let parsed = evalResult.result;
                 if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
@@ -643,7 +644,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
     const script = h.getProviderScript('readChat') || h.getProviderScript('read_chat');
     if (script) {
         try {
-            const evalResult = await h.evaluateProviderScript('readChat', undefined, 50000);
+            const evalResult = await h.evaluateProviderScript('readChat', undefined, READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS);
             if (evalResult?.result) {
                 let parsed: any = evalResult.result;
                 if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }

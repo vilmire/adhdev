@@ -39,6 +39,7 @@ export default function CliTerminalPane({
     useBaseDaemons();
     const { sendPtyInput } = useTransport();
     const [runtimeReady, setRuntimeReady] = useState(false);
+    const [runtimeStatusMessage, setRuntimeStatusMessage] = useState('Runtime terminal unavailable');
     const [terminalScale, setTerminalScale] = useState(1);
     const [terminalViewport, setTerminalViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const [terminalIntrinsicViewport, setTerminalIntrinsicViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -85,7 +86,7 @@ export default function CliTerminalPane({
     const daemonRouteId = activeConv.daemonId || activeConv.routeId?.split(':')[0] || activeConv.routeId || '';
     const sendBlockMessage = getConversationSendBlockMessage(activeConv);
     const inputStatusMessage = !runtimeReady
-        ? 'Runtime terminal unavailable'
+        ? runtimeStatusMessage
         : (sendFeedbackMessage || sendBlockMessage);
     const MIN_TERMINAL_SCALE = DEFAULT_MIN_CLI_TERMINAL_SCALE;
     const MAX_TERMINAL_SCALE = DEFAULT_MAX_CLI_TERMINAL_SCALE;
@@ -146,6 +147,7 @@ export default function CliTerminalPane({
             cancelScheduledFrame();
         }
         setRuntimeReady(false);
+        setRuntimeStatusMessage('Runtime terminal unavailable');
         terminalRef.current?.reset?.();
     };
 
@@ -159,6 +161,7 @@ export default function CliTerminalPane({
             cancelScheduledFrame();
         }
         setRuntimeReady(true);
+        setRuntimeStatusMessage('');
         terminalRef.current?.reset?.();
     };
 
@@ -186,6 +189,7 @@ export default function CliTerminalPane({
         if (seq === 0 && liveOutputStartedRef.current) return;
         seededSnapshotSeqRef.current = seq;
         setRuntimeReady(true);
+        setRuntimeStatusMessage('');
         if (typeof cols === 'number' && typeof rows === 'number' && cols > 0 && rows > 0) {
             terminalRef.current?.resize?.(cols, rows);
         }
@@ -221,6 +225,7 @@ export default function CliTerminalPane({
                     seededSnapshotSeqRef.current = Math.max(seededSnapshotSeqRef.current, event.seq);
                 }
                 if (!runtimeReady) setRuntimeReady(true);
+                if (!runtimeReady) setRuntimeStatusMessage('');
                 if (typeof event.data === 'string') enqueueTerminalWrite(event.data);
                 return;
             }
@@ -240,18 +245,31 @@ export default function CliTerminalPane({
         };
     }, [daemonRouteId, sessionId, terminalRef, isVisible, runtimeReady]);
 
+    const requestRuntimeSnapshot = async () => {
+        if (!daemonRouteId || !sessionId) return;
+        setRuntimeStatusMessage('Loading runtime terminal...');
+        try {
+            const snapshotResult = await connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId);
+            if (snapshotResult && snapshotResult.success === false) {
+                setRuntimeReady(false);
+                setRuntimeStatusMessage(`Runtime terminal unavailable: ${snapshotResult.error}`);
+            }
+        } catch (error: any) {
+            setRuntimeReady(false);
+            setRuntimeStatusMessage(`Runtime terminal unavailable: ${error?.message || String(error)}`);
+        }
+    };
+
     useEffect(() => {
         if (!sessionId) return;
 
         if (daemonRouteId && connectionManager.getState?.(daemonRouteId) === 'connected') {
-            setRuntimeReady(true);
-            connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId).catch(() => {});
+            void requestRuntimeSnapshot();
         }
 
         const unsubState = connectionManager.onStateChange?.((connectedDaemonId: string, state: string) => {
             if (connectedDaemonId !== daemonRouteId || state !== 'connected') return;
-            setRuntimeReady(true);
-            connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId).catch(() => {});
+            void requestRuntimeSnapshot();
         });
 
         return () => {
@@ -321,7 +339,7 @@ export default function CliTerminalPane({
         }
 
         if (daemonRouteId && sessionId && connectionManager.getState?.(daemonRouteId) === 'connected') {
-            connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId).catch(() => {});
+            void requestRuntimeSnapshot();
         }
 
         if (pendingLiveOutputRef.current && flushFrameRef.current === null) {
@@ -440,7 +458,7 @@ export default function CliTerminalPane({
                 </div>
                 {!runtimeReady && (
                     <div className="absolute inset-x-2 top-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-300 pointer-events-none">
-                        Runtime terminal unavailable
+                        {runtimeStatusMessage}
                     </div>
                 )}
             </div>

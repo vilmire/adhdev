@@ -49,7 +49,7 @@ describe('CLI terminal measured layout plumbing', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
     expect(source.includes('const pendingSnapshot = pendingHiddenSnapshotRef.current;')).toBe(true)
     expect(source.includes('seedTerminal(pendingSnapshot.text, pendingSnapshot.seq, pendingSnapshot.cols, pendingSnapshot.rows);')).toBe(true)
-    expect(source.includes('connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId).catch(() => {});')).toBe(true)
+    expect(source.includes('void requestRuntimeSnapshot();')).toBe(true)
     expect(source.includes('} else if (daemonRouteId && connectionManager.getState?.(daemonRouteId) === \'connected\') {')).toBe(false)
     expect(source.includes('const MAX_TERMINAL_WRITE_CHARS_PER_FRAME = 32 * 1024;')).toBe(true)
     expect(source.includes('const nextChunk = queuedOutput.slice(0, MAX_TERMINAL_WRITE_CHARS_PER_FRAME);')).toBe(true)
@@ -64,6 +64,14 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(chatSource.includes('onSend={handleSendChat}')).toBe(true)
     expect(terminalSource.includes('return handleSendChat(message);')).toBe(true)
     expect(terminalSource.includes('if (!runtimeReady || sendBlockMessage) return false;')).toBe(true)
+  })
+
+  it('does not mark the terminal runtime ready just because P2P connected; readiness comes from snapshot or live output', () => {
+    const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
+    expect(source.includes("setRuntimeReady(true);\n            connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId).catch(() => {});")).toBe(false)
+    expect(source.includes('const requestRuntimeSnapshot = async () => {')).toBe(true)
+    expect(source.includes('const snapshotResult = await connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId);')).toBe(true)
+    expect(source.includes('setRuntimeStatusMessage(`Runtime terminal unavailable: ${snapshotResult.error}`);')).toBe(true)
   })
 
   it('uses measured renderer overflow to decide pan/scroll ownership, anchors the terminal surface bottom-left without centering slack, exposes horizontal pan when needed, sizes the pan surface from rendered terminal dimensions, and avoids eager auto-grow after the first fit', () => {

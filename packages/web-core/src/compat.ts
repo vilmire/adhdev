@@ -1,6 +1,7 @@
 /**
  * Compatibility layer — wraps functions used by existing page code
- * with web-core abstractions. Supports gradual migration.
+ * with web-core abstractions. Host apps must inject real implementations;
+ * missing injection should fail explicitly, not silently fall back.
  */
 import { useBaseDaemons } from './context/BaseDaemonContext'
 import type { BaseDaemonContextValue } from './context/BaseDaemonContext'
@@ -62,8 +63,8 @@ class ConnectionManagerStub {
         return () => {}
     }
 
-    requestRuntimeSnapshot(_daemonId: string, _sessionId: string): Promise<void> {
-        return Promise.resolve()
+    requestRuntimeSnapshot(_daemonId: string, _sessionId: string): Promise<{ success: true } | { success: false; error: string }> {
+        return Promise.resolve({ success: false, error: 'Connection manager not configured; host app must inject requestRuntimeSnapshot' })
     }
 }
 

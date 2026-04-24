@@ -122,10 +122,17 @@ class StandaloneConnectionManager {
         }
     }
 
-    async requestRuntimeSnapshot(_daemonId: string, sessionId: string): Promise<void> {
-        if (!sessionId) return
+    async requestRuntimeSnapshot(_daemonId: string, sessionId: string): Promise<{ success: true } | { success: false; error: string }> {
+        if (!sessionId) return { success: false, error: 'sessionId is required' }
         const res = await standaloneFetch(`/api/v1/runtime/${encodeURIComponent(sessionId)}/snapshot`)
-        if (!res.ok) return
+        if (!res.ok) {
+            let error = `Runtime snapshot unavailable (${res.status})`
+            try {
+                const body = await res.json() as { error?: string }
+                if (body?.error) error = body.error
+            } catch {}
+            return { success: false, error }
+        }
         const snapshot = await res.json() as { seq?: number; text?: string; truncated?: boolean; cols?: number; rows?: number }
         this.emitRuntimeEvent(sessionId, {
             type: 'runtime_snapshot',
@@ -136,6 +143,7 @@ class StandaloneConnectionManager {
             cols: typeof snapshot.cols === 'number' ? snapshot.cols : undefined,
             rows: typeof snapshot.rows === 'number' ? snapshot.rows : undefined,
         })
+        return { success: true }
     }
 
     private emitRuntimeEvent(sessionId: string, event: RuntimeEvent): void {
