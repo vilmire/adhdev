@@ -1258,7 +1258,7 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         if (!effectiveModal) {
             return { success: false, error: 'Not in approval state' };
         }
-        const buttons: string[] = effectiveModal.buttons;
+        const buttons: string[] = Array.isArray(effectiveModal.buttons) ? effectiveModal.buttons : [];
         // Resolve button index: explicit buttonIndex arg → exact text match → explicit action mapping
         let buttonIndex = typeof args?.buttonIndex === 'number' ? args.buttonIndex : -1;
         if (buttonIndex < 0 && button) {
