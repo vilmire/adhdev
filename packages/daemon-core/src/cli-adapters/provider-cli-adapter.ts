@@ -890,7 +890,10 @@ export class ProviderCliAdapter implements CliAdapter {
             ? parsedTranscript.activeModal
             : null;
         const modal = this.runParseApproval(tail) || parsedModal;
-        const scriptStatus = this.runDetectStatus(tail);
+        const rawScriptStatus = this.runDetectStatus(tail);
+        const scriptStatus = parsedTranscript?.status === 'waiting_approval' && modal
+            ? 'waiting_approval'
+            : rawScriptStatus;
         const parsedMessages = Array.isArray(parsedTranscript?.messages)
             ? normalizeCliParsedMessages(parsedTranscript.messages, {
                 committedMessages: this.committedMessages,
