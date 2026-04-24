@@ -3028,8 +3028,18 @@
         body {
             -webkit-user-select: none;
             user-select: none;
-            /* Global safe-area: push entire app below notch */
+        }
+
+        /* Keep safe-area offset on app surfaces instead of shifting the whole body.
+           This avoids iPad standalone/PWA touch hit-testing drift on the fixed sidebar. */
+        .landing {
             padding-top: env(safe-area-inset-top, 0px);
+            box-sizing: border-box;
+        }
+
+        .main-content {
+            padding-top: env(safe-area-inset-top, 0px);
+            box-sizing: border-box;
         }
 
         /* Fixed elements need their own safe-area offset */
