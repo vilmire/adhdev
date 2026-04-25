@@ -367,6 +367,15 @@ export class CliProviderInstance implements ProviderInstance {
                 ? parsedMessages.slice(-historyMessageCount)
                 : [];
         }
+        // During waiting_approval the approval dialog fills the terminal, pushing prior
+        // conversation out of view. parseOutput can only see the approval UI and returns
+        // a partial or empty message list. committedMessages (adapterStatus.messages) is
+        // the reliable source of conversation history — use it as a floor so history
+        // is not lost while the approval dialog is visible.
+        const committedMessages = Array.isArray(adapterStatus.messages) ? adapterStatus.messages : [];
+        if (adapterStatus.status === 'waiting_approval' && parsedMessages.length < committedMessages.length) {
+            parsedMessages = normalizeChatMessages(committedMessages as any);
+        }
         const mergedMessages = this.mergeConversationMessages(parsedMessages);
         const canonicalBackedHistory = this.syncCanonicalSavedHistoryIfNeeded();
 
