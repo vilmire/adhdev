@@ -708,7 +708,7 @@ export class ProviderCliAdapter implements CliAdapter {
     private armApprovalExitTimeout(): void {
         if (this.approvalExitTimeout) clearTimeout(this.approvalExitTimeout);
         this.approvalExitTimeout = setTimeout(() => {
-            if (this.currentStatus !== 'waiting_approval') return;
+            if (!this.hasActionableApproval()) return;
             const tail = this.recentOutputBuffer;
             const screenText = this.terminalScreen.getText() || '';
             const modal = this.runParseApproval(tail);
@@ -736,7 +736,7 @@ export class ProviderCliAdapter implements CliAdapter {
 
     private shouldRetryFinishResponse(commitResult: { hasAssistant: boolean; assistantContent: string }): boolean {
         if (!this.currentTurnScope) return false;
-        if (this.currentStatus === 'waiting_approval' || this.activeModal) return false;
+        if (this.hasActionableApproval()) return false;
         if (this.finishRetryCount >= ProviderCliAdapter.MAX_FINISH_RETRIES) return false;
         if (commitResult.hasAssistant && commitResult.assistantContent.trim()) return false;
 
@@ -757,7 +757,7 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     private shouldDeferIdleTimeoutFinish(): boolean {
-        if (!this.isWaitingForResponse || this.currentStatus === 'waiting_approval') {
+        if (!this.isWaitingForResponse || this.hasActionableApproval()) {
             return false;
         }
         const latestStatus = this.runDetectStatus(this.recentOutputBuffer) || this.currentStatus;
@@ -942,7 +942,7 @@ export class ProviderCliAdapter implements CliAdapter {
             && !lastParsedAssistant
             && !this.submitRetryUsed
             && this.ptyProcess
-            && this.currentStatus !== 'waiting_approval'
+            && !this.hasActionableApproval()
             && promptLikelyVisible(screenText, normalizedPromptSnippet)
             && !this.hasMeaningfulResponseBuffer(normalizedPromptSnippet)
         ) {
@@ -1054,7 +1054,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.setStatus('generating', 'recent_activity_hold');
         if (this.idleTimeout) clearTimeout(this.idleTimeout);
         this.idleTimeout = setTimeout(() => {
-            if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
+            if (this.isWaitingForResponse && !this.hasActionableApproval()) {
                 if (this.shouldDeferIdleTimeoutFinish()) return;
                 this.finishResponse();
             }
@@ -1084,16 +1084,16 @@ export class ProviderCliAdapter implements CliAdapter {
             if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
             this.activeModal = null;
             if (this.isWaitingForResponse) {
-                this.setStatus('generating', inCooldown ? 'approval_cooldown_ignore' : 'approval_prompt_gone');
+                this.setStatus('idle', inCooldown ? 'approval_cooldown_non_actionable' : 'approval_prompt_gone_non_actionable');
                 if (this.idleTimeout) clearTimeout(this.idleTimeout);
                 this.idleTimeout = setTimeout(() => {
-                    if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
+                    if (this.isWaitingForResponse && !this.hasActionableApproval()) {
                         if (this.shouldDeferIdleTimeoutFinish()) return;
                         this.finishResponse();
                     }
                 }, this.timeouts.generatingIdle);
             } else {
-                this.setStatus('idle', inCooldown ? 'approval_cooldown_ignore' : 'approval_prompt_gone');
+                this.setStatus('idle', inCooldown ? 'approval_cooldown_non_actionable' : 'approval_prompt_gone_non_actionable');
             }
             this.onStatusChange?.();
             return;
@@ -1153,9 +1153,7 @@ export class ProviderCliAdapter implements CliAdapter {
             if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
             this.activeModal = null;
             this.lastApprovalResolvedAt = Date.now();
-            if (this.isWaitingForResponse) {
-                this.setStatus('generating', 'approval_prompt_gone_idle_confirm');
-            }
+            this.setStatus('idle', 'approval_prompt_gone_script_idle');
         }
         if (!this.isWaitingForResponse) {
             if (prevStatus !== 'idle') {
@@ -1225,7 +1223,7 @@ export class ProviderCliAdapter implements CliAdapter {
 
         if (this.idleTimeout) clearTimeout(this.idleTimeout);
         this.idleTimeout = setTimeout(() => {
-            if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
+            if (this.isWaitingForResponse && !this.hasActionableApproval()) {
                 if (this.shouldDeferIdleTimeoutFinish()) return;
                 this.clearIdleFinishCandidate('idle_timeout_finish');
                 this.finishResponse();
@@ -1264,7 +1262,7 @@ export class ProviderCliAdapter implements CliAdapter {
             if (this.finishRetryTimer) clearTimeout(this.finishRetryTimer);
             this.finishRetryTimer = setTimeout(() => {
                 this.finishRetryTimer = null;
-                if (this.isWaitingForResponse && this.currentStatus !== 'waiting_approval') {
+                if (this.isWaitingForResponse && !this.hasActionableApproval()) {
                     this.finishResponse();
                 }
             }, ProviderCliAdapter.FINISH_RETRY_DELAY_MS);
@@ -1427,10 +1425,14 @@ export class ProviderCliAdapter implements CliAdapter {
         }
     }
 
+    private hasActionableApproval(startupModal: { message: string; buttons: string[] } | null = null): boolean {
+        return !!(startupModal || this.activeModal);
+    }
+
     private projectEffectiveStatus(startupModal: { message: string; buttons: string[] } | null = null): CliSessionStatus['status'] {
         if (this.parseErrorMessage) return 'error';
-        if (startupModal || this.activeModal) return 'waiting_approval';
-        if (this.isWaitingForResponse && this.currentTurnScope && this.currentStatus === 'idle') return 'generating';
+        if (this.hasActionableApproval(startupModal)) return 'waiting_approval';
+        if (this.isWaitingForResponse && this.currentTurnScope && this.currentStatus !== 'stopped') return 'generating';
         return this.currentStatus;
     }
 
@@ -1815,7 +1817,7 @@ export class ProviderCliAdapter implements CliAdapter {
         const allowInputDuringGeneration = this.provider.allowInputDuringGeneration === true;
         const allowInterventionPrompt = allowInputDuringGeneration
             && this.isWaitingForResponse
-            && this.currentStatus !== 'waiting_approval';
+            && !this.hasActionableApproval();
         if (this.startupParseGate) {
             const deadline = Date.now() + 10000;
             while (this.startupParseGate && Date.now() < deadline) {
@@ -1946,7 +1948,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 const retrySubmitIfStuck = (attempt: number) => {
                     this.submitRetryTimer = null;
                     if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
-                    if (this.currentStatus === 'waiting_approval') return;
+                    if (this.hasActionableApproval()) return;
                     if (this.hasMeaningfulResponseBuffer(normalizedPromptSnippet)) return;
                     const screenText = this.terminalScreen.getText();
                     if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
@@ -1990,7 +1992,7 @@ export class ProviderCliAdapter implements CliAdapter {
                     this.submitRetryTimer = setTimeout(() => {
                         this.submitRetryTimer = null;
                         if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
-                        if (this.currentStatus === 'waiting_approval') return;
+                        if (this.hasActionableApproval()) return;
                         if (this.hasMeaningfulResponseBuffer(normalizedPromptSnippet)) return;
                         const screenText = this.terminalScreen.getText();
                         if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
@@ -2284,6 +2286,9 @@ export class ProviderCliAdapter implements CliAdapter {
             name: this.cliName,
             providerResolution: this.providerResolutionMeta,
             status: effectiveStatus,
+            projectedStatus: effectiveStatus,
+            rawStatus: this.currentStatus,
+            lifecycleStatus: this.isWaitingForResponse ? 'awaiting_response' : 'idle',
             ready: effectiveReady,
             startupParseGate: this.startupParseGate,
             spawnAt: this.spawnAt,

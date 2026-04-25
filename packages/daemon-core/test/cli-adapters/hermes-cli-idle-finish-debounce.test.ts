@@ -457,7 +457,7 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
     expect(write).toHaveBeenCalledWith('\x1B[B\x1B[B\x1B[B\r')
   })
 
-  it('does not remain in waiting_approval without an active modal after an approved Claude turn settles idle', async () => {
+  it('projects an active Claude turn as generating after approval clears without letting the adapter override provider idle status', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-22T12:00:00Z'))
 
@@ -491,7 +491,7 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
     adapter.evaluateSettled()
 
     expect(adapter.activeModal).toBeNull()
-    expect(adapter.currentStatus).toBe('generating')
+    expect(adapter.currentStatus).toBe('idle')
     expect(adapter.getStatus().status).toBe('generating')
 
     await vi.advanceTimersByTimeAsync(5_000)
