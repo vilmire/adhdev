@@ -114,4 +114,24 @@ describe('conversation presenters', () => {
 
         expect(getConversationPreviewText(conversation)).toBe('Newest compact preview')
     })
+
+    it('prefers the rich transcript tail over compact preview when transcript time is missing or tied', () => {
+        const missingTimestamp = createConversation({
+            lastMessagePreview: 'User prompt from compact status',
+            lastMessageAt: 3000,
+            messages: [
+                { role: 'assistant', content: 'Assistant reply without timestamp' },
+            ],
+        })
+        const tiedTimestamp = createConversation({
+            lastMessagePreview: 'User prompt from compact status',
+            lastMessageAt: 3000,
+            messages: [
+                { role: 'assistant', content: 'Assistant reply at same timestamp', receivedAt: 3000 },
+            ],
+        })
+
+        expect(getConversationPreviewText(missingTimestamp)).toBe('Assistant reply without timestamp')
+        expect(getConversationPreviewText(tiedTimestamp)).toBe('Assistant reply at same timestamp')
+    })
 })

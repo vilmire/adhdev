@@ -47,7 +47,9 @@ export function getConversationPreviewText(conversation: ActiveConversation): st
         ? conversation.lastMessageAt
         : 0
 
-    if (summaryPreview && (!messagePreview || (summaryAt > 0 && summaryAt >= messageAt))) return summaryPreview
+    if (summaryPreview && !messagePreview) return summaryPreview
+    if (messagePreview && !summaryPreview) return messagePreview
+    if (summaryPreview && messagePreview && summaryAt > 0 && messageAt > 0 && summaryAt > messageAt) return summaryPreview
     if (messagePreview) return messagePreview
     if (summaryPreview) return summaryPreview
     if (conversation.title) return conversation.title
