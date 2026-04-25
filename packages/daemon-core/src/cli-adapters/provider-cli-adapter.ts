@@ -111,6 +111,12 @@ function normalizeComparableTranscriptText(value: unknown): string {
         .trim();
 }
 
+function hasVisibleInterruptPrompt(text: string): boolean {
+    return /\bEnter\s+to\s+interrupt\b(?:\s*,?\s*Ctrl\s*(?:\+|-)?\s*C\s+to\s+cancel)?/i.test(
+        sanitizeTerminalText(text || ''),
+    );
+}
+
 function parsedTranscriptIsRicherThanCommitted(
     parsedMessages: Array<{ role?: string; content?: unknown; id?: string; index?: number }> | null | undefined,
     committedMessages: Array<{ role?: string; content?: unknown; id?: string; index?: number }> | null | undefined,
@@ -1660,7 +1666,8 @@ export class ProviderCliAdapter implements CliAdapter {
             && this.currentStatus === 'idle'
             && !this.currentTurnScope
             && !result?.activeModal
-            && hasVisibleAssistantMessage;
+            && hasVisibleAssistantMessage
+            && !hasVisibleInterruptPrompt(screenText);
         if (shouldClampStaleGeneratingToIdle) {
             result = {
                 ...result,

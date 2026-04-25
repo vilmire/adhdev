@@ -240,6 +240,37 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.sendMessage).not.toHaveBeenCalled()
   })
 
+  it('does not clamp parsed generating status to idle while Hermes interrupt prompt is visible', () => {
+    const adapter = buildAdapter({ allowInputDuringGeneration: true })
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.currentTurnScope = null
+    adapter.recentOutputBuffer = '⚕ ❯ type a message + Enter to interrupt, Ctrl+C to cancel\n'
+    adapter.accumulatedBuffer = [
+      '● Please inspect the workspace.',
+      '╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮',
+      'I am still checking a couple more files...',
+      '╰──────────────────────────────────────────────────────────────────────────────╯',
+      '⚕ ❯ type a message + Enter to interrupt, Ctrl+C to cancel',
+    ].join('\n')
+    adapter.accumulatedRawBuffer = adapter.accumulatedBuffer
+    adapter.terminalScreen = { getText: () => adapter.accumulatedBuffer }
+    adapter.cliScripts.detectStatus = () => 'generating'
+    adapter.cliScripts.parseApproval = () => null
+    adapter.cliScripts.parseOutput = () => ({
+      status: 'generating',
+      messages: [
+        { role: 'user', content: 'Please inspect the workspace.' },
+        { role: 'assistant', content: 'I am still checking a couple more files...' },
+      ],
+      activeModal: null,
+    })
+
+    const parsed = adapter.getScriptParsedStatus()
+
+    expect(parsed.status).toBe('generating')
+  })
+
   it('suppresses stale parsed approval state during the post-approval cooldown once the live screen no longer shows a modal', () => {
     const adapter = buildAdapter()
     adapter.currentStatus = 'generating'
