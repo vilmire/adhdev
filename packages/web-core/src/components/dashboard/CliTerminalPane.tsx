@@ -39,6 +39,8 @@ export default function CliTerminalPane({
     useBaseDaemons();
     const { sendPtyInput } = useTransport();
     const [runtimeReady, setRuntimeReady] = useState(false);
+    const runtimeReadyRef = useRef(false);
+    runtimeReadyRef.current = runtimeReady;
     const [runtimeStatusMessage, setRuntimeStatusMessage] = useState('Runtime terminal unavailable');
     const [terminalScale, setTerminalScale] = useState(1);
     const [terminalViewport, setTerminalViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -210,8 +212,8 @@ export default function CliTerminalPane({
                 if (typeof event.seq === 'number') {
                     seededSnapshotSeqRef.current = Math.max(seededSnapshotSeqRef.current, event.seq);
                 }
-                if (!runtimeReady) setRuntimeReady(true);
-                if (!runtimeReady) setRuntimeStatusMessage('');
+                if (!runtimeReadyRef.current) setRuntimeReady(true);
+                if (!runtimeReadyRef.current) setRuntimeStatusMessage('');
                 if (typeof event.data === 'string') enqueueTerminalWrite(event.data);
                 return;
             }
@@ -238,7 +240,7 @@ export default function CliTerminalPane({
         return () => {
             unsubRuntime();
         };
-    }, [daemonRouteId, sessionId, terminalRef, isVisible, runtimeReady]);
+    }, [daemonRouteId, sessionId, terminalRef, isVisible]);
 
     const requestRuntimeSnapshot = async () => {
         if (!daemonRouteId || !sessionId) return;
