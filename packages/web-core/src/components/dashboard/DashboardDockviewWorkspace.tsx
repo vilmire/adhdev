@@ -398,6 +398,7 @@ function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDo
                 userName={ctx.userName}
                 scrollToBottomRequestNonce={ctx.scrollToBottomRequest?.tabKey === activeConv.tabKey ? ctx.scrollToBottomRequest.nonce : undefined}
                 isInputActive={isPanelActive}
+                isVisible={isPanelActive}
             />
         </div>
     )

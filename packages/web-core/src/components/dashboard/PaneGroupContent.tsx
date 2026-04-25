@@ -26,6 +26,11 @@ interface PaneGroupContentProps {
     userName?: string
     scrollToBottomRequestNonce?: number
     isInputActive?: boolean
+    isVisible?: boolean
+}
+
+export function getPaneGroupContentChildVisibility(parentIsVisible: boolean | undefined, localIsVisible = true): boolean {
+    return (parentIsVisible ?? true) && localIsVisible
 }
 
 const PaneGroupContent = memo(function PaneGroupContent({
@@ -45,6 +50,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     userName,
     scrollToBottomRequestNonce,
     isInputActive = true,
+    isVisible = true,
 }: PaneGroupContentProps) {
     const [terminalRevealReady, setTerminalRevealReady] = useState(isCliTerminal)
     const previousIsCliTerminalRef = useRef(isCliTerminal)
@@ -79,6 +85,9 @@ const PaneGroupContent = memo(function PaneGroupContent({
 
     const showTerminalPane = isCliTerminal && terminalRevealReady
     const showChatPane = !isCliTerminal || !terminalRevealReady
+    const terminalPaneVisible = getPaneGroupContentChildVisibility(isVisible, isCliTerminal)
+    const chatPaneVisible = getPaneGroupContentChildVisibility(isVisible, showChatPane)
+    const paneVisible = getPaneGroupContentChildVisibility(isVisible)
     const modalState = useSessionModalSubscription(activeConv)
     const effectiveConv: ActiveConversation = (
         modalState.status || modalState.modalMessage || modalState.modalButtons
@@ -129,8 +138,8 @@ const PaneGroupContent = memo(function PaneGroupContent({
                             handleSendChat={handleSendChat}
                             isSendingChat={isSendingChat}
                             sendFeedbackMessage={sendFeedbackMessage}
-                            isVisible={isCliTerminal}
-                            isInputActive={isInputActive && isCliTerminal}
+                            isVisible={terminalPaneVisible}
+                            isInputActive={isInputActive && terminalPaneVisible}
                         />
                     </div>
                     <div
@@ -157,8 +166,8 @@ const PaneGroupContent = memo(function PaneGroupContent({
                             actionLogs={actionLogs}
                             userName={userName}
                             scrollToBottomRequestNonce={scrollToBottomRequestNonce}
-                            isInputActive={isInputActive && showChatPane}
-                            isVisible={showChatPane}
+                            isInputActive={isInputActive && chatPaneVisible}
+                            isVisible={chatPaneVisible}
                         />
                     </div>
                 </div>
@@ -174,7 +183,8 @@ const PaneGroupContent = memo(function PaneGroupContent({
                     actionLogs={actionLogs}
                     userName={userName}
                     scrollToBottomRequestNonce={scrollToBottomRequestNonce}
-                    isInputActive={isInputActive}
+                    isInputActive={isInputActive && paneVisible}
+                    isVisible={paneVisible}
                 />
             )}
         </>
@@ -195,6 +205,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
     && prev.userName === next.userName
     && prev.scrollToBottomRequestNonce === next.scrollToBottomRequestNonce
     && prev.isInputActive === next.isInputActive
+    && prev.isVisible === next.isVisible
 ));
 
 export default PaneGroupContent
