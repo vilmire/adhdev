@@ -1171,11 +1171,7 @@ export class ProviderCliAdapter implements CliAdapter {
         const screenText = this.terminalScreen.getText() || '';
         const effectiveScreenText = screenText || this.accumulatedBuffer;
         const noActiveTurn = !this.currentTurnScope;
-        const looksIdleChrome = /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(effectiveScreenText)
-            || (/accept edits on/i.test(effectiveScreenText)
-                && (/Update available!/i.test(screenText)
-                    || /\/effort/i.test(screenText)
-                    || /^.*➜\s+\S+/m.test(effectiveScreenText)));
+        const looksIdleChrome = /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(effectiveScreenText);
         const parsedShowsLiveAssistantProgress = parsedStatus === 'generating'
             && !!lastParsedAssistant
             && parsedMessages.length > this.committedMessages.length;
