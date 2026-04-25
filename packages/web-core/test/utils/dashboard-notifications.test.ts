@@ -87,6 +87,57 @@ describe('dashboard notifications', () => {
     })
   })
 
+  it('uses the rich transcript tail for notification preview when compact preview is stale', () => {
+    const conversation = createConversation({
+      lastMessagePreview: 'Older compact preview',
+      lastMessageAt: 1000,
+      messages: [
+        { role: 'assistant', content: 'Latest transcript bubble', receivedAt: 2000 },
+      ],
+    })
+    const stateBySessionId = new Map<string, LiveSessionInboxState>([
+      ['session-1', createLiveState({ lastUpdated: 2000 })],
+    ])
+
+    const candidates = buildDashboardNotificationCandidates([conversation], stateBySessionId)
+
+    expect(candidates[0]?.preview).toBe('Latest transcript bubble')
+  })
+
+  it('uses compact preview for notification preview only when it is newer than the local transcript tail', () => {
+    const staleCompact = createConversation({
+      sessionId: 'session-stale',
+      tabKey: 'tab-stale',
+      lastMessagePreview: 'Stale compact prompt',
+      lastMessageAt: 3000,
+      messages: [
+        { role: 'assistant', content: 'Assistant reply at same timestamp', receivedAt: 3000 },
+      ],
+    })
+    const newerCompact = createConversation({
+      sessionId: 'session-newer',
+      tabKey: 'tab-newer',
+      lastMessagePreview: 'Newer compact summary',
+      lastMessageAt: 4000,
+      messages: [
+        { role: 'assistant', content: 'Older transcript bubble', receivedAt: 3000 },
+      ],
+    })
+
+    const candidates = buildDashboardNotificationCandidates(
+      [staleCompact, newerCompact],
+      new Map<string, LiveSessionInboxState>([
+        ['session-stale', createLiveState({ sessionId: 'session-stale', lastUpdated: 3000 })],
+        ['session-newer', createLiveState({ sessionId: 'session-newer', lastUpdated: 4000 })],
+      ]),
+    )
+
+    expect(candidates.find(record => record.sessionId === 'session-stale')?.preview)
+      .toBe('Assistant reply at same timestamp')
+    expect(candidates.find(record => record.sessionId === 'session-newer')?.preview)
+      .toBe('Newer compact summary')
+  })
+
   it('does not keep task-complete candidates alive once daemon unread state cleared', () => {
     const conversation = createConversation({ providerSessionId: 'provider-1' })
     const stateBySessionId = new Map<string, LiveSessionInboxState>([

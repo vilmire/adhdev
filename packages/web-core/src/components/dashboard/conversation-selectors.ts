@@ -1,6 +1,7 @@
 import type { DaemonData, SessionEntry } from '../../types'
 import { formatIdeType } from '../../utils/daemon-utils'
-import { isAcpConv, isCliConv, isCliTerminalConv, type ActiveConversation } from './types'
+import { normalizeTextContent } from '../../utils/text'
+import { isAcpConv, isCliConv, isCliTerminalConv, type ActiveConversation, type DashboardMessage } from './types'
 
 type ConversationTargetEntry = Pick<
     DaemonData,
@@ -47,8 +48,45 @@ export function getConversationNotificationLabel(conversation: ActiveConversatio
         || 'Session'
 }
 
+function getConversationLastMessage(conversation: ActiveConversation): DashboardMessage | undefined {
+    return [...conversation.messages].reverse().find((message) => !message?._localId)
+        || conversation.messages[conversation.messages.length - 1]
+}
+
+function parseConversationMessageTimestamp(value: unknown): number {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'string') {
+        const parsed = Date.parse(value)
+        if (Number.isFinite(parsed)) return parsed
+    }
+    return 0
+}
+
+function getConversationMessageActivityAt(message: DashboardMessage | undefined): number {
+    return parseConversationMessageTimestamp(message?.receivedAt)
+        || parseConversationMessageTimestamp(message?.timestamp)
+        || 0
+}
+
+export function getConversationLastMessagePreview(conversation: ActiveConversation): string {
+    const lastMessage = getConversationLastMessage(conversation)
+    const messagePreview = normalizeTextContent(lastMessage?.content)
+    const messageAt = getConversationMessageActivityAt(lastMessage)
+    const summaryPreview = normalizeTextContent(conversation.lastMessagePreview)
+    const summaryAt = typeof conversation.lastMessageAt === 'number' && Number.isFinite(conversation.lastMessageAt)
+        ? conversation.lastMessageAt
+        : 0
+
+    if (summaryPreview && !messagePreview) return summaryPreview
+    if (messagePreview && !summaryPreview) return messagePreview
+    if (summaryPreview && messagePreview && summaryAt > 0 && messageAt > 0 && summaryAt > messageAt) return summaryPreview
+    if (messagePreview) return messagePreview
+    if (summaryPreview) return summaryPreview
+    return ''
+}
+
 export function getConversationNotificationPreview(conversation: ActiveConversation): string {
-    return conversation.lastMessagePreview || conversation.displaySecondary || ''
+    return getConversationLastMessagePreview(conversation) || conversation.displaySecondary || ''
 }
 
 export function getConversationMetaParts(conversation: ActiveConversation): string[] {
