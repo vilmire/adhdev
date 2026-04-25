@@ -457,6 +457,47 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
     expect(write).toHaveBeenCalledWith('\x1B[B\x1B[B\x1B[B\r')
   })
 
+  it('does not remain in waiting_approval without an active modal after an approved Claude turn settles idle', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-22T12:00:00Z'))
+
+    const adapter = buildAdapter('claude-cli')
+    const finishResponse = vi.fn()
+    adapter.finishResponse = finishResponse
+    adapter.currentStatus = 'waiting_approval'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'run the command',
+      startedAt: Date.now() - 20_000,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+    adapter.activeModal = {
+      message: 'Run command requires approval',
+      buttons: ['Yes', 'Always allow', 'No'],
+    }
+    adapter.lastNonEmptyOutputAt = Date.now() - 300
+    adapter.lastScreenChangeAt = Date.now() - 300
+    adapter.parseCurrentTranscript = () => ({
+      status: 'idle',
+      messages: [
+        { role: 'user', content: 'run the command' },
+        { role: 'assistant', content: 'DONE' },
+      ],
+      activeModal: null,
+    })
+    adapter.runDetectStatus = () => 'idle'
+
+    adapter.evaluateSettled()
+
+    expect(adapter.activeModal).toBeNull()
+    expect(adapter.currentStatus).toBe('generating')
+    expect(adapter.getStatus().status).toBe('generating')
+
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(finishResponse).toHaveBeenCalledTimes(1)
+  })
+
   it('eventually finishes an idle-looking screen for non-Hermes CLI providers when the settled transcript still has no assistant turn', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-15T15:00:00Z'))

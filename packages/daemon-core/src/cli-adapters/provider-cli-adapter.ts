@@ -1153,6 +1153,9 @@ export class ProviderCliAdapter implements CliAdapter {
             if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
             this.activeModal = null;
             this.lastApprovalResolvedAt = Date.now();
+            if (this.isWaitingForResponse) {
+                this.setStatus('generating', 'approval_prompt_gone_idle_confirm');
+            }
         }
         if (!this.isWaitingForResponse) {
             if (prevStatus !== 'idle') {
