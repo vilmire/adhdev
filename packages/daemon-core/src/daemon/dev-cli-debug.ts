@@ -1195,7 +1195,7 @@ export async function handleCliRaw(ctx: DevServerContext, req: http.IncomingMess
 
   try {
     if (typeof adapter.writeRaw === 'function') {
-      adapter.writeRaw(keys);
+      await adapter.writeRaw(keys);
       ctx.json(res, 200, { sent: true, type: target.type, instanceId: target.instanceId, keysLength: keys.length });
     } else {
       ctx.json(res, 400, { error: 'writeRaw not available on this adapter' });

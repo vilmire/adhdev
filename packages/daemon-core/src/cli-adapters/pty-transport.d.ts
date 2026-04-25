@@ -28,7 +28,7 @@ export interface PtyRuntimeTransport {
     readonly pid: number;
     readonly ready: Promise<void>;
     readonly terminalQueriesHandled?: boolean;
-    write(data: string): void;
+    write(data: string): void | Promise<void>;
     resize(cols: number, rows: number): void;
     kill(): void;
     clearBuffer?(): void;

@@ -156,6 +156,8 @@ export declare class ProviderCliAdapter implements CliAdapter {
      * Uses resolveAction script if available, otherwise falls back to standard text.
      */
     resolveAction(data: any): Promise<void>;
+    private writeToPty;
+    private resetPendingSendState;
     sendMessage(text: string): Promise<void>;
     getPartialResponse(): string;
     getRuntimeMetadata(): PtyRuntimeMetadata | null;
@@ -168,7 +170,7 @@ export declare class ProviderCliAdapter implements CliAdapter {
     clearHistory(): void;
     isProcessing(): boolean;
     isReady(): boolean;
-    writeRaw(data: string): void;
+    writeRaw(data: string): Promise<void>;
     resolveModal(buttonIndex: number): void;
     resize(cols: number, rows: number): void;
     getDebugState(): Record<string, any>;

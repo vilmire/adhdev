@@ -127,6 +127,27 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('interrupt now\r')
   })
 
+  it('surfaces async PTY write failures instead of reporting sendMessage success', async () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.ptyProcess.write = vi.fn().mockRejectedValue(new Error('runtime not ready'))
+
+    await expect(adapter.sendMessage('will fail')).rejects.toThrow('runtime not ready')
+    expect(adapter.committedMessages).toHaveLength(0)
+    expect(adapter.isWaitingForResponse).toBe(false)
+  })
+
+  it('surfaces writeRaw when the runtime is missing or rejects input', async () => {
+    const adapter = buildAdapter()
+    adapter.ptyProcess = null
+
+    await expect(adapter.writeRaw('x')).rejects.toThrow('not running')
+
+    adapter.ptyProcess = { write: vi.fn().mockRejectedValue(new Error('send_input failed')) }
+    await expect(adapter.writeRaw('x')).rejects.toThrow('send_input failed')
+  })
+
   it('does not block a new prompt solely because approval state is surfaced', async () => {
     const adapter = buildAdapter()
     adapter.currentStatus = 'waiting_approval'

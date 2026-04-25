@@ -237,6 +237,15 @@ export default function CliTerminalPane({
                     return;
                 }
                 clearRuntimeView();
+                return;
+            }
+            if (event.type === 'session_io_error') {
+                const detail = typeof event.error === 'string' && event.error
+                    ? event.error
+                    : (typeof event.reason === 'string' && event.reason ? event.reason : 'unknown error');
+                setRuntimeReady(false);
+                setRuntimeStatusMessage(`Runtime input failed: ${detail}`);
+                return;
             }
         }) || (() => {});
 

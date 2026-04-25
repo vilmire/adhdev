@@ -526,7 +526,7 @@ export class CliProviderInstance implements ProviderInstance {
         if (cliCommand?.type === 'send_message' && cliCommand.text) {
             await this.adapter.sendMessage(cliCommand.text);
         } else if (cliCommand?.type === 'pty_write' && cliCommand.text) {
-            this.adapter.writeRaw(cliCommand.text + '\r');
+            await this.adapter.writeRaw(cliCommand.text + '\r');
         }
 
         this.applyProviderResponse(parsed.payload, { phase: 'immediate' });

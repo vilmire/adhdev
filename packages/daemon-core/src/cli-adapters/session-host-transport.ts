@@ -82,8 +82,8 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         this.exitCallbacks.add(callback);
     }
 
-    write(data: string): void {
-        this.enqueue(async () => {
+    write(data: string): Promise<void> {
+        return this.enqueue(async () => {
             let response = await this.client.request({
                 type: 'send_input',
                 payload: {
@@ -404,13 +404,14 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         };
     }
 
-    private enqueue(action: () => Promise<void>): void {
-        this.operationChain = this.operationChain
+    private enqueue(action: () => Promise<void>): Promise<void> {
+        const operation = this.operationChain
             .then(() => this.ready)
             .then(action)
-            .catch((error) => {
-                LOG.warn('CLI', `[session-host:${this.options.runtimeId}] ${error?.message || error}`);
-            });
+        this.operationChain = operation.catch((error) => {
+            LOG.warn('CLI', `[session-host:${this.options.runtimeId}] ${error?.message || error}`);
+        });
+        return operation;
     }
 
     private async closeClient(destroy = false): Promise<void> {

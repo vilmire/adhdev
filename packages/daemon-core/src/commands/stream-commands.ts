@@ -110,14 +110,14 @@ export async function handleOpenPanel(h: CommandHelpers, args: any): Promise<Com
 
 // ─── PTY Raw I/O ──────────────────────────────────
 
-export function handlePtyInput(h: CommandHelpers, args: any): CommandResult {
+export async function handlePtyInput(h: CommandHelpers, args: any): Promise<CommandResult> {
     const { cliType, data, targetSessionId } = args || {};
     if (!data) return { success: false, error: 'data required' };
     const adapter = h.getCliAdapter(targetSessionId || cliType);
     if (!adapter || typeof adapter.writeRaw !== 'function') {
         return { success: false, error: `CLI adapter not found: ${targetSessionId || cliType || 'unknown'}` };
     }
-    adapter.writeRaw(data);
+    await adapter.writeRaw(data);
     return { success: true };
 }
 
@@ -343,7 +343,7 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
             if (cliCommand?.type === 'send_message' && cliCommand.text) {
                 await adapter.sendMessage(cliCommand.text);
             } else if (cliCommand?.type === 'pty_write' && cliCommand.text && adapter.writeRaw) {
-                adapter.writeRaw(cliCommand.text + '\r');
+                await adapter.writeRaw(cliCommand.text + '\r');
             }
             applyProviderPatch(h, args, parsed.payload);
             return {

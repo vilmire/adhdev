@@ -83,9 +83,9 @@ describe('stream session action commands', () => {
     expect(cdp.evaluate).toHaveBeenCalledTimes(2)
   })
 
-  it('pty_input allows direct terminal intervention even when the CLI session is currently in chat mode', () => {
+  it('pty_input allows direct terminal intervention even when the CLI session is currently in chat mode', async () => {
     const writeRaw = vi.fn()
-    const result = handlePtyInput({
+    const result = await handlePtyInput({
       getCliAdapter: vi.fn(() => ({ writeRaw })),
       ctx: { instanceManager: { getInstance: () => ({ category: 'cli', getPresentationMode: () => 'chat' }) } },
     } as any, {

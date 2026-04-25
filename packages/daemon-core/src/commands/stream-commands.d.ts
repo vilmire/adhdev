@@ -5,7 +5,7 @@
 import type { CommandResult, CommandHelpers } from './handler.js';
 export declare function handleSelectSession(h: CommandHelpers, args: any): Promise<CommandResult>;
 export declare function handleOpenPanel(h: CommandHelpers, args: any): Promise<CommandResult>;
-export declare function handlePtyInput(h: CommandHelpers, args: any): CommandResult;
+export declare function handlePtyInput(h: CommandHelpers, args: any): Promise<CommandResult>;
 export declare function handlePtyResize(h: CommandHelpers, args: any): CommandResult;
 export declare function handleGetProviderSettings(h: CommandHelpers, args: any): CommandResult;
 export declare function handleSetProviderSetting(h: CommandHelpers, args: any): Promise<CommandResult>;

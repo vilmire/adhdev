@@ -1779,6 +1779,22 @@ export class ProviderCliAdapter implements CliAdapter {
         await this.sendMessage(promptText);
     }
 
+    private async writeToPty(data: string): Promise<void> {
+        if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
+        await this.ptyProcess.write(data);
+    }
+
+    private resetPendingSendState(reason: string): void {
+        this.isWaitingForResponse = false;
+        this.responseBuffer = '';
+        this.currentTurnScope = null;
+        this.submitPendingUntil = 0;
+        this.clearIdleFinishCandidate(reason);
+        if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
+        if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
+        if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
+    }
+
     async sendMessage(text: string): Promise<void> {
         if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
         const allowInputDuringGeneration = this.provider.allowInputDuringGeneration === true;
@@ -1881,12 +1897,23 @@ export class ProviderCliAdapter implements CliAdapter {
                 if (this.isWaitingForResponse) this.finishResponse();
             }, this.timeouts.maxResponse);
         };
-        await new Promise<void>((resolve) => {
+        await new Promise<void>((resolve, reject) => {
             let resolved = false;
             const resolveOnce = () => {
                 if (resolved) return;
                 resolved = true;
                 resolve();
+            };
+            const rejectOnce = (error: unknown) => {
+                if (resolved) return;
+                this.resetPendingSendState('send_write_failed');
+                resolved = true;
+                reject(error);
+            };
+            const writeRetryKey = (mode: string) => {
+                void this.writeToPty(this.sendKey).catch((error) => {
+                    LOG.warn('CLI', `[${this.cliType}] ${mode} write failed: ${error?.message || error}`);
+                });
             };
 
             const submit = () => {
@@ -1894,7 +1921,6 @@ export class ProviderCliAdapter implements CliAdapter {
                     resolveOnce();
                     return;
                 }
-                commitUserTurn();
                 this.submitPendingUntil = 0;
                 const screenText = this.terminalScreen.getText();
                 this.recordTrace('submit_write', {
@@ -1902,7 +1928,6 @@ export class ProviderCliAdapter implements CliAdapter {
                     sendKey: this.sendKey,
                     screenText: summarizeCliTraceText(screenText, 500),
                 });
-                this.ptyProcess!.write(this.sendKey);
                 const retrySubmitIfStuck = (attempt: number) => {
                     this.submitRetryTimer = null;
                     if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
@@ -1922,20 +1947,22 @@ export class ProviderCliAdapter implements CliAdapter {
                         sendKey: this.sendKey,
                         screenText: summarizeCliTraceText(screenText, 500),
                     });
-                    this.ptyProcess.write(this.sendKey);
+                    writeRetryKey('submit_retry');
                     if (attempt >= 3) {
                         this.submitRetryUsed = true;
                         return;
                     }
                     this.submitRetryTimer = setTimeout(() => retrySubmitIfStuck(attempt + 1), retryDelayMs);
                 };
-                this.submitRetryTimer = setTimeout(() => retrySubmitIfStuck(1), retryDelayMs);
-                startResponseTimeout();
-                resolveOnce();
+                void this.writeToPty(this.sendKey).then(() => {
+                    commitUserTurn();
+                    this.submitRetryTimer = setTimeout(() => retrySubmitIfStuck(1), retryDelayMs);
+                    startResponseTimeout();
+                    resolveOnce();
+                }, rejectOnce);
             };
 
             if (this.submitStrategy === 'immediate') {
-                commitUserTurn();
                 this.submitPendingUntil = 0;
                 this.recordTrace('submit_write', {
                     mode: 'immediate',
@@ -1943,38 +1970,39 @@ export class ProviderCliAdapter implements CliAdapter {
                     sendKey: this.sendKey,
                     screenText: summarizeCliTraceText(this.terminalScreen.getText(), 500),
                 });
-                this.ptyProcess!.write(text + this.sendKey);
-                this.submitRetryTimer = setTimeout(() => {
-                    this.submitRetryTimer = null;
-                    if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
-                    if (this.currentStatus === 'waiting_approval') return;
-                    if (this.hasMeaningfulResponseBuffer(normalizedPromptSnippet)) return;
-                    const screenText = this.terminalScreen.getText();
-                    if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
-                    const liveApproval = this.runParseApproval(screenText) || this.runParseApproval(this.recentOutputBuffer);
-                    if (liveApproval) return;
-                    const liveStatus = this.runDetectStatus(screenText) || this.runDetectStatus(this.recentOutputBuffer);
-                    if (liveStatus === 'generating' || liveStatus === 'waiting_approval') return;
-                    LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt 1)`);
-                    this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
-                    this.recordTrace('submit_write', {
-                        mode: 'immediate_retry',
-                        attempt: 1,
-                        sendKey: this.sendKey,
-                        screenText: summarizeCliTraceText(screenText, 500),
-                    });
-                    this.ptyProcess.write(this.sendKey);
-                    this.submitRetryUsed = true;
-                }, retryDelayMs);
-                startResponseTimeout();
-                resolveOnce();
+                void this.writeToPty(text + this.sendKey).then(() => {
+                    commitUserTurn();
+                    this.submitRetryTimer = setTimeout(() => {
+                        this.submitRetryTimer = null;
+                        if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
+                        if (this.currentStatus === 'waiting_approval') return;
+                        if (this.hasMeaningfulResponseBuffer(normalizedPromptSnippet)) return;
+                        const screenText = this.terminalScreen.getText();
+                        if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
+                        const liveApproval = this.runParseApproval(screenText) || this.runParseApproval(this.recentOutputBuffer);
+                        if (liveApproval) return;
+                        const liveStatus = this.runDetectStatus(screenText) || this.runDetectStatus(this.recentOutputBuffer);
+                        if (liveStatus === 'generating' || liveStatus === 'waiting_approval') return;
+                        LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt 1)`);
+                        this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
+                        this.recordTrace('submit_write', {
+                            mode: 'immediate_retry',
+                            attempt: 1,
+                            sendKey: this.sendKey,
+                            screenText: summarizeCliTraceText(screenText, 500),
+                        });
+                        writeRetryKey('immediate_retry');
+                        this.submitRetryUsed = true;
+                    }, retryDelayMs);
+                    startResponseTimeout();
+                    resolveOnce();
+                }, rejectOnce);
                 return;
             }
 
             if (submitDelayMs > 0) {
                 this.submitPendingUntil = Date.now() + submitDelayMs;
             }
-            this.ptyProcess!.write(text);
             this.recordTrace('submit_write', {
                 mode: 'type_then_submit',
                 text: summarizeCliTraceText(text, 500),
@@ -2014,7 +2042,7 @@ export class ProviderCliAdapter implements CliAdapter {
 
                 setTimeout(waitForEchoAndSubmit, 50);
             };
-            waitForEchoAndSubmit();
+            void this.writeToPty(text).then(() => waitForEchoAndSubmit(), rejectOnce);
         });
     }
 
@@ -2168,12 +2196,12 @@ export class ProviderCliAdapter implements CliAdapter {
     isProcessing(): boolean { return this.isWaitingForResponse; }
     isReady(): boolean { return this.ready; }
 
-    writeRaw(data: string): void {
+    async writeRaw(data: string): Promise<void> {
         this.recordTrace('write_raw', {
             keys: JSON.stringify(data),
             length: data.length,
         });
-        this.ptyProcess?.write(data);
+        await this.writeToPty(data);
     }
 
     resolveModal(buttonIndex: number): void {
