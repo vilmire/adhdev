@@ -112,9 +112,14 @@ function normalizeComparableTranscriptText(value: unknown): string {
 }
 
 function hasVisibleInterruptPrompt(text: string): boolean {
-    return /\bEnter\s+to\s+interrupt\b(?:\s*,?\s*Ctrl\s*(?:\+|-)?\s*C\s+to\s+cancel)?/i.test(
-        sanitizeTerminalText(text || ''),
-    );
+    const interruptCopyPattern = /\bEnter\s+to\s+interrupt\b(?:\s*,?\s*Ctrl\s*(?:\+|-)?\s*C\s+to\s+cancel)?/i;
+    return sanitizeTerminalText(text || '')
+        .split(/\r?\n/g)
+        .some((line) => {
+            const trimmed = line.trim();
+            if (!interruptCopyPattern.test(trimmed)) return false;
+            return /^(?:[^A-Za-z0-9\s]{1,8}\s+)?[❯›>]\s+/.test(trimmed);
+        });
 }
 
 function parsedTranscriptIsRicherThanCommitted(

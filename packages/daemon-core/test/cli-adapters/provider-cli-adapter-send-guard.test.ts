@@ -271,6 +271,37 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(parsed.status).toBe('generating')
   })
 
+  it('still clamps stale parsed generating status when interrupt copy is only assistant text', () => {
+    const adapter = buildAdapter({ allowInputDuringGeneration: true })
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.currentTurnScope = null
+    adapter.recentOutputBuffer = '❯\n'
+    adapter.accumulatedBuffer = [
+      '● Please quote the interrupt prompt.',
+      '╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮',
+      'Literal text: type a message + Enter to interrupt, Ctrl+C to cancel',
+      '╰──────────────────────────────────────────────────────────────────────────────╯',
+      '❯',
+    ].join('\n')
+    adapter.accumulatedRawBuffer = adapter.accumulatedBuffer
+    adapter.terminalScreen = { getText: () => adapter.accumulatedBuffer }
+    adapter.cliScripts.detectStatus = () => 'generating'
+    adapter.cliScripts.parseApproval = () => null
+    adapter.cliScripts.parseOutput = () => ({
+      status: 'generating',
+      messages: [
+        { role: 'user', content: 'Please quote the interrupt prompt.' },
+        { role: 'assistant', content: 'Literal text: type a message + Enter to interrupt, Ctrl+C to cancel' },
+      ],
+      activeModal: null,
+    })
+
+    const parsed = adapter.getScriptParsedStatus()
+
+    expect(parsed.status).toBe('idle')
+  })
+
   it('suppresses stale parsed approval state during the post-approval cooldown once the live screen no longer shows a modal', () => {
     const adapter = buildAdapter()
     adapter.currentStatus = 'generating'

@@ -319,11 +319,19 @@ export class SessionHostServer extends EventEmitter {
   }
 
   private emitEvent(event: SessionHostEvent): void {
-    for (const socket of [...this.sockets]) {
-      this.writeEnvelopeSafely(socket, {
-        kind: 'event',
-        event,
-      });
+    // Diagnostic-only events are stored locally (recentLogs/Requests/Transitions)
+    // and accessible via get_host_diagnostics. Broadcasting them to every socket
+    // creates O(N²) traffic when many CLI sessions are active.
+    const diagnosticOnly = event.type === 'request_trace'
+      || event.type === 'runtime_transition'
+      || event.type === 'host_log';
+    if (!diagnosticOnly) {
+      for (const socket of [...this.sockets]) {
+        this.writeEnvelopeSafely(socket, {
+          kind: 'event',
+          event,
+        });
+      }
     }
     this.emit('event', event);
   }
