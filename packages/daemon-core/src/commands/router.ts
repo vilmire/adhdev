@@ -818,9 +818,15 @@ export class DaemonCommandRouter {
                         // ignore ls failures; upgrade can still proceed
                     }
 
-                    if (currentInstalled === latest) {
+                    const runningVersion = typeof this.deps.statusVersion === 'string'
+                        ? this.deps.statusVersion.trim().replace(/^v/, '')
+                        : null;
+                    if (currentInstalled === latest && runningVersion === latest) {
                         LOG.info('Upgrade', `Already on latest version v${latest}; skipping install`);
                         return { success: true, upgraded: false, alreadyLatest: true, version: latest };
+                    }
+                    if (currentInstalled === latest && runningVersion && runningVersion !== latest) {
+                        LOG.info('Upgrade', `Installed package is v${latest}, but running daemon is v${runningVersion}; scheduling restart`);
                     }
 
                     spawnDetachedDaemonUpgradeHelper({
