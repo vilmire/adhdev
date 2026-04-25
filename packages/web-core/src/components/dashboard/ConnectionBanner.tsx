@@ -1,17 +1,72 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+
 /**
  * ConnectionBanner — WS connection status banner
  */
-
 export interface ConnectionBannerProps {
     wsStatus: string;
     showReconnected: boolean;
     /** Login page URL — only shown when provided (cloud-only) */
     loginUrl?: string;
     onReconnect?: () => void;
+    /**
+     * Grace period before showing transient reconnect states.
+     * Mobile Safari/PWA resumes can briefly flip WS state while the socket heals;
+     * do not surface that as an alarming toast unless it persists.
+     */
+    reconnectDelayMs?: number;
 }
 
-export default function ConnectionBanner({ wsStatus, showReconnected, loginUrl, onReconnect }: ConnectionBannerProps) {
-    const showDisconnected = wsStatus === 'disconnected' || wsStatus === 'reconnecting' || wsStatus === 'offline' || wsStatus === 'auth_failed';
+const DEFAULT_RECONNECT_BANNER_DELAY_MS = 2500;
+
+function isReconnectLikeStatus(status: string): boolean {
+    return status === 'disconnected' || status === 'reconnecting';
+}
+
+export default function ConnectionBanner({
+    wsStatus,
+    showReconnected,
+    loginUrl,
+    onReconnect,
+    reconnectDelayMs = DEFAULT_RECONNECT_BANNER_DELAY_MS,
+}: ConnectionBannerProps) {
+    const reconnectLikeStatus = isReconnectLikeStatus(wsStatus);
+    const [showReconnectState, setShowReconnectState] = useState(() => !reconnectLikeStatus || reconnectDelayMs <= 0);
+    const reconnectBannerWasVisibleRef = useRef(false);
+
+    useEffect(() => {
+        if (!reconnectLikeStatus) {
+            setShowReconnectState(false);
+            return;
+        }
+
+        reconnectBannerWasVisibleRef.current = false;
+
+        if (reconnectDelayMs <= 0) {
+            reconnectBannerWasVisibleRef.current = true;
+            setShowReconnectState(true);
+            return;
+        }
+
+        setShowReconnectState(false);
+        const timer = setTimeout(() => {
+            reconnectBannerWasVisibleRef.current = true;
+            setShowReconnectState(true);
+        }, reconnectDelayMs);
+
+        return () => clearTimeout(timer);
+    }, [reconnectDelayMs, reconnectLikeStatus]);
+
+    const showDisconnected = reconnectLikeStatus
+        ? showReconnectState
+        : wsStatus === 'offline' || wsStatus === 'auth_failed';
+    const showConnectedConfirmation = useMemo(() => {
+        if (!showReconnected || wsStatus !== 'connected') return false;
+        // If the reconnect state resolved inside the grace period, suppress the
+        // matching "Connected" toast too; otherwise mobile inbox can flash a
+        // success toast for a disconnect the user never saw.
+        return reconnectDelayMs <= 0 || reconnectBannerWasVisibleRef.current;
+    }, [reconnectDelayMs, showReconnected, wsStatus]);
 
     const bannerColor = wsStatus === 'auth_failed' ? 'red' : wsStatus === 'offline' ? 'orange' : 'accent';
     const gradients: Record<string, string> = {
@@ -67,7 +122,7 @@ export default function ConnectionBanner({ wsStatus, showReconnected, loginUrl, 
                                         Session expired.{' '}
                                         <a href={loginUrl} className="text-inherit underline">Log in again</a>
                                     </>
-                                ) : 'Connection failed — please restart the server.'
+                                ) : 'Connection failed — refresh the page or try again shortly.'
                             )}
                         </span>
                         {onReconnect && wsStatus !== 'auth_failed' && (
@@ -83,7 +138,7 @@ export default function ConnectionBanner({ wsStatus, showReconnected, loginUrl, 
                     </div>
                 </div>
             )}
-            {showReconnected && wsStatus === 'connected' && (
+            {showConnectedConfirmation && (
                 <div className={overlayClassName} style={overlayStyle}>
                     <div className="pointer-events-none rounded-2xl border px-4 py-2 text-xs font-semibold flex items-center gap-2 justify-center bg-gradient-to-r from-green-500/[0.12] to-green-500/[0.04] text-green-400 border-green-500/15 shadow-[0_18px_40px_rgba(2,6,23,0.2)] backdrop-blur-xl animate-[fadeIn_0.3s_ease]">
                         <img src="/otter-logo.png" alt="" className="w-4 h-4" />

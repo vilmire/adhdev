@@ -666,6 +666,7 @@ export default function Dashboard() {
                 connectionBanner={{
                     wsStatus,
                     showReconnected,
+                    loginUrl: daemonCtx.connectionLoginUrl,
                     onReconnect: daemonCtx.retryServerConnection,
                 }}
                 toastOverlay={{

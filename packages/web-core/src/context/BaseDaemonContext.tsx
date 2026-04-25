@@ -42,6 +42,8 @@ export interface BaseDaemonContextValue {
     showReconnected: boolean
     retryConnection?: (machineId: string) => void
     retryServerConnection?: () => void
+    /** Login URL for cloud auth/session-expired connection banners. */
+    connectionLoginUrl?: string
     /** User display name for chat messages */
     userName?: string
     setUserName?: (name: string) => void
@@ -821,6 +823,7 @@ export interface ConnectionOverrides {
     showReconnected?: boolean
     retryConnection?: (machineId: string) => void
     retryServerConnection?: () => void
+    connectionLoginUrl?: string
     isP2PActive?: boolean
     p2pStates?: Record<string, string>
     userRole?: string
@@ -891,6 +894,7 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
         showReconnected: co?.showReconnected ?? false,
         retryConnection: co?.retryConnection,
         retryServerConnection: co?.retryServerConnection,
+        connectionLoginUrl: co?.connectionLoginUrl,
         // Cloud-specific
         isP2PActive: co?.isP2PActive ?? false,
         p2pStates: co?.p2pStates ?? {},
@@ -909,6 +913,7 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
         co?.showReconnected,
         co?.retryConnection,
         co?.retryServerConnection,
+        co?.connectionLoginUrl,
         co?.isP2PActive,
         co?.p2pStates,
         co?.userRole,
