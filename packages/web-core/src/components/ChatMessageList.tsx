@@ -64,6 +64,21 @@ type ChatScrollSnapshot = {
     messageFingerprint?: string;
 }
 
+type ChatContentAutoScrollOptions = {
+    hasSelection: boolean;
+    userScrolledUp: boolean;
+    isNewMessage?: boolean;
+    isNearBottomAfterUpdate?: boolean;
+}
+
+type ChatResizeAutoScrollOptions = {
+    hasSelection: boolean;
+    userScrolledUp: boolean;
+    contextAutoScrollActive: boolean;
+}
+
+const CHAT_SCROLL_NEAR_BOTTOM_PX = 200;
+const CHAT_BOTTOM_AUTO_SCROLL_WINDOW_MS = 650;
 const chatScrollSnapshotCache = new Map<string, ChatScrollSnapshot>();
 
 export function shouldRestoreChatScrollSnapshot(
@@ -87,6 +102,34 @@ export function shouldAutoScrollOnChatVisibilityChange(
     nextIsVisible: boolean,
 ): boolean {
     return !previousIsVisible && nextIsVisible;
+}
+
+export function isChatScrollSnapshotScrolledUp(
+    snapshot: ChatScrollSnapshot | null | undefined,
+    thresholdPx = CHAT_SCROLL_NEAR_BOTTOM_PX,
+): boolean {
+    return !!snapshot && snapshot.fromBottom >= thresholdPx;
+}
+
+export function shouldAutoScrollAfterChatContentChange({
+    hasSelection,
+    userScrolledUp,
+}: ChatContentAutoScrollOptions): boolean {
+    if (hasSelection) return false;
+    if (userScrolledUp) return false;
+    // If the view is in bottom-follow mode, keep following for both appended messages
+    // and same-message streaming growth. Reading "near bottom" after the DOM update
+    // can already be false when a tall chunk or a wrapped split-pane layout was added.
+    return true;
+}
+
+export function shouldAutoScrollOnChatResize({
+    hasSelection,
+    userScrolledUp,
+    contextAutoScrollActive,
+}: ChatResizeAutoScrollOptions): boolean {
+    if (hasSelection) return false;
+    return contextAutoScrollActive || !userScrolledUp;
 }
 
 function restoreChatScrollSnapshot(el: HTMLDivElement, snapshot: ChatScrollSnapshot): void {
@@ -456,7 +499,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     const isNearBottom = () => {
         const el = containerRef.current;
         if (!el) return true;
-        return el.scrollHeight - el.scrollTop - el.clientHeight < 200;
+        return el.scrollHeight - el.scrollTop - el.clientHeight < CHAT_SCROLL_NEAR_BOTTOM_PX;
     };
 
     const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
@@ -515,7 +558,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         contextAutoScrollTimerRef.current = window.setTimeout(() => {
             contextAutoScrollRef.current = false;
             contextAutoScrollTimerRef.current = null;
-        }, 180);
+        }, CHAT_BOTTOM_AUTO_SCROLL_WINDOW_MS);
     }, []);
 
     // Auto-scroll: On new message / streaming update / tab switch
@@ -535,6 +578,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                         const el = containerRef.current;
                         if (!el) return;
                         restoreChatScrollSnapshot(el, snapshot);
+                        userScrolledUp.current = isChatScrollSnapshotScrolledUp(snapshot);
                         restoredInitialScrollRef.current = true;
                     });
                 } else {
@@ -545,13 +589,15 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             return;
         }
 
-        // When new message added — follow if user hasn't scrolled up
+        // When chat content changes, keep following the bottom unless the user explicitly scrolled up.
+        // This covers both appended messages and same-message streaming growth, where checking
+        // near-bottom after DOM growth can already be too late.
         const isNewMessage = messages.length > prevCountRef.current;
-        if (isNewMessage) {
-            if (!userScrolledUp.current && !hasSelectionRef.current) {
-                scheduleScrollToBottom('auto');
-            }
-        } else if (isNearBottom() && !userScrolledUp.current && !hasSelectionRef.current) {
+        if (shouldAutoScrollAfterChatContentChange({
+            hasSelection: hasSelectionRef.current,
+            userScrolledUp: userScrolledUp.current,
+            isNewMessage,
+        })) {
             scheduleScrollToBottom('auto');
         }
         prevCountRef.current = messages.length;
@@ -587,7 +633,8 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
     useEffect(() => {
         const contentEl = contentRef.current;
-        if (!contentEl) return;
+        const containerEl = containerRef.current;
+        if (!contentEl || !containerEl) return;
 
         const finishContextAutoScroll = () => {
             if (contextAutoScrollTimerRef.current != null) {
@@ -596,17 +643,22 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             contextAutoScrollTimerRef.current = window.setTimeout(() => {
                 contextAutoScrollRef.current = false;
                 contextAutoScrollTimerRef.current = null;
-            }, 180);
+            }, CHAT_BOTTOM_AUTO_SCROLL_WINDOW_MS);
         };
 
         const observer = new ResizeObserver(() => {
-            if (!contextAutoScrollRef.current) return;
-            if (hasSelectionRef.current) return;
+            const contextAutoScrollActive = contextAutoScrollRef.current;
+            if (!shouldAutoScrollOnChatResize({
+                hasSelection: hasSelectionRef.current,
+                userScrolledUp: userScrolledUp.current,
+                contextAutoScrollActive,
+            })) return;
             scheduleScrollToBottom('auto');
-            finishContextAutoScroll();
+            if (contextAutoScrollActive) finishContextAutoScroll();
         });
 
         observer.observe(contentEl);
+        if (containerEl !== contentEl) observer.observe(containerEl);
         return () => {
             observer.disconnect();
             if (contextAutoScrollTimerRef.current != null) {
@@ -670,6 +722,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             return;
         }
         restoreChatScrollSnapshot(el, snapshot);
+        userScrolledUp.current = isChatScrollSnapshotScrolledUp(snapshot);
         restoredInitialScrollRef.current = true;
     }, [contextKey, lastMsgFingerprint, messages.length, scrollToBottom]);
 
