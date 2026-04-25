@@ -403,7 +403,7 @@ function StandaloneWSConnector({ children }: { children: ReactNode }) {
                                         timestamp: update.timestamp,
                                     })
                                     if (metadataEntries.length > 0) {
-                                        actionsRef.current.injectEntries(metadataEntries)
+                                        actionsRef.current.injectEntries(metadataEntries, { authoritativeDaemonIds: [daemonId] })
                                     }
                                     if (update.userName && setUserNameRef.current) {
                                         setUserNameRef.current(update.userName)
