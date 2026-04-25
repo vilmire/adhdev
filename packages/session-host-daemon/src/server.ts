@@ -42,6 +42,9 @@ export class SessionHostServer extends EventEmitter {
   private readonly storage: SessionHostStorage;
   private ipcServer: net.Server | null = null;
   private sockets = new Set<net.Socket>();
+  // Tracks which sessionIds each socket has subscribed to (via create/attach).
+  // Used to avoid broadcasting session-specific events to uninterested sockets.
+  private socketSessions = new Map<net.Socket, Set<string>>();
   private persistTimers = new Map<string, NodeJS.Timeout>();
   private readonly startedAt = Date.now();
   private recentLogs: SessionHostLogEntry[] = [];
@@ -66,14 +69,14 @@ export class SessionHostServer extends EventEmitter {
 
     this.ipcServer = net.createServer((socket) => {
       this.sockets.add(socket);
-      socket.on('close', () => {
+      const removeSocket = () => {
         this.sockets.delete(socket);
-      });
-      socket.on('end', () => {
-        this.sockets.delete(socket);
-      });
+        this.socketSessions.delete(socket);
+      };
+      socket.on('close', removeSocket);
+      socket.on('end', removeSocket);
       socket.on('error', () => {
-        this.sockets.delete(socket);
+        removeSocket();
         try {
           socket.destroy();
         } catch {
@@ -122,6 +125,7 @@ export class SessionHostServer extends EventEmitter {
       socket.destroy();
     }
     this.sockets.clear();
+    this.socketSessions.clear();
     if (this.ipcServer) {
       const server = this.ipcServer;
       this.ipcServer = null;
@@ -326,7 +330,13 @@ export class SessionHostServer extends EventEmitter {
       || event.type === 'runtime_transition'
       || event.type === 'host_log';
     if (!diagnosticOnly) {
+      const targetSessionId = 'sessionId' in event ? (event as { sessionId: string }).sessionId : null;
       for (const socket of [...this.sockets]) {
+        // If the event is session-specific, only send to sockets subscribed to that session.
+        if (targetSessionId && this.socketSessions.size > 0) {
+          const sessions = this.socketSessions.get(socket);
+          if (sessions && !sessions.has(targetSessionId)) continue;
+        }
         this.writeEnvelopeSafely(socket, {
           kind: 'event',
           event,
@@ -336,9 +346,27 @@ export class SessionHostServer extends EventEmitter {
     this.emit('event', event);
   }
 
+  private subscribeSocketToSession(socket: net.Socket, sessionId: string): void {
+    let sessions = this.socketSessions.get(socket);
+    if (!sessions) {
+      sessions = new Set();
+      this.socketSessions.set(socket, sessions);
+    }
+    sessions.add(sessionId);
+  }
+
   private async handleIncomingRequest(socket: net.Socket, envelope: SessionHostRequestEnvelope): Promise<void> {
+    const sessionId = this.getRequestSessionId(envelope.request);
+    if (sessionId && (envelope.request.type === 'create_session' || envelope.request.type === 'attach_session')) {
+      this.subscribeSocketToSession(socket, sessionId);
+    }
     const startedAt = Date.now();
     const response = await this.handleRequest(envelope.request);
+    if (sessionId && envelope.request.type === 'create_session' && response.success) {
+      // sessionId may have been auto-generated — subscribe to whatever was actually created
+      const createdId = (response.result as { sessionId?: string } | undefined)?.sessionId;
+      if (createdId && createdId !== sessionId) this.subscribeSocketToSession(socket, createdId);
+    }
     this.recordRequestTrace({
       timestamp: startedAt,
       requestId: envelope.requestId,
