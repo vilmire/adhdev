@@ -214,6 +214,64 @@ describe('handleReadChat for CLI adapters', () => {
     })
   })
 
+  it('collapses replayed standard assistant bubbles within a turn without hiding tool rows', async () => {
+    const getScriptParsedStatus = vi.fn(() => ({
+      status: 'generating',
+      messages: [
+        { role: 'user', content: 'debug this bubble' },
+        { role: 'assistant', content: 'I found the issue.' },
+        { role: 'assistant', content: 'I found the issue.' },
+        { role: 'assistant', kind: 'tool', senderName: 'Tool', content: 'read chat-commands.ts' },
+        { role: 'assistant', content: 'I found the issue.' },
+        { role: 'user', content: 'new turn can repeat that text' },
+        { role: 'assistant', content: 'I found the issue.' },
+      ],
+      activeModal: null,
+      title: 'Hermes Agent',
+    }))
+
+    const adapter = {
+      cliType: 'hermes-cli',
+      cliName: 'Hermes Agent',
+      workingDir: '/tmp/project',
+      spawn: async () => {},
+      sendMessage: async () => {},
+      getStatus: () => ({ status: 'generating', messages: [], activeModal: null }),
+      getScriptParsedStatus,
+      getPartialResponse: () => '',
+      shutdown: () => {},
+      cancel: () => {},
+      isProcessing: () => true,
+      isReady: () => true,
+      setOnStatusChange: () => {},
+    }
+
+    const result = await handleReadChat({
+      getCdp: () => null,
+      getProvider: () => ({ type: 'hermes-cli', category: 'cli' }),
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      getCliAdapter: () => adapter as any,
+      currentManagerKey: undefined,
+      currentIdeType: undefined,
+      currentProviderType: undefined,
+      currentSession: undefined,
+      agentStream: null,
+      ctx: {},
+      historyWriter: { appendNewMessages: () => {} },
+    } as any, { agentType: 'hermes-cli' })
+
+    expect(result.success).toBe(true)
+    expect(result.totalMessages).toBe(5)
+    expect(result.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'debug this bubble' }),
+      expect.objectContaining({ role: 'assistant', content: 'I found the issue.' }),
+      expect.objectContaining({ role: 'assistant', kind: 'tool', senderName: 'Tool', content: 'read chat-commands.ts' }),
+      expect.objectContaining({ role: 'user', content: 'new turn can repeat that text' }),
+      expect.objectContaining({ role: 'assistant', content: 'I found the issue.' }),
+    ])
+  })
+
   it('collapses replayed adjacent tool and terminal updates before applying tail sync', async () => {
     const getScriptParsedStatus = vi.fn(() => ({
       status: 'generating',

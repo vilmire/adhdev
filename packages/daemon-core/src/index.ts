@@ -39,6 +39,7 @@ export type {
   ReadChatSyncResult,
   TransportTopic,
   SessionChatTailSubscriptionParams,
+  SessionRuntimeOutputSubscriptionParams,
   MachineRuntimeSubscriptionParams,
   SessionHostDiagnosticsSubscriptionParams,
   SessionModalSubscriptionParams,

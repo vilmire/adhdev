@@ -112,6 +112,7 @@ describe('DaemonStatusReporter P2P publish behavior', () => {
 
     await reporter.sendUnifiedStatusReport({ p2pOnly: true, reason: 'test' })
 
+    expect(buildSessionEntriesMock).not.toHaveBeenCalled()
     expect(sendStatus).toHaveBeenCalledTimes(1)
     expect(sendStatus.mock.calls[0]?.[0]?.sessions?.[0]).toMatchObject({
       id: 'cli-1',
@@ -123,22 +124,21 @@ describe('DaemonStatusReporter P2P publish behavior', () => {
     expect(sendMessage).not.toHaveBeenCalled()
   })
 
-  it('publishes an immediate p2p rich status on status change even inside the throttle window', async () => {
+  it('reuses the live status snapshot sessions for p2p plus server reports instead of building server sessions up front', async () => {
     const { reporter, sendStatus, sendMessage } = createReporter({
       serverConnected: true,
       p2pConnected: true,
     })
 
-    ;(reporter as any).lastStatusSentAt = Date.now()
-    reporter.onStatusChange()
-    await vi.runAllTicks()
+    await reporter.sendUnifiedStatusReport({ reason: 'combined' })
 
+    expect(buildSessionEntriesMock).not.toHaveBeenCalled()
     expect(sendStatus).toHaveBeenCalledTimes(1)
-    expect(sendStatus.mock.calls[0]?.[0]?.sessions?.[0]).toMatchObject({
-      completionMarker: 'id:msg_1',
-      inboxBucket: 'task_complete',
-      unread: true,
+    expect(sendMessage).toHaveBeenCalledTimes(1)
+    expect(sendMessage.mock.calls[0]?.[1]?.sessions?.[0]).toMatchObject({
+      id: 'cli-1',
+      providerType: 'hermes-cli',
+      status: 'idle',
     })
-    expect(sendMessage).not.toHaveBeenCalled()
   })
 })

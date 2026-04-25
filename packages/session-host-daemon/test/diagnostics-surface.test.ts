@@ -106,6 +106,36 @@ test('writeEnvelopeSafely ignores already-ended sockets immediately', () => {
   assert.equal(writeCalled, false)
 })
 
+test('session-scoped output events are only written to sockets subscribed to that session', () => {
+  const server = new SessionHostServer({ appName: 'adhdev-test-surface-fanout' }) as any
+  const writes: Record<string, string[]> = { a: [], b: [], c: [] }
+  const makeSocket = (id: 'a' | 'b' | 'c') => ({
+    destroyed: false,
+    writable: true,
+    writableEnded: false,
+    write: (payload: string, cb?: (error?: Error | null) => void) => {
+      writes[id].push(payload)
+      cb?.(null)
+      return true
+    },
+    destroy: () => {},
+  })
+  const socketA = makeSocket('a')
+  const socketB = makeSocket('b')
+  const socketC = makeSocket('c')
+  server.sockets.add(socketA)
+  server.sockets.add(socketB)
+  server.sockets.add(socketC)
+  server.subscribeSocketToSession(socketA, 'session-a')
+  server.subscribeSocketToSession(socketB, 'session-b')
+
+  server.emitEvent({ type: 'session_output', sessionId: 'session-a', seq: 1, data: 'hello' })
+
+  assert.equal(writes.a.length, 1)
+  assert.equal(writes.b.length, 0)
+  assert.equal(writes.c.length, 0)
+})
+
 test('getHostDiagnostics strips launch env from diagnostics records to keep payloads lightweight', () => {
   const server = new SessionHostServer({ appName: 'adhdev-test-surface-sanitized' })
   const record = buildRecord({

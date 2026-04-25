@@ -333,7 +333,10 @@ export class SessionHostServer extends EventEmitter {
       const targetSessionId = 'sessionId' in event ? (event as { sessionId: string }).sessionId : null;
       for (const socket of [...this.sockets]) {
         // If the event is session-specific, only send to sockets subscribed to that session.
-        if (targetSessionId && this.socketSessions.size > 0) {
+        if (targetSessionId && event.type === 'session_output') {
+          const sessions = this.socketSessions.get(socket);
+          if (!sessions?.has(targetSessionId)) continue;
+        } else if (targetSessionId && this.socketSessions.size > 0) {
           const sessions = this.socketSessions.get(socket);
           if (sessions && !sessions.has(targetSessionId)) continue;
         }

@@ -59,6 +59,7 @@ class ConnectionManagerStub {
     onRuntimeEvent(
         _sessionId: string,
         _callback: (event: { type: string; sessionId: string; seq?: number; text?: string; data?: string; truncated?: boolean }) => void,
+        _daemonId?: string,
     ): () => void {
         return () => {}
     }

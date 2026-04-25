@@ -14,7 +14,6 @@ import {
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { MachineInfo } from '../shared-types.js';
 import type { CloudStatusReportPayload, DaemonStatusEventPayload } from '../shared-types.js';
-import { buildSessionEntries } from './builders.js';
 import { buildStatusSnapshot } from './snapshot.js';
 import type {
     ProviderState,
@@ -258,13 +257,7 @@ export class DaemonStatusReporter {
             }
         }
 
- // IDE/CLI/ACP states → managed entries (shared builder)
-        const sessions = buildSessionEntries(
-            allStates,
-            this.deps.cdpManagers,
-        );
-
- // ═══ Assemble payload (P2P — required data only) ═══
+// ═══ Assemble payload (P2P — required data only) ═══
         const payload: Record<string, any> = {
             ...buildStatusSnapshot({
                 allStates,
@@ -286,9 +279,9 @@ export class DaemonStatusReporter {
         };
 
 // ═══ P2P transmit ═══
-        const payloadBytes = JSON.stringify(payload).length;
         const p2pSent = this.sendP2PPayload(payload);
         if (p2pSent) {
+            const payloadBytes = JSON.stringify(payload).length;
             LOG.debug('P2P', `sent (${payloadBytes} bytes)`);
             if (payloadBytes > 256 * 1024) {
                 LOG.warn(
@@ -300,10 +293,12 @@ export class DaemonStatusReporter {
 
  // ═══ Server transmit (minimal routing meta only) ═══
         if (opts?.p2pOnly) return;
+        if (!serverConnected || !serverConn) return;
         // Server relay only needs compact session metadata for routing, compact status,
         // initial_state fallback, and lightweight API/session inspection.
+        const payloadSessions = Array.isArray(payload.sessions) ? payload.sessions : [];
         const wsPayload: CloudStatusReportPayload = {
-            sessions: sessions.map((session) => ({
+            sessions: payloadSessions.map((session) => ({
                 id: session.id,
                 parentId: session.parentId,
                 providerType: session.providerType,
@@ -329,8 +324,9 @@ export class DaemonStatusReporter {
             return;
         }
         this.lastServerStatusHash = wsHash;
+        const wsPayloadBytes = JSON.stringify(wsPayload).length;
         serverConn.sendMessage('status_report', wsPayload);
-        LOG.debug('Server', `sent status_report (${JSON.stringify(wsPayload).length} bytes)${opts?.reason ? ` [${opts.reason}]` : ''}`);
+        LOG.debug('Server', `sent status_report (${wsPayloadBytes} bytes)${opts?.reason ? ` [${opts.reason}]` : ''}`);
     }
 
  // ─── P2P ─────────────────────────────────────────

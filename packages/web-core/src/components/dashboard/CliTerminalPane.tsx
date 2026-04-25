@@ -233,7 +233,7 @@ export default function CliTerminalPane({
                 setRuntimeStatusMessage(`Runtime input failed: ${detail}`);
                 return;
             }
-        }) || (() => {});
+        }, daemonRouteId) || (() => {});
 
         return () => {
             unsubRuntime();

@@ -16,6 +16,7 @@ import { getTerminalBackendRuntimeStatus } from '../cli-adapters/terminal-screen
 import { LOG } from '../logging/logger.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import { buildSessionEntries, isCdpConnected, type SessionEntryProfile } from './builders.js';
+import { LIVE_STATUS_ACTIVE_CHAT_OPTIONS, normalizeActiveChatData } from './normalize.js';
 import type { ProviderState } from '../providers/provider-instance.js';
 import type {
     AvailableProviderInfo,
@@ -336,6 +337,19 @@ function getUnreadState(
     return { unread, inboxBucket: unread ? 'task_complete' : 'idle' };
 }
 
+function projectLiveSessionFromFull(session: SessionEntry): SessionEntry {
+    const {
+        capabilities: _capabilities,
+        controlValues: _controlValues,
+        providerControls: _providerControls,
+        ...rest
+    } = session as SessionEntry & Record<string, unknown>;
+    return {
+        ...rest,
+        activeChat: normalizeActiveChatData(session.activeChat as any, LIVE_STATUS_ACTIVE_CHAT_OPTIONS),
+    } as SessionEntry;
+}
+
 function buildRecentLaunches(
     recentActivity: ReturnType<typeof getRecentActivity>,
 ): RecentLaunchEntry[] {
@@ -368,11 +382,13 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
     );
     const sessions = profile === 'full'
         ? unreadSourceSessions
-        : buildSessionEntries(
-            options.allStates,
-            options.cdpManagers,
-            { profile },
-        );
+        : profile === 'live'
+            ? unreadSourceSessions.map(projectLiveSessionFromFull)
+            : buildSessionEntries(
+                options.allStates,
+                options.cdpManagers,
+                { profile },
+            );
     const sessionsById = new Map(sessions.map((session) => [session.id, session]));
     for (const sourceSession of unreadSourceSessions) {
         const session = sessionsById.get(sourceSession.id);

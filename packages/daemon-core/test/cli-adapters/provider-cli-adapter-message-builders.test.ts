@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { ProviderCliAdapter } from '../../src/cli-adapters/provider-cli-adapter.js'
+import { appendBoundedText, ProviderCliAdapter } from '../../src/cli-adapters/provider-cli-adapter.js'
 import { buildCliParseInput, normalizeCliParsedMessages } from '../../src/cli-adapters/provider-cli-parse.js'
 import { normalizeComparableMessageContent } from '../../src/cli-adapters/provider-cli-shared.js'
 import { LOG } from '../../src/logging/logger.js'
@@ -263,6 +263,178 @@ describe('ProviderCliAdapter message fallback shaping', () => {
         cleanLength: 11,
       },
     })
+  })
+
+  it('does not run full parseOutput from the frequent getStatus hot path without a fresh parsed cache', () => {
+    const parseOutput = vi.fn(() => ({
+      id: 'cli_session',
+      status: 'waiting_approval',
+      title: 'Test CLI',
+      activeModal: { message: 'Approve?', buttons: ['Yes'] },
+      messages: [],
+    }))
+
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+        parseOutput,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => 'screen snapshot'),
+    }
+    adapter.currentStatus = 'idle'
+    adapter.activeModal = null
+    adapter.startupParseGate = false
+
+    const status = adapter.getStatus()
+
+    expect(status.status).toBe('idle')
+    expect(status.activeModal).toBeNull()
+    expect(parseOutput).not.toHaveBeenCalled()
+  })
+
+  it('throttles uncached full parseOutput probes from repeated generating getStatus calls', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-25T12:00:00Z'))
+
+    const parseOutput = vi.fn(() => ({
+      id: 'cli_session',
+      status: 'generating',
+      title: 'Test CLI',
+      messages: [],
+    }))
+
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'generating',
+        parseApproval: () => null,
+        parseOutput,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => 'screen snapshot'),
+    }
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'hello',
+      startedAt: Date.now() - 1000,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+
+    adapter.getStatus()
+    adapter.recentOutputBuffer = 'new output invalidates parsed cache'
+    vi.setSystemTime(new Date('2026-04-25T12:00:00.500Z'))
+    adapter.getStatus()
+
+    expect(parseOutput).toHaveBeenCalledTimes(1)
+  })
+
+  it('appends rolling text without constructing an over-limit combined buffer first', () => {
+    const existing = 'a'.repeat(256)
+    const chunk = 'b'.repeat(128)
+
+    const result = appendBoundedText(existing, chunk, 300)
+
+    expect(result).toHaveLength(300)
+    expect(result).toBe(`${'a'.repeat(172)}${chunk}`)
+  })
+
+  it('reuses the current output flush screen snapshot for startup readiness instead of reading the terminal twice', () => {
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+      },
+    } as any, '/tmp/project') as any
+
+    const getText = vi.fn(() => 'screen snapshot')
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText,
+    }
+    adapter.scheduleSettle = vi.fn()
+    adapter.scheduleStartupSettleCheck = vi.fn()
+    adapter.startupParseGate = true
+    adapter.spawnAt = Date.now()
+
+    adapter.handleOutput('hello world')
+
+    expect(getText).toHaveBeenCalledTimes(1)
+  })
+
+  it('throttles terminal screen full snapshot reads across bursty output flushes', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-25T12:00:00Z'))
+
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+      },
+    } as any, '/tmp/project') as any
+
+    const getText = vi.fn(() => 'screen snapshot')
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText,
+    }
+    adapter.scheduleSettle = vi.fn()
+    adapter.scheduleStartupSettleCheck = vi.fn()
+    adapter.startupParseGate = false
+
+    adapter.handleOutput('first burst')
+    vi.setSystemTime(new Date('2026-04-25T12:00:00.050Z'))
+    adapter.handleOutput('second burst')
+
+    expect(getText).toHaveBeenCalledTimes(1)
   })
 
   it('reuses cached parsed status when transcript inputs have not changed', () => {

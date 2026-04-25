@@ -66,10 +66,13 @@ export interface ProviderSummaryItem {
 export interface ProviderSummaryMetadata {
     items: ProviderSummaryItem[];
 }
-export type TransportTopic = 'session.chat_tail' | 'machine.runtime' | 'session_host.diagnostics' | 'session.modal' | 'daemon.metadata';
+export type TransportTopic = 'session.chat_tail' | 'session.runtime_output' | 'machine.runtime' | 'session_host.diagnostics' | 'session.modal' | 'daemon.metadata';
 export interface SessionChatTailSubscriptionParams extends ReadChatCursor {
     targetSessionId: string;
     historySessionId?: string;
+}
+export interface SessionRuntimeOutputSubscriptionParams {
+    targetSessionId: string;
 }
 export interface MachineRuntimeSubscriptionParams {
     intervalMs?: number;
@@ -90,6 +93,13 @@ export interface SessionChatTailUpdate extends ReadChatSyncResult {
     key: string;
     sessionId: string;
     historySessionId?: string;
+    seq: number;
+    timestamp: number;
+}
+export interface SessionRuntimeOutputUpdate {
+    topic: 'session.runtime_output';
+    key: string;
+    sessionId: string;
     seq: number;
     timestamp: number;
 }
@@ -129,6 +139,7 @@ export interface DaemonMetadataUpdate {
 }
 export interface TopicUpdateEnvelopeMap {
     'session.chat_tail': SessionChatTailUpdate;
+    'session.runtime_output': SessionRuntimeOutputUpdate;
     'machine.runtime': MachineRuntimeUpdate;
     'session_host.diagnostics': SessionHostDiagnosticsUpdate;
     'session.modal': SessionModalUpdate;
@@ -137,6 +148,7 @@ export interface TopicUpdateEnvelopeMap {
 export type TopicUpdateEnvelope = TopicUpdateEnvelopeMap[TransportTopic];
 export interface SubscribeRequestMap {
     'session.chat_tail': SessionChatTailSubscriptionParams;
+    'session.runtime_output': SessionRuntimeOutputSubscriptionParams;
     'machine.runtime': MachineRuntimeSubscriptionParams;
     'session_host.diagnostics': SessionHostDiagnosticsSubscriptionParams;
     'session.modal': SessionModalSubscriptionParams;

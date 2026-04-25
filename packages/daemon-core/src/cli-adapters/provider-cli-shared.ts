@@ -26,7 +26,15 @@ export interface CliSessionStatus {
     errorReason?: string;
 }
 
+export interface ParsedSession {
+    status: string;
+    messages: any[];
+    modal: { message: string; buttons: string[] } | null;
+    parsedStatus: string | null;
+}
+
 export interface CliScripts {
+    parseSession?: (input: CliScriptInput & { tail?: string; tailScreen?: CliScreenSnapshot }) => ParsedSession | null;
     parseOutput?: (input: CliScriptInput) => any;
     detectStatus?: (input: CliStatusInput) => string | null;
     parseApproval?: (input: CliApprovalInput) => { message: string; buttons: string[] } | null;

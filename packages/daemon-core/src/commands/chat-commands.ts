@@ -190,30 +190,31 @@ function buildReadChatReplayCollapseSignature(message: ChatMessage | null | unde
 function shouldCollapseReadChatReplayDuplicate(message: ChatMessage | null | undefined): boolean {
     if (!message) return false;
     const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
-    if (role !== 'assistant' && role !== 'system') return false;
-    const kind = typeof message.kind === 'string' ? message.kind.trim().toLowerCase() : 'standard';
-    return kind === 'tool' || kind === 'terminal' || kind === 'thought' || kind === 'system';
+    return role === 'assistant' || role === 'system';
 }
 
 function collapseReplayDuplicatesFromReadChat(messages: ChatMessage[]): ChatMessage[] {
     const collapsed: ChatMessage[] = [];
-    let lastReplayTurnSignature = '';
+    const replaySignaturesInCurrentTurn = new Set<string>();
 
     for (const message of messages) {
+        const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
+        if (role === 'user') {
+            replaySignaturesInCurrentTurn.clear();
+        }
+
         const signature = buildReadChatReplayCollapseSignature(message);
         const previous = collapsed[collapsed.length - 1];
         const previousSignature = buildReadChatReplayCollapseSignature(previous);
 
         if (shouldCollapseReadChatReplayDuplicate(message) && signature) {
             if (previousSignature === signature) continue;
-            if (lastReplayTurnSignature === signature) continue;
+            if (replaySignaturesInCurrentTurn.has(signature)) continue;
         }
 
         collapsed.push(message);
         if (shouldCollapseReadChatReplayDuplicate(message) && signature) {
-            lastReplayTurnSignature = signature;
-        } else if ((message.role || '').toLowerCase() === 'user') {
-            lastReplayTurnSignature = '';
+            replaySignaturesInCurrentTurn.add(signature);
         }
     }
 

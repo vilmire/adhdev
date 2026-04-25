@@ -43,6 +43,7 @@ import {
     type CliScripts,
     type CliSessionStatus,
     type CliTraceEntry,
+    type ParsedSession,
 } from './provider-cli-shared.js';
 import { buildChatMessage } from '../providers/chat-message-normalization.js';
 import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
@@ -95,14 +96,26 @@ interface IdleFinishCandidate {
 
 interface SettledEvalContext {
     now: number;
-    screenText: string;
     modal: any;
-    scriptStatus: string;
-    parsedTranscript: any;
+    status: string;
     parsedMessages: CliChatMessage[];
     lastParsedAssistant: CliChatMessage | undefined;
-    parsedShowsLiveAssistantProgress: boolean;
+    parsedStatus: string | null;
     prevStatus: string;
+}
+
+interface SendMessageState {
+    text: string;
+    normalizedPromptSnippet: string;
+    submitDelayMs: number;
+    maxEchoWaitMs: number;
+    retryDelayMs: number;
+    didCommitUserTurn: boolean;
+}
+
+interface SendMessageCompletion {
+    resolveOnce: () => void;
+    rejectOnce: (error: unknown) => void;
 }
 
 function normalizeComparableTranscriptText(value: unknown): string {
@@ -148,6 +161,15 @@ function parsedTranscriptIsRicherThanCommitted(
     return false;
 }
 
+export function appendBoundedText(current: string, chunk: string, maxChars: number): string {
+    if (!chunk) return current.length <= maxChars ? current : current.slice(-maxChars);
+    if (maxChars <= 0) return '';
+    if (chunk.length >= maxChars) return chunk.slice(-maxChars);
+    const keepFromCurrent = maxChars - chunk.length;
+    if (current.length <= keepFromCurrent) return current + chunk;
+    return current.slice(-keepFromCurrent) + chunk;
+}
+
 // ─── Adapter ────────────────────────────────────────
 
 export class ProviderCliAdapter implements CliAdapter {
@@ -180,15 +202,17 @@ export class ProviderCliAdapter implements CliAdapter {
 
  // PTY I/O
     private onPtyDataCallback: ((data: string) => void) | null = null;
-    private pendingOutputParseBuffer = '';
+    private pendingOutputParseChunks: string[] = [];
     private pendingOutputParseTimer: NodeJS.Timeout | null = null;
-    private ptyOutputBuffer = '';
+    private ptyOutputChunks: string[] = [];
     private ptyOutputFlushTimer: NodeJS.Timeout | null = null;
     private pendingTerminalQueryTail = '';
     private lastOutputAt = 0;
     private lastNonEmptyOutputAt = 0;
     private lastScreenChangeAt = 0;
     private lastScreenSnapshot = '';
+    private lastScreenText = '';
+    private lastScreenSnapshotReadAt = Number.NEGATIVE_INFINITY;
 
  // Server log forwarding
     private serverConn: any = null;
@@ -254,6 +278,9 @@ export class ProviderCliAdapter implements CliAdapter {
         lastOutputAt: number;
         result: any;
     } | null = null;
+    private lastStatusHotPathParseAt = Number.NEGATIVE_INFINITY;
+    private static readonly STATUS_HOT_PATH_PARSE_MIN_INTERVAL_MS = 1000;
+    private static readonly SCREEN_SNAPSHOT_MIN_INTERVAL_MS = 250;
     private static readonly MAX_TRACE_ENTRIES = 250;
 
     private readonly providerResolutionMeta: ProviderResolutionMeta;
@@ -263,6 +290,47 @@ export class ProviderCliAdapter implements CliAdapter {
     private syncMessageViews(): void {
         this.messages = [...this.committedMessages];
         this.structuredMessages = [...this.committedMessages];
+    }
+
+    private readTerminalScreenText(now = Date.now()): string {
+        const screenText = this.terminalScreen.getText() || '';
+        this.lastScreenText = screenText;
+        this.lastScreenSnapshotReadAt = now;
+        return screenText;
+    }
+
+    private shouldReadTerminalScreenSnapshot(now: number): boolean {
+        if (!this.lastScreenText) return true;
+        return (now - this.lastScreenSnapshotReadAt) >= ProviderCliAdapter.SCREEN_SNAPSHOT_MIN_INTERVAL_MS;
+    }
+
+    private resetTerminalScreen(rows?: number, cols?: number): void {
+        this.terminalScreen.reset(rows, cols);
+        this.lastScreenText = '';
+        this.lastScreenSnapshot = '';
+        this.lastScreenChangeAt = 0;
+        this.lastScreenSnapshotReadAt = Number.NEGATIVE_INFINITY;
+    }
+
+    private getFreshParsedStatusCache(): any | null {
+        const cached = this.parsedStatusCache;
+        if (
+            cached
+            && cached.committedMessagesRef === this.committedMessages
+            && cached.responseBuffer === this.responseBuffer
+            && cached.currentTurnScope === this.currentTurnScope
+            && cached.recentOutputBuffer === this.recentOutputBuffer
+            && cached.accumulatedBuffer === this.accumulatedBuffer
+            && cached.accumulatedRawBuffer === this.accumulatedRawBuffer
+            && cached.screenText === this.lastScreenText
+            && cached.currentStatus === this.currentStatus
+            && cached.activeModal === this.activeModal
+            && cached.cliName === this.cliName
+            && cached.lastOutputAt === this.lastOutputAt
+        ) {
+            return cached.result;
+        }
+        return null;
     }
 
     private getIdleFinishConfirmMs(): number {
@@ -445,9 +513,9 @@ export class ProviderCliAdapter implements CliAdapter {
             clearTimeout(this.pendingOutputParseTimer);
             this.pendingOutputParseTimer = null;
         }
-        if (!this.pendingOutputParseBuffer) return;
-        const rawData = this.pendingOutputParseBuffer;
-        this.pendingOutputParseBuffer = '';
+        if (this.pendingOutputParseChunks.length === 0) return;
+        const rawData = this.pendingOutputParseChunks.join('');
+        this.pendingOutputParseChunks = [];
         this.handleOutput(rawData);
     }
 
@@ -509,7 +577,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 });
             }
 
-            this.pendingOutputParseBuffer += data;
+            this.pendingOutputParseChunks.push(data);
             if (!this.pendingOutputParseTimer) {
                 this.pendingOutputParseTimer = setTimeout(() => {
                     this.pendingOutputParseTimer = null;
@@ -518,13 +586,13 @@ export class ProviderCliAdapter implements CliAdapter {
             }
 
             if (this.onPtyDataCallback) {
-                this.ptyOutputBuffer += data;
+                this.ptyOutputChunks.push(data);
                 if (!this.ptyOutputFlushTimer) {
                     this.ptyOutputFlushTimer = setTimeout(() => {
-                        if (this.ptyOutputBuffer && this.onPtyDataCallback) {
-                            this.onPtyDataCallback(this.ptyOutputBuffer);
+                        if (this.ptyOutputChunks.length > 0 && this.onPtyDataCallback) {
+                            this.onPtyDataCallback(this.ptyOutputChunks.join(''));
                         }
-                        this.ptyOutputBuffer = '';
+                        this.ptyOutputChunks = [];
                         this.ptyOutputFlushTimer = null;
                     }, this.timeouts.ptyFlush);
                 }
@@ -548,7 +616,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.startupBuffer = '';
         this.startupFirstOutputAt = 0;
         if (this.startupSettleTimer) { clearTimeout(this.startupSettleTimer); this.startupSettleTimer = null; }
-        this.terminalScreen.reset(24, 80);
+        this.resetTerminalScreen(24, 80);
         this.pendingTerminalQueryTail = '';
         this.currentTurnScope = null;
         this.finishRetryCount = 0;
@@ -569,11 +637,14 @@ export class ProviderCliAdapter implements CliAdapter {
         this.terminalScreen.write(rawData);
         const cleanData = sanitizeTerminalText(rawData);
         const now = Date.now();
-        const screenText = this.terminalScreen.getText();
-        const normalizedScreenSnapshot = normalizeScreenSnapshot(screenText);
+        const shouldReadScreen = this.shouldReadTerminalScreenSnapshot(now);
+        const screenText = shouldReadScreen ? this.readTerminalScreenText(now) : this.lastScreenText;
+        const normalizedScreenSnapshot = shouldReadScreen
+            ? normalizeScreenSnapshot(screenText)
+            : this.lastScreenSnapshot;
         this.lastOutputAt = now;
         if (cleanData.trim()) this.lastNonEmptyOutputAt = now;
-        if (normalizedScreenSnapshot !== this.lastScreenSnapshot) {
+        if (shouldReadScreen && normalizedScreenSnapshot !== this.lastScreenSnapshot) {
             this.lastScreenSnapshot = normalizedScreenSnapshot;
             this.lastScreenChangeAt = now;
         }
@@ -597,7 +668,7 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         if (this.isWaitingForResponse && cleanData) {
-            this.responseBuffer = (this.responseBuffer + cleanData).slice(-8000);
+            this.responseBuffer = appendBoundedText(this.responseBuffer, cleanData, 8000);
         }
 
         // Server log forwarding
@@ -610,11 +681,11 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         // Rolling buffers
-        this.recentOutputBuffer = (this.recentOutputBuffer + cleanData).slice(-1000);
         const prevAccumulatedLen = this.accumulatedBuffer.length;
         const prevAccumulatedRawLen = this.accumulatedRawBuffer.length;
-        this.accumulatedBuffer = (this.accumulatedBuffer + cleanData).slice(-ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
-        this.accumulatedRawBuffer = (this.accumulatedRawBuffer + rawData).slice(-ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
+        this.recentOutputBuffer = appendBoundedText(this.recentOutputBuffer, cleanData, 1000);
+        this.accumulatedBuffer = appendBoundedText(this.accumulatedBuffer, cleanData, ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
+        this.accumulatedRawBuffer = appendBoundedText(this.accumulatedRawBuffer, rawData, ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
         // Keep turn-scope offsets aligned with the truncated buffer so scoped
         // parses don't lose the beginning of a long turn (e.g. the Hermes
         // ╭─ opening line) when the rolling window sheds bytes.
@@ -629,18 +700,25 @@ export class ProviderCliAdapter implements CliAdapter {
             }
         }
 
-        this.resolveStartupState('output');
+        this.resolveStartupState('output', screenText, normalizedScreenSnapshot, now);
 
         // ─── Script-based status detection
         this.scheduleSettle();
     }
 
-    private resolveStartupState(trigger: string): void {
+    private resolveStartupState(
+        trigger: string,
+        screenTextOverride?: string,
+        normalizedScreenOverride?: string,
+        nowOverride?: number,
+    ): void {
         if (!this.startupParseGate) return;
 
-        const now = Date.now();
-        const screenText = this.terminalScreen.getText() || '';
-        const normalizedScreen = normalizeScreenSnapshot(screenText);
+        const now = typeof nowOverride === 'number' ? nowOverride : Date.now();
+        const screenText = typeof screenTextOverride === 'string' ? screenTextOverride : this.readTerminalScreenText();
+        const normalizedScreen = typeof normalizedScreenOverride === 'string'
+            ? normalizedScreenOverride
+            : normalizeScreenSnapshot(screenText);
         const hasStartupOutput = !!this.startupFirstOutputAt || !!normalizedScreen.trim();
         if (!hasStartupOutput) return;
 
@@ -886,48 +964,34 @@ export class ProviderCliAdapter implements CliAdapter {
             }, delayTime);
             return;
         }
-        const tail = this.settledBuffer;
-        const screenText = this.terminalScreen.getText() || '';
+
         this.resolveStartupState('settled');
-        if (this.startupParseGate) {
-            return;
-        }
-        const parsedTranscript = this.parseCurrentTranscript(
-            this.committedMessages,
-            this.responseBuffer,
-            this.currentTurnScope,
-        );
-        const parsedModal = parsedTranscript?.activeModal && Array.isArray(parsedTranscript.activeModal.buttons) && parsedTranscript.activeModal.buttons.some((button: any) => typeof button === 'string' && button.trim())
-            ? parsedTranscript.activeModal
-            : null;
-        const modal = this.runParseApproval(tail) || parsedModal;
-        const rawScriptStatus = this.runDetectStatus(tail);
-        const scriptStatus = parsedTranscript?.status === 'waiting_approval' && modal
-            ? 'waiting_approval'
-            : rawScriptStatus;
-        const parsedMessages = Array.isArray(parsedTranscript?.messages)
-            ? normalizeCliParsedMessages(parsedTranscript.messages, {
-                committedMessages: this.committedMessages,
-                scope: this.currentTurnScope,
-                lastOutputAt: this.lastOutputAt,
-            })
-            : [];
-        if (this.maybeCommitVisibleIdleTranscript(parsedTranscript)) {
-            return;
-        }
-        const lastParsedAssistant = [...parsedMessages].reverse().find((message) => message.role === 'assistant');
-        const parsedShowsLiveAssistantProgress = parsedTranscript?.status === 'generating'
-            && !!lastParsedAssistant
-            && parsedMessages.length > this.committedMessages.length;
+        if (this.startupParseGate) return;
+
+        const session = this.runParseSession();
+        if (!session) return;
+
+        const { status, messages, modal, parsedStatus } = session;
+        const parsedMessages = normalizeCliParsedMessages(messages, {
+            committedMessages: this.committedMessages,
+            scope: this.currentTurnScope,
+            lastOutputAt: this.lastOutputAt,
+        });
+
+        if (this.maybeCommitVisibleIdleTranscript(session, parsedMessages)) return;
+
+        const lastParsedAssistant = [...parsedMessages].reverse().find((m) => m.role === 'assistant');
         const normalizedPromptSnippet = normalizePromptText(this.submitRetryPromptSnippet || this.currentTurnScope?.prompt || '');
+        const screenText = this.terminalScreen.getText() || '';
+
         this.recordTrace('settled', {
-            tail: summarizeCliTraceText(tail, 500),
+            tail: summarizeCliTraceText(this.settledBuffer, 500),
             screenText: summarizeCliTraceText(screenText, 1200),
-            detectStatus: scriptStatus,
-            parsedStatus: parsedTranscript?.status || null,
+            detectStatus: status,
+            parsedStatus: parsedStatus || null,
             parsedMessageCount: parsedMessages.length,
             parsedLastAssistant: lastParsedAssistant ? summarizeCliTraceText(lastParsedAssistant.content, 280) : '',
-            parsedActiveModal: parsedTranscript?.activeModal ?? null,
+            parsedActiveModal: modal,
             approval: modal,
             ...buildCliTraceParseSnapshot({
                 accumulatedBuffer: this.accumulatedBuffer,
@@ -937,6 +1001,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 scope: this.currentTurnScope,
             }),
         });
+
         if (
             this.currentTurnScope
             && !lastParsedAssistant
@@ -963,60 +1028,48 @@ export class ProviderCliAdapter implements CliAdapter {
             }, this.timeouts.outputSettle + 150);
             return;
         }
+
         if (this.currentTurnScope && !lastParsedAssistant) {
             LOG.info(
                 'CLI',
                 `[${this.cliType}] Settled without assistant: prompt=${JSON.stringify(this.currentTurnScope.prompt).slice(0, 140)} responseBuffer=${JSON.stringify(summarizeCliTraceText(this.responseBuffer, 220)).slice(0, 260)} screen=${JSON.stringify(summarizeCliTraceText(screenText, 220)).slice(0, 260)} providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'}`
             );
         }
-        if (!scriptStatus) return;
+
+        if (!status) return;
 
         const prevStatus = this.currentStatus;
-        const ctx: SettledEvalContext = { now, screenText, modal, scriptStatus, parsedTranscript, parsedMessages, lastParsedAssistant, parsedShowsLiveAssistantProgress, prevStatus };
+        const ctx: SettledEvalContext = { now, modal, status, parsedMessages, lastParsedAssistant, parsedStatus: parsedStatus || null, prevStatus };
 
         if (!this.applyPendingScriptStatusDebounce(ctx)) return;
 
         const recentInteractiveActivity = this.hasRecentInteractiveActivity(now);
         LOG.info(
             'CLI',
-            `[${this.cliType}] settled diagnostics prompt=${JSON.stringify(this.currentTurnScope?.prompt || '').slice(0, 140)} scriptStatus=${String(scriptStatus || '')} parsedStatus=${String(parsedTranscript?.status || '')} parsedMsgCount=${parsedMessages.length} lastParsedAssistant=${JSON.stringify(summarizeCliTraceText(lastParsedAssistant?.content || '', 120)).slice(0, 160)} responseBuffer=${JSON.stringify(summarizeCliTraceText(this.responseBuffer, 160)).slice(0, 220)} screen=${JSON.stringify(summarizeCliTraceText(screenText, 160)).slice(0, 220)}`
+            `[${this.cliType}] settled diagnostics prompt=${JSON.stringify(this.currentTurnScope?.prompt || '').slice(0, 140)} status=${String(status || '')} parsedStatus=${String(parsedStatus || '')} parsedMsgCount=${parsedMessages.length} lastParsedAssistant=${JSON.stringify(summarizeCliTraceText(lastParsedAssistant?.content || '', 120)).slice(0, 160)} responseBuffer=${JSON.stringify(summarizeCliTraceText(this.responseBuffer, 160)).slice(0, 220)} screen=${JSON.stringify(summarizeCliTraceText(screenText, 160)).slice(0, 220)}`
         );
 
         const shouldHoldGenerating =
-            scriptStatus === 'idle'
+            status === 'idle'
             && this.isWaitingForResponse
             && !modal
             && recentInteractiveActivity
-            && !(parsedTranscript?.status === 'idle' && !!lastParsedAssistant);
+            && !(parsedStatus === 'idle' && !!lastParsedAssistant);
 
-        if (shouldHoldGenerating) {
-            this.applyHoldGenerating(ctx, recentInteractiveActivity);
-            return;
-        }
-
-        if (scriptStatus === 'waiting_approval') {
-            this.applyWaitingApproval(ctx);
-            return;
-        }
-
-        if (scriptStatus === 'generating') {
-            this.applyGenerating(ctx);
-            return;
-        }
-
-        if (scriptStatus === 'idle') {
-            this.applyIdle(ctx, now);
-        }
+        if (shouldHoldGenerating) { this.applyHoldGenerating(ctx, recentInteractiveActivity); return; }
+        if (status === 'waiting_approval') { this.applyWaitingApproval(ctx); return; }
+        if (status === 'generating') { this.applyGenerating(ctx); return; }
+        if (status === 'idle') { this.applyIdle(ctx, now); }
     }
 
     // Returns false if the caller should bail out (debounce pending).
     private applyPendingScriptStatusDebounce(ctx: SettledEvalContext): boolean {
-        const { now, scriptStatus, prevStatus } = ctx;
+        const { now, status, prevStatus } = ctx;
         const shouldDebounce =
             prevStatus === 'idle'
             && !this.isWaitingForResponse
             && !this.currentTurnScope
-            && (scriptStatus === 'generating' || scriptStatus === 'waiting_approval');
+            && (status === 'generating' || status === 'waiting_approval');
 
         if (!shouldDebounce) {
             this.pendingScriptStatus = null;
@@ -1034,8 +1087,8 @@ export class ProviderCliAdapter implements CliAdapter {
             }, delayMs);
         };
 
-        if (this.pendingScriptStatus !== scriptStatus) {
-            this.pendingScriptStatus = scriptStatus as 'generating' | 'waiting_approval';
+        if (this.pendingScriptStatus !== status) {
+            this.pendingScriptStatus = status as 'generating' | 'waiting_approval';
             this.pendingScriptStatusSince = now;
             armPending(ProviderCliAdapter.SCRIPT_STATUS_DEBOUNCE_MS);
             return false;
@@ -1049,7 +1102,7 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     private applyHoldGenerating(ctx: SettledEvalContext, recentInteractiveActivity: boolean): void {
-        const { scriptStatus } = ctx;
+        const { status } = ctx;
         this.clearIdleFinishCandidate('hold_generating_recent_activity');
         this.setStatus('generating', 'recent_activity_hold');
         if (this.idleTimeout) clearTimeout(this.idleTimeout);
@@ -1060,7 +1113,7 @@ export class ProviderCliAdapter implements CliAdapter {
             }
         }, this.timeouts.generatingIdle);
         this.recordTrace('hold_generating_recent_activity', {
-            scriptStatus,
+            scriptStatus: status,
             recentInteractiveActivity,
             lastNonEmptyOutputAt: this.lastNonEmptyOutputAt,
             lastScreenChangeAt: this.lastScreenChangeAt,
@@ -1113,8 +1166,9 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     private applyGenerating(ctx: SettledEvalContext): void {
-        const { screenText, modal, parsedShowsLiveAssistantProgress, prevStatus } = ctx;
+        const { modal, parsedMessages, lastParsedAssistant, parsedStatus, prevStatus } = ctx;
         this.clearIdleFinishCandidate('generating');
+        const screenText = this.terminalScreen.getText() || '';
         const effectiveScreenText = screenText || this.accumulatedBuffer;
         const noActiveTurn = !this.currentTurnScope;
         const looksIdleChrome = /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(effectiveScreenText)
@@ -1122,6 +1176,9 @@ export class ProviderCliAdapter implements CliAdapter {
                 && (/Update available!/i.test(screenText)
                     || /\/effort/i.test(screenText)
                     || /^.*➜\s+\S+/m.test(effectiveScreenText)));
+        const parsedShowsLiveAssistantProgress = parsedStatus === 'generating'
+            && !!lastParsedAssistant
+            && parsedMessages.length > this.committedMessages.length;
         if (prevStatus === 'idle' && !this.isWaitingForResponse && noActiveTurn && !modal && looksIdleChrome && !parsedShowsLiveAssistantProgress) {
             return;
         }
@@ -1148,7 +1205,7 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     private applyIdle(ctx: SettledEvalContext, now: number): void {
-        const { screenText, modal, lastParsedAssistant, prevStatus } = ctx;
+        const { modal, lastParsedAssistant, prevStatus } = ctx;
         if (prevStatus === 'waiting_approval') {
             if (this.approvalExitTimeout) { clearTimeout(this.approvalExitTimeout); this.approvalExitTimeout = null; }
             this.activeModal = null;
@@ -1281,30 +1338,24 @@ export class ProviderCliAdapter implements CliAdapter {
         this.onStatusChange?.();
     }
 
-    private maybeCommitVisibleIdleTranscript(parsed: any): boolean {
+    private maybeCommitVisibleIdleTranscript(session: ParsedSession, parsedMessages: CliChatMessage[]): boolean {
         const allowImmediateScriptIdleCommit = this.provider.allowInputDuringGeneration === true;
         if (!allowImmediateScriptIdleCommit) return false;
         if (
-            !parsed
-            || !Array.isArray(parsed.messages)
-            || parsed.status !== 'idle'
+            !session
+            || session.status !== 'idle'
             || !this.isWaitingForResponse
             || !this.currentTurnScope
             || this.activeModal
-            || parsed.activeModal
+            || session.modal
         ) {
             return false;
         }
 
-        const hydratedForIdleCommit = normalizeCliParsedMessages(parsed.messages, {
-            committedMessages: this.committedMessages,
-            scope: this.currentTurnScope,
-            lastOutputAt: this.lastOutputAt,
-        });
-        const visibleAssistant = [...hydratedForIdleCommit].reverse().find((message) => message.role === 'assistant' && message.content.trim());
+        const visibleAssistant = [...parsedMessages].reverse().find((m) => m.role === 'assistant' && m.content.trim());
         if (!visibleAssistant) return false;
 
-        this.committedMessages = hydratedForIdleCommit;
+        this.committedMessages = parsedMessages;
         this.trimLastAssistantEcho(this.committedMessages, this.currentTurnScope?.prompt || getLastUserPromptText(this.committedMessages));
         this.clearAllTimers();
         this.syncMessageViews();
@@ -1385,6 +1436,68 @@ export class ProviderCliAdapter implements CliAdapter {
 
 
  // ─── Script Execution ──────────────────────────
+
+    private runParseSession(): ParsedSession | null {
+        // Preferred: provider exposes a unified parseSession script
+        if (typeof this.cliScripts?.parseSession === 'function') {
+            try {
+                const screenText = this.terminalScreen.getText();
+                const tail = this.recentOutputBuffer.slice(-500);
+                const input = buildCliParseInput({
+                    accumulatedBuffer: this.accumulatedBuffer,
+                    accumulatedRawBuffer: this.accumulatedRawBuffer,
+                    recentOutputBuffer: this.recentOutputBuffer,
+                    terminalScreenText: screenText,
+                    baseMessages: this.committedMessages,
+                    partialResponse: this.responseBuffer,
+                    isWaitingForResponse: this.isWaitingForResponse,
+                    scope: this.currentTurnScope,
+                    runtimeSettings: this.runtimeSettings,
+                });
+                const session = this.cliScripts.parseSession({ ...input, tail, tailScreen: buildCliScreenSnapshot(tail) });
+                this.parseErrorMessage = null;
+                return session && typeof session === 'object' ? session : null;
+            } catch (e: any) {
+                const message = e?.message || String(e);
+                this.parseErrorMessage = message;
+                LOG.warn('CLI', `[${this.cliType}] parseSession error: ${message}`);
+                return null;
+            }
+        }
+        // Fallback: reconcile from the three individual scripts (for providers without parseSession)
+        if (!this.cliScripts?.detectStatus && !this.cliScripts?.parseOutput) return null;
+        try {
+            const tail = this.settledBuffer;
+            const parsedTranscript = this.parseCurrentTranscript(
+                this.committedMessages,
+                this.responseBuffer,
+                this.currentTurnScope,
+            );
+            const parsedModal = parsedTranscript?.activeModal
+                && Array.isArray(parsedTranscript.activeModal.buttons)
+                && parsedTranscript.activeModal.buttons.some((b: any) => typeof b === 'string' && b.trim())
+                ? parsedTranscript.activeModal
+                : null;
+            const approval = this.runParseApproval(tail);
+            const modal = approval || parsedModal;
+            const rawStatus = this.runDetectStatus(tail);
+            const parsedStatus = typeof parsedTranscript?.status === 'string' ? parsedTranscript.status : null;
+            const effectiveStatus = (parsedStatus === 'waiting_approval' && modal)
+                ? 'waiting_approval'
+                : (rawStatus || parsedStatus || 'idle');
+            return {
+                status: effectiveStatus,
+                messages: Array.isArray(parsedTranscript?.messages) ? parsedTranscript.messages : [],
+                modal,
+                parsedStatus,
+            };
+        } catch (e: any) {
+            const message = e?.message || String(e);
+            this.parseErrorMessage = message;
+            LOG.warn('CLI', `[${this.cliType}] parseSession fallback error: ${message}`);
+            return null;
+        }
+    }
 
     private runDetectStatus(text: string): string | null {
         if (!this.cliScripts?.detectStatus) return null;
@@ -1478,18 +1591,25 @@ export class ProviderCliAdapter implements CliAdapter {
         let effectiveStatus = this.projectEffectiveStatus(startupModal);
         let effectiveModal = startupModal || this.activeModal;
         if (!startupModal && !effectiveModal && typeof this.cliScripts?.parseOutput === 'function') {
-            try {
-                const parsed = this.getScriptParsedStatus();
-                const parsedModal = parsed?.activeModal && Array.isArray(parsed.activeModal.buttons)
-                    && parsed.activeModal.buttons.some((button: any) => typeof button === 'string' && button.trim())
-                    ? parsed.activeModal
-                    : null;
-                if (parsed?.status === 'waiting_approval' && parsedModal) {
-                    effectiveStatus = 'waiting_approval';
-                    effectiveModal = parsedModal;
+            let parsed = this.getFreshParsedStatusCache();
+            if (!parsed && effectiveStatus !== 'idle') {
+                const now = Date.now();
+                if ((now - this.lastStatusHotPathParseAt) >= ProviderCliAdapter.STATUS_HOT_PATH_PARSE_MIN_INTERVAL_MS) {
+                    this.lastStatusHotPathParseAt = now;
+                    try {
+                        parsed = this.getScriptParsedStatus();
+                    } catch {
+                        // Ignore parse errors here; getScriptParsedStatus surfaces them on richer callers.
+                    }
                 }
-            } catch {
-                // Ignore parse errors here; getScriptParsedStatus surfaces them on richer callers.
+            }
+            const parsedModal = parsed?.activeModal && Array.isArray(parsed.activeModal.buttons)
+                && parsed.activeModal.buttons.some((button: any) => typeof button === 'string' && button.trim())
+                ? parsed.activeModal
+                : null;
+            if (parsed?.status === 'waiting_approval' && parsedModal) {
+                effectiveStatus = 'waiting_approval';
+                effectiveModal = parsedModal;
             }
         }
         return {
@@ -1529,7 +1649,7 @@ export class ProviderCliAdapter implements CliAdapter {
      * Called by command handler / dashboard for rich content rendering.
      */
     getScriptParsedStatus(): any {
-        const screenText = this.terminalScreen.getText();
+        const screenText = this.readTerminalScreenText();
         const cached = this.parsedStatusCache;
         if (
             cached
@@ -1566,8 +1686,21 @@ export class ProviderCliAdapter implements CliAdapter {
                 this.onStatusChange?.();
             }
         }
-        if (this.maybeCommitVisibleIdleTranscript(parsed)) {
-            return this.getScriptParsedStatus();
+        if (parsed && Array.isArray(parsed.messages)) {
+            const hydratedForCommit = normalizeCliParsedMessages(parsed.messages, {
+                committedMessages: this.committedMessages,
+                scope: this.currentTurnScope,
+                lastOutputAt: this.lastOutputAt,
+            });
+            const fakeSession: ParsedSession = {
+                status: parsed.status || 'idle',
+                messages: parsed.messages,
+                modal: parsedModal,
+                parsedStatus: parsed.status || null,
+            };
+            if (this.maybeCommitVisibleIdleTranscript(fakeSession, hydratedForCommit)) {
+                return this.getScriptParsedStatus();
+            }
         }
         const shouldPreferCommittedMessages =
             !this.currentTurnScope
@@ -1796,6 +1929,18 @@ export class ProviderCliAdapter implements CliAdapter {
         await this.sendMessage(promptText);
     }
 
+    private isSubmitStuck(normalizedPromptSnippet: string): boolean {
+        if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return false;
+        if (this.hasActionableApproval()) return false;
+        if (this.hasMeaningfulResponseBuffer(normalizedPromptSnippet)) return false;
+        const screenText = this.terminalScreen.getText();
+        if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return false;
+        const liveApproval = this.runParseApproval(screenText) || this.runParseApproval(this.recentOutputBuffer);
+        if (liveApproval) return false;
+        const liveStatus = this.runDetectStatus(screenText) || this.runDetectStatus(this.recentOutputBuffer);
+        return liveStatus !== 'generating' && liveStatus !== 'waiting_approval';
+    }
+
     private async writeToPty(data: string): Promise<void> {
         if (!this.ptyProcess) throw new Error(`${this.cliName} is not running`);
         await this.ptyProcess.write(data);
@@ -1810,6 +1955,135 @@ export class ProviderCliAdapter implements CliAdapter {
         if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
         if (this.submitRetryTimer) { clearTimeout(this.submitRetryTimer); this.submitRetryTimer = null; }
         if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
+    }
+
+    private commitSendUserTurn(state: SendMessageState): void {
+        if (state.didCommitUserTurn) return;
+        state.didCommitUserTurn = true;
+        this.committedMessages.push({ role: 'user', content: state.text, timestamp: Date.now() });
+        this.syncMessageViews();
+    }
+
+    private armResponseTimeout(): void {
+        if (this.responseTimeout) clearTimeout(this.responseTimeout);
+        this.responseTimeout = setTimeout(() => {
+            if (this.isWaitingForResponse) this.finishResponse();
+        }, this.timeouts.maxResponse);
+    }
+
+    private writeSubmitKeyForRetry(mode: string): void {
+        void this.writeToPty(this.sendKey).catch((error) => {
+            LOG.warn('CLI', `[${this.cliType}] ${mode} write failed: ${error?.message || error}`);
+        });
+    }
+
+    private retrySubmitIfStuck(state: SendMessageState, attempt: number): void {
+        this.submitRetryTimer = null;
+        if (!this.isSubmitStuck(state.normalizedPromptSnippet)) return;
+        const screenText = this.terminalScreen.getText();
+        this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
+        LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt ${attempt})`);
+        this.recordTrace('submit_write', {
+            mode: 'submit_retry',
+            attempt,
+            sendKey: this.sendKey,
+            screenText: summarizeCliTraceText(screenText, 500),
+        });
+        this.writeSubmitKeyForRetry('submit_retry');
+        if (attempt >= 3) { this.submitRetryUsed = true; return; }
+        this.submitRetryTimer = setTimeout(() => this.retrySubmitIfStuck(state, attempt + 1), state.retryDelayMs);
+    }
+
+    private retryImmediateSubmitIfStuck(state: SendMessageState): void {
+        this.submitRetryTimer = null;
+        if (!this.isSubmitStuck(state.normalizedPromptSnippet)) return;
+        const screenText = this.terminalScreen.getText();
+        this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
+        LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt 1)`);
+        this.recordTrace('submit_write', {
+            mode: 'immediate_retry',
+            attempt: 1,
+            sendKey: this.sendKey,
+            screenText: summarizeCliTraceText(screenText, 500),
+        });
+        this.writeSubmitKeyForRetry('immediate_retry');
+        this.submitRetryUsed = true;
+    }
+
+    private submitSendKey(state: SendMessageState, completion: SendMessageCompletion): void {
+        if (!this.ptyProcess) {
+            completion.resolveOnce();
+            return;
+        }
+        this.submitPendingUntil = 0;
+        const screenText = this.terminalScreen.getText();
+        this.recordTrace('submit_write', {
+            mode: 'submit_key',
+            sendKey: this.sendKey,
+            screenText: summarizeCliTraceText(screenText, 500),
+        });
+        void this.writeToPty(this.sendKey).then(() => {
+            this.commitSendUserTurn(state);
+            this.submitRetryTimer = setTimeout(() => this.retrySubmitIfStuck(state, 1), state.retryDelayMs);
+            this.armResponseTimeout();
+            completion.resolveOnce();
+        }, completion.rejectOnce);
+    }
+
+    private submitImmediatePrompt(state: SendMessageState, completion: SendMessageCompletion): void {
+        this.submitPendingUntil = 0;
+        this.recordTrace('submit_write', {
+            mode: 'immediate',
+            text: summarizeCliTraceText(state.text, 500),
+            sendKey: this.sendKey,
+            screenText: summarizeCliTraceText(this.terminalScreen.getText(), 500),
+        });
+        void this.writeToPty(state.text + this.sendKey).then(() => {
+            this.commitSendUserTurn(state);
+            this.submitRetryTimer = setTimeout(() => this.retryImmediateSubmitIfStuck(state), state.retryDelayMs);
+            this.armResponseTimeout();
+            completion.resolveOnce();
+        }, completion.rejectOnce);
+    }
+
+    private waitForEchoAndSubmit(
+        state: SendMessageState,
+        completion: SendMessageCompletion,
+        submitStartedAt: number,
+        lastNormalizedScreen = '',
+        lastScreenChangeAt = submitStartedAt,
+    ): void {
+        if (!this.ptyProcess) {
+            completion.resolveOnce();
+            return;
+        }
+        const now = Date.now();
+        const elapsed = now - submitStartedAt;
+        const screenText = this.terminalScreen.getText();
+        const normalizedScreen = normalizePromptText(screenText);
+        const nextScreenChangeAt = normalizedScreen !== lastNormalizedScreen ? now : lastScreenChangeAt;
+        const echoVisible = !state.normalizedPromptSnippet || promptLikelyVisible(screenText, state.normalizedPromptSnippet);
+
+        if (echoVisible) {
+            const screenSettled = (now - nextScreenChangeAt) >= 500;
+            if (elapsed >= state.submitDelayMs && screenSettled) {
+                this.submitSendKey(state, completion);
+                return;
+            }
+        }
+
+        if (elapsed >= state.maxEchoWaitMs) {
+            this.submitSendKey(state, completion);
+            return;
+        }
+
+        setTimeout(() => this.waitForEchoAndSubmit(
+            state,
+            completion,
+            submitStartedAt,
+            normalizedScreen,
+            nextScreenChangeAt,
+        ), 50);
     }
 
     async sendMessage(text: string): Promise<void> {
@@ -1895,12 +2169,13 @@ export class ProviderCliAdapter implements CliAdapter {
         const submitDelayMs = this.sendDelayMs + Math.min(2000, Math.max(0, estimatedLines - 1) * 350);
         const maxEchoWaitMs = submitDelayMs + Math.max(1500, Math.min(5000, estimatedLines * 500));
         const retryDelayMs = Math.max(350, Math.min(1500, Math.max(this.sendDelayMs, submitDelayMs)));
-        let didCommitUserTurn = false;
-        const commitUserTurn = () => {
-            if (didCommitUserTurn) return;
-            didCommitUserTurn = true;
-            this.committedMessages.push({ role: 'user', content: text, timestamp: Date.now() });
-            this.syncMessageViews();
+        const sendState: SendMessageState = {
+            text,
+            normalizedPromptSnippet,
+            submitDelayMs,
+            maxEchoWaitMs,
+            retryDelayMs,
+            didCommitUserTurn: false,
         };
         if (this.settleTimer) {
             clearTimeout(this.settleTimer);
@@ -1908,112 +2183,24 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         this.responseEpoch += 1;
         this.responseSettleIgnoreUntil = Date.now() + submitDelayMs + this.timeouts.outputSettle + 250;
-        const startResponseTimeout = () => {
-            if (this.responseTimeout) clearTimeout(this.responseTimeout);
-            this.responseTimeout = setTimeout(() => {
-                if (this.isWaitingForResponse) this.finishResponse();
-            }, this.timeouts.maxResponse);
-        };
         await new Promise<void>((resolve, reject) => {
             let resolved = false;
-            const resolveOnce = () => {
-                if (resolved) return;
-                resolved = true;
-                resolve();
-            };
-            const rejectOnce = (error: unknown) => {
-                if (resolved) return;
-                this.resetPendingSendState('send_write_failed');
-                resolved = true;
-                reject(error);
-            };
-            const writeRetryKey = (mode: string) => {
-                void this.writeToPty(this.sendKey).catch((error) => {
-                    LOG.warn('CLI', `[${this.cliType}] ${mode} write failed: ${error?.message || error}`);
-                });
-            };
-
-            const submit = () => {
-                if (!this.ptyProcess) {
-                    resolveOnce();
-                    return;
-                }
-                this.submitPendingUntil = 0;
-                const screenText = this.terminalScreen.getText();
-                this.recordTrace('submit_write', {
-                    mode: 'submit_key',
-                    sendKey: this.sendKey,
-                    screenText: summarizeCliTraceText(screenText, 500),
-                });
-                const retrySubmitIfStuck = (attempt: number) => {
-                    this.submitRetryTimer = null;
-                    if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
-                    if (this.hasActionableApproval()) return;
-                    if (this.hasMeaningfulResponseBuffer(normalizedPromptSnippet)) return;
-                    const screenText = this.terminalScreen.getText();
-                    if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
-                    const liveApproval = this.runParseApproval(screenText) || this.runParseApproval(this.recentOutputBuffer);
-                    if (liveApproval) return;
-                    const liveStatus = this.runDetectStatus(screenText) || this.runDetectStatus(this.recentOutputBuffer);
-                    if (liveStatus === 'generating' || liveStatus === 'waiting_approval') return;
-                    this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
-                    LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt ${attempt})`);
-                    this.recordTrace('submit_write', {
-                        mode: 'submit_retry',
-                        attempt,
-                        sendKey: this.sendKey,
-                        screenText: summarizeCliTraceText(screenText, 500),
-                    });
-                    writeRetryKey('submit_retry');
-                    if (attempt >= 3) {
-                        this.submitRetryUsed = true;
-                        return;
-                    }
-                    this.submitRetryTimer = setTimeout(() => retrySubmitIfStuck(attempt + 1), retryDelayMs);
-                };
-                void this.writeToPty(this.sendKey).then(() => {
-                    commitUserTurn();
-                    this.submitRetryTimer = setTimeout(() => retrySubmitIfStuck(1), retryDelayMs);
-                    startResponseTimeout();
-                    resolveOnce();
-                }, rejectOnce);
+            const completion: SendMessageCompletion = {
+                resolveOnce: () => {
+                    if (resolved) return;
+                    resolved = true;
+                    resolve();
+                },
+                rejectOnce: (error: unknown) => {
+                    if (resolved) return;
+                    this.resetPendingSendState('send_write_failed');
+                    resolved = true;
+                    reject(error);
+                },
             };
 
             if (this.submitStrategy === 'immediate') {
-                this.submitPendingUntil = 0;
-                this.recordTrace('submit_write', {
-                    mode: 'immediate',
-                    text: summarizeCliTraceText(text, 500),
-                    sendKey: this.sendKey,
-                    screenText: summarizeCliTraceText(this.terminalScreen.getText(), 500),
-                });
-                void this.writeToPty(text + this.sendKey).then(() => {
-                    commitUserTurn();
-                    this.submitRetryTimer = setTimeout(() => {
-                        this.submitRetryTimer = null;
-                        if (!this.ptyProcess || !this.isWaitingForResponse || this.submitRetryUsed) return;
-                        if (this.hasActionableApproval()) return;
-                        if (this.hasMeaningfulResponseBuffer(normalizedPromptSnippet)) return;
-                        const screenText = this.terminalScreen.getText();
-                        if (!promptLikelyVisible(screenText, normalizedPromptSnippet)) return;
-                        const liveApproval = this.runParseApproval(screenText) || this.runParseApproval(this.recentOutputBuffer);
-                        if (liveApproval) return;
-                        const liveStatus = this.runDetectStatus(screenText) || this.runDetectStatus(this.recentOutputBuffer);
-                        if (liveStatus === 'generating' || liveStatus === 'waiting_approval') return;
-                        LOG.info('CLI', `[${this.cliType}] Retrying submit key for stuck prompt (attempt 1)`);
-                        this.responseSettleIgnoreUntil = Date.now() + this.timeouts.outputSettle + 400;
-                        this.recordTrace('submit_write', {
-                            mode: 'immediate_retry',
-                            attempt: 1,
-                            sendKey: this.sendKey,
-                            screenText: summarizeCliTraceText(screenText, 500),
-                        });
-                        writeRetryKey('immediate_retry');
-                        this.submitRetryUsed = true;
-                    }, retryDelayMs);
-                    startResponseTimeout();
-                    resolveOnce();
-                }, rejectOnce);
+                this.submitImmediatePrompt(sendState, completion);
                 return;
             }
 
@@ -2027,39 +2214,10 @@ export class ProviderCliAdapter implements CliAdapter {
                 screenText: summarizeCliTraceText(this.terminalScreen.getText(), 500),
             });
             const submitStartedAt = Date.now();
-            let lastNormalizedScreen = '';
-            let lastScreenChangeAt = submitStartedAt;
-            const waitForEchoAndSubmit = () => {
-                if (!this.ptyProcess) {
-                    resolveOnce();
-                    return;
-                }
-                const now = Date.now();
-                const elapsed = now - submitStartedAt;
-                const screenText = this.terminalScreen.getText();
-                const normalizedScreen = normalizePromptText(screenText);
-                if (normalizedScreen !== lastNormalizedScreen) {
-                    lastNormalizedScreen = normalizedScreen;
-                    lastScreenChangeAt = now;
-                }
-                const echoVisible = !normalizedPromptSnippet || promptLikelyVisible(screenText, normalizedPromptSnippet);
-
-                if (echoVisible) {
-                    const screenSettled = (now - lastScreenChangeAt) >= 500;
-                    if (elapsed >= submitDelayMs && screenSettled) {
-                        submit();
-                        return;
-                    }
-                }
-
-                if (elapsed >= maxEchoWaitMs) {
-                    submit();
-                    return;
-                }
-
-                setTimeout(waitForEchoAndSubmit, 50);
-            };
-            void this.writeToPty(text).then(() => waitForEchoAndSubmit(), rejectOnce);
+            void this.writeToPty(text).then(
+                () => this.waitForEchoAndSubmit(sendState, completion, submitStartedAt),
+                completion.rejectOnce,
+            );
         });
     }
 
@@ -2148,9 +2306,9 @@ export class ProviderCliAdapter implements CliAdapter {
     shutdown(): void {
         this.clearIdleFinishCandidate('shutdown');
         this.clearAllTimers();
-        this.pendingOutputParseBuffer = '';
+        this.pendingOutputParseChunks = [];
         this.pendingTerminalQueryTail = '';
-        this.ptyOutputBuffer = '';
+        this.ptyOutputChunks = [];
         this.finishRetryCount = 0;
         if (this.ptyProcess) {
             this.ptyProcess.write('\x03');
@@ -2169,9 +2327,9 @@ export class ProviderCliAdapter implements CliAdapter {
     detach(): void {
         this.clearIdleFinishCandidate('detach');
         this.clearAllTimers();
-        this.pendingOutputParseBuffer = '';
+        this.pendingOutputParseChunks = [];
         this.pendingTerminalQueryTail = '';
-        this.ptyOutputBuffer = '';
+        this.ptyOutputChunks = [];
         this.finishRetryCount = 0;
         if (this.ptyProcess) {
             try {
@@ -2199,13 +2357,13 @@ export class ProviderCliAdapter implements CliAdapter {
         this.submitRetryUsed = false;
         this.submitRetryPromptSnippet = '';
         if (this.pendingOutputParseTimer) { clearTimeout(this.pendingOutputParseTimer); this.pendingOutputParseTimer = null; }
-        this.pendingOutputParseBuffer = '';
+        this.pendingOutputParseChunks = [];
         this.pendingTerminalQueryTail = '';
         if (this.ptyOutputFlushTimer) { clearTimeout(this.ptyOutputFlushTimer); this.ptyOutputFlushTimer = null; }
-        this.ptyOutputBuffer = '';
+        this.ptyOutputChunks = [];
         if (this.finishRetryTimer) { clearTimeout(this.finishRetryTimer); this.finishRetryTimer = null; }
         this.finishRetryCount = 0;
-        this.terminalScreen.reset();
+        this.resetTerminalScreen();
         this.ptyProcess?.clearBuffer?.();
         this.onStatusChange?.();
     }
@@ -2326,7 +2484,7 @@ export class ProviderCliAdapter implements CliAdapter {
             traceEntryCount: this.traceEntries.length,
             statusHistory: this.statusHistory.slice(-30),
             timeouts: this.timeouts,
-            pendingOutputParseBufferLength: this.pendingOutputParseBuffer.length,
+            pendingOutputParseBufferLength: this.pendingOutputParseChunks.reduce((total, chunk) => total + chunk.length, 0),
             pendingOutputParseScheduled: !!this.pendingOutputParseTimer,
             ptyAlive: !!this.ptyProcess,
         };
