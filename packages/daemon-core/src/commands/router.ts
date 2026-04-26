@@ -356,6 +356,12 @@ export class DaemonCommandRouter {
                     if (logs.length > 0) {
                         return { success: true, logs, totalBuffered: logs.length };
                     }
+                    // Incremental polling must not fall back to unfiltered file text: the file
+                    // format is not timestamp-filterable, and returning its tail makes the UI
+                    // replace structured logs with old raw fallback lines when nothing new exists.
+                    if (sinceTs > 0) {
+                        return { success: true, logs: [], totalBuffered: 0 };
+                    }
                     // Priority 2: file fallback
                     if (fs.existsSync(LOG_PATH)) {
                         const content = fs.readFileSync(LOG_PATH, 'utf-8');

@@ -70,6 +70,7 @@ export interface CommandHelpers {
 }
 
 const COMMAND_DEBUG_LEVELS = new Set([
+    'read_chat',
     'pty_input',
     'pty_resize',
     'cdp_eval',

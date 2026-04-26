@@ -11,4 +11,9 @@ describe('handleReadChat CLI hotpath logging', () => {
     expect(source).not.toContain("LOG.info('Command', `[read_chat] cli-like resolved")
     expect(source).toContain("LOG.debug('Command', `[read_chat] cli-like resolved")
   })
+
+  it('keeps successful read_chat start/end command logs out of the default info log stream', () => {
+    const source = readFileSync(resolve(__dirname, '../../src/commands/handler.ts'), 'utf8')
+    expect(source).toMatch(/COMMAND_DEBUG_LEVELS = new Set\(\[[^\]]*'read_chat'/)
+  })
 })
