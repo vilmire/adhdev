@@ -18,7 +18,7 @@ import {
     isExpectedCliViewModeTransportError,
     shouldRetainOptimisticCliViewModeOverrideOnError,
 } from '../../components/dashboard/cliViewModeOverrides'
-import { formatIdeType, getWorkspaceDisplayLabel } from '../../utils/daemon-utils'
+import { formatIdeType } from '../../utils/daemon-utils'
 import {
     getLaunchPrimaryActionLabel,
     getLaunchPrimaryBusyLabel,
@@ -47,6 +47,7 @@ import type { LaunchWorkspaceOption } from './types'
 import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
 import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-load-state'
 import { isLaunchableMachineProvider, type LaunchableProviderCategory } from '../../utils/provider-activation'
+import AgentWorkspaceSelector from './AgentWorkspaceSelector'
 
 type AgentCategory = LaunchableProviderCategory
 
@@ -598,81 +599,6 @@ export default function AgentTab({
         }
     }, [machineId, openSessionInDashboard, sendDaemonCommand])
 
-    // ─── Workspace Selector (shared across all categories) ───
-    const workspaceSelector = (
-        <div className="mb-3">
-            <div className="flex gap-2 items-center flex-wrap">
-                <select
-                    value={selectedWorkspace}
-                    onChange={e => {
-                        const nextValue = e.target.value
-                        setSelectedWorkspace(nextValue)
-                        if (nextValue === '__custom__' && sendDaemonCommand) {
-                            openBrowseDialog()
-                            return
-                        }
-                        if (nextValue !== '__custom__') setCustomPath('')
-                    }}
-                    className="px-3 py-1.5 rounded-md min-w-[200px] flex-1 text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors"
-                >
-                    {(machine.workspaces || []).length > 0 ? (
-                        <>
-                            <option value="">(no workspace — launch in home)</option>
-                            {(machine.workspaces || []).map(w => (
-                                <option key={w.id} value={w.id}>
-                                    {w.id === machine.defaultWorkspaceId ? '⭐ ' : ''}
-                                    {getWorkspaceDisplayLabel(w.path, w.label)}
-                                </option>
-                            ))}
-                            <option value="__custom__">{sendDaemonCommand ? '📁 Select workspace…' : '✏️ Custom path…'}</option>
-                        </>
-                    ) : (
-                        <>
-                            <option value="">(no workspaces saved — add in Overview tab)</option>
-                            <option value="__custom__">{sendDaemonCommand ? '📁 Select workspace…' : '✏️ Custom path…'}</option>
-                        </>
-                    )}
-                </select>
-                {selectedWorkspace === '__custom__' && (
-                    sendDaemonCommand ? (
-                        <button
-                            type="button"
-                            className="px-3 py-1.5 rounded-md text-sm bg-bg-primary border border-[#ffffff1a] hover:border-accent-primary text-text-secondary hover:text-text-primary transition-colors"
-                            onClick={openBrowseDialog}
-                        >
-                            Select workspace…
-                        </button>
-                    ) : (
-                        <input
-                            type="text"
-                            placeholder="Enter absolute path…"
-                            value={customPath}
-                            onChange={e => setCustomPath(e.target.value)}
-                            className="px-3 py-1.5 rounded-md flex-1 min-w-[200px] text-sm bg-bg-primary border border-[#ffffff1a] focus:border-accent-primary focus:outline-none transition-colors"
-                            autoFocus
-                        />
-                    )
-                )}
-            </div>
-            <div className="mt-1.5 text-[10px] text-text-muted">
-                {selectedWorkspace === '__custom__'
-                    ? (resolvedWorkspacePath
-                        ? <span className="font-mono truncate block" title={resolvedWorkspacePath}>{resolvedWorkspacePath}</span>
-                        : (sendDaemonCommand ? 'Browse to a folder before launching there.' : 'Enter an absolute path to launch there.'))
-                    : resolvedWorkspacePath
-                        ? (
-                            <>
-                                <span className="font-medium text-text-secondary">
-                                    {selectedWorkspace === machine.defaultWorkspaceId ? 'Default workspace' : 'Selected workspace'}
-                                </span>
-                                <span className="font-mono truncate block" title={resolvedWorkspacePath}>{resolvedWorkspacePath}</span>
-                            </>
-                        )
-                        : 'No workspace selected. This launches in the home directory.'}
-            </div>
-        </div>
-    )
-
     return (
         <div>
             {/* ═══ Launch Form ═══ */}
@@ -783,7 +709,16 @@ export default function AgentTab({
                             <span className="text-accent-primary font-bold">{isIde ? formatIdeType(selectedType) : providerLabelMap.get(selectedType) || selectedType}</span>
                         </div>
                         
-                        {workspaceSelector}
+                        <AgentWorkspaceSelector
+                            machine={machine}
+                            selectedWorkspace={selectedWorkspace}
+                            resolvedWorkspacePath={resolvedWorkspacePath}
+                            customPath={customPath}
+                            canBrowse={!!sendDaemonCommand}
+                            onWorkspaceChange={setSelectedWorkspace}
+                            onCustomPathChange={setCustomPath}
+                            onOpenBrowseDialog={openBrowseDialog}
+                        />
                         
                         {!isIde && (
                             <div className="flex flex-col gap-3">
