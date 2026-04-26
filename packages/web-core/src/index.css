@@ -101,6 +101,10 @@
         --text-secondary: #9ca3af;
         --text-muted: #6b7280;
 
+        --scrollbar-track: transparent;
+        --scrollbar-thumb: rgba(156, 163, 175, 0.56);
+        --scrollbar-thumb-hover: rgba(156, 163, 175, 0.82);
+
         --accent-primary: #d97706;
         --accent-primary-light: #f59e0b;
         --accent-on-primary: #111827;
@@ -141,6 +145,10 @@
         --text-secondary: #4b5563;
         --text-muted: #6b7280;
 
+        --scrollbar-track: transparent;
+        --scrollbar-thumb: rgba(75, 85, 99, 0.36);
+        --scrollbar-thumb-hover: rgba(75, 85, 99, 0.58);
+
         --accent-primary: #d97706;
         --accent-primary-light: #f59e0b;
         --accent-on-primary: #111827;
@@ -176,6 +184,10 @@
             --text-primary: #111827;
             --text-secondary: #4b5563;
             --text-muted: #6b7280;
+
+            --scrollbar-track: transparent;
+            --scrollbar-thumb: rgba(75, 85, 99, 0.36);
+            --scrollbar-thumb-hover: rgba(75, 85, 99, 0.58);
 
             --accent-primary: #d97706;
             --accent-primary-light: #f59e0b;
@@ -239,8 +251,8 @@
         --dv-tab-divider-color: var(--border-subtle);
         --dv-separator-border: var(--border-default);
         --dv-paneview-header-border-color: var(--border-default);
-        --dv-tabs-container-scrollbar-color: color-mix(in srgb, var(--text-muted) 60%, transparent);
-        --dv-scrollbar-background-color: color-mix(in srgb, var(--text-muted) 28%, transparent);
+        --dv-tabs-container-scrollbar-color: var(--scrollbar-thumb);
+        --dv-scrollbar-background-color: var(--scrollbar-thumb);
         --dv-icon-hover-background-color: var(--bg-glass-hover);
         --dv-floating-box-shadow: 0 8px 20px rgba(0, 0, 0, 0.16);
         --dv-sash-color: color-mix(in srgb, var(--border-default) 65%, transparent);
@@ -267,8 +279,8 @@
         --dv-tab-divider-color: color-mix(in srgb, var(--border-default) 70%, transparent);
         --dv-separator-border: var(--border-default);
         --dv-paneview-header-border-color: color-mix(in srgb, var(--border-default) 90%, transparent);
-        --dv-tabs-container-scrollbar-color: color-mix(in srgb, var(--text-secondary) 40%, transparent);
-        --dv-scrollbar-background-color: color-mix(in srgb, var(--text-secondary) 18%, transparent);
+        --dv-tabs-container-scrollbar-color: var(--scrollbar-thumb);
+        --dv-scrollbar-background-color: var(--scrollbar-thumb);
         --dv-icon-hover-background-color: color-mix(in srgb, var(--accent-primary) 10%, transparent);
         --dv-floating-box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
         --dv-sash-color: color-mix(in srgb, var(--border-default) 80%, transparent);
@@ -2636,26 +2648,31 @@
     }
 
     .dashboard-agent-tabs::-webkit-scrollbar-thumb {
-        background: var(--border-default);
+        background: var(--scrollbar-thumb);
         border-radius: 4px;
     }
 
+    * {
+        scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+        scrollbar-width: thin;
+    }
+
     ::-webkit-scrollbar {
-        width: 6px;
-        height: 6px;
+        width: 8px;
+        height: 8px;
     }
 
     ::-webkit-scrollbar-track {
-        background: transparent;
+        background: var(--scrollbar-track);
     }
 
     ::-webkit-scrollbar-thumb {
-        background: var(--border-default);
+        background: var(--scrollbar-thumb);
         border-radius: 10px;
     }
 
     ::-webkit-scrollbar-thumb:hover {
-        background: var(--text-muted);
+        background: var(--scrollbar-thumb-hover);
     }
 
     @keyframes spin {
