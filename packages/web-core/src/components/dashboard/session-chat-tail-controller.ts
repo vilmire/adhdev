@@ -6,8 +6,6 @@ import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
 import { getConversationHistorySessionId } from './conversation-identity'
 import { getConversationDaemonRouteId } from './conversation-selectors'
-import { getMessageTimestamp } from './message-utils'
-import { normalizeTextContent } from '../../utils/text'
 
 export interface SessionChatTailSnapshot {
   liveMessages: DashboardMessage[]
@@ -367,57 +365,6 @@ export class SessionChatTailController {
     })
     this.emit()
   }
-}
-
-function getLatestMessageTimestamp(messages: DashboardMessage[]): number {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const ts = getMessageTimestamp(messages[i])
-    if (ts > 0) return ts
-  }
-  return 0
-}
-
-function shouldOverlayWarmLiveMessages(conversation: ActiveConversation, liveMessages: DashboardMessage[]): boolean {
-  if (liveMessages.length === 0) return false
-  const existingMessages = Array.isArray(conversation.messages) ? conversation.messages : []
-  if (existingMessages.length === 0) return true
-
-  const existingAt = getLatestMessageTimestamp(existingMessages)
-  const liveAt = getLatestMessageTimestamp(liveMessages)
-  if (existingAt > 0 && liveAt > 0 && liveAt < existingAt) return false
-
-  const existingSignature = buildChatSnapshotSignature(existingMessages, conversation.status)
-  const liveSignature = buildChatSnapshotSignature(liveMessages, conversation.status)
-  return existingSignature !== liveSignature
-}
-
-export function applyWarmSessionChatTailSnapshots(
-  conversations: ActiveConversation[],
-  snapshots: Map<string, SessionChatTailSnapshot>,
-): ActiveConversation[] {
-  if (snapshots.size === 0 || conversations.length === 0) return conversations
-
-  let changed = false
-  const merged = conversations.map((conversation) => {
-    const daemonId = getConversationDaemonRouteId(conversation)
-    const sessionId = conversation.sessionId || ''
-    if (!daemonId || !sessionId) return conversation
-    const snapshot = snapshots.get(getControllerKey(daemonId, sessionId))
-    const liveMessages = snapshot?.liveMessages || []
-    if (!shouldOverlayWarmLiveMessages(conversation, liveMessages)) return conversation
-    const lastLiveMessage = liveMessages[liveMessages.length - 1]
-    const lastLiveMessageAt = getMessageTimestamp(lastLiveMessage)
-    const lastLiveMessagePreview = normalizeTextContent(lastLiveMessage?.content)
-    changed = true
-    return {
-      ...conversation,
-      messages: liveMessages,
-      ...(lastLiveMessagePreview ? { lastMessagePreview: lastLiveMessagePreview } : {}),
-      ...(lastLiveMessageAt > 0 ? { lastMessageAt: lastLiveMessageAt } : {}),
-    }
-  })
-
-  return changed ? merged : conversations
 }
 
 export function getOrCreateSessionChatTailController(options: SessionChatTailControllerOptions): SessionChatTailController {

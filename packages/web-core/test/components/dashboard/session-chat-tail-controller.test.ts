@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SessionChatTailUpdate } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
-  applyWarmSessionChatTailSnapshots,
   buildWarmSessionChatTailDescriptorState,
   getOrCreateSessionChatTailController,
   getWarmSessionChatTailDescriptorRefreshMs,
   resetSessionChatTailControllersForTest,
 } from '../../../src/components/dashboard/session-chat-tail-controller'
+import { applyConversationMessageSnapshots } from '../../../src/components/dashboard/conversation-message-snapshot'
 
 function createConversation(overrides: Record<string, any> = {}) {
   return {
@@ -134,7 +134,7 @@ describe('SessionChatTailController registry', () => {
       }],
     ])
 
-    const merged = applyWarmSessionChatTailSnapshots(conversations as any, snapshots as any)
+    const merged = applyConversationMessageSnapshots(conversations as any, snapshots as any)
 
     expect(merged).not.toBe(conversations)
     expect(merged[0]?.messages).toEqual([
@@ -159,7 +159,7 @@ describe('SessionChatTailController registry', () => {
       }],
     ])
 
-    const merged = applyWarmSessionChatTailSnapshots(conversations as any, snapshots as any)
+    const merged = applyConversationMessageSnapshots(conversations as any, snapshots as any)
 
     expect(merged).toBe(conversations)
     expect(merged[0]?.messages).toEqual([

@@ -26,6 +26,7 @@ import {
 import { getConversationSendBlockMessage } from '../../hooks/dashboardCommandUtils'
 import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages } from './chat-visibility';
 import { useSessionChatTailController } from './session-chat-tail-controller';
+import { buildVisibleConversationMessages, getConversationLiveMessages } from './conversation-message-snapshot';
 import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
 
 export interface ChatPaneProps {
@@ -96,9 +97,7 @@ export default function ChatPane({
     const historyMessages = chatTailState.historyMessages;
     const hasMoreHistory = chatTailState.hasMoreHistory;
     const loadError = chatTailState.historyError;
-    const liveMessages = chatTailState.liveMessages.length > 0
-        ? chatTailState.liveMessages
-        : activeConv.messages;
+    const liveMessages = getConversationLiveMessages(activeConv, chatTailState);
 
     useEffect(() => {
         setVisibleLiveCount(defaultVisibleLiveMessages);
@@ -148,12 +147,11 @@ export default function ChatPane({
     }, [chatTailState, isLoadingMore, liveMessages.length, visibleLiveCount]);
 
     const { allMessages, receivedAtMap } = useMemo(() => {
-        const visibleLiveMessages = hiddenLiveCount > 0
-            ? liveMessages.slice(-visibleLiveCount)
-            : liveMessages;
-        const allMessages = historyMessages.length === 0
-            ? visibleLiveMessages
-            : [...historyMessages, ...visibleLiveMessages];
+        const allMessages = buildVisibleConversationMessages({
+            historyMessages,
+            liveMessages,
+            visibleLiveCount,
+        });
         const nextReceivedAtMap: Record<string, number> = {};
         allMessages.forEach((message, index: number) => {
             const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;

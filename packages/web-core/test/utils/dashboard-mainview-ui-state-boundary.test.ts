@@ -19,4 +19,17 @@ describe('dashboard main view ui-state boundary cleanup', () => {
     expect(mainViewSource).not.toContain('const [shortcutSection')
     expect(mainViewSource).toContain('useDashboardMainViewUiState(')
   })
+
+  it('routes dashboard message surfaces through the shared conversation snapshot authority', () => {
+    const dashboardSource = readSource('pages/Dashboard.tsx')
+
+    expect(dashboardSource).toContain('const messageSnapshotConversations = useMemo(')
+    expect(dashboardSource).toContain('const messageSnapshotVisibleConversations = useMemo(')
+    expect(dashboardSource).toContain('conversations: messageSnapshotConversations,')
+    expect(dashboardSource).toContain('visibleConversations: messageSnapshotVisibleConversations,')
+    expect(dashboardSource).toContain('visibleConversations={messageSnapshotVisibleConversations}')
+    expect(dashboardSource).toContain('mobileChatConversations={mobileChatConversations}')
+    expect(dashboardSource).not.toContain('inboxPreviewConversations')
+    expect(dashboardSource).not.toContain('inboxPreviewVisibleConversations')
+  })
 })
