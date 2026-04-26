@@ -423,8 +423,8 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         } catch { /* noop */ }
         try {
             await this.client.close();
-        } catch {
-            if (destroy) throw new Error(`Failed to close session host client: ${this.options.runtimeId}`);
+        } catch (err) {
+            if (destroy) throw err instanceof Error ? err : new Error(`Failed to close session host client: ${this.options.runtimeId}`);
         }
     }
 }

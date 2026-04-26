@@ -2414,8 +2414,12 @@ export class ProviderCliAdapter implements CliAdapter {
         if (buttonIndex in this.approvalKeys) {
             this.ptyProcess.write(this.approvalKeys[buttonIndex]);
         } else {
+            const buttonCount = Array.isArray(modal?.buttons) ? modal.buttons.length : 0;
+            const clampedIndex = buttonCount > 0
+                ? Math.min(Math.max(0, buttonIndex), buttonCount - 1)
+                : Math.max(0, buttonIndex);
             const DOWN = '\x1B[B';
-            const keys = DOWN.repeat(Math.max(0, buttonIndex)) + '\r';
+            const keys = DOWN.repeat(clampedIndex) + '\r';
             this.ptyProcess.write(keys);
         }
     }
