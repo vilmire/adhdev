@@ -11,14 +11,18 @@ describe('frontend daemon IO boundary', () => {
     const conversationCommands = readSource('hooks/useDashboardConversationCommands.ts')
     const sessionCommands = readSource('hooks/useDashboardSessionCommands.ts')
     const eventManagerHook = readSource('hooks/useDashboardEventManager.ts')
+    const eventManager = readSource('managers/EventManager.ts')
 
     expect(conversationCommands).not.toContain('setLocalUserMessages')
     expect(conversationCommands).not.toContain('useLocalPendingMessage')
     expect(conversationCommands).not.toContain("const userMsg =")
     expect(sessionCommands).not.toContain('setLocalUserMessages')
-    expect(eventManagerHook).not.toContain('setLocalUserMessages')
-    expect(eventManagerHook).not.toContain('onSystemMessage(')
-    expect(eventManagerHook).not.toContain('onClearSystemMessage(')
+    for (const source of [eventManagerHook, eventManager]) {
+      expect(source).not.toContain('localUserMessages')
+      expect(source).not.toContain('setLocalUserMessages')
+      expect(source).not.toContain('onSystemMessage(')
+      expect(source).not.toContain('onClearSystemMessage(')
+    }
   })
 
   it('does not keep dashboard-level localUserMessages state once transcript ownership is daemon-side', () => {

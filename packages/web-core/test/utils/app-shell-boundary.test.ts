@@ -34,4 +34,23 @@ describe('shared app shell boundary', () => {
     expect(appShell).toContain('className="sidebar-overlay"')
     expect(appShell).toContain('className={`sidebar ${mobileMenuOpen ? \'sidebar-open\' : \'\'}`}')
   })
+
+  it('keeps cloud and standalone policy out of the shared AppShell', () => {
+    const appShell = readCore('components/app/AppShell.tsx')
+
+    for (const forbidden of [
+      'getBillingStatus',
+      'getMe',
+      'logout',
+      'SystemAnnouncementBanner',
+      'userRole',
+      'admin',
+      'billing',
+      'Selfhost',
+      'standaloneFetch',
+      'getStandaloneToken',
+    ]) {
+      expect(appShell).not.toContain(forbidden)
+    }
+  })
 })
