@@ -419,6 +419,19 @@ export interface AvailableProviderInfo {
     enabled?: boolean;
     /** Machine-local readiness state for opt-in providers. */
     machineStatus?: 'disabled' | 'enabled_unchecked' | 'not_detected' | 'detected';
+    /** Last machine-local command detection/runnable check result. */
+    lastDetection?: MachineProviderCheckResult;
+    /** Last end-to-end ADHDev verification result, when available. */
+    lastVerification?: MachineProviderCheckResult;
+}
+
+export interface MachineProviderCheckResult {
+    ok: boolean;
+    stage?: 'detection' | 'runnable' | 'verification';
+    checkedAt?: string;
+    message?: string;
+    command?: string;
+    path?: string | null;
 }
 
 /** ACP config option (model/mode/thought_level selection) */

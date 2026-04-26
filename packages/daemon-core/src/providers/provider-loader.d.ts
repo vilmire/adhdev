@@ -15,6 +15,22 @@
 import { VersionArchive } from './version-archive.js';
 import type { ProviderModule, ProviderCategory, ProviderSettingSchema, ResolvedProvider } from './contracts.js';
 import type { ProviderSourceMode } from '../config/config.js';
+export type ProviderMachineStatus = 'disabled' | 'enabled_unchecked' | 'not_detected' | 'detected';
+export interface MachineProviderCheckResult {
+    ok: boolean;
+    stage?: 'detection' | 'runnable' | 'verification';
+    checkedAt?: string;
+    message?: string;
+    command?: string;
+    path?: string | null;
+}
+export interface MachineProviderConfig {
+    enabled?: boolean;
+    executable?: string;
+    args?: string[];
+    lastDetection?: MachineProviderCheckResult;
+    lastVerification?: MachineProviderCheckResult;
+}
 export declare class ProviderLoader {
     private providers;
     private providerAvailability;
@@ -110,7 +126,9 @@ export declare class ProviderLoader {
         displayName: string;
         icon: string;
         command: string;
+        args?: string[];
         category: string;
+        enabled: boolean;
         versionCommand?: string;
     }[];
     /**
@@ -168,6 +186,7 @@ export declare class ProviderLoader {
     */
     getAvailableIdeTypes(): string[];
     getSpawnCommand(type: string, fallback?: string): string;
+    getSpawnArgs(type: string, fallback?: string[]): string[];
     getIdeCliCommand(type: string, fallback?: string | null): string | null;
     getIdePathCandidates(type: string, fallback?: string[]): string[];
     setProviderAvailability(type: string, state: {
@@ -188,6 +207,10 @@ export declare class ProviderLoader {
     getAvailableProviderInfos(): Array<ProviderModule & {
         installed?: boolean;
         detectedPath?: string | null;
+        enabled: boolean;
+        machineStatus: ProviderMachineStatus;
+        lastDetection?: MachineProviderCheckResult;
+        lastVerification?: MachineProviderCheckResult;
     }>;
     /**
     * Register IDE providers to core/detector registry

@@ -46,21 +46,14 @@ import { buildLaunchWorkspaceOptions } from '../../components/machine/launchWork
 import type { LaunchWorkspaceOption } from './types'
 import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
 import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-load-state'
+import { isLaunchableMachineProvider, type LaunchableProviderCategory } from '../../utils/provider-activation'
 
-type AgentCategory = 'ide' | 'cli' | 'acp'
+type AgentCategory = LaunchableProviderCategory
 
 interface SavedSessionOption extends SavedSessionHistoryEntry {}
 
 // Union type for running entries
 type AgentEntry = IdeSessionEntry | CliSessionEntry | AcpSessionEntry
-
-function isLaunchableMachineProvider(provider: ProviderInfo, category: AgentCategory) {
-    if (provider.category !== category) return false
-    if (category === 'ide') return true
-    if (provider.enabled === false) return false
-    if (provider.machineStatus && provider.machineStatus !== 'detected') return false
-    return provider.installed !== false
-}
 
 interface AgentTabProps {
     category: AgentCategory

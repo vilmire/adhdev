@@ -25,6 +25,7 @@ import { appendRecentActivity, getRecentActivity, markSessionSeen, dismissSessio
 import { getSavedProviderSessions } from '../config/saved-sessions.js';
 import { listSavedHistorySessions } from '../config/chat-history.js';
 import { detectIDEs } from '../detection/ide-detector.js';
+import { detectCLI } from '../detection/cli-detector.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 import { logCommand } from '../logging/command-log.js';
@@ -667,6 +668,34 @@ export class DaemonCommandRouter {
                     } catch { /* ignore activity persist errors */ }
                 }
                 return { ...result };
+            }
+
+            // ─── Detect providers ───
+            case 'detect_provider': {
+                const providerType = typeof args?.providerType === 'string' ? args.providerType.trim() : '';
+                if (!providerType) return { success: false, error: 'providerType is required' };
+                const normalizedType = this.deps.providerLoader.resolveAlias(providerType);
+                const provider = this.deps.providerLoader.getByAlias(providerType);
+                if (!provider) return { success: false, error: `Provider not found: ${providerType}` };
+                if (provider.category !== 'cli' && provider.category !== 'acp') {
+                    return { success: false, error: `Provider detection is only supported for CLI/ACP providers: ${providerType}` };
+                }
+                if (!this.deps.providerLoader.isMachineProviderEnabled(normalizedType)) {
+                    return { success: false, error: `Provider is disabled on this machine: ${providerType}` };
+                }
+                const detected = await detectCLI(normalizedType, this.deps.providerLoader, { includeVersion: false });
+                this.deps.providerLoader.setCliDetectionResults([{
+                    id: normalizedType,
+                    installed: !!detected,
+                    path: detected?.path,
+                }], false);
+                this.deps.onStatusChange?.();
+                return {
+                    success: true,
+                    providerType: normalizedType,
+                    detected: !!detected,
+                    path: detected?.path || null,
+                };
             }
 
             // ─── Detect IDEs ───

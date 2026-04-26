@@ -786,14 +786,17 @@ export class ProviderLoader {
     }
   }
 
-  getAvailableProviderInfos(): Array<ProviderModule & { installed?: boolean; detectedPath?: string | null; enabled: boolean; machineStatus: ProviderMachineStatus }> {
+  getAvailableProviderInfos(): Array<ProviderModule & { installed?: boolean; detectedPath?: string | null; enabled: boolean; machineStatus: ProviderMachineStatus; lastDetection?: MachineProviderCheckResult; lastVerification?: MachineProviderCheckResult }> {
     return this.getAll().map((provider) => {
       const availability = this.providerAvailability.get(provider.type);
       const enabled = this.isMachineProviderEnabled(provider.type);
+      const machineConfig = this.getMachineProviderConfig(provider.type);
       return {
         ...provider,
         enabled,
         machineStatus: this.getMachineProviderStatus(provider.type),
+        ...(machineConfig.lastDetection ? { lastDetection: machineConfig.lastDetection } : {}),
+        ...(machineConfig.lastVerification ? { lastVerification: machineConfig.lastVerification } : {}),
         ...(availability
           ? {
               installed: availability.installed,

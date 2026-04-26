@@ -15,6 +15,40 @@ interface ProvidersTabProps {
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
 }
 
+type ProviderMachineCheck = NonNullable<ProviderInfo['lastDetection']>
+
+function isMachineRuntimeProvider(category: string): boolean {
+    return category === 'cli' || category === 'acp'
+}
+
+function getMachineStatusLabel(status?: ProviderInfo['machineStatus']): string {
+    switch (status) {
+        case 'detected': return 'Detected'
+        case 'not_detected': return 'Not detected'
+        case 'enabled_unchecked': return 'Enabled, not checked'
+        case 'disabled': return 'Disabled'
+        default: return 'Disabled'
+    }
+}
+
+function getMachineStatusClass(status?: ProviderInfo['machineStatus']): string {
+    switch (status) {
+        case 'detected': return 'bg-green-500/[0.10] border-green-500/25 text-green-400'
+        case 'not_detected': return 'bg-red-500/[0.10] border-red-500/25 text-red-400'
+        case 'enabled_unchecked': return 'bg-yellow-500/[0.10] border-yellow-500/25 text-yellow-400'
+        case 'disabled':
+        default: return 'bg-white/[0.04] border-white/[0.10] text-text-muted'
+    }
+}
+
+function formatMachineCheck(check?: ProviderMachineCheck): string {
+    if (!check) return 'No result yet'
+    const stage = check.stage || 'check'
+    const outcome = check.ok ? 'OK' : 'Failed'
+    const detail = check.message || check.path || check.command || ''
+    return detail ? `${stage}: ${outcome} — ${detail}` : `${stage}: ${outcome}`
+}
+
 export default function ProvidersTab({ machineId, providers, sendDaemonCommand }: ProvidersTabProps) {
     const [settings, setSettings] = useState<ProviderSettingsEntry[]>([])
     const [loading, setLoading] = useState(false)
@@ -47,7 +81,9 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
             const res = await sendDaemonCommand(machineId, 'get_provider_settings', {})
             const payload = extractProviderSettingsPayload(res)
             if (payload) {
-                const entries: ProviderSettingsEntry[] = buildProviderSettingsEntries(payload, providers)
+                const entries: ProviderSettingsEntry[] = buildProviderSettingsEntries(payload, providers, {
+                    filterSchema: (schema) => schema.filter((setting) => setting.key !== 'enabled'),
+                })
                 entries.sort((a, b) => a.category.localeCompare(b.category) || a.displayName.localeCompare(b.displayName))
                 setSettings(entries)
             }
@@ -73,6 +109,27 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
             fetchSettings()
         }
         setSavingKey(null)
+    }
+
+    const handleMachineProviderEnable = async (providerType: string, enabled: boolean) => {
+        await handleSetSetting(providerType, 'enabled', enabled)
+        await fetchSettings()
+    }
+
+    const handleDetectProvider = async (providerType: string) => {
+        setSavingKey(`${providerType}.detect`)
+        try {
+            await sendDaemonCommand(machineId, 'detect_provider', { providerType })
+        } finally {
+            await fetchSettings()
+            setSavingKey(null)
+        }
+    }
+
+    const handleResetProviderCommand = async (providerType: string) => {
+        await handleSetSetting(providerType, 'executablePath', '')
+        await handleSetSetting(providerType, 'executableArgs', '')
+        await fetchSettings()
     }
 
     const handleApplySourceConfig = async () => {
@@ -243,6 +300,35 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                                         color: prov.category === 'acp' ? '#a78bfa' : prov.category === 'cli' ? '#60a5fa' : prov.category === 'ide' ? '#86efac' : 'var(--status-warning)',
                                     }}
                                 >{prov.category}</span>
+                                {isMachineRuntimeProvider(prov.category) && (() => {
+                                    const providerInfo = providers.find(p => p.type === prov.type)
+                                    const enabled = providerInfo?.enabled === true || prov.values.enabled === true
+                                    const machineStatus = providerInfo?.machineStatus || (enabled ? 'enabled_unchecked' : 'disabled')
+                                    return (
+                                        <>
+                                            <span className={`px-1.5 py-px rounded border text-[9px] font-semibold ${getMachineStatusClass(machineStatus)}`}>
+                                                {getMachineStatusLabel(machineStatus)}
+                                            </span>
+                                            <div className="ml-auto flex items-center gap-1.5">
+                                                <button
+                                                    onClick={() => void handleMachineProviderEnable(prov.type, !enabled)}
+                                                    disabled={savingKey === `${prov.type}.enabled`}
+                                                    className={`machine-btn text-[9px] px-2 py-0.5 ${enabled ? 'text-red-400 border-red-500/25' : 'text-green-400 border-green-500/25'}`}
+                                                >{enabled ? 'Disable' : 'Enable'}</button>
+                                                <button
+                                                    onClick={() => void handleDetectProvider(prov.type)}
+                                                    disabled={!enabled || savingKey === `${prov.type}.detect`}
+                                                    title={enabled ? 'Run detection for the configured executable' : 'Enable this provider before detection'}
+                                                    className={`machine-btn text-[9px] px-2 py-0.5 text-blue-400 border-blue-500/25 ${enabled ? '' : 'opacity-40 cursor-not-allowed'}`}
+                                                >Detect</button>
+                                                <button
+                                                    onClick={() => void handleResetProviderCommand(prov.type)}
+                                                    className="machine-btn text-[9px] px-2 py-0.5"
+                                                >Reset command</button>
+                                            </div>
+                                        </>
+                                    )
+                                })()}
                                 {prov.category === 'ide' && (
                                     <button
                                         onClick={() => setFixTarget(providers.find(p => p.type === prov.type) || {
@@ -256,6 +342,22 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                                     >🔧 Auto-Fix</button>
                                 )}
                             </div>
+                            {isMachineRuntimeProvider(prov.category) && (() => {
+                                const providerInfo = providers.find(p => p.type === prov.type)
+                                return (
+                                    <div className="mb-2.5 grid gap-1 rounded-lg border border-white/[0.06] bg-bg-primary/40 px-3 py-2 text-[10px] text-text-muted">
+                                        <div>
+                                            <span className="font-medium text-text-secondary">Detection:</span> {formatMachineCheck(providerInfo?.lastDetection)}
+                                        </div>
+                                        <div>
+                                            <span className="font-medium text-text-secondary">Verification:</span> {formatMachineCheck(providerInfo?.lastVerification)}
+                                        </div>
+                                        <div className="text-[9px] text-text-muted">
+                                            Supported catalog entry only becomes launchable after Enable + Detect succeeds. Custom executable path/args below are machine-local overrides.
+                                        </div>
+                                    </div>
+                                )
+                            })()}
                             <div className="flex flex-col gap-2">
                                 {prov.schema.map(s => (
                                     <div key={s.key} className="flex items-center justify-between gap-3">

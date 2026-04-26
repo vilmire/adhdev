@@ -21,17 +21,9 @@ import { buildMobileMachineCards, buildSelectedMachineRecentLaunches } from './d
 import { useDashboardMobileChatEffects } from './useDashboardMobileChatEffects'
 import { useDashboardMobileMachineActions } from './useDashboardMobileMachineActions'
 import { useDashboardMobileNavigationController } from './useDashboardMobileNavigationController'
+import { isLaunchableMachineProvider } from '../../utils/provider-activation'
 
 declare const __APP_VERSION__: string
-
-type MachineProvider = NonNullable<DaemonData['availableProviders']>[number]
-
-function isLaunchableMachineProvider(provider: MachineProvider, category: 'cli' | 'acp') {
-    if (provider.category !== category) return false
-    if (provider.enabled === false) return false
-    if (provider.machineStatus && provider.machineStatus !== 'detected') return false
-    return provider.installed !== false
-}
 
 interface DashboardMobileChatModeProps {
     conversations: ActiveConversation[]

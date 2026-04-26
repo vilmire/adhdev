@@ -16,17 +16,9 @@ import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../
 import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-load-state'
 import SavedHistoryLaunchSection from '../SavedHistoryLaunchSection'
 import LaunchSectionCard from '../LaunchSectionCard'
+import { isLaunchableMachineProvider } from '../../utils/provider-activation'
 
 type LaunchKind = 'ide' | 'cli' | 'acp'
-
-type MachineProvider = NonNullable<DaemonData['availableProviders']>[number]
-
-function isLaunchableMachineProvider(provider: MachineProvider, category: 'cli' | 'acp') {
-    if (provider.category !== category) return false
-    if (provider.enabled === false) return false
-    if (provider.machineStatus && provider.machineStatus !== 'detected') return false
-    return provider.installed !== false
-}
 
 interface SavedSessionOption {
     id: string

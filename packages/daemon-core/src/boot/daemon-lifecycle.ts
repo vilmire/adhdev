@@ -181,10 +181,11 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         if (!providerType || targetCategory === 'cli' || targetCategory === 'acp') {
             if (providerType && targetProvider) {
                 const detected = await detectCLI(targetProvider.type, providerLoader, { includeVersion: false });
-                providerLoader.setProviderAvailability(targetProvider.type, {
+                providerLoader.setCliDetectionResults([{
+                    id: targetProvider.type,
                     installed: !!detected,
-                    detectedPath: detected?.path || null,
-                });
+                    path: detected?.path,
+                }], false);
             } else {
                 providerLoader.setCliDetectionResults(await detectCLIs(providerLoader, { includeVersion: false }), true);
             }
