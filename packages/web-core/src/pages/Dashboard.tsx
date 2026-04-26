@@ -11,7 +11,10 @@ import {
     applyCliViewModeOverrides,
     reconcileCliViewModeOverrides,
 } from '../components/dashboard/cliViewModeOverrides'
-import { useWarmSessionChatTailControllers } from '../components/dashboard/session-chat-tail-controller'
+import {
+    applyWarmSessionChatTailSnapshots,
+    useWarmSessionChatTailControllers,
+} from '../components/dashboard/session-chat-tail-controller'
 import { useHiddenTabs, isConversationHidden } from '../hooks/useHiddenTabs'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
@@ -163,7 +166,15 @@ export default function Dashboard() {
         () => new Map(conversations.map(conversation => [conversation.tabKey, conversation])),
         [conversations],
     )
-    useWarmSessionChatTailControllers(visibleConversations, warmChatTailOptions)
+    const warmChatTailSnapshots = useWarmSessionChatTailControllers(visibleConversations, warmChatTailOptions)
+    const inboxPreviewConversations = useMemo(
+        () => applyWarmSessionChatTailSnapshots(conversations, warmChatTailSnapshots),
+        [conversations, warmChatTailSnapshots],
+    )
+    const inboxPreviewVisibleConversations = useMemo(
+        () => applyWarmSessionChatTailSnapshots(visibleConversations, warmChatTailSnapshots),
+        [visibleConversations, warmChatTailSnapshots],
+    )
     useEffect(() => {
         if (Object.keys(cliViewModeOverrides).length === 0) return
         setCliViewModeOverrides((prev) => reconcileCliViewModeOverrides(prev, ides))
@@ -176,7 +187,7 @@ export default function Dashboard() {
         notifications,
         unreadCount: notificationUnreadCount,
     } = useDashboardNotifications({
-        conversations,
+        conversations: inboxPreviewConversations,
         liveSessionInboxState,
     })
     const {
@@ -410,8 +421,8 @@ export default function Dashboard() {
     })
 
     const mobileChatConversations = useMemo(
-        () => visibleConversations,
-        [visibleConversations],
+        () => inboxPreviewVisibleConversations,
+        [inboxPreviewVisibleConversations],
     )
     const showMobileChatMode = isMobile && mobileViewMode === 'chat'
     const hiddenConversations = useMemo(

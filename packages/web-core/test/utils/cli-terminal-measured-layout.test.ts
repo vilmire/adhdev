@@ -65,7 +65,7 @@ describe('CLI terminal measured layout plumbing', () => {
     const chatSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/ChatPane.tsx'), 'utf8')
     expect(chatSource.includes('onSend={handleSendChat}')).toBe(true)
     expect(terminalSource.includes('return handleSendChat(message);')).toBe(true)
-    expect(terminalSource.includes('if (!runtimeReady || sendBlockMessage) return false;')).toBe(true)
+    expect(terminalSource.includes('if (sendBlockMessage) return false;')).toBe(true)
   })
 
   it('does not mark the terminal runtime ready just because P2P connected; readiness comes from snapshot or live output', () => {

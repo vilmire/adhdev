@@ -33,8 +33,18 @@ export function mergeActiveChatData(
   if (!existing) return incoming ?? null
 
   const incomingHasMessages = hasOwnProperty(incoming, 'messages')
-  const mergedMessages = incomingHasMessages
+  const incomingMessages = incomingHasMessages
     ? (Array.isArray(incoming.messages) ? incoming.messages : [])
+    : undefined
+  const isApprovalSnapshot = incoming.status === 'waiting_approval'
+    || (Array.isArray(incoming.activeModal?.buttons) && incoming.activeModal.buttons.length > 0)
+  const shouldPreserveExistingMessages = incomingHasMessages
+    && isApprovalSnapshot
+    && incomingMessages?.length === 0
+    && Array.isArray(existing.messages)
+    && existing.messages.length > 0
+  const mergedMessages = incomingHasMessages
+    ? (shouldPreserveExistingMessages ? existing.messages : incomingMessages ?? [])
     : existing.messages
 
   const mergedActiveModal = incoming.activeModal

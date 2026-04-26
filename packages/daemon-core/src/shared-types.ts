@@ -215,6 +215,7 @@ export interface SessionChatTailUpdate extends ReadChatSyncResult {
     interactionId?: string;
     seq: number;
     timestamp: number;
+    error?: string;
 }
 
 export interface SessionRuntimeOutputUpdate {

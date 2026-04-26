@@ -6,6 +6,8 @@ import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
 import { getConversationHistorySessionId } from './conversation-identity'
 import { getConversationDaemonRouteId } from './conversation-selectors'
+import { getMessageTimestamp } from './message-utils'
+import { normalizeTextContent } from '../../utils/text'
 
 export interface SessionChatTailSnapshot {
   liveMessages: DashboardMessage[]
@@ -134,7 +136,6 @@ export class SessionChatTailController {
   private retainCount = 0
   private loadHistoryPromise: Promise<void> | null = null
   private pendingDisconnectTimer: ReturnType<typeof setTimeout> | null = null
-  private pendingSubscribeRetryTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(options: SessionChatTailControllerOptions) {
     this.manager = options.manager || subscriptionManager
@@ -269,24 +270,6 @@ export class SessionChatTailController {
     }
   }
 
-  private clearPendingSubscribeRetry(): void {
-    if (!this.pendingSubscribeRetryTimer) return
-    clearTimeout(this.pendingSubscribeRetryTimer)
-    this.pendingSubscribeRetryTimer = null
-  }
-
-  private scheduleSubscribeRetry(): void {
-    if (this.pendingSubscribeRetryTimer || !this.sendData || !this.daemonId || !this.sessionId || this.retainCount === 0) return
-    this.pendingSubscribeRetryTimer = setTimeout(() => {
-      this.pendingSubscribeRetryTimer = null
-      if (!this.sendData || !this.daemonId || !this.sessionId || this.retainCount === 0) return
-      const accepted = this.sendData(this.daemonId, this.buildSubscribeRequest())
-      if (!accepted) {
-        this.scheduleSubscribeRetry()
-      }
-    }, CHAT_TAIL_SUBSCRIBE_RETRY_MS)
-  }
-
   private connect(): void {
     if (this.transportSubscription || !this.sendData || !this.daemonId || !this.sessionId) return
     this.transportSubscription = this.manager.subscribe(
@@ -296,14 +279,11 @@ export class SessionChatTailController {
       (update: SessionChatTailUpdate) => {
         this.handleUpdate(update)
       },
+      { retryIntervalMs: CHAT_TAIL_SUBSCRIBE_RETRY_MS },
     )
-    if (!this.transportSubscription.initialSendAccepted) {
-      this.scheduleSubscribeRetry()
-    }
   }
 
   private disconnect(): void {
-    this.clearPendingSubscribeRetry()
     this.transportSubscription?.()
     this.transportSubscription = null
   }
@@ -324,7 +304,7 @@ export class SessionChatTailController {
   }
 
   private handleUpdate(update: SessionChatTailUpdate): void {
-    this.clearPendingSubscribeRetry()
+    if (update.error) return
 
     // Guard: if the daemon's last-message signature already matches our current
     // last message, liveMessages is already up to date (hydrateLiveMessages may
@@ -387,6 +367,57 @@ export class SessionChatTailController {
     })
     this.emit()
   }
+}
+
+function getLatestMessageTimestamp(messages: DashboardMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const ts = getMessageTimestamp(messages[i])
+    if (ts > 0) return ts
+  }
+  return 0
+}
+
+function shouldOverlayWarmLiveMessages(conversation: ActiveConversation, liveMessages: DashboardMessage[]): boolean {
+  if (liveMessages.length === 0) return false
+  const existingMessages = Array.isArray(conversation.messages) ? conversation.messages : []
+  if (existingMessages.length === 0) return true
+
+  const existingAt = getLatestMessageTimestamp(existingMessages)
+  const liveAt = getLatestMessageTimestamp(liveMessages)
+  if (existingAt > 0 && liveAt > 0 && liveAt < existingAt) return false
+
+  const existingSignature = buildChatSnapshotSignature(existingMessages, conversation.status)
+  const liveSignature = buildChatSnapshotSignature(liveMessages, conversation.status)
+  return existingSignature !== liveSignature
+}
+
+export function applyWarmSessionChatTailSnapshots(
+  conversations: ActiveConversation[],
+  snapshots: Map<string, SessionChatTailSnapshot>,
+): ActiveConversation[] {
+  if (snapshots.size === 0 || conversations.length === 0) return conversations
+
+  let changed = false
+  const merged = conversations.map((conversation) => {
+    const daemonId = getConversationDaemonRouteId(conversation)
+    const sessionId = conversation.sessionId || ''
+    if (!daemonId || !sessionId) return conversation
+    const snapshot = snapshots.get(getControllerKey(daemonId, sessionId))
+    const liveMessages = snapshot?.liveMessages || []
+    if (!shouldOverlayWarmLiveMessages(conversation, liveMessages)) return conversation
+    const lastLiveMessage = liveMessages[liveMessages.length - 1]
+    const lastLiveMessageAt = getMessageTimestamp(lastLiveMessage)
+    const lastLiveMessagePreview = normalizeTextContent(lastLiveMessage?.content)
+    changed = true
+    return {
+      ...conversation,
+      messages: liveMessages,
+      ...(lastLiveMessagePreview ? { lastMessagePreview: lastLiveMessagePreview } : {}),
+      ...(lastLiveMessageAt > 0 ? { lastMessageAt: lastLiveMessageAt } : {}),
+    }
+  })
+
+  return changed ? merged : conversations
 }
 
 export function getOrCreateSessionChatTailController(options: SessionChatTailControllerOptions): SessionChatTailController {
@@ -565,13 +596,14 @@ export function useSessionChatTailController(
 export function useWarmSessionChatTailControllers(
   conversations: ActiveConversation[],
   options?: { enabled?: boolean; tailLimit?: number; recentActivityMs?: number },
-): void {
+): Map<string, SessionChatTailSnapshot> {
   const { sendData } = useTransport()
   const enabled = options?.enabled !== false
   const tailLimit = Math.max(0, options?.tailLimit ?? DEFAULT_TAIL_LIMIT)
   const recentActivityMs = Math.max(0, Number(options?.recentActivityMs ?? DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS))
   const refreshMs = getWarmSessionChatTailDescriptorRefreshMs(recentActivityMs)
   const [refreshTick, setRefreshTick] = useState(0)
+  const [snapshots, setSnapshots] = useState<Map<string, SessionChatTailSnapshot>>(() => new Map())
 
   useEffect(() => {
     if (!enabled || conversations.length === 0) return
@@ -589,17 +621,39 @@ export function useWarmSessionChatTailControllers(
   )
 
   useEffect(() => {
-    if (!enabled || !sendData || descriptorState.descriptors.length === 0) return
-    const controllers = descriptorState.descriptors.map((descriptor) => (
-      getOrCreateSessionChatTailController({
+    if (!enabled || !sendData || descriptorState.descriptors.length === 0) {
+      setSnapshots((prev) => (prev.size === 0 ? prev : new Map()))
+      return
+    }
+    const controllers = descriptorState.descriptors.map((descriptor) => ({
+      key: getControllerKey(descriptor.daemonId, descriptor.sessionId),
+      controller: getOrCreateSessionChatTailController({
         ...descriptor,
         sendData,
         tailLimit,
+      }),
+    }))
+    const activeKeys = new Set(controllers.map(({ key }) => key))
+    const publishSnapshot = (key: string, snapshot: SessionChatTailSnapshot) => {
+      setSnapshots((prev) => {
+        const next = new Map(prev)
+        for (const existingKey of next.keys()) {
+          if (!activeKeys.has(existingKey)) next.delete(existingKey)
+        }
+        next.set(key, snapshot)
+        return next
       })
-    ))
-    controllers.forEach((controller) => controller.retain())
+    }
+    const unsubscribes = controllers.map(({ key, controller }) => {
+      controller.retain()
+      publishSnapshot(key, controller.getSnapshot())
+      return controller.subscribe((snapshot) => publishSnapshot(key, snapshot))
+    })
     return () => {
-      controllers.forEach((controller) => controller.release())
+      unsubscribes.forEach((unsubscribe) => unsubscribe())
+      controllers.forEach(({ controller }) => controller.release())
     }
   }, [descriptorState.signature, enabled, sendData, tailLimit])
+
+  return snapshots
 }

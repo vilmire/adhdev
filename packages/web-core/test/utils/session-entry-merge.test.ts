@@ -184,6 +184,40 @@ describe('session entry merge helpers', () => {
     expect(merged?.messages).toEqual([])
   })
 
+  it('keeps the existing transcript when an approval-state snapshot reports an empty modal-only transcript', () => {
+    const merged = mergeActiveChatData(
+      {
+        id: 'chat-1',
+        title: 'Claude Code (VS Code)',
+        status: 'waiting_approval',
+        messages: [],
+        activeModal: {
+          message: 'Allow command?',
+          buttons: ['Allow once', 'Deny'],
+        },
+      } as any,
+      {
+        id: 'chat-1',
+        title: 'Claude Code (VS Code)',
+        status: 'generating',
+        messages: [
+          { role: 'user', content: 'run tests', id: 'msg-user-1', receivedAt: 1000 },
+          { role: 'assistant', content: 'I need approval', id: 'msg-assistant-1', receivedAt: 2000 },
+        ],
+        activeModal: null,
+      } as any,
+    )
+
+    expect(merged?.messages).toEqual([
+      { role: 'user', content: 'run tests', id: 'msg-user-1', receivedAt: 1000 },
+      { role: 'assistant', content: 'I need approval', id: 'msg-assistant-1', receivedAt: 2000 },
+    ])
+    expect(merged?.activeModal).toEqual({
+      message: 'Allow command?',
+      buttons: ['Allow once', 'Deny'],
+    })
+  })
+
   it('merges child session arrays through the same sparse-preserving contract', () => {
     const merged = mergeSessionEntryChildren(
       [createSession()],

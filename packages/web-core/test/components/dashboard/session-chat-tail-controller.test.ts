@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SessionChatTailUpdate } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
+  applyWarmSessionChatTailSnapshots,
   buildWarmSessionChatTailDescriptorState,
   getOrCreateSessionChatTailController,
   getWarmSessionChatTailDescriptorRefreshMs,
@@ -115,6 +116,54 @@ describe('SessionChatTailController registry', () => {
 
     expect(state.descriptors).toEqual([
       expect.objectContaining({ sessionId: 'session-cached' }),
+    ])
+  })
+
+  it('overlays newer warm chat-tail messages onto conversations used by mobile inbox previews', () => {
+    const conversations = [createConversation({
+      messages: [{ role: 'assistant', content: 'old inbox preview', id: 'old-1', receivedAt: 1000 }],
+    })]
+    const snapshots = new Map([
+      ['daemon-1::session-1', {
+        liveMessages: [{ role: 'assistant', content: 'actual last message in chat', id: 'new-1', receivedAt: 2000 }],
+        cursor: { knownMessageCount: 1, lastMessageSignature: 'sig-new', tailLimit: 60 },
+        historyMessages: [],
+        historyOffset: 0,
+        hasMoreHistory: true,
+        historyError: null,
+      }],
+    ])
+
+    const merged = applyWarmSessionChatTailSnapshots(conversations as any, snapshots as any)
+
+    expect(merged).not.toBe(conversations)
+    expect(merged[0]?.messages).toEqual([
+      { role: 'assistant', content: 'actual last message in chat', id: 'new-1', receivedAt: 2000 },
+    ])
+    expect(merged[0]?.lastMessagePreview).toBe('actual last message in chat')
+    expect(merged[0]?.lastMessageAt).toBe(2000)
+  })
+
+  it('keeps conversation messages when the warm chat-tail snapshot is older', () => {
+    const conversations = [createConversation({
+      messages: [{ role: 'assistant', content: 'current conversation message', id: 'new-1', receivedAt: 2000 }],
+    })]
+    const snapshots = new Map([
+      ['daemon-1::session-1', {
+        liveMessages: [{ role: 'assistant', content: 'older cached message', id: 'old-1', receivedAt: 1000 }],
+        cursor: { knownMessageCount: 1, lastMessageSignature: 'sig-old', tailLimit: 60 },
+        historyMessages: [],
+        historyOffset: 0,
+        hasMoreHistory: true,
+        historyError: null,
+      }],
+    ])
+
+    const merged = applyWarmSessionChatTailSnapshots(conversations as any, snapshots as any)
+
+    expect(merged).toBe(conversations)
+    expect(merged[0]?.messages).toEqual([
+      { role: 'assistant', content: 'current conversation message', id: 'new-1', receivedAt: 2000 },
     ])
   })
 

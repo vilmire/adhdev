@@ -9,6 +9,11 @@ export type SubscriptionHandle = (() => void) & {
     initialSendAccepted: boolean
 }
 
+export interface SubscriptionOptions {
+    /** If sendData returns false on initial subscribe, retry every retryIntervalMs until accepted or unsubscribed. */
+    retryIntervalMs?: number
+}
+
 type TopicHandler<T extends TopicUpdateEnvelope = TopicUpdateEnvelope> = (update: T) => void
 
 interface ActiveSubscription {
@@ -38,12 +43,14 @@ function logSubscriptionDebug(event: string, payload: Record<string, unknown>): 
 
 export class SubscriptionManager {
     private active = new Map<string, ActiveSubscription>()
+    private retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
     subscribe<T extends TopicUpdateEnvelope>(
         transport: SubscriptionTransport,
         daemonId: string,
         request: SubscribeRequest,
         handler: TopicHandler<T>,
+        options?: SubscriptionOptions,
     ): SubscriptionHandle {
         const id = buildSubscriptionId(request.topic, request.key)
         const existing = this.active.get(id)
@@ -66,9 +73,13 @@ export class SubscriptionManager {
                 key: request.key,
             })
             initialSendAccepted = transport.sendData?.(daemonId, request) ?? false
+            if (!initialSendAccepted && options?.retryIntervalMs) {
+                this.scheduleRetry(id, transport, options.retryIntervalMs)
+            }
         }
 
         const unsubscribe = (() => {
+            this.clearRetry(id)
             const current = this.active.get(id)
             if (!current) return
             current.handlers.delete(handler as TopicHandler)
@@ -95,6 +106,8 @@ export class SubscriptionManager {
         const id = buildSubscriptionId(update.topic, update.key)
         const subscription = this.active.get(id)
         if (!subscription) return
+        // An update arriving means the subscription is live — cancel any pending initial retry.
+        this.clearRetry(id)
         subscription.lastUpdate = update
         webDebugStore.record({
             interactionId: typeof (update as { interactionId?: unknown }).interactionId === 'string' ? (update as { interactionId?: string }).interactionId : undefined,
@@ -146,6 +159,34 @@ export class SubscriptionManager {
         })
         for (const subscription of subscriptions) {
             transport.sendData?.(subscription.daemonId, subscription.request)
+        }
+    }
+
+    private scheduleRetry(id: string, transport: SubscriptionTransport, intervalMs: number): void {
+        if (this.retryTimers.has(id)) return
+        const timer = setTimeout(() => {
+            this.retryTimers.delete(id)
+            const subscription = this.active.get(id)
+            if (!subscription) return
+            const accepted = transport.sendData?.(subscription.daemonId, subscription.request) ?? false
+            logSubscriptionDebug('subscribe_retry', {
+                id,
+                accepted,
+                topic: subscription.request.topic,
+                key: subscription.request.key,
+            })
+            if (!accepted) {
+                this.scheduleRetry(id, transport, intervalMs)
+            }
+        }, intervalMs)
+        this.retryTimers.set(id, timer)
+    }
+
+    private clearRetry(id: string): void {
+        const timer = this.retryTimers.get(id)
+        if (timer !== undefined) {
+            clearTimeout(timer)
+            this.retryTimers.delete(id)
         }
     }
 }

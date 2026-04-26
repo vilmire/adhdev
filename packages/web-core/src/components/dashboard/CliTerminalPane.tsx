@@ -459,10 +459,10 @@ export default function CliTerminalPane({
                 contextKey={activeConv.tabKey}
                 panelLabel={getConversationTitle(activeConv)}
                 isSending={isSendingChat}
-                isBusy={!runtimeReady || !!sendBlockMessage}
+                isBusy={!!sendBlockMessage}
                 statusMessage={inputStatusMessage}
                 onSend={async (message) => {
-                    if (!runtimeReady || sendBlockMessage) return false;
+                    if (sendBlockMessage) return false;
                     return handleSendChat(message);
                 }}
                 isActive={isInputActive && isVisible}
