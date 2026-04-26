@@ -309,7 +309,9 @@ export default function Dashboard() {
             const readAt = autoReadPlan.readAt
             void sendDaemonCommand(activeConv.daemonId || activeConv.routeId, 'mark_session_seen', {
                 sessionId: activeConv.sessionId,
+                providerSessionId: activeConv.providerSessionId,
                 seenAt: readAt,
+                completionMarker: autoReadPlan.completionMarker,
             }).catch(() => {})
         }
 

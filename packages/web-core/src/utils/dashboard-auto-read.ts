@@ -18,6 +18,7 @@ export interface DesktopAutoReadPlanInput {
 export interface DesktopAutoReadPlan {
   shouldMarkSeen: boolean
   autoReadKey: string
+  completionMarker: string
   readAt: number
 }
 
@@ -95,6 +96,7 @@ export function getDesktopAutoReadPlan(input: DesktopAutoReadPlanInput): Desktop
   return {
     shouldMarkSeen,
     autoReadKey,
+    completionMarker,
     readAt: Math.max(Date.now(), input.timestamp || 0, input.liveState.lastUpdated || 0),
   }
 }

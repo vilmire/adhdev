@@ -88,7 +88,9 @@ export function useDashboardMobileChatEffects({
         })
         void sendDaemonCommand(getConversationMachineId(conversation) || conversation.routeId, 'mark_session_seen', {
             sessionId: conversation.sessionId,
+            providerSessionId: conversation.providerSessionId,
             seenAt: readAt,
+            completionMarker: liveState.completionMarker,
         }).then((result) => {
             logMobileReadDebug('mark_read:result', {
                 tabKey: conversation.tabKey,

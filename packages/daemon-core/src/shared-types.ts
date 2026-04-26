@@ -372,12 +372,31 @@ export interface CompactSessionEntry {
     parentId: string | null;
     providerType: string;
     providerName: string;
+    providerSessionId?: string;
     kind: SessionKind;
     transport: SessionTransport;
     status: SessionStatus;
     title: string;
     workspace: string | null;
     cdpConnected?: boolean;
+    runtimeKey?: string;
+    runtimeDisplayName?: string;
+    runtimeWorkspaceLabel?: string;
+    runtimeWriteOwner?: RuntimeWriteOwner | null;
+    runtimeAttachedClients?: RuntimeAttachedClient[];
+    lastMessagePreview?: string;
+    lastMessageRole?: string;
+    lastMessageAt?: number;
+    lastMessageHash?: string;
+    lastUpdated?: number;
+    unread?: boolean;
+    lastSeenAt?: number;
+    inboxBucket?: RecentSessionBucket;
+    completionMarker?: string;
+    seenCompletionMarker?: string;
+    surfaceHidden?: boolean;
+    controlValues?: Record<string, string | number | boolean>;
+    providerControls?: ProviderControlSchema[];
     summaryMetadata?: ProviderSummaryMetadata;
 }
 

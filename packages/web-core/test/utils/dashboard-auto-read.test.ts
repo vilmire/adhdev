@@ -22,6 +22,7 @@ describe('dashboard auto-read plan', () => {
     })
 
     expect(plan.shouldMarkSeen).toBe(true)
+    expect(plan.completionMarker).toBe('done-1')
     expect(plan.autoReadKey).toBe('tab-1:hist-1:done-1::task_complete:1')
     expect(plan.readAt).toBeGreaterThanOrEqual(130)
   })

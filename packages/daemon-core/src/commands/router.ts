@@ -718,13 +718,20 @@ export class DaemonCommandRouter {
                     this.deps.cdpManagers,
                 );
                 const targetSession = sessionEntries.find((entry) => entry.id === sessionId);
-                const completionMarker = targetSession ? getSessionCompletionMarker(targetSession) : '';
+                const requestedCompletionMarker = typeof args?.completionMarker === 'string'
+                    ? args.completionMarker.trim()
+                    : '';
+                const completionMarker = requestedCompletionMarker || (targetSession ? getSessionCompletionMarker(targetSession) : '');
+                const requestedProviderSessionId = typeof args?.providerSessionId === 'string'
+                    ? args.providerSessionId.trim()
+                    : '';
+                const providerSessionId = requestedProviderSessionId || targetSession?.providerSessionId;
                 const next = markSessionSeen(
                     currentState,
                     sessionId,
                     typeof args?.seenAt === 'number' ? args.seenAt : Date.now(),
                     completionMarker,
-                    targetSession?.providerSessionId,
+                    providerSessionId,
                 );
                 if (READ_DEBUG_ENABLED) {
                     LOG.info('RecentRead', `mark_session_seen sessionId=${sessionId} seenAt=${String(args?.seenAt || '')} prevSeenAt=${String(prevSeenAt)} nextSeenAt=${String(next.sessionReads?.[sessionId] || 0)} marker=${completionMarker || '-'}`);
