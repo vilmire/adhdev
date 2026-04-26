@@ -153,25 +153,36 @@ function normalizeGhosttyBinding(mod: any): GhosttyBinding | null {
   const raw = mod?.default?.createTerminal ? mod.default : mod?.createTerminal ? mod : null;
   if (!raw) return null;
 
-  // Wrap the native handle to fill in any missing methods (pre-built binaries may lack
-  // formatVT / getCursorPosition if built before those methods were added to the Rust side).
+  // Keep Ghostty as the authoritative emulator for terminal query responses, but use
+  // xterm's viewport snapshot for UI seeding. Ghostty's formatter serializes scrollback
+  // before the active viewport; after full-screen Claude Code redraws (for example
+  // `/status` -> Esc), replaying that as a fresh terminal seed makes stale splash-screen
+  // rows visible as duplicated logos. The browser terminal is xterm, so snapshotting the
+  // same viewport xterm would show live keeps restore behavior aligned with the UI.
   return {
     createTerminal(options: { cols: number; rows: number; scrollback: number }): GhosttyTerminalHandle {
       const handle = raw.createTerminal(options) as any;
+      const viewportSnapshot = createXtermMirror(options);
       return {
-        write(data: string | Uint8Array): void { handle.write(data); },
-        resize(cols: number, rows: number): void { handle.resize(cols, rows); },
+        write(data: string | Uint8Array): void {
+          handle.write(data);
+          viewportSnapshot.write(data);
+        },
+        resize(cols: number, rows: number): void {
+          handle.resize(cols, rows);
+          viewportSnapshot.resize(cols, rows);
+        },
         formatVT(): string {
-          if (typeof handle.formatVT === 'function') return handle.formatVT();
-          // Fallback: formatPlainText is always available in the shipped bindings
-          if (typeof handle.formatPlainText === 'function') return handle.formatPlainText({ trim: false }) as string;
-          return '';
+          return viewportSnapshot.formatVT();
         },
         getCursorPosition(): { col: number; row: number } {
           if (typeof handle.getCursorPosition === 'function') return handle.getCursorPosition() as { col: number; row: number };
-          return { col: 0, row: 0 };
+          return viewportSnapshot.getCursorPosition();
         },
-        dispose(): void { handle.dispose(); },
+        dispose(): void {
+          handle.dispose();
+          viewportSnapshot.dispose();
+        },
       };
     },
   };
