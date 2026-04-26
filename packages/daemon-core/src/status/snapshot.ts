@@ -45,6 +45,10 @@ export interface StatusSnapshotOptions {
             category: 'ide' | 'extension' | 'cli' | 'acp';
             installed?: boolean;
             detectedPath?: string | null;
+            enabled?: boolean;
+            machineStatus?: 'disabled' | 'enabled_unchecked' | 'not_detected' | 'detected';
+            lastDetection?: AvailableProviderInfo['lastDetection'];
+            lastVerification?: AvailableProviderInfo['lastVerification'];
         }>;
     };
     detectedIdes: Array<{
@@ -134,6 +138,10 @@ function buildAvailableProviders(
         category: 'ide' | 'extension' | 'cli' | 'acp';
         installed?: boolean;
         detectedPath?: string | null;
+        enabled?: boolean;
+        machineStatus?: 'disabled' | 'enabled_unchecked' | 'not_detected' | 'detected';
+        lastDetection?: AvailableProviderInfo['lastDetection'];
+        lastVerification?: AvailableProviderInfo['lastVerification'];
     }> = providerLoader.getAvailableProviderInfos?.() || providerLoader.getAll();
     return providers.map((provider) => ({
         type: provider.type,
@@ -143,6 +151,10 @@ function buildAvailableProviders(
         category: provider.category,
         ...(provider.installed !== undefined ? { installed: provider.installed } : {}),
         ...(provider.detectedPath !== undefined ? { detectedPath: provider.detectedPath } : {}),
+        ...(provider.enabled !== undefined ? { enabled: provider.enabled } : {}),
+        ...(provider.machineStatus !== undefined ? { machineStatus: provider.machineStatus } : {}),
+        ...(provider.lastDetection !== undefined ? { lastDetection: provider.lastDetection } : {}),
+        ...(provider.lastVerification !== undefined ? { lastVerification: provider.lastVerification } : {}),
     }));
 }
 

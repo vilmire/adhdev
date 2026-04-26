@@ -6,6 +6,54 @@ import {
 } from '../../src/status/chat-tail-hot-sessions.js'
 
 describe('status snapshot message time fallbacks', () => {
+  it('preserves machine provider activation fields in availableProviders', () => {
+    const lastDetection = {
+      ok: true,
+      stage: 'detection' as const,
+      checkedAt: '2026-04-26T11:35:42.036Z',
+      command: 'hermes',
+      path: '/opt/homebrew/bin/hermes',
+      message: 'Provider command detected',
+    }
+    const snapshot = buildStatusSnapshot({
+      allStates: [],
+      cdpManagers: new Map(),
+      providerLoader: {
+        getAvailableProviderInfos: () => [
+          {
+            type: 'hermes-cli',
+            displayName: 'Hermes Agent',
+            icon: '⚕',
+            category: 'cli',
+            installed: true,
+            detectedPath: '/opt/homebrew/bin/hermes',
+            enabled: true,
+            machineStatus: 'detected',
+            lastDetection,
+          },
+        ],
+        getAll: () => [],
+      },
+      detectedIdes: [],
+      instanceId: 'daemon-1',
+      version: '0.0.0-test',
+      timestamp: 1,
+      profile: 'full',
+    })
+
+    expect(snapshot.availableProviders).toEqual([
+      expect.objectContaining({
+        type: 'hermes-cli',
+        category: 'cli',
+        installed: true,
+        detectedPath: '/opt/homebrew/bin/hermes',
+        enabled: true,
+        machineStatus: 'detected',
+        lastDetection,
+      }),
+    ])
+  })
+
   it('uses message timestamp when receivedAt is missing for lastMessageAt', () => {
     const ts = 1_717_000_000_000
     const snapshot = buildStatusSnapshot({
