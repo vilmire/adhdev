@@ -367,13 +367,23 @@ export class CliProviderInstance implements ProviderInstance {
                 ? parsedMessages.slice(-historyMessageCount)
                 : [];
         }
-        // During waiting_approval the approval dialog fills the terminal, pushing prior
-        // conversation out of view. parseOutput can only see the approval UI and returns
-        // a partial or empty message list. committedMessages (adapterStatus.messages) is
-        // the reliable source of conversation history — use it as a floor so history
-        // is not lost while the approval dialog is visible.
+        // committedMessages (adapterStatus.messages) is the adapter's accumulated
+        // conversation history — use it as a floor to prevent history from disappearing.
+        //
+        // waiting_approval: always override — the approval dialog fills the terminal,
+        // pushing prior conversation out of view; parsedMessages will be partial or empty
+        // regardless of historyMessageCount.
+        //
+        // Other active states (generating, long_generating, error): apply floor only
+        // when the script has not explicitly windowed via historyMessageCount, so
+        // intentional windowing is preserved. Excludes idle — scripts may legitimately
+        // return messages:[] when the CLI exits or a new session begins.
         const committedMessages = Array.isArray(adapterStatus.messages) ? adapterStatus.messages : [];
-        if (adapterStatus.status === 'waiting_approval' && parsedMessages.length < committedMessages.length) {
+        const isActiveNonIdle = adapterStatus.status !== 'idle';
+        const shouldApplyCommittedFloor = parsedMessages.length < committedMessages.length
+            && (adapterStatus.status === 'waiting_approval'
+                || (isActiveNonIdle && historyMessageCount === null));
+        if (shouldApplyCommittedFloor) {
             parsedMessages = normalizeChatMessages(committedMessages as any);
         }
         const mergedMessages = this.mergeConversationMessages(parsedMessages);

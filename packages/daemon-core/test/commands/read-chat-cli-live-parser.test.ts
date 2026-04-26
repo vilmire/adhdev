@@ -272,6 +272,75 @@ describe('handleReadChat for CLI adapters', () => {
     ])
   })
 
+  it('collapses assistant-only viewport replay after a stable final answer without dropping a new user turn', async () => {
+    const finalAnswer = [
+      'Created the tiny browser Snake game in this workspace:',
+      '/tmp/adhdev-live-snake/index.html',
+      '/tmp/adhdev-live-snake/src/snake.js',
+      '/tmp/adhdev-live-snake/README.md',
+      'Run it by opening index.html in a browser. Controls: Arrow keys or WASD. Score, restart, and game-over state are implemented.',
+    ].join('\n')
+    const replayedFinalAnswer = `${finalAnswer}\nVerified again.`
+    const getScriptParsedStatus = vi.fn(() => ({
+      status: 'idle',
+      messages: [
+        { role: 'user', content: 'create snake game' },
+        { role: 'assistant', kind: 'terminal', senderName: 'Terminal', content: '$ pwd' },
+        { role: 'assistant', content: finalAnswer },
+        { role: 'assistant', kind: 'terminal', senderName: 'Terminal', content: '$ pwd && python3 verify.py' },
+        { role: 'assistant', kind: 'tool', senderName: 'Tool', content: 'read README.md' },
+        { role: 'assistant', content: replayedFinalAnswer },
+        { role: 'user', content: 'now summarize in one line' },
+        { role: 'assistant', content: 'Snake game created and verified.' },
+      ],
+      activeModal: null,
+      title: 'Hermes Agent',
+    }))
+
+    const adapter = {
+      cliType: 'hermes-cli',
+      cliName: 'Hermes Agent',
+      workingDir: '/tmp/project',
+      spawn: async () => {},
+      sendMessage: async () => {},
+      getStatus: () => ({ status: 'idle', messages: [], activeModal: null }),
+      getScriptParsedStatus,
+      getPartialResponse: () => '',
+      shutdown: () => {},
+      cancel: () => {},
+      isProcessing: () => false,
+      isReady: () => true,
+      setOnStatusChange: () => {},
+    }
+
+    const result = await handleReadChat({
+      getCdp: () => null,
+      getProvider: () => ({ type: 'hermes-cli', category: 'cli' }),
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      getCliAdapter: () => adapter as any,
+      currentManagerKey: undefined,
+      currentIdeType: undefined,
+      currentProviderType: undefined,
+      currentSession: undefined,
+      agentStream: null,
+      ctx: {},
+      historyWriter: { appendNewMessages: () => {} },
+    } as any, { agentType: 'hermes-cli' })
+
+    expect(result.success).toBe(true)
+    expect(result.totalMessages).toBe(7)
+    expect(result.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'create snake game' }),
+      expect.objectContaining({ role: 'assistant', kind: 'terminal', senderName: 'Terminal', content: '$ pwd' }),
+      expect.objectContaining({ role: 'assistant', content: finalAnswer }),
+      expect.objectContaining({ role: 'assistant', kind: 'terminal', senderName: 'Terminal', content: '$ pwd && python3 verify.py' }),
+      expect.objectContaining({ role: 'assistant', kind: 'tool', senderName: 'Tool', content: 'read README.md' }),
+      expect.objectContaining({ role: 'user', content: 'now summarize in one line' }),
+      expect.objectContaining({ role: 'assistant', content: 'Snake game created and verified.' }),
+    ])
+  })
+
   it('collapses replayed adjacent tool and terminal updates before applying tail sync', async () => {
     const getScriptParsedStatus = vi.fn(() => ({
       status: 'generating',
