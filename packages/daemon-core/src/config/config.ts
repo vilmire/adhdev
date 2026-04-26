@@ -26,6 +26,23 @@ export function resolveProviderSourceMode(
     return legacyDisableUpstream === true ? 'no-upstream' : 'normal';
 }
 
+export interface MachineProviderCheckResult {
+    ok: boolean;
+    stage?: 'detection' | 'runnable' | 'verification';
+    checkedAt?: string;
+    message?: string;
+    command?: string;
+    path?: string | null;
+}
+
+export interface MachineProviderConfig {
+    enabled?: boolean;
+    executable?: string;
+    args?: string[];
+    lastDetection?: MachineProviderCheckResult;
+    lastVerification?: MachineProviderCheckResult;
+}
+
 export interface ADHDevConfig {
  // Server connection
     serverUrl: string;
@@ -86,6 +103,9 @@ export interface ADHDevConfig {
  // Per-provider user config (public setting values)
     providerSettings: Record<string, Record<string, any>>;
 
+ // Machine-local provider activation/config. Providers default disabled until explicitly enabled.
+    machineProviders: Record<string, MachineProviderConfig>;
+
  // Per-IDE extension config (per-IDE on/off control)
     ideSettings: Record<string, {
         extensions?: Record<string, { enabled: boolean }>;
@@ -128,6 +148,7 @@ const DEFAULT_CONFIG: ADHDevConfig = {
     machineSecret: null,
     registeredMachineId: undefined,
     providerSettings: {},
+    machineProviders: {},
     ideSettings: {},
     providerSourceMode: 'normal',
     terminalSizingMode: 'measured',
@@ -156,6 +177,30 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
     return typeof value === 'boolean' ? value : fallback;
 }
 
+function normalizeMachineProviders(value: unknown): Record<string, MachineProviderConfig> {
+    if (!isPlainObject(value)) return {};
+    const result: Record<string, MachineProviderConfig> = {};
+    for (const [providerType, raw] of Object.entries(value)) {
+        if (!isPlainObject(raw)) continue;
+        const entry: MachineProviderConfig = {};
+        if (raw.enabled === true) entry.enabled = true;
+        if (typeof raw.executable === 'string' && raw.executable.trim()) {
+            entry.executable = raw.executable.trim();
+        }
+        if (Array.isArray(raw.args)) {
+            entry.args = raw.args.filter((arg): arg is string => typeof arg === 'string');
+        }
+        if (isPlainObject(raw.lastDetection)) {
+            entry.lastDetection = raw.lastDetection as MachineProviderCheckResult;
+        }
+        if (isPlainObject(raw.lastVerification)) {
+            entry.lastVerification = raw.lastVerification as MachineProviderCheckResult;
+        }
+        result[providerType] = entry;
+    }
+    return result;
+}
+
 function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: string | null } {
     const parsed = isPlainObject(raw) ? raw : {};
 
@@ -179,6 +224,7 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
         machineSecret: parsed.machineSecret === null ? null : asOptionalString(parsed.machineSecret),
         registeredMachineId: asOptionalString(parsed.registeredMachineId),
         providerSettings: isPlainObject(parsed.providerSettings) ? parsed.providerSettings : {},
+        machineProviders: normalizeMachineProviders(parsed.machineProviders),
         ideSettings: isPlainObject(parsed.ideSettings) ? parsed.ideSettings : {},
         providerSourceMode: resolveProviderSourceMode(parsed.providerSourceMode, parsed.disableUpstream),
         providerDir: asOptionalString(parsed.providerDir),

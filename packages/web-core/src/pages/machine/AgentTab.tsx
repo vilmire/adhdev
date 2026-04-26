@@ -54,6 +54,14 @@ interface SavedSessionOption extends SavedSessionHistoryEntry {}
 // Union type for running entries
 type AgentEntry = IdeSessionEntry | CliSessionEntry | AcpSessionEntry
 
+function isLaunchableMachineProvider(provider: ProviderInfo, category: AgentCategory) {
+    if (provider.category !== category) return false
+    if (category === 'ide') return true
+    if (provider.enabled === false) return false
+    if (provider.machineStatus && provider.machineStatus !== 'detected') return false
+    return provider.installed !== false
+}
+
 interface AgentTabProps {
     category: AgentCategory
     machine: MachineData
@@ -104,10 +112,7 @@ export default function AgentTab({
     const isIde = category === 'ide'
     const isAcp = category === 'acp'
     const categoryProviders = useMemo(
-        () => providers.filter(provider =>
-            provider.category === category
-            && (category === 'ide' || provider.installed !== false),
-        ),
+        () => providers.filter(provider => isLaunchableMachineProvider(provider, category)),
         [category, providers],
     )
     const providerLabelMap = useMemo(

@@ -24,6 +24,15 @@ import { useDashboardMobileNavigationController } from './useDashboardMobileNavi
 
 declare const __APP_VERSION__: string
 
+type MachineProvider = NonNullable<DaemonData['availableProviders']>[number]
+
+function isLaunchableMachineProvider(provider: MachineProvider, category: 'cli' | 'acp') {
+    if (provider.category !== category) return false
+    if (provider.enabled === false) return false
+    if (provider.machineStatus && provider.machineStatus !== 'detected') return false
+    return provider.installed !== false
+}
+
 interface DashboardMobileChatModeProps {
     conversations: ActiveConversation[]
     hiddenConversations: ActiveConversation[]
@@ -225,7 +234,7 @@ export default function DashboardMobileChatMode({
     )
     const selectedMachineCliProviders = useMemo(
         () => selectedMachineProviders
-            .filter(provider => provider.category === 'cli' && provider.installed !== false)
+            .filter(provider => isLaunchableMachineProvider(provider, 'cli'))
             .map(provider => ({
                 type: provider.type,
                 displayName: provider.displayName || provider.type,
@@ -235,7 +244,7 @@ export default function DashboardMobileChatMode({
     )
     const selectedMachineAcpProviders = useMemo(
         () => selectedMachineProviders
-            .filter(provider => provider.category === 'acp' && provider.installed !== false)
+            .filter(provider => isLaunchableMachineProvider(provider, 'acp'))
             .map(provider => ({
                 type: provider.type,
                 displayName: provider.displayName || provider.type,

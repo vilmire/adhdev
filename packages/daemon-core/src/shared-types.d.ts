@@ -240,6 +240,10 @@ export interface AvailableProviderInfo {
     icon: string;
     installed?: boolean;
     detectedPath?: string | null;
+    /** Machine-local opt-in activation state. Undefined means older daemon payload. */
+    enabled?: boolean;
+    /** Machine-local readiness state for opt-in providers. */
+    machineStatus?: 'disabled' | 'enabled_unchecked' | 'not_detected' | 'detected';
 }
 /** ACP config option (model/mode/thought_level selection) */
 export interface AcpConfigOption {

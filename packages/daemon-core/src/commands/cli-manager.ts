@@ -8,6 +8,8 @@
 import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { existsSync } from 'fs';
+import { execFileSync } from 'child_process';
 import chalk from 'chalk';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
@@ -32,6 +34,30 @@ import { LOG } from '../logging/logger.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
 
 // ─── external dependency interface ──────────────────────────
+
+function isExplicitCommand(command: string): boolean {
+    const trimmed = command.trim();
+    return path.isAbsolute(trimmed) || trimmed.includes('/') || trimmed.includes('\\') || trimmed.startsWith('~');
+}
+
+function expandExecutable(command: string): string {
+    const trimmed = command.trim();
+    return trimmed.startsWith('~') ? path.join(os.homedir(), trimmed.slice(1)) : trimmed;
+}
+
+function commandExists(command: string): boolean {
+    const trimmed = command.trim();
+    if (!trimmed) return false;
+    if (isExplicitCommand(trimmed)) {
+        return existsSync(expandExecutable(trimmed));
+    }
+    try {
+        execFileSync(process.platform === 'win32' ? 'where' : 'which', [trimmed], { stdio: 'ignore' });
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 export interface CliManagerDeps {
  /** Server connection — injected into adapter */
@@ -461,7 +487,15 @@ export class DaemonCliManager {
 
  // cliType normalize (Resolve alias)
         const normalizedType = this.providerLoader.resolveAlias(cliType);
-        const provider = this.providerLoader.getByAlias(cliType);
+        const rawProvider = this.providerLoader.getByAlias(cliType);
+        const provider = rawProvider ? (this.providerLoader.resolve(normalizedType) || rawProvider) : undefined;
+        if (provider && (provider.category === 'cli' || provider.category === 'acp') && !this.providerLoader.isMachineProviderEnabled(normalizedType)) {
+            const displayName = provider.displayName || provider.name || normalizedType;
+            throw new Error(
+                `${displayName} is disabled on this machine.\n` +
+                `Enable and detect this provider from the Machine Providers page before starting a runtime.`
+            );
+        }
 
  // Create UUID-based key (allows separate instances even for same type+dir)
         const key = crypto.randomUUID();
@@ -471,26 +505,22 @@ export class DaemonCliManager {
         if (provider && provider.category === 'acp') {
             const instanceManager = this.deps.getInstanceManager();
             if (!instanceManager) throw new Error('InstanceManager not available');
+            const resolvedProvider = this.providerLoader.resolve(normalizedType) || provider;
 
  // Check if command is installed
-            const spawnCmd = provider.spawn?.command;
-            if (spawnCmd) {
-                try {
-                    const { execSync } = require('child_process');
-                    execSync(`which ${spawnCmd}`, { stdio: 'ignore' });
-                } catch {
-                    const installInfo = provider.install || `Install: check ${provider.displayName || provider.name} documentation`;
-                    throw new Error(
-                        `${provider.displayName || provider.name} is not installed.\n` +
-                        `Command '${spawnCmd}' not found in PATH.\n\n` +
-                        `${installInfo}`
-                    );
-                }
+            const spawnCmd = resolvedProvider.spawn?.command;
+            if (spawnCmd && !commandExists(spawnCmd)) {
+                const installInfo = provider.install || `Install: check ${provider.displayName || provider.name} documentation`;
+                throw new Error(
+                    `${provider.displayName || provider.name} is not installed.\n` +
+                    `Command '${spawnCmd}' not found.\n\n` +
+                    `${installInfo}`
+                );
             }
 
             console.log(colorize('cyan', `  🔌 Starting ACP agent: ${provider.name} (${provider.type}) in ${resolvedDir}`));
 
-            const acpInstance = new AcpProviderInstance(provider, resolvedDir, cliArgs);
+            const acpInstance = new AcpProviderInstance(resolvedProvider, resolvedDir, cliArgs);
             await instanceManager.addInstance(key, acpInstance, {
                 settings: this.providerLoader.getSettings(normalizedType),
             });

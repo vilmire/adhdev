@@ -19,6 +19,15 @@ import LaunchSectionCard from '../LaunchSectionCard'
 
 type LaunchKind = 'ide' | 'cli' | 'acp'
 
+type MachineProvider = NonNullable<DaemonData['availableProviders']>[number]
+
+function isLaunchableMachineProvider(provider: MachineProvider, category: 'cli' | 'acp') {
+    if (provider.category !== category) return false
+    if (provider.enabled === false) return false
+    if (provider.machineStatus && provider.machineStatus !== 'detected') return false
+    return provider.installed !== false
+}
+
 interface SavedSessionOption {
     id: string
     providerSessionId: string
@@ -60,10 +69,10 @@ interface DashboardNewSessionDialogProps {
 function getDefaultLaunchKind(machine: DaemonData | undefined) {
     if (!machine) return null
     const providers = machine.availableProviders || []
-    if (providers.some(provider => provider.category === 'cli' && provider.installed !== false)) return 'cli' as const
+    if (providers.some(provider => isLaunchableMachineProvider(provider, 'cli'))) return 'cli' as const
     const hasIde = (machine.detectedIdes?.length || 0) > 0
     if (hasIde) return 'ide' as const
-    if (providers.some(provider => provider.category === 'acp' && provider.installed !== false)) return 'acp' as const
+    if (providers.some(provider => isLaunchableMachineProvider(provider, 'acp'))) return 'acp' as const
     return null
 }
 
@@ -142,11 +151,11 @@ export default function DashboardNewSessionDialog({
     }, [loadDaemonMetadata, selectedMachine])
 
     const cliProviders = useMemo(
-        () => ((selectedMachine?.availableProviders || []).filter(provider => provider.category === 'cli' && provider.installed !== false)),
+        () => ((selectedMachine?.availableProviders || []).filter(provider => isLaunchableMachineProvider(provider, 'cli'))),
         [selectedMachine],
     )
     const acpProviders = useMemo(
-        () => ((selectedMachine?.availableProviders || []).filter(provider => provider.category === 'acp' && provider.installed !== false)),
+        () => ((selectedMachine?.availableProviders || []).filter(provider => isLaunchableMachineProvider(provider, 'acp'))),
         [selectedMachine],
     )
     const ideTargets = useMemo(

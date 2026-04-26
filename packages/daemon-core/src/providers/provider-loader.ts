@@ -38,6 +38,40 @@ interface ProviderAvailabilityState {
   detectedPath: string | null;
 }
 
+export type ProviderMachineStatus =
+  | 'disabled'
+  | 'enabled_unchecked'
+  | 'not_detected'
+  | 'detected';
+
+export interface MachineProviderCheckResult {
+  ok: boolean;
+  stage?: 'detection' | 'runnable' | 'verification';
+  checkedAt?: string;
+  message?: string;
+  command?: string;
+  path?: string | null;
+}
+
+export interface MachineProviderConfig {
+  enabled?: boolean;
+  executable?: string;
+  args?: string[];
+  lastDetection?: MachineProviderCheckResult;
+  lastVerification?: MachineProviderCheckResult;
+}
+
+type CliDetectionEntry = {
+  id: string;
+  displayName: string;
+  icon: string;
+  command: string;
+  args?: string[];
+  category: string;
+  enabled: boolean;
+  versionCommand?: string;
+};
+
 export class ProviderLoader {
   private providers = new Map<string, ProviderModule>();
   private providerAvailability = new Map<string, ProviderAvailabilityState>();
@@ -362,18 +396,21 @@ export class ProviderLoader {
  * Build CLI/ACP detection list (replaces cli-detector)
  * Dynamically generated from provider.js spawn.command.
  */
-  getCliDetectionList(): { id: string; displayName: string; icon: string; command: string; category: string; versionCommand?: string }[] {
-    const result: { id: string; displayName: string; icon: string; command: string; category: string; versionCommand?: string }[] = [];
+  getCliDetectionList(): CliDetectionEntry[] {
+    const result: CliDetectionEntry[] = [];
     for (const p of this.providers.values()) {
-      if ((p.category === 'cli' || p.category === 'acp') && p.spawn?.command) {
+      if ((p.category === 'cli' || p.category === 'acp') && p.spawn?.command && this.isMachineProviderEnabled(p.type)) {
         const versionCommand = this.getPlatformVersionCommand(p.versionCommand);
         const command = this.getSpawnCommand(p.type, p.spawn.command);
+        const args = this.getSpawnArgs(p.type, p.spawn.args || []);
         result.push({
           id: p.type,
           displayName: p.displayName || p.name,
           icon: p.icon || '🔧',
           command,
+          ...(args.length > 0 ? { args } : {}),
           category: p.category,
+          enabled: true,
           ...(typeof versionCommand === 'string' && versionCommand.trim()
             ? { versionCommand: versionCommand.trim() }
             : {}),
@@ -520,9 +557,10 @@ export class ProviderLoader {
   }
 
   getSpawnCommand(type: string, fallback?: string): string {
-    const override = this.getOptionalStringSetting(type, 'executablePath');
-    if (override) return override;
-    return fallback || this.providers.get(type)?.spawn?.command || type;
+    const providerType = this.resolveAlias(type);
+    const machineConfig = this.getMachineProviderConfig(providerType);
+    if (machineConfig.executable) return machineConfig.executable;
+    return fallback || this.providers.get(providerType)?.spawn?.command || providerType;
   }
 
   getIdeCliCommand(type: string, fallback?: string | null): string | null {
@@ -539,6 +577,139 @@ export class ProviderLoader {
     return Array.isArray(osPaths) ? [...osPaths] : [];
   }
 
+  isMachineProviderEnabled(type: string): boolean {
+    const providerType = this.resolveAlias(type);
+    const config = this.readConfig();
+    return config?.machineProviders?.[providerType]?.enabled === true;
+  }
+
+  getMachineProviderConfig(type: string): MachineProviderConfig {
+    const providerType = this.resolveAlias(type);
+    const raw = this.readConfig()?.machineProviders?.[providerType];
+    if (!raw || typeof raw !== 'object') return {};
+    const executable = typeof raw.executable === 'string' && raw.executable.trim() ? raw.executable.trim() : undefined;
+    return {
+      ...(raw.enabled === true ? { enabled: true } : {}),
+      ...(executable ? { executable } : {}),
+      ...(Array.isArray(raw.args) ? { args: raw.args.filter((arg: unknown): arg is string => typeof arg === 'string') } : {}),
+      ...(raw.lastDetection && typeof raw.lastDetection === 'object' ? { lastDetection: raw.lastDetection } : {}),
+      ...(raw.lastVerification && typeof raw.lastVerification === 'object' ? { lastVerification: raw.lastVerification } : {}),
+    };
+  }
+
+  setMachineProviderConfig(type: string, patch: Partial<MachineProviderConfig>): boolean {
+    const providerType = this.resolveAlias(type);
+    if (!this.providers.has(providerType)) return false;
+    const config = this.readConfig();
+    if (!config) return false;
+
+    try {
+      if (!config.machineProviders) config.machineProviders = {};
+      const current: MachineProviderConfig = config.machineProviders[providerType] || {};
+      const next: MachineProviderConfig = { ...current };
+      const enabledChanged = 'enabled' in patch && current.enabled !== (patch.enabled === true);
+      const executableChanged = 'executable' in patch;
+      const argsChanged = 'args' in patch;
+      if ('enabled' in patch) next.enabled = patch.enabled === true;
+      if ('executable' in patch) {
+        const executable = typeof patch.executable === 'string' ? patch.executable.trim() : '';
+        if (executable) next.executable = executable;
+        else delete next.executable;
+      }
+      if ('args' in patch) {
+        if (Array.isArray(patch.args)) next.args = patch.args.filter((arg): arg is string => typeof arg === 'string');
+        else delete next.args;
+      }
+      if (enabledChanged || executableChanged || argsChanged) {
+        delete next.lastDetection;
+        delete next.lastVerification;
+      }
+      if ('lastDetection' in patch) {
+        if (patch.lastDetection) next.lastDetection = patch.lastDetection;
+        else delete next.lastDetection;
+      }
+      if ('lastVerification' in patch) {
+        if (patch.lastVerification) next.lastVerification = patch.lastVerification;
+        else delete next.lastVerification;
+      }
+      config.machineProviders[providerType] = next;
+      if (next.enabled !== true) {
+        this.providerAvailability.set(providerType, { installed: false, detectedPath: null });
+      }
+      this.writeConfig(config);
+      this.log(`Machine provider config updated: ${providerType}`);
+      return true;
+    } catch (e) {
+      this.log(`Failed to save machine provider config: ${(e as Error).message}`);
+      return false;
+    }
+  }
+
+  setMachineProviderEnabled(type: string, enabled: boolean): boolean {
+    return this.setMachineProviderConfig(type, { enabled });
+  }
+
+  getMachineProviderStatus(type: string): ProviderMachineStatus {
+    const providerType = this.resolveAlias(type);
+    if (!this.isMachineProviderEnabled(providerType)) return 'disabled';
+    const availability = this.providerAvailability.get(providerType);
+    if (!availability) return 'enabled_unchecked';
+    return availability.installed ? 'detected' : 'not_detected';
+  }
+
+  getSpawnArgs(type: string, fallback: string[] = []): string[] {
+    const machineConfig = this.getMachineProviderConfig(type);
+    if (machineConfig.args) return [...machineConfig.args];
+    return [...fallback];
+  }
+
+  private parseArgsSetting(value: string): string[] {
+    const args: string[] = [];
+    let current = '';
+    let quote: 'single' | 'double' | null = null;
+    let escaping = false;
+    for (const ch of value.trim()) {
+      if (escaping) {
+        current += ch;
+        escaping = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escaping = true;
+        continue;
+      }
+      if (quote === 'single') {
+        if (ch === "'") quote = null;
+        else current += ch;
+        continue;
+      }
+      if (quote === 'double') {
+        if (ch === '"') quote = null;
+        else current += ch;
+        continue;
+      }
+      if (ch === "'") {
+        quote = 'single';
+        continue;
+      }
+      if (ch === '"') {
+        quote = 'double';
+        continue;
+      }
+      if (/\s/.test(ch)) {
+        if (current) {
+          args.push(current);
+          current = '';
+        }
+        continue;
+      }
+      current += ch;
+    }
+    if (escaping) current += '\\';
+    if (current) args.push(current);
+    return args;
+  }
+
   setProviderAvailability(type: string, state: { installed: boolean; detectedPath?: string | null }): void {
     this.providerAvailability.set(type, {
       installed: !!state.installed,
@@ -547,18 +718,55 @@ export class ProviderLoader {
   }
 
   setCliDetectionResults(results: Array<{ id: string; installed: boolean; path?: string }>, replace: boolean = true): void {
+    const resultByType = new Map<string, { id: string; installed: boolean; path?: string }>();
+    for (const result of results) {
+      resultByType.set(this.resolveAlias(result.id), result);
+    }
+
     if (replace) {
       for (const provider of this.providers.values()) {
         if (provider.category === 'cli' || provider.category === 'acp') {
-          this.providerAvailability.set(provider.type, { installed: false, detectedPath: null });
+          const result = resultByType.get(provider.type);
+          const installed = !!result?.installed;
+          const detectedPath = result?.path || null;
+          this.providerAvailability.set(provider.type, { installed, detectedPath });
+          if (this.isMachineProviderEnabled(provider.type)) {
+            this.setMachineProviderConfig(provider.type, {
+              lastDetection: {
+                ok: installed,
+                stage: 'detection',
+                checkedAt: new Date().toISOString(),
+                command: this.getSpawnCommand(provider.type, provider.spawn?.command),
+                path: detectedPath,
+                message: installed ? 'Provider command detected' : 'Provider command was not detected',
+              },
+            });
+          }
         }
       }
+      return;
     }
+
     for (const result of results) {
-      this.setProviderAvailability(result.id, {
+      const providerType = this.resolveAlias(result.id);
+      const provider = this.providers.get(providerType);
+      const detectedPath = result.path || null;
+      this.setProviderAvailability(providerType, {
         installed: !!result.installed,
-        detectedPath: result.path || null,
+        detectedPath,
       });
+      if (provider && (provider.category === 'cli' || provider.category === 'acp') && this.isMachineProviderEnabled(providerType)) {
+        this.setMachineProviderConfig(providerType, {
+          lastDetection: {
+            ok: !!result.installed,
+            stage: 'detection',
+            checkedAt: new Date().toISOString(),
+            command: this.getSpawnCommand(providerType, provider.spawn?.command),
+            path: detectedPath,
+            message: result.installed ? 'Provider command detected' : 'Provider command was not detected',
+          },
+        });
+      }
     }
   }
 
@@ -578,11 +786,14 @@ export class ProviderLoader {
     }
   }
 
-  getAvailableProviderInfos(): Array<ProviderModule & { installed?: boolean; detectedPath?: string | null }> {
+  getAvailableProviderInfos(): Array<ProviderModule & { installed?: boolean; detectedPath?: string | null; enabled: boolean; machineStatus: ProviderMachineStatus }> {
     return this.getAll().map((provider) => {
       const availability = this.providerAvailability.get(provider.type);
+      const enabled = this.isMachineProviderEnabled(provider.type);
       return {
         ...provider,
+        enabled,
+        machineStatus: this.getMachineProviderStatus(provider.type),
         ...(availability
           ? {
               installed: availability.installed,
@@ -762,6 +973,14 @@ export class ProviderLoader {
           resolved.scripts = { ...resolved.scripts, ...override.scripts };
         }
       }
+    }
+
+    if ((resolved.category === 'cli' || resolved.category === 'acp') && resolved.spawn?.command) {
+      resolved.spawn = {
+        ...resolved.spawn,
+        command: this.getSpawnCommand(type, resolved.spawn.command),
+        args: this.getSpawnArgs(type, resolved.spawn.args || []),
+      };
     }
 
     return resolved;
@@ -1117,7 +1336,19 @@ export class ProviderLoader {
  * Resolved setting value for a provider (default + user override)
  */
   getSettingValue(type: string, key: string): any {
-    const schemaDef = this.getSettingsSchema(type)[key];
+    const providerType = this.resolveAlias(type);
+    const machineConfig = this.getMachineProviderConfig(providerType);
+    if (key === 'enabled') {
+      return machineConfig.enabled === true;
+    }
+    if (key === 'executablePath') {
+      return machineConfig.executable || '';
+    }
+    if (key === 'executableArgs') {
+      const args = machineConfig.args;
+      return args ? args.map((arg) => /\s/.test(arg) ? JSON.stringify(arg) : arg).join(' ') : '';
+    }
+    const schemaDef = this.getSettingsSchema(providerType)[key];
     const defaultVal = schemaDef
       ? (key === 'autoApprove' && schemaDef.type === 'boolean'
         ? true
@@ -1125,7 +1356,7 @@ export class ProviderLoader {
       : undefined;
 
     const config = this.readConfig();
-    const userVal = config?.providerSettings?.[type]?.[key];
+    const userVal = config?.providerSettings?.[providerType]?.[key];
     return userVal !== undefined ? userVal : defaultVal;
   }
 
@@ -1133,10 +1364,11 @@ export class ProviderLoader {
  * All resolved settings for a provider (default + user override)
  */
   getSettings(type: string): Record<string, any> {
-    const settings = this.getSettingsSchema(type);
+    const providerType = this.resolveAlias(type);
+    const settings = this.getSettingsSchema(providerType);
     const result: Record<string, any> = {};
     for (const [key] of Object.entries(settings)) {
-      result[key] = this.getSettingValue(type, key);
+      result[key] = this.getSettingValue(providerType, key);
     }
     return result;
   }
@@ -1145,7 +1377,8 @@ export class ProviderLoader {
  * Save provider setting value (writes to config.json)
  */
   setSetting(type: string, key: string, value: any): boolean {
-    const schemaDef = this.getSettingsSchema(type)[key];
+    const providerType = this.resolveAlias(type);
+    const schemaDef = this.getSettingsSchema(providerType)[key];
     if (!schemaDef) return false;
 
  // Non-public settings cannot be modified externally
@@ -1161,15 +1394,27 @@ export class ProviderLoader {
     }
     if (schemaDef.type === 'select' && schemaDef.options && !schemaDef.options.includes(value)) return false;
 
+    if (key === 'enabled') {
+      return this.setMachineProviderEnabled(providerType, value);
+    }
+    if (key === 'executablePath') {
+      return this.setMachineProviderConfig(providerType, { executable: value });
+    }
+    if (key === 'executableArgs') {
+      return this.setMachineProviderConfig(providerType, {
+        args: value.trim() ? this.parseArgsSetting(value) : undefined,
+      });
+    }
+
     const config = this.readConfig();
     if (!config) return false;
 
     try {
       if (!config.providerSettings) config.providerSettings = {};
-      if (!config.providerSettings[type]) config.providerSettings[type] = {};
-      config.providerSettings[type][key] = value;
+      if (!config.providerSettings[providerType]) config.providerSettings[providerType] = {};
+      config.providerSettings[providerType][key] = value;
       this.writeConfig(config);
-      this.log(`Setting updated: ${type}.${key} = ${JSON.stringify(value)}`);
+      this.log(`Setting updated: ${providerType}.${key} = ${JSON.stringify(value)}`);
       return true;
     } catch (e) {
       this.log(`Failed to save setting: ${(e as Error).message}`);
@@ -1237,6 +1482,16 @@ export class ProviderLoader {
   private getSyntheticSettings(type: string, provider: ProviderModule): Record<string, ProviderSettingDef> {
     const result: Record<string, ProviderSettingDef> = {};
 
+    if (provider.category === 'cli' || provider.category === 'acp') {
+      result.enabled = {
+        type: 'boolean',
+        default: false,
+        public: true,
+        label: 'Enabled on this machine',
+        description: 'Opt in before ADHDev detects, launches, or verifies this provider on this machine.',
+      };
+    }
+
     if (!provider.settings?.autoApprove) {
       result.autoApprove = {
         type: 'boolean',
@@ -1254,6 +1509,16 @@ export class ProviderLoader {
         public: true,
         label: 'Executable path',
         description: 'Optional absolute path for this provider binary. Leave blank to use the default PATH lookup.',
+      };
+    }
+
+    if ((provider.category === 'cli' || provider.category === 'acp') && provider.spawn?.command && !provider.settings?.executableArgs) {
+      result.executableArgs = {
+        type: 'string',
+        default: '',
+        public: true,
+        label: 'Executable arguments',
+        description: 'Optional replacement for provider default command arguments. Leave blank to use the provider default.',
       };
     }
 

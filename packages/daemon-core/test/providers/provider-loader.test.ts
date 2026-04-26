@@ -26,6 +26,13 @@ class TestProviderLoader extends ProviderLoader {
     userDir: string,
     private readonly testConfig: {
       providerSettings?: Record<string, Record<string, unknown>>;
+      machineProviders?: Record<string, {
+        enabled?: boolean;
+        executable?: string;
+        args?: string[];
+        lastDetection?: Record<string, unknown>;
+        lastVerification?: Record<string, unknown>;
+      }>;
       ideSettings?: Record<string, { extensions?: Record<string, { enabled: boolean }> }>;
     },
   ) {
@@ -162,12 +169,19 @@ describe('ProviderLoader settings schema', () => {
   let userDir = '';
   let testConfig: {
     providerSettings?: Record<string, Record<string, unknown>>;
+    machineProviders?: Record<string, {
+      enabled?: boolean;
+      executable?: string;
+      args?: string[];
+      lastDetection?: Record<string, unknown>;
+      lastVerification?: Record<string, unknown>;
+    }>;
     ideSettings?: Record<string, { extensions?: Record<string, { enabled: boolean }> }>;
   };
 
   beforeEach(() => {
     userDir = mkdtempSync(join(tmpdir(), 'adhdev-provider-loader-'));
-    testConfig = { providerSettings: {}, ideSettings: {} };
+    testConfig = { providerSettings: {}, machineProviders: {}, ideSettings: {} };
   });
 
   afterEach(() => {
@@ -175,7 +189,7 @@ describe('ProviderLoader settings schema', () => {
       rmSync(userDir, { recursive: true, force: true });
     }
     userDir = '';
-    testConfig = { providerSettings: {}, ideSettings: {} };
+    testConfig = { providerSettings: {}, machineProviders: {}, ideSettings: {} };
   });
 
   it('adds synthetic autoApprove for providers that do not declare it', () => {
@@ -313,7 +327,11 @@ describe('ProviderLoader settings schema', () => {
     testConfig.providerSettings = {
       'foo-cli': {
         autoApprove: false,
-        executablePath: '/custom/foo',
+      },
+    };
+    testConfig.machineProviders = {
+      'foo-cli': {
+        executable: '/custom/foo',
       },
     };
 
@@ -370,7 +388,7 @@ describe('ProviderLoader settings schema', () => {
     });
   });
 
-  it('resolves aliases and builds CLI detection entries from providers', () => {
+  it('keeps CLI and ACP providers out of active detection until they are machine-enabled', () => {
     writeProvider(userDir, 'cli', 'codex-cli', {
       type: 'codex-cli',
       name: 'Codex CLI',
@@ -378,7 +396,7 @@ describe('ProviderLoader settings schema', () => {
       category: 'cli',
       aliases: ['codex'],
       icon: '📦',
-      spawn: { command: 'codex' },
+      spawn: { command: 'codex', args: ['agent'] },
       versionCommand: {
         darwin: 'codex --version',
         linux: 'codex version',
@@ -392,9 +410,10 @@ describe('ProviderLoader settings schema', () => {
       spawn: { command: 'agent-acp' },
     });
 
-    testConfig.providerSettings = {
+    testConfig.machineProviders = {
       'codex-cli': {
-        executablePath: '/custom/bin/codex',
+        executable: '/custom/bin/codex',
+        args: ['agent', '--sandbox', 'workspace'],
       },
     };
 
@@ -403,23 +422,115 @@ describe('ProviderLoader settings schema', () => {
 
     expect(loader.resolveAlias('codex')).toBe('codex-cli');
     expect(loader.getByAlias('codex')?.type).toBe('codex-cli');
+    expect(loader.isMachineProviderEnabled('codex-cli')).toBe(false);
+    expect(loader.getCliDetectionList()).toEqual([]);
+
+    expect(loader.setMachineProviderEnabled('codex-cli', true)).toBe(true);
+    expect(loader.isMachineProviderEnabled('codex')).toBe(true);
+    expect(testConfig.providerSettings?.['codex-cli']).toBeUndefined();
+    expect(testConfig.machineProviders?.['codex-cli']).toMatchObject({
+      enabled: true,
+      executable: '/custom/bin/codex',
+      args: ['agent', '--sandbox', 'workspace'],
+    });
 
     const entries = loader.getCliDetectionList();
-    expect(entries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'codex-cli',
-          command: '/custom/bin/codex',
-          category: 'cli',
-          versionCommand: process.platform === 'darwin' ? 'codex --version' : 'codex version',
-        }),
-        expect.objectContaining({
-          id: 'agent-acp',
-          command: 'agent-acp',
-          category: 'acp',
-        }),
-      ]),
-    );
+    expect(entries).toEqual([
+      expect.objectContaining({
+        id: 'codex-cli',
+        command: '/custom/bin/codex',
+        args: ['agent', '--sandbox', 'workspace'],
+        category: 'cli',
+        enabled: true,
+        versionCommand: process.platform === 'darwin' ? 'codex --version' : 'codex version',
+      }),
+    ]);
+
+    loader.setCliDetectionResults([{ id: 'codex-cli', installed: true, path: '/custom/bin/codex' }]);
+    expect(testConfig.machineProviders?.['codex-cli']?.lastDetection).toMatchObject({
+      ok: true,
+      stage: 'detection',
+      command: '/custom/bin/codex',
+      path: '/custom/bin/codex',
+    });
+  });
+
+  it('stores machine executable and argv overrides outside providerSettings', () => {
+    writeProvider(userDir, 'cli', 'foo-cli', {
+      type: 'foo-cli',
+      name: 'Foo CLI',
+      displayName: 'Foo CLI',
+      category: 'cli',
+      spawn: { command: 'foo', args: ['default'] },
+    });
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    expect(loader.setSetting('foo-cli', 'enabled', true)).toBe(true);
+    expect(loader.setSetting('foo-cli', 'executablePath', '/opt/foo/bin/foo')).toBe(true);
+    expect(loader.setSetting('foo-cli', 'executableArgs', 'agent --profile "work tree"')).toBe(true);
+
+    expect(testConfig.providerSettings?.['foo-cli']).toBeUndefined();
+    expect(testConfig.machineProviders?.['foo-cli']).toMatchObject({
+      enabled: true,
+      executable: '/opt/foo/bin/foo',
+      args: ['agent', '--profile', 'work tree'],
+    });
+    expect(loader.getSettingValue('foo-cli', 'executablePath')).toBe('/opt/foo/bin/foo');
+    expect(loader.getSettingValue('foo-cli', 'executableArgs')).toBe('agent --profile "work tree"');
+    expect(loader.getCliDetectionList()).toEqual([
+      expect.objectContaining({
+        id: 'foo-cli',
+        command: '/opt/foo/bin/foo',
+        args: ['agent', '--profile', 'work tree'],
+      }),
+    ]);
+    expect(loader.resolve('foo-cli')?.spawn).toMatchObject({
+      command: '/opt/foo/bin/foo',
+      args: ['agent', '--profile', 'work tree'],
+    });
+  });
+
+  it('surfaces passive catalog providers separately from machine-enabled provider state', () => {
+    writeProvider(userDir, 'cli', 'foo-cli', {
+      type: 'foo-cli',
+      name: 'Foo CLI',
+      displayName: 'Foo CLI',
+      category: 'cli',
+      spawn: { command: 'foo' },
+    });
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    expect(loader.getAvailableProviderInfos()).toEqual([
+      expect.objectContaining({
+        type: 'foo-cli',
+        enabled: false,
+        machineStatus: 'disabled',
+      }),
+    ]);
+
+    expect(loader.setMachineProviderEnabled('foo-cli', true)).toBe(true);
+    expect(loader.getAvailableProviderInfos()).toEqual([
+      expect.objectContaining({
+        type: 'foo-cli',
+        enabled: true,
+        machineStatus: 'enabled_unchecked',
+      }),
+    ]);
+
+    loader.setProviderAvailability('foo-cli', { installed: true, detectedPath: '/usr/local/bin/foo' });
+    expect(loader.getAvailableProviderInfos()).toEqual([
+      expect.objectContaining({
+        type: 'foo-cli',
+        enabled: true,
+        installed: true,
+        detectedPath: '/usr/local/bin/foo',
+        machineStatus: 'detected',
+      }),
+    ]);
   });
 
   it('normalizes IDE type prefixes when reading and writing extension enabled state', () => {
