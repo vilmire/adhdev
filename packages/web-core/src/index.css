@@ -345,6 +345,24 @@
         margin: 0 !important;
     }
 
+    .adhdev-dockview .dv-tab,
+    .adhdev-dockview-tab,
+    .dashboard-agent-tabs>div {
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-user-drag: none;
+        touch-action: manipulation;
+    }
+
+    .adhdev-dockview-tab *,
+    .dashboard-agent-tabs>div * {
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-user-drag: none;
+    }
+
     .adhdev-dockview .dv-tab.dv-active-tab,
     .adhdev-dockview .dv-tab.dv-inactive-tab {
         background: transparent !important;

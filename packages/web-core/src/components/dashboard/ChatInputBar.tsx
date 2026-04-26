@@ -110,15 +110,6 @@ const ChatInputBar = memo(function ChatInputBar({
                             e.preventDefault();
                             void submitDraft();
                         }}
-                        onBlur={(e) => {
-                            if (window.innerWidth < 768) {
-                                const related = e.relatedTarget as HTMLElement | null;
-                                if (related?.tagName === 'BUTTON') return;
-                                setTimeout(() => {
-                                    document.documentElement.scrollTop = 0;
-                                }, 300);
-                            }
-                        }}
                         className="w-full h-10 rounded-[20px] px-4 bg-bg-secondary text-sm text-text-primary"
                         style={{ border: '1px solid var(--chat-input-border, var(--border-subtle))' }}
                     />
