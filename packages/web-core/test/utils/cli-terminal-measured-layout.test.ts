@@ -50,7 +50,7 @@ describe('CLI terminal measured layout plumbing', () => {
   it('always requests a fresh runtime snapshot after replaying a hidden buffered snapshot on visibility restore, and replays large terminal buffers in frame-sized chunks instead of one giant write', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
     expect(source.includes('const pendingSnapshot = pendingHiddenSnapshotRef.current;')).toBe(true)
-    expect(source.includes('seedTerminal(pendingSnapshot.text, pendingSnapshot.seq, pendingSnapshot.cols, pendingSnapshot.rows);')).toBe(true)
+    expect(source.includes('seedTerminal(pendingSnapshot.text, pendingSnapshot.seq, pendingSnapshot.cols, pendingSnapshot.rows, { force: !!pendingSnapshot.force });')).toBe(true)
     expect(source.includes('void requestRuntimeSnapshot();')).toBe(true)
     expect(source.includes('} else if (daemonRouteId && connectionManager.getState?.(daemonRouteId) === \'connected\') {')).toBe(false)
     expect(source.includes('const MAX_TERMINAL_WRITE_CHARS_PER_FRAME = 32 * 1024;')).toBe(true)
@@ -58,6 +58,22 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('pendingLiveOutputRef.current = queuedOutput.slice(nextChunk.length);')).toBe(true)
     expect(source.includes('if (pendingLiveOutputRef.current.length > 0) {')).toBe(true)
     expect(source.includes('scheduleFlushPendingLiveOutput();')).toBe(true)
+  })
+
+  it('exposes a manual older-terminal-output loader that force replays raw session scrollback without changing dashboard resize policy', () => {
+    const paneSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
+    const compatSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/compat.ts'), 'utf8')
+
+    expect(paneSource.includes('Load older terminal output')).toBe(true)
+    expect(paneSource.includes('const loadOlderRuntimeScrollback = async () => {')).toBe(true)
+    expect(paneSource.includes('sinceSeq: 0')).toBe(true)
+    expect(paneSource.includes('force: true')).toBe(true)
+    expect(paneSource.includes('seedTerminal(event.text || \'\', event.seq || 0, event.cols, event.rows, { force: !!event.force });')).toBe(true)
+    expect(paneSource.includes('if (!force && seq > 0 && seededSnapshotSeqRef.current >= seq) return;')).toBe(true)
+    expect(paneSource.includes('if (!force && seq === 0 && liveOutputStartedRef.current) return;')).toBe(true)
+    expect(paneSource.includes('sendPtyResize(')).toBe(false)
+    expect(paneSource.includes('sizingMode="measured"')).toBe(true)
+    expect(compatSource.includes('_options?: { sinceSeq?: number; force?: boolean }')).toBe(true)
   })
 
   it('routes terminal-mode sends through the same handleSendChat path as chat mode', () => {
@@ -71,8 +87,8 @@ describe('CLI terminal measured layout plumbing', () => {
   it('does not mark the terminal runtime ready just because P2P connected; readiness comes from snapshot or live output', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
     expect(source.includes("setRuntimeReady(true);\n            connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId).catch(() => {});")).toBe(false)
-    expect(source.includes('const requestRuntimeSnapshot = async () => {')).toBe(true)
-    expect(source.includes('const snapshotResult = await connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId);')).toBe(true)
+    expect(source.includes('const requestRuntimeSnapshot = async (options: { sinceSeq?: number; force?: boolean; loadingMessage?: string; preserveStatus?: boolean } = {}) => {')).toBe(true)
+    expect(source.includes('const snapshotResult = await connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId, {')).toBe(true)
     expect(source.includes('setRuntimeStatusMessage(`Runtime terminal unavailable: ${snapshotResult.error}`);')).toBe(true)
   })
 

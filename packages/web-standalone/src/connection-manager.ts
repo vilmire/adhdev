@@ -13,7 +13,7 @@ export interface StandaloneConnectionAdapter {
 type ScreenshotCallback = (sourceDaemonId: string, blob: Blob) => void
 type StatusCallback = (sourceDaemonId: string, payload: any) => void
 type RuntimeEvent =
-    | { type: 'runtime_snapshot'; sessionId: string; seq: number; text: string; truncated?: boolean; cols?: number; rows?: number }
+    | { type: 'runtime_snapshot'; sessionId: string; seq: number; text: string; truncated?: boolean; cols?: number; rows?: number; force?: boolean }
     | { type: 'session_output'; sessionId: string; seq?: number; data: string }
     | { type: 'session_cleared'; sessionId: string }
 
@@ -122,9 +122,15 @@ class StandaloneConnectionManager {
         }
     }
 
-    async requestRuntimeSnapshot(_daemonId: string, sessionId: string): Promise<{ success: true } | { success: false; error: string }> {
+    async requestRuntimeSnapshot(
+        _daemonId: string,
+        sessionId: string,
+        options?: { sinceSeq?: number; force?: boolean },
+    ): Promise<{ success: true } | { success: false; error: string }> {
         if (!sessionId) return { success: false, error: 'sessionId is required' }
-        const res = await standaloneFetch(`/api/v1/runtime/${encodeURIComponent(sessionId)}/snapshot`)
+        const snapshotUrl = new URL(`/api/v1/runtime/${encodeURIComponent(sessionId)}/snapshot`, window.location.origin)
+        if (typeof options?.sinceSeq === 'number') snapshotUrl.searchParams.set('sinceSeq', String(options.sinceSeq))
+        const res = await standaloneFetch(`${snapshotUrl.pathname}${snapshotUrl.search}`)
         if (!res.ok) {
             let error = `Runtime snapshot unavailable (${res.status})`
             try {
@@ -142,6 +148,7 @@ class StandaloneConnectionManager {
             truncated: !!snapshot.truncated,
             cols: typeof snapshot.cols === 'number' ? snapshot.cols : undefined,
             rows: typeof snapshot.rows === 'number' ? snapshot.rows : undefined,
+            force: !!options?.force,
         })
         return { success: true }
     }

@@ -998,9 +998,12 @@ class StandaloneServer {
         void (async () => {
           const client = await this.createSessionHostClient();
           try {
+            const sinceSeqParam = parsedUrl.searchParams.get('sinceSeq');
+            const sinceSeqValue = sinceSeqParam === null ? undefined : Number(sinceSeqParam);
+            const sinceSeq = typeof sinceSeqValue === 'number' && Number.isFinite(sinceSeqValue) ? sinceSeqValue : undefined;
             const snapshot = await client.request<{ seq: number; text: string; truncated: boolean; cols?: number; rows?: number }>({
               type: 'get_snapshot',
-              payload: { sessionId },
+              payload: { sessionId, sinceSeq },
             });
             if (!snapshot.success || !snapshot.result) {
               res.writeHead(404, { 'Content-Type': 'application/json' });

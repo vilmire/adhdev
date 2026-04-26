@@ -42,6 +42,8 @@ export default function CliTerminalPane({
     const runtimeReadyRef = useRef(false);
     runtimeReadyRef.current = runtimeReady;
     const [runtimeStatusMessage, setRuntimeStatusMessage] = useState('Runtime terminal unavailable');
+    const [isLoadingScrollback, setIsLoadingScrollback] = useState(false);
+    const [scrollbackStatusMessage, setScrollbackStatusMessage] = useState<string | null>(null);
     const [terminalScale, setTerminalScale] = useState(1);
     const [terminalViewport, setTerminalViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const [terminalIntrinsicViewport, setTerminalIntrinsicViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -52,7 +54,7 @@ export default function CliTerminalPane({
     const seededSnapshotSeqRef = useRef(0);
     const liveOutputStartedRef = useRef(false);
     const pendingLiveOutputRef = useRef('');
-    const pendingHiddenSnapshotRef = useRef<{ text: string; seq: number; cols?: number; rows?: number } | null>(null);
+    const pendingHiddenSnapshotRef = useRef<{ text: string; seq: number; cols?: number; rows?: number; force?: boolean } | null>(null);
     const pendingHiddenClearRef = useRef(false);
     const flushFrameRef = useRef<{ ownerWindow: Window; frameId: number } | null>(null);
     const MAX_TERMINAL_WRITE_CHARS_PER_FRAME = 32 * 1024;
@@ -136,6 +138,8 @@ export default function CliTerminalPane({
         }
         setRuntimeReady(false);
         setRuntimeStatusMessage('Runtime terminal unavailable');
+        setScrollbackStatusMessage(null);
+        setIsLoadingScrollback(false);
         terminalRef.current?.reset?.();
     };
 
@@ -150,6 +154,8 @@ export default function CliTerminalPane({
         }
         setRuntimeReady(true);
         setRuntimeStatusMessage('');
+        setScrollbackStatusMessage(null);
+        setIsLoadingScrollback(false);
         terminalRef.current?.reset?.();
     };
 
@@ -172,9 +178,10 @@ export default function CliTerminalPane({
         scheduleFlushPendingLiveOutput();
     };
 
-    const seedTerminal = (text: string, seq = 0, cols?: number, rows?: number) => {
-        if (seq > 0 && seededSnapshotSeqRef.current >= seq) return;
-        if (seq === 0 && liveOutputStartedRef.current) return;
+    const seedTerminal = (text: string, seq = 0, cols?: number, rows?: number, options: { force?: boolean } = {}) => {
+        const force = !!options.force;
+        if (!force && seq > 0 && seededSnapshotSeqRef.current >= seq) return;
+        if (!force && seq === 0 && liveOutputStartedRef.current) return;
         seededSnapshotSeqRef.current = seq;
         setRuntimeReady(true);
         setRuntimeStatusMessage('');
@@ -201,10 +208,11 @@ export default function CliTerminalPane({
                         seq: event.seq || 0,
                         cols: event.cols,
                         rows: event.rows,
+                        force: !!event.force,
                     };
                     return;
                 }
-                seedTerminal(event.text || '', event.seq || 0, event.cols, event.rows);
+                seedTerminal(event.text || '', event.seq || 0, event.cols, event.rows, { force: !!event.force });
                 return;
             }
             if (event.type === 'session_output') {
@@ -242,19 +250,51 @@ export default function CliTerminalPane({
         };
     }, [daemonRouteId, sessionId, terminalRef, isVisible]);
 
-    const requestRuntimeSnapshot = async () => {
-        if (!daemonRouteId || !sessionId) return;
-        setRuntimeStatusMessage('Loading runtime terminal...');
+    const requestRuntimeSnapshot = async (options: { sinceSeq?: number; force?: boolean; loadingMessage?: string; preserveStatus?: boolean } = {}) => {
+        if (!daemonRouteId || !sessionId) return { success: false as const, error: 'daemonId and sessionId are required' };
+        if (!options.preserveStatus) setRuntimeStatusMessage(options.loadingMessage || 'Loading runtime terminal...');
         try {
-            const snapshotResult = await connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId);
+            const snapshotResult = await connectionManager.requestRuntimeSnapshot?.(daemonRouteId, sessionId, {
+                sinceSeq: options.sinceSeq,
+                force: options.force,
+            });
             if (snapshotResult && snapshotResult.success === false) {
-                setRuntimeReady(false);
-                setRuntimeStatusMessage(`Runtime terminal unavailable: ${snapshotResult.error}`);
+                if (!options.preserveStatus) {
+                    setRuntimeReady(false);
+                    setRuntimeStatusMessage(`Runtime terminal unavailable: ${snapshotResult.error}`);
+                }
+                return snapshotResult;
             }
+            return snapshotResult || { success: true as const };
         } catch (error: any) {
-            setRuntimeReady(false);
-            setRuntimeStatusMessage(`Runtime terminal unavailable: ${error?.message || String(error)}`);
+            const message = error?.message || String(error);
+            if (!options.preserveStatus) {
+                setRuntimeReady(false);
+                setRuntimeStatusMessage(`Runtime terminal unavailable: ${message}`);
+            }
+            return { success: false as const, error: message };
         }
+    };
+
+    const loadOlderRuntimeScrollback = async () => {
+        if (isLoadingScrollback) return;
+        setIsLoadingScrollback(true);
+        setScrollbackStatusMessage('Loading older terminal output...');
+        const result = await requestRuntimeSnapshot({
+            sinceSeq: 0,
+            force: true,
+            loadingMessage: 'Loading older terminal output...',
+            preserveStatus: runtimeReady,
+        });
+        setIsLoadingScrollback(false);
+        if (result?.success === false) {
+            setScrollbackStatusMessage(`Older terminal output unavailable: ${result.error}`);
+            return;
+        }
+        setScrollbackStatusMessage('Older terminal output loaded');
+        scheduleInOwnerWindow(() => {
+            terminalRef.current?.bumpResize();
+        });
     };
 
     useEffect(() => {
@@ -332,7 +372,7 @@ export default function CliTerminalPane({
         const pendingSnapshot = pendingHiddenSnapshotRef.current;
         if (pendingSnapshot) {
             pendingHiddenSnapshotRef.current = null;
-            seedTerminal(pendingSnapshot.text, pendingSnapshot.seq, pendingSnapshot.cols, pendingSnapshot.rows);
+            seedTerminal(pendingSnapshot.text, pendingSnapshot.seq, pendingSnapshot.cols, pendingSnapshot.rows, { force: !!pendingSnapshot.force });
         }
 
         if (daemonRouteId && sessionId && connectionManager.getState?.(daemonRouteId) === 'connected') {
@@ -379,6 +419,22 @@ export default function CliTerminalPane({
         <>
             {/* Terminal */}
             <div ref={terminalViewportRef} className="flex-1 min-h-0 p-2 bg-[#0f1117] relative">
+                <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
+                    <button
+                        type="button"
+                        className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-[11px] font-medium text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
+                        onClick={() => { void loadOlderRuntimeScrollback(); }}
+                        disabled={!sessionId || isLoadingScrollback}
+                        title="Replay raw session scrollback so the terminal viewport can scroll farther up"
+                    >
+                        {isLoadingScrollback ? 'Loading older...' : 'Load older terminal output'}
+                    </button>
+                    {scrollbackStatusMessage && (
+                        <span className="rounded-full border border-white/10 bg-black/35 px-2 py-1 text-[10px] text-white/70 backdrop-blur-sm">
+                            {scrollbackStatusMessage}
+                        </span>
+                    )}
+                </div>
                 <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5">
                         <button
                             type="button"

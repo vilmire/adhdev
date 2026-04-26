@@ -58,13 +58,17 @@ class ConnectionManagerStub {
 
     onRuntimeEvent(
         _sessionId: string,
-        _callback: (event: { type: string; sessionId: string; seq?: number; text?: string; data?: string; truncated?: boolean }) => void,
+        _callback: (event: { type: string; sessionId: string; seq?: number; text?: string; data?: string; truncated?: boolean; cols?: number; rows?: number; force?: boolean }) => void,
         _daemonId?: string,
     ): () => void {
         return () => {}
     }
 
-    requestRuntimeSnapshot(_daemonId: string, _sessionId: string): Promise<{ success: true } | { success: false; error: string }> {
+    requestRuntimeSnapshot(
+        _daemonId: string,
+        _sessionId: string,
+        _options?: { sinceSeq?: number; force?: boolean },
+    ): Promise<{ success: true } | { success: false; error: string }> {
         return Promise.resolve({ success: false, error: 'Connection manager not configured; host app must inject requestRuntimeSnapshot' })
     }
 }
