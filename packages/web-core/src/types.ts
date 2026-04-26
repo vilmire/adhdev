@@ -197,6 +197,8 @@ export interface BaseDaemonData {
     _isCli?: boolean;
     /** @internal ACP session marker */
     _isAcp?: boolean;
+    /** @internal Status payload included an explicit sessions list, even if empty. */
+    _sessionListAuthoritative?: boolean;
 }
 
 // Backward compatibility alias for web-core components

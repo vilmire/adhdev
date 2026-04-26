@@ -137,6 +137,7 @@ export function statusPayloadToEntries(
         ...(payload.terminalBackend && { terminalBackend: payload.terminalBackend }),
         ...(payload.detectedIdes && { detectedIdes: payload.detectedIdes }),
         ...(payload.availableProviders && { availableProviders: payload.availableProviders }),
+        _sessionListAuthoritative: Array.isArray(payload.sessions),
         cdpConnected: ideSessions.some((session) => !!session.cdpConnected),
     } as DaemonData)
 

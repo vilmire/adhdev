@@ -389,6 +389,7 @@ function collectIncomingDaemonSets(incoming: DaemonData[]) {
     const incomingIds = new Set(incoming.map((entry) => entry.id))
     const incomingDaemonIds = new Set<string>()
     const daemonIdsWithSessionEntries = new Set<string>()
+    const daemonIdsWithAuthoritativeSessionList = new Set<string>()
 
     for (const entry of incoming) {
         const daemonId = getEntryDaemonId(entry)
@@ -396,9 +397,17 @@ function collectIncomingDaemonSets(incoming: DaemonData[]) {
         if (daemonId && entry.type !== 'adhdev-daemon') {
             daemonIdsWithSessionEntries.add(daemonId)
         }
+        if (daemonId && entry.type === 'adhdev-daemon' && entry._sessionListAuthoritative) {
+            daemonIdsWithAuthoritativeSessionList.add(daemonId)
+        }
     }
 
-    return { incomingIds, incomingDaemonIds, daemonIdsWithSessionEntries }
+    return {
+        incomingIds,
+        incomingDaemonIds,
+        daemonIdsWithSessionEntries,
+        daemonIdsWithAuthoritativeSessionList,
+    }
 }
 
 function shouldDropMissingAuthoritativeTransportEntry(
@@ -456,7 +465,12 @@ export function reconcileIdes(
         resultMap.set(ide.id, ide)
     }
 
-    const { incomingIds, incomingDaemonIds, daemonIdsWithSessionEntries } = collectIncomingDaemonSets(incoming)
+    const {
+        incomingIds,
+        incomingDaemonIds,
+        daemonIdsWithSessionEntries,
+        daemonIdsWithAuthoritativeSessionList,
+    } = collectIncomingDaemonSets(incoming)
 
     for (const ide of incoming) {
         const existing = resultMap.get(ide.id)
@@ -499,7 +513,11 @@ export function reconcileIdes(
         const entryDaemonId = ide.daemonId || key.split(':')[0]
         if (!incomingDaemonIds.has(entryDaemonId)) continue
 
-        if (authoritativeDaemonIds.has(entryDaemonId) && !incomingIds.has(key)) {
+        if (
+            authoritativeDaemonIds.has(entryDaemonId)
+            && daemonIdsWithAuthoritativeSessionList.has(entryDaemonId)
+            && !incomingIds.has(key)
+        ) {
             resultMap.delete(key)
             continue
         }

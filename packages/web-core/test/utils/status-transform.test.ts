@@ -188,7 +188,24 @@ describe('statusPayloadToEntries', () => {
         })
     });
 
-  it('preserves daemon completion markers through status transform for auto-read consumers', () => {
+    it('marks only explicit session arrays as authoritative for session deletion', () => {
+        const withSessions = statusPayloadToEntries(createPayload({ sessions: [] }), {
+            daemonId: 'machine-authority',
+        })
+        expect(withSessions[0]._sessionListAuthoritative).toBe(true)
+
+        const sparse = statusPayloadToEntries({
+            ...createPayload({ sessions: undefined as any }),
+            detectedIdes: [],
+        }, {
+            daemonId: 'machine-authority',
+            existingDaemon: withSessions[0],
+            existingEntries: withSessions,
+        })
+        expect(sparse[0]._sessionListAuthoritative).toBe(false)
+    })
+
+    it('preserves daemon completion markers through status transform for auto-read consumers', () => {
     const cliSession = createSession({
       id: 'cli-marker',
       providerType: 'hermes-cli',
