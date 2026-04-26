@@ -44,12 +44,18 @@ type XtermBuffer = {
 
 type XtermTerminal = {
   buffer: { active: XtermBuffer };
+  loadAddon(addon: { activate(terminal: XtermTerminal): void }): void;
   write(data: string, callback?: () => void): void;
   resize(cols: number, rows: number): void;
   dispose(): void;
 };
 
 type XtermCtor = new (options: { cols: number; rows: number; scrollback: number }) => XtermTerminal;
+
+type XtermSerializeAddon = {
+  serialize(options?: { range?: { start: number; end: number }; scrollback?: number; excludeModes?: boolean }): string;
+  dispose(): void;
+};
 
 let terminalMirrorFactory:
   | ((options: { cols: number; rows: number; scrollback: number }) => TerminalMirrorHandle)
@@ -91,7 +97,7 @@ function computeTerminalQueryTail(buffer: string): string {
   return '';
 }
 
-function formatXtermViewport(terminal: XtermTerminal, rows: number): string {
+function formatXtermViewportPlain(terminal: XtermTerminal, rows: number): string {
   const buffer = terminal.buffer.active;
   const start = Math.max(0, buffer.viewportY || 0);
   const end = Math.max(start, Math.min(buffer.length || 0, start + Math.max(1, rows | 0)));
@@ -106,7 +112,35 @@ function formatXtermViewport(terminal: XtermTerminal, rows: number): string {
   let last = lines.length;
   while (first < last && !lines[first]?.trim()) first++;
   while (last > first && !lines[last - 1]?.trim()) last--;
-  return lines.slice(first, last).join('\n');
+  // Browser xterm runs with convertEol=false. Plain fallback snapshots therefore
+  // need CRLF row boundaries; bare LF replays as a staircase from the previous
+  // cursor column and makes Claude's startup art look broken.
+  return lines.slice(first, last).join('\r\n');
+}
+
+function createXtermSerializeAddon(terminal: XtermTerminal): XtermSerializeAddon | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('@xterm/addon-serialize');
+    const SerializeAddon = mod.SerializeAddon || mod.default?.SerializeAddon || mod.default;
+    if (!SerializeAddon) return null;
+    const addon = new SerializeAddon() as XtermSerializeAddon & { activate(terminal: XtermTerminal): void };
+    terminal.loadAddon(addon);
+    return addon;
+  } catch {
+    return null;
+  }
+}
+
+function serializeXtermViewport(terminal: XtermTerminal, serializer: XtermSerializeAddon, rows: number): string {
+  const buffer = terminal.buffer.active;
+  const start = Math.max(0, buffer.viewportY || 0);
+  const end = Math.max(start, Math.min(Math.max(0, buffer.length || 0) - 1, start + Math.max(1, rows | 0) - 1));
+  if (end < start) return '';
+  return serializer.serialize({
+    range: { start, end },
+    excludeModes: true,
+  });
 }
 
 function createXtermMirror(options: { cols: number; rows: number; scrollback: number }): TerminalMirrorHandle {
@@ -123,6 +157,7 @@ function createXtermMirror(options: { cols: number; rows: number; scrollback: nu
     rows: currentRows,
     scrollback: Math.max(0, options.scrollback | 0),
   });
+  const serializer = createXtermSerializeAddon(terminal);
 
   return {
     write(data: string | Uint8Array): void {
@@ -134,7 +169,8 @@ function createXtermMirror(options: { cols: number; rows: number; scrollback: nu
       terminal.resize(Math.max(1, cols | 0), currentRows);
     },
     formatVT(): string {
-      return formatXtermViewport(terminal, currentRows);
+      if (serializer) return serializeXtermViewport(terminal, serializer, currentRows);
+      return formatXtermViewportPlain(terminal, currentRows);
     },
     getCursorPosition(): { col: number; row: number } {
       const buffer = terminal.buffer.active;
@@ -144,6 +180,7 @@ function createXtermMirror(options: { cols: number; rows: number; scrollback: nu
       };
     },
     dispose(): void {
+      serializer?.dispose();
       terminal.dispose();
     },
   };
@@ -154,11 +191,11 @@ function normalizeGhosttyBinding(mod: any): GhosttyBinding | null {
   if (!raw) return null;
 
   // Keep Ghostty as the authoritative emulator for terminal query responses, but use
-  // xterm's viewport snapshot for UI seeding. Ghostty's formatter serializes scrollback
-  // before the active viewport; after full-screen Claude Code redraws (for example
-  // `/status` -> Esc), replaying that as a fresh terminal seed makes stale splash-screen
-  // rows visible as duplicated logos. The browser terminal is xterm, so snapshotting the
-  // same viewport xterm would show live keeps restore behavior aligned with the UI.
+  // xterm's serialized active viewport for UI seeding. Ghostty's formatter serializes
+  // scrollback before the active viewport; after full-screen Claude Code redraws (for
+  // example `/status` -> Esc), replaying that as a fresh terminal seed makes stale
+  // splash-screen rows visible as duplicated logos. xterm's serialize addon gives us
+  // the viewport-only seed without dropping SGR color/style or CRLF row movement.
   return {
     createTerminal(options: { cols: number; rows: number; scrollback: number }): GhosttyTerminalHandle {
       const handle = raw.createTerminal(options) as any;
@@ -187,6 +224,12 @@ function normalizeGhosttyBinding(mod: any): GhosttyBinding | null {
     },
   };
 }
+
+export const __testing = {
+  createXtermMirror,
+  formatXtermViewportPlain,
+  serializeXtermViewport,
+};
 
 function getTerminalMirrorFactory(): (options: { cols: number; rows: number; scrollback: number }) => TerminalMirrorHandle {
   if (terminalMirrorFactory) return terminalMirrorFactory;
