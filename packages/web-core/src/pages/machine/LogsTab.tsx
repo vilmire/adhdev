@@ -12,15 +12,18 @@ import {
     type DebugTraceCategoryFilter,
 } from '../../utils/logs-trace-filters'
 import {
+    appendIncrementalTraceEntries,
     buildVisibleLogsExport,
     filterDaemonLogEntries,
     filterDaemonRawLines,
     filterTraceEntries,
     filterWebEntries,
     getQuickFilterCounts,
+    mergeIncrementalDaemonLogs,
     normalizeDaemonLogsPayload,
     summarizeLogsSurface,
     truncatePayload,
+    type DaemonLogMergeState,
     type DaemonLogPayloadKind,
     type LogsSurfaceTraceEntry,
     type LogsSurfaceWebEntry,
@@ -58,8 +61,6 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
     const [daemonRawText, setDaemonRawText] = useState('')
     const [debugTrace, setDebugTrace] = useState<LogsSurfaceTraceEntry[]>([])
     const [webEvents, setWebEvents] = useState<LogsSurfaceWebEntry[]>([])
-    const [lastLogTs, setLastLogTs] = useState(0)
-    const [lastTraceTs, setLastTraceTs] = useState(0)
     const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null)
     const [autoRefresh, setAutoRefresh] = useState(true)
     const [logLevel, setLogLevel] = useState<'debug' | 'info' | 'warn' | 'error'>('info')
@@ -74,6 +75,27 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
     const [sectionsOpen, setSectionsOpen] = useState({ daemon: true, trace: false, web: false })
     const logsEndRef = useRef<HTMLDivElement>(null)
     const initialScrollDone = useRef(false)
+    const lastLogTsRef = useRef(0)
+    const lastTraceTsRef = useRef(0)
+    const daemonStateRef = useRef<DaemonLogMergeState>({ entries: [], kind: 'empty', rawText: '', lastTs: 0 })
+    const debugTraceRef = useRef<LogsSurfaceTraceEntry[]>([])
+
+    const resetDaemonState = useCallback(() => {
+        const emptyState: DaemonLogMergeState = { entries: [], kind: 'empty', rawText: '', lastTs: 0 }
+        daemonStateRef.current = emptyState
+        lastLogTsRef.current = 0
+        setDaemonLogs([])
+        setDaemonRawText('')
+        setDaemonLogKind('empty')
+        setDaemonLoading(true)
+    }, [])
+
+    const resetTraceState = useCallback(() => {
+        debugTraceRef.current = []
+        lastTraceTsRef.current = 0
+        setDebugTrace([])
+        setTraceLoading(true)
+    }, [])
 
     const filteredDebugTrace = useMemo(
         () => filterDebugTraceEntries(debugTrace, traceCategory),
@@ -144,29 +166,25 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
     const fetchDebugData = useCallback(async () => {
         if (!machineId) return
 
+        const sinceLogTs = lastLogTsRef.current
+        const sinceTraceTs = lastTraceTsRef.current
         const [logsRes, traceRes] = await Promise.allSettled([
-            sendDaemonCommand(machineId, 'get_logs', { count: 200, minLevel: logLevel, since: lastLogTs }),
-            sendDaemonCommand(machineId, 'get_debug_trace', buildDebugTraceQuery({ count: 120, since: lastTraceTs, category: traceCategory })),
+            sendDaemonCommand(machineId, 'get_logs', { count: 200, minLevel: logLevel, since: sinceLogTs }),
+            sendDaemonCommand(machineId, 'get_debug_trace', buildDebugTraceQuery({ count: 120, since: sinceTraceTs, category: traceCategory })),
         ])
 
         if (logsRes.status === 'fulfilled') {
             const rawLogsRes = logsRes.value
             const logsPayload = rawLogsRes?.result || rawLogsRes
             const normalized = normalizeDaemonLogsPayload(logsPayload)
+            const merged = mergeIncrementalDaemonLogs(daemonStateRef.current, normalized, 300)
+            daemonStateRef.current = merged
+            lastLogTsRef.current = merged.lastTs
             setDaemonLoading(false)
             setDaemonFetchError(rawLogsRes?.success === false ? String(rawLogsRes?.error || 'Could not load daemon logs') : '')
-            setDaemonLogKind(normalized.kind)
-            setDaemonRawText(normalized.rawText)
-            if (normalized.entries.length > 0) {
-                setDaemonLogs((prev) => {
-                    const next = lastLogTs > 0 ? [...prev, ...normalized.entries] : normalized.entries
-                    return next.slice(-300)
-                })
-                const maxTs = normalized.entries.reduce((max, entry) => Math.max(max, Number(entry.timestamp || 0)), lastLogTs)
-                if (maxTs > lastLogTs) setLastLogTs(maxTs)
-            } else if (normalized.kind !== 'structured' && lastLogTs === 0) {
-                setDaemonLogs([])
-            }
+            setDaemonLogKind(merged.kind)
+            setDaemonRawText(merged.rawText)
+            setDaemonLogs(merged.entries)
         } else {
             setDaemonLoading(false)
             setDaemonFetchError(logsRes.reason instanceof Error ? logsRes.reason.message : 'Could not load daemon logs')
@@ -178,13 +196,15 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
             if (rawTraceRes?.success === false) {
                 setTraceFetchError(String(rawTraceRes?.error || 'Could not load daemon trace'))
             } else if (Array.isArray(tracePayload?.trace)) {
+                const nextTrace = tracePayload.trace as LogsSurfaceTraceEntry[]
+                const mergedTrace = appendIncrementalTraceEntries(debugTraceRef.current, nextTrace, 120)
+                const maxTraceTs = nextTrace.reduce((max: number, entry: { ts?: unknown }) => Math.max(max, Number(entry.ts || 0)), sinceTraceTs)
+                debugTraceRef.current = mergedTrace
+                if (maxTraceTs > sinceTraceTs) lastTraceTsRef.current = maxTraceTs
                 setTraceFetchError('')
-                setDebugTrace(tracePayload.trace.slice(-120) as LogsSurfaceTraceEntry[])
-                const maxTraceTs = tracePayload.trace.reduce((max: number, entry: { ts?: unknown }) => Math.max(max, Number(entry.ts || 0)), lastTraceTs)
-                if (maxTraceTs > lastTraceTs) setLastTraceTs(maxTraceTs)
+                setDebugTrace(mergedTrace)
             } else {
                 setTraceFetchError('')
-                setDebugTrace([])
             }
             setTraceLoading(false)
         } else {
@@ -194,7 +214,11 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
 
         setWebEvents(webDebugStore.list({ limit: 120 }) as LogsSurfaceWebEntry[])
         setLastUpdatedAt(Date.now())
-    }, [lastLogTs, lastTraceTs, logLevel, machineId, sendDaemonCommand, traceCategory])
+    }, [logLevel, machineId, sendDaemonCommand, traceCategory])
+
+    useEffect(() => {
+        resetTraceState()
+    }, [resetTraceState, traceCategory])
 
     useEffect(() => {
         if (!machineId) return
@@ -216,12 +240,6 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
         }
     }, [visibleDaemonLogs.length, visibleDaemonRawLines.length, visibleTraceEntries.length, visibleWebEvents.length, autoRefresh])
 
-    useEffect(() => {
-        setDebugTrace([])
-        setLastTraceTs(0)
-        setTraceLoading(true)
-    }, [traceCategory])
-
     const latestIssueTone = summary.latestIssue?.level === 'error' ? 'danger' : summary.latestIssue?.level === 'warn' ? 'warning' : 'good'
     const statusTone = daemonFetchError || traceFetchError ? 'danger' : autoRefresh ? 'good' : 'neutral'
 
@@ -233,12 +251,12 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
             webEvents: visibleWebEvents,
         })
         if (!rendered.trim()) {
-            eventManager.showToast('복사할 visible logs가 없습니다.', 'info')
+            eventManager.showToast('No visible logs to copy.', 'info')
             return
         }
         try {
             await navigator.clipboard?.writeText(rendered)
-            eventManager.showToast('Visible logs를 클립보드에 복사했습니다.', 'success')
+            eventManager.showToast('Copied visible logs to clipboard.', 'success')
         } catch (cause) {
             eventManager.showToast(cause instanceof Error ? cause.message : 'Could not copy visible logs', 'warning')
         }
@@ -255,12 +273,9 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
                         <button
                             key={level}
                             onClick={() => {
+                                if (level === logLevel) return
                                 setLogLevel(level)
-                                setDaemonLogs([])
-                                setDaemonRawText('')
-                                setDaemonLogKind('empty')
-                                setLastLogTs(0)
-                                setDaemonLoading(true)
+                                resetDaemonState()
                             }}
                             className={`machine-btn text-[10px] px-2 py-0.5 ${
                                 logLevel === level ? 'bg-violet-500/15 border-violet-500/40 text-violet-400' : ''
@@ -273,7 +288,9 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
                     {DEBUG_TRACE_FILTERS.map((filter) => (
                         <button
                             key={filter.value}
-                            onClick={() => setTraceCategory(filter.value)}
+                            onClick={() => {
+                                if (filter.value !== traceCategory) setTraceCategory(filter.value)
+                            }}
                             className={`machine-btn text-[10px] px-2 py-0.5 ${
                                 traceCategory === filter.value ? 'bg-violet-500/15 border-violet-500/40 text-violet-400' : ''
                             }`}
@@ -324,18 +341,12 @@ export default function LogsTab({ machineId, sendDaemonCommand }: LogsTabProps) 
                     >↻ Refresh</button>
                     <button
                         onClick={() => {
-                            setDaemonLogs([])
-                            setDaemonRawText('')
-                            setDaemonLogKind('empty')
-                            setDebugTrace([])
+                            resetDaemonState()
+                            resetTraceState()
                             setWebEvents([])
-                            setLastLogTs(0)
-                            setLastTraceTs(0)
                             setLastUpdatedAt(null)
                             setDaemonFetchError('')
                             setTraceFetchError('')
-                            setDaemonLoading(true)
-                            setTraceLoading(true)
                             webDebugStore.clear()
                         }}
                         className="machine-btn"

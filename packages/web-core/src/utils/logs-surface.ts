@@ -76,6 +76,13 @@ export interface VisibleLogsExportOptions {
   webEvents: LogsSurfaceWebEntry[]
 }
 
+export interface DaemonLogMergeState {
+  entries: LogEntry[]
+  kind: DaemonLogPayloadKind
+  rawText: string
+  lastTs: number
+}
+
 function normalizeSearch(query: string): string {
   return query.trim().toLowerCase()
 }
@@ -139,6 +146,52 @@ export function normalizeDaemonLogsPayload(payload: unknown): NormalizedDaemonLo
 
 export function filterDaemonLogEntries(entries: LogEntry[], query: string): LogEntry[] {
   return entries.filter((entry) => matchesSearch([entry.level, entry.message], query))
+}
+
+function getDaemonLogEntryKey(entry: LogEntry): string {
+  return `${entry.timestamp}:${entry.level}:${entry.message}`
+}
+
+export function mergeIncrementalDaemonLogs(
+  previous: DaemonLogMergeState,
+  next: NormalizedDaemonLogsPayload,
+  limit = 300,
+): DaemonLogMergeState {
+  if (next.entries.length > 0) {
+    const byKey = new Map<string, LogEntry>()
+    for (const entry of previous.entries) byKey.set(getDaemonLogEntryKey(entry), entry)
+    for (const entry of next.entries) byKey.set(getDaemonLogEntryKey(entry), entry)
+    const entries = Array.from(byKey.values())
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .slice(-limit)
+    const lastTs = entries.reduce((max, entry) => Math.max(max, Number(entry.timestamp || 0)), previous.lastTs)
+    return { entries, kind: 'structured', rawText: '', lastTs }
+  }
+
+  if (next.kind === 'text') {
+    if (previous.entries.length > 0) return previous
+    return { entries: [], kind: 'text', rawText: next.rawText, lastTs: previous.lastTs }
+  }
+
+  if (previous.entries.length > 0 || previous.rawText) {
+    return previous
+  }
+
+  return { entries: [], kind: 'empty', rawText: '', lastTs: previous.lastTs }
+}
+
+export function appendIncrementalTraceEntries(
+  previous: LogsSurfaceTraceEntry[],
+  next: LogsSurfaceTraceEntry[],
+  limit = 120,
+): LogsSurfaceTraceEntry[] {
+  if (next.length === 0) return previous
+  const byId = new Map<string, LogsSurfaceTraceEntry>()
+  for (const entry of previous) byId.set(entry.id, entry)
+  for (const entry of next) byId.set(entry.id, entry)
+  return Array.from(byId.values())
+    .sort((a, b) => a.ts - b.ts)
+    .slice(-limit)
 }
 
 export function filterDaemonRawLines(rawText: string, query: string): string[] {
