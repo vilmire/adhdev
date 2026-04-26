@@ -1675,7 +1675,16 @@
 
     .conversation-meta-chips.is-mobile-header {
         flex-wrap: nowrap;
-        overflow: hidden;
+        max-width: 100%;
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding-bottom: 1px;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+
+    .conversation-meta-chips.is-mobile-header::-webkit-scrollbar {
+        display: none;
     }
 
     .conversation-meta-chip {
@@ -1701,8 +1710,13 @@
     }
 
     .conversation-meta-chips.is-mobile-header .conversation-meta-chip {
-        flex: 0 1 auto;
-        max-width: min(42vw, 180px);
+        flex: 0 0 auto;
+        max-width: none;
+    }
+
+    .conversation-meta-chips.is-mobile-header .conversation-meta-chip span {
+        overflow: visible;
+        text-overflow: clip;
     }
 
     button.conversation-meta-chip {

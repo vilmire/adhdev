@@ -247,13 +247,19 @@ export default function DashboardMobileChatInbox({
                         {isDisconnected ? (
                             <MobileEmptyHero
                                 icon={<MobileSpinner label="Reconnecting…" />}
-                                title="Connecting to server"
+                                title={
+                                    wsStatus === 'offline'
+                                        ? 'Network offline'
+                                        : wsStatus === 'auth_failed'
+                                            ? 'Session expired'
+                                            : 'Reconnecting'
+                                }
                                 subtitle={
                                     wsStatus === 'offline'
-                                        ? 'Your device appears to be offline. Waiting for network…'
+                                        ? 'Waiting for network…'
                                         : wsStatus === 'auth_failed'
-                                            ? 'Session expired. Please log in again.'
-                                            : 'Establishing connection to the server. This usually takes a moment.'
+                                            ? 'Please log in again.'
+                                            : 'Restoring the server connection…'
                                 }
                             />
                         ) : machineCards.length === 0 ? (

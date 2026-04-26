@@ -17,7 +17,7 @@ export interface ConnectionBannerProps {
     reconnectDelayMs?: number;
 }
 
-const DEFAULT_RECONNECT_BANNER_DELAY_MS = 2500;
+const DEFAULT_RECONNECT_BANNER_DELAY_MS = 5000;
 
 function isReconnectLikeStatus(status: string): boolean {
     return status === 'disconnected' || status === 'reconnecting';
@@ -112,10 +112,10 @@ export default function ConnectionBanner({
                                 filter: wsStatus === 'auth_failed' ? 'grayscale(1)' : undefined,
                             }}
                         />
-                        <span className="min-w-0 text-center">
-                            {wsStatus === 'offline' && 'Network offline — waiting for connection...'}
-                            {wsStatus === 'disconnected' && 'Reconnecting to server...'}
-                            {wsStatus === 'reconnecting' && 'Reconnecting to server...'}
+                        <span className="min-w-0 text-center whitespace-nowrap">
+                            {wsStatus === 'offline' && 'Network offline'}
+                            {wsStatus === 'disconnected' && 'Reconnecting'}
+                            {wsStatus === 'reconnecting' && 'Reconnecting'}
                             {wsStatus === 'auth_failed' && (
                                 loginUrl ? (
                                     <>

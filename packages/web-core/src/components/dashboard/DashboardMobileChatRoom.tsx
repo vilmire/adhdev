@@ -77,11 +77,11 @@ export default function DashboardMobileChatRoom({
                     >
                         <IconChevronLeft size={18} />
                     </button>
-                    <div className="min-w-0 flex flex-col gap-0.5">
+                    <div className="min-w-0 flex-1 flex flex-col gap-0.5">
                         <div className="flex items-center gap-2 text-[17px] font-extrabold tracking-tight text-text-primary truncate">
                             {getConversationTitle(selectedConversation)}
                         </div>
-                        <div className="min-w-0 overflow-hidden text-xs text-text-secondary">
+                        <div className="min-w-0 max-w-full text-xs text-text-secondary">
                             <ConversationMetaChips
                                 conversation={selectedConversation}
                                 className="is-mobile-header"
