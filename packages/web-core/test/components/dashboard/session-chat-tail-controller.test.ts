@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SessionChatTailUpdate } from '@adhdev/daemon-core'
 import { SubscriptionManager } from '../../../src/managers/SubscriptionManager'
 import {
+  buildLastMessageSignature,
   buildWarmSessionChatTailDescriptorState,
   getOrCreateSessionChatTailController,
   getWarmSessionChatTailDescriptorRefreshMs,
@@ -469,6 +470,45 @@ describe('SessionChatTailController registry', () => {
       'new-2',
       'new-3',
     ])
+  })
+
+  it('does not append a duplicate tail row when the daemon cursor already matches the live transcript', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+    const currentTail = { role: 'assistant', content: 'already hydrated', id: 'msg-2', timestamp: 2 } as any
+
+    controller.hydrateLiveMessages([
+      { role: 'user', content: 'hello', id: 'msg-1', timestamp: 1 } as any,
+      currentTail,
+    ])
+    controller.retain()
+
+    manager.publish(createUpdate({
+      messages: [currentTail],
+      syncMode: 'append',
+      totalMessages: 3,
+      lastMessageSignature: buildLastMessageSignature(currentTail),
+    }))
+
+    const snapshot = controller.getSnapshot()
+    expect(snapshot.liveMessages.map(message => (message as any).content)).toEqual([
+      'hello',
+      'already hydrated',
+    ])
+    expect(snapshot.cursor).toMatchObject({
+      knownMessageCount: 3,
+      lastMessageSignature: buildLastMessageSignature(currentTail),
+      tailLimit: 60,
+    })
   })
 
   it('persists loaded history pages across controller reacquisition for the same session', async () => {

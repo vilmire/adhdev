@@ -583,11 +583,18 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
 
     // Extension transport: evaluateInSession
     if (isExtensionTransport(transport)) {
+        let extensionReadChatError = '';
         try {
             const evalResult = await h.evaluateProviderScript('readChat', undefined, READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS);
             if (evalResult?.result) {
                 let parsed = evalResult.result;
-                if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
+                if (typeof parsed === 'string') {
+                    try {
+                        parsed = JSON.parse(parsed);
+                    } catch (e: any) {
+                        extensionReadChatError = `extension read_chat parse failed: ${e?.message || String(e)}`;
+                    }
+                }
                 if (parsed && typeof parsed === 'object') {
                     const validated = validateReadChatResultPayload(parsed, 'extension read_chat');
                     _log(`Extension OK: ${validated.messages?.length || 0} msgs`);
@@ -610,8 +617,14 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     );
                     return buildReadChatCommandResult(validated as Record<string, any>, args);
                 }
+                if (!extensionReadChatError) {
+                    extensionReadChatError = 'extension read_chat returned a non-object payload';
+                }
+            } else {
+                extensionReadChatError = 'extension read_chat returned no payload';
             }
         } catch (e: any) {
+            extensionReadChatError = `extension read_chat failed: ${e?.message || String(e)}`;
             _log(`Extension error: ${e.message}`);
             traceProviderEvent(args, 'provider', 'extension.read_chat.error', {
                 h,
@@ -626,8 +639,8 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const parentSessionId = h.currentSession?.parentSessionId;
             if (cdp && parentSessionId) {
                 const stream = await h.agentStream.collectActiveSession(cdp, parentSessionId);
-                if (stream?.agentType !== provider?.type) {
-                    return buildReadChatCommandResult({ messages: [], status: 'idle' }, args);
+                if (stream && stream.agentType !== provider?.type) {
+                    return { success: false, error: `extension read_chat stream agent mismatch for ${provider?.type || 'unknown_extension'}` };
                 }
                 if (stream) {
                     h.historyWriter.appendNewMessages(
@@ -645,7 +658,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 }
             }
         }
-        return buildReadChatCommandResult({ messages: [], status: 'idle' }, args);
+        return { success: false, error: extensionReadChatError || 'extension read_chat unavailable' };
     }
 
     // IDE category (default): cdp.evaluate
@@ -655,6 +668,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
     // webview IDE (Kiro, PearAI) → evaluateInWebviewFrame directly use
     const webviewScript = h.getProviderScript('webviewReadChat') || h.getProviderScript('webview_read_chat');
     if (webviewScript) {
+        let webviewReadChatError = '';
         try {
             const matchText = provider?.webviewMatchText;
             const matchFn = matchText
@@ -663,37 +677,56 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const raw = await cdp.evaluateInWebviewFrame(webviewScript, matchFn);
             if (raw) {
                 let parsed: any = raw;
-                if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
+                if (typeof parsed === 'string') {
+                    try {
+                        parsed = JSON.parse(parsed);
+                    } catch (e: any) {
+                        webviewReadChatError = `webview read_chat parse failed: ${e?.message || String(e)}`;
+                    }
+                }
                 if (parsed && typeof parsed === 'object') {
                     const validated = validateReadChatResultPayload(parsed, 'webview read_chat');
                     _log(`Webview OK: ${validated.messages?.length || 0} msgs`);
-                h.historyWriter.appendNewMessages(
-                    provider?.type || getCurrentProviderType(h, 'unknown_webview'),
-                    toHistoryPersistedMessages(normalizeReadChatMessages(validated)),
-                    validated.title,
-                    args?.targetSessionId,
-                    historySessionId,
-                );
+                    h.historyWriter.appendNewMessages(
+                        provider?.type || getCurrentProviderType(h, 'unknown_webview'),
+                        toHistoryPersistedMessages(normalizeReadChatMessages(validated)),
+                        validated.title,
+                        args?.targetSessionId,
+                        historySessionId,
+                    );
                     return buildReadChatCommandResult(validated as Record<string, any>, args);
                 }
+                if (!webviewReadChatError) {
+                    webviewReadChatError = 'webview read_chat returned a non-object payload';
+                }
+            } else {
+                webviewReadChatError = 'webview read_chat returned no payload';
             }
         } catch (e: any) {
+            webviewReadChatError = `webview read_chat failed: ${e?.message || String(e)}`;
             _log(`Webview readChat error: ${e.message}`);
         }
-        return buildReadChatCommandResult({ messages: [], status: 'idle' }, args);
+        return { success: false, error: webviewReadChatError || 'webview read_chat unavailable' };
     }
 
     // Regular IDE (Cursor, Windsurf, Trae etc) → main DOM evaluate
     const script = h.getProviderScript('readChat') || h.getProviderScript('read_chat');
     if (script) {
+        let ideReadChatError = '';
         try {
             const evalResult = await h.evaluateProviderScript('readChat', undefined, READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS);
             if (evalResult?.result) {
                 let parsed: any = evalResult.result;
-                if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { } }
-                if (parsed && typeof parsed === 'object' && parsed.messages?.length > 0) {
+                if (typeof parsed === 'string') {
+                    try {
+                        parsed = JSON.parse(parsed);
+                    } catch (e: any) {
+                        ideReadChatError = `ide read_chat parse failed: ${e?.message || String(e)}`;
+                    }
+                }
+                if (parsed && typeof parsed === 'object') {
                     const validated = validateReadChatResultPayload(parsed, 'ide read_chat');
-                    _log(`OK: ${validated.messages?.length} msgs`);
+                    _log(`OK: ${validated.messages?.length || 0} msgs`);
                     traceProviderEvent(args, 'provider', 'ide.read_chat.success', {
                         h,
                         provider,
@@ -713,8 +746,14 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     );
                     return buildReadChatCommandResult(validated as Record<string, any>, args);
                 }
+                if (!ideReadChatError) {
+                    ideReadChatError = 'ide read_chat returned a non-object payload';
+                }
+            } else {
+                ideReadChatError = 'ide read_chat returned no payload';
             }
         } catch (e: any) {
+            ideReadChatError = `ide read_chat failed: ${e?.message || String(e)}`;
             LOG.info('Command', `[read_chat] Script error: ${e.message}`);
             traceProviderEvent(args, 'provider', 'ide.read_chat.error', {
                 h,
@@ -723,9 +762,10 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 payload: { method: 'evaluate', error: e.message },
             });
         }
+        return { success: false, error: ideReadChatError || 'ide read_chat unavailable' };
     }
 
-    return buildReadChatCommandResult({ messages: [], status: 'idle' }, args);
+    return { success: false, error: 'read_chat unavailable' };
 }
 
 export async function handleSendChat(h: CommandHelpers, args: any): Promise<CommandResult> {

@@ -86,6 +86,48 @@ describe('conversation message authority snapshot', () => {
         expect(getConversationPreviewText(result[0]!)).toBe('newer conversation message')
     })
 
+    it('keeps the rich conversation transcript when a warm snapshot has the same timestamp', () => {
+        const conversation = createConversation({
+            messages: [{ role: 'assistant', content: 'rich transcript body', id: 'rich-1', receivedAt: 3000 }],
+            lastMessagePreview: 'rich transcript body',
+            lastMessageAt: 3000,
+        })
+        const snapshots = new Map([
+            [getConversationMessageAuthorityKey(conversation), createSnapshot([
+                { role: 'assistant', content: 'same-time warm snapshot body', id: 'warm-1', receivedAt: 3000 },
+            ])],
+        ])
+
+        const result = applyConversationMessageSnapshots([conversation], snapshots)
+
+        expect(result[0]).toBe(conversation)
+        expect(result[0]?.messages).toEqual([
+            { role: 'assistant', content: 'rich transcript body', id: 'rich-1', receivedAt: 3000 },
+        ])
+        expect(getConversationPreviewText(result[0]!)).toBe('rich transcript body')
+        expect(getConversationNotificationPreview(result[0]!)).toBe('rich transcript body')
+    })
+
+    it('keeps the rich conversation transcript when a warm snapshot has no provably newer timestamp', () => {
+        const conversation = createConversation({
+            messages: [{ role: 'assistant', content: 'rich transcript without timestamp', id: 'rich-1' }],
+            lastMessagePreview: 'rich transcript without timestamp',
+        })
+        const snapshots = new Map([
+            [getConversationMessageAuthorityKey(conversation), createSnapshot([
+                { role: 'assistant', content: 'untimed warm snapshot body', id: 'warm-1' },
+            ])],
+        ])
+
+        const result = applyConversationMessageSnapshots([conversation], snapshots)
+
+        expect(result[0]).toBe(conversation)
+        expect(result[0]?.messages).toEqual([
+            { role: 'assistant', content: 'rich transcript without timestamp', id: 'rich-1' },
+        ])
+        expect(getConversationPreviewText(result[0]!)).toBe('rich transcript without timestamp')
+    })
+
     it('builds the chat pane visible feed from the same snapshot-selected live messages', () => {
         const conversation = createConversation({
             messages: [

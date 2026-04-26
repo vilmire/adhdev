@@ -46,7 +46,7 @@ function shouldOverlayWarmLiveMessages(conversation: ActiveConversation, liveMes
 
     const existingAt = getLatestMessageTimestamp(existingMessages)
     const liveAt = getLatestMessageTimestamp(liveMessages)
-    if (existingAt > 0 && liveAt > 0 && liveAt < existingAt) return false
+    if (existingAt <= 0 || liveAt <= existingAt) return false
 
     const existingSignature = buildChatSnapshotSignature(existingMessages, conversation.status)
     const liveSignature = buildChatSnapshotSignature(liveMessages, conversation.status)

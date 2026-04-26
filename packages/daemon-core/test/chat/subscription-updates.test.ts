@@ -91,6 +91,36 @@ describe('chat subscription update helpers', () => {
     })
   })
 
+  it('suppresses failed read_chat results without advancing cursor or publishing empty-success chat-tail', () => {
+    const cursor = {
+      knownMessageCount: 4,
+      lastMessageSignature: 'sig-current',
+      tailLimit: 25,
+    }
+    const prepared = prepareSessionChatTailUpdate({
+      key: 'sub-1',
+      sessionId: 'session-1',
+      seq: 7,
+      timestamp: 789,
+      cursor,
+      lastDeliveredSignature: 'delivered-current',
+      result: {
+        success: false,
+        error: 'provider parser exploded',
+        syncMode: 'full',
+        messages: [],
+        status: 'idle',
+        totalMessages: 0,
+        lastMessageSignature: '',
+      } as any,
+    })
+
+    expect(prepared.update).toBeNull()
+    expect(prepared.seq).toBe(7)
+    expect(prepared.lastDeliveredSignature).toBe('delivered-current')
+    expect(prepared.cursor).toBe(cursor)
+  })
+
   it('suppresses duplicate modal updates after hashing the normalized modal payload', () => {
     const first = prepareSessionModalUpdate({
       key: 'modal-1',
