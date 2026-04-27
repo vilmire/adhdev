@@ -49,6 +49,10 @@ import { IconExternalWindow, IconArrowBack, IconKeyboard, IconX, IconEyeOff, Ico
 import { buildDashboardDockviewContextMenuItems } from './dockviewContextMenuItems'
 import { shouldAwaitStoredDockviewHydration, shouldDeferDockviewPanelPrune } from './dashboardDockviewHydration'
 import { getPassiveSessionSelectionCommand } from './dashboardSessionCommands'
+import {
+    getDockviewDragDetachFloatingOptions,
+    shouldDetachDockviewTabDrag,
+} from './dockviewDragDetach'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
 
 interface DashboardDockviewWorkspaceProps {
@@ -1600,7 +1604,29 @@ export default function DashboardDockviewWorkspace({
             setPopoutWindowRevision(value => value + 1)
         })
 
-        event.api.onWillDragPanel(() => {
+        event.api.onWillDragPanel(dragEvent => {
+            const panel = dragEvent.panel
+            const locationType = panel.group.model.location.type
+            if (shouldDetachDockviewTabDrag({
+                isDefaultPrevented: dragEvent.nativeEvent.defaultPrevented,
+                locationType,
+                groupPanelCount: panel.group.panels.length,
+            })) {
+                const dragTarget = dragEvent.nativeEvent.target instanceof Element
+                    ? dragEvent.nativeEvent.target
+                    : null
+                const tabElement = dragTarget?.closest('.dv-tab')
+                const rootElement = dockviewContainerRef.current?.querySelector('.adhdev-dockview')
+                    ?? dockviewContainerRef.current
+                if (tabElement instanceof HTMLElement && rootElement instanceof HTMLElement) {
+                    dragEvent.nativeEvent.preventDefault()
+                    const floatingOptions = getDockviewDragDetachFloatingOptions({
+                        rootRect: rootElement.getBoundingClientRect(),
+                        tabRect: tabElement.getBoundingClientRect(),
+                    })
+                    event.api.addFloatingGroup(panel, floatingOptions)
+                }
+            }
             setIsDraggingDockview(true)
             setIsShowingDockviewOverlay(false)
             markDockviewOverlaysHidden()
