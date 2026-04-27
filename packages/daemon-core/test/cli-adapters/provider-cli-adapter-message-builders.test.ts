@@ -610,6 +610,68 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     expect(result.messages[2600]).toMatchObject({ content: 'fresh assistant answer', id: 'assistant-fresh' })
   })
 
+  it('does not repeatedly normalize the committed prefix when stitching a tail parse result', () => {
+    const parseOutput = vi.fn((input: any) => ({
+      id: 'cli_session',
+      status: 'idle',
+      title: 'Test CLI',
+      messages: [
+        ...input.messages,
+        { role: 'assistant', content: 'fresh assistant answer', id: 'assistant-fresh', index: 2600 },
+      ],
+    }))
+
+    const contentAccesses = { count: 0 }
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+        parseOutput,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => 'fresh screen snapshot'),
+    }
+    adapter.committedMessages = Array.from({ length: 2600 }, (_, index) => {
+      const message: any = {
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        timestamp: index + 1,
+        receivedAt: index + 1,
+        id: `msg-${index + 1}`,
+        index,
+      }
+      Object.defineProperty(message, 'content', {
+        enumerable: true,
+        get() {
+          contentAccesses.count += 1
+          return `committed-${index + 1}`
+        },
+      })
+      return message
+    })
+    adapter.currentStatus = 'idle'
+    adapter.activeModal = null
+
+    const result = adapter.getScriptParsedStatus()
+
+    expect(result.messages).toHaveLength(2601)
+    expect(result.messages[0]).toMatchObject({ content: 'committed-1', id: 'msg-1' })
+    expect(result.messages[2600]).toMatchObject({ content: 'fresh assistant answer', id: 'assistant-fresh' })
+    expect(contentAccesses.count).toBeLessThanOrEqual(2800)
+  })
+
   it('keeps turn-scoped parse input empty instead of falling back to the full pre-turn transcript when no new output has arrived yet', () => {
     const input = buildCliParseInput({
       accumulatedBuffer: 'startup text already on screen',

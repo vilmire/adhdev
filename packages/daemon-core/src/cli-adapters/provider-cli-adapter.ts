@@ -369,7 +369,17 @@ export class ProviderCliAdapter implements CliAdapter {
         return baseMessages.slice(-ProviderCliAdapter.PARSE_MESSAGE_TAIL_LIMIT);
     }
 
+    private messagesShareStableIdentity(left: any, right: any): boolean {
+        if (left === right) return true;
+        if (!left || !right) return false;
+        if ((left.role || '') !== (right.role || '')) return false;
+        if (left.id && right.id && String(left.id) === String(right.id)) return true;
+        if (typeof left.index === 'number' && typeof right.index === 'number' && left.index === right.index) return true;
+        return false;
+    }
+
     private messagesComparable(left: any, right: any): boolean {
+        if (this.messagesShareStableIdentity(left, right)) return true;
         if (!left || !right) return false;
         if ((left.role || '') !== (right.role || '')) return false;
         const leftText = normalizeComparableTranscriptText(left.content);
@@ -1723,6 +1733,82 @@ export class ProviderCliAdapter implements CliAdapter {
         this.syncMessageViews();
     }
 
+    private getSharedCommittedPrefixLength(parsedMessages: any[]): number {
+        const committedMessages = this.committedMessages;
+        const max = Math.min(parsedMessages.length, committedMessages.length);
+        let index = 0;
+        while (index < max && this.messagesShareStableIdentity(parsedMessages[index], committedMessages[index])) {
+            index += 1;
+        }
+        return index;
+    }
+
+    private hydrateCommittedPrefixForParsedStatus(parsedMessages: any[]): any[] | null {
+        const sharedPrefixLength = this.getSharedCommittedPrefixLength(parsedMessages);
+        if (sharedPrefixLength !== this.committedMessages.length) return null;
+
+        const committedHydratedMessages = this.committedMessages.map((message, index) => {
+            const timestamp = typeof message.timestamp === 'number' && Number.isFinite(message.timestamp)
+                ? message.timestamp
+                : (this.lastOutputAt || this.currentTurnScope?.startedAt || Date.now());
+            const contentValue = message.content;
+            return {
+                role: message.role,
+                content: typeof contentValue === 'string' ? contentValue : String(contentValue || ''),
+                timestamp,
+                receivedAt: typeof message.receivedAt === 'number' && Number.isFinite(message.receivedAt)
+                    ? message.receivedAt
+                    : timestamp,
+                kind: message.kind,
+                id: message.id || `msg_${index}`,
+                index: typeof message.index === 'number' ? message.index : index,
+                meta: message.meta,
+                senderName: message.senderName,
+            };
+        });
+        const extraMessages = parsedMessages.slice(sharedPrefixLength);
+        if (extraMessages.length === 0) return committedHydratedMessages;
+
+        const extraHydratedMessages = hydrateCliParsedMessages(extraMessages, {
+            committedMessages: [],
+            scope: this.currentTurnScope,
+            lastOutputAt: this.lastOutputAt,
+        }).map((message, offset) => ({
+            ...message,
+            id: message.id || `msg_${sharedPrefixLength + offset}`,
+            index: typeof message.index === 'number' ? message.index : sharedPrefixLength + offset,
+        }));
+        return [...committedHydratedMessages, ...extraHydratedMessages];
+    }
+
+    private hydrateParsedMessagesForStatus(parsedMessages: any[]): any[] {
+        return this.hydrateCommittedPrefixForParsedStatus(parsedMessages)
+            || hydrateCliParsedMessages(parsedMessages, {
+                committedMessages: this.committedMessages,
+                scope: this.currentTurnScope,
+                lastOutputAt: this.lastOutputAt,
+            });
+    }
+
+    private buildCommittedChatMessages(): any[] {
+        return this.committedMessages.map((message, index) => {
+            const contentValue = message.content;
+            return buildChatMessage({
+                role: message.role,
+                content: typeof contentValue === 'string' ? contentValue : String(contentValue || ''),
+                timestamp: message.timestamp,
+                kind: message.kind,
+                meta: message.meta,
+                senderName: message.senderName,
+                id: message.id || `msg_${index}`,
+                index: typeof message.index === 'number' ? message.index : index,
+                receivedAt: typeof message.receivedAt === 'number'
+                    ? message.receivedAt
+                    : message.timestamp,
+            });
+        });
+    }
+
     /**
      * Script-based full parse — returns ReadChatResult.
      * Called by command handler / dashboard for rich content rendering.
@@ -1765,7 +1851,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 this.onStatusChange?.();
             }
         }
-        if (parsed && Array.isArray(parsed.messages)) {
+        if (parsed && Array.isArray(parsed.messages) && this.provider.allowInputDuringGeneration === true) {
             const hydratedForCommit = normalizeCliParsedMessages(parsed.messages, {
                 committedMessages: this.committedMessages,
                 scope: this.currentTurnScope,
@@ -1787,25 +1873,13 @@ export class ProviderCliAdapter implements CliAdapter {
             && this.currentStatus === 'idle';
         let result: any;
         if (parsed && Array.isArray(parsed.messages)) {
-            const parsedHydratedMessages = hydrateCliParsedMessages(parsed.messages, {
-                committedMessages: this.committedMessages,
-                scope: this.currentTurnScope,
-                lastOutputAt: this.lastOutputAt,
-            });
-            const committedHydratedMessages = this.committedMessages.map((message, index) => buildChatMessage({
-                ...message,
-                id: message.id || `msg_${index}`,
-                index: typeof message.index === 'number' ? message.index : index,
-                receivedAt: typeof message.receivedAt === 'number'
-                    ? message.receivedAt
-                    : message.timestamp,
-            }));
+            const parsedHydratedMessages = this.hydrateParsedMessagesForStatus(parsed.messages);
             const parsedLastAssistant = [...parsedHydratedMessages].reverse().find((message) => message.role === 'assistant' && typeof message.content === 'string' && message.content.trim());
             const shouldAdoptParsedIdleReplay =
                 !this.currentTurnScope
                 && !this.activeModal
                 && !!parsedLastAssistant
-                && parsedTranscriptIsRicherThanCommitted(parsedHydratedMessages, committedHydratedMessages)
+                && parsedTranscriptIsRicherThanCommitted(parsedHydratedMessages, this.committedMessages)
                 && (
                     this.currentStatus === 'idle'
                     || (
@@ -1816,11 +1890,23 @@ export class ProviderCliAdapter implements CliAdapter {
                     )
                 );
             if (shouldAdoptParsedIdleReplay) {
-                this.committedMessages = normalizeCliParsedMessages(parsed.messages, {
-                    committedMessages: this.committedMessages,
-                    scope: this.currentTurnScope,
-                    lastOutputAt: this.lastOutputAt,
-                });
+                this.committedMessages = this.getSharedCommittedPrefixLength(parsed.messages) === this.committedMessages.length
+                    ? parsedHydratedMessages.map((message) => ({
+                        role: message.role,
+                        content: typeof message.content === 'string' ? message.content : String(message.content || ''),
+                        timestamp: message.timestamp,
+                        receivedAt: message.receivedAt,
+                        kind: message.kind,
+                        id: message.id,
+                        index: message.index,
+                        meta: message.meta,
+                        senderName: message.senderName,
+                    }))
+                    : normalizeCliParsedMessages(parsed.messages, {
+                        committedMessages: this.committedMessages,
+                        scope: this.currentTurnScope,
+                        lastOutputAt: this.lastOutputAt,
+                    });
                 this.syncMessageViews();
                 if (this.currentStatus !== 'idle' || this.isWaitingForResponse) {
                     this.responseBuffer = '';
@@ -1835,25 +1921,15 @@ export class ProviderCliAdapter implements CliAdapter {
                     this.onStatusChange?.();
                 }
             }
-            const effectiveCommittedHydratedMessages = shouldAdoptParsedIdleReplay
-                ? this.committedMessages.map((message, index) => buildChatMessage({
-                    ...message,
-                    id: message.id || `msg_${index}`,
-                    index: typeof message.index === 'number' ? message.index : index,
-                    receivedAt: typeof message.receivedAt === 'number'
-                        ? message.receivedAt
-                        : message.timestamp,
-                }))
-                : committedHydratedMessages;
             const shouldPreferCommittedHistoryReplay =
                 !this.currentTurnScope
                 && !this.activeModal
-                && effectiveCommittedHydratedMessages.length > parsedHydratedMessages.length;
+                && this.committedMessages.length > parsedHydratedMessages.length;
             const shouldPreferCommittedIdleReplay =
                 shouldPreferCommittedMessages
                 && !shouldAdoptParsedIdleReplay;
             const hydratedMessages = (shouldPreferCommittedIdleReplay || shouldPreferCommittedHistoryReplay)
-                ? effectiveCommittedHydratedMessages
+                ? this.buildCommittedChatMessages()
                 : parsedHydratedMessages;
             result = {
                 id: parsed.id || 'cli_session',

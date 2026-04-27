@@ -5,6 +5,7 @@ All notable changes to ADHDev will be documented in this file.
 ## [0.9.35] - 2026-04-27
 
 ### Fixed
+- **daemon-core**: Avoid rehydrating the full committed CLI transcript on repeated tail parse results, preventing high CPU in long-running Node daemons with large chat histories.
 - **daemon-core**: Refresh provider scripts on reload so active provider roots pick up updated scripts without requiring a full daemon restart.
 - **daemon-core**: Keep chat tails hot when committed output arrives, preserving active CLI transcript freshness after output is finalized.
 - **session-host**: Restore cursor position in terminal snapshots so replayed browser terminals resume with the expected visual cursor state.
