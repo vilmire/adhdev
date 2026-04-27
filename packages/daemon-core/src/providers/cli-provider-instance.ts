@@ -492,9 +492,13 @@ export class CliProviderInstance implements ProviderInstance {
         const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
         const visibleStatus = autoApproveActive ? 'generating' : adapterStatus.status;
         const runtime = this.adapter.getRuntimeMetadata();
+        const lastCommittedMessageActivityAt = typeof this.adapter.getLastCommittedMessageActivityAt === 'function'
+            ? this.adapter.getLastCommittedMessageActivityAt()
+            : 0;
         return {
             id: this.instanceId,
             status: visibleStatus,
+            lastMessageAt: lastCommittedMessageActivityAt || undefined,
             runtimeLifecycle: runtime?.lifecycle ?? null,
             runtimeSurfaceKind: runtime?.surfaceKind,
             runtimeRestoredFromStorage: runtime?.restoredFromStorage === true,

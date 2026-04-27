@@ -15,6 +15,9 @@ function projectHotChatSessionStatesFromProviderState(state: ProviderState): Hot
     const project = (item: ProviderState): HotChatSessionState => ({
         id: item.instanceId,
         status: item.activeChat?.status || item.status,
+        unread: (item as any).unread,
+        inboxBucket: (item as any).inboxBucket,
+        lastMessageAt: (item as any).lastMessageAt ?? (item.activeChat as any)?.lastMessageAt,
         runtimeLifecycle: item.runtime?.lifecycle ?? null,
         runtimeSurfaceKind: item.runtime?.surfaceKind,
         runtimeRestoredFromStorage: item.runtime?.restoredFromStorage === true,

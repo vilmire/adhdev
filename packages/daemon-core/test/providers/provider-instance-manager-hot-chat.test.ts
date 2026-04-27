@@ -43,4 +43,40 @@ describe('ProviderInstanceManager hot chat session collection', () => {
     expect(getHotChatSessionState).toHaveBeenCalledTimes(1)
     expect(instance.getState).not.toHaveBeenCalled()
   })
+
+  it('projects unread, inbox bucket, and last message metadata from fallback provider state', async () => {
+    const manager = new ProviderInstanceManager()
+    const getState = vi.fn(() => ({
+      type: 'hermes-cli',
+      name: 'Hermes',
+      category: 'cli',
+      status: 'idle',
+      activeChat: { status: 'idle', lastMessageAt: 1234 },
+      instanceId: 'runtime-1',
+      unread: true,
+      inboxBucket: 'task_complete',
+      runtime: {
+        lifecycle: 'running',
+        surfaceKind: 'live_runtime',
+      },
+      lastUpdated: 1,
+      settings: {},
+      pendingEvents: [],
+    }))
+    const instance = createInstance({ getState })
+
+    await manager.addInstance('runtime-1', instance, { settings: {} })
+
+    expect(manager.collectHotChatSessionStates()).toEqual([
+      expect.objectContaining({
+        id: 'runtime-1',
+        status: 'idle',
+        unread: true,
+        inboxBucket: 'task_complete',
+        lastMessageAt: 1234,
+        runtimeLifecycle: 'running',
+        runtimeSurfaceKind: 'live_runtime',
+      }),
+    ])
+  })
 })

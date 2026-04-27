@@ -7,6 +7,7 @@ import { resetDebugRuntimeConfig, resolveDebugRuntimeConfig, setDebugRuntimeConf
 
 describe('ProviderCliAdapter message fallback shaping', () => {
   afterEach(() => {
+    vi.useRealTimers()
     resetDebugRuntimeConfig()
   })
 
@@ -89,6 +90,40 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     } as any, '/tmp/project')
 
     expect(warnSpy).toHaveBeenCalledWith('CLI', expect.stringContaining('No CLI scripts loaded'))
+  })
+
+  it('refreshes committed message activity when the last assistant content is completed in place', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-27T12:00:01Z'))
+
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+      },
+    } as any, '/tmp/project')
+
+    adapter.seedCommittedMessages([
+      { role: 'assistant', content: 'partial assistant answer', timestamp: 100 },
+    ])
+    expect(adapter.getLastCommittedMessageActivityAt()).toBe(Date.parse('2026-04-27T12:00:01Z'))
+
+    vi.setSystemTime(new Date('2026-04-27T12:00:04Z'))
+    adapter.seedCommittedMessages([
+      { role: 'assistant', content: 'partial assistant answer that is now complete', timestamp: 100 },
+    ])
+
+    expect(adapter.getLastCommittedMessageActivityAt()).toBe(Date.parse('2026-04-27T12:00:04Z'))
   })
 
   it('preserves the full committed transcript when parseOutput is unavailable', () => {

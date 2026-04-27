@@ -32,6 +32,7 @@ import {
     extractPromptRetrySnippet,
     getLastUserPromptText,
     listCliScriptNames,
+    normalizeComparableMessageContent,
     normalizePromptText,
     normalizeScreenSnapshot,
     promptLikelyVisible,
@@ -183,6 +184,8 @@ export class ProviderCliAdapter implements CliAdapter {
     private messages: CliChatMessage[] = [];
     private committedMessages: CliChatMessage[] = [];
     private structuredMessages: CliChatMessage[] = [];
+    private committedMessagesActivitySignature = '';
+    private committedMessagesChangedAt = 0;
     private currentStatus: CliSessionStatus['status'] = 'starting';
     private onStatusChange: (() => void) | null = null;
 
@@ -288,9 +291,36 @@ export class ProviderCliAdapter implements CliAdapter {
     private static readonly FINISH_RETRY_DELAY_MS = 300;
     private static readonly MAX_FINISH_RETRIES = 2;
 
+    private buildCommittedMessagesActivitySignature(): string {
+        const last = this.committedMessages[this.committedMessages.length - 1];
+        return [
+            String(this.committedMessages.length),
+            String(last?.role || ''),
+            String(last?.kind || ''),
+            String(last?.senderName || ''),
+            String(last?.timestamp || ''),
+            String(last?.receivedAt || ''),
+            normalizeComparableMessageContent(last?.content || '').slice(-240),
+        ].join('|');
+    }
+
     private syncMessageViews(): void {
+        const signature = this.buildCommittedMessagesActivitySignature();
+        if (signature !== this.committedMessagesActivitySignature) {
+            this.committedMessagesActivitySignature = signature;
+            this.committedMessagesChangedAt = Date.now();
+        }
         this.messages = [...this.committedMessages];
         this.structuredMessages = [...this.committedMessages];
+    }
+
+    getLastCommittedMessageActivityAt(): number {
+        const last = this.committedMessages[this.committedMessages.length - 1];
+        const messageTime = Math.max(
+            typeof last?.receivedAt === 'number' && Number.isFinite(last.receivedAt) ? last.receivedAt : 0,
+            typeof last?.timestamp === 'number' && Number.isFinite(last.timestamp) ? last.timestamp : 0,
+        );
+        return Math.max(messageTime, this.committedMessagesChangedAt || 0);
     }
 
     private readTerminalScreenText(now = Date.now()): string {
