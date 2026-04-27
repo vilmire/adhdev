@@ -197,6 +197,9 @@ export interface ProviderInstance {
  /** Update settings at runtime (called when user changes settings from dashboard) */
     updateSettings?(newSettings: Record<string, any>): void;
 
+    /** Refresh static provider definition/scripts without restarting the live runtime. */
+    refreshProviderDefinition?(provider: ProviderModule): void;
+
  /** cleanup */
     dispose(): void;
 }

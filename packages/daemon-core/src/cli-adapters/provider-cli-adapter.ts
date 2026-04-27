@@ -549,8 +549,16 @@ export class ProviderCliAdapter implements CliAdapter {
     /** Inject CLI scripts after construction (e.g. when resolved by ProviderLoader) */
     setCliScripts(scripts: CliScripts): void {
         this.cliScripts = scripts;
+        this.parsedStatusCache = null;
+        this.parseErrorMessage = null;
         const scriptNames = listCliScriptNames(scripts);
         LOG.info('CLI', `[${this.cliType}] CLI scripts injected: [${scriptNames.join(', ')}]`);
+    }
+
+    /** Refresh provider scripts/config used by this adapter without restarting the PTY runtime. */
+    refreshProviderDefinition(provider: CliProviderModule): void {
+        this.provider = provider;
+        this.setCliScripts(provider.scripts || {});
     }
 
     updateRuntimeSettings(settings: Record<string, any>): void {

@@ -507,20 +507,9 @@ export class DevServer implements DevServerContext {
   private async handleReload(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     try {
       this.providerLoader.reload();
-      let refreshedInstances = 0;
-      if (this.instanceManager) {
-        for (const id of this.instanceManager.listInstanceIds()) {
-          const instance = this.instanceManager.getInstance(id) as any;
-          const providerType = typeof instance?.type === 'string' ? instance.type : '';
-          if (!providerType) continue;
-          const resolved = this.providerLoader.resolve(providerType);
-          if (!resolved) continue;
-          if (instance && typeof instance === 'object' && 'provider' in instance) {
-            instance.provider = resolved;
-            refreshedInstances += 1;
-          }
-        }
-      }
+      const refreshedInstances = this.instanceManager
+        ? this.instanceManager.refreshProviderDefinitions((providerType) => this.providerLoader.resolve(providerType))
+        : 0;
       const providers = this.providerLoader.getAll().map(p => ({
         type: p.type, name: p.name, category: p.category,
       }));

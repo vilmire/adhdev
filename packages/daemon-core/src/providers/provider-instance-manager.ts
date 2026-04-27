@@ -261,6 +261,18 @@ export class ProviderInstanceManager {
         return updated;
     }
 
+    refreshProviderDefinitions(resolveProvider: (providerType: string) => unknown): number {
+        let refreshed = 0;
+        for (const instance of this.instances.values()) {
+            if (typeof instance.refreshProviderDefinition !== 'function') continue;
+            const provider = resolveProvider(instance.type);
+            if (!provider || typeof provider !== 'object') continue;
+            instance.refreshProviderDefinition(provider as any);
+            refreshed += 1;
+        }
+        return refreshed;
+    }
+
  // ─── cleanup ──────────────────────────────────────
 
  /**

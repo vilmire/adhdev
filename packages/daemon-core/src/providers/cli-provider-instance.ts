@@ -219,6 +219,12 @@ export class CliProviderInstance implements ProviderInstance {
         this.historyWriter = new ChatHistoryWriter();
     }
 
+    refreshProviderDefinition(provider: ProviderModule): void {
+        if (provider.type !== this.type || provider.category !== 'cli') return;
+        this.provider = provider;
+        this.adapter.refreshProviderDefinition(provider as CliProviderModule);
+    }
+
  // ─── Lifecycle ─────────────────────────────────
 
     async init(context: InstanceContext): Promise<void> {

@@ -51,6 +51,7 @@ export interface CliAdapter {
     isReady(): boolean;
     setOnStatusChange(callback: () => void): void;
     updateRuntimeSettings?(settings: Record<string, unknown>): void;
+    setCliScripts?(scripts: Record<string, unknown>): void;
     setServerConn?(serverConn: unknown): void;
     clearHistory?(): void;
     resolveAction?(data: unknown): Promise<void>;

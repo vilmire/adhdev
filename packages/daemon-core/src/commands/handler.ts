@@ -507,7 +507,16 @@ export class DaemonCommandHandler implements CommandHelpers {
         if (this._ctx.providerLoader) {
             await this._ctx.providerLoader.fetchLatest().catch(() => {});
             this._ctx.providerLoader.reload();
-            return { success: true };
+            this._ctx.providerLoader.registerToDetector();
+            const refreshedInstances = this._ctx.instanceManager
+                ? this._ctx.instanceManager.refreshProviderDefinitions((providerType) => this._ctx.providerLoader!.resolve(providerType))
+                : 0;
+            const providers = this._ctx.providerLoader.getAll().map((provider) => ({
+                type: provider.type,
+                name: provider.name,
+                category: provider.category,
+            }));
+            return { success: true, refreshedInstances, providers };
         }
         return { success: false, error: 'ProviderLoader not initialized' };
     }

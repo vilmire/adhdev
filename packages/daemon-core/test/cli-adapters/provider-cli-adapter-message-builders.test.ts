@@ -171,6 +171,43 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     })
   })
 
+  it('uses newly injected scripts immediately instead of returning a stale parsed-status cache', () => {
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+        parseOutput: () => ({
+          status: 'idle',
+          messages: [{ role: 'assistant', content: 'old parser' }],
+        }),
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.committedMessages = [{ role: 'assistant', content: 'transcript', timestamp: 1 }]
+    expect(adapter.getScriptParsedStatus().messages[0].content).toBe('old parser')
+
+    adapter.setCliScripts({
+      detectStatus: () => 'idle',
+      parseApproval: () => null,
+      parseOutput: () => ({
+        status: 'idle',
+        messages: [{ role: 'assistant', content: 'new parser' }],
+      }),
+    })
+
+    expect(adapter.getScriptParsedStatus().messages[0].content).toBe('new parser')
+  })
+
   it('throws instead of silently falling back when parseOutput crashes', () => {
     const adapter = new ProviderCliAdapter({
       type: 'test-cli',
