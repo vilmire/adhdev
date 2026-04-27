@@ -199,6 +199,10 @@ export class ProviderLoader {
     this.logFn(`[ProviderLoader] ${msg}`);
   }
 
+  private debugLog(msg: string): void {
+    LOG.debug('Provider', `[ProviderLoader] ${msg}`);
+  }
+
  // ─── Public API ────────────────────────────────
 
   /**
@@ -892,7 +896,7 @@ export class ProviderLoader {
             const loaded = this.loadScriptsFromDir(type, entry.scriptDir);
             if (loaded) {
               resolved.scripts = loaded;
-              this.log(`  [compatibility] ${type} v${currentVersion} → ${entry.scriptDir}`);
+              this.debugLog(`  [compatibility] ${type} v${currentVersion} → ${entry.scriptDir}`);
               resolved._resolvedScriptDir = entry.scriptDir;
               resolved._resolvedScriptsSource = `compatibility:${entry.ideVersion}`;
               if (providerDir) {
@@ -912,7 +916,7 @@ export class ProviderLoader {
           const loaded = this.loadScriptsFromDir(type, base.defaultScriptDir);
           if (loaded) {
             resolved.scripts = loaded;
-            this.log(`  [compatibility] ${type} v${currentVersion} → default: ${base.defaultScriptDir}`);
+            this.debugLog(`  [compatibility] ${type} v${currentVersion} → default: ${base.defaultScriptDir}`);
             resolved._resolvedScriptDir = base.defaultScriptDir;
             resolved._resolvedScriptsSource = 'defaultScriptDir:version_miss';
             if (providerDir) {
@@ -955,7 +959,7 @@ export class ProviderLoader {
       const loaded = this.loadScriptsFromDir(type, base.defaultScriptDir);
       if (loaded) {
         resolved.scripts = loaded;
-        this.log(`  [compatibility] ${type} no version detected → default: ${base.defaultScriptDir}`);
+        this.debugLog(`  [compatibility] ${type} no version detected → default: ${base.defaultScriptDir}`);
         resolved._resolvedScriptDir = base.defaultScriptDir;
         resolved._resolvedScriptsSource = 'defaultScriptDir:no_version';
         if (providerDir) {

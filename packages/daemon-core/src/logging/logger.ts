@@ -175,19 +175,18 @@ export function daemonLog(category: string, msg: string, level: LogLevel = 'info
     const label = LEVEL_LABEL[level];
     const line = `[${ts()}] [${label}] [${category}] ${msg}`;
 
- // Always record to file (including DEBUG)
+ // Apply the active log level consistently to console, file, and the remote ring buffer.
+ // Debug hot paths are useful when explicitly enabled, but should not inflate normal-mode logs.
+    if (!shouldOutput) return;
+
     writeToFile(line);
 
- // Always save to ring buffer (for remote transmission)
     ringBuffer.push({ ts: Date.now(), level, category, message: msg });
     if (ringBuffer.length > RING_BUFFER_SIZE) {
         ringBuffer.splice(0, ringBuffer.length - RING_BUFFER_SIZE);
     }
 
- // Apply filter to console output
-    if (shouldOutput) {
-        origConsoleLog(line);
-    }
+    origConsoleLog(line);
 }
 
 // ─── Convenience API ────────────────────────────────

@@ -1044,7 +1044,7 @@ export class ProviderCliAdapter implements CliAdapter {
         if (!this.applyPendingScriptStatusDebounce(ctx)) return;
 
         const recentInteractiveActivity = this.hasRecentInteractiveActivity(now);
-        LOG.info(
+        LOG.debug(
             'CLI',
             `[${this.cliType}] settled diagnostics prompt=${JSON.stringify(this.currentTurnScope?.prompt || '').slice(0, 140)} status=${String(status || '')} parsedStatus=${String(parsedStatus || '')} parsedMsgCount=${parsedMessages.length} lastParsedAssistant=${JSON.stringify(summarizeCliTraceText(lastParsedAssistant?.content || '', 120)).slice(0, 160)} responseBuffer=${JSON.stringify(summarizeCliTraceText(this.responseBuffer, 160)).slice(0, 220)} screen=${JSON.stringify(summarizeCliTraceText(screenText, 160)).slice(0, 220)}`
         );
