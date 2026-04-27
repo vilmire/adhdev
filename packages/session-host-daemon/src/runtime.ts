@@ -132,15 +132,28 @@ function createXtermSerializeAddon(terminal: XtermTerminal): XtermSerializeAddon
   }
 }
 
+function formatCursorRestore(terminal: XtermTerminal, rows: number): string {
+  const buffer = terminal.buffer.active;
+  const row = Math.max(0, Math.min(Math.max(0, rows | 0) - 1, buffer.cursorY || 0));
+  const col = Math.max(0, buffer.cursorX || 0);
+  return `\x1b[${row + 1};${col + 1}H`;
+}
+
 function serializeXtermViewport(terminal: XtermTerminal, serializer: XtermSerializeAddon, rows: number): string {
   const buffer = terminal.buffer.active;
   const start = Math.max(0, buffer.viewportY || 0);
   const end = Math.max(start, Math.min(Math.max(0, buffer.length || 0) - 1, start + Math.max(1, rows | 0) - 1));
   if (end < start) return '';
-  return serializer.serialize({
+  const viewport = serializer.serialize({
     range: { start, end },
     excludeModes: true,
   });
+  // Range serialization reproduces the visible cells, but leaves the replay cursor
+  // at the end of the serialized viewport. CLIs like Claude frequently update the
+  // current status line with relative cursor movement; if the dashboard seeds a
+  // snapshot and then receives an incremental update, that update must continue
+  // from the live cursor row, not from the next line after the viewport replay.
+  return `${viewport}${formatCursorRestore(terminal, rows)}`;
 }
 
 function createXtermMirror(options: { cols: number; rows: number; scrollback: number }): TerminalMirrorHandle {
