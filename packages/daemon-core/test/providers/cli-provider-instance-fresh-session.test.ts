@@ -284,6 +284,23 @@ describe('CliProviderInstance incremental history persistence', () => {
     }
 
     instance.getState()
+    instance.adapter = {
+      getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        title: 'Hermes Agent',
+        messages: [
+          { role: 'user', content: 'same prompt', kind: 'standard', receivedAt: 12_000 },
+          { role: 'assistant', content: 'same reply', kind: 'tool', senderName: 'Tool', receivedAt: 13_000 },
+          { role: 'assistant', content: 'new tail', kind: 'standard', receivedAt: 14_000 },
+        ],
+      }),
+      getRuntimeMetadata: () => null,
+    }
+
+    instance.getState()
+
+    expect(appendNewMessages).toHaveBeenCalledTimes(2)
 
     expect(appendNewMessages).toHaveBeenNthCalledWith(
       1,
