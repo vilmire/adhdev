@@ -8,8 +8,24 @@
  * 4. Event collection and propagation
  */
 
-import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
+import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, HotChatSessionState } from './provider-instance.js';
 import { LOG } from '../logging/logger.js';
+
+function projectHotChatSessionStatesFromProviderState(state: ProviderState): HotChatSessionState[] {
+    const project = (item: ProviderState): HotChatSessionState => ({
+        id: item.instanceId,
+        status: item.activeChat?.status || item.status,
+        runtimeLifecycle: item.runtime?.lifecycle ?? null,
+        runtimeSurfaceKind: item.runtime?.surfaceKind,
+        runtimeRestoredFromStorage: item.runtime?.restoredFromStorage === true,
+        runtimeRecoveryState: item.runtime?.recoveryState ?? null,
+    });
+
+    if (state.category === 'ide') {
+        return [project(state), ...state.extensions.map(project)];
+    }
+    return [project(state)];
+}
 
 export class ProviderInstanceManager {
     private instances = new Map<string, ProviderInstance>();
@@ -118,6 +134,32 @@ export class ProviderInstanceManager {
             }
         }
         return states;
+    }
+
+    collectHotChatSessionStates(): HotChatSessionState[] {
+        const sessions: HotChatSessionState[] = [];
+        for (const [id, instance] of this.instances) {
+            try {
+                const projected = instance.getHotChatSessionState?.();
+                if (Array.isArray(projected)) {
+                    sessions.push(...projected.filter((session): session is HotChatSessionState => !!session?.id));
+                    continue;
+                }
+                if (projected?.id) {
+                    sessions.push(projected);
+                    continue;
+                }
+
+                // Fallback for provider types that have not implemented the cheap
+                // projection yet. CLI implements getHotChatSessionState() because
+                // its full getState() may run rich transcript parsing.
+                const state = instance.getState();
+                sessions.push(...projectHotChatSessionStatesFromProviderState(state));
+            } catch (e) {
+                LOG.warn('InstanceMgr', `[InstanceManager] Failed to collect hot chat metadata from ${id}: ${(e as Error).message}`);
+            }
+        }
+        return sessions;
     }
 
  /**

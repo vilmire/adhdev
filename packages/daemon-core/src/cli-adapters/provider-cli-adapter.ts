@@ -1067,7 +1067,7 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         if (this.currentTurnScope && !lastParsedAssistant) {
-            LOG.info(
+            LOG.debug(
                 'CLI',
                 `[${this.cliType}] Settled without assistant: prompt=${JSON.stringify(this.currentTurnScope.prompt).slice(0, 140)} responseBuffer=${JSON.stringify(summarizeCliTraceText(this.responseBuffer, 220)).slice(0, 260)} screen=${JSON.stringify(summarizeCliTraceText(screenText, 220)).slice(0, 260)} providerDir=${this.providerResolutionMeta.providerDir || '-'} scriptDir=${this.providerResolutionMeta.scriptDir || '-'}`
             );

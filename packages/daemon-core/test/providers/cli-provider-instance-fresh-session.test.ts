@@ -173,6 +173,77 @@ describe('CliProviderInstance provider session recovery', () => {
   })
 })
 
+describe('CliProviderInstance lightweight hot chat state', () => {
+  it('does not run the rich script parser when projecting hot chat metadata', () => {
+    const instance = new CliProviderInstance({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      spawn: { command: 'hermes', args: [] },
+    } as any, '/tmp/project', [], 'runtime-1') as any
+
+    const getScriptParsedStatus = vi.fn(() => {
+      throw new Error('rich parser should not run')
+    })
+    instance.adapter = {
+      getStatus: () => ({ status: 'generating', activeModal: null, messages: [] }),
+      getScriptParsedStatus,
+      getRuntimeMetadata: () => ({
+        runtimeId: 'runtime-1',
+        lifecycle: 'running',
+        surfaceKind: 'live_runtime',
+        restoredFromStorage: false,
+        recoveryState: null,
+      }),
+    }
+
+    expect(instance.getHotChatSessionState()).toEqual(expect.objectContaining({
+      id: 'runtime-1',
+      status: 'generating',
+      runtimeLifecycle: 'running',
+      runtimeSurfaceKind: 'live_runtime',
+    }))
+    expect(getScriptParsedStatus).not.toHaveBeenCalled()
+  })
+
+  it('drops a pending completion when generation resumes before the debounce callback observes it', () => {
+    vi.useFakeTimers()
+    try {
+      const instance = new CliProviderInstance({
+        type: 'hermes-cli',
+        name: 'Hermes Agent',
+        category: 'cli',
+        spawn: { command: 'hermes', args: [] },
+      } as any, '/tmp/project') as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      instance.lastStatus = 'idle'
+
+      let status = 'generating'
+      instance.adapter = {
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        getScriptParsedStatus: () => ({ status, title: 'Hermes Agent', messages: [] }),
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+      }
+
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+      expect(events.map((event) => event.event)).toContain('agent:generating_started')
+
+      status = 'idle'
+      instance.detectStatusTransition()
+      status = 'generating'
+      vi.advanceTimersByTime(3000)
+
+      expect(events.map((event) => event.event)).not.toContain('agent:generating_completed')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('CliProviderInstance incremental history persistence', () => {
   it('persists only the new transcript suffix when repeated getState snapshots replay the full transcript with fresh fallback timestamps', () => {
     const instance = new CliProviderInstance({

@@ -135,6 +135,18 @@ export interface ProviderEvent {
     [key: string]: any;
 }
 
+export interface HotChatSessionState {
+    id: string;
+    status?: unknown;
+    unread?: unknown;
+    inboxBucket?: unknown;
+    lastMessageAt?: unknown;
+    runtimeLifecycle?: unknown;
+    runtimeSurfaceKind?: unknown;
+    runtimeRestoredFromStorage?: unknown;
+    runtimeRecoveryState?: unknown;
+}
+
 // ─── ProviderInstance interface ─────────────────
 
 export interface InstanceContext {
@@ -171,6 +183,13 @@ export interface ProviderInstance {
 
  /** Return current status */
     getState(): ProviderState;
+
+    /**
+     * Return the cheap session metadata needed to decide whether chat-tail
+     * subscriptions should be flushed. Implementations must avoid rich transcript
+     * parsing here; callers use this on P2P hot flush paths.
+     */
+    getHotChatSessionState?(): HotChatSessionState | HotChatSessionState[] | null;
 
  /** Receive event (external → Instance) */
     onEvent(event: string, data?: any): void;

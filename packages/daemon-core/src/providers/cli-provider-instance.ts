@@ -12,7 +12,7 @@ import * as fs from 'fs';
 import { createRequire } from 'node:module';
 import { normalizeInputEnvelope, type ProviderModule, flattenContent } from './contracts.js';
 import { assertTextOnlyInput } from './provider-input-support.js';
-import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason } from './provider-instance.js';
+import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState } from './provider-instance.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
@@ -487,6 +487,21 @@ export class CliProviderInstance implements ProviderInstance {
         return this.presentationMode;
     }
 
+    getHotChatSessionState(): HotChatSessionState {
+        const adapterStatus = this.adapter.getStatus();
+        const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
+        const visibleStatus = autoApproveActive ? 'generating' : adapterStatus.status;
+        const runtime = this.adapter.getRuntimeMetadata();
+        return {
+            id: this.instanceId,
+            status: visibleStatus,
+            runtimeLifecycle: runtime?.lifecycle ?? null,
+            runtimeSurfaceKind: runtime?.surfaceKind,
+            runtimeRestoredFromStorage: runtime?.restoredFromStorage === true,
+            runtimeRecoveryState: runtime?.recoveryState ?? null,
+        };
+    }
+
     updateSettings(newSettings: Record<string, any>): void {
         this.settings = { ...newSettings };
         this.adapter.updateRuntimeSettings?.(this.settings);
@@ -650,6 +665,15 @@ export class CliProviderInstance implements ProviderInstance {
                     this.completedDebouncePending = { chatTitle, duration, timestamp: now };
                     this.completedDebounceTimer = setTimeout(() => {
                         if (this.completedDebouncePending) {
+                            const latestStatus = this.adapter.getStatus();
+                            const latestAutoApproveActive = latestStatus.status === 'waiting_approval' && this.shouldAutoApprove();
+                            const latestVisibleStatus = latestAutoApproveActive ? 'generating' : latestStatus.status;
+                            if (latestVisibleStatus !== 'idle') {
+                                LOG.info('CLI', `[${this.type}] cancelled pending completed (resumed ${latestVisibleStatus})`);
+                                this.completedDebouncePending = null;
+                                this.completedDebounceTimer = null;
+                                return;
+                            }
                             LOG.info('CLI', `[${this.type}] completed in ${this.completedDebouncePending.duration}s`);
                             this.pushEvent({ event: 'agent:generating_completed', ...this.completedDebouncePending });
                             this.completedDebouncePending = null;

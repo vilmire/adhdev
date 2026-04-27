@@ -31,6 +31,7 @@ export function hydrateCliParsedMessages(
 ): any[] {
     const { committedMessages, scope, lastOutputAt } = options;
     const referenceMessages = [...committedMessages];
+    const referenceComparables = referenceMessages.map((message) => normalizeComparableMessageContent(message?.content || ''));
     const usedReferenceIndexes = new Set<number>();
     const now = options.now ?? Date.now();
 
@@ -43,7 +44,7 @@ export function hydrateCliParsedMessages(
             sameIndex
             && !usedReferenceIndexes.has(parsedIndex)
             && sameIndex.role === role
-            && normalizeComparableMessageContent(sameIndex.content) === normalizedContent
+            && referenceComparables[parsedIndex] === normalizedContent
             && typeof sameIndex.timestamp === 'number'
             && Number.isFinite(sameIndex.timestamp)
         ) {
@@ -55,7 +56,7 @@ export function hydrateCliParsedMessages(
             if (usedReferenceIndexes.has(i)) continue;
             const candidate = referenceMessages[i];
             if (!candidate || candidate.role !== role) continue;
-            const candidateContent = normalizeComparableMessageContent(candidate.content);
+            const candidateContent = referenceComparables[i];
             if (!candidateContent) continue;
             const exactMatch = candidateContent === normalizedContent;
             const fuzzyMatch = candidateContent.includes(normalizedContent) || normalizedContent.includes(candidateContent);
