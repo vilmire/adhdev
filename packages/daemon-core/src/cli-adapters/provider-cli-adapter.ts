@@ -1675,11 +1675,12 @@ export class ProviderCliAdapter implements CliAdapter {
 
  // ─── Public API (CliAdapter) ───────────────────
 
-    getStatus(): CliSessionStatus {
-        const startupModal = this.startupParseGate ? this.runParseApproval(this.recentOutputBuffer) : null;
+    getStatus(options: { allowParse?: boolean } = {}): CliSessionStatus {
+        const allowParse = options.allowParse !== false;
+        const startupModal = allowParse && this.startupParseGate ? this.runParseApproval(this.recentOutputBuffer) : null;
         let effectiveStatus = this.projectEffectiveStatus(startupModal);
         let effectiveModal = startupModal || this.activeModal;
-        if (!startupModal && !effectiveModal && typeof this.cliScripts?.parseOutput === 'function') {
+        if (allowParse && !startupModal && !effectiveModal && typeof this.cliScripts?.parseOutput === 'function') {
             let parsed = this.getFreshParsedStatusCache();
             if (!parsed && effectiveStatus !== 'idle') {
                 const now = Date.now();

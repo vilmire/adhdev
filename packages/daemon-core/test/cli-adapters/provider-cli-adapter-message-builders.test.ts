@@ -379,6 +379,48 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     expect(parseOutput).not.toHaveBeenCalled()
   })
 
+  it('skips uncached full parseOutput probes when getStatus disallows parsing', () => {
+    const parseOutput = vi.fn(() => ({
+      id: 'cli_session',
+      status: 'waiting_approval',
+      title: 'Test CLI',
+      activeModal: { message: 'Approve?', buttons: ['Yes'] },
+      messages: [],
+    }))
+
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'generating',
+        parseApproval: () => null,
+        parseOutput,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => 'screen snapshot'),
+    }
+    adapter.currentStatus = 'generating'
+    adapter.activeModal = null
+    adapter.startupParseGate = false
+
+    const status = adapter.getStatus({ allowParse: false })
+
+    expect(status.status).toBe('generating')
+    expect(status.activeModal).toBeNull()
+    expect(parseOutput).not.toHaveBeenCalled()
+  })
+
   it('throttles uncached full parseOutput probes from repeated generating getStatus calls', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-25T12:00:00Z'))
@@ -608,6 +650,45 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     expect(result.messages[0]).toMatchObject({ content: 'committed-1', id: 'msg-1' })
     expect(result.messages[2599]).toMatchObject({ content: 'committed-2600', id: 'msg-2600' })
     expect(result.messages[2600]).toMatchObject({ content: 'fresh assistant answer', id: 'assistant-fresh' })
+  })
+
+  it('preserves timestamps by stable id/index without reading committed transcript content', () => {
+    const committedContentAccesses = { count: 0 }
+    const committedMessages = Array.from({ length: 250 }, (_, index) => {
+      const message: any = {
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        timestamp: 10_000 + index,
+        receivedAt: 10_000 + index,
+        id: `msg-${index}`,
+        index,
+      }
+      Object.defineProperty(message, 'content', {
+        enumerable: true,
+        get() {
+          committedContentAccesses.count += 1
+          return `committed message ${index}`
+        },
+      })
+      return message
+    })
+    const parsedMessages = committedMessages.map((message, index) => ({
+      role: message.role,
+      id: message.id,
+      index: message.index,
+      content: `committed message ${index}`,
+    }))
+
+    const result = normalizeCliParsedMessages(parsedMessages, {
+      committedMessages,
+      scope: null,
+      lastOutputAt: 999,
+      now: 1_000,
+    })
+
+    expect(result).toHaveLength(250)
+    expect(result[0]).toMatchObject({ id: 'msg-0', index: 0, timestamp: 10_000, receivedAt: 10_000 })
+    expect(result[249]).toMatchObject({ id: 'msg-249', index: 249, timestamp: 10_249, receivedAt: 10_249 })
+    expect(committedContentAccesses.count).toBe(0)
   })
 
   it('does not repeatedly normalize the committed prefix when stitching a tail parse result', () => {

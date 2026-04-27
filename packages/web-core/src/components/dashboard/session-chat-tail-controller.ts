@@ -152,12 +152,23 @@ export class SessionChatTailController {
     if (options.tailLimit !== undefined) {
       const nextTailLimit = Math.max(0, options.tailLimit)
       if (nextTailLimit !== this.snapshot.cursor.tailLimit) {
-        const nextKnownMessageCount = Math.min(this.snapshot.cursor.knownMessageCount, this.snapshot.liveMessages.length)
+        // When tailLimit grows the existing cursor may represent a tail window
+        // (e.g. warm subscription used tailLimit=60, now ChatPane wants 1000).
+        // Keeping knownMessageCount+lastSig causes the daemon to return an empty
+        // append (nothing after the already-known last message), and the guard in
+        // handleUpdate advances knownCount to totalMessages — permanently hiding
+        // the earlier messages that were outside the smaller window.
+        // Reset to zero so the daemon delivers the full new tail on reconnect.
+        const growing = nextTailLimit > this.snapshot.cursor.tailLimit
+        const nextKnownMessageCount = growing
+          ? 0
+          : Math.min(this.snapshot.cursor.knownMessageCount, this.snapshot.liveMessages.length)
+        const nextLastMessageSignature = growing ? '' : this.snapshot.cursor.lastMessageSignature
         this.snapshot = {
           ...this.snapshot,
           cursor: {
-            ...this.snapshot.cursor,
             knownMessageCount: nextKnownMessageCount,
+            lastMessageSignature: nextLastMessageSignature,
             tailLimit: nextTailLimit,
           },
         }

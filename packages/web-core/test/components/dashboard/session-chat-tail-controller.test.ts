@@ -309,14 +309,18 @@ describe('SessionChatTailController registry', () => {
 
     expect(reacquired).toBe(controller)
     const subscribeCalls = sendData.mock.calls.filter((call) => call[1]?.type === 'subscribe')
+    // When tailLimit grows the cursor must be reset to zero so the daemon can
+    // deliver the full new window. Keeping the stale (knownMessageCount=60,
+    // lastSig) cursor causes an empty-append response that permanently hides
+    // earlier messages that were outside the smaller tail window.
     expect(subscribeCalls.at(-1)?.[1]).toMatchObject({
       topic: 'session.chat_tail',
       key: 'daemon:daemon-1:session:session-1',
       params: {
         targetSessionId: 'session-1',
         historySessionId: 'history-1',
-        knownMessageCount: 60,
-        lastMessageSignature: 'sig-tail-60',
+        knownMessageCount: 0,
+        lastMessageSignature: '',
         tailLimit: 200,
       },
     })

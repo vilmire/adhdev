@@ -494,7 +494,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     getHotChatSessionState(): HotChatSessionState {
-        const adapterStatus = this.adapter.getStatus();
+        const adapterStatus = this.adapter.getStatus({ allowParse: false });
         const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
         const visibleStatus = autoApproveActive ? 'generating' : adapterStatus.status;
         const runtime = this.adapter.getRuntimeMetadata();
