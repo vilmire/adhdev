@@ -4,304 +4,208 @@ All notable changes to ADHDev will be documented in this file.
 
 ## [0.9.35] - 2026-04-27
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Refresh provider scripts on reload so active provider roots pick up updated scripts without requiring a full daemon restart.
+- **daemon-core**: Keep chat tails hot when committed output arrives, preserving active CLI transcript freshness after output is finalized.
+- **session-host**: Restore cursor position in terminal snapshots so replayed browser terminals resume with the expected visual cursor state.
 
-### Changed
-- 
 ## [0.9.34] - 2026-04-27
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Avoid rich CLI parsing during hot chat flushes to reduce burst latency for live output paths.
+- **daemon-core**: Harden session-host stop handling and avoid fake CLI completion from the response watchdog.
+- **terminal / web-core**: Improve terminal scrollback behavior and mobile copy handling.
 
 ### Changed
-- 
+- **web-core**: Isolate notification auto-read boundaries so read-state transitions stay tied to the intended dashboard surfaces.
+
 ## [0.9.33] - 2026-04-27
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Stabilize CLI provider launch and chat-tail synchronization so newly launched providers publish live transcript updates reliably.
 
-### Changed
-- 
 ## [0.9.32] - 2026-04-27
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Parse only the transcript tail for CLI providers, reducing parser cost while keeping recent status accurate.
+- **daemon-core**: Keep chat tails hot on CLI output so active conversations update promptly.
 
 ### Changed
-- 
+- **daemon-core**: Reduce default log noise for routine provider/runtime flows.
+
 ## [0.9.31] - 2026-04-27
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core / daemon-core**: Preserve authoritative session lists and harden chat transcript authority across dashboard state merges.
 
 ### Changed
-- 
+- **web-core**: Extracted the AgentTab workspace selector to reduce dashboard surface coupling.
+- Added shell-boundary regression coverage for the shared web-core app shell.
+
 ## [0.9.30] - 2026-04-26
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Preserve provider activation snapshot fields so machine-scoped opt-in provider state survives status serialization.
 
-### Changed
-- 
 ## [0.9.29] - 2026-04-26
 
 ### Added
-- 
+- **daemon-core / web-core**: Added machine activation controls for CLI providers, requiring explicit machine activation before provider use.
+- **web-core**: Added manual terminal scrollback reload support.
 
 ### Fixed
-- 
+- **web-core**: Preserve observed read markers and compact mobile inbox reconnect UI.
 
 ### Changed
-- 
+- **web-core**: Split machine logs diagnostics UI for clearer log polling and diagnostics surfaces.
+
 ## [0.9.28] - 2026-04-26
 
-### Added
-- 
-
-### Fixed
-- 
-
 ### Changed
-- 
+- Release metadata only; no additional OSS runtime behavior changed after `v0.9.27`.
+
 ## [0.9.27] - 2026-04-26
 
-### Added
-- 
-
-### Fixed
-- 
-
 ### Changed
-- 
+- Release metadata only; the follow-up cloud packaging fix for the session-host snapshot serializer dependency landed in the cloud repo.
+
 ## [0.9.26] - 2026-04-26
 
-### Added
-- 
-
 ### Fixed
-- 
+- **session-host**: Serialize xterm viewport snapshots so restored terminal panes keep richer visible content.
+- **web-core**: Preserve machine logs during polling instead of clearing visible log state while refreshes are in flight.
 
-### Changed
-- 
 ## [0.9.25] - 2026-04-26
 
-### Added
-- 
-
 ### Fixed
-- 
+- **session-host**: Seed terminals from viewport snapshots for faster and more faithful restored terminal views.
+- **daemon-core**: Stabilize machine log polling.
+- **web-core**: Improve mobile dashboard touch handling and normalize dashboard scrollbar styling.
 
-### Changed
-- 
 ## [0.9.24] - 2026-04-26
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Centralize conversation message snapshots so chat consumers read from a consistent message authority.
+- **web-core**: Centralize subscription retry handling, propagate subscription errors, and guard DataChannel sends with `isOpen` checks.
+- **daemon-core**: Clamp resolve-modal button indexes and preserve close-client errors instead of swallowing them.
 
-### Changed
-- 
 ## [0.9.23] - 2026-04-26
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Extend the `committedMessages` floor to all active CLI states so active output is not truncated too aggressively.
+- **daemon-core**: Preserve conversation history during CLI approval dialogs.
 
-### Changed
-- 
 ## [0.9.22] - 2026-04-26
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Prevent subscription churn on first CLI output.
+- Updated dockview pane visibility guard coverage for reveal/scroll behavior.
 
-### Changed
-- 
 ## [0.9.21] - 2026-04-26
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Restore chat scroll position when dockview tabs are revealed.
 
-### Changed
-- 
 ## [0.9.20] - 2026-04-26
 
-### Added
-- 
-
-### Fixed
-- 
-
 ### Changed
-- 
+- **daemon-core / web-core**: Reduce CLI output fanout hot-path work so bursty live CLI output costs less across daemon and dashboard consumers.
+
 ## [0.9.19] - 2026-04-25
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Unify inbox notification previews so mobile and desktop surfaces show the same recent transcript context.
+- **web-standalone**: Treat `daemon.metadata` subscription updates as authoritative.
 
-### Changed
-- 
 ## [0.9.18] - 2026-04-25
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Project active CLI turns after approval clears so dashboards do not lose active state immediately after modal resolution.
 
 ### Changed
-- 
+- **daemon-core**: Expose projected CLI debug status for easier provider/runtime validation.
+
 ## [0.9.17] - 2026-04-25
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Settle approved CLI turns after modal clearance.
+- **web-core**: Prefer transcript tail content for mobile inbox previews and avoid terminal-view auto-scroll.
+- **session-host-daemon**: Eliminate O(N²) IPC broadcast behavior when many CLI sessions are active.
 
-### Changed
-- 
 ## [0.9.16] - 2026-04-25
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Narrow interrupt prompt detection so ordinary CLI output is not misclassified as an intervention prompt.
 
-### Changed
-- 
 ## [0.9.15] - 2026-04-25
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Keep interrupt-prompt sessions in the generating state while user action is still pending.
 
-### Changed
-- 
 ## [0.9.14] - 2026-04-25
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Delay transient reconnect banners and preserve chat bottom-follow behavior on resize.
+- **daemon-core**: Restart stale daemons when the installed package is already current.
 
-### Changed
-- 
 ## [0.9.13] - 2026-04-25
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Surface CLI PTY input failures so failed sends are visible to callers.
 
 ### Changed
-- 
+- **docs**: Clarified README support positioning and refreshed README screenshots.
+
 ## [0.9.12] - 2026-04-25
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Unify mobile dashboard CLI mode state so chat/terminal mode stays consistent across mobile surfaces.
 
-### Changed
-- 
 ## [0.9.11] - 2026-04-24
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Keep mobile inbox previews current.
+- **web-core**: Prevent chat message duplication from hydrate/subscription cursor mismatch.
+- **web-core**: Scroll chat to the bottom when a hidden chat surface is revealed.
 
-### Changed
-- 
 ## [0.9.10] - 2026-04-24
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core / web-core**: Harden cloud chat and runtime terminal paths while keeping standalone/cloud command extraction compatible.
+- **web-core**: Stabilize CLI chat terminal toggles and accept both cloud and standalone response shapes in command extractors.
+- **daemon-core**: Lengthen CLI idle debounce windows to reduce premature idle/completion transitions.
 
 ### Changed
-- 
+- **web-core**: Skip message re-hash work for shared array references during live status merges.
+
 ## [0.9.9] - 2026-04-24
 
 ### Added
-- 
+- **daemon-core**: Add transcript identity fields to the read-chat contract so clients can track stable message/session identity.
 
-### Fixed
-- 
-
-### Changed
-- 
 ## [0.9.8] - 2026-04-24
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Prefer parsed approval state while Hermes approval settle logic catches up to adapter modal state.
 
-### Changed
-- 
 ## [0.9.7] - 2026-04-24
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Harden CLI approval and transcript parsing, and unblock daemon-core release typecheck.
+- **web-core**: Calm browser terminal auto-zoom and avoid standalone PWA sidebar touch offset.
 
 ### Changed
-- 
+- **daemon-core**: Delegate provider-specific detection to provider scripts.
+- **web-core**: Share the app shell across cloud and standalone and show dashboard connection state as an overlay.
+
 ## [0.9.6] - 2026-04-24
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Refresh dashboard machine metadata consistently.
 
 ### Changed
-- 
+- **daemon-core**: Reduce per-tick sync I/O when multiple CLI instances are active.
+
 ## [0.9.5] - 2026-04-24
 
 ### Added
@@ -325,6 +229,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.9.3] - 2026-04-23
 
 ### Added
@@ -335,6 +240,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.9.2] - 2026-04-23
 
 ### Added
@@ -361,6 +267,7 @@ All notable changes to ADHDev will be documented in this file.
 ### Changed
 - **web-core**: Simplified dashboard state boundaries by moving local orchestration/state blobs behind dedicated hooks and reducing `Dashboard.tsx` to composition/wiring-oriented responsibilities.
 - **web-core**: Kept `DashboardOverlays` as a thin render hub while grouping props by overlay surface instead of maintaining one large flat prop contract.
+
 ## [0.9.0] - 2026-04-23
 
 ### Added
@@ -371,6 +278,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.102] - 2026-04-23
 
 ### Added
@@ -381,6 +289,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.101] - 2026-04-22
 
 ### Added
@@ -391,6 +300,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.100] - 2026-04-22
 
 ### Added
@@ -402,6 +312,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - README now leads with the concrete self-hosted product value: one local dashboard for IDE and CLI agents with no cloud dependency.
+
 ## [0.8.99] - 2026-04-22
 
 ### Added
@@ -412,6 +323,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - The new-session flow now treats hosted-runtime recovery as a separate interruption path instead of mixing it into ordinary launch.
+
 ## [0.8.98] - 2026-04-22
 
 ### Added
@@ -423,6 +335,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - Continued tightening the shared launch/recovery surface around the dashboard new-session UX.
+
 ## [0.8.97] - 2026-04-22
 
 ### Added
@@ -434,6 +347,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - **web-core**: Removed now-unused frontend transcript merge helpers after the daemon-owned transcript path became canonical.
+
 ## [0.8.96] - 2026-04-22
 
 ### Added
@@ -445,6 +359,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.95] - 2026-04-22
 
 ### Added
@@ -455,6 +370,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - Version bump only; no OSS runtime behavior changed beyond recording the prior release notes in the changelog.
+
 ## [0.8.94] - 2026-04-21
 
 ### Added
@@ -511,6 +427,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - Version bump only; no user-visible changes.
+
 ## [0.8.87] - 2026-04-20
 
 ### Changed
@@ -549,6 +466,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.83] - 2026-04-20
 
 ### Added
@@ -559,6 +477,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.82] - 2026-04-20
 
 ### Added
@@ -571,6 +490,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - Re-centered dashboard state around daemon-derived conversation/notification truth by tightening hidden-tab identity, notification overlay reduction, and related mobile dashboard mode wiring instead of relying on fragmented local fallback state.
+
 ## [0.8.81] - 2026-04-19
 
 ### Added
@@ -637,6 +557,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.75] - 2026-04-17
 
 ### Added
@@ -705,6 +626,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - Split shared stream-session actions into explicit passive session selection vs panel-opening capabilities and exposed the richer session capability metadata to dashboard surfaces.
+
 ## [0.8.69] - 2026-04-16
 
 ### Added
@@ -715,6 +637,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.67] - 2026-04-16
 
 ### Added
@@ -725,6 +648,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.66] - 2026-04-16
 
 ### Added
@@ -801,6 +725,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.59] - 2026-04-15
 
 ### Added
@@ -811,6 +736,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.58] - 2026-04-14
 
 ### Added
@@ -823,6 +749,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - Refined shared dashboard/machine/mobile continuity UX so saved-history search/filter/sort state persists across reopen flows within the same scope and normal resume paths stay subtle but easier to scan.
+
 ## [0.8.57] - 2026-04-14
 
 ### Added
@@ -833,6 +760,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.56] - 2026-04-14
 
 ### Fixed
@@ -841,6 +769,7 @@ All notable changes to ADHDev will be documented in this file.
 ### Changed
 - Made ordinary CLI launches fresh by default while keeping saved-history resume and hosted runtime recovery explicit.
 - Unified runtime, dashboard, and machine wording around `Start fresh`, `Resume saved history`, `Recover hosted runtime`, and `Saved History`.
+
 ## [0.8.55] - 2026-04-14
 
 ### Added
@@ -851,6 +780,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.54] - 2026-04-14
 
 ### Added
@@ -861,6 +791,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.53] - 2026-04-14
 
 ### Added
@@ -871,6 +802,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.52] - 2026-04-13
 
 ### Added
@@ -881,6 +813,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.51] - 2026-04-13
 
 ### Added
@@ -891,6 +824,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.50] - 2026-04-13
 
 ### Added
@@ -901,6 +835,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.49] - 2026-04-13
 
 ### Added
@@ -911,6 +846,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.48] - 2026-04-13
 
 ### Added
@@ -931,43 +867,53 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - Refined dockview workspace controls and recovery behavior so dashboard layouts restore more cleanly after panel and reconnect churn.
+
 ## [0.8.45] - 2026-04-12
 
 ### Changed
 - Version-only release to keep published OSS packages aligned. No standalone surface changes landed in this tag.
+
 ## [0.8.44] - 2026-04-12
 
 ### Fixed
 - Narrowed dockview popout window typing to prevent popout-specific web-core regressions in dashboard and standalone builds.
+
 ## [0.8.43] - 2026-04-12
 
 ### Changed
 - Refined dockview popout behavior, layout persistence, and related dashboard workspace interactions.
+
 ## [0.8.42] - 2026-04-12
 
 ### Changed
 - Version-only release to keep published OSS packages aligned. No standalone surface changes landed in this tag.
+
 ## [0.8.41] - 2026-04-12
 
 ### Added
 - Dashboard and standalone surfaces now enforce the version update policy and expose version update state more consistently.
+
 ## [0.8.40] - 2026-04-12
 
 ### Changed
 - Version-only release to keep published OSS packages aligned. No standalone surface changes landed in this tag.
+
 ## [0.8.39] - 2026-04-11
 
 ### Changed
 - Version-only release to keep published OSS packages aligned. No standalone surface changes landed in this tag.
+
 ## [0.8.38] - 2026-04-11
 
 ### Added
 - Live last-message previews in dashboard conversation lists.
 - CDP multi-window handling in `daemon-core` plus the Claude Code VS Code catalog entry used by the launcher inventory.
+
 ## [0.8.37] - 2026-04-11
 
 ### Changed
 - Version-only release to keep published OSS packages aligned. No standalone surface changes landed in this tag.
+
 ## [0.8.36] - 2026-04-11
 
 ### Fixed
@@ -976,6 +922,7 @@ All notable changes to ADHDev will be documented in this file.
 ### Changed
 - Backfilled recent changelog entries.
 - Reverted an experimental builtin vendor provider-loader fallback before release, so this version does not introduce a new fallback contract.
+
 ## [0.8.35] - 2026-04-10
 
 ### Fixed
@@ -987,6 +934,7 @@ All notable changes to ADHDev will be documented in this file.
 ### Changed
 - Server compact session payloads now use an explicit typed schema and stop forwarding transient UI/control metadata that is only needed on the P2P path.
 - Shared dashboard chrome and dialog surfaces now consistently use the SVG icon set instead of mixed emoji/text close affordances.
+
 ## [0.8.34] - 2026-04-10
 
 ### Fixed
@@ -996,6 +944,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - Polished dashboard and standalone shell presentation, including notification bulk toggles, remote dialog behavior, and capabilities page removal from the standalone surface.
+
 ## [0.8.33] - 2026-04-10
 
 ### Added
@@ -1006,6 +955,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - Tightened `daemon-core` and `web-core` typing across provider loading, command routing, compact daemon status handling, and dashboard conversation/presenter layers.
+
 ## [0.8.32] - 2026-04-10
 
 ### Added
@@ -1016,6 +966,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.31] - 2026-04-10
 
 ### Added
@@ -1039,6 +990,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - Enabled auto-approve by default for provider settings and added provider-specific positive-action hint matching so each provider can customize approval button selection priority.
+
 ## [0.8.29] - 2026-04-10
 
 ### Added
@@ -1049,6 +1001,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.28] - 2026-04-09
 
 ### Added
@@ -1061,6 +1014,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - Removed legacy `AccentColor` configuration field from daemon settings in favor of the existing CSS custom-property theme system.
+
 ## [0.8.27] - 2026-04-09
 
 ### Fixed
@@ -1125,6 +1079,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.20] - 2026-04-08
 
 ### Added
@@ -1135,6 +1090,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.19] - 2026-04-08
 
 ### Added
@@ -1145,6 +1101,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.16] - 2026-04-08
 
 ### Added
@@ -1155,6 +1112,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.15] - 2026-04-07
 
 ### Fixed
@@ -1174,6 +1132,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.13] - 2026-04-07
 
 ### Added
@@ -1184,6 +1143,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.12] - 2026-04-07
 
 ### Added
@@ -1194,6 +1154,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.11] - 2026-04-07
 
 ### Added
@@ -1204,6 +1165,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.10] - 2026-04-07
 
 ### Added
@@ -1214,6 +1176,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.9] - 2026-04-07
 
 ### Added
@@ -1224,6 +1187,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.8] - 2026-04-06
 
 ### Added
@@ -1234,6 +1198,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.7] - 2026-04-06
 
 ### Added
@@ -1244,6 +1209,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.6] - 2026-04-06
 
 ### Added
@@ -1254,6 +1220,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.5] - 2026-04-06
 
 ### Added
@@ -1264,6 +1231,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.4] - 2026-04-06
 
 ### Added
@@ -1274,6 +1242,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.3] - 2026-04-06
 
 ### Added
@@ -1284,6 +1253,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.2] - 2026-04-06
 
 ### Added
@@ -1294,6 +1264,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.1] - 2026-04-05
 
 ### Added
@@ -1304,6 +1275,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.8.0] - 2026-04-05
 
 ### Added
@@ -1314,6 +1286,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.46] - 2026-04-05
 
 ### Added
@@ -1324,6 +1297,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.45] - 2026-04-04
 
 ### Added
@@ -1334,6 +1308,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.44] - 2026-04-04
 
 ### Added
@@ -1344,6 +1319,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.43] - 2026-04-04
 
 ### Added
@@ -1354,6 +1330,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.42] - 2026-04-04
 
 ### Added
@@ -1364,6 +1341,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.41] - 2026-04-04
 
 ### Added
@@ -1374,6 +1352,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.40] - 2026-04-04
 
 ### Added
@@ -1384,6 +1363,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.39] - 2026-04-03
 
 ### Added
@@ -1394,6 +1374,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.38] - 2026-04-03
 
 ### Added
@@ -1404,6 +1385,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.37] - 2026-04-03
 
 ### Added
@@ -1414,6 +1396,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.36] - 2026-04-03
 
 ### Added
@@ -1424,6 +1407,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.35] - 2026-04-02
 
 ### Added
@@ -1434,6 +1418,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.34] - 2026-04-02
 
 ### Added
@@ -1444,6 +1429,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.33] - 2026-04-02
 
 ### Added
@@ -1454,6 +1440,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.32] - 2026-04-02
 
 ### Added
@@ -1464,6 +1451,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.31] - 2026-04-02
 
 ### Added
@@ -1474,6 +1462,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.30] - 2026-04-02
 
 ### Added
@@ -1484,6 +1473,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.29] - 2026-04-02
 
 ### Added
@@ -1494,6 +1484,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.28] - 2026-04-02
 
 ### Added
@@ -1504,6 +1495,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.27] - 2026-04-02
 
 ### Added
@@ -1514,6 +1506,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.26] - 2026-04-02
 
 ### Added
@@ -1524,6 +1517,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.25] - 2026-04-02
 
 ### Added
@@ -1534,6 +1528,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.24] - 2026-04-02
 
 ### Added
@@ -1544,6 +1539,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.23] - 2026-04-02
 
 ### Added
@@ -1554,6 +1550,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.22] - 2026-04-02
 
 ### Added
@@ -1564,6 +1561,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.21] - 2026-04-02
 
 ### Added
@@ -1574,6 +1572,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.17] - 2026-04-02
 
 ### Added
@@ -1584,6 +1583,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.16] - 2026-04-02
 
 ### Added
@@ -1594,6 +1594,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.15] - 2026-04-02
 
 ### Added
@@ -1604,6 +1605,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.14] - 2026-04-02
 
 ### Added
@@ -1614,6 +1616,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.6] - 2026-04-01
 
 ### Added
@@ -1624,6 +1627,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.5] - 2026-04-01
 
 ### Added
@@ -1634,6 +1638,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.4] - 2026-04-01
 
 ### Added
@@ -1644,6 +1649,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.3] - 2026-04-01
 
 ### Added
@@ -1654,6 +1660,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.2] - 2026-03-31
 
 ### Added
@@ -1664,6 +1671,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.1] - 2026-03-31
 
 ### Added
@@ -1674,6 +1682,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.7.0] - 2026-03-31
 
 ### Added
@@ -1684,6 +1693,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.6.79] - 2026-03-31
 
 ### Added
@@ -1694,6 +1704,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.6.77] - 2026-03-31
 
 ### Added
@@ -1704,6 +1715,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.6.76] - 2026-03-31
 
 ### Added
@@ -1714,6 +1726,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.6.75] - 2026-03-30
 
 ### Added
@@ -1724,6 +1737,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.6.74] - 2026-03-30
 
 ### Added
@@ -1734,6 +1748,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.6.73] - 2026-03-30
 
 ### Added
@@ -1744,6 +1759,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.6.72] - 2026-03-30
 
 ### Added
@@ -1754,6 +1770,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.6.71] - 2026-03-30
 
 ### Added
@@ -1764,6 +1781,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.6.70] - 2026-03-30
 
 ### Added
@@ -1774,6 +1792,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.6.69] - 2026-03-30
 
 ### Added
@@ -1784,6 +1803,7 @@ All notable changes to ADHDev will be documented in this file.
 
 ### Changed
 - 
+
 ## [0.6.68] - 2026-03-30
 
 ### Added
