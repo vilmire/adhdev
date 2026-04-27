@@ -653,10 +653,26 @@ export class ProviderLoader {
     return this.setMachineProviderConfig(type, { enabled });
   }
 
+  private getEffectiveProviderAvailability(type: string): ProviderAvailabilityState | undefined {
+    const providerType = this.resolveAlias(type);
+    const availability = this.providerAvailability.get(providerType);
+    if (availability) return availability;
+
+    const machineConfig = this.getMachineProviderConfig(providerType);
+    const lastDetection = machineConfig.lastDetection;
+    if (!lastDetection) return undefined;
+    return {
+      installed: lastDetection.ok === true,
+      detectedPath: typeof lastDetection.path === 'string' && lastDetection.path.trim()
+        ? lastDetection.path.trim()
+        : null,
+    };
+  }
+
   getMachineProviderStatus(type: string): ProviderMachineStatus {
     const providerType = this.resolveAlias(type);
     if (!this.isMachineProviderEnabled(providerType)) return 'disabled';
-    const availability = this.providerAvailability.get(providerType);
+    const availability = this.getEffectiveProviderAvailability(providerType);
     if (!availability) return 'enabled_unchecked';
     return availability.installed ? 'detected' : 'not_detected';
   }
@@ -792,7 +808,7 @@ export class ProviderLoader {
 
   getAvailableProviderInfos(): Array<ProviderModule & { installed?: boolean; detectedPath?: string | null; enabled: boolean; machineStatus: ProviderMachineStatus; lastDetection?: MachineProviderCheckResult; lastVerification?: MachineProviderCheckResult }> {
     return this.getAll().map((provider) => {
-      const availability = this.providerAvailability.get(provider.type);
+      const availability = this.getEffectiveProviderAvailability(provider.type);
       const enabled = this.isMachineProviderEnabled(provider.type);
       const machineConfig = this.getMachineProviderConfig(provider.type);
       return {

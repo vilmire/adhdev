@@ -297,6 +297,36 @@ function toHistoryPersistedMessages(messages: ChatMessage[]): Array<{
     }));
 }
 
+function findLastMessageIndexBySignature(messages: ChatMessage[], signature: string): number {
+    if (!signature) return -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (getChatMessageSignature(messages[index]) === signature) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+function buildBoundedTailSync(messages: ChatMessage[], cursor: Required<ReadChatCursor>): {
+    syncMode: ReadChatSyncMode;
+    replaceFrom: number;
+    messages: ChatMessage[];
+    totalMessages: number;
+    lastMessageSignature: string;
+} {
+    const totalMessages = messages.length;
+    const tailMessages = cursor.tailLimit > 0 && totalMessages > cursor.tailLimit
+        ? messages.slice(-cursor.tailLimit)
+        : messages;
+    return {
+        syncMode: 'full',
+        replaceFrom: 0,
+        messages: tailMessages,
+        totalMessages,
+        lastMessageSignature: getChatMessageSignature(messages[totalMessages - 1]),
+    };
+}
+
 function computeReadChatSync(messages: ChatMessage[], cursor: Required<ReadChatCursor>): {
     syncMode: ReadChatSyncMode;
     replaceFrom: number;
@@ -338,6 +368,16 @@ function computeReadChatSync(messages: ChatMessage[], cursor: Required<ReadChatC
         };
     }
 
+    if (cursor.tailLimit > 0 && knownSignature === lastMessageSignature) {
+        return {
+            syncMode: 'noop',
+            replaceFrom: totalMessages,
+            messages: [],
+            totalMessages,
+            lastMessageSignature,
+        };
+    }
+
     if (knownMessageCount < totalMessages) {
         const anchorSignature = getChatMessageSignature(messages[knownMessageCount - 1]);
         if (anchorSignature === knownSignature) {
@@ -348,6 +388,20 @@ function computeReadChatSync(messages: ChatMessage[], cursor: Required<ReadChatC
                 totalMessages,
                 lastMessageSignature,
             };
+        }
+
+        if (cursor.tailLimit > 0) {
+            const signatureIndex = findLastMessageIndexBySignature(messages, knownSignature);
+            if (signatureIndex >= 0) {
+                return {
+                    syncMode: 'append',
+                    replaceFrom: knownMessageCount,
+                    messages: messages.slice(signatureIndex + 1),
+                    totalMessages,
+                    lastMessageSignature,
+                };
+            }
+            return buildBoundedTailSync(messages, cursor);
         }
     }
 

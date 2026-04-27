@@ -1,5 +1,45 @@
 import { describe, expect, it, vi } from 'vitest'
+import { buildChatMessageSignature } from '../../src/chat/chat-signatures.js'
 import { handleReadChat } from '../../src/commands/chat-commands.js'
+
+function createCliReadChatHarness(messages: Array<Record<string, any>>) {
+  const getScriptParsedStatus = vi.fn(() => ({
+    status: 'generating',
+    messages,
+    activeModal: null,
+    title: 'Hermes Agent',
+  }))
+  const adapter = {
+    cliType: 'hermes-cli',
+    cliName: 'Hermes Agent',
+    workingDir: '/tmp/project',
+    spawn: async () => {},
+    sendMessage: async () => {},
+    getStatus: () => ({ status: 'generating', messages: [], activeModal: null }),
+    getScriptParsedStatus,
+    getPartialResponse: () => '',
+    shutdown: () => {},
+    cancel: () => {},
+    isProcessing: () => true,
+    isReady: () => true,
+    setOnStatusChange: () => {},
+  }
+  const helpers = {
+    getCdp: () => null,
+    getProvider: () => ({ type: 'hermes-cli', category: 'cli' }),
+    getProviderScript: () => null,
+    evaluateProviderScript: async () => null,
+    getCliAdapter: () => adapter as any,
+    currentManagerKey: undefined,
+    currentIdeType: undefined,
+    currentProviderType: undefined,
+    currentSession: undefined,
+    agentStream: null,
+    ctx: {},
+    historyWriter: { appendNewMessages: () => {} },
+  }
+  return { helpers, getScriptParsedStatus }
+}
 
 describe('handleReadChat for CLI adapters', () => {
   it('prefers live script-parsed transcript output over committed-only adapter status', async () => {
@@ -338,6 +378,85 @@ describe('handleReadChat for CLI adapters', () => {
       expect.objectContaining({ role: 'assistant', kind: 'tool', senderName: 'Tool', content: 'read README.md' }),
       expect.objectContaining({ role: 'user', content: 'now summarize in one line' }),
       expect.objectContaining({ role: 'assistant', content: 'Snake game created and verified.' }),
+    ])
+  })
+
+  it('treats a truncated tail cursor as current when its last signature matches the full transcript last message', async () => {
+    const messages = Array.from({ length: 100 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `message-${index + 1}`,
+      id: `msg-${index + 1}`,
+      timestamp: index + 1,
+    }))
+    const { helpers } = createCliReadChatHarness(messages)
+    const lastMessageSignature = buildChatMessageSignature(messages[messages.length - 1] as any)
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'hermes-cli',
+      knownMessageCount: 4,
+      lastMessageSignature,
+      tailLimit: 4,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.syncMode).toBe('noop')
+    expect(result.totalMessages).toBe(100)
+    expect(result.messages).toEqual([])
+    expect(result.lastMessageSignature).toBe(lastMessageSignature)
+  })
+
+  it('appends only messages after a matching truncated tail cursor signature', async () => {
+    const messages = Array.from({ length: 101 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `message-${index + 1}`,
+      id: `msg-${index + 1}`,
+      timestamp: index + 1,
+    }))
+    const { helpers } = createCliReadChatHarness(messages)
+    const previousTailLastSignature = buildChatMessageSignature(messages[99] as any)
+    const finalSignature = buildChatMessageSignature(messages[100] as any)
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'hermes-cli',
+      knownMessageCount: 4,
+      lastMessageSignature: previousTailLastSignature,
+      tailLimit: 4,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.syncMode).toBe('append')
+    expect(result.totalMessages).toBe(101)
+    expect(result.messages).toEqual([
+      expect.objectContaining({ id: 'msg-101', content: 'message-101' }),
+    ])
+    expect(result.lastMessageSignature).toBe(finalSignature)
+  })
+
+  it('falls back to a bounded full tail when a truncated tail cursor signature no longer anchors', async () => {
+    const messages = Array.from({ length: 100 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `message-${index + 1}`,
+      id: `msg-${index + 1}`,
+      timestamp: index + 1,
+    }))
+    const { helpers } = createCliReadChatHarness(messages)
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'hermes-cli',
+      knownMessageCount: 4,
+      lastMessageSignature: 'missing-stale-signature',
+      tailLimit: 4,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.syncMode).toBe('full')
+    expect(result.replaceFrom).toBe(0)
+    expect(result.totalMessages).toBe(100)
+    expect(result.messages).toEqual([
+      expect.objectContaining({ id: 'msg-97', content: 'message-97' }),
+      expect.objectContaining({ id: 'msg-98', content: 'message-98' }),
+      expect.objectContaining({ id: 'msg-99', content: 'message-99' }),
+      expect.objectContaining({ id: 'msg-100', content: 'message-100' }),
     ])
   })
 

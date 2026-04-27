@@ -533,6 +533,43 @@ describe('ProviderLoader settings schema', () => {
     ]);
   });
 
+  it('hydrates enabled CLI machine status from persisted last detection after reload', () => {
+    writeProvider(userDir, 'cli', 'foo-cli', {
+      type: 'foo-cli',
+      name: 'Foo CLI',
+      displayName: 'Foo CLI',
+      category: 'cli',
+      spawn: { command: 'foo' },
+    });
+    testConfig.machineProviders = {
+      'foo-cli': {
+        enabled: true,
+        lastDetection: {
+          ok: true,
+          stage: 'detection',
+          checkedAt: '2026-04-27T00:00:00.000Z',
+          command: 'foo',
+          path: '/usr/local/bin/foo',
+          message: 'Provider command detected',
+        },
+      },
+    };
+
+    const loader = new TestProviderLoader(userDir, testConfig);
+    loader.loadAll();
+
+    expect(loader.getAvailableProviderInfos()).toEqual([
+      expect.objectContaining({
+        type: 'foo-cli',
+        enabled: true,
+        installed: true,
+        detectedPath: '/usr/local/bin/foo',
+        machineStatus: 'detected',
+        lastDetection: expect.objectContaining({ ok: true, path: '/usr/local/bin/foo' }),
+      }),
+    ]);
+  });
+
   it('normalizes IDE type prefixes when reading and writing extension enabled state', () => {
     testConfig.ideSettings = {
       cursor: {
