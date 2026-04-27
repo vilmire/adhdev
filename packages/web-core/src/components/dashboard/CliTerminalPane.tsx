@@ -47,6 +47,14 @@ export default function CliTerminalPane({
     const [terminalScale, setTerminalScale] = useState(1);
     const [terminalViewport, setTerminalViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const [terminalIntrinsicViewport, setTerminalIntrinsicViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+    const [terminalScrollMetrics, setTerminalScrollMetrics] = useState<{ scrollTop: number; scrollHeight: number; clientHeight: number; atTop: boolean; canScroll: boolean }>({
+        scrollTop: 0,
+        scrollHeight: 0,
+        clientHeight: 0,
+        atTop: false,
+        canScroll: false,
+    });
+    const [copyStatusMessage, setCopyStatusMessage] = useState<string | null>(null);
     const terminalViewportRef = useRef<HTMLDivElement | null>(null);
     const terminalPanSurfaceRef = useRef<HTMLDivElement | null>(null);
     const terminalScaleTouchedRef = useRef(false);
@@ -57,6 +65,8 @@ export default function CliTerminalPane({
     const pendingHiddenSnapshotRef = useRef<{ text: string; seq: number; cols?: number; rows?: number; force?: boolean } | null>(null);
     const pendingHiddenClearRef = useRef(false);
     const flushFrameRef = useRef<{ ownerWindow: Window; frameId: number } | null>(null);
+    const copyStatusTimeoutRef = useRef<{ ownerWindow: Window; timeoutId: number } | null>(null);
+    const scrollbackStatusTimeoutRef = useRef<{ ownerWindow: Window; timeoutId: number } | null>(null);
     const MAX_TERMINAL_WRITE_CHARS_PER_FRAME = 32 * 1024;
 
     const getOwnerWindow = () => terminalViewportRef.current?.ownerDocument?.defaultView
@@ -76,6 +86,22 @@ export default function CliTerminalPane({
             pendingFrame.ownerWindow.cancelAnimationFrame(pendingFrame.frameId);
         } catch {}
         flushFrameRef.current = null;
+    };
+    const clearCopyStatusTimeout = () => {
+        const pendingTimeout = copyStatusTimeoutRef.current;
+        if (!pendingTimeout) return;
+        try {
+            pendingTimeout.ownerWindow.clearTimeout(pendingTimeout.timeoutId);
+        } catch {}
+        copyStatusTimeoutRef.current = null;
+    };
+    const clearScrollbackStatusTimeout = () => {
+        const pendingTimeout = scrollbackStatusTimeoutRef.current;
+        if (!pendingTimeout) return;
+        try {
+            pendingTimeout.ownerWindow.clearTimeout(pendingTimeout.timeoutId);
+        } catch {}
+        scrollbackStatusTimeoutRef.current = null;
     };
     const scheduleFlushPendingLiveOutput = () => {
         if (!isVisible) return;
@@ -138,7 +164,10 @@ export default function CliTerminalPane({
         }
         setRuntimeReady(false);
         setRuntimeStatusMessage('Runtime terminal unavailable');
+        clearScrollbackStatusTimeout();
+        clearCopyStatusTimeout();
         setScrollbackStatusMessage(null);
+        setCopyStatusMessage(null);
         setIsLoadingScrollback(false);
         terminalRef.current?.reset?.();
     };
@@ -154,7 +183,10 @@ export default function CliTerminalPane({
         }
         setRuntimeReady(true);
         setRuntimeStatusMessage('');
+        clearScrollbackStatusTimeout();
+        clearCopyStatusTimeout();
         setScrollbackStatusMessage(null);
+        setCopyStatusMessage(null);
         setIsLoadingScrollback(false);
         terminalRef.current?.reset?.();
     };
@@ -276,6 +308,77 @@ export default function CliTerminalPane({
         }
     };
 
+    const copyTextToClipboard = async (text: string): Promise<boolean> => {
+        const ownerDocument = terminalViewportRef.current?.ownerDocument || document;
+        const ownerWindow = ownerDocument.defaultView || window;
+        const clipboard = ownerWindow.navigator?.clipboard;
+        if (clipboard?.writeText && ownerWindow.isSecureContext) {
+            try {
+                await clipboard.writeText(text);
+                return true;
+            } catch {}
+        }
+        let textarea: HTMLTextAreaElement | null = null;
+        try {
+            textarea = ownerDocument.createElement('textarea');
+            textarea.value = text;
+            textarea.setAttribute('readonly', 'true');
+            textarea.style.position = 'fixed';
+            textarea.style.left = '-9999px';
+            textarea.style.top = '0';
+            ownerDocument.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            return ownerDocument.execCommand('copy');
+        } catch {
+            return false;
+        } finally {
+            textarea?.remove();
+        }
+    };
+
+    const setTransientCopyStatus = (message: string) => {
+        clearCopyStatusTimeout();
+        setCopyStatusMessage(message);
+        const ownerWindow = getOwnerWindow();
+        copyStatusTimeoutRef.current = {
+            ownerWindow,
+            timeoutId: ownerWindow.setTimeout(() => {
+                copyStatusTimeoutRef.current = null;
+                setCopyStatusMessage((current) => (current === message ? null : current));
+            }, 2200),
+        };
+    };
+
+    const setTransientScrollbackStatus = (message: string) => {
+        clearScrollbackStatusTimeout();
+        setScrollbackStatusMessage(message);
+        const ownerWindow = getOwnerWindow();
+        scrollbackStatusTimeoutRef.current = {
+            ownerWindow,
+            timeoutId: ownerWindow.setTimeout(() => {
+                scrollbackStatusTimeoutRef.current = null;
+                setScrollbackStatusMessage((current) => (current === message ? null : current));
+            }, 2200),
+        };
+    };
+
+    const copyCurrentTerminalText = async () => {
+        const selection = terminalRef.current?.getSelection?.() || '';
+        const visibleText = terminalRef.current?.getVisibleText?.() || '';
+        const text = (selection.trimEnd() || visibleText.trimEnd());
+        if (!text) {
+            setTransientCopyStatus('Nothing to copy');
+            return;
+        }
+        const copied = await copyTextToClipboard(text);
+        if (!copied) {
+            setTransientCopyStatus('Copy failed');
+            return;
+        }
+        setTransientCopyStatus(selection.trimEnd() ? 'Copied selection' : 'Copied visible terminal');
+    };
+
     const loadOlderRuntimeScrollback = async () => {
         if (isLoadingScrollback) return;
         setIsLoadingScrollback(true);
@@ -291,7 +394,7 @@ export default function CliTerminalPane({
             setScrollbackStatusMessage(`Older terminal output unavailable: ${result.error}`);
             return;
         }
-        setScrollbackStatusMessage('Older terminal output loaded');
+        setTransientScrollbackStatus('Older terminal output loaded');
         scheduleInOwnerWindow(() => {
             terminalRef.current?.bumpResize();
         });
@@ -393,6 +496,8 @@ export default function CliTerminalPane({
             if (flushFrameRef.current !== null) {
                 cancelScheduledFrame();
             }
+            clearCopyStatusTimeout();
+            clearScrollbackStatusTimeout();
         };
     }, []);
 
@@ -415,58 +520,76 @@ export default function CliTerminalPane({
         };
     }, [runtimeReady, sessionId, terminalRef]);
 
+    const shouldShowOlderScrollbackLoader = runtimeReady && (terminalScrollMetrics.atTop || isLoadingScrollback || !!scrollbackStatusMessage);
+
     return (
         <>
             {/* Terminal */}
             <div ref={terminalViewportRef} className="flex-1 min-h-0 p-2 bg-[#0f1117] relative">
-                <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
-                    <button
-                        type="button"
-                        className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-[11px] font-medium text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
-                        onClick={() => { void loadOlderRuntimeScrollback(); }}
-                        disabled={!sessionId || isLoadingScrollback}
-                        title="Replay raw session scrollback so the terminal viewport can scroll farther up"
-                    >
-                        {isLoadingScrollback ? 'Loading older...' : 'Load older terminal output'}
-                    </button>
-                    {scrollbackStatusMessage && (
+                {shouldShowOlderScrollbackLoader && (
+                    <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
+                        <button
+                            type="button"
+                            className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-[11px] font-medium text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
+                            onClick={() => { void loadOlderRuntimeScrollback(); }}
+                            disabled={!sessionId || isLoadingScrollback}
+                            title="Replay raw session scrollback so the terminal viewport can scroll farther up"
+                        >
+                            {isLoadingScrollback ? 'Loading older...' : 'Load older terminal output'}
+                        </button>
+                        {scrollbackStatusMessage && (
+                            <span className="rounded-full border border-white/10 bg-black/35 px-2 py-1 text-[10px] text-white/70 backdrop-blur-sm">
+                                {scrollbackStatusMessage}
+                            </span>
+                        )}
+                    </div>
+                )}
+                <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5">
+                    {copyStatusMessage && (
                         <span className="rounded-full border border-white/10 bg-black/35 px-2 py-1 text-[10px] text-white/70 backdrop-blur-sm">
-                            {scrollbackStatusMessage}
+                            {copyStatusMessage}
                         </span>
                     )}
+                    <button
+                        type="button"
+                        className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-[11px] font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
+                        onClick={() => { void copyCurrentTerminalText(); }}
+                        disabled={!runtimeReady}
+                        title="Copy selected terminal text, or the visible terminal viewport if nothing is selected"
+                    >
+                        Copy
+                    </button>
+                    <button
+                        type="button"
+                        className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
+                        onClick={() => {
+                            terminalScaleTouchedRef.current = true;
+                            setTerminalScale(scale => {
+                                const nextScale = Math.max(fittedTerminalScale, Number((scale - 0.1).toFixed(2)));
+                                if (nextScale > fittedTerminalScale) anchorZoomViewportBottomLeft();
+                                return nextScale;
+                            });
+                        }}
+                        title="Shrink terminal viewport"
+                    >
+                        -
+                    </button>
+                    <button
+                        type="button"
+                        className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
+                        onClick={() => {
+                            terminalScaleTouchedRef.current = true;
+                            setTerminalScale(scale => {
+                                const nextScale = Math.min(MAX_TERMINAL_SCALE, Number((scale + 0.1).toFixed(2)));
+                                if (nextScale > fittedTerminalScale) anchorZoomViewportBottomLeft();
+                                return nextScale;
+                            });
+                        }}
+                        title="Increase terminal viewport"
+                    >
+                        +
+                    </button>
                 </div>
-                <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5">
-                        <button
-                            type="button"
-                            className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
-                            onClick={() => {
-                                terminalScaleTouchedRef.current = true;
-                                setTerminalScale(scale => {
-                                    const nextScale = Math.max(fittedTerminalScale, Number((scale - 0.1).toFixed(2)));
-                                    if (nextScale > fittedTerminalScale) anchorZoomViewportBottomLeft();
-                                    return nextScale;
-                                });
-                            }}
-                            title="Shrink terminal viewport"
-                        >
-                            -
-                        </button>
-                        <button
-                            type="button"
-                            className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
-                            onClick={() => {
-                                terminalScaleTouchedRef.current = true;
-                                setTerminalScale(scale => {
-                                    const nextScale = Math.min(MAX_TERMINAL_SCALE, Number((scale + 0.1).toFixed(2)));
-                                    if (nextScale > fittedTerminalScale) anchorZoomViewportBottomLeft();
-                                    return nextScale;
-                                });
-                            }}
-                            title="Increase terminal viewport"
-                        >
-                            +
-                        </button>
-                    </div>
                 <div
                     ref={terminalPanSurfaceRef}
                     className={isManualZoomedIn ? 'w-full h-full overflow-auto rounded-lg overscroll-contain' : 'w-full h-full overflow-hidden rounded-lg overscroll-contain'}
@@ -495,6 +618,7 @@ export default function CliTerminalPane({
                                 readOnly={!runtimeReady || !isVisible}
                                 sizingMode="measured"
                                 onViewportMetrics={setTerminalIntrinsicViewport}
+                                onScrollMetrics={setTerminalScrollMetrics}
                                 onInput={(data) => {
                                     if (!runtimeReady) return;
                                     const sent = sendPtyInput?.(daemonRouteId, sessionId, data) ?? false;

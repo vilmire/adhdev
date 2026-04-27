@@ -65,6 +65,8 @@ describe('CLI terminal measured layout plumbing', () => {
     const compatSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/compat.ts'), 'utf8')
 
     expect(paneSource.includes('Load older terminal output')).toBe(true)
+    expect(paneSource.includes('const shouldShowOlderScrollbackLoader = runtimeReady && (terminalScrollMetrics.atTop || isLoadingScrollback || !!scrollbackStatusMessage);')).toBe(true)
+    expect(paneSource.includes('{shouldShowOlderScrollbackLoader && (')).toBe(true)
     expect(paneSource.includes('const loadOlderRuntimeScrollback = async () => {')).toBe(true)
     expect(paneSource.includes('sinceSeq: 0')).toBe(true)
     expect(paneSource.includes('force: true')).toBe(true)
@@ -165,6 +167,25 @@ describe('CLI terminal measured layout plumbing', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../../terminal-render-web/src/index.tsx'), 'utf8')
     expect(source.includes('-webkit-overflow-scrolling: touch')).toBe(true)
     expect(source.includes('touch-action: pan-y')).toBe(true)
+    expect(source.includes("touchContainer.addEventListener('touchmove', touchMove, { passive: false });")).toBe(true)
+    expect(source.includes('activeViewport.scrollTop = Math.max(0, Math.min(maxScrollTop, before + delta));')).toBe(true)
+    expect(source.includes('onScrollMetrics?: (metrics: { scrollTop: number; scrollHeight: number; clientHeight: number; atTop: boolean; canScroll: boolean }) => void')).toBe(true)
+  })
+
+  it('adds mobile-friendly terminal copy plumbing that can copy selected text or the visible viewport', () => {
+    const terminalSource = fs.readFileSync(path.join(import.meta.dirname, '../../../terminal-render-web/src/index.tsx'), 'utf8')
+    const wrapperSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/CliTerminal.tsx'), 'utf8')
+    const paneSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
+
+    expect(terminalSource.includes('getSelection: () => string;')).toBe(true)
+    expect(terminalSource.includes('getVisibleText: () => string;')).toBe(true)
+    expect(terminalSource.includes('term?.buffer?.active')).toBe(true)
+    expect(terminalSource.includes('translateToString(true)')).toBe(true)
+    expect(wrapperSource.includes('getSelection: () => innerRef.current?.getSelection?.() ||')).toBe(true)
+    expect(wrapperSource.includes('getVisibleText: () => innerRef.current?.getVisibleText?.() ||')).toBe(true)
+    expect(paneSource.includes('const copyCurrentTerminalText = async () => {')).toBe(true)
+    expect(paneSource.includes("selection.trimEnd() ? 'Copied selection' : 'Copied visible terminal'")).toBe(true)
+    expect(paneSource.includes('clipboard.writeText(text)')).toBe(true)
   })
 
   it('uses shared terminal size constants and boots the browser terminal at 80x32', () => {

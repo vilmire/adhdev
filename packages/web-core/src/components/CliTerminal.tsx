@@ -25,7 +25,7 @@ type TerminalViewComponent = ForwardRefExoticComponent<GhosttyTerminalViewProps 
 let rendererLoadLogged = false;
 
 export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
-    ({ onInput, onViewportMetrics, fontSize = 13, readOnly = false, sizingMode = 'measured' }, ref) => {
+    ({ onInput, onViewportMetrics, onScrollMetrics, fontSize = 13, readOnly = false, sizingMode = 'measured' }, ref) => {
         const innerRef = useRef<CliTerminalHandle>(null);
         const [LoadedTerminal, setLoadedTerminal] = useState<TerminalViewComponent | null>(null);
         const pendingWritesRef = useRef<string[]>([]);
@@ -89,6 +89,8 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
                 if (innerRef.current) innerRef.current.bumpResize();
                 else pendingBumpResizeRef.current = true;
             },
+            getSelection: () => innerRef.current?.getSelection?.() || '',
+            getVisibleText: () => innerRef.current?.getVisibleText?.() || '',
         }), []);
 
         useEffect(() => {
@@ -128,6 +130,7 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
                 ref={innerRef}
                 onInput={onInput}
                 onViewportMetrics={onViewportMetrics}
+                onScrollMetrics={onScrollMetrics}
                 fontSize={fontSize}
                 readOnly={readOnly}
                 sizingMode={sizingMode}

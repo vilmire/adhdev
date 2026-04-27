@@ -18,12 +18,15 @@ export interface TerminalRendererHandle {
   resize: (cols: number, rows: number) => void;
   fit: () => void;
   bumpResize: () => void;
+  getSelection: () => string;
+  getVisibleText: () => string;
 }
 
 export interface GhosttyTerminalViewProps {
   onInput: (data: string) => void;
   onResize?: (cols: number, rows: number) => void;
   onViewportMetrics?: (metrics: { width: number; height: number }) => void;
+  onScrollMetrics?: (metrics: { scrollTop: number; scrollHeight: number; clientHeight: number; atTop: boolean; canScroll: boolean }) => void;
   fontSize?: number;
   readOnly?: boolean;
   /**
@@ -75,6 +78,12 @@ const TERMINAL_CHROME_CSS = `
     touch-action: pan-y;
   }
 
+  .adhdev-terminal-renderer .xterm-screen,
+  .adhdev-terminal-renderer .xterm-rows {
+    touch-action: pan-y;
+    -webkit-touch-callout: default;
+  }
+
   .adhdev-terminal-renderer .xterm-viewport::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -95,7 +104,7 @@ const TERMINAL_CHROME_CSS = `
 let rendererRuntimeLogged = false;
 
 export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTerminalViewProps>(
-  ({ onInput, onResize, onViewportMetrics, fontSize = 13, readOnly = false, sizingMode = 'measured', className, style }, ref) => {
+  ({ onInput, onResize, onViewportMetrics, onScrollMetrics, fontSize = 13, readOnly = false, sizingMode = 'measured', className, style }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const terminalRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
@@ -104,6 +113,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
     const onInputRef = useRef(onInput);
     const onResizeRef = useRef(onResize);
     const onViewportMetricsRef = useRef(onViewportMetrics);
+    const onScrollMetricsRef = useRef(onScrollMetrics);
     const readOnlyRef = useRef(readOnly);
     const lastReportedSizeRef = useRef<{ cols: number; rows: number } | null>(null);
     const [ready, setReady] = useState(false);
@@ -133,6 +143,25 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
     useEffect(() => { onInputRef.current = onInput; }, [onInput]);
     useEffect(() => { onResizeRef.current = onResize; }, [onResize]);
     useEffect(() => { onViewportMetricsRef.current = onViewportMetrics; }, [onViewportMetrics]);
+    useEffect(() => { onScrollMetricsRef.current = onScrollMetrics; }, [onScrollMetrics]);
+
+    const getViewportElement = () => containerRef.current?.querySelector('.xterm-viewport') as HTMLElement | null;
+
+    const reportScrollMetrics = () => {
+      const viewport = getViewportElement();
+      if (!viewport) return;
+      const scrollTop = viewport.scrollTop;
+      const scrollHeight = viewport.scrollHeight;
+      const clientHeight = viewport.clientHeight;
+      const canScroll = scrollHeight > clientHeight + 2;
+      onScrollMetricsRef.current?.({
+        scrollTop,
+        scrollHeight,
+        clientHeight,
+        canScroll,
+        atTop: canScroll && scrollTop <= 2,
+      });
+    };
 
     const reportViewportMetrics = () => {
       const screen = containerRef.current?.querySelector('.xterm-screen') as HTMLElement | null;
@@ -145,6 +174,21 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
       width += TERMINAL_CHROME_PADDING_X * 2;
       height += TERMINAL_CHROME_PADDING_Y * 2;
       onViewportMetricsRef.current?.({ width, height });
+      reportScrollMetrics();
+    };
+
+    const getVisibleText = () => {
+      const term = terminalRef.current;
+      const buffer = term?.buffer?.active;
+      if (!term || !buffer) return '';
+      const start = Math.max(0, buffer.viewportY || 0);
+      const end = Math.min(buffer.length, start + term.rows);
+      const lines: string[] = [];
+      for (let row = start; row < end; row += 1) {
+        const line = buffer.getLine(row);
+        lines.push(line?.translateToString(true) || '');
+      }
+      return lines.join('\n').replace(/[\s\n]+$/g, '');
     };
 
     const refreshTerminalSurface = () => {
@@ -197,12 +241,15 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           refreshTerminalSurface();
         });
       },
+      getSelection: () => terminalRef.current?.getSelection?.() || '',
+      getVisibleText,
     }), []);
 
     useEffect(() => {
       let cancelled = false;
       let disposable: { dispose: () => void } | null = null;
       let termForCleanup: Terminal | null = null;
+      let removeTouchScrollListeners: (() => void) | null = null;
 
       function init(): void {
         if (!containerRef.current) return;
@@ -274,6 +321,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           try {
             applyFitIfEnabled(true);
             reportViewportMetrics();
+            reportScrollMetrics();
             setReady(true);
             if (!readOnlyRef.current) term.focus();
             for (const chunk of pendingWritesRef.current) term.write(chunk);
@@ -281,7 +329,57 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           } catch {}
         });
 
+        const touchContainer = containerRef.current;
+        const viewport = getViewportElement();
+        const scrollListener = () => reportScrollMetrics();
+        viewport?.addEventListener('scroll', scrollListener, { passive: true });
+
+        let touchLastY: number | null = null;
+        const touchStart = (event: TouchEvent) => {
+          if (event.touches.length !== 1) {
+            touchLastY = null;
+            return;
+          }
+          const activeViewport = getViewportElement();
+          if (!activeViewport || activeViewport.scrollHeight <= activeViewport.clientHeight + 2) {
+            touchLastY = null;
+            return;
+          }
+          touchLastY = event.touches[0]?.clientY ?? null;
+        };
+        const touchMove = (event: TouchEvent) => {
+          if (touchLastY === null || event.touches.length !== 1) return;
+          const activeViewport = getViewportElement();
+          const nextY = event.touches[0]?.clientY;
+          if (!activeViewport || typeof nextY !== 'number') return;
+          const delta = touchLastY - nextY;
+          touchLastY = nextY;
+          if (Math.abs(delta) < 1) return;
+          const before = activeViewport.scrollTop;
+          const maxScrollTop = Math.max(0, activeViewport.scrollHeight - activeViewport.clientHeight);
+          activeViewport.scrollTop = Math.max(0, Math.min(maxScrollTop, before + delta));
+          if (activeViewport.scrollTop !== before) {
+            event.preventDefault();
+            reportScrollMetrics();
+          }
+        };
+        const touchEnd = () => {
+          touchLastY = null;
+        };
+        touchContainer.addEventListener('touchstart', touchStart, { passive: true });
+        touchContainer.addEventListener('touchmove', touchMove, { passive: false });
+        touchContainer.addEventListener('touchend', touchEnd, { passive: true });
+        touchContainer.addEventListener('touchcancel', touchEnd, { passive: true });
+        removeTouchScrollListeners = () => {
+          viewport?.removeEventListener('scroll', scrollListener);
+          touchContainer.removeEventListener('touchstart', touchStart);
+          touchContainer.removeEventListener('touchmove', touchMove);
+          touchContainer.removeEventListener('touchend', touchEnd);
+          touchContainer.removeEventListener('touchcancel', touchEnd);
+        };
+
         if (cancelled) {
+          removeTouchScrollListeners?.();
           disposable.dispose();
           term.dispose();
         }
@@ -299,6 +397,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         resizeObserverRef.current?.disconnect();
         resizeObserverRef.current = null;
         disposable?.dispose();
+        removeTouchScrollListeners?.();
         termForCleanup?.dispose();
         terminalRef.current = null;
         fitAddonRef.current = null;
