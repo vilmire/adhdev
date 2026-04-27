@@ -49,10 +49,6 @@ import { IconExternalWindow, IconArrowBack, IconKeyboard, IconX, IconEyeOff, Ico
 import { buildDashboardDockviewContextMenuItems } from './dockviewContextMenuItems'
 import { shouldAwaitStoredDockviewHydration, shouldDeferDockviewPanelPrune } from './dashboardDockviewHydration'
 import { getPassiveSessionSelectionCommand } from './dashboardSessionCommands'
-import {
-    getDockviewDragDetachFloatingOptions,
-    shouldDetachDockviewTabDrag,
-} from './dockviewDragDetach'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
 
 interface DashboardDockviewWorkspaceProps {
@@ -623,10 +619,7 @@ export default function DashboardDockviewWorkspace({
     const storedActiveTabIdRef = useRef<string | null>(null)
     const previousVisibleTabKeysRef = useRef<string[]>([])
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; tabKey: string; sourceDocument: Document } | null>(null)
-    const [isDraggingDockview, setIsDraggingDockview] = useState(false)
-    const [isShowingDockviewOverlay, setIsShowingDockviewOverlay] = useState(false)
     const [popoutWindowRevision, setPopoutWindowRevision] = useState(0)
-    const overlayCleanupTimeoutRef = useRef<number | null>(null)
     const hiddenRestoreStateRef = useRef<Record<string, DashboardStoredHiddenTabLocation>>(
         typeof window === 'undefined' ? {} : readDashboardDockviewHiddenRestoreState(layoutProfile),
     )
@@ -729,25 +722,6 @@ export default function DashboardDockviewWorkspace({
             }
         }
     }, [theme])
-
-    const syncPopoutContainerClasses = useCallback(() => {
-        const api = apiRef.current
-        if (!api) return
-        for (const group of api.groups) {
-            try {
-                const ownerDoc = group.element?.ownerDocument
-                if (!ownerDoc || ownerDoc === document) continue
-                const mount = ownerDoc.getElementById('dv-popout-window')
-                if (!(mount instanceof HTMLElement)) continue
-                mount.classList.add('adhdev-dockview')
-                applyDockviewThemeClass(mount, theme)
-                mount.classList.toggle('is-showing-dockview-overlay', isShowingDockviewOverlay)
-                mount.classList.toggle('is-dragging-dockview', isDraggingDockview)
-            } catch {
-                // ignore detached popout docs
-            }
-        }
-    }, [isDraggingDockview, isShowingDockviewOverlay, theme])
 
     const popoutTab = useCallback((tabKey: string) => {
         const api = apiRef.current
@@ -1479,67 +1453,6 @@ export default function DashboardDockviewWorkspace({
         startShortcutListeningForActiveTab,
     ])
 
-    const markDockviewOverlaysHidden = useCallback(() => {
-        const root = dockviewContainerRef.current
-        if (!root) return
-        const nodes = root.querySelectorAll<HTMLElement>(
-            '.dv-drop-target-container, .dv-drop-target-anchor, .dv-drop-target-dropzone, .dv-drop-target-selection',
-        )
-        for (const node of nodes) {
-            node.setAttribute('data-adhdev-force-hidden', 'true')
-        }
-    }, [])
-
-    const clearDockviewOverlayHiddenMarks = useCallback(() => {
-        const root = dockviewContainerRef.current
-        if (!root) return
-        const nodes = root.querySelectorAll<HTMLElement>('[data-adhdev-force-hidden="true"]')
-        for (const node of nodes) {
-            node.removeAttribute('data-adhdev-force-hidden')
-        }
-    }, [])
-
-    const removeDockviewOverlayNodes = useCallback(() => {
-        const root = dockviewContainerRef.current
-        if (!root) return
-
-        const dropTargetRoots = root.querySelectorAll<HTMLElement>('.dv-drop-target-container')
-        for (const node of dropTargetRoots) {
-            node.remove()
-        }
-
-        const dropzones = root.querySelectorAll<HTMLElement>('.dv-drop-target-dropzone')
-        for (const node of dropzones) {
-            node.remove()
-        }
-
-        const dropTargetParents = root.querySelectorAll<HTMLElement>('.dv-drop-target')
-        for (const node of dropTargetParents) {
-            node.classList.remove('dv-drop-target')
-        }
-    }, [])
-
-    const cleanupDockviewOverlays = useCallback(() => {
-        setIsDraggingDockview(false)
-        setIsShowingDockviewOverlay(false)
-        clearDockviewOverlayHiddenMarks()
-        markDockviewOverlaysHidden()
-        removeDockviewOverlayNodes()
-        if (typeof window === 'undefined') return
-        if (overlayCleanupTimeoutRef.current != null) {
-            window.clearTimeout(overlayCleanupTimeoutRef.current)
-        }
-        window.requestAnimationFrame(() => {
-            markDockviewOverlaysHidden()
-            removeDockviewOverlayNodes()
-        })
-        overlayCleanupTimeoutRef.current = window.setTimeout(() => {
-            markDockviewOverlaysHidden()
-            removeDockviewOverlayNodes()
-            overlayCleanupTimeoutRef.current = null
-        }, 80)
-    }, [clearDockviewOverlayHiddenMarks, markDockviewOverlaysHidden, removeDockviewOverlayNodes])
-
     const handleReady = useCallback((event: DockviewReadyEvent) => {
         apiRef.current = event.api
 
@@ -1604,45 +1517,6 @@ export default function DashboardDockviewWorkspace({
             setPopoutWindowRevision(value => value + 1)
         })
 
-        event.api.onWillDragPanel(dragEvent => {
-            const panel = dragEvent.panel
-            const locationType = panel.group.model.location.type
-            if (shouldDetachDockviewTabDrag({
-                isDefaultPrevented: dragEvent.nativeEvent.defaultPrevented,
-                locationType,
-                groupPanelCount: panel.group.panels.length,
-            })) {
-                const dragTarget = dragEvent.nativeEvent.target instanceof Element
-                    ? dragEvent.nativeEvent.target
-                    : null
-                const tabElement = dragTarget?.closest('.dv-tab')
-                const rootElement = dockviewContainerRef.current?.querySelector('.adhdev-dockview')
-                    ?? dockviewContainerRef.current
-                if (tabElement instanceof HTMLElement && rootElement instanceof HTMLElement) {
-                    dragEvent.nativeEvent.preventDefault()
-                    const floatingOptions = getDockviewDragDetachFloatingOptions({
-                        rootRect: rootElement.getBoundingClientRect(),
-                        tabRect: tabElement.getBoundingClientRect(),
-                    })
-                    event.api.addFloatingGroup(panel, floatingOptions)
-                }
-            }
-            setIsDraggingDockview(true)
-            setIsShowingDockviewOverlay(false)
-            markDockviewOverlaysHidden()
-        })
-        event.api.onWillDragGroup(() => {
-            setIsDraggingDockview(true)
-            setIsShowingDockviewOverlay(false)
-            markDockviewOverlaysHidden()
-        })
-        event.api.onWillShowOverlay(() => {
-            clearDockviewOverlayHiddenMarks()
-            setIsShowingDockviewOverlay(true)
-        })
-        event.api.onDidMovePanel(cleanupDockviewOverlays)
-        event.api.onDidDrop(cleanupDockviewOverlays)
-
         // Inject theme attributes into popout windows created by drag-to-popout.
         // Note: dockview already copies stylesheets (addStyles), but data-theme
         // attribute and inline :root style overrides need manual propagation.
@@ -1669,13 +1543,10 @@ export default function DashboardDockviewWorkspace({
     }, [
         activatePanel,
         activateRequestedTab,
-        cleanupDockviewOverlays,
-        clearDockviewOverlayHiddenMarks,
         conversationsByTabKey,
         ides,
         initialDataLoaded,
         layoutProfile,
-        markDockviewOverlaysHidden,
         onActiveTabChange,
         persistDockviewLayout,
         requestedActiveTabKey,
@@ -1778,28 +1649,6 @@ export default function DashboardDockviewWorkspace({
     }, [activateRequestedTab, requestedActiveTabKey])
 
     useEffect(() => {
-        if (!isDraggingDockview || typeof window === 'undefined') return
-        const handlePointerUp = () => cleanupDockviewOverlays()
-        window.addEventListener('pointerup', handlePointerUp)
-        window.addEventListener('mouseup', handlePointerUp)
-        window.addEventListener('dragend', handlePointerUp)
-        return () => {
-            window.removeEventListener('pointerup', handlePointerUp)
-            window.removeEventListener('mouseup', handlePointerUp)
-            window.removeEventListener('dragend', handlePointerUp)
-        }
-    }, [cleanupDockviewOverlays, isDraggingDockview])
-
-    useEffect(() => {
-        return () => {
-            if (typeof window === 'undefined') return
-            if (overlayCleanupTimeoutRef.current != null) {
-                window.clearTimeout(overlayCleanupTimeoutRef.current)
-            }
-        }
-    }, [])
-
-    useEffect(() => {
         const handleDragStart = (e: DragEvent) => {
             const target = e.target as HTMLElement
             if (!target) return
@@ -1845,13 +1694,11 @@ export default function DashboardDockviewWorkspace({
         }
         syncThemeToOpenPopouts()
         syncPopoutChrome()
-        syncPopoutContainerClasses()
-    }, [syncPopoutChrome, syncPopoutContainerClasses, syncThemeToOpenPopouts, theme])
+    }, [syncPopoutChrome, syncThemeToOpenPopouts, theme])
 
     useEffect(() => {
         syncPopoutChrome()
-        syncPopoutContainerClasses()
-    }, [syncPopoutChrome, syncPopoutContainerClasses])
+    }, [syncPopoutChrome])
 
     useEffect(() => {
         const handler = (event: KeyboardEvent) => {
@@ -2045,7 +1892,7 @@ export default function DashboardDockviewWorkspace({
         <DashboardDockviewContext.Provider value={contextValue}>
             <div ref={dockviewContainerRef} className="flex-1 min-h-0 min-w-0 overflow-hidden">
                 <DockviewReact
-                    className={`h-full min-h-0 min-w-0 adhdev-dockview${isDraggingDockview ? ' is-dragging-dockview' : ''}${isShowingDockviewOverlay ? ' is-showing-dockview-overlay' : ''}`}
+                    className="h-full min-h-0 min-w-0 adhdev-dockview"
                     components={{ conversation: DashboardDockviewPanel, remote: DashboardDockviewRemotePanel }}
                     defaultTabComponent={DashboardDockviewTab}
                     watermarkComponent={DashboardDockviewWatermark}

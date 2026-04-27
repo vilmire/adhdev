@@ -417,36 +417,6 @@
         margin: 0;
     }
 
-    .adhdev-dockview .dv-drop-target-container,
-    .adhdev-dockview .dv-drop-target {
-        --dv-transition-duration: 0ms;
-    }
-
-    .adhdev-dockview .dv-drop-target-container .dv-drop-target-anchor,
-    .adhdev-dockview .dv-drop-target>.dv-drop-target-dropzone>.dv-drop-target-selection {
-        transition: none !important;
-    }
-
-    .adhdev-dockview:not(.is-showing-dockview-overlay) .dv-drop-target-container,
-    .adhdev-dockview:not(.is-showing-dockview-overlay) .dv-drop-target>.dv-drop-target-dropzone {
-        opacity: 0 !important;
-    }
-
-    .adhdev-dockview:not(.is-showing-dockview-overlay) .dv-drop-target-container .dv-drop-target-anchor,
-    .adhdev-dockview:not(.is-showing-dockview-overlay) .dv-drop-target>.dv-drop-target-dropzone>.dv-drop-target-selection {
-        background: transparent !important;
-        border-color: transparent !important;
-        opacity: 0 !important;
-        pointer-events: none !important;
-    }
-
-    .adhdev-dockview [data-adhdev-force-hidden="true"] {
-        background: transparent !important;
-        border-color: transparent !important;
-        opacity: 0 !important;
-        pointer-events: none !important;
-    }
-
     .adhdev-dockview-tab {
         position: relative;
         display: flex;
