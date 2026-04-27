@@ -81,6 +81,7 @@ import {
 } from '@adhdev/terminal-mux-control/api';
 import {
   classifyHotChatSessionsForSubscriptionFlush,
+  DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS,
 } from '@adhdev/daemon-core';
 import {
   DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
@@ -93,6 +94,8 @@ import {
 // ─── Constants ───
 const DEFAULT_PORT = 3847;
 const STATUS_INTERVAL = 2000;
+const CHAT_OUTPUT_ACTIVITY_HOT_MS = DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS;
+const CHAT_OUTPUT_FLUSH_DEBOUNCE_MS = 700;
 const STANDALONE_AUTH_SESSION_COOKIE = 'adhdev_standalone_session';
 const STANDALONE_PASSWORD_CONFIG_FILE = 'standalone-auth.json';
 const STANDALONE_PREFERENCES_CONFIG_FILE = 'standalone-network.json';
@@ -385,6 +388,8 @@ class StandaloneServer {
   private wsChatFlushInFlight = false;
   private pendingWsChatFlush: { targetWs?: WebSocket; onlyActive: boolean } | null = null;
   private hotWsChatSessionIds = new Set<string>();
+  private wsChatOutputActiveAt = new Map<string, number>();
+  private wsChatOutputFlushTimer: NodeJS.Timeout | null = null;
   private running = false;
   private components: DaemonComponents | null = null;
   private devServer: Awaited<ReturnType<typeof startDaemonDevSupport>> | null = null;
@@ -444,6 +449,28 @@ class StandaloneServer {
   private isCliSession(sessionId: string): boolean {
     const mode = this.getCliPresentationMode(sessionId);
     return mode === 'chat' || mode === 'terminal';
+  }
+
+  private getRecentlyOutputActiveChatSessionIds(now: number): Set<string> {
+    const active = new Set<string>();
+    for (const [sessionId, lastOutputAt] of this.wsChatOutputActiveAt) {
+      if (now - lastOutputAt <= CHAT_OUTPUT_ACTIVITY_HOT_MS) {
+        active.add(sessionId);
+      } else {
+        this.wsChatOutputActiveAt.delete(sessionId);
+      }
+    }
+    return active;
+  }
+
+  private markWsChatOutputActivity(sessionId: string): void {
+    if (!sessionId || !this.isCliSession(sessionId)) return;
+    this.wsChatOutputActiveAt.set(sessionId, Date.now());
+    if (this.wsChatOutputFlushTimer || this.clients.size === 0) return;
+    this.wsChatOutputFlushTimer = setTimeout(() => {
+      this.wsChatOutputFlushTimer = null;
+      void this.flushWsChatSubscriptions(undefined, { onlyActive: true });
+    }, CHAT_OUTPUT_FLUSH_DEBOUNCE_MS);
   }
 
   private hasPasswordAuth(): boolean {
@@ -557,6 +584,7 @@ class StandaloneServer {
         getP2p: () => ({
           broadcastSessionOutput: (key: string, data: string) => {
             if (this.clients.size === 0 || !this.isCliSession(key)) return;
+            this.markWsChatOutputActivity(key);
             const msg = JSON.stringify({ type: 'session_output', sessionId: key, data });
             for (const client of this.clients) {
               if (client.readyState === 1) { // OPEN
@@ -1403,10 +1431,12 @@ class StandaloneServer {
   }
 
   private getHotChatSessionIdsForWsFlush(): { active: Set<string>; finalizing: Set<string> } {
+    const now = Date.now();
     const snapshot = this.buildSharedSnapshot('live');
     const hotSessions = classifyHotChatSessionsForSubscriptionFlush(
       snapshot.sessions,
       this.hotWsChatSessionIds,
+      { now, activeSessionIds: this.getRecentlyOutputActiveChatSessionIds(now) },
     );
     this.hotWsChatSessionIds = hotSessions.active;
     return hotSessions;

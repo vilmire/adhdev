@@ -59,6 +59,7 @@ export function classifyHotChatSessionsForSubscriptionFlush(
     now?: number;
     recentMessageGraceMs?: number;
     activeStatuses?: ReadonlySet<string>;
+    activeSessionIds?: ReadonlySet<string>;
   } = {},
 ): { active: Set<string>; finalizing: Set<string> } {
   const now = options.now ?? Date.now();
@@ -69,6 +70,7 @@ export function classifyHotChatSessionsForSubscriptionFlush(
       : DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS,
   );
   const activeStatuses = options.activeStatuses ?? DEFAULT_ACTIVE_CHAT_POLL_STATUSES;
+  const activeSessionIds = options.activeSessionIds ?? new Set<string>();
   const active = new Set<string>();
   const excluded = new Set<string>();
 
@@ -77,6 +79,10 @@ export function classifyHotChatSessionsForSubscriptionFlush(
     if (!sessionId) continue;
     if (isDefinitelyNonLiveRuntimeSession(session)) {
       excluded.add(sessionId);
+      continue;
+    }
+    if (activeSessionIds.has(sessionId)) {
+      active.add(sessionId);
       continue;
     }
 

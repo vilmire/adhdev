@@ -60,6 +60,44 @@ describe('classifyHotChatSessionsForSubscriptionFlush', () => {
     expect(Array.from(result.finalizing)).toEqual([])
   })
 
+  it('treats subscribed sessions with recent PTY output as hot even when parsed status is idle', () => {
+    const now = 25_000
+    const result = classifyHotChatSessionsForSubscriptionFlush([
+      {
+        id: 'session-output-active',
+        status: 'idle',
+        unread: false,
+        inboxBucket: 'idle',
+        lastMessageAt: 0,
+      },
+    ], new Set(), {
+      now,
+      activeSessionIds: new Set(['session-output-active']),
+    })
+
+    expect(Array.from(result.active)).toEqual(['session-output-active'])
+    expect(Array.from(result.finalizing)).toEqual([])
+  })
+
+  it('does not revive stopped recovery snapshots via explicit output activity', () => {
+    const now = 26_000
+    const result = classifyHotChatSessionsForSubscriptionFlush([
+      {
+        id: 'session-output-recovery',
+        status: 'idle',
+        runtimeLifecycle: 'stopped',
+        runtimeSurfaceKind: 'recovery_snapshot',
+        runtimeRestoredFromStorage: true,
+      },
+    ], new Set(['session-output-recovery']), {
+      now,
+      activeSessionIds: new Set(['session-output-recovery']),
+    })
+
+    expect(Array.from(result.active)).toEqual([])
+    expect(Array.from(result.finalizing)).toEqual([])
+  })
+
   it('marks previous hot sessions as finalizing once they fall out of the grace window', () => {
     const now = 30_000
     const result = classifyHotChatSessionsForSubscriptionFlush([
