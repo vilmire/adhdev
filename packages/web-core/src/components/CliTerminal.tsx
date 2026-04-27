@@ -32,6 +32,7 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
         const pendingClearRef = useRef(false);
         const pendingFitRef = useRef(false);
         const pendingBumpResizeRef = useRef(false);
+        const pendingScrollToTopRef = useRef(false);
 
         const flushPending = () => {
             const terminal = innerRef.current;
@@ -53,6 +54,11 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
             if (pendingBumpResizeRef.current) {
                 terminal.bumpResize();
                 pendingBumpResizeRef.current = false;
+            }
+
+            if (pendingScrollToTopRef.current) {
+                terminal.scrollToTop();
+                pendingScrollToTopRef.current = false;
             }
         };
 
@@ -88,6 +94,10 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
             bumpResize: () => {
                 if (innerRef.current) innerRef.current.bumpResize();
                 else pendingBumpResizeRef.current = true;
+            },
+            scrollToTop: () => {
+                if (innerRef.current) innerRef.current.scrollToTop();
+                else pendingScrollToTopRef.current = true;
             },
             getSelection: () => innerRef.current?.getSelection?.() || '',
             getVisibleText: () => innerRef.current?.getVisibleText?.() || '',

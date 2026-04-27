@@ -70,6 +70,9 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(paneSource.includes('const loadOlderRuntimeScrollback = async () => {')).toBe(true)
     expect(paneSource.includes('sinceSeq: 0')).toBe(true)
     expect(paneSource.includes('force: true')).toBe(true)
+    expect(paneSource.includes('const pendingScrollToTopAfterReplayRef = useRef(false);')).toBe(true)
+    expect(paneSource.includes('pendingScrollToTopAfterReplayRef.current = true;')).toBe(true)
+    expect(paneSource.includes('terminalRef.current?.scrollToTop?.();')).toBe(true)
     expect(paneSource.includes('seedTerminal(event.text || \'\', event.seq || 0, event.cols, event.rows, { force: !!event.force });')).toBe(true)
     expect(paneSource.includes('if (!force && seq > 0 && seededSnapshotSeqRef.current >= seq) return;')).toBe(true)
     expect(paneSource.includes('if (!force && seq === 0 && liveOutputStartedRef.current) return;')).toBe(true)
@@ -186,6 +189,18 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(paneSource.includes('const copyCurrentTerminalText = async () => {')).toBe(true)
     expect(paneSource.includes("selection.trimEnd() ? 'Copied selection' : 'Copied visible terminal'")).toBe(true)
     expect(paneSource.includes('clipboard.writeText(text)')).toBe(true)
+  })
+
+  it('exposes terminal viewport scroll control through the renderer and lazy wrapper for older scrollback replay anchoring', () => {
+    const terminalSource = fs.readFileSync(path.join(import.meta.dirname, '../../../terminal-render-web/src/index.tsx'), 'utf8')
+    const wrapperSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/CliTerminal.tsx'), 'utf8')
+    expect(terminalSource.includes('scrollToTop: () => void;')).toBe(true)
+    expect(terminalSource.includes('term.scrollToTop();')).toBe(true)
+    expect(terminalSource.includes('const scroll = (remainingAttempts = 4) => {')).toBe(true)
+    expect(wrapperSource.includes('scrollToTop: () => {')).toBe(true)
+    expect(wrapperSource.includes('pendingScrollToTopRef.current = true;')).toBe(true)
+    expect(wrapperSource.includes('terminal.scrollToTop();')).toBe(true)
+    expect(wrapperSource.includes('if (innerRef.current) innerRef.current.scrollToTop();')).toBe(true)
   })
 
   it('uses shared terminal size constants and boots the browser terminal at 80x32', () => {

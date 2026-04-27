@@ -64,6 +64,7 @@ export default function CliTerminalPane({
     const pendingLiveOutputRef = useRef('');
     const pendingHiddenSnapshotRef = useRef<{ text: string; seq: number; cols?: number; rows?: number; force?: boolean } | null>(null);
     const pendingHiddenClearRef = useRef(false);
+    const pendingScrollToTopAfterReplayRef = useRef(false);
     const flushFrameRef = useRef<{ ownerWindow: Window; frameId: number } | null>(null);
     const copyStatusTimeoutRef = useRef<{ ownerWindow: Window; timeoutId: number } | null>(null);
     const scrollbackStatusTimeoutRef = useRef<{ ownerWindow: Window; timeoutId: number } | null>(null);
@@ -155,6 +156,7 @@ export default function CliTerminalPane({
         pendingLiveOutputRef.current = '';
         pendingHiddenSnapshotRef.current = null;
         pendingHiddenClearRef.current = false;
+        pendingScrollToTopAfterReplayRef.current = false;
         if (!terminalScaleTouchedRef.current) {
             terminalAutoScaleInitializedRef.current = false;
             setTerminalScale(1);
@@ -178,6 +180,7 @@ export default function CliTerminalPane({
         pendingLiveOutputRef.current = '';
         pendingHiddenSnapshotRef.current = null;
         pendingHiddenClearRef.current = false;
+        pendingScrollToTopAfterReplayRef.current = false;
         if (flushFrameRef.current !== null) {
             cancelScheduledFrame();
         }
@@ -201,6 +204,13 @@ export default function CliTerminalPane({
         terminalRef.current?.write(nextChunk);
         if (pendingLiveOutputRef.current.length > 0) {
             scheduleFlushPendingLiveOutput();
+            return;
+        }
+        if (pendingScrollToTopAfterReplayRef.current) {
+            pendingScrollToTopAfterReplayRef.current = false;
+            scheduleInOwnerWindow(() => {
+                terminalRef.current?.scrollToTop?.();
+            });
         }
     };
 
@@ -223,6 +233,12 @@ export default function CliTerminalPane({
         pendingLiveOutputRef.current = '';
         terminalRef.current?.reset?.();
         if (text) enqueueTerminalWrite(text);
+        else if (pendingScrollToTopAfterReplayRef.current) {
+            pendingScrollToTopAfterReplayRef.current = false;
+            scheduleInOwnerWindow(() => {
+                terminalRef.current?.scrollToTop?.();
+            });
+        }
     };
 
     useEffect(() => {
@@ -383,6 +399,7 @@ export default function CliTerminalPane({
         if (isLoadingScrollback) return;
         setIsLoadingScrollback(true);
         setScrollbackStatusMessage('Loading older terminal output...');
+        pendingScrollToTopAfterReplayRef.current = true;
         const result = await requestRuntimeSnapshot({
             sinceSeq: 0,
             force: true,
@@ -391,6 +408,7 @@ export default function CliTerminalPane({
         });
         setIsLoadingScrollback(false);
         if (result?.success === false) {
+            pendingScrollToTopAfterReplayRef.current = false;
             setScrollbackStatusMessage(`Older terminal output unavailable: ${result.error}`);
             return;
         }

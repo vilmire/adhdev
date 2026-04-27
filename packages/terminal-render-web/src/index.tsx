@@ -18,6 +18,7 @@ export interface TerminalRendererHandle {
   resize: (cols: number, rows: number) => void;
   fit: () => void;
   bumpResize: () => void;
+  scrollToTop: () => void;
   getSelection: () => string;
   getVisibleText: () => string;
 }
@@ -240,6 +241,19 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         else scheduleInOwnerWindow(() => {
           refreshTerminalSurface();
         });
+      },
+      scrollToTop: () => {
+        const scroll = (remainingAttempts = 4) => {
+          const term = terminalRef.current;
+          if (!term) return;
+          try { term.scrollToTop(); } catch {}
+          reportScrollMetrics();
+          refreshTerminalSurface();
+          if (remainingAttempts > 0) {
+            scheduleInOwnerWindow(() => scroll(remainingAttempts - 1));
+          }
+        };
+        scroll();
       },
       getSelection: () => terminalRef.current?.getSelection?.() || '',
       getVisibleText,
