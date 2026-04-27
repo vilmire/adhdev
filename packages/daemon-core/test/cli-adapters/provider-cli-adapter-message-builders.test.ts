@@ -483,6 +483,61 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     expect(second).toEqual(first)
   })
 
+  it('passes only the committed transcript tail to parseOutput while returning the full transcript', () => {
+    const parseOutput = vi.fn((input: any) => ({
+      id: 'cli_session',
+      status: 'idle',
+      title: 'Test CLI',
+      messages: [
+        ...input.messages,
+        { role: 'assistant', content: 'fresh assistant answer', id: 'assistant-fresh', index: 2600 },
+      ],
+    }))
+
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+        parseOutput,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => 'fresh screen snapshot'),
+    }
+    adapter.committedMessages = Array.from({ length: 2600 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `committed-${index + 1}`,
+      timestamp: index + 1,
+      receivedAt: index + 1,
+      id: `msg-${index + 1}`,
+      index,
+    }))
+    adapter.currentStatus = 'idle'
+    adapter.activeModal = null
+
+    const result = adapter.getScriptParsedStatus()
+    const input = parseOutput.mock.calls[0][0]
+
+    expect(input.messages).toHaveLength(100)
+    expect(input.messages[0]).toMatchObject({ content: 'committed-2501', id: 'msg-2501' })
+    expect(result.messages).toHaveLength(2601)
+    expect(result.messages[0]).toMatchObject({ content: 'committed-1', id: 'msg-1' })
+    expect(result.messages[2599]).toMatchObject({ content: 'committed-2600', id: 'msg-2600' })
+    expect(result.messages[2600]).toMatchObject({ content: 'fresh assistant answer', id: 'assistant-fresh' })
+  })
+
   it('keeps turn-scoped parse input empty instead of falling back to the full pre-turn transcript when no new output has arrived yet', () => {
     const input = buildCliParseInput({
       accumulatedBuffer: 'startup text already on screen',

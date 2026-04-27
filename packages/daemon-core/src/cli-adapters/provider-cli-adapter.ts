@@ -282,6 +282,7 @@ export class ProviderCliAdapter implements CliAdapter {
     private static readonly STATUS_HOT_PATH_PARSE_MIN_INTERVAL_MS = 1000;
     private static readonly SCREEN_SNAPSHOT_MIN_INTERVAL_MS = 250;
     private static readonly MAX_TRACE_ENTRIES = 250;
+    private static readonly PARSE_MESSAGE_TAIL_LIMIT = 100;
 
     private readonly providerResolutionMeta: ProviderResolutionMeta;
     private static readonly FINISH_RETRY_DELAY_MS = 300;
@@ -331,6 +332,42 @@ export class ProviderCliAdapter implements CliAdapter {
             return cached.result;
         }
         return null;
+    }
+
+    private selectParseBaseMessages(baseMessages: CliChatMessage[]): CliChatMessage[] {
+        if (baseMessages.length <= ProviderCliAdapter.PARSE_MESSAGE_TAIL_LIMIT) return baseMessages;
+        return baseMessages.slice(-ProviderCliAdapter.PARSE_MESSAGE_TAIL_LIMIT);
+    }
+
+    private messagesComparable(left: any, right: any): boolean {
+        if (!left || !right) return false;
+        if ((left.role || '') !== (right.role || '')) return false;
+        const leftText = normalizeComparableTranscriptText(left.content);
+        const rightText = normalizeComparableTranscriptText(right.content);
+        return !!leftText && leftText === rightText;
+    }
+
+    private stitchParsedMessagesWithCommittedBase(
+        parsedMessages: any[],
+        fullBaseMessages: CliChatMessage[],
+        parseBaseMessages: CliChatMessage[],
+    ): any[] {
+        if (!Array.isArray(parsedMessages) || parsedMessages.length === 0) return parsedMessages;
+        if (fullBaseMessages.length <= parseBaseMessages.length) return parsedMessages;
+
+        const parsedFirst = parsedMessages[0];
+        const fullFirst = fullBaseMessages[0];
+        if (parsedMessages.length >= fullBaseMessages.length && this.messagesComparable(parsedFirst, fullFirst)) {
+            return parsedMessages;
+        }
+
+        const tailFirst = parseBaseMessages[0];
+        if (tailFirst && this.messagesComparable(parsedFirst, tailFirst)) {
+            const prefixLength = fullBaseMessages.length - parseBaseMessages.length;
+            return [...fullBaseMessages.slice(0, prefixLength), ...parsedMessages];
+        }
+
+        return [...fullBaseMessages, ...parsedMessages];
     }
 
     private getIdleFinishConfirmMs(): number {
@@ -1439,18 +1476,26 @@ export class ProviderCliAdapter implements CliAdapter {
             try {
                 const screenText = this.terminalScreen.getText();
                 const tail = this.recentOutputBuffer.slice(-500);
+                const parseBaseMessages = this.selectParseBaseMessages(this.committedMessages);
                 const input = buildCliParseInput({
                     accumulatedBuffer: this.accumulatedBuffer,
                     accumulatedRawBuffer: this.accumulatedRawBuffer,
                     recentOutputBuffer: this.recentOutputBuffer,
                     terminalScreenText: screenText,
-                    baseMessages: this.committedMessages,
+                    baseMessages: parseBaseMessages,
                     partialResponse: this.responseBuffer,
                     isWaitingForResponse: this.isWaitingForResponse,
                     scope: this.currentTurnScope,
                     runtimeSettings: this.runtimeSettings,
                 });
                 const session = this.cliScripts.parseSession({ ...input, tail, tailScreen: buildCliScreenSnapshot(tail) });
+                if (session && typeof session === 'object' && Array.isArray(session.messages)) {
+                    session.messages = this.stitchParsedMessagesWithCommittedBase(
+                        session.messages,
+                        this.committedMessages,
+                        parseBaseMessages,
+                    );
+                }
                 this.parseErrorMessage = null;
                 return session && typeof session === 'object' ? session : null;
             } catch (e: any) {
@@ -1871,12 +1916,13 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         try {
             const screenText = typeof screenTextOverride === 'string' ? screenTextOverride : this.terminalScreen.getText();
+            const parseBaseMessages = this.selectParseBaseMessages(baseMessages);
             const input = buildCliParseInput({
                 accumulatedBuffer: this.accumulatedBuffer,
                 accumulatedRawBuffer: this.accumulatedRawBuffer,
                 recentOutputBuffer: this.recentOutputBuffer,
                 terminalScreenText: screenText,
-                baseMessages,
+                baseMessages: parseBaseMessages,
                 partialResponse,
                 isWaitingForResponse: this.isWaitingForResponse,
                 scope,
@@ -1888,6 +1934,11 @@ export class ProviderCliAdapter implements CliAdapter {
             }
             const normalizedParsed = this.suppressStaleParsedApproval(parsed, input.recentBuffer, input.screenText);
             if (normalizedParsed && Array.isArray(normalizedParsed.messages)) {
+                normalizedParsed.messages = this.stitchParsedMessagesWithCommittedBase(
+                    normalizedParsed.messages,
+                    baseMessages,
+                    parseBaseMessages,
+                );
                 this.trimLastAssistantEcho(normalizedParsed.messages, scope?.prompt || getLastUserPromptText(baseMessages));
             }
             this.parseErrorMessage = null;
