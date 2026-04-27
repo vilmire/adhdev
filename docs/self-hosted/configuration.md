@@ -71,10 +71,10 @@ Relevant standalone-facing fields:
 | `machineNickname` | Friendly name shown in the dashboard |
 | `workspaces` | Saved launch targets for IDE, CLI, and ACP launches |
 | `defaultWorkspaceId` | Default saved workspace selection |
-| `providerSettings` | Per-provider user settings |
+| `providerSettings` | Per-provider user settings, including machine-local CLI/ACP activation and executable overrides |
 | `ideSettings` | Per-IDE extension enablement settings |
 | `providerSourceMode` | Provider source policy: `normal` (upstream cache + overrides) or `no-upstream` (skip upstream fetch/load) |
-| `providerDir` | Optional explicit override root. Set this if you want a local `adhdev-providers` checkout to shadow upstream providers. |
+| `providerDir` | Optional explicit override root. Set this if you want a local `adhdev-providers` checkout to shadow upstream providers. Apply/reload provider source config after changing it. |
 | `terminalSizingMode` | `measured` by default, or `fit` for the legacy xterm fit path |
 
 Standalone-only preferences stored outside `config.json`:
@@ -92,9 +92,9 @@ If you only care about the settings that most affect day-to-day standalone behav
 
 - `machineNickname` so the dashboard shows a meaningful machine label
 - `workspaces` and `defaultWorkspaceId` so launch flows start in the right places
-- `providerSettings` for per-provider behavior and auth-related settings
+- `providerSettings` for per-provider behavior, machine-local CLI/ACP activation, executable paths, and auth-related settings
 - `providerSourceMode` if you want to keep local user overrides but disable upstream fetch/load on this machine
-- `providerDir` if you want ADHDev to use an explicit local provider override root instead of the default `~/.adhdev/providers`
+- `providerDir` if you want ADHDev to use an explicit local provider override root instead of the default `~/.adhdev/providers`; use the dashboard's Providers tab **Apply + Reload** flow after changing provider source settings
 - `terminalSizingMode` if terminal rendering behaves poorly in your environment
 
 ## Shared Fields You Can Usually Ignore
@@ -218,6 +218,10 @@ If you are operating self-hosted seriously, these other local state areas are wo
 - `~/.adhdev/terminal-mux/state.json` for last-workspace client state
 
 ## Provider Directories
+
+The dashboard's machine **Providers** tab shows the effective user root, upstream root, and provider root order. Its **Apply + Reload** action refreshes provider resolution for fix/verify flows and new launches. Existing running sessions may still need a restart to use changed provider scripts.
+
+CLI and ACP providers are machine-scoped: enable the provider, run detection, and set custom executable path/args if needed before expecting it to appear as launchable.
 
 Provider roots use a category-based layout:
 
