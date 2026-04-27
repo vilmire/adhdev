@@ -8,7 +8,7 @@ function readSource(relativePath: string): string {
 
 describe('dashboard auto-read mark_session_seen payload', () => {
   it('passes the live completion marker observed by desktop auto-read to the daemon', () => {
-    const source = readSource('pages/Dashboard.tsx')
+    const source = readSource('hooks/useDashboardDesktopAutoRead.ts')
     const commandIndex = source.indexOf("'mark_session_seen'")
     expect(commandIndex).toBeGreaterThan(-1)
     const payload = source.slice(commandIndex, commandIndex + 320)

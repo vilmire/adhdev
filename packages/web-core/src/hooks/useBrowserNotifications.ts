@@ -8,7 +8,7 @@
  *
  * Works on localhost and HTTPS. Browser tab must be open (background OK).
  */
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { isManagedStatusWorking, normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize'
 import { shouldNotify } from './useNotificationPrefs'
 
@@ -58,6 +58,11 @@ export function canNotify(): boolean {
  * If so, the server handles push notifications — we should skip browser-level ones.
  */
 let _pushSubscriptionActive: boolean | null = null
+
+export function shouldSuppressBrowserNotificationForPushState(pushActive: boolean | null): boolean {
+    return pushActive !== false
+}
+
 async function checkPushSubscription(): Promise<boolean> {
     if (_pushSubscriptionActive !== null) return _pushSubscriptionActive
     try {
@@ -109,11 +114,15 @@ export function useBrowserNotifications(
     const opts = { ...DEFAULT_OPTS, ...options }
     const prevStates = useRef<Map<string, string>>(new Map())
     const lastNotifyTime = useRef(0)
-    const pushActive = useRef<boolean | null>(null)
+    const [pushActive, setPushActive] = useState<boolean | null>(null)
 
     // Check once if PWA push is active (cloud) — skip browser notifications if so
     useEffect(() => {
-        checkPushSubscription().then(active => { pushActive.current = active })
+        let cancelled = false
+        checkPushSubscription().then(active => {
+            if (!cancelled) setPushActive(active)
+        })
+        return () => { cancelled = true }
     }, [])
 
     const throttledNotify = useCallback((title: string, body: string, tag?: string) => {
@@ -127,8 +136,9 @@ export function useBrowserNotifications(
         if (!opts.enabled || !canNotify()) return
         // Respect global notification preference
         if (!shouldNotify('browser')) return
-        // Skip if PWA push notifications are active (cloud handles it)
-        if (pushActive.current === true) return
+        // Skip while Service Worker push state is unknown, or when PWA push notifications are active.
+        // This avoids duplicate buzzing before the async subscription check resolves.
+        if (shouldSuppressBrowserNotificationForPushState(pushActive)) return
         // Don't notify if page is focused (user is already looking)
         if (document.hasFocus()) {
             // Still track state changes
@@ -173,5 +183,5 @@ export function useBrowserNotifications(
 
             prevStates.current.set(agent.id, curr)
         }
-    }, [agents, opts.enabled, opts.onApproval, opts.onComplete, opts.onError, throttledNotify])
+    }, [agents, opts.enabled, opts.onApproval, opts.onComplete, opts.onError, pushActive, throttledNotify])
 }

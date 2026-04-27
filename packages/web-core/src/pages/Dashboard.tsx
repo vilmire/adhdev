@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useDaemons } from '../compat'
@@ -28,6 +28,7 @@ import { useDashboardNotifications } from '../hooks/useDashboardNotifications'
 import { useDashboardNotificationActions } from '../hooks/useDashboardNotificationActions'
 import { useDashboardCommandActions } from '../hooks/useDashboardCommandActions'
 import { useDashboardDesktopWorkspaceState } from '../hooks/useDashboardDesktopWorkspaceState'
+import { useDashboardDesktopAutoRead } from '../hooks/useDashboardDesktopAutoRead'
 import { useDashboardHistoryModalState } from '../hooks/useDashboardHistoryModalState'
 import { useDashboardOverlayDialogsState } from '../hooks/useDashboardOverlayDialogsState'
 import { useDashboardPendingLaunch } from '../hooks/useDashboardPendingLaunch'
@@ -40,11 +41,8 @@ import type { Toast } from '../components/dashboard/ToastContainer'
 import type { DashboardMobileSection } from '../components/dashboard/DashboardMobileBottomNav'
 import { getMobileDashboardMode, subscribeMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
 import { getDashboardWarmChatTailOptions } from '../utils/dashboard-warm-chat-tail'
-import { buildLiveSessionInboxStateMap, getConversationLiveInboxState } from '../components/dashboard/DashboardMobileChatShared'
-import { getConversationHistorySessionId } from '../components/dashboard/conversation-identity'
-import { getConversationTimestamp } from '../components/dashboard/conversation-sort'
+import { buildLiveSessionInboxStateMap } from '../components/dashboard/DashboardMobileChatShared'
 import { compareMachineEntries, getMachineDisplayName } from '../utils/daemon-utils'
-import { getDesktopAutoReadPlan, getDesktopAutoReadScheduleDecision } from '../utils/dashboard-auto-read'
 import { getDashboardMachineRefreshTargets } from '../utils/dashboard-machine-refresh'
 
 
@@ -196,11 +194,6 @@ export default function Dashboard() {
         notifications,
         sendDaemonCommand,
     })
-    const lastDesktopAutoReadKeyRef = useRef<string | null>(null)
-    const pendingDesktopAutoReadKeyRef = useRef<string | null>(null)
-    const pendingDesktopAutoReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-    const pendingDesktopAutoReadVisibleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-    const pendingDesktopAutoReadVisibilityHandlerRef = useRef<(() => void) | null>(null)
 
     const {
         containerRef,
@@ -241,118 +234,12 @@ export default function Dashboard() {
         setSearchParams,
     })
 
-    useEffect(() => {
-        const clearPendingDesktopAutoRead = () => {
-            if (pendingDesktopAutoReadTimerRef.current) {
-                clearTimeout(pendingDesktopAutoReadTimerRef.current)
-                pendingDesktopAutoReadTimerRef.current = null
-            }
-            if (pendingDesktopAutoReadVisibleTimerRef.current) {
-                clearTimeout(pendingDesktopAutoReadVisibleTimerRef.current)
-                pendingDesktopAutoReadVisibleTimerRef.current = null
-            }
-            if (pendingDesktopAutoReadVisibilityHandlerRef.current) {
-                document.removeEventListener('visibilitychange', pendingDesktopAutoReadVisibilityHandlerRef.current)
-                pendingDesktopAutoReadVisibilityHandlerRef.current = null
-            }
-            pendingDesktopAutoReadKeyRef.current = null
-        }
-
-        if (isMobile) {
-            clearPendingDesktopAutoRead()
-            lastDesktopAutoReadKeyRef.current = null
-            return
-        }
-        if (!activeConv?.sessionId) {
-            clearPendingDesktopAutoRead()
-            lastDesktopAutoReadKeyRef.current = null
-            return
-        }
-
-        const liveState = getConversationLiveInboxState(activeConv, liveSessionInboxState)
-        const autoReadPlan = getDesktopAutoReadPlan({
-            tabKey: activeConv.tabKey,
-            historySessionId: getConversationHistorySessionId(activeConv) || '',
-            lastMessageHash: activeConv.lastMessageHash || '',
-            lastMessageAt: Number(activeConv.lastMessageAt || 0),
-            timestamp: getConversationTimestamp(activeConv),
-            liveState,
-        })
-        const autoReadKey = autoReadPlan.autoReadKey
-        const scheduleDecision = getDesktopAutoReadScheduleDecision({
-            autoReadKey,
-            shouldMarkSeen: autoReadPlan.shouldMarkSeen,
-            completedKey: lastDesktopAutoReadKeyRef.current,
-            pendingKey: pendingDesktopAutoReadKeyRef.current,
-        })
-
-        if (!autoReadPlan.shouldMarkSeen) {
-            if (scheduleDecision.shouldCancelPending) clearPendingDesktopAutoRead()
-            lastDesktopAutoReadKeyRef.current = autoReadKey
-            return
-        }
-        if (!scheduleDecision.shouldSchedule) return
-        if (scheduleDecision.shouldCancelPending) clearPendingDesktopAutoRead()
-
-        const doMarkSeen = () => {
-            if (document.visibilityState !== 'visible') return
-            if (lastDesktopAutoReadKeyRef.current === autoReadKey) return
-            lastDesktopAutoReadKeyRef.current = autoReadKey
-            pendingDesktopAutoReadKeyRef.current = null
-            pendingDesktopAutoReadTimerRef.current = null
-            pendingDesktopAutoReadVisibleTimerRef.current = null
-            if (pendingDesktopAutoReadVisibilityHandlerRef.current) {
-                document.removeEventListener('visibilitychange', pendingDesktopAutoReadVisibilityHandlerRef.current)
-                pendingDesktopAutoReadVisibilityHandlerRef.current = null
-            }
-
-            const readAt = autoReadPlan.readAt
-            void sendDaemonCommand(activeConv.daemonId || activeConv.routeId, 'mark_session_seen', {
-                sessionId: activeConv.sessionId,
-                providerSessionId: activeConv.providerSessionId,
-                seenAt: readAt,
-                completionMarker: autoReadPlan.completionMarker,
-            }).catch(() => {})
-        }
-
-        pendingDesktopAutoReadKeyRef.current = scheduleDecision.nextPendingKey
-
-        if (document.visibilityState === 'visible') {
-            pendingDesktopAutoReadTimerRef.current = setTimeout(doMarkSeen, 1500)
-            const onVisChange = () => {
-                if (document.visibilityState === 'visible') return
-                if (pendingDesktopAutoReadTimerRef.current) {
-                    clearTimeout(pendingDesktopAutoReadTimerRef.current)
-                    pendingDesktopAutoReadTimerRef.current = null
-                }
-            }
-            pendingDesktopAutoReadVisibilityHandlerRef.current = onVisChange
-            document.addEventListener('visibilitychange', onVisChange)
-            return
-        }
-
-        const onVisible = () => {
-            if (document.visibilityState !== 'visible') return
-            if (pendingDesktopAutoReadVisibleTimerRef.current) {
-                clearTimeout(pendingDesktopAutoReadVisibleTimerRef.current)
-            }
-            pendingDesktopAutoReadVisibleTimerRef.current = setTimeout(doMarkSeen, 800)
-            if (pendingDesktopAutoReadVisibilityHandlerRef.current) {
-                document.removeEventListener('visibilitychange', pendingDesktopAutoReadVisibilityHandlerRef.current)
-                pendingDesktopAutoReadVisibilityHandlerRef.current = null
-            }
-        }
-        pendingDesktopAutoReadVisibilityHandlerRef.current = onVisible
-        document.addEventListener('visibilitychange', onVisible)
-    }, [activeConv, isMobile, liveSessionInboxState, sendDaemonCommand])
-
-    useEffect(() => () => {
-        if (pendingDesktopAutoReadTimerRef.current) clearTimeout(pendingDesktopAutoReadTimerRef.current)
-        if (pendingDesktopAutoReadVisibleTimerRef.current) clearTimeout(pendingDesktopAutoReadVisibleTimerRef.current)
-        if (pendingDesktopAutoReadVisibilityHandlerRef.current) {
-            document.removeEventListener('visibilitychange', pendingDesktopAutoReadVisibilityHandlerRef.current)
-        }
-    }, [])
+    useDashboardDesktopAutoRead({
+        activeConv,
+        isMobile,
+        liveSessionInboxState,
+        sendDaemonCommand,
+    })
 
     const {
         requestedDesktopTabKey,
