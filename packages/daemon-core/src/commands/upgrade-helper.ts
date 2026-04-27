@@ -161,6 +161,52 @@ function killPid(pid: number): boolean {
   }
 }
 
+function getWindowsProcessCommandLine(pid: number): string | null {
+  const pidFilter = `ProcessId=${pid}`;
+  try {
+    const psOut = execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-Command',
+      `(Get-CimInstance Win32_Process -Filter "${pidFilter}").CommandLine`,
+    ], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (psOut) return psOut;
+  } catch {
+    // fall through to wmic fallback
+  }
+
+  try {
+    const wmicOut = execFileSync('wmic', [
+      'process', 'where', pidFilter, 'get', 'CommandLine',
+    ], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (wmicOut) return wmicOut;
+  } catch {
+    // noop
+  }
+  return null;
+}
+
+function getProcessCommandLine(pid: number): string | null {
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  if (process.platform === 'win32') return getWindowsProcessCommandLine(pid);
+  try {
+    const text = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], {
+      encoding: 'utf8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return text || null;
+  } catch {
+    return null;
+  }
+}
+
+function isManagedSessionHostPid(pid: number): boolean {
+  const commandLine = getProcessCommandLine(pid);
+  return !!commandLine && /session-host-daemon/i.test(commandLine);
+}
+
 async function waitForPidExit(pid: number, timeoutMs: number): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -173,12 +219,12 @@ async function waitForPidExit(pid: number, timeoutMs: number): Promise<void> {
   }
 }
 
-function stopSessionHostProcesses(appName: string): void {
+export function stopSessionHostProcesses(appName: string): void {
   const pidFile = path.join(os.homedir(), '.adhdev', `${appName}-session-host.pid`);
   try {
     if (fs.existsSync(pidFile)) {
       const pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
-      if (Number.isFinite(pid)) {
+      if (Number.isFinite(pid) && pid !== process.pid && isManagedSessionHostPid(pid)) {
         killPid(pid);
       }
     }
@@ -187,20 +233,6 @@ function stopSessionHostProcesses(appName: string): void {
   } finally {
     try {
       fs.unlinkSync(pidFile);
-    } catch {
-      // noop
-    }
-  }
-
-  if (process.platform !== 'win32') {
-    try {
-      const raw = execFileSync('pgrep', ['-f', 'session-host-daemon'], { encoding: 'utf8' }).trim();
-      for (const line of raw.split('\n')) {
-        const pid = Number.parseInt(line.trim(), 10);
-        if (Number.isFinite(pid)) {
-          killPid(pid);
-        }
-      }
     } catch {
       // noop
     }
