@@ -163,6 +163,40 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
     expect(adapter.runDetectStatus).toHaveBeenCalled()
   })
 
+  it('does not turn the 300s maxResponse watchdog into a fake completed response while still generating', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-15T15:00:00Z'))
+
+    const adapter = buildAdapter('hermes-cli')
+    const finishResponse = vi.fn()
+    adapter.finishResponse = finishResponse
+    adapter.timeouts.maxResponse = 300_000
+    adapter.runDetectStatus = vi.fn(() => 'generating')
+    adapter.parseCurrentTranscript = () => ({
+      status: 'generating',
+      messages: [
+        { role: 'user', content: 'long task' },
+        { role: 'assistant', content: 'still working' },
+      ],
+    })
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'long task',
+      startedAt: Date.now(),
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+
+    adapter.armResponseTimeout()
+    await vi.advanceTimersByTimeAsync(300_000)
+
+    expect(finishResponse).not.toHaveBeenCalled()
+    expect(adapter.currentStatus).toBe('generating')
+    expect(adapter.isWaitingForResponse).toBe(true)
+    expect(adapter.responseTimeout).toBeTruthy()
+  })
+
   it('commits a visible assistant turn immediately when parseOutput already reports idle during an active Hermes turn', () => {
     const adapter = buildAdapter('hermes-cli')
     adapter.committedMessages = [{ role: 'user', content: 'hello', timestamp: 1 }]

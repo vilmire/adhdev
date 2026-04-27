@@ -2013,9 +2013,52 @@ export class ProviderCliAdapter implements CliAdapter {
 
     private armResponseTimeout(): void {
         if (this.responseTimeout) clearTimeout(this.responseTimeout);
+        const timeoutMs = this.timeouts.maxResponse;
+        if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+            this.responseTimeout = null;
+            return;
+        }
         this.responseTimeout = setTimeout(() => {
-            if (this.isWaitingForResponse) this.finishResponse();
-        }, this.timeouts.maxResponse);
+            this.responseTimeout = null;
+            if (!this.isWaitingForResponse) return;
+
+            const detectedStatusBeforeEval = this.runDetectStatus(this.recentOutputBuffer);
+            this.recordTrace('response_timeout_check', {
+                timeoutMs,
+                detectedStatus: detectedStatusBeforeEval,
+                currentStatus: this.currentStatus,
+                isWaitingForResponse: this.isWaitingForResponse,
+                hasActionableApproval: this.hasActionableApproval(),
+                ...buildCliTraceParseSnapshot({
+                    accumulatedBuffer: this.accumulatedBuffer,
+                    accumulatedRawBuffer: this.accumulatedRawBuffer,
+                    responseBuffer: this.responseBuffer,
+                    partialResponse: this.responseBuffer,
+                    scope: this.currentTurnScope,
+                }),
+            });
+
+            // maxResponse is a watchdog/checkpoint, not a completion signal. The old
+            // behavior called finishResponse() unconditionally at the default 300s,
+            // which fabricated idle transitions and downstream generating_completed
+            // notifications while long-running CLIs were still generating. Re-run the
+            // normal settled parser instead and keep the turn open unless the provider
+            // actually reports an idle, commit-ready state.
+            this.settledBuffer = this.recentOutputBuffer;
+            this.evaluateSettled();
+
+            if (this.isWaitingForResponse && !this.hasActionableApproval()) {
+                const detectedStatusAfterEval = this.runDetectStatus(this.recentOutputBuffer);
+                this.recordTrace('response_timeout_kept_open', {
+                    timeoutMs,
+                    detectedStatusBeforeEval,
+                    detectedStatusAfterEval,
+                    currentStatus: this.currentStatus,
+                    isWaitingForResponse: this.isWaitingForResponse,
+                });
+                this.armResponseTimeout();
+            }
+        }, timeoutMs);
     }
 
     private writeSubmitKeyForRetry(mode: string): void {
