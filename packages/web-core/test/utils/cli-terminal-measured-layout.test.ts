@@ -166,7 +166,14 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(source.includes('scrollSensitivity:')).toBe(true)
     expect(source.includes('fastScrollSensitivity:')).toBe(true)
     expect(source.includes('smoothScrollDuration:')).toBe(true)
-    expect(source.includes('scrollOnUserInput:')).toBe(true)
+    expect(source.includes('scrollOnUserInput: false')).toBe(true)
+    expect(source.includes('scrollOnUserInput: true')).toBe(false)
+    expect(source.includes('const preserveViewportAfterLocalInput = (term: Terminal) => {')).toBe(true)
+    expect(source.includes('const viewportYBeforeInput = bufferBeforeInput.viewportY;')).toBe(true)
+    expect(source.includes('const baseYBeforeInput = bufferBeforeInput.baseY;')).toBe(true)
+    expect(source.includes('if (viewportYBeforeInput >= baseYBeforeInput) return;')).toBe(true)
+    expect(source.includes('restoreViewportAfterLocalInput(term, viewportYBeforeInput, baseYBeforeInput);')).toBe(true)
+    expect(source.includes('term.scrollLines(viewportYBeforeInput - buffer.viewportY);')).toBe(true)
   })
 
   it('adds terminal chrome polish for cursor, wrapper padding, and scrollbar styling without making xterm measure against the padded box', () => {

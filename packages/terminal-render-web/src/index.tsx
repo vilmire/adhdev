@@ -105,6 +105,29 @@ const TERMINAL_CHROME_CSS = `
 
 let rendererRuntimeLogged = false;
 
+const restoreViewportAfterLocalInput = (term: Terminal, viewportYBeforeInput: number, baseYBeforeInput: number): boolean => {
+  if (viewportYBeforeInput >= baseYBeforeInput) return false;
+  const buffer = term.buffer.active;
+  if (!buffer) return false;
+  if (buffer.baseY !== baseYBeforeInput) return false;
+  if (buffer.viewportY === viewportYBeforeInput) return false;
+  try {
+    term.scrollLines(viewportYBeforeInput - buffer.viewportY);
+    return term.buffer.active.viewportY === viewportYBeforeInput;
+  } catch {
+    return false;
+  }
+};
+
+const preserveViewportAfterLocalInput = (term: Terminal) => {
+  const bufferBeforeInput = term.buffer.active;
+  if (!bufferBeforeInput) return undefined;
+  const viewportYBeforeInput = bufferBeforeInput.viewportY;
+  const baseYBeforeInput = bufferBeforeInput.baseY;
+  if (viewportYBeforeInput >= baseYBeforeInput) return;
+  return () => restoreViewportAfterLocalInput(term, viewportYBeforeInput, baseYBeforeInput);
+};
+
 export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTerminalViewProps>(
   ({ onInput, onResize, onViewportMetrics, onScrollMetrics, fontSize = 13, readOnly = false, sizingMode = 'measured', className, style }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -112,6 +135,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
     const fitAddonRef = useRef<FitAddon | null>(null);
     const resizeObserverRef = useRef<ResizeObserver | null>(null);
     const pendingWritesRef = useRef<Array<{ data: string; onProcessed?: () => void }>>([]);
+    const pendingLocalInputViewportRestoreRef = useRef<(() => boolean) | null>(null);
     const onInputRef = useRef(onInput);
     const onResizeRef = useRef(onResize);
     const onViewportMetricsRef = useRef(onViewportMetrics);
@@ -202,6 +226,13 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
       reportViewportMetrics();
     };
 
+    const restorePreservedLocalInputViewport = (restore: (() => boolean) | null | undefined) => {
+      if (!restore) return;
+      if (!restore()) return;
+      reportScrollMetrics();
+      refreshTerminalSurface();
+    };
+
     useEffect(() => {
       readOnlyRef.current = readOnly;
       if (!readOnly) return;
@@ -265,6 +296,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
       let disposable: { dispose: () => void } | null = null;
       let termForCleanup: Terminal | null = null;
       let removeTouchScrollListeners: (() => void) | null = null;
+      let removeLocalInputViewportListener: (() => void) | null = null;
 
       function init(): void {
         if (!containerRef.current) return;
@@ -287,7 +319,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           scrollSensitivity: 1.15,
           fastScrollSensitivity: 4,
           smoothScrollDuration: 120,
-          scrollOnUserInput: true,
+          scrollOnUserInput: false,
           convertEol: false,
           disableStdin: false,
         });
@@ -329,7 +361,13 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
 
         disposable = term.onData((data: string) => {
           if (readOnlyRef.current) return;
+          const restoreViewportAfterInput = pendingLocalInputViewportRestoreRef.current ?? preserveViewportAfterLocalInput(term);
+          pendingLocalInputViewportRestoreRef.current = null;
           onInputRef.current(data);
+          restorePreservedLocalInputViewport(restoreViewportAfterInput);
+          scheduleInOwnerWindow(() => {
+            restorePreservedLocalInputViewport(restoreViewportAfterInput);
+          });
         });
 
         scheduleInOwnerWindow(() => {
@@ -348,6 +386,15 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         const viewport = getViewportElement();
         const scrollListener = () => reportScrollMetrics();
         viewport?.addEventListener('scroll', scrollListener, { passive: true });
+
+        const localInputViewportKeyDown = () => {
+          if (readOnlyRef.current) return;
+          pendingLocalInputViewportRestoreRef.current = preserveViewportAfterLocalInput(term) || null;
+        };
+        touchContainer.addEventListener('keydown', localInputViewportKeyDown, { capture: true });
+        removeLocalInputViewportListener = () => {
+          touchContainer.removeEventListener('keydown', localInputViewportKeyDown, { capture: true });
+        };
 
         let touchLastY: number | null = null;
         let touchPixelRemainder = 0;
@@ -434,6 +481,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
 
         if (cancelled) {
           removeTouchScrollListeners?.();
+          removeLocalInputViewportListener?.();
           disposable.dispose();
           term.dispose();
         }
@@ -452,6 +500,8 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         resizeObserverRef.current = null;
         disposable?.dispose();
         removeTouchScrollListeners?.();
+        removeLocalInputViewportListener?.();
+        pendingLocalInputViewportRestoreRef.current = null;
         termForCleanup?.dispose();
         terminalRef.current = null;
         fitAddonRef.current = null;
