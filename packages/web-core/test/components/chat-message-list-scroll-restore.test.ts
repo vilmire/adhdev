@@ -48,10 +48,21 @@ describe('ChatMessageList scroll snapshot restore', () => {
     expect(shouldAutoScrollOnChatVisibilityChange(true, false)).toBe(false)
   })
 
+  it('does not scroll to the bottom for generation/status-only updates', () => {
+    expect(shouldAutoScrollAfterChatContentChange({
+      hasSelection: false,
+      userScrolledUp: false,
+      hasChatContentChanged: false,
+      isNewMessage: false,
+      isNearBottomAfterUpdate: true,
+    })).toBe(false)
+  })
+
   it('keeps following the bottom for streaming content even if the post-update distance is no longer near bottom', () => {
     expect(shouldAutoScrollAfterChatContentChange({
       hasSelection: false,
       userScrolledUp: false,
+      hasChatContentChanged: true,
       isNewMessage: false,
       isNearBottomAfterUpdate: false,
     })).toBe(true)

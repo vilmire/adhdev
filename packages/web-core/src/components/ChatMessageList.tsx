@@ -67,6 +67,8 @@ type ChatScrollSnapshot = {
 type ChatContentAutoScrollOptions = {
     hasSelection: boolean;
     userScrolledUp: boolean;
+    /** True only when the transcript fingerprint changed; status/typing-only updates must not pull history to bottom. */
+    hasChatContentChanged?: boolean;
     isNewMessage?: boolean;
     isNearBottomAfterUpdate?: boolean;
 }
@@ -114,9 +116,11 @@ export function isChatScrollSnapshotScrolledUp(
 export function shouldAutoScrollAfterChatContentChange({
     hasSelection,
     userScrolledUp,
+    hasChatContentChanged = true,
 }: ChatContentAutoScrollOptions): boolean {
     if (hasSelection) return false;
     if (userScrolledUp) return false;
+    if (!hasChatContentChanged) return false;
     // If the view is in bottom-follow mode, keep following for both appended messages
     // and same-message streaming growth. Reading "near bottom" after the DOM update
     // can already be false when a tall chunk or a wrapped split-pane layout was added.
@@ -483,6 +487,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     const contentRef = useRef<HTMLDivElement>(null);
     const endRef = useRef<HTMLDivElement>(null);
     const prevCountRef = useRef<number>(0);
+    const prevFingerprintRef = useRef<string>('');
     const prevContextRef = useRef<string>('');  // Empty value → always different on first render
     const mountedRef = useRef(false);
     const scrollFrameRef = useRef<number | null>(null);
@@ -586,6 +591,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                 }
             }
             prevCountRef.current = messages.length;
+            prevFingerprintRef.current = lastMsgFingerprint;
             return;
         }
 
@@ -593,15 +599,18 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         // This covers both appended messages and same-message streaming growth, where checking
         // near-bottom after DOM growth can already be too late.
         const isNewMessage = messages.length > prevCountRef.current;
+        const hasChatContentChanged = lastMsgFingerprint !== prevFingerprintRef.current;
         if (shouldAutoScrollAfterChatContentChange({
             hasSelection: hasSelectionRef.current,
             userScrolledUp: userScrolledUp.current,
+            hasChatContentChanged,
             isNewMessage,
         })) {
             scheduleScrollToBottom('auto');
         }
         prevCountRef.current = messages.length;
-    }, [lastMsgFingerprint, contextKey, isWorking, messages.length, scheduleScrollToBottom]);
+        prevFingerprintRef.current = lastMsgFingerprint;
+    }, [lastMsgFingerprint, contextKey, messages.length, scheduleScrollToBottom]);
 
     useEffect(() => {
         if (!scrollToBottomRequestNonce) return;
