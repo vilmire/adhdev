@@ -28,7 +28,7 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
     ({ onInput, onViewportMetrics, onScrollMetrics, fontSize = 13, readOnly = false, sizingMode = 'measured' }, ref) => {
         const innerRef = useRef<CliTerminalHandle>(null);
         const [LoadedTerminal, setLoadedTerminal] = useState<TerminalViewComponent | null>(null);
-        const pendingWritesRef = useRef<string[]>([]);
+        const pendingWritesRef = useRef<Array<{ data: string; onProcessed?: () => void }>>([]);
         const pendingClearRef = useRef(false);
         const pendingFitRef = useRef(false);
         const pendingBumpResizeRef = useRef(false);
@@ -43,7 +43,7 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
                 pendingClearRef.current = false;
             }
 
-            for (const chunk of pendingWritesRef.current) terminal.write(chunk);
+            for (const chunk of pendingWritesRef.current) terminal.write(chunk.data, chunk.onProcessed);
             pendingWritesRef.current = [];
 
             if (pendingFitRef.current) {
@@ -63,9 +63,9 @@ export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
         };
 
         useImperativeHandle(ref, () => ({
-            write: (data: string) => {
-                if (innerRef.current) innerRef.current.write(data);
-                else pendingWritesRef.current.push(data);
+            write: (data: string, onProcessed?: () => void) => {
+                if (innerRef.current) innerRef.current.write(data, onProcessed);
+                else pendingWritesRef.current.push({ data, onProcessed });
             },
             clear: () => {
                 if (innerRef.current) innerRef.current.clear();

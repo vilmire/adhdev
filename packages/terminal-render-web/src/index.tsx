@@ -12,7 +12,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core/defaults';
 
 export interface TerminalRendererHandle {
-  write: (data: string) => void;
+  write: (data: string, onProcessed?: () => void) => void;
   clear: () => void;
   reset: () => void;
   resize: (cols: number, rows: number) => void;
@@ -110,7 +110,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
     const terminalRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
     const resizeObserverRef = useRef<ResizeObserver | null>(null);
-    const pendingWritesRef = useRef<string[]>([]);
+    const pendingWritesRef = useRef<Array<{ data: string; onProcessed?: () => void }>>([]);
     const onInputRef = useRef(onInput);
     const onResizeRef = useRef(onResize);
     const onViewportMetricsRef = useRef(onViewportMetrics);
@@ -214,9 +214,9 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
     }, [readOnly]);
 
     useImperativeHandle(ref, () => ({
-      write: (data: string) => {
-        if (terminalRef.current) terminalRef.current.write(data);
-        else pendingWritesRef.current.push(data);
+      write: (data: string, onProcessed?: () => void) => {
+        if (terminalRef.current) terminalRef.current.write(data, onProcessed);
+        else pendingWritesRef.current.push({ data, onProcessed });
       },
       clear: () => {
         if (terminalRef.current) terminalRef.current.clear();
@@ -338,7 +338,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
             reportScrollMetrics();
             setReady(true);
             if (!readOnlyRef.current) term.focus();
-            for (const chunk of pendingWritesRef.current) term.write(chunk);
+            for (const chunk of pendingWritesRef.current) term.write(chunk.data, chunk.onProcessed);
             pendingWritesRef.current = [];
           } catch {}
         });

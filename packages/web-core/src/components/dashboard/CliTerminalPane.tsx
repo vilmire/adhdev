@@ -200,6 +200,14 @@ export default function CliTerminalPane({
         terminalRef.current?.reset?.();
     };
 
+    const finishScrollbackReplayIfNeeded = () => {
+        if (!pendingScrollToTopAfterReplayRef.current) return;
+        pendingScrollToTopAfterReplayRef.current = false;
+        scheduleInOwnerWindow(() => {
+            terminalRef.current?.scrollToTop?.();
+        });
+    };
+
     const flushPendingLiveOutput = () => {
         flushFrameRef.current = null;
         if (!isVisible) return;
@@ -207,17 +215,19 @@ export default function CliTerminalPane({
         if (!queuedOutput) return;
         const nextChunk = queuedOutput.slice(0, MAX_TERMINAL_WRITE_CHARS_PER_FRAME);
         pendingLiveOutputRef.current = queuedOutput.slice(nextChunk.length);
-        terminalRef.current?.write(nextChunk);
-        if (pendingLiveOutputRef.current.length > 0) {
+        const terminal = terminalRef.current;
+        if (!terminal) {
+            pendingLiveOutputRef.current = nextChunk + pendingLiveOutputRef.current;
             scheduleFlushPendingLiveOutput();
             return;
         }
-        if (pendingScrollToTopAfterReplayRef.current) {
-            pendingScrollToTopAfterReplayRef.current = false;
-            scheduleInOwnerWindow(() => {
-                terminalRef.current?.scrollToTop?.();
-            });
-        }
+        terminal.write(nextChunk, () => {
+            if (pendingLiveOutputRef.current.length > 0) {
+                scheduleFlushPendingLiveOutput();
+                return;
+            }
+            finishScrollbackReplayIfNeeded();
+        });
     };
 
     const enqueueTerminalWrite = (data: string) => {
@@ -240,12 +250,7 @@ export default function CliTerminalPane({
         pendingLiveOutputRef.current = '';
         terminalRef.current?.reset?.();
         if (text) enqueueTerminalWrite(text);
-        else if (pendingScrollToTopAfterReplayRef.current) {
-            pendingScrollToTopAfterReplayRef.current = false;
-            scheduleInOwnerWindow(() => {
-                terminalRef.current?.scrollToTop?.();
-            });
-        }
+        else finishScrollbackReplayIfNeeded();
     };
 
     useEffect(() => {
