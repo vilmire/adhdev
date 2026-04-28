@@ -36,6 +36,13 @@ describe('dashboard mobile/touch regressions', () => {
     expect(source).not.toContain('Establishing connection to the server')
   })
 
+  it('does not render the top-right timestamp when the Done chip owns that corner', () => {
+    const source = readSource('components/dashboard/DashboardMobileChatInbox.tsx')
+
+    expect(source).toContain('const shouldShowTimestamp = !isWorking && !isTaskComplete')
+    expect(source).toContain('{shouldShowTimestamp && <span')
+  })
+
   it('makes dashboard tab drag handles non-text-selectable on touch devices', () => {
     const css = readSource('index.css')
 

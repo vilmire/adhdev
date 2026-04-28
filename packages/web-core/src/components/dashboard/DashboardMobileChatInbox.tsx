@@ -115,6 +115,7 @@ function DashboardMobileChatItem({
     const metaClassName = isEarlier ? 'text-text-muted' : 'text-text-secondary'
     const previewClassName = isEarlier ? 'text-text-secondary opacity-80' : 'text-text-muted'
     const timestampClassName = isEarlier ? 'text-text-muted opacity-80' : 'text-text-muted'
+    const shouldShowTimestamp = !isWorking && !isTaskComplete
     const warningTextClassName = 'text-[color:var(--status-warning)]'
     
     return (
@@ -136,7 +137,7 @@ function DashboardMobileChatItem({
             <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                 <div className="flex items-center justify-between gap-2">
                     <span className={`text-[15px] font-bold truncate tracking-tight ${titleClassName}`}>{title}</span>
-                    {!isWorking && <span className={`text-[11px] font-medium shrink-0 ${timestampClassName}`}>{formatRelativeTime(item.timestamp)}</span>}
+                    {shouldShowTimestamp && <span className={`text-[11px] font-medium shrink-0 ${timestampClassName}`}>{formatRelativeTime(item.timestamp)}</span>}
                 </div>
                 <div className={`text-[12px] font-medium truncate flex items-center ${metaClassName}`}>
                     {metaText}
