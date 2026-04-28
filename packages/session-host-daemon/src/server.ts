@@ -466,14 +466,21 @@ export class SessionHostServer extends EventEmitter {
 
   private getHostDiagnostics(payload?: { includeSessions?: boolean; limit?: number }): SessionHostDiagnostics {
     const limit = Math.max(1, Math.min(200, Number(payload?.limit) || 50));
-    const sessions = payload?.includeSessions === false
+    const allSessions = payload?.includeSessions === false
       ? undefined
       : this.registry.listSessions()
         .map((record) => this.annotateSessionSurface(record))
         .map((record) => this.sanitizeDiagnosticsRecord(record));
-    const liveRuntimes = sessions?.filter((record) => record.surfaceKind === 'live_runtime');
-    const recoverySnapshots = sessions?.filter((record) => record.surfaceKind === 'recovery_snapshot');
-    const inactiveRecords = sessions?.filter((record) => record.surfaceKind === 'inactive_record');
+    const liveRuntimes = allSessions?.filter((record) => record.surfaceKind === 'live_runtime');
+    const recoverySnapshots = allSessions?.filter((record) => record.surfaceKind === 'recovery_snapshot').slice(0, limit);
+    const inactiveRecords = allSessions?.filter((record) => record.surfaceKind === 'inactive_record').slice(0, limit);
+    const sessions = allSessions
+      ? [
+        ...(liveRuntimes || []),
+        ...(recoverySnapshots || []),
+        ...(inactiveRecords || []),
+      ]
+      : undefined;
     return {
       hostStartedAt: this.startedAt,
       endpoint: this.endpoint.path,

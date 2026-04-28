@@ -164,3 +164,35 @@ test('getHostDiagnostics strips launch env from diagnostics records to keep payl
   assert.equal(diagnostics.sessions[0].launchCommand.env, undefined)
   assert.equal(record.launchCommand.env?.HUGE_ONE?.length, 4096)
 })
+
+test('getHostDiagnostics applies limit to recovery and inactive session groups without dropping live runtimes', () => {
+  const server = new SessionHostServer({ appName: 'adhdev-test-surface-limit' })
+
+  const liveOne = buildRecord({ sessionId: 'live-1', lifecycle: 'running' })
+  const liveTwo = buildRecord({ sessionId: 'live-2', lifecycle: 'running' })
+  const recoveryOne = buildRecord({
+    sessionId: 'recovery-1',
+    lifecycle: 'stopped',
+    meta: { restoredFromStorage: true, runtimeRecoveryState: 'orphan_snapshot' },
+  })
+  const recoveryTwo = buildRecord({
+    sessionId: 'recovery-2',
+    lifecycle: 'stopped',
+    meta: { restoredFromStorage: true, runtimeRecoveryState: 'orphan_snapshot' },
+  })
+  const inactiveOne = buildRecord({ sessionId: 'inactive-1', lifecycle: 'stopped' })
+  const inactiveTwo = buildRecord({ sessionId: 'inactive-2', lifecycle: 'stopped' })
+
+  for (const record of [liveOne, liveTwo, recoveryOne, recoveryTwo, inactiveOne, inactiveTwo]) {
+    server.registry.restoreSession(record)
+  }
+  ;(server as any).runtimes.set(liveOne.sessionId, {})
+  ;(server as any).runtimes.set(liveTwo.sessionId, {})
+
+  const diagnostics = (server as any).getHostDiagnostics({ includeSessions: true, limit: 1 })
+
+  assert.deepEqual(diagnostics.liveRuntimes.map((record: SessionHostRecord) => record.sessionId), ['live-1', 'live-2'])
+  assert.deepEqual(diagnostics.recoverySnapshots.map((record: SessionHostRecord) => record.sessionId), ['recovery-1'])
+  assert.deepEqual(diagnostics.inactiveRecords.map((record: SessionHostRecord) => record.sessionId), ['inactive-1'])
+  assert.deepEqual(diagnostics.sessions.map((record: SessionHostRecord) => record.sessionId), ['live-1', 'live-2', 'recovery-1', 'inactive-1'])
+})
