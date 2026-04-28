@@ -166,6 +166,13 @@ function escapeHtml(value: string) {
         .replace(/'/g, '&#39;')
 }
 
+function preventContextMenuButtonFocus(event: React.MouseEvent<HTMLButtonElement>) {
+    // Context-menu actions are overlays on the active chat. Let click still fire,
+    // but do not move DOM focus into the portal/body: browser focus correction can
+    // scroll the underlying chat pane back to its first focusable content.
+    event.preventDefault()
+}
+
 function focusOwnerWindow(ownerDoc: Document | null | undefined) {
     const ownerWindow = ownerDoc?.defaultView
     if (!ownerWindow) return
@@ -2093,7 +2100,9 @@ export default function DashboardDockviewWorkspace({
                         return (
                             <button
                                 key={item.id}
+                                type="button"
                                 className={`w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors flex items-center gap-2 ${item.tone === 'muted' ? 'text-text-muted' : ''}`}
+                                onMouseDown={preventContextMenuButtonFocus}
                                 onClick={onClick}
                             >
                                 {icon}

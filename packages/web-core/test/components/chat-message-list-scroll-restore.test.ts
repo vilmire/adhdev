@@ -101,6 +101,10 @@ describe('ChatMessageList scroll snapshot restore', () => {
     expect(source).toContain('latestScrollSnapshotRef')
     expect(source).toContain('isVisibleRef.current')
     expect(source).toContain('const latestSnapshot = latestScrollSnapshotRef.current')
+    expect(source).toContain('if (wasVisible && !isVisible)')
+    expect(source).toContain('saveScrollSnapshot();')
+    const hiddenTransitionIndex = source.indexOf('if (wasVisible && !isVisible)')
+    expect(source.slice(hiddenTransitionIndex, hiddenTransitionIndex + 500)).toContain('isVisibleRef.current = isVisible')
     expect(source).not.toContain('useEffect(() => () => {\n        saveScrollSnapshot();')
   })
 

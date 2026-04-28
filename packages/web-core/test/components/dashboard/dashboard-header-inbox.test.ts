@@ -1,4 +1,6 @@
 import React from 'react'
+import { readFileSync } from 'node:fs'
+import * as path from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import DashboardHeader, { getDashboardHeaderConnectionState } from '../../../src/components/dashboard/DashboardHeader'
@@ -179,5 +181,14 @@ describe('DashboardHeader inbox notifications', () => {
     expect(html).toContain('Delete')
     expect(html).toContain(DASHBOARD_NEW_SESSION_LABEL)
     expect(html).toContain('>1<')
+  })
+
+  it('renders the dashboard guide in the header instead of a floating bottom-right overlay that can collide with chat jump buttons', () => {
+    const html = renderHeader({ onOpenDashboardGuide: () => {}, guideNudgeVisible: true })
+    const mainViewSource = readFileSync(path.resolve(process.cwd(), 'src/components/dashboard/DashboardMainView.tsx'), 'utf8')
+
+    expect(html).toContain('Open dashboard guide')
+    expect(html).toContain('Guide')
+    expect(mainViewSource).not.toContain('fixed right-4 bottom-24')
   })
 })

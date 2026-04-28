@@ -5,6 +5,12 @@ import type { ActiveConversation } from './types'
 import { getConversationViewStates } from './DashboardMobileChatShared'
 import { getConversationTabMetaText, getConversationTitle } from './conversation-presenters'
 
+const preventContextMenuButtonFocus = (event: React.MouseEvent<HTMLButtonElement>) => {
+    // Keep context-menu clicks from moving focus into the fixed menu overlay,
+    // which can cause the underlying chat scroller to jump while the tab stays active.
+    event.preventDefault()
+}
+
 interface PaneGroupTabBarProps {
     conversations: ActiveConversation[]
     activeTabId: string | null
@@ -340,7 +346,9 @@ export default function PaneGroupTabBar({
                     {allowTabShortcuts && (
                         <>
                             <button
+                                type="button"
                                 className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors "
+                                onMouseDown={preventContextMenuButtonFocus}
                                 onClick={(e) => {
                                     e.stopPropagation()
                                     setShortcutListening(ctxMenu.tabKey)
@@ -351,7 +359,9 @@ export default function PaneGroupTabBar({
                             </button>
                             {tabShortcuts[ctxMenu.tabKey] && (
                                 <button
+                                    type="button"
                                     className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors text-text-muted "
+                                    onMouseDown={preventContextMenuButtonFocus}
                                     onClick={() => {
                                         const next = { ...tabShortcuts }
                                         delete next[ctxMenu.tabKey]
@@ -368,7 +378,9 @@ export default function PaneGroupTabBar({
                         <>
                             {allowTabShortcuts && <div className="border-t border-border-subtle my-1" />}
                             <button
+                                type="button"
                                 className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-secondary transition-colors text-text-muted"
+                                onMouseDown={preventContextMenuButtonFocus}
                                 onClick={() => { onHideTab(ctxMenu.tabKey); setCtxMenu(null) }}
                             >
                                 🚫 Hide from Dashboard

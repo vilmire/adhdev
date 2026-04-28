@@ -45,6 +45,8 @@ export interface DashboardHeaderProps {
     onMarkNotificationUnread: (notificationId: string) => void;
     onDeleteNotification: (notificationId: string) => void;
     onOpenNewSession?: () => void;
+    onOpenDashboardGuide?: () => void;
+    guideNudgeVisible?: boolean;
     actionShortcuts?: Partial<Record<DashboardActionShortcutId, string>>;
 }
 
@@ -177,6 +179,8 @@ export default function DashboardHeader({
     hiddenOpen,
     onHiddenOpenChange,
     onOpenNewSession,
+    onOpenDashboardGuide,
+    guideNudgeVisible = false,
     actionShortcuts,
     notifications,
     notificationUnreadCount,
@@ -336,6 +340,18 @@ export default function DashboardHeader({
                 </div>
             </div>
             <div className="flex gap-2 items-center">
+                {onOpenDashboardGuide && (
+                    <button
+                        type="button"
+                        onClick={onOpenDashboardGuide}
+                        className="btn btn-secondary btn-sm hidden md:inline-flex items-center gap-1.5 dashboard-header-guide-button"
+                        title="Dashboard guide"
+                        aria-label="Open dashboard guide"
+                    >
+                        <span className="font-semibold leading-none">?</span>
+                        {guideNudgeVisible && <span>Guide</span>}
+                    </button>
+                )}
                 {activeConv && (isCliActive || isAcpActive || !isAcpConv(activeConv)) && (
                     <div className="dashboard-header-actions-group">
                         <span

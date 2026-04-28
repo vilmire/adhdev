@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { buildDashboardDockviewContextMenuItems } from '../../../src/components/dashboard/dockviewContextMenuItems'
 
@@ -71,5 +73,16 @@ describe('buildDashboardDockviewContextMenuItems', () => {
       shortcut: '⌥+X',
       tone: 'muted',
     })
+  })
+
+  it('renders tab context-menu action buttons as non-focusing buttons so menu clicks do not jump chat scroll', () => {
+    const dockviewSource = readFileSync(path.resolve(process.cwd(), 'src/components/dashboard/DashboardDockviewWorkspace.tsx'), 'utf8')
+    const paneTabBarSource = readFileSync(path.resolve(process.cwd(), 'src/components/dashboard/PaneGroupTabBar.tsx'), 'utf8')
+
+    expect(dockviewSource).toContain('function preventContextMenuButtonFocus')
+    expect(dockviewSource).toContain('type="button"')
+    expect(dockviewSource).toContain('onMouseDown={preventContextMenuButtonFocus}')
+    expect(paneTabBarSource).toContain('const preventContextMenuButtonFocus')
+    expect(paneTabBarSource).toContain('onMouseDown={preventContextMenuButtonFocus}')
   })
 })

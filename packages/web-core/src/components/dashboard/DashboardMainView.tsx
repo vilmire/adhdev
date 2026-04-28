@@ -518,6 +518,8 @@ export default function DashboardMainView({
                     hiddenOpen={hiddenOpen}
                     onHiddenOpenChange={handleHiddenOpenChange}
                     onOpenNewSession={!isMobile ? openNewSession : undefined}
+                    onOpenDashboardGuide={handleOpenShortcutHelp}
+                    guideNudgeVisible={guideNudgeVisible}
                     actionShortcuts={actionShortcuts}
                     onOpenRemote={() => {
                         if (!activeConv || isCliConv(activeConv) || isAcpConv(activeConv)) return
@@ -816,19 +818,6 @@ export default function DashboardMainView({
                         )}
                     </div>
                 </div>
-            )}
-            {!showMobileChatMode && (
-                <button
-                    type="button"
-                    onClick={handleOpenShortcutHelp}
-                    className={`fixed right-4 bottom-24 z-40 hidden md:inline-flex items-center rounded-full border border-border-subtle bg-bg-primary/88 backdrop-blur py-2 text-xs text-text-secondary hover:text-text-primary transition-all ${guideNudgeVisible ? 'gap-2 px-2.5' : 'justify-center w-10 px-0'}`}
-                    style={{ boxShadow: '0 6px 18px rgba(0,0,0,0.12)' }}
-                    title="Dashboard guide"
-                    aria-label="Open dashboard guide"
-                >
-                    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-bg-secondary text-[11px] font-semibold text-text-primary shrink-0">?</span>
-                    {guideNudgeVisible && <span>Guide</span>}
-                </button>
             )}
         </>
     )

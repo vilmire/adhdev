@@ -529,6 +529,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                     )}
                     {showExpandBtn && (
                         <button
+                            type="button"
                             onClick={onToggleTextExpanded}
                             className="mt-1.5 text-[11px] font-semibold text-[var(--accent-primary)] p-0 opacity-80"
                         >
@@ -720,8 +721,14 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     }, [openBottomAutoScrollWindow, scheduleScrollToBottom, scrollToBottomRequestNonce]);
 
     useEffect(() => {
-        isVisibleRef.current = isVisible;
         const wasVisible = previousIsVisibleRef.current;
+        if (wasVisible && !isVisible) {
+            // Dockview tab/context-menu actions can hide a mounted pane without
+            // unmounting it. Persist the last visible position before marking it
+            // hidden so a later reveal does not fall back to scrollTop=0.
+            saveScrollSnapshot();
+        }
+        isVisibleRef.current = isVisible;
         previousIsVisibleRef.current = isVisible;
         const snapshot = contextKey ? chatScrollSnapshotCache.get(contextKey) : null;
         if (shouldRestoreChatScrollOnVisibilityChange(wasVisible, isVisible, snapshot, lastMsgFingerprint)) {
@@ -743,7 +750,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         if (!hasSelectionRef.current) {
             scheduleScrollToBottom('auto');
         }
-    }, [isVisible, contextKey, lastMsgFingerprint, openBottomAutoScrollWindow, scheduleScrollToBottom, updateJumpButtonState]);
+    }, [isVisible, contextKey, lastMsgFingerprint, openBottomAutoScrollWindow, saveScrollSnapshot, scheduleScrollToBottom, updateJumpButtonState]);
 
     useEffect(() => () => {
         const latestSnapshot = latestScrollSnapshotRef.current;
@@ -929,6 +936,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             {hasMoreVisibleContent && !isLoadingMore && (
                 <div className="text-center py-2">
                     <button
+                        type="button"
                         onClick={handleLoadMoreClick}
                         className={`text-[11px] rounded-xl px-4 py-1.5 cursor-pointer border transition-all ${
                             loadError && hiddenLiveCount === 0
