@@ -61,6 +61,7 @@ export default function CliTerminalPane({
     const terminalPanSurfaceRef = useRef<HTMLDivElement | null>(null);
     const terminalScaleTouchedRef = useRef(false);
     const terminalAutoScaleInitializedRef = useRef(false);
+    const previousIsVisibleRef = useRef(isVisible);
     const seededSnapshotSeqRef = useRef(0);
     const liveOutputStartedRef = useRef(false);
     const pendingLiveOutputRef = useRef('');
@@ -495,8 +496,15 @@ export default function CliTerminalPane({
     }, [isManualZoomedIn, scaledTerminalHeight, scaledTerminalWidth]);
 
     useEffect(() => {
+        const wasVisible = previousIsVisibleRef.current;
+        previousIsVisibleRef.current = isVisible;
+
         if (!isVisible) {
             return;
+        }
+
+        if (!wasVisible) {
+            setHasLoadedOlderRuntimeScrollback(false);
         }
 
         if (pendingHiddenClearRef.current) {
