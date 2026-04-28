@@ -5,6 +5,30 @@ import type { MobileConversationListItem, MobileMachineCard } from './DashboardM
 import { getConversationMachineId } from './conversation-selectors'
 import { getConversationMachineCardPreview } from './conversation-presenters'
 
+export function sortMobileInboxItems(items: MobileConversationListItem[]) {
+    return [...items].sort((left, right) => {
+        const timestampDiff = right.timestamp - left.timestamp
+        if (timestampDiff !== 0) return timestampDiff
+        return left.conversation.tabKey.localeCompare(right.conversation.tabKey)
+    })
+}
+
+export function sortStableMobileLiveItems(
+    items: MobileConversationListItem[],
+    previousLiveOrder: string[] = [],
+) {
+    const itemByTabKey = new Map(items.map(item => [item.conversation.tabKey, item]))
+    const previousOrderedItems = previousLiveOrder
+        .map(tabKey => itemByTabKey.get(tabKey))
+        .filter((item): item is MobileConversationListItem => !!item)
+
+    if (previousOrderedItems.length === items.length) {
+        return previousOrderedItems
+    }
+
+    return sortMobileInboxItems(items)
+}
+
 export function getMobileMachineConnectionLabel(machineEntry: DaemonData): 'Connected' | 'Connecting' | 'Offline' {
     const p2pState = machineEntry.p2p?.state || ''
     if (p2pState === 'connected') return 'Connected'

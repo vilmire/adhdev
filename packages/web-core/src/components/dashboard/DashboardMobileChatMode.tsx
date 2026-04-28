@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { DaemonData } from '../../types'
@@ -17,7 +17,12 @@ import { getConversationInboxSurfaceState } from './DashboardMobileChatShared'
 import { getConversationMachineId } from './conversation-selectors'
 import { getConversationPreviewText } from './conversation-presenters'
 import { compareMachineEntries } from '../../utils/daemon-utils'
-import { buildMobileMachineCards, buildSelectedMachineRecentLaunches } from './dashboard-mobile-chat-mode-helpers'
+import {
+    buildMobileMachineCards,
+    buildSelectedMachineRecentLaunches,
+    sortMobileInboxItems,
+    sortStableMobileLiveItems,
+} from './dashboard-mobile-chat-mode-helpers'
 import { useDashboardMobileChatEffects } from './useDashboardMobileChatEffects'
 import { useDashboardMobileMachineActions } from './useDashboardMobileMachineActions'
 import { useDashboardMobileNavigationController } from './useDashboardMobileNavigationController'
@@ -59,14 +64,6 @@ function getAvatarText(primary: string) {
     return text[0]!.toUpperCase()
 }
 
-function sortInboxItems(items: MobileConversationListItem[]) {
-    return [...items].sort((left, right) => {
-        const timestampDiff = right.timestamp - left.timestamp
-        if (timestampDiff !== 0) return timestampDiff
-        return left.conversation.tabKey.localeCompare(right.conversation.tabKey)
-    })
-}
-
 export default function DashboardMobileChatMode({
     conversations,
     hiddenConversations,
@@ -99,6 +96,7 @@ export default function DashboardMobileChatMode({
     const [section, setSection] = useState<DashboardMobileSection>('chats')
     const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null)
     const [machineBackTarget, setMachineBackTarget] = useState<'inbox' | 'chat'>('inbox')
+    const liveWorkingOrderRef = useRef<string[]>([])
     const navigate = useNavigate()
     const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
 
@@ -192,20 +190,26 @@ export default function DashboardMobileChatMode({
     })
 
     const attentionItems = useMemo(
-        () => sortInboxItems(items.filter(item => item.requiresAction)),
+        () => sortMobileInboxItems(items.filter(item => item.requiresAction)),
         [items],
     )
 
     const unreadItems = useMemo(
-        () => sortInboxItems(items.filter(item => item.unread && !item.requiresAction)),
+        () => sortMobileInboxItems(items.filter(item => item.unread && !item.requiresAction)),
         [items],
     )
     const workingItems = useMemo(
-        () => sortInboxItems(items.filter(item => !item.unread && !item.requiresAction && item.isWorking)),
+        () => sortStableMobileLiveItems(
+            items.filter(item => !item.unread && !item.requiresAction && item.isWorking),
+            liveWorkingOrderRef.current,
+        ),
         [items],
     )
+    useEffect(() => {
+        liveWorkingOrderRef.current = workingItems.map(item => item.conversation.tabKey)
+    }, [workingItems])
     const completedItems = useMemo(
-        () => sortInboxItems(items.filter(item => !item.unread && !item.requiresAction && !item.isWorking)),
+        () => sortMobileInboxItems(items.filter(item => !item.unread && !item.requiresAction && !item.isWorking)),
         [items],
     )
     const selectedMachineConversations = useMemo(

@@ -6,6 +6,8 @@ import {
     buildMobileMachineCards,
     buildSelectedMachineRecentLaunches,
     getMobileMachineConnectionLabel,
+    sortMobileInboxItems,
+    sortStableMobileLiveItems,
 } from '../../../src/components/dashboard/dashboard-mobile-chat-mode-helpers'
 
 function createMachine(overrides: Partial<DaemonData> = {}): DaemonData {
@@ -41,10 +43,49 @@ function createConversation(overrides: Partial<ActiveConversation> = {}): Active
         machineName: 'Studio Mac',
         connectionState: 'connected',
         ...overrides,
+    } as ActiveConversation
+}
+
+function createItem(tabKey: string, timestamp: number): MobileConversationListItem {
+    return {
+        conversation: createConversation({ tabKey, sessionId: tabKey, displayPrimary: tabKey }),
+        timestamp,
+        preview: `${tabKey} preview`,
+        unread: false,
+        requiresAction: false,
+        isWorking: true,
+        inboxBucket: 'working',
     }
 }
 
 describe('dashboard mobile chat mode helpers', () => {
+    it('sorts regular mobile inbox items by latest timestamp', () => {
+        const sorted = sortMobileInboxItems([
+            createItem('agent-a', 100),
+            createItem('agent-b', 300),
+        ])
+
+        expect(sorted.map(item => item.conversation.tabKey)).toEqual(['agent-b', 'agent-a'])
+    })
+
+    it('keeps live mobile inbox order stable when only chat timestamps change', () => {
+        const sorted = sortStableMobileLiveItems([
+            createItem('agent-a', 100),
+            createItem('agent-b', 300),
+        ], ['agent-a', 'agent-b'])
+
+        expect(sorted.map(item => item.conversation.tabKey)).toEqual(['agent-a', 'agent-b'])
+    })
+
+    it('uses recency sort when a new live mobile inbox item appears', () => {
+        const sorted = sortStableMobileLiveItems([
+            createItem('agent-a', 100),
+            createItem('agent-b', 300),
+        ], ['agent-a'])
+
+        expect(sorted.map(item => item.conversation.tabKey)).toEqual(['agent-b', 'agent-a'])
+    })
+
     it('treats only p2p connected machines as connected', () => {
         expect(getMobileMachineConnectionLabel(createMachine({ p2p: { available: true, state: 'connected', peers: 1 } }))).toBe('Connected')
         expect(getMobileMachineConnectionLabel(createMachine({ p2p: { available: true, state: 'connecting', peers: 0 } }))).toBe('Connecting')
