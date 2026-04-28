@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildChatScrollFingerprint,
+  getChatScrollEdgeSnapTarget,
   isChatScrollSnapshotScrolledUp,
   shouldAutoScrollAfterChatContentChange,
   shouldAutoScrollOnChatResize,
@@ -53,8 +54,8 @@ describe('ChatMessageList scroll snapshot restore', () => {
     ], 'daemon-hash-1')).toBe('1:daemon-hash-1')
   })
 
-  it('requests a bottom scroll when a hidden chat pane becomes visible again', () => {
-    expect(shouldAutoScrollOnChatVisibilityChange(false, true)).toBe(true)
+  it('preserves scroll when a hidden chat pane becomes visible again', () => {
+    expect(shouldAutoScrollOnChatVisibilityChange(false, true)).toBe(false)
     expect(shouldAutoScrollOnChatVisibilityChange(true, true)).toBe(false)
     expect(shouldAutoScrollOnChatVisibilityChange(true, false)).toBe(false)
   })
@@ -110,5 +111,37 @@ describe('ChatMessageList scroll snapshot restore', () => {
       userScrolledUp: true,
       contextAutoScrollActive: true,
     })).toBe(true)
+  })
+
+  it('snaps to the requested edge only after sustained one-direction scrolling', () => {
+    expect(getChatScrollEdgeSnapTarget({
+      direction: 'up',
+      accumulatedDistancePx: 850,
+      thresholdPx: 900,
+    })).toBeNull()
+    expect(getChatScrollEdgeSnapTarget({
+      direction: 'up',
+      accumulatedDistancePx: 900,
+      thresholdPx: 900,
+    })).toBe('top')
+    expect(getChatScrollEdgeSnapTarget({
+      direction: 'down',
+      accumulatedDistancePx: 1100,
+      thresholdPx: 900,
+    })).toBe('bottom')
+  })
+
+  it('does not edge-snap for tiny wheel noise or text selection', () => {
+    expect(getChatScrollEdgeSnapTarget({
+      direction: 'none',
+      accumulatedDistancePx: 1200,
+      thresholdPx: 900,
+    })).toBeNull()
+    expect(getChatScrollEdgeSnapTarget({
+      direction: 'down',
+      accumulatedDistancePx: 1200,
+      thresholdPx: 900,
+      hasSelection: true,
+    })).toBeNull()
   })
 })

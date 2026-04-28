@@ -81,8 +81,20 @@ type ChatResizeAutoScrollOptions = {
     contextAutoScrollActive: boolean;
 }
 
+type ChatScrollEdgeDirection = 'up' | 'down' | 'none';
+type ChatScrollEdgeSnapTarget = 'top' | 'bottom' | null;
+
+type ChatScrollEdgeSnapOptions = {
+    direction: ChatScrollEdgeDirection;
+    accumulatedDistancePx: number;
+    thresholdPx?: number;
+    hasSelection?: boolean;
+}
+
 const CHAT_SCROLL_NEAR_BOTTOM_PX = 200;
 const CHAT_BOTTOM_AUTO_SCROLL_WINDOW_MS = 650;
+const CHAT_SCROLL_EDGE_SNAP_THRESHOLD_PX = 900;
+const CHAT_SCROLL_EDGE_SNAP_WINDOW_MS = 800;
 const chatScrollSnapshotCache = new Map<string, ChatScrollSnapshot>();
 
 export function shouldRestoreChatScrollSnapshot(
@@ -107,7 +119,33 @@ export function shouldAutoScrollOnChatVisibilityChange(
     previousIsVisible: boolean,
     nextIsVisible: boolean,
 ): boolean {
-    return !previousIsVisible && nextIsVisible;
+    void previousIsVisible;
+    void nextIsVisible;
+    // Dockview tab/focus/split/floating changes should preserve the user's current
+    // read position. Explicit navigation intents still use scrollToBottomRequestNonce.
+    return false;
+}
+
+export function getChatScrollEdgeSnapTarget({
+    direction,
+    accumulatedDistancePx,
+    thresholdPx = CHAT_SCROLL_EDGE_SNAP_THRESHOLD_PX,
+    hasSelection = false,
+}: ChatScrollEdgeSnapOptions): ChatScrollEdgeSnapTarget {
+    if (hasSelection) return null;
+    if (direction === 'none') return null;
+    if (!Number.isFinite(accumulatedDistancePx) || accumulatedDistancePx < thresholdPx) return null;
+    return direction === 'up' ? 'top' : 'bottom';
+}
+
+function getWheelDeltaPixels(event: WheelEvent): number {
+    const rawDelta = Number(event.deltaY) || 0;
+    if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) return rawDelta * 16;
+    if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+        const target = event.currentTarget as HTMLElement | null;
+        return rawDelta * Math.max(1, target?.clientHeight || window.innerHeight || 1);
+    }
+    return rawDelta;
 }
 
 export function isChatScrollSnapshotScrolledUp(
@@ -497,6 +535,11 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     const scrollFrameRef = useRef<number | null>(null);
     const contextAutoScrollRef = useRef(false);
     const contextAutoScrollTimerRef = useRef<number | null>(null);
+    const edgeScrollAccumulatorRef = useRef<{ direction: ChatScrollEdgeDirection; distance: number; lastAt: number }>({
+        direction: 'none',
+        distance: 0,
+        lastAt: 0,
+    });
     const hasSelectionRef = useRef(false);
     const [expandedTexts, setExpandedTexts] = useState<Set<string>>(new Set());
 
@@ -515,6 +558,12 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         const el = containerRef.current;
         if (!el) return;
         el.scrollTo({ top: el.scrollHeight, behavior });
+    }, []);
+
+    const scrollToTop = useCallback((behavior: ScrollBehavior = 'auto') => {
+        const el = containerRef.current;
+        if (!el) return;
+        el.scrollTo({ top: 0, behavior });
     }, []);
 
     const updateSelectionState = useCallback(() => {
@@ -703,6 +752,53 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         el.addEventListener('scroll', onScroll, { passive: true });
         return () => { el.removeEventListener('scroll', onScroll); clearTimeout(scrollTimer); };
     }, [saveScrollSnapshot]);
+
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        const resetEdgeAccumulator = () => {
+            edgeScrollAccumulatorRef.current = { direction: 'none', distance: 0, lastAt: 0 };
+        };
+        const onWheel = (event: WheelEvent) => {
+            if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+            updateSelectionState();
+            if (hasSelectionRef.current) {
+                resetEdgeAccumulator();
+                return;
+            }
+            const deltaY = getWheelDeltaPixels(event);
+            const absDeltaY = Math.abs(deltaY);
+            if (absDeltaY < 1) return;
+
+            const direction: ChatScrollEdgeDirection = deltaY < 0 ? 'up' : 'down';
+            const now = el.ownerDocument.defaultView?.performance?.now?.() ?? Date.now();
+            const current = edgeScrollAccumulatorRef.current;
+            const shouldReset = current.direction !== direction
+                || now - current.lastAt > CHAT_SCROLL_EDGE_SNAP_WINDOW_MS;
+            const nextDistance = (shouldReset ? 0 : current.distance) + absDeltaY;
+            edgeScrollAccumulatorRef.current = { direction, distance: nextDistance, lastAt: now };
+
+            const target = getChatScrollEdgeSnapTarget({
+                direction,
+                accumulatedDistancePx: nextDistance,
+                hasSelection: hasSelectionRef.current,
+            });
+            if (!target) return;
+
+            event.preventDefault();
+            resetEdgeAccumulator();
+            if (target === 'top') {
+                userScrolledUp.current = true;
+                scrollToTop('smooth');
+            } else {
+                userScrolledUp.current = false;
+                scrollToBottom('smooth');
+            }
+            el.ownerDocument.defaultView?.requestAnimationFrame(() => saveScrollSnapshot());
+        };
+        el.addEventListener('wheel', onWheel, { passive: false });
+        return () => el.removeEventListener('wheel', onWheel);
+    }, [saveScrollSnapshot, scrollToBottom, scrollToTop, updateSelectionState]);
 
     useEffect(() => {
         document.addEventListener('selectionchange', updateSelectionState);
