@@ -160,6 +160,9 @@ describe('CLI terminal measured layout plumbing', () => {
 
   it('tunes xterm scrolling instead of relying on outer container scrolling', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../../terminal-render-web/src/index.tsx'), 'utf8')
+    expect(source.includes('const TERMINAL_REPLAY_SCROLLBACK_ROWS = 50000;')).toBe(true)
+    expect(source.includes('scrollback: TERMINAL_REPLAY_SCROLLBACK_ROWS')).toBe(true)
+    expect(source.includes('scrollback: 5000')).toBe(false)
     expect(source.includes('scrollSensitivity:')).toBe(true)
     expect(source.includes('fastScrollSensitivity:')).toBe(true)
     expect(source.includes('smoothScrollDuration:')).toBe(true)
@@ -180,8 +183,11 @@ describe('CLI terminal measured layout plumbing', () => {
     const source = fs.readFileSync(path.join(import.meta.dirname, '../../../terminal-render-web/src/index.tsx'), 'utf8')
     expect(source.includes('-webkit-overflow-scrolling: touch')).toBe(true)
     expect(source.includes('touch-action: pan-y')).toBe(true)
-    expect(source.includes("touchContainer.addEventListener('touchmove', touchMove, { passive: false });")).toBe(true)
+    expect(source.includes('const touchListenerOptions: AddEventListenerOptions = { passive: false, capture: true }')).toBe(true)
+    expect(source.includes("touchContainer.addEventListener('touchmove', touchMove, touchListenerOptions);")).toBe(true)
     expect(source.includes('activeViewport.scrollTop = Math.max(0, Math.min(maxScrollTop, before + delta));')).toBe(true)
+    expect(source.includes('term.scrollLines(lineDelta);')).toBe(true)
+    expect(source.includes('termBuffer.length > terminalRef.current.rows')).toBe(true)
     expect(source.includes('onScrollMetrics?: (metrics: { scrollTop: number; scrollHeight: number; clientHeight: number; atTop: boolean; canScroll: boolean }) => void')).toBe(true)
   })
 

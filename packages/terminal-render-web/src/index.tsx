@@ -69,6 +69,7 @@ const TERMINAL_THEME = {
 
 const TERMINAL_CHROME_PADDING_Y = 8;
 const TERMINAL_CHROME_PADDING_X = 14;
+const TERMINAL_REPLAY_SCROLLBACK_ROWS = 50000;
 
 const TERMINAL_CHROME_CSS = `
   .adhdev-terminal-renderer .xterm-viewport {
@@ -282,7 +283,7 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           lineHeight: 1.2,
           theme: TERMINAL_THEME,
           allowTransparency: true,
-          scrollback: 5000,
+          scrollback: TERMINAL_REPLAY_SCROLLBACK_ROWS,
           scrollSensitivity: 1.15,
           fastScrollSensitivity: 4,
           smoothScrollDuration: 120,
@@ -349,17 +350,38 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
         viewport?.addEventListener('scroll', scrollListener, { passive: true });
 
         let touchLastY: number | null = null;
+        let touchPixelRemainder = 0;
+        const touchListenerOptions: AddEventListenerOptions = { passive: false, capture: true };
+        const passiveTouchListenerOptions: AddEventListenerOptions = { passive: true, capture: true };
+        const hasScrollableTerminal = (activeViewport: HTMLElement | null) => {
+          const termBuffer = terminalRef.current?.buffer?.active;
+          const hasDomScroll = !!activeViewport && activeViewport.scrollHeight > activeViewport.clientHeight + 2;
+          const hasXtermScrollback = !!termBuffer && !!terminalRef.current && termBuffer.length > terminalRef.current.rows;
+          return hasDomScroll || hasXtermScrollback;
+        };
+        const getApproxLineHeight = (activeViewport: HTMLElement) => {
+          const term = terminalRef.current;
+          const rows = Math.max(1, term?.rows || DEFAULT_SESSION_HOST_ROWS);
+          const viewportLineHeight = activeViewport.clientHeight / rows;
+          if (Number.isFinite(viewportLineHeight) && viewportLineHeight > 0) return viewportLineHeight;
+          const firstRow = containerRef.current?.querySelector('.xterm-rows > div') as HTMLElement | null;
+          const measuredLineHeight = firstRow?.getBoundingClientRect().height || 0;
+          return Number.isFinite(measuredLineHeight) && measuredLineHeight > 0 ? measuredLineHeight : fontSize * 1.2;
+        };
         const touchStart = (event: TouchEvent) => {
           if (event.touches.length !== 1) {
             touchLastY = null;
+            touchPixelRemainder = 0;
             return;
           }
           const activeViewport = getViewportElement();
-          if (!activeViewport || activeViewport.scrollHeight <= activeViewport.clientHeight + 2) {
+          if (!activeViewport || !hasScrollableTerminal(activeViewport)) {
             touchLastY = null;
+            touchPixelRemainder = 0;
             return;
           }
           touchLastY = event.touches[0]?.clientY ?? null;
+          touchPixelRemainder = 0;
         };
         const touchMove = (event: TouchEvent) => {
           if (touchLastY === null || event.touches.length !== 1) return;
@@ -374,22 +396,40 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
           activeViewport.scrollTop = Math.max(0, Math.min(maxScrollTop, before + delta));
           if (activeViewport.scrollTop !== before) {
             event.preventDefault();
+            touchPixelRemainder = 0;
             reportScrollMetrics();
+            return;
+          }
+
+          const term = terminalRef.current;
+          const termBuffer = term?.buffer?.active;
+          if (!term || !termBuffer || termBuffer.length <= term.rows) return;
+          touchPixelRemainder += delta;
+          const lineDelta = Math.trunc(touchPixelRemainder / getApproxLineHeight(activeViewport));
+          if (lineDelta === 0) return;
+          const viewportYBefore = termBuffer.viewportY;
+          try { term.scrollLines(lineDelta); } catch {}
+          touchPixelRemainder -= lineDelta * getApproxLineHeight(activeViewport);
+          if (termBuffer.viewportY !== viewportYBefore || Math.abs(touchPixelRemainder) < getApproxLineHeight(activeViewport)) {
+            event.preventDefault();
+            reportScrollMetrics();
+            refreshTerminalSurface();
           }
         };
         const touchEnd = () => {
           touchLastY = null;
+          touchPixelRemainder = 0;
         };
-        touchContainer.addEventListener('touchstart', touchStart, { passive: true });
-        touchContainer.addEventListener('touchmove', touchMove, { passive: false });
-        touchContainer.addEventListener('touchend', touchEnd, { passive: true });
-        touchContainer.addEventListener('touchcancel', touchEnd, { passive: true });
+        touchContainer.addEventListener('touchstart', touchStart, passiveTouchListenerOptions);
+        touchContainer.addEventListener('touchmove', touchMove, touchListenerOptions);
+        touchContainer.addEventListener('touchend', touchEnd, passiveTouchListenerOptions);
+        touchContainer.addEventListener('touchcancel', touchEnd, passiveTouchListenerOptions);
         removeTouchScrollListeners = () => {
           viewport?.removeEventListener('scroll', scrollListener);
-          touchContainer.removeEventListener('touchstart', touchStart);
-          touchContainer.removeEventListener('touchmove', touchMove);
-          touchContainer.removeEventListener('touchend', touchEnd);
-          touchContainer.removeEventListener('touchcancel', touchEnd);
+          touchContainer.removeEventListener('touchstart', touchStart, passiveTouchListenerOptions);
+          touchContainer.removeEventListener('touchmove', touchMove, touchListenerOptions);
+          touchContainer.removeEventListener('touchend', touchEnd, passiveTouchListenerOptions);
+          touchContainer.removeEventListener('touchcancel', touchEnd, passiveTouchListenerOptions);
         };
 
         if (cancelled) {
