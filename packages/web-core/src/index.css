@@ -868,6 +868,15 @@
     }
 
     /* ── Chat Element Classes ──────────────────────── */
+    .chat-scroll-frame {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--chat-container-bg);
+    }
+
     .chat-container {
         flex: 1;
         min-height: 0;
@@ -885,6 +894,57 @@
         gap: var(--chat-container-gap);
         min-width: 0;
         min-height: min-content;
+    }
+
+    .chat-scroll-jump-controls {
+        position: absolute;
+        right: 18px;
+        bottom: 18px;
+        z-index: 8;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 8px;
+        pointer-events: none;
+    }
+
+    .chat-scroll-jump-button {
+        pointer-events: auto;
+        border: 1px solid color-mix(in srgb, var(--border-subtle) 72%, var(--accent-primary) 28%);
+        background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+        color: var(--text-primary);
+        border-radius: 999px;
+        padding: 7px 12px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+        backdrop-filter: blur(14px);
+        cursor: pointer;
+        transition: transform 120ms ease, border-color 120ms ease, background 120ms ease, opacity 120ms ease;
+    }
+
+    .chat-scroll-jump-button:hover {
+        transform: translateY(-1px);
+        border-color: color-mix(in srgb, var(--accent-primary) 58%, var(--border-subtle));
+        background: color-mix(in srgb, var(--bg-secondary) 72%, var(--accent-primary) 12%);
+    }
+
+    .chat-scroll-jump-button-primary {
+        color: var(--accent-primary);
+    }
+
+    @supports not (backdrop-filter: blur(14px)) {
+        .chat-scroll-jump-button {
+            background: var(--bg-secondary);
+        }
+    }
+
+    @media (max-width: 640px) {
+        .chat-scroll-jump-controls {
+            right: 12px;
+            bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+        }
     }
 
     .chat-bubble {

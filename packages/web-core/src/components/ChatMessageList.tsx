@@ -86,20 +86,22 @@ type ChatResizeAutoScrollOptions = {
     contextAutoScrollActive: boolean;
 }
 
-type ChatScrollEdgeDirection = 'up' | 'down' | 'none';
-type ChatScrollEdgeSnapTarget = 'top' | 'bottom' | null;
+type ChatScrollJumpButtonState = {
+    showTop: boolean;
+    showBottom: boolean;
+}
 
-type ChatScrollEdgeSnapOptions = {
-    direction: ChatScrollEdgeDirection;
-    accumulatedDistancePx: number;
-    thresholdPx?: number;
-    hasSelection?: boolean;
+type ChatScrollJumpButtonOptions = {
+    scrollTop: number;
+    scrollHeight: number;
+    clientHeight: number;
+    topThresholdPx?: number;
+    bottomThresholdPx?: number;
 }
 
 const CHAT_SCROLL_NEAR_BOTTOM_PX = 200;
+const CHAT_SCROLL_TOP_JUMP_THRESHOLD_PX = 80;
 const CHAT_BOTTOM_AUTO_SCROLL_WINDOW_MS = 650;
-const CHAT_SCROLL_EDGE_SNAP_THRESHOLD_PX = 900;
-const CHAT_SCROLL_EDGE_SNAP_WINDOW_MS = 800;
 const chatScrollSnapshotCache = new Map<string, ChatScrollSnapshot>();
 
 export function shouldRestoreChatScrollSnapshot(
@@ -131,26 +133,40 @@ export function shouldAutoScrollOnChatVisibilityChange(
     return false;
 }
 
-export function getChatScrollEdgeSnapTarget({
-    direction,
-    accumulatedDistancePx,
-    thresholdPx = CHAT_SCROLL_EDGE_SNAP_THRESHOLD_PX,
-    hasSelection = false,
-}: ChatScrollEdgeSnapOptions): ChatScrollEdgeSnapTarget {
-    if (hasSelection) return null;
-    if (direction === 'none') return null;
-    if (!Number.isFinite(accumulatedDistancePx) || accumulatedDistancePx < thresholdPx) return null;
-    return direction === 'up' ? 'top' : 'bottom';
+export function shouldRestoreChatScrollOnVisibilityChange(
+    previousIsVisible: boolean,
+    nextIsVisible: boolean,
+    snapshot: ChatScrollSnapshot | null | undefined,
+    currentMessageFingerprint: string,
+): boolean {
+    if (previousIsVisible || !nextIsVisible) return false;
+    return shouldRestoreChatScrollSnapshot(snapshot, currentMessageFingerprint);
 }
 
-function getWheelDeltaPixels(event: WheelEvent): number {
-    const rawDelta = Number(event.deltaY) || 0;
-    if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) return rawDelta * 16;
-    if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
-        const target = event.currentTarget as HTMLElement | null;
-        return rawDelta * Math.max(1, target?.clientHeight || window.innerHeight || 1);
-    }
-    return rawDelta;
+export function getChatScrollJumpButtonState({
+    scrollTop,
+    scrollHeight,
+    clientHeight,
+    topThresholdPx = CHAT_SCROLL_TOP_JUMP_THRESHOLD_PX,
+    bottomThresholdPx = CHAT_SCROLL_NEAR_BOTTOM_PX,
+}: ChatScrollJumpButtonOptions): ChatScrollJumpButtonState {
+    const safeScrollTop = Math.max(0, Number(scrollTop) || 0);
+    const safeScrollHeight = Math.max(0, Number(scrollHeight) || 0);
+    const safeClientHeight = Math.max(0, Number(clientHeight) || 0);
+    const maxScrollTop = Math.max(0, safeScrollHeight - safeClientHeight);
+    if (maxScrollTop <= 0) return { showTop: false, showBottom: false };
+    return {
+        showTop: safeScrollTop > topThresholdPx,
+        showBottom: Math.max(0, safeScrollHeight - safeScrollTop - safeClientHeight) > bottomThresholdPx,
+    };
+}
+
+function getChatScrollJumpButtonStateForElement(el: HTMLElement): ChatScrollJumpButtonState {
+    return getChatScrollJumpButtonState({
+        scrollTop: el.scrollTop,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+    });
 }
 
 export function isChatScrollSnapshotScrolledUp(
@@ -158,6 +174,14 @@ export function isChatScrollSnapshotScrolledUp(
     thresholdPx = CHAT_SCROLL_NEAR_BOTTOM_PX,
 ): boolean {
     return !!snapshot && snapshot.fromBottom >= thresholdPx;
+}
+
+export function shouldOpenBottomAutoScrollWindowOnInitialChatMount(
+    snapshot: ChatScrollSnapshot | null | undefined,
+    currentMessageFingerprint: string,
+): boolean {
+    if (!shouldRestoreChatScrollSnapshot(snapshot, currentMessageFingerprint)) return true;
+    return !isChatScrollSnapshotScrolledUp(snapshot);
 }
 
 export function shouldAutoScrollAfterChatContentChange({
@@ -540,17 +564,16 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     const scrollFrameRef = useRef<number | null>(null);
     const contextAutoScrollRef = useRef(false);
     const contextAutoScrollTimerRef = useRef<number | null>(null);
-    const edgeScrollAccumulatorRef = useRef<{ direction: ChatScrollEdgeDirection; distance: number; lastAt: number }>({
-        direction: 'none',
-        distance: 0,
-        lastAt: 0,
-    });
     const hasSelectionRef = useRef(false);
     const [expandedTexts, setExpandedTexts] = useState<Set<string>>(new Set());
+    const [jumpButtons, setJumpButtons] = useState<ChatScrollJumpButtonState>({ showTop: false, showBottom: false });
 
     const userScrolledUp = useRef(false);
     const restoredInitialScrollRef = useRef(false);
     const previousIsVisibleRef = useRef(isVisible);
+    const isVisibleRef = useRef(isVisible);
+    const latestScrollSnapshotRef = useRef<{ contextKey: string; snapshot: ChatScrollSnapshot } | null>(null);
+    isVisibleRef.current = isVisible;
 
     /** Check if user is near bottom of scroll */
     const isNearBottom = () => {
@@ -559,17 +582,31 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         return el.scrollHeight - el.scrollTop - el.clientHeight < CHAT_SCROLL_NEAR_BOTTOM_PX;
     };
 
+    const updateJumpButtonState = useCallback(() => {
+        const el = containerRef.current;
+        const next = el
+            ? getChatScrollJumpButtonStateForElement(el)
+            : { showTop: false, showBottom: false };
+        setJumpButtons(prev => (
+            prev.showTop === next.showTop && prev.showBottom === next.showBottom
+                ? prev
+                : next
+        ));
+    }, []);
+
     const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
         const el = containerRef.current;
         if (!el) return;
         el.scrollTo({ top: el.scrollHeight, behavior });
-    }, []);
+        el.ownerDocument.defaultView?.requestAnimationFrame(() => updateJumpButtonState());
+    }, [updateJumpButtonState]);
 
     const scrollToTop = useCallback((behavior: ScrollBehavior = 'auto') => {
         const el = containerRef.current;
         if (!el) return;
         el.scrollTo({ top: 0, behavior });
-    }, []);
+        el.ownerDocument.defaultView?.requestAnimationFrame(() => updateJumpButtonState());
+    }, [updateJumpButtonState]);
 
     const updateSelectionState = useCallback(() => {
         const container = containerRef.current;
@@ -593,12 +630,14 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
     const saveScrollSnapshot = useCallback(() => {
         const el = containerRef.current;
-        if (!el || !contextKey) return;
-        chatScrollSnapshotCache.set(contextKey, {
+        if (!el || !contextKey || !isVisibleRef.current) return;
+        const snapshot = {
             top: el.scrollTop,
             fromBottom: Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight),
             messageFingerprint: lastMsgFingerprint,
-        });
+        };
+        latestScrollSnapshotRef.current = { contextKey, snapshot };
+        chatScrollSnapshotCache.set(contextKey, snapshot);
     }, [contextKey, lastMsgFingerprint]);
 
     const scheduleScrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
@@ -632,16 +671,18 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
         if (isFirstMount || isTabSwitch) {
             mountedRef.current = true;
-            userScrolledUp.current = false;
-            contextAutoScrollRef.current = true;
+            const snapshot = contextKey ? chatScrollSnapshotCache.get(contextKey) : null;
+            const canRestoreSnapshot = !!snapshot && shouldRestoreChatScrollSnapshot(snapshot, lastMsgFingerprint);
+            userScrolledUp.current = canRestoreSnapshot ? isChatScrollSnapshotScrolledUp(snapshot) : false;
+            contextAutoScrollRef.current = shouldOpenBottomAutoScrollWindowOnInitialChatMount(snapshot, lastMsgFingerprint);
             if (!hasSelectionRef.current) {
-                const snapshot = contextKey ? chatScrollSnapshotCache.get(contextKey) : null;
-                if (snapshot && shouldRestoreChatScrollSnapshot(snapshot, lastMsgFingerprint)) {
+                if (canRestoreSnapshot) {
                     requestAnimationFrame(() => {
                         const el = containerRef.current;
                         if (!el) return;
                         restoreChatScrollSnapshot(el, snapshot);
                         userScrolledUp.current = isChatScrollSnapshotScrolledUp(snapshot);
+                        updateJumpButtonState();
                         restoredInitialScrollRef.current = true;
                     });
                 } else {
@@ -668,7 +709,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         }
         prevCountRef.current = messages.length;
         prevFingerprintRef.current = lastMsgFingerprint;
-    }, [lastMsgFingerprint, contextKey, messages.length, scheduleScrollToBottom]);
+    }, [lastMsgFingerprint, contextKey, messages.length, scheduleScrollToBottom, updateJumpButtonState]);
 
     useEffect(() => {
         if (!scrollToBottomRequestNonce) return;
@@ -679,24 +720,43 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     }, [openBottomAutoScrollWindow, scheduleScrollToBottom, scrollToBottomRequestNonce]);
 
     useEffect(() => {
+        isVisibleRef.current = isVisible;
         const wasVisible = previousIsVisibleRef.current;
         previousIsVisibleRef.current = isVisible;
+        const snapshot = contextKey ? chatScrollSnapshotCache.get(contextKey) : null;
+        if (shouldRestoreChatScrollOnVisibilityChange(wasVisible, isVisible, snapshot, lastMsgFingerprint)) {
+            if (!snapshot) return;
+            userScrolledUp.current = isChatScrollSnapshotScrolledUp(snapshot);
+            contextAutoScrollRef.current = false;
+            if (!hasSelectionRef.current) {
+                requestAnimationFrame(() => {
+                    const el = containerRef.current;
+                    if (!el) return;
+                    restoreChatScrollSnapshot(el, snapshot);
+                    updateJumpButtonState();
+                });
+            }
+            return;
+        }
         if (!shouldAutoScrollOnChatVisibilityChange(wasVisible, isVisible)) return;
         openBottomAutoScrollWindow();
         if (!hasSelectionRef.current) {
             scheduleScrollToBottom('auto');
         }
-    }, [isVisible, openBottomAutoScrollWindow, scheduleScrollToBottom]);
+    }, [isVisible, contextKey, lastMsgFingerprint, openBottomAutoScrollWindow, scheduleScrollToBottom, updateJumpButtonState]);
 
     useEffect(() => () => {
-        saveScrollSnapshot();
+        const latestSnapshot = latestScrollSnapshotRef.current;
+        if (latestSnapshot) {
+            chatScrollSnapshotCache.set(latestSnapshot.contextKey, latestSnapshot.snapshot);
+        }
         if (scrollFrameRef.current != null) {
             cancelAnimationFrame(scrollFrameRef.current);
         }
         if (contextAutoScrollTimerRef.current != null) {
             window.clearTimeout(contextAutoScrollTimerRef.current);
         }
-    }, [saveScrollSnapshot]);
+    }, []);
 
     useEffect(() => {
         const contentEl = contentRef.current;
@@ -714,6 +774,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         };
 
         const observer = new ResizeObserver(() => {
+            updateJumpButtonState();
             const contextAutoScrollActive = contextAutoScrollRef.current;
             if (!shouldAutoScrollOnChatResize({
                 hasSelection: hasSelectionRef.current,
@@ -733,7 +794,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                 contextAutoScrollTimerRef.current = null;
             }
         };
-    }, [scheduleScrollToBottom, contextKey]);
+    }, [scheduleScrollToBottom, contextKey, updateJumpButtonState]);
 
     useImperativeHandle(ref, () => ({
         scrollToBottom: (behavior: ScrollBehavior = 'smooth') => {
@@ -747,63 +808,17 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         if (!el) return;
         let scrollTimer: NodeJS.Timeout;
         const onScroll = () => {
+            saveScrollSnapshot();
             clearTimeout(scrollTimer);
             scrollTimer = setTimeout(() => {
                 // If 200px+ from bottom, user has scrolled up
                 userScrolledUp.current = !isNearBottom();
-                saveScrollSnapshot();
+                updateJumpButtonState();
             }, 50);
         };
         el.addEventListener('scroll', onScroll, { passive: true });
         return () => { el.removeEventListener('scroll', onScroll); clearTimeout(scrollTimer); };
-    }, [saveScrollSnapshot]);
-
-    useEffect(() => {
-        const el = containerRef.current;
-        if (!el) return;
-        const resetEdgeAccumulator = () => {
-            edgeScrollAccumulatorRef.current = { direction: 'none', distance: 0, lastAt: 0 };
-        };
-        const onWheel = (event: WheelEvent) => {
-            if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
-            updateSelectionState();
-            if (hasSelectionRef.current) {
-                resetEdgeAccumulator();
-                return;
-            }
-            const deltaY = getWheelDeltaPixels(event);
-            const absDeltaY = Math.abs(deltaY);
-            if (absDeltaY < 1) return;
-
-            const direction: ChatScrollEdgeDirection = deltaY < 0 ? 'up' : 'down';
-            const now = el.ownerDocument.defaultView?.performance?.now?.() ?? Date.now();
-            const current = edgeScrollAccumulatorRef.current;
-            const shouldReset = current.direction !== direction
-                || now - current.lastAt > CHAT_SCROLL_EDGE_SNAP_WINDOW_MS;
-            const nextDistance = (shouldReset ? 0 : current.distance) + absDeltaY;
-            edgeScrollAccumulatorRef.current = { direction, distance: nextDistance, lastAt: now };
-
-            const target = getChatScrollEdgeSnapTarget({
-                direction,
-                accumulatedDistancePx: nextDistance,
-                hasSelection: hasSelectionRef.current,
-            });
-            if (!target) return;
-
-            event.preventDefault();
-            resetEdgeAccumulator();
-            if (target === 'top') {
-                userScrolledUp.current = true;
-                scrollToTop('smooth');
-            } else {
-                userScrolledUp.current = false;
-                scrollToBottom('smooth');
-            }
-            el.ownerDocument.defaultView?.requestAnimationFrame(() => saveScrollSnapshot());
-        };
-        el.addEventListener('wheel', onWheel, { passive: false });
-        return () => el.removeEventListener('wheel', onWheel);
-    }, [saveScrollSnapshot, scrollToBottom, scrollToTop, updateSelectionState]);
+    }, [saveScrollSnapshot, updateJumpButtonState]);
 
     useEffect(() => {
         document.addEventListener('selectionchange', updateSelectionState);
@@ -819,10 +834,11 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         if (!el || !isHistoryLoading.current || prevScrollHeight.current === 0) return;
         const addedHeight = el.scrollHeight - prevScrollHeight.current;
         if (addedHeight > 0) el.scrollTop = addedHeight;
+        updateJumpButtonState();
         saveScrollSnapshot();
         prevScrollHeight.current = 0;
         isHistoryLoading.current = false;
-    }, [messages.length, saveScrollSnapshot]);
+    }, [messages.length, saveScrollSnapshot, updateJumpButtonState]);
 
     useEffect(() => {
         if (restoredInitialScrollRef.current) return;
@@ -837,8 +853,9 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         }
         restoreChatScrollSnapshot(el, snapshot);
         userScrolledUp.current = isChatScrollSnapshotScrolledUp(snapshot);
+        updateJumpButtonState();
         restoredInitialScrollRef.current = true;
-    }, [contextKey, lastMsgFingerprint, messages.length, scrollToBottom]);
+    }, [contextKey, lastMsgFingerprint, messages.length, scrollToBottom, updateJumpButtonState]);
 
     // Track when load starts so we can restore scroll after
     const handleLoadMoreClick = () => {
@@ -846,6 +863,18 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         if (el) prevScrollHeight.current = el.scrollHeight;
         isHistoryLoading.current = true;
         onLoadMore?.();
+    };
+
+    const handleJumpToTop = () => {
+        userScrolledUp.current = true;
+        scrollToTop('smooth');
+        saveScrollSnapshot();
+    };
+
+    const handleJumpToBottom = () => {
+        openBottomAutoScrollWindow();
+        scrollToBottom('smooth');
+        saveScrollSnapshot();
     };
 
     // Merge messages + action logs by timestamp
@@ -884,12 +913,13 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         : (loadError ? `↻ ${loadError}` : '↑ Load older messages');
 
     return (
-        <div
-            ref={containerRef}
-            data-chat-scroll
-            className="chat-container"
-        >
-            <div ref={contentRef} className="chat-container-content">
+        <div className="chat-scroll-frame">
+            <div
+                ref={containerRef}
+                data-chat-scroll
+                className="chat-container"
+            >
+                <div ref={contentRef} className="chat-container-content">
             {/* Load more button — shown at top when there's history available */}
             {isLoadingMore && (
                 <div className="text-center py-3 text-text-muted text-xs opacity-60 animate-pulse">
@@ -967,7 +997,34 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             )}
 
             <div className="min-h-10" ref={endRef} />
+                </div>
             </div>
+            {(jumpButtons.showTop || jumpButtons.showBottom) && (
+                <div className="chat-scroll-jump-controls" aria-label="Chat scroll shortcuts">
+                    {jumpButtons.showTop && (
+                        <button
+                            type="button"
+                            className="chat-scroll-jump-button"
+                            onClick={handleJumpToTop}
+                            aria-label="Jump to oldest messages"
+                            title="Jump to top"
+                        >
+                            ↑ Top
+                        </button>
+                    )}
+                    {jumpButtons.showBottom && (
+                        <button
+                            type="button"
+                            className="chat-scroll-jump-button chat-scroll-jump-button-primary"
+                            onClick={handleJumpToBottom}
+                            aria-label="Jump to latest messages"
+                            title="Jump to bottom"
+                        >
+                            ↓ Latest
+                        </button>
+                    )}
+                </div>
+            )}
         </div>
     );
 });

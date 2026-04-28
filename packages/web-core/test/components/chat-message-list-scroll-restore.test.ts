@@ -1,11 +1,15 @@
+import { readFileSync } from 'node:fs'
+import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   buildChatScrollFingerprint,
-  getChatScrollEdgeSnapTarget,
+  getChatScrollJumpButtonState,
   isChatScrollSnapshotScrolledUp,
   shouldAutoScrollAfterChatContentChange,
   shouldAutoScrollOnChatResize,
   shouldAutoScrollOnChatVisibilityChange,
+  shouldOpenBottomAutoScrollWindowOnInitialChatMount,
+  shouldRestoreChatScrollOnVisibilityChange,
   shouldRestoreChatScrollSnapshot,
 } from '../../src/components/ChatMessageList'
 
@@ -58,6 +62,46 @@ describe('ChatMessageList scroll snapshot restore', () => {
     expect(shouldAutoScrollOnChatVisibilityChange(false, true)).toBe(false)
     expect(shouldAutoScrollOnChatVisibilityChange(true, true)).toBe(false)
     expect(shouldAutoScrollOnChatVisibilityChange(true, false)).toBe(false)
+  })
+
+  it('restores a saved tab scroll snapshot when a hidden pane becomes visible again', () => {
+    const snapshot = {
+      top: 2200,
+      fromBottom: 5800,
+      messageFingerprint: '80:same-signature',
+    }
+
+    expect(shouldRestoreChatScrollOnVisibilityChange(false, true, snapshot, '80:same-signature')).toBe(true)
+    expect(shouldRestoreChatScrollOnVisibilityChange(true, true, snapshot, '80:same-signature')).toBe(false)
+    expect(shouldRestoreChatScrollOnVisibilityChange(false, false, snapshot, '80:same-signature')).toBe(false)
+    expect(shouldRestoreChatScrollOnVisibilityChange(false, true, snapshot, '80:new-signature')).toBe(false)
+  })
+
+  it('does not open an initial bottom-follow window when restoring a scrolled-up tab snapshot', () => {
+    const scrolledUpSnapshot = {
+      top: 2200,
+      fromBottom: 5800,
+      messageFingerprint: '80:same-signature',
+    }
+    const bottomSnapshot = {
+      top: 8000,
+      fromBottom: 0,
+      messageFingerprint: '80:same-signature',
+    }
+
+    expect(shouldOpenBottomAutoScrollWindowOnInitialChatMount(scrolledUpSnapshot, '80:same-signature')).toBe(false)
+    expect(shouldOpenBottomAutoScrollWindowOnInitialChatMount(bottomSnapshot, '80:same-signature')).toBe(true)
+    expect(shouldOpenBottomAutoScrollWindowOnInitialChatMount(null, '80:same-signature')).toBe(true)
+    expect(shouldOpenBottomAutoScrollWindowOnInitialChatMount(scrolledUpSnapshot, '80:new-signature')).toBe(true)
+  })
+
+  it('does not let tab cleanup overwrite the last visible scroll snapshot from hidden layout state', () => {
+    const source = readFileSync(path.resolve(process.cwd(), 'src/components/ChatMessageList.tsx'), 'utf8')
+
+    expect(source).toContain('latestScrollSnapshotRef')
+    expect(source).toContain('isVisibleRef.current')
+    expect(source).toContain('const latestSnapshot = latestScrollSnapshotRef.current')
+    expect(source).not.toContain('useEffect(() => () => {\n        saveScrollSnapshot();')
   })
 
   it('does not scroll to the bottom for generation/status-only updates', () => {
@@ -113,35 +157,37 @@ describe('ChatMessageList scroll snapshot restore', () => {
     })).toBe(true)
   })
 
-  it('snaps to the requested edge only after sustained one-direction scrolling', () => {
-    expect(getChatScrollEdgeSnapTarget({
-      direction: 'up',
-      accumulatedDistancePx: 850,
-      thresholdPx: 900,
-    })).toBeNull()
-    expect(getChatScrollEdgeSnapTarget({
-      direction: 'up',
-      accumulatedDistancePx: 900,
-      thresholdPx: 900,
-    })).toBe('top')
-    expect(getChatScrollEdgeSnapTarget({
-      direction: 'down',
-      accumulatedDistancePx: 1100,
-      thresholdPx: 900,
-    })).toBe('bottom')
+  it('shows explicit jump buttons instead of deriving an automatic edge-snap target from wheel distance', () => {
+    expect(getChatScrollJumpButtonState({
+      scrollTop: 0,
+      scrollHeight: 2400,
+      clientHeight: 600,
+      bottomThresholdPx: 200,
+      topThresholdPx: 80,
+    })).toEqual({ showTop: false, showBottom: true })
+
+    expect(getChatScrollJumpButtonState({
+      scrollTop: 900,
+      scrollHeight: 2400,
+      clientHeight: 600,
+      bottomThresholdPx: 200,
+      topThresholdPx: 80,
+    })).toEqual({ showTop: true, showBottom: true })
+
+    expect(getChatScrollJumpButtonState({
+      scrollTop: 1800,
+      scrollHeight: 2400,
+      clientHeight: 600,
+      bottomThresholdPx: 200,
+      topThresholdPx: 80,
+    })).toEqual({ showTop: true, showBottom: false })
   })
 
-  it('does not edge-snap for tiny wheel noise or text selection', () => {
-    expect(getChatScrollEdgeSnapTarget({
-      direction: 'none',
-      accumulatedDistancePx: 1200,
-      thresholdPx: 900,
-    })).toBeNull()
-    expect(getChatScrollEdgeSnapTarget({
-      direction: 'down',
-      accumulatedDistancePx: 1200,
-      thresholdPx: 900,
-      hasSelection: true,
-    })).toBeNull()
+  it('hides jump buttons when the transcript is not scrollable', () => {
+    expect(getChatScrollJumpButtonState({
+      scrollTop: 0,
+      scrollHeight: 600,
+      clientHeight: 600,
+    })).toEqual({ showTop: false, showBottom: false })
   })
 })
