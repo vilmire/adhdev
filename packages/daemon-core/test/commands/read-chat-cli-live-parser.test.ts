@@ -428,6 +428,34 @@ describe('handleReadChat for CLI adapters', () => {
     expect(result.lastMessageSignature).toBe(lastMessageSignature)
   })
 
+  it('hydrates a bounded tail when the cursor only knows the last preview message', async () => {
+    const messages = Array.from({ length: 100 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `message-${index + 1}`,
+      id: `msg-${index + 1}`,
+      timestamp: index + 1,
+    }))
+    const { helpers } = createCliReadChatHarness(messages)
+    const lastMessageSignature = buildChatMessageSignature(messages[messages.length - 1] as any)
+
+    const result = await handleReadChat(helpers as any, {
+      agentType: 'hermes-cli',
+      knownMessageCount: 1,
+      lastMessageSignature,
+      tailLimit: 60,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.syncMode).toBe('full')
+    expect(result.replaceFrom).toBe(0)
+    expect(result.totalMessages).toBe(100)
+    const resultMessages = result.messages as any[]
+    expect(resultMessages).toHaveLength(60)
+    expect(resultMessages[0]).toEqual(expect.objectContaining({ id: 'msg-41', content: 'message-41' }))
+    expect(resultMessages[resultMessages.length - 1]).toEqual(expect.objectContaining({ id: 'msg-100', content: 'message-100' }))
+    expect(result.lastMessageSignature).toBe(lastMessageSignature)
+  })
+
   it('appends only messages after a matching truncated tail cursor signature', async () => {
     const messages = Array.from({ length: 101 }, (_, index) => ({
       role: index % 2 === 0 ? 'user' : 'assistant',

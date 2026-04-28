@@ -374,13 +374,17 @@ function computeReadChatSync(messages: ChatMessage[], cursor: Required<ReadChatC
     }
 
     if (cursor.tailLimit > 0 && knownSignature === lastMessageSignature) {
-        return {
-            syncMode: 'noop',
-            replaceFrom: totalMessages,
-            messages: [],
-            totalMessages,
-            lastMessageSignature,
-        };
+        const requestedTailCount = Math.min(totalMessages, cursor.tailLimit);
+        if (knownMessageCount >= requestedTailCount) {
+            return {
+                syncMode: 'noop',
+                replaceFrom: totalMessages,
+                messages: [],
+                totalMessages,
+                lastMessageSignature,
+            };
+        }
+        return buildBoundedTailSync(messages, cursor);
     }
 
     if (knownMessageCount < totalMessages) {
