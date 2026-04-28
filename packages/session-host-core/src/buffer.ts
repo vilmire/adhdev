@@ -4,6 +4,12 @@ export interface SessionRingBufferOptions {
   maxBytes?: number;
 }
 
+// Manual "Load older terminal output" replays this raw ring buffer into the
+// browser terminal. 512KiB was too small for long Claude/Codex conversations:
+// by the time the user scrolled to the top and clicked the loader, the output
+// they were trying to recover was often already trimmed.
+export const DEFAULT_SESSION_RING_BUFFER_MAX_BYTES = 4 * 1024 * 1024;
+
 export class SessionRingBuffer {
   private maxBytes: number;
   private chunks: { seq: number; data: string; bytes: number }[] = [];
@@ -11,7 +17,7 @@ export class SessionRingBuffer {
   private totalBytes = 0;
 
   constructor(options: SessionRingBufferOptions = {}) {
-    this.maxBytes = options.maxBytes ?? 512 * 1024;
+    this.maxBytes = options.maxBytes ?? DEFAULT_SESSION_RING_BUFFER_MAX_BYTES;
   }
 
   append(data: string): number {

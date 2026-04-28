@@ -42,7 +42,7 @@ export type {
   StopSessionPayload,
 } from './types.js';
 
-export { SessionRingBuffer } from './buffer.js';
+export { DEFAULT_SESSION_RING_BUFFER_MAX_BYTES, SessionRingBuffer } from './buffer.js';
 export type { SessionRingBufferOptions } from './buffer.js';
 export { SessionHostRegistry } from './registry.js';
 export {
