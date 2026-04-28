@@ -147,6 +147,13 @@ export interface HotChatSessionState {
     runtimeRecoveryState?: unknown;
 }
 
+export interface SessionModalState {
+    id: string;
+    status?: unknown;
+    title?: unknown;
+    activeModal?: unknown;
+}
+
 // ─── ProviderInstance interface ─────────────────
 
 export interface InstanceContext {
@@ -190,6 +197,12 @@ export interface ProviderInstance {
      * parsing here; callers use this on P2P hot flush paths.
      */
     getHotChatSessionState?(): HotChatSessionState | HotChatSessionState[] | null;
+
+    /**
+     * Return the cheap modal metadata for a single session subscription. This is
+     * used on P2P topic flushes and must not invoke rich chat/transcript parsing.
+     */
+    getSessionModalState?(): SessionModalState | null;
 
  /** Receive event (external → Instance) */
     onEvent(event: string, data?: any): void;

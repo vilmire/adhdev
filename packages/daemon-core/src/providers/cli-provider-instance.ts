@@ -12,7 +12,7 @@ import * as fs from 'fs';
 import { createRequire } from 'node:module';
 import { normalizeInputEnvelope, type ProviderModule, flattenContent } from './contracts.js';
 import { assertTextOnlyInput } from './provider-input-support.js';
-import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState } from './provider-instance.js';
+import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
@@ -530,6 +530,19 @@ export class CliProviderInstance implements ProviderInstance {
             runtimeSurfaceKind: runtime?.surfaceKind,
             runtimeRestoredFromStorage: runtime?.restoredFromStorage === true,
             runtimeRecoveryState: runtime?.recoveryState ?? null,
+        };
+    }
+
+    getSessionModalState(): SessionModalState {
+        const adapterStatus = this.adapter.getStatus({ allowParse: false });
+        const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
+        const visibleStatus = autoApproveActive ? 'generating' : adapterStatus.status;
+        const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
+        return {
+            id: this.instanceId,
+            status: visibleStatus,
+            title: dirName,
+            activeModal: autoApproveActive ? null : adapterStatus.activeModal,
         };
     }
 
