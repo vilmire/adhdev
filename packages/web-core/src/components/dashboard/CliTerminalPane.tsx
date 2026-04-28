@@ -44,6 +44,8 @@ export default function CliTerminalPane({
     const [runtimeStatusMessage, setRuntimeStatusMessage] = useState('Runtime terminal unavailable');
     const [isLoadingScrollback, setIsLoadingScrollback] = useState(false);
     const [scrollbackStatusMessage, setScrollbackStatusMessage] = useState<string | null>(null);
+    const [mayHaveOlderRuntimeScrollback, setMayHaveOlderRuntimeScrollback] = useState(false);
+    const [hasLoadedOlderRuntimeScrollback, setHasLoadedOlderRuntimeScrollback] = useState(false);
     const [terminalScale, setTerminalScale] = useState(1);
     const [terminalViewport, setTerminalViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const [terminalIntrinsicViewport, setTerminalIntrinsicViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -171,6 +173,8 @@ export default function CliTerminalPane({
         setScrollbackStatusMessage(null);
         setCopyStatusMessage(null);
         setIsLoadingScrollback(false);
+        setMayHaveOlderRuntimeScrollback(false);
+        setHasLoadedOlderRuntimeScrollback(false);
         terminalRef.current?.reset?.();
     };
 
@@ -191,6 +195,8 @@ export default function CliTerminalPane({
         setScrollbackStatusMessage(null);
         setCopyStatusMessage(null);
         setIsLoadingScrollback(false);
+        setMayHaveOlderRuntimeScrollback(false);
+        setHasLoadedOlderRuntimeScrollback(false);
         terminalRef.current?.reset?.();
     };
 
@@ -225,6 +231,7 @@ export default function CliTerminalPane({
         if (!force && seq > 0 && seededSnapshotSeqRef.current >= seq) return;
         if (!force && seq === 0 && liveOutputStartedRef.current) return;
         seededSnapshotSeqRef.current = seq;
+        if (seq > 0) setMayHaveOlderRuntimeScrollback(true);
         setRuntimeReady(true);
         setRuntimeStatusMessage('');
         if (typeof cols === 'number' && typeof rows === 'number' && cols > 0 && rows > 0) {
@@ -267,6 +274,7 @@ export default function CliTerminalPane({
                 liveOutputStartedRef.current = true;
                 if (typeof event.seq === 'number') {
                     seededSnapshotSeqRef.current = Math.max(seededSnapshotSeqRef.current, event.seq);
+                    if (event.seq > 0) setMayHaveOlderRuntimeScrollback(true);
                 }
                 if (!runtimeReadyRef.current) setRuntimeReady(true);
                 if (!runtimeReadyRef.current) setRuntimeStatusMessage('');
@@ -412,6 +420,7 @@ export default function CliTerminalPane({
             setScrollbackStatusMessage(`Older terminal output unavailable: ${result.error}`);
             return;
         }
+        setHasLoadedOlderRuntimeScrollback(true);
         setTransientScrollbackStatus('Older terminal output loaded');
         scheduleInOwnerWindow(() => {
             terminalRef.current?.bumpResize();
@@ -538,7 +547,11 @@ export default function CliTerminalPane({
         };
     }, [runtimeReady, sessionId, terminalRef]);
 
-    const shouldShowOlderScrollbackLoader = runtimeReady && (terminalScrollMetrics.atTop || isLoadingScrollback || !!scrollbackStatusMessage);
+    const shouldOfferOlderScrollbackLoad = runtimeReady
+        && mayHaveOlderRuntimeScrollback
+        && !hasLoadedOlderRuntimeScrollback
+        && (terminalScrollMetrics.atTop || !terminalScrollMetrics.canScroll);
+    const shouldShowOlderScrollbackLoader = shouldOfferOlderScrollbackLoad || isLoadingScrollback || !!scrollbackStatusMessage;
 
     return (
         <>

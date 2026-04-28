@@ -65,7 +65,11 @@ describe('CLI terminal measured layout plumbing', () => {
     const compatSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/compat.ts'), 'utf8')
 
     expect(paneSource.includes('Load older terminal output')).toBe(true)
-    expect(paneSource.includes('const shouldShowOlderScrollbackLoader = runtimeReady && (terminalScrollMetrics.atTop || isLoadingScrollback || !!scrollbackStatusMessage);')).toBe(true)
+    expect(paneSource.includes('const shouldOfferOlderScrollbackLoad = runtimeReady')).toBe(true)
+    expect(paneSource.includes('&& mayHaveOlderRuntimeScrollback')).toBe(true)
+    expect(paneSource.includes('&& !hasLoadedOlderRuntimeScrollback')).toBe(true)
+    expect(paneSource.includes('&& (terminalScrollMetrics.atTop || !terminalScrollMetrics.canScroll);')).toBe(true)
+    expect(paneSource.includes('const shouldShowOlderScrollbackLoader = shouldOfferOlderScrollbackLoad || isLoadingScrollback || !!scrollbackStatusMessage;')).toBe(true)
     expect(paneSource.includes('{shouldShowOlderScrollbackLoader && (')).toBe(true)
     expect(paneSource.includes('const loadOlderRuntimeScrollback = async () => {')).toBe(true)
     expect(paneSource.includes('sinceSeq: 0')).toBe(true)
