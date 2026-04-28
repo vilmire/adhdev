@@ -246,6 +246,7 @@ export default function ChatPane({
                 isWorking={viewStates.isGenerating}
                 contextKey={activeConv.tabKey}
                 receivedAtMap={receivedAtMap}
+                lastMessageHash={activeConv.lastMessageHash}
                 onLoadMore={handleLoadMore}
                 isLoadingMore={isLoadingMore}
                 hasMoreHistory={hasMoreHistory}

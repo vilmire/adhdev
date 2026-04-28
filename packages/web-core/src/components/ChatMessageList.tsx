@@ -40,6 +40,8 @@ export interface ChatMessageListProps {
     contextKey?: string;
     /** Forward received timestamp map from external (messageId → timestamp) */
     receivedAtMap?: Record<string, number>;
+    /** Daemon-provided hash for the current last message; avoids re-hashing large idle transcripts. */
+    lastMessageHash?: string;
     /** custom empty state */
     emptyState?: React.ReactNode;
     /** Load previous messages when user clicks load button */
@@ -93,8 +95,10 @@ export function shouldRestoreChatScrollSnapshot(
     return savedFingerprint === String(currentMessageFingerprint || '');
 }
 
-export function buildChatScrollFingerprint(messages: ChatMessage[]): string {
+export function buildChatScrollFingerprint(messages: ChatMessage[], lastMessageHash?: string): string {
     if (!Array.isArray(messages) || messages.length === 0) return '0:empty';
+    const providedHash = String(lastMessageHash || '').trim();
+    if (providedHash) return `${messages.length}:${providedHash}`;
     const lastMessage = messages[messages.length - 1];
     return `${messages.length}:${buildChatMessageSignature(lastMessage)}`;
 }
@@ -480,7 +484,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
 // ─── Component ────────────────────────────────
 
 const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(function ChatMessageList(
-    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true },
+    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true },
     ref
 ) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -530,8 +534,8 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         );
     }, []);
 
-    // Last message signature — detect transcript changes robustly across remounts/tab switches.
-    const lastMsgFingerprint = buildChatScrollFingerprint(messages);
+    // Last message signature — prefer daemon-owned hash so idle status renders don't re-hash large content.
+    const lastMsgFingerprint = buildChatScrollFingerprint(messages, lastMessageHash);
 
     const saveScrollSnapshot = useCallback(() => {
         const el = containerRef.current;
@@ -876,6 +880,7 @@ const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     && prev.isWorking === next.isWorking
     && prev.contextKey === next.contextKey
     && prev.receivedAtMap === next.receivedAtMap
+    && prev.lastMessageHash === next.lastMessageHash
     && prev.emptyState === next.emptyState
     && prev.onLoadMore === next.onLoadMore
     && prev.isLoadingMore === next.isLoadingMore

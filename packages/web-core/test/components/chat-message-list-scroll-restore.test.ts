@@ -42,6 +42,17 @@ describe('ChatMessageList scroll snapshot restore', () => {
     expect(first).not.toBe(second)
   })
 
+  it('uses a daemon-provided last message hash without walking message content', () => {
+    const hostileContent = {
+      toJSON() { throw new Error('content should not be stringified') },
+      toString() { throw new Error('content should not be coerced') },
+    }
+
+    expect(buildChatScrollFingerprint([
+      { role: 'assistant', id: 'msg-1', content: hostileContent } as any,
+    ], 'daemon-hash-1')).toBe('1:daemon-hash-1')
+  })
+
   it('requests a bottom scroll when a hidden chat pane becomes visible again', () => {
     expect(shouldAutoScrollOnChatVisibilityChange(false, true)).toBe(true)
     expect(shouldAutoScrollOnChatVisibilityChange(true, true)).toBe(false)
