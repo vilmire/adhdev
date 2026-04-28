@@ -438,6 +438,42 @@ describe('SessionChatTailController registry', () => {
     )
   })
 
+  it('does not let a stale conversation hydrate overwrite a newer chat-tail update', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+    const staleMessages = [
+      { role: 'user', content: 'question', id: 'msg-1', timestamp: 1 } as any,
+    ]
+    const freshMessages = [
+      ...staleMessages,
+      { role: 'assistant', content: 'final answer', id: 'msg-2', timestamp: 2 } as any,
+    ]
+
+    controller.hydrateLiveMessages(staleMessages)
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: freshMessages,
+      syncMode: 'full',
+      totalMessages: 2,
+      lastMessageSignature: buildLastMessageSignature(freshMessages[1]),
+    }))
+    controller.hydrateLiveMessages(staleMessages)
+
+    expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
+      'question',
+      'final answer',
+    ])
+  })
+
   it('replaces the live transcript with the daemon-provided full tail refresh as-is', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()

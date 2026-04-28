@@ -6,6 +6,7 @@ import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
 import { getConversationHistorySessionId } from './conversation-identity'
 import { getConversationDaemonRouteId } from './conversation-selectors'
+import { getMessageTimestamp } from './message-utils'
 
 export interface SessionChatTailSnapshot {
   liveMessages: DashboardMessage[]
@@ -97,6 +98,30 @@ function buildChatSnapshotSignature(messages: DashboardMessage[], status?: strin
   ].join('|')
 }
 
+function getLatestMessageTimestamp(messages: DashboardMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const timestamp = getMessageTimestamp(messages[index])
+    if (timestamp > 0) return timestamp
+  }
+  return 0
+}
+
+function shouldHydrateLiveMessages(
+  currentMessages: DashboardMessage[],
+  incomingMessages: DashboardMessage[],
+): boolean {
+  if (incomingMessages.length === 0) return false
+  if (currentMessages.length === 0) return true
+
+  const currentAt = getLatestMessageTimestamp(currentMessages)
+  const incomingAt = getLatestMessageTimestamp(incomingMessages)
+  if (currentAt > 0 && incomingAt <= 0) return false
+  if (currentAt > 0 && incomingAt > 0 && incomingAt < currentAt) return false
+  if (currentAt > 0 && incomingAt === currentAt && incomingMessages.length < currentMessages.length) return false
+
+  return true
+}
+
 export function applyReadChatSync(
   previousMessages: DashboardMessage[],
   result: Partial<ReadChatSyncResult>,
@@ -186,7 +211,7 @@ export class SessionChatTailController {
 
   hydrateLiveMessages(messages: DashboardMessage[]): void {
     const incoming = Array.isArray(messages) ? messages : []
-    if (incoming.length === 0) return
+    if (!shouldHydrateLiveMessages(this.snapshot.liveMessages, incoming)) return
     const nextMessages = incoming
     const nextCursor = buildReadChatCursor(nextMessages, this.snapshot.cursor.tailLimit)
     const unchanged = buildChatSnapshotSignature(this.snapshot.liveMessages)
