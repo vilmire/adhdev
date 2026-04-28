@@ -273,12 +273,10 @@ export class ProviderCliAdapter implements CliAdapter {
         currentTurnScope: TurnParseScope | null;
         recentOutputBuffer: string;
         accumulatedBuffer: string;
-        accumulatedRawBuffer: string;
         screenText: string;
         currentStatus: CliSessionStatus['status'];
         activeModal: { message: string; buttons: string[] } | null;
         cliName: string;
-        lastOutputAt: number;
         result: any;
     } | null = null;
     private lastStatusHotPathParseAt = Number.NEGATIVE_INFINITY;
@@ -352,12 +350,10 @@ export class ProviderCliAdapter implements CliAdapter {
             && cached.currentTurnScope === this.currentTurnScope
             && cached.recentOutputBuffer === this.recentOutputBuffer
             && cached.accumulatedBuffer === this.accumulatedBuffer
-            && cached.accumulatedRawBuffer === this.accumulatedRawBuffer
             && cached.screenText === this.lastScreenText
             && cached.currentStatus === this.currentStatus
             && cached.activeModal === this.activeModal
             && cached.cliName === this.cliName
-            && cached.lastOutputAt === this.lastOutputAt
         ) {
             return cached.result;
         }
@@ -1835,12 +1831,10 @@ export class ProviderCliAdapter implements CliAdapter {
             && cached.currentTurnScope === this.currentTurnScope
             && cached.recentOutputBuffer === this.recentOutputBuffer
             && cached.accumulatedBuffer === this.accumulatedBuffer
-            && cached.accumulatedRawBuffer === this.accumulatedRawBuffer
             && cached.screenText === screenText
             && cached.currentStatus === this.currentStatus
             && cached.activeModal === this.activeModal
             && cached.cliName === this.cliName
-            && cached.lastOutputAt === this.lastOutputAt
         ) {
             return cached.result;
         }
@@ -2002,12 +1996,10 @@ export class ProviderCliAdapter implements CliAdapter {
             currentTurnScope: this.currentTurnScope,
             recentOutputBuffer: this.recentOutputBuffer,
             accumulatedBuffer: this.accumulatedBuffer,
-            accumulatedRawBuffer: this.accumulatedRawBuffer,
             screenText,
             currentStatus: this.currentStatus,
             activeModal: this.activeModal,
             cliName: this.cliName,
-            lastOutputAt: this.lastOutputAt,
             result,
         };
         return result;

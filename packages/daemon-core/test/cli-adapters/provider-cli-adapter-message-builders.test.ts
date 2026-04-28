@@ -597,6 +597,70 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     expect(second).toEqual(first)
   })
 
+  it('keeps parsed status cached across ANSI-only cursor output that does not change semantic terminal content', () => {
+    const parseOutput = vi.fn(() => ({
+      id: 'cli_session',
+      status: 'idle',
+      title: 'Test CLI',
+      messages: [
+        { role: 'assistant', content: 'parsed assistant', id: 'assistant-1', index: 0, receivedAt: 2 },
+      ],
+    }))
+
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+        parseOutput,
+      },
+    } as any, '/tmp/project') as any
+
+    let screenText = '❯ '
+    adapter.terminalScreen = {
+      write: vi.fn((data: string) => {
+        if (data === '\x1b[?25l' || data === '\x1b[?25h' || data === '\x1b[31m') return
+        screenText += data
+      }),
+      getText: vi.fn(() => screenText),
+    }
+    adapter.scheduleSettle = vi.fn()
+    adapter.scheduleStartupSettleCheck = vi.fn()
+    adapter.resolveStartupState = vi.fn()
+    adapter.startupParseGate = false
+    adapter.committedMessages = [
+      { role: 'assistant', content: 'parsed assistant', timestamp: 2, receivedAt: 2, id: 'assistant-1', index: 0 },
+    ]
+    adapter.currentStatus = 'idle'
+    adapter.activeModal = null
+
+    const first = adapter.getScriptParsedStatus()
+    adapter.handleOutput('\x1b[?25l')
+    const afterCursorHide = adapter.getScriptParsedStatus()
+    adapter.handleOutput('\x1b[?25h')
+    const afterCursorShow = adapter.getScriptParsedStatus()
+    adapter.handleOutput('\x1b[31m')
+    const afterColorOnly = adapter.getScriptParsedStatus()
+
+    expect(parseOutput).toHaveBeenCalledTimes(1)
+    expect(afterCursorHide).toEqual(first)
+    expect(afterCursorShow).toEqual(first)
+    expect(afterColorOnly).toEqual(first)
+
+    adapter.handleOutput('real text')
+    adapter.getScriptParsedStatus()
+    expect(parseOutput).toHaveBeenCalledTimes(2)
+  })
+
   it('passes only the committed transcript tail to parseOutput while returning the full transcript', () => {
     const parseOutput = vi.fn((input: any) => ({
       id: 'cli_session',
