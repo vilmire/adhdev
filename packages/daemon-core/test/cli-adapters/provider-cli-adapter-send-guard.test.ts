@@ -120,6 +120,41 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('Reply with BEGIN, then the numbers 1 through 40 with one number per line, then END.\r')
   })
 
+  it('skips rich parse on settled idle output when there is no active response turn', () => {
+    const parseOutput = vi.fn(() => ({ status: 'idle', messages: [] }))
+    const adapter = new ProviderCliAdapter({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      binary: 'hermes',
+      spawn: {
+        command: 'hermes',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+        parseOutput,
+      },
+    } as any, '/tmp/project') as any
+    adapter.ready = true
+    adapter.startupParseGate = false
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.currentTurnScope = null
+    adapter.activeModal = null
+    adapter.recentOutputBuffer = '❯\n'
+    adapter.settledBuffer = '❯\n'
+    adapter.terminalScreen = { getText: () => '❯\n' }
+
+    adapter.evaluateSettled()
+
+    expect(parseOutput).not.toHaveBeenCalled()
+    expect(adapter.currentStatus).toBe('idle')
+  })
+
   it('allows an intervention prompt during generation for providers that explicitly opt in', async () => {
     const adapter = buildAdapter({ allowInputDuringGeneration: true })
 

@@ -1053,6 +1053,17 @@ export class ProviderCliAdapter implements CliAdapter {
         this.resolveStartupState('settled');
         if (this.startupParseGate) return;
 
+        if (!this.isWaitingForResponse && !this.currentTurnScope && !this.activeModal && !this.parseErrorMessage) {
+            const tail = this.settledBuffer || this.recentOutputBuffer;
+            const modal = this.runParseApproval(tail);
+            const lightweightStatus = this.cliScripts?.detectStatus
+                ? this.runDetectStatus(tail)
+                : null;
+            if (!modal && lightweightStatus === 'idle' && this.currentStatus === 'idle') {
+                return;
+            }
+        }
+
         const session = this.runParseSession();
         if (!session) return;
 

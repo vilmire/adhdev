@@ -206,6 +206,31 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     expect(getScriptParsedStatus).not.toHaveBeenCalled()
   })
 
+  it('does not run the rich script parser while handling status transitions', () => {
+    const instance = new CliProviderInstance({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      spawn: { command: 'hermes', args: [] },
+    } as any, '/tmp/project') as any
+    const getStatus = vi.fn(() => ({ status: 'generating', activeModal: null, messages: [] }))
+    const getScriptParsedStatus = vi.fn(() => {
+      throw new Error('rich parser should not run from status transitions')
+    })
+    instance.adapter = {
+      getStatus,
+      getScriptParsedStatus,
+      getPartialResponse: () => '',
+      getRuntimeMetadata: () => null,
+    }
+    instance.historyWriter = { appendNewMessages: vi.fn() }
+    instance.lastStatus = 'idle'
+
+    expect(() => instance.detectStatusTransition()).not.toThrow()
+    expect(getStatus).toHaveBeenCalledWith({ allowParse: false })
+    expect(getScriptParsedStatus).not.toHaveBeenCalled()
+  })
+
   it('drops a pending completion when generation resumes before the debounce callback observes it', () => {
     vi.useFakeTimers()
     try {

@@ -599,8 +599,11 @@ export class CliProviderInstance implements ProviderInstance {
 
     private detectStatusTransition(): void {
         const now = Date.now();
-        const adapterStatus = this.adapter.getStatus();
-        const parsedStatus = this.adapter.getScriptParsedStatus?.() || null;
+        // Status-change handling is a hot path: PTY output can fire it many times
+        // during long-running CLI sessions. Keep this path on adapter-owned light
+        // state only; rich provider parsing is reserved for getState/read_chat.
+        const adapterStatus = this.adapter.getStatus({ allowParse: false });
+        const parsedStatus = null;
         const rawStatus = adapterStatus.status;
         const autoApproveActive = rawStatus === 'waiting_approval' && this.shouldAutoApprove();
         // Guard re-entry: onStatusChange can fire multiple times while the modal
@@ -696,7 +699,7 @@ export class CliProviderInstance implements ProviderInstance {
                     this.completedDebouncePending = { chatTitle, duration, timestamp: now };
                     this.completedDebounceTimer = setTimeout(() => {
                         if (this.completedDebouncePending) {
-                            const latestStatus = this.adapter.getStatus();
+                            const latestStatus = this.adapter.getStatus({ allowParse: false });
                             const latestAutoApproveActive = latestStatus.status === 'waiting_approval' && this.shouldAutoApprove();
                             const latestVisibleStatus = latestAutoApproveActive ? 'generating' : latestStatus.status;
                             if (latestVisibleStatus !== 'idle') {
