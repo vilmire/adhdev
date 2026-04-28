@@ -149,4 +149,21 @@ describe('conversation message authority snapshot', () => {
         expect(liveMessages.map(message => message.content)).toEqual(['live one', 'live two'])
         expect(visibleMessages.map(message => message.content)).toEqual(['history', 'live two'])
     })
+
+    it('does not let a stale chat-tail controller snapshot mask a newer conversation transcript in ChatPane', () => {
+        const conversation = createConversation({
+            messages: [
+                { role: 'assistant', content: 'new transcript last message', id: 'new-1', receivedAt: 4000 },
+            ],
+            lastMessagePreview: 'new transcript last message',
+            lastMessageAt: 4000,
+        })
+        const snapshot = createSnapshot([
+            { role: 'assistant', content: 'middle stale message', id: 'old-1', receivedAt: 2000 },
+        ])
+
+        const liveMessages = getConversationLiveMessages(conversation, snapshot)
+
+        expect(liveMessages.map(message => message.content)).toEqual(['new transcript last message'])
+    })
 })

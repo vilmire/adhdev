@@ -72,8 +72,17 @@ export function getConversationLiveMessages(
     conversation: ActiveConversation,
     snapshot?: Pick<SessionChatTailSnapshot, 'liveMessages'> | null,
 ): DashboardMessage[] {
+    const conversationMessages = Array.isArray(conversation.messages) ? conversation.messages : []
     const snapshotMessages = snapshot?.liveMessages || []
-    return snapshotMessages.length > 0 ? snapshotMessages : conversation.messages
+    if (snapshotMessages.length === 0) return conversationMessages
+    if (conversationMessages.length === 0) return snapshotMessages
+
+    const conversationAt = getLatestMessageTimestamp(conversationMessages)
+    const snapshotAt = getLatestMessageTimestamp(snapshotMessages)
+    if (conversationAt > 0 && (snapshotAt <= 0 || conversationAt >= snapshotAt)) {
+        return conversationMessages
+    }
+    return snapshotMessages
 }
 
 export function buildVisibleConversationMessages(options: {
