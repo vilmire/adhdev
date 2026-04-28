@@ -173,10 +173,12 @@ export function hydrateCliParsedMessages(
         });
 }
 
-function chooseMoreComparableCliMessage(left: CliChatMessage, right: CliChatMessage): CliChatMessage {
-    const leftComparable = normalizeComparableMessageContent(left.content || '');
-    const rightComparable = normalizeComparableMessageContent(right.content || '');
-
+function chooseMoreComparableCliMessage(
+    left: CliChatMessage,
+    right: CliChatMessage,
+    leftComparable = normalizeComparableMessageContent(left.content || ''),
+    rightComparable = normalizeComparableMessageContent(right.content || ''),
+): CliChatMessage {
     if (leftComparable && leftComparable === rightComparable) {
         const leftNewlines = String(left.content || '').split(/\r\n|\n|\r/g).length - 1;
         const rightNewlines = String(right.content || '').split(/\r\n|\n|\r/g).length - 1;
@@ -187,35 +189,43 @@ function chooseMoreComparableCliMessage(left: CliChatMessage, right: CliChatMess
 }
 
 function dedupeConsecutiveComparableCliMessages(messages: CliChatMessage[]): CliChatMessage[] {
-    const deduped: CliChatMessage[] = [];
+    const deduped: Array<{ message: CliChatMessage; comparable: string }> = [];
 
     for (const message of messages) {
         const current = {
             ...message,
             content: typeof message.content === 'string' ? message.content : String(message.content || ''),
         } as CliChatMessage;
+        const currentComparable = normalizeComparableMessageContent(current.content || '');
         const previous = deduped[deduped.length - 1];
         if (!previous) {
-            deduped.push(current);
+            deduped.push({ message: current, comparable: currentComparable });
             continue;
         }
 
-        const previousComparable = normalizeComparableMessageContent(previous.content || '');
-        const currentComparable = normalizeComparableMessageContent(current.content || '');
-        const sameRole = previous.role === current.role;
-        const sameKind = (previous.kind || 'standard') === (current.kind || 'standard');
-        const sameSender = (previous.senderName || '') === (current.senderName || '');
-        const comparableMatch = previousComparable && previousComparable === currentComparable;
+        const sameRole = previous.message.role === current.role;
+        const sameKind = (previous.message.kind || 'standard') === (current.kind || 'standard');
+        const sameSender = (previous.message.senderName || '') === (current.senderName || '');
+        const comparableMatch = previous.comparable && previous.comparable === currentComparable;
 
         if (sameRole && sameKind && sameSender && comparableMatch) {
-            deduped[deduped.length - 1] = chooseMoreComparableCliMessage(previous, current);
+            const selected = chooseMoreComparableCliMessage(
+                previous.message,
+                current,
+                previous.comparable,
+                currentComparable,
+            );
+            deduped[deduped.length - 1] = {
+                message: selected,
+                comparable: selected === current ? currentComparable : previous.comparable,
+            };
             continue;
         }
 
-        deduped.push(current);
+        deduped.push({ message: current, comparable: currentComparable });
     }
 
-    return deduped;
+    return deduped.map((entry) => entry.message);
 }
 
 export function normalizeCliParsedMessages(

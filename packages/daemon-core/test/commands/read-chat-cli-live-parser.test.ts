@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { buildChatMessageSignature } from '../../src/chat/chat-signatures.js'
-import { handleReadChat } from '../../src/commands/chat-commands.js'
+import { collapseReplayDuplicatesFromReadChat, handleReadChat } from '../../src/commands/chat-commands.js'
 
 function createCliReadChatHarness(messages: Array<Record<string, any>>) {
   const getScriptParsedStatus = vi.fn(() => ({
@@ -379,6 +379,29 @@ describe('handleReadChat for CLI adapters', () => {
       expect.objectContaining({ role: 'user', content: 'now summarize in one line' }),
       expect.objectContaining({ role: 'assistant', content: 'Snake game created and verified.' }),
     ])
+  })
+
+  it('normalizes each large read_chat replay message only once while collapsing duplicates', () => {
+    const contentAccesses = { count: 0 }
+    const repeatedAnswer = 'final answer '.repeat(20_000)
+    const messages: any[] = [{ role: 'user', content: 'debug hot path' }]
+
+    for (let index = 0; index < 12; index += 1) {
+      const message: any = { role: 'assistant', kind: 'standard', senderName: 'Hermes' }
+      Object.defineProperty(message, 'content', {
+        enumerable: true,
+        get() {
+          contentAccesses.count += 1
+          return repeatedAnswer
+        },
+      })
+      messages.push(message)
+    }
+
+    const collapsed = collapseReplayDuplicatesFromReadChat(messages)
+
+    expect(collapsed).toHaveLength(2)
+    expect(contentAccesses.count).toBe(12)
   })
 
   it('treats a truncated tail cursor as current when its last signature matches the full transcript last message', async () => {

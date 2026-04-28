@@ -178,85 +178,90 @@ function normalizeReadChatMessages(payload: Record<string, any>): ChatMessage[] 
     return normalizeChatMessages(messages);
 }
 
-function buildReadChatReplayCollapseSignature(message: ChatMessage | null | undefined): string {
-    if (!message) return '';
+interface ReadChatReplayCollapseInfo {
+    role: string;
+    kind: string;
+    senderName: string;
+    content: string;
+    signature: string;
+    collapsible: boolean;
+}
+
+function normalizeReadChatReplayTextContent(content: ChatMessage['content'] | undefined): string {
+    return flattenContent(content || '').replace(/\s+/g, ' ').trim();
+}
+
+function getReadChatReplayCollapseInfo(message: ChatMessage | null | undefined): ReadChatReplayCollapseInfo | null {
+    if (!message) return null;
     const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
     const kind = typeof message.kind === 'string' ? message.kind.trim().toLowerCase() : 'standard';
     const senderName = typeof message.senderName === 'string' ? message.senderName.trim().toLowerCase() : '';
-    const content = flattenContent(message.content || '').replace(/\s+/g, ' ').trim();
-    return `${role}:${kind}:${senderName}:${content}`;
+    const collapsible = role === 'assistant' || role === 'system';
+    if (!collapsible) return { role, kind, senderName, content: '', signature: '', collapsible };
+    const content = normalizeReadChatReplayTextContent(message.content);
+    return {
+        role,
+        kind,
+        senderName,
+        content,
+        signature: `${role}:${kind}:${senderName}:${content}`,
+        collapsible,
+    };
 }
 
-function shouldCollapseReadChatReplayDuplicate(message: ChatMessage | null | undefined): boolean {
-    if (!message) return false;
-    const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
-    return role === 'assistant' || role === 'system';
-}
-
-function normalizeReadChatReplayText(message: ChatMessage | null | undefined): string {
-    return flattenContent(message?.content || '').replace(/\s+/g, ' ').trim();
-}
-
-function isStableReadChatAssistantAnswer(message: ChatMessage | null | undefined): boolean {
-    if (!message) return false;
-    const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
-    const kind = typeof message.kind === 'string' ? message.kind.trim().toLowerCase() : 'standard';
-    if (role !== 'assistant') return false;
-    if (kind && kind !== 'standard') return false;
-    const content = normalizeReadChatReplayText(message);
-    if (content.length < 160) return false;
+function isStableReadChatAssistantAnswerInfo(info: ReadChatReplayCollapseInfo | null): boolean {
+    if (!info) return false;
+    if (info.role !== 'assistant') return false;
+    if (info.kind && info.kind !== 'standard') return false;
+    if (info.content.length < 160) return false;
 
     // A provider may surface expanded command output as a standard assistant bubble
     // (for example Claude Code's "Bash command ..." block). That is live work output,
     // not a stable final answer. Treating it as a terminal answer would hide the
     // real final response and violate read_chat fidelity.
-    if (/^(bash|shell|terminal) command\b/i.test(content)) return false;
+    if (/^(bash|shell|terminal) command\b/i.test(info.content)) return false;
     return true;
 }
 
-function isReplayedAssistantAnswerAfterStableAnswer(
-    message: ChatMessage | null | undefined,
-    stableAnswer: ChatMessage | null,
+function isReplayedAssistantAnswerAfterStableAnswerInfo(
+    info: ReadChatReplayCollapseInfo | null,
+    stableContent: string,
 ): boolean {
-    if (!message || !stableAnswer) return false;
-    const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
-    const kind = typeof message.kind === 'string' ? message.kind.trim().toLowerCase() : 'standard';
-    if (role !== 'assistant') return false;
-    if (kind && kind !== 'standard') return false;
-    const content = normalizeReadChatReplayText(message);
-    const stableContent = normalizeReadChatReplayText(stableAnswer);
+    if (!info || !stableContent) return false;
+    if (info.role !== 'assistant') return false;
+    if (info.kind && info.kind !== 'standard') return false;
+    const content = info.content;
     if (content.length < 80 || stableContent.length < 80) return false;
     return content === stableContent || content.startsWith(stableContent) || stableContent.startsWith(content);
 }
 
-function collapseReplayDuplicatesFromReadChat(messages: ChatMessage[]): ChatMessage[] {
+export function collapseReplayDuplicatesFromReadChat(messages: ChatMessage[]): ChatMessage[] {
     const collapsed: ChatMessage[] = [];
     const replaySignaturesInCurrentTurn = new Set<string>();
-    let stableAssistantAnswerInCurrentTurn: ChatMessage | null = null;
+    let stableAssistantAnswerContentInCurrentTurn = '';
+    let previousReplaySignature = '';
 
     for (const message of messages) {
-        const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
-        if (role === 'user') {
+        const info = getReadChatReplayCollapseInfo(message);
+        if (info?.role === 'user') {
             replaySignaturesInCurrentTurn.clear();
-            stableAssistantAnswerInCurrentTurn = null;
+            stableAssistantAnswerContentInCurrentTurn = '';
+            previousReplaySignature = '';
         }
 
-        const signature = buildReadChatReplayCollapseSignature(message);
-        const previous = collapsed[collapsed.length - 1];
-        const previousSignature = buildReadChatReplayCollapseSignature(previous);
-
-        if (shouldCollapseReadChatReplayDuplicate(message) && signature) {
-            if (previousSignature === signature) continue;
-            if (replaySignaturesInCurrentTurn.has(signature)) continue;
-            if (isReplayedAssistantAnswerAfterStableAnswer(message, stableAssistantAnswerInCurrentTurn)) continue;
+        if (info?.collapsible && info.signature) {
+            if (previousReplaySignature === info.signature) continue;
+            if (replaySignaturesInCurrentTurn.has(info.signature)) continue;
+            if (isReplayedAssistantAnswerAfterStableAnswerInfo(info, stableAssistantAnswerContentInCurrentTurn)) continue;
         }
 
         collapsed.push(message);
-        if (shouldCollapseReadChatReplayDuplicate(message) && signature) {
-            replaySignaturesInCurrentTurn.add(signature);
+        previousReplaySignature = info?.collapsible ? info.signature : '';
+        if (info?.collapsible && info.signature) {
+            replaySignaturesInCurrentTurn.add(info.signature);
         }
-        if (isStableReadChatAssistantAnswer(message)) {
-            stableAssistantAnswerInCurrentTurn = message;
+        if (isStableReadChatAssistantAnswerInfo(info)) {
+            stableAssistantAnswerContentInCurrentTurn = info?.content || '';
         }
     }
 
