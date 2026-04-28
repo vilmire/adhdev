@@ -202,7 +202,7 @@ export interface ProviderInstance {
      * Return the cheap modal metadata for a single session subscription. This is
      * used on P2P topic flushes and must not invoke rich chat/transcript parsing.
      */
-    getSessionModalState?(): SessionModalState | null;
+    getSessionModalState?(sessionId?: string): SessionModalState | null;
 
  /** Receive event (external → Instance) */
     onEvent(event: string, data?: any): void;

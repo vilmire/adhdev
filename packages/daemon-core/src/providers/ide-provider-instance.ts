@@ -12,7 +12,7 @@
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { flattenContent, type ProviderModule } from './contracts.js';
-import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
+import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, SessionModalState } from './provider-instance.js';
 import { ExtensionProviderInstance } from './extension-provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
@@ -169,6 +169,30 @@ export class IdeProviderInstance implements ProviderInstance {
             lastUpdated: Date.now(),
             settings: this.settings,
             pendingEvents: this.flushEvents(),
+        };
+    }
+
+    getSessionModalState(sessionId?: string): SessionModalState | null {
+        if (sessionId && sessionId !== this.instanceId) {
+            for (const ext of this.extensions.values()) {
+                const projected = ext.getSessionModalState?.(sessionId);
+                if (projected?.id === sessionId) return projected;
+            }
+            return null;
+        }
+
+        const autoApproveActive = (
+            this.currentStatus === 'waiting_approval'
+            || this.cachedChat?.status === 'waiting_approval'
+        ) && this.canAutoApprove();
+        const visibleStatus = autoApproveActive ? 'generating' : this.currentStatus;
+        return {
+            id: this.instanceId,
+            status: autoApproveActive && this.cachedChat?.status === 'waiting_approval'
+                ? 'generating'
+                : (this.cachedChat?.status || visibleStatus),
+            title: this.cachedChat?.title || this.type,
+            activeModal: autoApproveActive ? null : (this.cachedChat?.activeModal || null),
         };
     }
 

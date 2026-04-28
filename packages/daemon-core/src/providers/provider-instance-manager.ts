@@ -8,7 +8,7 @@
  * 4. Event collection and propagation
  */
 
-import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, HotChatSessionState } from './provider-instance.js';
+import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, HotChatSessionState, SessionModalState } from './provider-instance.js';
 import { LOG } from '../logging/logger.js';
 
 function projectHotChatSessionStatesFromProviderState(state: ProviderState): HotChatSessionState[] {
@@ -163,6 +163,32 @@ export class ProviderInstanceManager {
             }
         }
         return sessions;
+    }
+
+    getSessionModalState(sessionId: string, options: { instanceKey?: string | null } = {}): SessionModalState | null {
+        if (!sessionId) return null;
+        const candidates = [sessionId];
+        if (options.instanceKey && options.instanceKey !== sessionId) {
+            candidates.push(options.instanceKey);
+        }
+
+        for (const id of candidates) {
+            const instance = this.instances.get(id);
+            if (!instance?.getSessionModalState) continue;
+            try {
+                const projected = instance.getSessionModalState(sessionId);
+                if (!projected?.id) continue;
+                if (projected.id !== sessionId) {
+                    LOG.warn('InstanceMgr', `[InstanceManager] Ignoring mismatched session modal projection from ${id}: requested=${sessionId} projected=${projected.id}`);
+                    continue;
+                }
+                return projected;
+            } catch (e) {
+                LOG.warn('InstanceMgr', `[InstanceManager] Failed to project session modal metadata from ${id}: ${(e as Error).message}`);
+            }
+        }
+
+        return null;
     }
 
  /**

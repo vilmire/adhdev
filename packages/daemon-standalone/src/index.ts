@@ -52,7 +52,6 @@ import {
   type SessionModalUpdate,
   type DaemonMetadataSubscriptionParams,
   type DaemonMetadataUpdate,
-  type ProviderState,
   type SubscribeRequest,
   type TopicUpdateEnvelope,
   type UnsubscribeRequest,
@@ -90,6 +89,7 @@ import {
   MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
   STANDALONE_CDP_SCAN_INTERVAL_MS,
 } from '../../daemon-core/src/runtime-defaults.js';
+import type { SessionModalState } from '../../daemon-core/src/providers/provider-instance.js';
 
 // ─── Constants ───
 const DEFAULT_PORT = 3847;
@@ -1576,29 +1576,24 @@ class StandaloneServer {
     }
   }
 
-  private findProviderStateBySessionId(sessionId: string): ProviderState | null {
+  private findSessionModalStateBySessionId(sessionId: string): SessionModalState | null {
     if (!this.components || !sessionId) return null;
-    const states = this.components.instanceManager.collectAllStates();
-    for (const state of states) {
-      if (state.instanceId === sessionId) return state;
-      if (state.category === 'ide') {
-        const child = state.extensions.find((entry: { instanceId?: string }) => entry.instanceId === sessionId);
-        if (child) return child;
-      }
-    }
-    return null;
+    const target = this.components.sessionRegistry.get(sessionId);
+    return this.components.instanceManager.getSessionModalState(sessionId, {
+      instanceKey: target?.instanceKey,
+    });
   }
 
   private buildSessionModalUpdate(
     state: SessionModalSubscriptionState,
     key: string,
   ): SessionModalUpdate | null {
-    const providerState = this.findProviderStateBySessionId(state.request.params.targetSessionId);
-    if (!providerState) return null;
+    const modalState = this.findSessionModalStateBySessionId(state.request.params.targetSessionId);
+    if (!modalState) return null;
     const now = Date.now();
-    const activeModal = providerState.activeChat?.activeModal;
-    const status = String(providerState.activeChat?.status || providerState.status || 'idle');
-    const title = typeof providerState.activeChat?.title === 'string' ? providerState.activeChat.title : undefined;
+    const activeModal = modalState.activeModal;
+    const status = String(modalState.status || 'idle');
+    const title = typeof modalState.title === 'string' ? modalState.title : undefined;
     const prepared = prepareSessionModalUpdate({
       key,
       sessionId: state.request.params.targetSessionId,
