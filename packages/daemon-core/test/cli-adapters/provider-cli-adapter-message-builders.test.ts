@@ -45,6 +45,49 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     expect(normalized[1]?.content).toBe(reflowed)
   })
 
+  it('preserves provider-owned bubble identity when normalizing CLI parsed messages', () => {
+    const normalized = normalizeCliParsedMessages([
+      {
+        role: 'user',
+        content: 'hello',
+        id: 'user-1',
+        index: 0,
+        providerUnitKey: 'hermes-cli:user:0:abc',
+        bubbleId: 'bubble-user-1',
+        bubbleState: 'final',
+        _turnKey: 'turn-user-1',
+      },
+      {
+        role: 'assistant',
+        content: 'hi',
+        id: 'assistant-1',
+        index: 1,
+        providerUnitKey: 'hermes-cli:assistant:1:def',
+        bubbleId: 'bubble-assistant-1',
+        bubbleState: 'streaming',
+        _turnKey: 'turn-assistant-1',
+      },
+    ], {
+      committedMessages: [],
+      scope: null,
+      lastOutputAt: 123,
+      now: 123,
+    }) as any[]
+
+    expect(normalized[0]).toMatchObject({
+      providerUnitKey: 'hermes-cli:user:0:abc',
+      bubbleId: 'bubble-user-1',
+      bubbleState: 'final',
+      _turnKey: 'turn-user-1',
+    })
+    expect(normalized[1]).toMatchObject({
+      providerUnitKey: 'hermes-cli:assistant:1:def',
+      bubbleId: 'bubble-assistant-1',
+      bubbleState: 'streaming',
+      _turnKey: 'turn-assistant-1',
+    })
+  })
+
   it('logs unresolved missing CLI scripts as info instead of warning noise', () => {
     const warnSpy = vi.spyOn(LOG, 'warn').mockImplementation(() => {})
     const infoSpy = vi.spyOn(LOG, 'info').mockImplementation(() => {})
@@ -714,6 +757,82 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     expect(result.messages[0]).toMatchObject({ content: 'committed-1', id: 'msg-1' })
     expect(result.messages[2599]).toMatchObject({ content: 'committed-2600', id: 'msg-2600' })
     expect(result.messages[2600]).toMatchObject({ content: 'fresh assistant answer', id: 'assistant-fresh' })
+  })
+
+  it('preserves provider-owned identity when hydrating a committed CLI transcript prefix', () => {
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+        parseOutput: () => ({
+          id: 'cli_session',
+          status: 'idle',
+          title: 'Test CLI',
+          messages: [
+            { role: 'user', content: 'hello', id: 'user-1', index: 0 },
+            { role: 'assistant', content: 'hi', id: 'assistant-1', index: 1 },
+          ],
+        }),
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => 'idle screen'),
+    }
+    adapter.committedMessages = [
+      {
+        role: 'user',
+        content: 'hello',
+        timestamp: 100,
+        receivedAt: 100,
+        id: 'user-1',
+        index: 0,
+        providerUnitKey: 'test-cli:user:0',
+        bubbleId: 'bubble-user-1',
+        bubbleState: 'final',
+        _turnKey: 'turn-user-1',
+      },
+      {
+        role: 'assistant',
+        content: 'hi',
+        timestamp: 101,
+        receivedAt: 101,
+        id: 'assistant-1',
+        index: 1,
+        providerUnitKey: 'test-cli:assistant:1',
+        bubbleId: 'bubble-assistant-1',
+        bubbleState: 'final',
+        _turnKey: 'turn-assistant-1',
+      },
+    ]
+    adapter.currentStatus = 'idle'
+    adapter.activeModal = null
+
+    const result = adapter.getScriptParsedStatus()
+
+    expect(result.messages[0]).toMatchObject({
+      providerUnitKey: 'test-cli:user:0',
+      bubbleId: 'bubble-user-1',
+      bubbleState: 'final',
+      _turnKey: 'turn-user-1',
+    })
+    expect(result.messages[1]).toMatchObject({
+      providerUnitKey: 'test-cli:assistant:1',
+      bubbleId: 'bubble-assistant-1',
+      bubbleState: 'final',
+      _turnKey: 'turn-assistant-1',
+    })
   })
 
   it('preserves timestamps by stable id/index without reading committed transcript content', () => {

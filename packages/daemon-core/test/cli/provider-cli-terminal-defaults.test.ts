@@ -27,6 +27,25 @@ describe('CLI PTY default terminal sizing', () => {
     expect(plan.ptyOptions.rows).toBe(32)
   })
 
+  it('exposes the launch workspace as TERMINAL_CWD for CLI agents that route tools through Hermes', () => {
+    const workingDir = '/tmp/adhdev-cli-workspace'
+    const plan = resolveCliSpawnPlan({
+      provider: {
+        spawn: {
+          command: '/bin/echo',
+          args: [],
+          env: {},
+        },
+      } as any,
+      runtimeSettings: {},
+      workingDir,
+      extraArgs: [],
+    })
+
+    expect(plan.ptyOptions.cwd).toBe(workingDir)
+    expect(plan.ptyOptions.env?.TERMINAL_CWD).toBe(workingDir)
+  })
+
   it('normalizes invalid or fractional session-host dimensions back to safe shared defaults', () => {
     expect(resolveSessionHostCols(undefined)).toBe(DEFAULT_SESSION_HOST_COLS)
     expect(resolveSessionHostCols(0)).toBe(DEFAULT_SESSION_HOST_COLS)

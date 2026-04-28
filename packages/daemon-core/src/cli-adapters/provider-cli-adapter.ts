@@ -1734,6 +1734,10 @@ export class ProviderCliAdapter implements CliAdapter {
                 kind: typeof message.kind === 'string' ? message.kind : undefined,
                 id: typeof message.id === 'string' ? message.id : undefined,
                 index: typeof message.index === 'number' ? message.index : undefined,
+                providerUnitKey: typeof (message as any).providerUnitKey === 'string' ? (message as any).providerUnitKey : undefined,
+                bubbleId: typeof (message as any).bubbleId === 'string' ? (message as any).bubbleId : undefined,
+                bubbleState: typeof (message as any).bubbleState === 'string' ? (message as any).bubbleState : undefined,
+                _turnKey: typeof (message as any)._turnKey === 'string' ? (message as any)._turnKey : undefined,
                 meta: message.meta && typeof message.meta === 'object' ? { ...(message.meta as Record<string, any>) } : undefined,
                 senderName: typeof message.senderName === 'string' ? message.senderName : undefined,
             }));
@@ -1770,6 +1774,10 @@ export class ProviderCliAdapter implements CliAdapter {
                 kind: message.kind,
                 id: message.id || `msg_${index}`,
                 index: typeof message.index === 'number' ? message.index : index,
+                providerUnitKey: (message as any).providerUnitKey,
+                bubbleId: (message as any).bubbleId,
+                bubbleState: (message as any).bubbleState,
+                _turnKey: (message as any)._turnKey,
                 meta: message.meta,
                 senderName: message.senderName,
             };
@@ -1810,6 +1818,10 @@ export class ProviderCliAdapter implements CliAdapter {
                 senderName: message.senderName,
                 id: message.id || `msg_${index}`,
                 index: typeof message.index === 'number' ? message.index : index,
+                providerUnitKey: (message as any).providerUnitKey,
+                bubbleId: (message as any).bubbleId,
+                bubbleState: (message as any).bubbleState,
+                _turnKey: (message as any)._turnKey,
                 receivedAt: typeof message.receivedAt === 'number'
                     ? message.receivedAt
                     : message.timestamp,

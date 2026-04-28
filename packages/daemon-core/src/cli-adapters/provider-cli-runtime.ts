@@ -65,6 +65,12 @@ export function resolveCliSpawnPlan(options: {
         shellArgs = allArgs;
     }
 
+    const env = buildCliSpawnEnv(process.env, spawnConfig.env);
+    // Some CLI agents, notably Hermes, route their tools through TERMINAL_CWD
+    // rather than process.cwd(). Keep the generic ADHDev launch workspace as
+    // the single source of truth so PTY cwd and tool cwd cannot diverge.
+    env.TERMINAL_CWD = workingDir;
+
     return {
         binaryPath,
         allArgs,
@@ -76,7 +82,7 @@ export function resolveCliSpawnPlan(options: {
             cols: DEFAULT_SESSION_HOST_COLS,
             rows: DEFAULT_SESSION_HOST_ROWS,
             cwd: workingDir,
-            env: buildCliSpawnEnv(process.env, spawnConfig.env),
+            env,
         },
     };
 }

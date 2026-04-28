@@ -245,6 +245,10 @@ export function normalizeCliParsedMessages(
         kind: message.kind,
         id: message.id,
         index: message.index,
+        providerUnitKey: message.providerUnitKey,
+        bubbleId: message.bubbleId,
+        bubbleState: message.bubbleState,
+        _turnKey: message._turnKey,
         meta: message.meta,
         senderName: message.senderName,
     })));
