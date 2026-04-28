@@ -171,6 +171,74 @@ export function appendBoundedText(current: string, chunk: string, maxChars: numb
     return current.slice(-keepFromCurrent) + chunk;
 }
 
+const COMMITTED_ACTIVITY_PREFIX_BLOCK_RE = /^(?:📖|💻|🔎|📚|📋|✏️|📝|🔧|🛠️|⚙️)\s+(.+)$/;
+
+function isLikelyCommittedActivityPrefixContinuation(line: string): boolean {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) return false;
+    if (COMMITTED_ACTIVITY_PREFIX_BLOCK_RE.test(trimmed)) return false;
+    if (/\s/.test(trimmed)) return false;
+    if (/[가-힣]/.test(trimmed)) return false;
+    if (trimmed.length > 96) return false;
+    return /^[A-Za-z0-9_./:@+%=-]+$/.test(trimmed);
+}
+
+function parseCommittedActivityPrefixBlock(lines: string[], index: number): { label: string; nextIndex: number } | null {
+    const first = String(lines[index] || '').trim();
+    if (!COMMITTED_ACTIVITY_PREFIX_BLOCK_RE.test(first)) return null;
+    const parts = [first];
+    let nextIndex = index + 1;
+    while (nextIndex < lines.length && isLikelyCommittedActivityPrefixContinuation(lines[nextIndex])) {
+        parts.push(String(lines[nextIndex] || '').trim());
+        nextIndex += 1;
+    }
+    return { label: parts.join(''), nextIndex };
+}
+
+export function sanitizeCliStandardMessageContent(content: unknown): string {
+    const source = String(content || '').trim();
+    if (!source) return '';
+    const lines = source.split(/\r?\n/);
+    if (lines.length < 4) return source;
+
+    const counts = new Map<string, number>();
+    for (let index = 0; index < lines.length; index += 1) {
+        const block = parseCommittedActivityPrefixBlock(lines, index);
+        if (!block) continue;
+        counts.set(block.label, (counts.get(block.label) || 0) + 1);
+        index = block.nextIndex - 1;
+    }
+
+    const repeatedLabels = new Set(
+        Array.from(counts.entries())
+            .filter(([, count]) => count >= 3)
+            .map(([label]) => label),
+    );
+    if (repeatedLabels.size === 0) return source;
+
+    const stripped: string[] = [];
+    let removed = 0;
+    for (let index = 0; index < lines.length; index += 1) {
+        const block = parseCommittedActivityPrefixBlock(lines, index);
+        if (block && repeatedLabels.has(block.label)) {
+            removed += 1;
+            index = block.nextIndex - 1;
+            continue;
+        }
+        stripped.push(lines[index]);
+    }
+
+    const next = stripped.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    return removed >= 3 && next.length >= 80 ? next : source;
+}
+
+function sanitizeCommittedMessageForDisplay<T extends { role?: string; kind?: string; content?: unknown }>(message: T): T {
+    if (!message || message.role !== 'assistant' || (message.kind || 'standard') !== 'standard') return message;
+    const content = sanitizeCliStandardMessageContent(message.content);
+    if (content === message.content) return message;
+    return { ...message, content };
+}
+
 // ─── Adapter ────────────────────────────────────────
 
 export class ProviderCliAdapter implements CliAdapter {
@@ -400,7 +468,12 @@ export class ProviderCliAdapter implements CliAdapter {
         const tailFirst = parseBaseMessages[0];
         if (tailFirst && this.messagesComparable(parsedFirst, tailFirst)) {
             const prefixLength = fullBaseMessages.length - parseBaseMessages.length;
-            return [...fullBaseMessages.slice(0, prefixLength), ...parsedMessages];
+            const prefix = fullBaseMessages.slice(0, prefixLength);
+            const shouldSanitizePrefix = !!this.currentTurnScope || this.currentStatus !== 'idle' || !!this.activeModal;
+            const nextPrefix = shouldSanitizePrefix
+                ? prefix.map((message) => sanitizeCommittedMessageForDisplay(message))
+                : prefix;
+            return [...nextPrefix, ...parsedMessages];
         }
 
         return [...fullBaseMessages, ...parsedMessages];
@@ -1808,10 +1881,14 @@ export class ProviderCliAdapter implements CliAdapter {
 
     private buildCommittedChatMessages(): any[] {
         return this.committedMessages.map((message, index) => {
-            const contentValue = message.content;
+            const rawContentValue = message.content;
+            const rawContent = typeof rawContentValue === 'string' ? rawContentValue : String(rawContentValue || '');
+            const content = message.role === 'assistant' && (message.kind || 'standard') === 'standard'
+                ? sanitizeCliStandardMessageContent(rawContent)
+                : rawContent;
             return buildChatMessage({
                 role: message.role,
-                content: typeof contentValue === 'string' ? contentValue : String(contentValue || ''),
+                content,
                 timestamp: message.timestamp,
                 kind: message.kind,
                 meta: message.meta,

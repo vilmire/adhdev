@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { appendBoundedText, ProviderCliAdapter } from '../../src/cli-adapters/provider-cli-adapter.js'
+import { appendBoundedText, ProviderCliAdapter, sanitizeCliStandardMessageContent } from '../../src/cli-adapters/provider-cli-adapter.js'
 import { buildCliParseInput, normalizeCliParsedMessages } from '../../src/cli-adapters/provider-cli-parse.js'
 import { normalizeComparableMessageContent } from '../../src/cli-adapters/provider-cli-shared.js'
 import { LOG } from '../../src/logging/logger.js'
@@ -9,6 +9,30 @@ describe('ProviderCliAdapter message fallback shaping', () => {
   afterEach(() => {
     vi.useRealTimers()
     resetDebugRuntimeConfig()
+  })
+
+  it('strips repeated activity prefix blocks from retained standard assistant content', () => {
+    const pathPrefix = '📖 /Users/moltbot/.openclaw/workspace/projects/adhdev-providers/tests/codex-c\nl\ni-parser.test.js'
+    const polluted = [
+      pathPrefix,
+      '점검 결과 요약:',
+      pathPrefix,
+      pathPrefix,
+      '1. Parser regression 테스트',
+      pathPrefix,
+      '- 실행: node --test tests/codex-cli-parser.test.js',
+      pathPrefix,
+      '- 결과: pass 65, fail 0',
+      pathPrefix,
+      '결론: standard assistant bubble에는 파일 read activity prefix가 남으면 안 됩니다.',
+    ].join('\n')
+
+    const cleaned = sanitizeCliStandardMessageContent(polluted)
+
+    expect(cleaned).toContain('점검 결과 요약:')
+    expect(cleaned).toContain('1. Parser regression 테스트')
+    expect(cleaned).toContain('결론: standard assistant bubble에는 파일 read activity prefix가 남으면 안 됩니다.')
+    expect(cleaned).not.toContain('📖 /Users/moltbot')
   })
 
   it('normalizes wrapped assistant prose to the same comparable text as its reflowed form', () => {
