@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo } from 'react'
 import type { RefObject } from 'react'
 import type { ActiveConversation } from './types'
 import type { DaemonData } from '../../types'
@@ -52,40 +52,9 @@ const PaneGroupContent = memo(function PaneGroupContent({
     isInputActive = true,
     isVisible = true,
 }: PaneGroupContentProps) {
-    const [terminalRevealReady, setTerminalRevealReady] = useState(isCliTerminal)
-    const previousIsCliTerminalRef = useRef(isCliTerminal)
-
-    useEffect(() => {
-        const wasCliTerminal = previousIsCliTerminalRef.current
-        previousIsCliTerminalRef.current = isCliTerminal
-
-        if (!isCliTerminal) {
-            setTerminalRevealReady(false)
-            return
-        }
-
-        if (wasCliTerminal) {
-            setTerminalRevealReady(true)
-            return
-        }
-
-        setTerminalRevealReady(false)
-        let frameA = 0
-        let frameB = 0
-        frameA = window.requestAnimationFrame(() => {
-            frameB = window.requestAnimationFrame(() => {
-                setTerminalRevealReady(true)
-            })
-        })
-        return () => {
-            window.cancelAnimationFrame(frameA)
-            window.cancelAnimationFrame(frameB)
-        }
-    }, [isCliTerminal])
-
-    const showTerminalPane = isCliTerminal && terminalRevealReady
-    const showChatPane = !isCliTerminal || !terminalRevealReady
-    const terminalPaneVisible = getPaneGroupContentChildVisibility(isVisible, isCliTerminal)
+    const showTerminalPane = isCliTerminal
+    const showChatPane = !isCliTerminal
+    const terminalPaneVisible = getPaneGroupContentChildVisibility(isVisible, showTerminalPane)
     const chatPaneVisible = getPaneGroupContentChildVisibility(isVisible, showChatPane)
     const paneVisible = getPaneGroupContentChildVisibility(isVisible)
     const modalState = useSessionModalSubscription(activeConv)

@@ -169,14 +169,22 @@ function escapeHtml(value: string) {
 function focusOwnerWindow(ownerDoc: Document | null | undefined) {
     const ownerWindow = ownerDoc?.defaultView
     if (!ownerWindow) return
+    const focusWithoutScrolling = (element: HTMLElement | null | undefined) => {
+        if (!element) return
+        try {
+            element.focus({ preventScroll: true })
+        } catch {
+            try { element.focus() } catch { /* noop */ }
+        }
+    }
     try {
         ownerWindow.focus()
-        ownerDoc?.body?.focus?.()
-        ownerDoc?.documentElement?.focus?.()
+        focusWithoutScrolling(ownerDoc?.body)
+        focusWithoutScrolling(ownerDoc?.documentElement)
         ownerWindow.requestAnimationFrame?.(() => {
             try {
                 ownerWindow.focus()
-                ownerDoc?.body?.focus?.()
+                focusWithoutScrolling(ownerDoc?.body)
             } catch {
                 // noop
             }

@@ -21,11 +21,11 @@ export function shouldRequestDashboardScrollToBottom(intent: DashboardScrollToBo
     case 'toast-open':
     case 'conversation-open':
     case 'requested-tab':
+      return true
     case 'dockview-shortcut':
     case 'dockview-focus':
     case 'dockview-move':
     case 'dockview-split':
-      return true
     case 'stored-layout-restore':
     case 'passive-tab-sync':
       return false

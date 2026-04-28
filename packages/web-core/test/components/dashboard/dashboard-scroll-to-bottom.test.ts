@@ -5,14 +5,18 @@ import {
 } from '../../../src/components/dashboard/dashboard-scroll-to-bottom'
 
 describe('dashboard scroll-to-bottom intents', () => {
-  it('requests bottom scroll for notification and explicit dockview actions', () => {
+  it('requests bottom scroll for user navigation intents', () => {
     expect(shouldRequestDashboardScrollToBottom('notification-open')).toBe(true)
     expect(shouldRequestDashboardScrollToBottom('toast-open')).toBe(true)
-    expect(shouldRequestDashboardScrollToBottom('dockview-split')).toBe(true)
-    expect(shouldRequestDashboardScrollToBottom('dockview-focus')).toBe(true)
+    expect(shouldRequestDashboardScrollToBottom('conversation-open')).toBe(true)
+    expect(shouldRequestDashboardScrollToBottom('requested-tab')).toBe(true)
   })
 
-  it('does not request bottom scroll for passive restore flows', () => {
+  it('does not request bottom scroll for layout-only dockview actions or passive restore flows', () => {
+    expect(shouldRequestDashboardScrollToBottom('dockview-shortcut')).toBe(false)
+    expect(shouldRequestDashboardScrollToBottom('dockview-split')).toBe(false)
+    expect(shouldRequestDashboardScrollToBottom('dockview-focus')).toBe(false)
+    expect(shouldRequestDashboardScrollToBottom('dockview-move')).toBe(false)
     expect(shouldRequestDashboardScrollToBottom('stored-layout-restore')).toBe(false)
     expect(shouldRequestDashboardScrollToBottom('passive-tab-sync')).toBe(false)
   })
