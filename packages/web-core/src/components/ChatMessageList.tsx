@@ -16,12 +16,17 @@ import remarkGfm from 'remark-gfm';
 import remarkAlert from 'remark-github-blockquote-alert';
 import remarkBreaks from 'remark-breaks';
 import { buildChatMessageSignature } from '@adhdev/daemon-core/chat/chat-signatures';
+import type { Pluggable, PluggableList } from 'unified';
 import { IconThought } from './Icons';
 import { stringifyTextContent } from '../utils/text';
 
 // ─── Types ────────────────────────────────────
 
 import type { ChatMessage } from '../types';
+
+const gfmRemarkPlugin: Pluggable = [remarkGfm, { singleTilde: false }];
+const chatRemarkPlugins: PluggableList = [gfmRemarkPlugin, remarkAlert, remarkBreaks];
+const actionLogRemarkPlugins: PluggableList = [gfmRemarkPlugin];
 
 export interface ActionLog {
     text: string;
@@ -252,7 +257,7 @@ function renderTextLikeContent(content: string, renderAsPreformatted: boolean): 
     }
     if (likelyNeedsMarkdownRender(content)) {
         return (
-            <ReactMarkdown remarkPlugins={[remarkGfm, remarkAlert, remarkBreaks]}>
+            <ReactMarkdown remarkPlugins={chatRemarkPlugins}>
                 {content}
             </ReactMarkdown>
         );
@@ -362,7 +367,7 @@ export function getChatMessageStableKey(message: ChatMessage, index: number): st
 const ActionLogRow = memo(function ActionLogRow({ log }: { log: ActionLog }) {
     return (
         <div className="self-center chat-msg-action">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{log.text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={actionLogRemarkPlugins}>{log.text}</ReactMarkdown>
             <span className="action-time">{formatTime(log.timestamp)}</span>
         </div>
     );
@@ -488,7 +493,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                             ) : renderAsPreformatted ? (
                                 <pre className="chat-preformatted">{visibleContent}</pre>
                             ) : renderAsMarkdown ? (
-                                <ReactMarkdown remarkPlugins={[remarkGfm, remarkAlert, remarkBreaks]}>
+                                <ReactMarkdown remarkPlugins={chatRemarkPlugins}>
                                     {visibleContent}
                                 </ReactMarkdown>
                             ) : (

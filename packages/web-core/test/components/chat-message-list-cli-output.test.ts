@@ -31,4 +31,17 @@ describe('ChatMessageList CLI assistant rendering', () => {
     expect(html).toContain('TAIL_MARKER_VISIBLE')
     expect(html).not.toContain('Show more')
   })
+
+  it('renders numeric ranges with single tildes literally instead of strikethrough', () => {
+    const html = renderMessages([
+      {
+        role: 'assistant',
+        content: '- daemon CPU 4~11%, session-host 0~2%',
+      } as ChatMessage,
+    ])
+
+    expect(html).toContain('4~11%')
+    expect(html).toContain('0~2%')
+    expect(html).not.toContain('<del>')
+  })
 })
