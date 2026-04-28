@@ -50,6 +50,11 @@ import { buildDashboardDockviewContextMenuItems } from './dockviewContextMenuIte
 import { shouldAwaitStoredDockviewHydration, shouldDeferDockviewPanelPrune } from './dashboardDockviewHydration'
 import { getPassiveSessionSelectionCommand } from './dashboardSessionCommands'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
+import {
+    DOCKVIEW_IDLE_DRAG_FLOAT_DELAY_MS,
+    createDockviewIdleDragFloatController,
+    isDockviewIdleDragFloatEnabled,
+} from './dockviewIdleDragFloat'
 
 interface DashboardDockviewWorkspaceProps {
     visibleConversations: ActiveConversation[]
@@ -613,6 +618,7 @@ export default function DashboardDockviewWorkspace({
     const { sendCommand } = useTransport()
     const apiRef = useRef<DockviewApi | null>(null)
     const dockviewContainerRef = useRef<HTMLDivElement | null>(null)
+    const idleDragFloatCleanupRef = useRef<(() => void) | null>(null)
     const hasInitializedRef = useRef(false)
     const awaitingInitialLayoutHydrationRef = useRef(false)
     const hasRestoredStoredActiveTabRef = useRef(false)
@@ -1453,8 +1459,17 @@ export default function DashboardDockviewWorkspace({
         startShortcutListeningForActiveTab,
     ])
 
+    useEffect(() => {
+        return () => {
+            idleDragFloatCleanupRef.current?.()
+            idleDragFloatCleanupRef.current = null
+        }
+    }, [])
+
     const handleReady = useCallback((event: DockviewReadyEvent) => {
         apiRef.current = event.api
+        idleDragFloatCleanupRef.current?.()
+        idleDragFloatCleanupRef.current = null
 
         const stored = readDashboardDockviewStoredLayout(layoutProfile)
         storedActiveTabIdRef.current = stored?.activeTabId ?? null
@@ -1516,6 +1531,101 @@ export default function DashboardDockviewWorkspace({
             syncPopoutChrome()
             setPopoutWindowRevision(value => value + 1)
         })
+
+        if (isDockviewIdleDragFloatEnabled()) {
+            const getDragPoint = (nativeEvent: DragEvent) => ({
+                clientX: nativeEvent.clientX,
+                clientY: nativeEvent.clientY,
+            })
+            const isOutsideDockviewContainer = (point: { clientX: number; clientY: number }) => {
+                const rect = dockviewContainerRef.current?.getBoundingClientRect()
+                if (!rect) return false
+                return point.clientX < rect.left
+                    || point.clientX > rect.right
+                    || point.clientY < rect.top
+                    || point.clientY > rect.bottom
+            }
+            const controller = createDockviewIdleDragFloatController({
+                detachDelayMs: DOCKVIEW_IDLE_DRAG_FLOAT_DELAY_MS,
+                onDetach: ({ panelId, clientX, clientY }) => {
+                    const panel = event.api.getPanel(panelId)
+                    if (!panel) return
+                    try {
+                        if (panel.group.model.location.type !== 'grid') return
+                    } catch {
+                        return
+                    }
+
+                    const rootRect = dockviewContainerRef.current?.getBoundingClientRect()
+                    const panelRect = panel.group.element?.getBoundingClientRect()
+                    const width = Math.round(Math.min(Math.max(panelRect?.width ?? 600, 360), 720))
+                    const height = Math.round(Math.min(Math.max(panelRect?.height ?? 500, 260), 640))
+                    event.api.addFloatingGroup(panel, {
+                        x: rootRect ? Math.max(0, clientX - rootRect.left - 32) : undefined,
+                        y: rootRect ? Math.max(0, clientY - rootRect.top - 18) : undefined,
+                        width,
+                        height,
+                    })
+                    panel.api.setActive()
+                    persistDockviewLayout()
+                    syncPopoutChrome()
+                    setPopoutWindowRevision(value => value + 1)
+                },
+            })
+            const disposables = [
+                event.api.onWillDragPanel(dragEvent => {
+                    if (dragEvent.nativeEvent.defaultPrevented || dragEvent.nativeEvent.shiftKey) return
+                    try {
+                        if (dragEvent.panel.group.model.location.type !== 'grid') return
+                    } catch {
+                        return
+                    }
+                    controller.startDrag({
+                        panelId: dragEvent.panel.id,
+                        ...getDragPoint(dragEvent.nativeEvent),
+                    })
+                }),
+                event.api.onWillShowOverlay(overlayEvent => {
+                    if (controller.hasDetached()) {
+                        overlayEvent.preventDefault()
+                        return
+                    }
+                    controller.markDockTarget(getDragPoint(overlayEvent.nativeEvent))
+                }),
+                event.api.onWillDrop(dropEvent => {
+                    if (controller.hasDetached()) {
+                        dropEvent.preventDefault()
+                        controller.endDrag()
+                        return
+                    }
+                    controller.markDockTarget(getDragPoint(dropEvent.nativeEvent))
+                }),
+                event.api.onDidDrop(() => controller.endDrag()),
+                event.api.onUnhandledDragOverEvent(unhandledEvent => {
+                    if (!controller.isDragging()) return
+                    controller.markNoDropTarget(getDragPoint(unhandledEvent.nativeEvent))
+                }),
+            ]
+            const handleDragOver = (nativeEvent: DragEvent) => {
+                if (!controller.isDragging()) return
+                const point = getDragPoint(nativeEvent)
+                if (isOutsideDockviewContainer(point)) {
+                    controller.markNoDropTarget(point)
+                }
+            }
+            const handleDragEnd = () => controller.endDrag()
+
+            window.addEventListener('dragover', handleDragOver, true)
+            window.addEventListener('drop', handleDragEnd, true)
+            window.addEventListener('dragend', handleDragEnd, true)
+            idleDragFloatCleanupRef.current = () => {
+                controller.dispose()
+                for (const disposable of disposables) disposable.dispose()
+                window.removeEventListener('dragover', handleDragOver, true)
+                window.removeEventListener('drop', handleDragEnd, true)
+                window.removeEventListener('dragend', handleDragEnd, true)
+            }
+        }
 
         // Inject theme attributes into popout windows created by drag-to-popout.
         // Note: dockview already copies stylesheets (addStyles), but data-theme
