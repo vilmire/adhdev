@@ -24,6 +24,7 @@ import { detectIDEs } from './detection/ide-detector.js';
 import { IDEInfo } from './detection/ide-detector.js';
 import { ProviderLoader } from './providers/provider-loader.js';
 import type { ProviderModule } from './providers/contracts.js';
+import { findMacAppProcessPids } from './launch/macos-app-process.js';
 
 // ─── Provider-based dynamic IDE infrastructure ────────────────
 // Reads cdpPorts, processNames from provider.js — only create provider.js to add new IDE
@@ -69,6 +70,37 @@ function getCdpStartupTimeoutMs(ideId: string): number {
 
 function escapeForAppleScript(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function getIdePathCandidates(ideId: string): string[] {
+    return getProviderLoader().getIdePathCandidates(ideId);
+}
+
+function getMacAppProcessPids(ideId: string): number[] {
+    const appPaths = getIdePathCandidates(ideId);
+    if (appPaths.length === 0) return [];
+    try {
+        const output = execSync('ps axww -o pid=,args=', {
+            encoding: 'utf-8',
+            timeout: 3000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        return findMacAppProcessPids(output, appPaths);
+    } catch {
+        return [];
+    }
+}
+
+function killMacAppPathProcesses(ideId: string, signal: NodeJS.Signals): boolean {
+    const pids = getMacAppProcessPids(ideId);
+    let signalled = false;
+    for (const pid of pids) {
+        try {
+            process.kill(pid, signal);
+            signalled = true;
+        } catch { }
+    }
+    return signalled;
 }
 
 // ─── Helpers ────────────────────────────────────
@@ -137,6 +169,7 @@ export async function killIdeProcess(ideId: string): Promise<boolean> {
             } catch {
                 try { execSync(`pkill -x "${appName}" 2>/dev/null`, { timeout: 5000 }); } catch { }
             }
+            killMacAppPathProcesses(ideId, 'SIGTERM');
         } else if (plat === 'win32' && winProcesses) {
  // Windows: taskkill for each process name
             for (const proc of winProcesses) {
@@ -164,6 +197,7 @@ export async function killIdeProcess(ideId: string): Promise<boolean> {
  // Force terminate retry
         if (plat === 'darwin' && appName) {
             try { execSync(`pkill -9 -x "${appName}" 2>/dev/null`, { timeout: 5000 }); } catch { }
+            killMacAppPathProcesses(ideId, 'SIGKILL');
         } else if (plat === 'win32' && winProcesses) {
             for (const proc of winProcesses) {
                 try { execSync(`taskkill /IM "${proc}" /F 2>nul`); } catch { }
@@ -185,14 +219,16 @@ export function isIdeRunning(ideId: string): boolean {
     try {
         if (plat === 'darwin') {
             const appName = getMacAppIdentifiers()[ideId];
-            if (!appName) return false;
+            if (!appName) return getMacAppProcessPids(ideId).length > 0;
             try {
                 const result = execSync(`pgrep -x "${appName}" 2>/dev/null`, {
                     encoding: 'utf-8',
                     timeout: 3000,
                 });
-                return result.trim().length > 0;
-            } catch {
+                if (result.trim().length > 0) return true;
+            } catch { }
+
+            try {
                 const result = execSync(
                     `osascript -e 'tell application "System Events" to count (every process whose name is "${escapeForAppleScript(appName)}")'`,
                     {
@@ -201,8 +237,10 @@ export function isIdeRunning(ideId: string): boolean {
                         stdio: ['pipe', 'pipe', 'pipe'],
                     },
                 );
-                return Number.parseInt(result.trim() || '0', 10) > 0;
-            }
+                if (Number.parseInt(result.trim() || '0', 10) > 0) return true;
+            } catch { }
+
+            return getMacAppProcessPids(ideId).length > 0;
         } else if (plat === 'win32') {
             const winProcesses = getWinProcessNames()[ideId];
             if (!winProcesses) return false;
