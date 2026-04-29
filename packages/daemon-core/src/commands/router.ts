@@ -531,6 +531,7 @@ export class DaemonCommandRouter {
                     offset,
                     limit,
                     historyBehavior: providerMeta?.historyBehavior,
+                    scripts: providerMeta?.scripts as any,
                 });
                 const state = loadState();
                 const savedSessions = getSavedProviderSessions(state, { providerType, kind });

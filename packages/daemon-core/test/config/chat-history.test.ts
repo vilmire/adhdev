@@ -449,6 +449,72 @@ describe('chat-history config helpers', () => {
     expect(fs.existsSync(path.join(mockHomeDir, '.adhdev', 'history', 'codex-cli'))).toBe(false)
   })
 
+  it('uses provider-owned native history scripts without daemon format adapters', async () => {
+    const historySessionId = 'provider-owned-session'
+    const { listProviderHistorySessions, materializeProviderNativeHistory, readChatHistory, readProviderChatHistory } = await import('../../src/config/chat-history.js')
+    const canonicalHistory = {
+      format: 'opaque-provider-native-format',
+      mode: 'native-source' as const,
+      scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
+    }
+    const scripts = {
+      readNativeHistory: (input: any) => ({
+        sourcePath: '/provider/native/session.jsonl',
+        sourceMtimeMs: 1_800_000_000_000,
+        messages: [
+          { role: 'system', kind: 'session_start', content: input.workspace, receivedAt: 1_800_000_000_000, workspace: input.workspace },
+          { role: 'user', content: 'script native user', receivedAt: 1_800_000_001_000 },
+          { role: 'assistant', kind: 'tool', senderName: 'Tool', content: 'script native tool', receivedAt: 1_800_000_002_000 },
+          { role: 'assistant', content: 'script native assistant', receivedAt: 1_800_000_003_000 },
+        ],
+      }),
+      listNativeHistory: () => ({
+        sessions: [{
+          historySessionId,
+          messageCount: 3,
+          firstMessageAt: 1_800_000_001_000,
+          lastMessageAt: 1_800_000_003_000,
+          preview: 'script native assistant',
+          workspace: '/workspaces/provider-owned',
+          sourcePath: '/provider/native/session.jsonl',
+          sourceMtimeMs: 1_800_000_000_000,
+        }],
+      }),
+    }
+
+    const read = readProviderChatHistory('opaque-cli', {
+      canonicalHistory,
+      scripts,
+      historySessionId,
+      workspace: '/workspaces/provider-owned',
+      offset: 0,
+      limit: 20,
+    })
+    expect(read).toMatchObject({ source: 'provider-native', sourcePath: '/provider/native/session.jsonl', sourceMtimeMs: 1_800_000_000_000 })
+    expect(read.messages.map(message => ({ role: message.role, kind: message.kind, content: message.content }))).toEqual([
+      { role: 'system', kind: 'session_start', content: '/workspaces/provider-owned' },
+      { role: 'user', kind: 'standard', content: 'script native user' },
+      { role: 'assistant', kind: 'tool', content: 'script native tool' },
+      { role: 'assistant', kind: 'standard', content: 'script native assistant' },
+    ])
+
+    const listed = listProviderHistorySessions('opaque-cli', { canonicalHistory, scripts, offset: 0, limit: 20 })
+    expect(listed).toMatchObject({ source: 'provider-native', hasMore: false })
+    expect(listed.sessions).toEqual([expect.objectContaining({
+      historySessionId,
+      preview: 'script native assistant',
+      sourcePath: '/provider/native/session.jsonl',
+    })])
+
+    expect(materializeProviderNativeHistory('opaque-cli', { ...canonicalHistory, mode: 'materialized-mirror' }, historySessionId, '/workspaces/provider-owned', scripts)).toBe(true)
+    expect(readChatHistory('opaque-cli', 0, 20, historySessionId).messages.map(message => message.content)).toEqual([
+      '/workspaces/provider-owned',
+      'script native user',
+      'script native tool',
+      'script native assistant',
+    ])
+  })
+
   it('builds provider-native summaries from each listed source path without re-resolving duplicate session ids', async () => {
     const workspace = '/workspaces/adhdev'
     const codexSessionId = '119dd4b3-bea7-74a0-a5ca-e894370e9c94'

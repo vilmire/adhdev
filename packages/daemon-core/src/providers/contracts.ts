@@ -603,23 +603,33 @@ export interface ProviderHistoryBehavior {
 }
 
 /**
+ * Provider-owned native history script names.
+ *
+ * These functions live in the provider's versioned CLI script bundle, not in
+ * daemon-core. They let each provider own native transcript file discovery and
+ * parsing while daemon-core only validates/pages the normalized result.
+ */
+export interface ProviderCanonicalHistoryScriptsConfig {
+  /** Reads one native session. Default: 'readNativeHistory'. */
+  readSession?: string;
+  /** Lists native sessions with summary metadata. Default: 'listNativeHistory'. */
+  listSessions?: string;
+}
+
+/**
  * Canonical history sync config — for providers that maintain their own native history files.
- * When set, daemon syncs from the provider's native format into the ADHDev JSONL store.
- * Replaces hardcoded hermes-cli / claude-cli checks in cli-provider-instance.ts.
+ *
+ * Preferred mode is provider-owned scripts via `scripts`. `format` is now an
+ * opaque provider label retained for diagnostics/backward compatibility; daemon
+ * live paths must not branch on provider-specific format values.
  */
 export interface ProviderCanonicalHistoryConfig {
-  /**
-   * Native history format.
-   * - 'hermes-json': single JSON file per session (~/.hermes/sessions/session_{{sessionId}}.json)
-   * - 'claude-jsonl': JSONL transcript under ~/.claude/projects/
-   * - 'codex-jsonl': rollout JSONL transcript under ~/.codex/sessions/YYYY/MM/DD/
-   */
-  format: 'hermes-json' | 'claude-jsonl' | 'codex-jsonl';
-  /**
-   * Path to the native history file. Supports ~ and {{sessionId}} placeholder.
-   * e.g. "~/.hermes/sessions/session_{{sessionId}}.json"
-   */
-  watchPath: string;
+  /** Opaque provider-owned history format label. */
+  format?: string;
+  /** Optional native history glob/template for diagnostics only. */
+  watchPath?: string;
+  /** Provider-owned script entry points for native transcript list/read. */
+  scripts?: ProviderCanonicalHistoryScriptsConfig;
   /**
    * How ADHDev should use native history.
    * - 'native-source': provider-native files are canonical; ADHDev reads them directly and keeps only in-memory/thin projections.

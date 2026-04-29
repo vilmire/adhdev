@@ -1060,6 +1060,7 @@ export class CliProviderInstance implements ProviderInstance {
                 offset: 0,
                 limit: Number.MAX_SAFE_INTEGER,
                 historyBehavior: this.provider.historyBehavior,
+                scripts: this.provider.scripts as any,
             });
             if (restoredHistory.source === 'provider-native') {
                 this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
@@ -1082,7 +1083,7 @@ export class CliProviderInstance implements ProviderInstance {
             this.lastNativeSourceCanonicalCacheKey = cacheKey;
             this.lastNativeSourceCanonicalCheckAt = now;
 
-            if (!materializeProviderNativeHistory(this.type, canonicalHistory, this.providerSessionId, this.workingDir)) {
+            if (!materializeProviderNativeHistory(this.type, canonicalHistory, this.providerSessionId, this.workingDir, this.provider.scripts as any)) {
                 return false;
             }
             const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId, 0, this.provider.historyBehavior);
@@ -1110,6 +1111,7 @@ export class CliProviderInstance implements ProviderInstance {
                 offset: 0,
                 limit: Number.MAX_SAFE_INTEGER,
                 historyBehavior: this.provider.historyBehavior,
+                scripts: this.provider.scripts as any,
             })
             : (() => {
                 this.historyWriter.compactHistorySession(this.type, this.providerSessionId!, this.provider.historyBehavior);

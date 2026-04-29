@@ -1,6 +1,4 @@
-import type { ProviderCanonicalHistoryConfig } from '../../providers/contracts.js';
-
-export type NativeHistoryFormat = ProviderCanonicalHistoryConfig['format'];
+export type NativeHistoryFormat = 'hermes-json' | 'claude-jsonl' | 'codex-jsonl';
 
 export interface NativeHistoryMessage {
     ts: string;

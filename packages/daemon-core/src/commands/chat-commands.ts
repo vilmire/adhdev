@@ -577,6 +577,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
             limit: limit || 30,
             excludeRecentCount,
             historyBehavior: provider?.historyBehavior,
+            scripts: provider?.scripts as any,
         });
         return { success: true, ...result, agent: agentStr };
     } catch (e: any) {

@@ -1336,17 +1336,116 @@ function rewriteCanonicalSavedHistory(agentType: string, historySessionId: strin
     }
 }
 
-function materializeNativeHistoryToMirror(
+export type ProviderNativeHistoryScripts = Record<string, ((input: any) => any) | undefined>;
+
+type ProviderNativeHistoryReadResult = { records: HistoryMessage[]; sourcePath: string; sourceMtimeMs: number };
+
+function getNativeHistoryScriptName(canonicalHistory: ProviderCanonicalHistoryConfig | undefined, key: 'readSession' | 'listSessions'): string {
+    const configured = canonicalHistory?.scripts?.[key];
+    if (typeof configured === 'string' && configured.trim()) return configured.trim();
+    return key === 'readSession' ? 'readNativeHistory' : 'listNativeHistory';
+}
+
+function getProviderNativeHistoryScript(
+    scripts: ProviderNativeHistoryScripts | undefined,
+    canonicalHistory: ProviderCanonicalHistoryConfig | undefined,
+    key: 'readSession' | 'listSessions',
+): ((input: any) => any) | null {
+    if (!canonicalHistory?.scripts) return null;
+    const fn = scripts?.[getNativeHistoryScriptName(canonicalHistory, key)];
+    return typeof fn === 'function' ? fn : null;
+}
+
+function normalizeProviderNativeHistoryRecords(agentType: string, historySessionId: string, records: unknown): HistoryMessage[] {
+    if (!Array.isArray(records)) return [];
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
+    return records
+        .map((record: any) => sanitizeHistoryMessage(agentType, {
+            ts: typeof record?.ts === 'string' ? record.ts : new Date(Number(record?.receivedAt) || Date.now()).toISOString(),
+            receivedAt: Number(record?.receivedAt) || Date.parse(record?.ts || '') || Date.now(),
+            role: record?.role,
+            content: String(record?.content || ''),
+            kind: record?.kind || (record?.role === 'system' ? 'session_start' : 'standard'),
+            senderName: record?.senderName,
+            agent: agentType,
+            instanceId: record?.instanceId,
+            historySessionId: normalizeSavedHistorySessionId(record?.historySessionId || normalizedSessionId),
+            sessionTitle: record?.sessionTitle,
+            workspace: record?.workspace,
+        } as HistoryMessage))
+        .filter(Boolean) as HistoryMessage[];
+}
+
+function callProviderNativeHistoryRead(
     agentType: string,
-    format: ProviderCanonicalHistoryConfig['format'],
+    canonicalHistory: ProviderCanonicalHistoryConfig | undefined,
+    scripts: ProviderNativeHistoryScripts | undefined,
     historySessionId: string,
     workspace?: string,
+): ProviderNativeHistoryReadResult | null {
+    const fn = getProviderNativeHistoryScript(scripts, canonicalHistory, 'readSession');
+    if (!fn) return null;
+    const result = fn({
+        agentType,
+        sessionId: historySessionId,
+        historySessionId,
+        workspace,
+        format: canonicalHistory?.format,
+        watchPath: canonicalHistory?.watchPath,
+        args: { sessionId: historySessionId, historySessionId, workspace },
+    });
+    if (!result || typeof result !== 'object') return null;
+    const records = normalizeProviderNativeHistoryRecords(agentType, historySessionId, (result as any).messages || (result as any).records);
+    if (records.length === 0) return null;
+    return {
+        records,
+        sourcePath: typeof (result as any).sourcePath === 'string' ? (result as any).sourcePath : '',
+        sourceMtimeMs: Number((result as any).sourceMtimeMs) || 0,
+    };
+}
+
+function buildLegacyAdapterNativeHistoryReadResult(
+    canonicalHistory: ProviderCanonicalHistoryConfig | undefined,
+    historySessionId: string | undefined,
+    workspace?: string,
+): ProviderNativeHistoryReadResult | null {
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || '');
+    if (!canonicalHistory?.format || !normalizedSessionId || !isNativeSourceCanonicalHistory(canonicalHistory)) return null;
+    const adapter = getNativeHistoryAdapter(canonicalHistory.format as any);
+    if (!adapter) return null;
+    const ref = adapter.resolveSession({ sessionId: normalizedSessionId, workspace });
+    if (!ref) return null;
+    const records = adapter.readSessionRef(ref) as HistoryMessage[] | null;
+    if (!records) return null;
+    return { records, sourcePath: ref.sourcePath, sourceMtimeMs: ref.sourceMtimeMs };
+}
+
+function buildNativeHistoryReadResult(
+    agentType: string,
+    canonicalHistory: ProviderCanonicalHistoryConfig | undefined,
+    scripts: ProviderNativeHistoryScripts | undefined,
+    historySessionId: string | undefined,
+    workspace?: string,
+): ProviderNativeHistoryReadResult | null {
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || '');
+    if (!canonicalHistory || !normalizedSessionId || !isNativeSourceCanonicalHistory(canonicalHistory)) return null;
+    return callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace)
+        || (!canonicalHistory.scripts ? buildLegacyAdapterNativeHistoryReadResult(canonicalHistory, normalizedSessionId, workspace) : null);
+}
+
+function materializeNativeHistoryToMirror(
+    agentType: string,
+    canonicalHistory: ProviderCanonicalHistoryConfig,
+    historySessionId: string,
+    workspace?: string,
+    scripts?: ProviderNativeHistoryScripts,
 ): boolean {
     const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
     if (!normalizedSessionId) return false;
-    const adapter = getNativeHistoryAdapter(format);
-    const nativeRecords = adapter?.readMessages({ sessionId: normalizedSessionId, workspace }) as HistoryMessage[] | null | undefined;
-    if (!nativeRecords || nativeRecords.length === 0) return false;
+    const nativeResult = callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace)
+        || (!canonicalHistory.scripts ? buildLegacyAdapterNativeHistoryReadResult({ ...canonicalHistory, mode: 'native-source' }, normalizedSessionId, workspace) : null);
+    const nativeRecords = nativeResult?.records || [];
+    if (nativeRecords.length === 0) return false;
     const normalizedRecords = nativeRecords.map((record) => ({
         ...record,
         agent: agentType,
@@ -1364,21 +1463,22 @@ export function materializeProviderNativeHistory(
     canonicalHistory: ProviderCanonicalHistoryConfig | undefined,
     historySessionId: string,
     workspace?: string,
+    scripts?: ProviderNativeHistoryScripts,
 ): boolean {
     if (!canonicalHistory || canonicalHistory.mode !== 'materialized-mirror') return false;
-    return materializeNativeHistoryToMirror(agentType, canonicalHistory.format, historySessionId, workspace);
+    return materializeNativeHistoryToMirror(agentType, canonicalHistory, historySessionId, workspace, scripts);
 }
 
 export function rebuildHermesSavedHistoryFromCanonicalSession(historySessionId: string): boolean {
-    return materializeNativeHistoryToMirror('hermes-cli', 'hermes-json', historySessionId);
+    return materializeNativeHistoryToMirror('hermes-cli', { format: 'hermes-json', mode: 'materialized-mirror' }, historySessionId);
 }
 
 export function rebuildClaudeSavedHistoryFromNativeProject(historySessionId: string, workspace?: string): boolean {
-    return materializeNativeHistoryToMirror('claude-cli', 'claude-jsonl', historySessionId, workspace);
+    return materializeNativeHistoryToMirror('claude-cli', { format: 'claude-jsonl', mode: 'materialized-mirror' }, historySessionId, workspace);
 }
 
 export function rebuildCodexSavedHistoryFromNativeSession(historySessionId: string, workspace?: string): boolean {
-    return materializeNativeHistoryToMirror('codex-cli', 'codex-jsonl', historySessionId, workspace);
+    return materializeNativeHistoryToMirror('codex-cli', { format: 'codex-jsonl', mode: 'materialized-mirror' }, historySessionId, workspace);
 }
 
 export function isNativeSourceCanonicalHistory(canonicalHistory?: ProviderCanonicalHistoryConfig): boolean {
@@ -1386,22 +1486,6 @@ export function isNativeSourceCanonicalHistory(canonicalHistory?: ProviderCanoni
     if ((canonicalHistory as any).mode === 'disabled') return false;
     if ((canonicalHistory as any).mode === 'materialized-mirror') return false;
     return true;
-}
-
-function buildNativeHistoryReadResult(
-    canonicalHistory: ProviderCanonicalHistoryConfig | undefined,
-    historySessionId: string | undefined,
-    workspace?: string,
-): { records: HistoryMessage[]; sourcePath: string; sourceMtimeMs: number } | null {
-    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || '');
-    if (!canonicalHistory || !normalizedSessionId || !isNativeSourceCanonicalHistory(canonicalHistory)) return null;
-    const adapter = getNativeHistoryAdapter(canonicalHistory.format);
-    if (!adapter) return null;
-    const ref = adapter.resolveSession({ sessionId: normalizedSessionId, workspace });
-    if (!ref) return null;
-    const records = adapter.readSessionRef(ref) as HistoryMessage[] | null;
-    if (!records) return null;
-    return { records, sourcePath: ref.sourcePath, sourceMtimeMs: ref.sourceMtimeMs };
 }
 
 export function readProviderChatHistory(
@@ -1414,10 +1498,11 @@ export function readProviderChatHistory(
         limit?: number;
         excludeRecentCount?: number;
         historyBehavior?: ProviderHistoryBehavior;
+        scripts?: ProviderNativeHistoryScripts;
     } = {},
 ): { messages: HistoryMessage[]; hasMore: boolean; source: 'provider-native' | 'adhdev-mirror' | 'native-unavailable'; sourcePath?: string; sourceMtimeMs?: number } {
     if (isNativeSourceCanonicalHistory(options.canonicalHistory) && options.historySessionId) {
-        const nativeResult = buildNativeHistoryReadResult(options.canonicalHistory, options.historySessionId, options.workspace);
+        const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace);
         if (!nativeResult) return { messages: [], hasMore: false, source: 'native-unavailable' };
         return {
             ...pageHistoryRecords(agentType, nativeResult.records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior),
@@ -1460,8 +1545,65 @@ function buildNativeSessionSummary(
     };
 }
 
-function collectNativeHistorySessionSummaries(agentType: string, canonicalHistory: ProviderCanonicalHistoryConfig): SavedHistorySessionSummary[] {
-    const adapter = getNativeHistoryAdapter(canonicalHistory.format);
+function normalizeProviderNativeHistorySessionSummary(agentType: string, item: any): SavedHistorySessionSummary | null {
+    const historySessionId = normalizeSavedHistorySessionId(item?.historySessionId || item?.sessionId || '');
+    if (!historySessionId) return null;
+    const sourcePath = typeof item?.sourcePath === 'string' ? item.sourcePath : '';
+    const sourceMtimeMs = Number(item?.sourceMtimeMs) || 0;
+    const firstMessageAt = Number(item?.firstMessageAt) || sourceMtimeMs || Date.now();
+    const lastMessageAt = Number(item?.lastMessageAt) || firstMessageAt;
+    const messageCount = Math.max(0, Number(item?.messageCount) || 0);
+    return {
+        historySessionId,
+        sessionTitle: typeof item?.sessionTitle === 'string' ? item.sessionTitle : undefined,
+        messageCount,
+        firstMessageAt,
+        lastMessageAt,
+        preview: typeof item?.preview === 'string' ? item.preview : undefined,
+        workspace: typeof item?.workspace === 'string' ? item.workspace : undefined,
+        source: 'provider-native',
+        sourcePath,
+        sourceMtimeMs,
+    };
+}
+
+function collectProviderScriptNativeHistorySessionSummaries(
+    agentType: string,
+    canonicalHistory: ProviderCanonicalHistoryConfig,
+    scripts?: ProviderNativeHistoryScripts,
+): SavedHistorySessionSummary[] | null {
+    const fn = getProviderNativeHistoryScript(scripts, canonicalHistory, 'listSessions');
+    if (!fn) return null;
+    const result = fn({
+        agentType,
+        format: canonicalHistory.format,
+        watchPath: canonicalHistory.watchPath,
+        args: {},
+    });
+    if (!result || typeof result !== 'object') return [];
+    const sessions = Array.isArray((result as any).sessions) ? (result as any).sessions : [];
+    const summaries: SavedHistorySessionSummary[] = [];
+    for (const item of sessions) {
+        if (Array.isArray(item?.messages || item?.records)) {
+            const historySessionId = normalizeSavedHistorySessionId(item?.historySessionId || item?.sessionId || '');
+            if (!historySessionId) continue;
+            const records = normalizeProviderNativeHistoryRecords(agentType, historySessionId, item.messages || item.records);
+            const summary = buildNativeSessionSummary(agentType, historySessionId, records, typeof item?.sourcePath === 'string' ? item.sourcePath : '');
+            if (summary) {
+                if (Number(item?.sourceMtimeMs)) summary.sourceMtimeMs = Number(item.sourceMtimeMs);
+                summaries.push(summary);
+            }
+            continue;
+        }
+        const summary = normalizeProviderNativeHistorySessionSummary(agentType, item);
+        if (summary) summaries.push(summary);
+    }
+    return sortSavedHistorySessionSummaries(summaries);
+}
+
+function collectLegacyAdapterNativeHistorySessionSummaries(agentType: string, canonicalHistory: ProviderCanonicalHistoryConfig): SavedHistorySessionSummary[] {
+    if (!canonicalHistory.format) return [];
+    const adapter = getNativeHistoryAdapter(canonicalHistory.format as any);
     if (!adapter) return [];
     const summaries: SavedHistorySessionSummary[] = [];
     for (const ref of adapter.listSessionRefs()) {
@@ -1472,6 +1614,15 @@ function collectNativeHistorySessionSummaries(agentType: string, canonicalHistor
     return sortSavedHistorySessionSummaries(summaries);
 }
 
+function collectNativeHistorySessionSummaries(
+    agentType: string,
+    canonicalHistory: ProviderCanonicalHistoryConfig,
+    scripts?: ProviderNativeHistoryScripts,
+): SavedHistorySessionSummary[] {
+    return collectProviderScriptNativeHistorySessionSummaries(agentType, canonicalHistory, scripts)
+        || (!canonicalHistory.scripts ? collectLegacyAdapterNativeHistorySessionSummaries(agentType, canonicalHistory) : []);
+}
+
 export function listProviderHistorySessions(
     agentType: string,
     options: {
@@ -1479,12 +1630,13 @@ export function listProviderHistorySessions(
         offset?: number;
         limit?: number;
         historyBehavior?: ProviderHistoryBehavior;
+        scripts?: ProviderNativeHistoryScripts;
     } = {},
 ): { sessions: SavedHistorySessionSummary[]; hasMore: boolean; source: 'provider-native' | 'adhdev-mirror' } {
     if (isNativeSourceCanonicalHistory(options.canonicalHistory)) {
         const offset = Math.max(0, options.offset || 0);
         const limit = Math.max(1, options.limit || 30);
-        const summaries = collectNativeHistorySessionSummaries(agentType, options.canonicalHistory!);
+        const summaries = collectNativeHistorySessionSummaries(agentType, options.canonicalHistory!, options.scripts);
         return {
             sessions: summaries.slice(offset, offset + limit),
             hasMore: offset + limit < summaries.length,
