@@ -123,6 +123,7 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
   }
 
   validateCapabilities(provider as unknown as ProviderModule, controls, errors)
+  validateCanonicalHistory(provider.canonicalHistory, errors)
 
   for (const control of controls) {
     validateControl(control as ProviderControlDef, errors)
@@ -189,6 +190,45 @@ function validateCapabilities(provider: ProviderModule, controls: ProviderContro
   }
   if (controls.length > 0 && controlCapabilities.typedResults !== true) {
     errors.push('providers declaring controls must set capabilities.controls.typedResults=true')
+  }
+}
+
+function validateCanonicalHistory(raw: unknown, errors: string[]): void {
+  if (raw === undefined) return
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push('canonicalHistory must be an object')
+    return
+  }
+
+  const canonicalHistory = raw as Record<string, unknown>
+  const format = canonicalHistory.format
+  if (format !== undefined && (typeof format !== 'string' || !format.trim())) {
+    errors.push('canonicalHistory.format must be a non-empty string when provided')
+  }
+
+  const watchPath = canonicalHistory.watchPath
+  if (watchPath !== undefined && (typeof watchPath !== 'string' || !watchPath.trim())) {
+    errors.push('canonicalHistory.watchPath must be a non-empty string when provided')
+  }
+
+  const mode = canonicalHistory.mode
+  if (mode !== undefined && !['native-source', 'materialized-mirror', 'disabled'].includes(String(mode))) {
+    errors.push('canonicalHistory.mode must be one of: native-source, materialized-mirror, disabled')
+  }
+
+  const scripts = canonicalHistory.scripts
+  if (scripts === undefined) return
+  if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) {
+    errors.push('canonicalHistory.scripts must be an object')
+    return
+  }
+
+  const scriptConfig = scripts as Record<string, unknown>
+  for (const key of ['readSession', 'listSessions']) {
+    const value = scriptConfig[key]
+    if (typeof value !== 'string' || !value.trim()) {
+      errors.push(`canonicalHistory.scripts.${key} must be a non-empty string`)
+    }
   }
 }
 

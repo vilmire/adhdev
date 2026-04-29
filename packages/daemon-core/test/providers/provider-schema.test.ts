@@ -167,6 +167,53 @@ describe('validateProviderDefinition', () => {
     expect(result.errors).toContain('controls.auto_approve: toggle controls require setScript')
   })
 
+  it('accepts provider-owned native history script entrypoints in canonicalHistory', () => {
+    const result = validateProviderDefinition({
+      type: 'foo-cli',
+      name: 'Foo CLI',
+      category: 'cli',
+      spawn: { command: 'foo' },
+      capabilities: baseCapabilities,
+      contractVersion: 2,
+      canonicalHistory: {
+        format: 'foo-native-jsonl',
+        watchPath: '~/.foo/sessions/**/*.jsonl',
+        mode: 'native-source',
+        scripts: {
+          readSession: 'readNativeHistory',
+          listSessions: 'listNativeHistory',
+        },
+      },
+    })
+
+    expect(result.errors).toEqual([])
+  })
+
+  it('rejects malformed provider-owned native history script entrypoints', () => {
+    const result = validateProviderDefinition({
+      type: 'foo-cli',
+      name: 'Foo CLI',
+      category: 'cli',
+      spawn: { command: 'foo' },
+      capabilities: baseCapabilities,
+      contractVersion: 2,
+      canonicalHistory: {
+        format: '',
+        watchPath: '',
+        mode: 'unknown-mode',
+        scripts: {
+          readSession: '',
+        },
+      },
+    })
+
+    expect(result.errors).toContain('canonicalHistory.format must be a non-empty string when provided')
+    expect(result.errors).toContain('canonicalHistory.watchPath must be a non-empty string when provided')
+    expect(result.errors).toContain('canonicalHistory.mode must be one of: native-source, materialized-mirror, disabled')
+    expect(result.errors).toContain('canonicalHistory.scripts.readSession must be a non-empty string')
+    expect(result.errors).toContain('canonicalHistory.scripts.listSessions must be a non-empty string')
+  })
+
   it('warns when focusEditor is declared without any openPanel script, because open_panel capability will stay disabled', () => {
     const result = validateProviderDefinition({
       type: 'foo-ide',
