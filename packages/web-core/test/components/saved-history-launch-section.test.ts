@@ -1,19 +1,19 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import SavedHistoryLaunchSection from '../../src/components/SavedHistoryLaunchSection'
 
-function renderSection(overrides: Record<string, unknown> = {}): string {
+function renderSection(props: Partial<React.ComponentProps<typeof SavedHistoryLaunchSection>> = {}): string {
   return renderToStaticMarkup(
     React.createElement(SavedHistoryLaunchSection, {
       busy: false,
       savedSessionsLoading: false,
       savedSessionsError: '',
       selectedSession: null,
-      onRefresh: () => {},
-      onOpenHistory: () => {},
-      onClearSelection: () => {},
-      ...overrides,
+      onRefresh: vi.fn(),
+      onOpenHistory: vi.fn(),
+      onClearSelection: vi.fn(),
+      ...props,
     }),
   )
 }
@@ -52,5 +52,15 @@ describe('SavedHistoryLaunchSection', () => {
     expect(html).toContain('gpt-5.4')
     expect(html).toContain('9 msgs')
     expect(html).toContain('Clear')
+  })
+
+  it('surfaces a refresh result count when saved histories have loaded', () => {
+    const html = renderSection({
+      savedSessionsLoaded: true,
+      savedSessionsCount: 2,
+    })
+
+    expect(html).toContain('2 saved histories loaded')
+    expect(html).toContain('Open saved history to choose one')
   })
 })

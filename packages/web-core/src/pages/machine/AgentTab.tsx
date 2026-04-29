@@ -727,6 +727,8 @@ export default function AgentTab({
                                         busy={!!launchingAgentType || !!launchingIde || pendingLaunchTypes.includes(selectedType)}
                                         savedSessionsLoading={savedSessionsLoading}
                                         savedSessionsError={savedSessionsError}
+                                        savedSessionsLoaded={savedSessionsLoaded}
+                                        savedSessionsCount={savedSessions.length}
                                         selectedSession={selectedSavedSession}
                                         onRefresh={() => void loadSavedSessions(selectedType)}
                                         onOpenHistory={() => {

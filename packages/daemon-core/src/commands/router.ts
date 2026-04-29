@@ -525,7 +525,7 @@ export class DaemonCommandRouter {
                 const wantsAll = args?.all === true;
                 const offset = wantsAll ? 0 : Math.max(0, Number(args?.offset) || 0);
                 const limit = wantsAll ? Number.MAX_SAFE_INTEGER : Math.max(1, Math.min(100, Number(args?.limit) || 30));
-                const providerMeta = this.deps.providerLoader.getMeta(providerType);
+                const providerMeta = this.deps.providerLoader.resolve?.(providerType) || this.deps.providerLoader.getMeta(providerType);
                 const { sessions: historySessions, hasMore, source } = listProviderHistorySessions(providerType, {
                     canonicalHistory: providerMeta?.canonicalHistory,
                     offset,

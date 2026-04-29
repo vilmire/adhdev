@@ -113,4 +113,67 @@ describe('list_saved_sessions native-source command surface', () => {
     const session = (result.sessions as any[])[0]
     expect(session.sourceMtimeMs).toBeGreaterThan(0)
   })
+
+  it('loads resolved provider scripts before listing native-source sessions', async () => {
+    const workspace = '/workspaces/adhdev'
+    const historySessionId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
+    const sourcePath = writeCodexSession(workspace, historySessionId)
+    const nativeHistoryScript = vi.fn(() => ({
+      sessions: [{
+        historySessionId,
+        messageCount: 3,
+        firstMessageAt: Date.parse('2026-04-29T03:00:00.000Z'),
+        lastMessageAt: Date.parse('2026-04-29T03:00:02.000Z'),
+        sessionTitle: 'native codex list assistant',
+        preview: 'native codex list assistant',
+        workspace,
+        sourcePath,
+        sourceMtimeMs: 1_800_000_000_000,
+      }],
+    }))
+    const rawMeta = {
+      type: 'codex-cli',
+      name: 'Codex CLI',
+      category: 'cli',
+      canonicalHistory: {
+        format: 'codex-provider-native',
+        watchPath: '~/.codex/sessions/**/*.jsonl',
+        mode: 'native-source',
+        scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
+      },
+      resume: { supported: true, resumeSessionArgs: ['resume', '{{id}}'] },
+    }
+    const resolve = vi.fn(() => ({
+      ...rawMeta,
+      scripts: { listNativeHistory: nativeHistoryScript },
+    }))
+
+    const { DaemonCommandRouter } = await import('../../src/commands/router.js')
+    const router = new DaemonCommandRouter({
+      commandHandler: { handle: vi.fn(async () => ({ success: false, error: 'unexpected delegation' })) } as any,
+      cliManager: { handleCliCommand: vi.fn(async () => ({ success: false, error: 'unexpected cli delegation' })) } as any,
+      cdpManagers: new Map(),
+      providerLoader: {
+        getMeta: () => rawMeta,
+        resolve,
+      } as any,
+      instanceManager: {} as any,
+      detectedIdes: { value: [] },
+      sessionRegistry: {} as any,
+    })
+
+    const result = await router.execute('list_saved_sessions', { providerType: 'codex-cli' }, 'standalone')
+
+    expect(resolve).toHaveBeenCalledWith('codex-cli')
+    expect(nativeHistoryScript).toHaveBeenCalled()
+    expect(result).toMatchObject({
+      success: true,
+      source: 'provider-native',
+      sessions: [expect.objectContaining({
+        providerSessionId: historySessionId,
+        title: 'native codex list assistant',
+        historySource: 'provider-native',
+      })],
+    })
+  })
 })

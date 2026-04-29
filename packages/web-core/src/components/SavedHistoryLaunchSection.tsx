@@ -14,22 +14,49 @@ export interface SavedHistoryLaunchSectionProps {
   busy: boolean
   savedSessionsLoading: boolean
   savedSessionsError: string
+  savedSessionsLoaded?: boolean
+  savedSessionsCount?: number
   selectedSession: SavedHistoryLaunchSectionSelectedSession | null
   onRefresh: () => void
   onOpenHistory: () => void
   onClearSelection: () => void
 }
 
+function buildSavedHistoryRefreshStatus({
+  savedSessionsLoading,
+  savedSessionsLoaded,
+  savedSessionsCount = 0,
+}: Pick<SavedHistoryLaunchSectionProps, 'savedSessionsLoading' | 'savedSessionsLoaded' | 'savedSessionsCount'>): string {
+  if (savedSessionsLoading) {
+    return 'Refreshing saved history…'
+  }
+  if (!savedSessionsLoaded) {
+    return 'Start fresh, or open saved history when you want continuity.'
+  }
+  if (savedSessionsCount > 0) {
+    const noun = savedSessionsCount === 1 ? 'history' : 'histories'
+    return `${savedSessionsCount} saved ${noun} loaded. Open saved history to choose one.`
+  }
+  return 'No saved history found yet. New Hermes CLI conversations will appear here after ADHDev captures provider history.'
+}
+
 export default function SavedHistoryLaunchSection({
   busy,
   savedSessionsLoading,
   savedSessionsError,
+  savedSessionsLoaded,
+  savedSessionsCount = 0,
   selectedSession,
   onRefresh,
   onOpenHistory,
   onClearSelection,
 }: SavedHistoryLaunchSectionProps) {
   const summary = selectedSession ? buildSavedHistorySummaryView(selectedSession) : null
+  const refreshStatus = buildSavedHistoryRefreshStatus({
+    savedSessionsLoading,
+    savedSessionsLoaded,
+    savedSessionsCount,
+  })
 
   return (
     <LaunchSectionCard
@@ -82,8 +109,8 @@ export default function SavedHistoryLaunchSection({
           </div>
         </div>
       ) : (
-        <div className="text-[11px] text-text-muted">
-          Start fresh, or open saved history when you want continuity.
+        <div className="text-[11px] text-text-muted" aria-live="polite">
+          {refreshStatus}
         </div>
       )}
 
