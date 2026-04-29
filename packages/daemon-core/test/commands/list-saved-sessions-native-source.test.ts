@@ -63,7 +63,27 @@ describe('list_saved_sessions native-source command surface', () => {
           type: 'codex-cli',
           name: 'Codex CLI',
           category: 'cli',
-          canonicalHistory: { format: 'codex-jsonl', watchPath: '~/.codex/sessions/**/*.jsonl', mode: 'native-source' },
+          canonicalHistory: {
+            format: 'codex-provider-native',
+            watchPath: '~/.codex/sessions/**/*.jsonl',
+            mode: 'native-source',
+            scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
+          },
+          scripts: {
+            listNativeHistory: () => ({
+              sessions: [{
+                historySessionId,
+                messageCount: 3,
+                firstMessageAt: Date.parse('2026-04-29T03:00:00.000Z'),
+                lastMessageAt: Date.parse('2026-04-29T03:00:02.000Z'),
+                sessionTitle: 'native codex list assistant',
+                preview: 'native codex list assistant',
+                workspace,
+                sourcePath,
+                sourceMtimeMs: 1_800_000_000_000,
+              }],
+            }),
+          },
           resume: { supported: true, resumeSessionArgs: ['resume', '{{id}}'] },
         }),
       } as any,

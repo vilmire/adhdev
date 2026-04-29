@@ -12,36 +12,6 @@ vi.mock('os', async () => {
   }
 })
 
-function writeCanonicalHermesSession(historySessionId: string, messages: Array<{ role: string; content: string }>) {
-  const hermesDir = path.join(mockHomeDir, '.hermes', 'sessions')
-  fs.mkdirSync(hermesDir, { recursive: true })
-  fs.writeFileSync(path.join(hermesDir, `session_${historySessionId}.json`), JSON.stringify({
-    session_id: historySessionId,
-    session_start: '2026-04-22T00:27:56.853373',
-    last_updated: '2026-04-22T00:29:27.545265',
-    messages,
-  }), 'utf-8')
-}
-
-function writeCanonicalClaudeProjectSession(workspace: string, historySessionId: string, lines: unknown[]) {
-  const projectDir = path.join(mockHomeDir, '.claude', 'projects', workspace.replace(/[\\/]/g, '-'))
-  fs.mkdirSync(projectDir, { recursive: true })
-  fs.writeFileSync(
-    path.join(projectDir, `${historySessionId}.jsonl`),
-    `${lines.map(line => JSON.stringify(line)).join('\n')}\n`,
-    'utf-8',
-  )
-}
-
-function writeCanonicalCodexSession(historySessionId: string, lines: unknown[]) {
-  const sessionDir = path.join(mockHomeDir, '.codex', 'sessions', '2026', '04', '29')
-  fs.mkdirSync(sessionDir, { recursive: true })
-  fs.writeFileSync(
-    path.join(sessionDir, `rollout-2026-04-29T00-27-22-${historySessionId}.jsonl`),
-    `${lines.map(line => JSON.stringify(line)).join('\n')}\n`,
-    'utf-8',
-  )
-}
 
 function readSavedHistoryLines(agentType: string, historySessionId: string): Array<{ role: string; kind?: string; content: string }> {
   const dir = path.join(mockHomeDir, '.adhdev', 'history', agentType)
@@ -59,6 +29,16 @@ function readSavedHistoryLines(agentType: string, historySessionId: string): Arr
 function persistedHistory(instance: any): Array<{ role: string; kind?: string; content: string }> {
   return (instance.lastPersistedHistoryMessages || [])
     .map((entry: any) => ({ role: entry.role, kind: entry.kind, content: entry.content }))
+}
+
+function providerNativeHistoryScripts(readMessages: (input: any) => Array<Record<string, unknown>> | null) {
+  return {
+    readNativeHistory: (input: any) => {
+      const messages = readMessages(input)
+      if (!messages) return null
+      return { messages, sourcePath: '/provider/native/session.jsonl', sourceMtimeMs: 1_800_000_000_000 }
+    },
+  }
 }
 
 describe('CliProviderInstance canonical Hermes saved-history sync', () => {
@@ -81,13 +61,8 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     mockHomeDir = ''
   })
 
-  it('prefers canonical ~/.hermes session history over parsed synthetic terminal/tool history for hermes saved-history', async () => {
+  it('prefers provider-owned native history over parsed synthetic terminal/tool history for hermes saved-history', async () => {
     const historySessionId = '20260422_002711_293d9a'
-    writeCanonicalHermesSession(historySessionId, [
-      { role: 'user', content: 'canonical user prompt' },
-      { role: 'assistant', content: 'canonical assistant reply' },
-      { role: 'tool', content: 'canonical tool output' },
-    ])
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
     const instance = new CliProviderInstance({
@@ -96,9 +71,15 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       category: 'cli',
       spawn: { command: 'hermes', args: [] },
       canonicalHistory: {
-        format: 'hermes-json',
+        format: 'hermes-provider-native',
         watchPath: '~/.hermes/sessions/session_{{sessionId}}.json',
+        scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
       },
+      scripts: providerNativeHistoryScripts(() => [
+        { role: 'user', kind: 'standard', content: 'canonical user prompt', receivedAt: 1_800_000_001_000 },
+        { role: 'assistant', kind: 'standard', content: 'canonical assistant reply', receivedAt: 1_800_000_002_000 },
+        { role: 'assistant', kind: 'tool', content: 'canonical tool output', receivedAt: 1_800_000_003_000 },
+      ]),
     } as any, '/workspaces/adhdev', [], 'runtime-1', undefined, {
       providerSessionId: historySessionId,
       launchMode: 'resume',
@@ -138,39 +119,9 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     ])
   })
 
-  it('prefers canonical ~/.claude project history over parsed synthetic terminal chatter for claude saved-history', async () => {
+  it('prefers provider-owned native history over parsed synthetic terminal chatter for claude saved-history', async () => {
     const workspace = '/workspaces/adhdev'
     const historySessionId = '12345678-1234-4234-9234-1234567890ab'
-    writeCanonicalClaudeProjectSession(workspace, historySessionId, [
-      {
-        type: 'user',
-        message: { role: 'user', content: [{ type: 'text', text: 'native claude user prompt' }] },
-        timestamp: '2026-04-22T08:34:55.724Z',
-        sessionId: historySessionId,
-        cwd: workspace,
-      },
-      {
-        type: 'assistant',
-        message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'pwd' } }] },
-        timestamp: '2026-04-22T08:35:00.848Z',
-        sessionId: historySessionId,
-        cwd: workspace,
-      },
-      {
-        type: 'user',
-        message: { role: 'user', content: [{ type: 'tool_result', content: [{ type: 'text', text: '/workspaces/adhdev' }], is_error: false }] },
-        timestamp: '2026-04-22T08:35:01.026Z',
-        sessionId: historySessionId,
-        cwd: workspace,
-      },
-      {
-        type: 'assistant',
-        message: { role: 'assistant', content: [{ type: 'text', text: 'native claude assistant reply' }] },
-        timestamp: '2026-04-22T08:35:02.105Z',
-        sessionId: historySessionId,
-        cwd: workspace,
-      },
-    ])
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
     const instance = new CliProviderInstance({
@@ -179,9 +130,17 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       category: 'cli',
       spawn: { command: 'claude', args: [] },
       canonicalHistory: {
-        format: 'claude-jsonl',
+        format: 'claude-provider-native',
         watchPath: '~/.claude/projects/{{workspace}}/{{sessionId}}.jsonl',
+        scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
       },
+      scripts: providerNativeHistoryScripts(() => [
+        { role: 'system', kind: 'session_start', content: workspace, receivedAt: 1_800_000_000_000 },
+        { role: 'user', kind: 'standard', content: 'native claude user prompt', receivedAt: 1_800_000_001_000 },
+        { role: 'assistant', kind: 'tool', content: 'Bash: pwd', receivedAt: 1_800_000_002_000 },
+        { role: 'assistant', kind: 'tool', content: '/workspaces/adhdev', receivedAt: 1_800_000_003_000 },
+        { role: 'assistant', kind: 'standard', content: 'native claude assistant reply', receivedAt: 1_800_000_004_000 },
+      ]),
     } as any, workspace, [], 'runtime-1', undefined, {
       providerSessionId: historySessionId,
       launchMode: 'resume',
@@ -222,36 +181,9 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     ])
   })
 
-  it('prefers canonical ~/.codex rollout history over parsed synthetic terminal chatter for codex saved-history', async () => {
+  it('prefers provider-owned native history over parsed synthetic terminal chatter for codex saved-history', async () => {
     const workspace = '/workspaces/adhdev'
     const historySessionId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
-    writeCanonicalCodexSession(historySessionId, [
-      {
-        type: 'session_meta',
-        timestamp: '2026-04-28T15:27:24.859Z',
-        payload: { id: historySessionId, cwd: workspace, timestamp: '2026-04-28T15:27:24.859Z' },
-      },
-      {
-        type: 'response_item',
-        timestamp: '2026-04-28T15:27:25.000Z',
-        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'native codex user prompt' }] },
-      },
-      {
-        type: 'response_item',
-        timestamp: '2026-04-28T15:27:26.000Z',
-        payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ cmd: 'pwd' }), call_id: 'call_pwd' },
-      },
-      {
-        type: 'response_item',
-        timestamp: '2026-04-28T15:27:27.000Z',
-        payload: { type: 'function_call_output', call_id: 'call_pwd', output: '/workspaces/adhdev' },
-      },
-      {
-        type: 'response_item',
-        timestamp: '2026-04-28T15:27:28.000Z',
-        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'native codex assistant reply' }] },
-      },
-    ])
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
     const instance = new CliProviderInstance({
@@ -260,9 +192,17 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       category: 'cli',
       spawn: { command: 'codex', args: [] },
       canonicalHistory: {
-        format: 'codex-jsonl',
+        format: 'codex-provider-native',
         watchPath: '~/.codex/sessions/**/*.jsonl',
+        scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
       },
+      scripts: providerNativeHistoryScripts(() => [
+        { role: 'system', kind: 'session_start', content: workspace, receivedAt: 1_800_000_000_000 },
+        { role: 'user', kind: 'standard', content: 'native codex user prompt', receivedAt: 1_800_000_001_000 },
+        { role: 'assistant', kind: 'tool', content: 'exec_command: pwd', receivedAt: 1_800_000_002_000 },
+        { role: 'assistant', kind: 'tool', content: '/workspaces/adhdev', receivedAt: 1_800_000_003_000 },
+        { role: 'assistant', kind: 'standard', content: 'native codex assistant reply', receivedAt: 1_800_000_004_000 },
+      ]),
     } as any, workspace, [], 'runtime-1', undefined, {
       providerSessionId: historySessionId,
       launchMode: 'resume',
@@ -306,18 +246,10 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
   it('throttles native-source history reads on repeated status ticks', async () => {
     const workspace = '/workspaces/adhdev'
     const historySessionId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
-    writeCanonicalCodexSession(historySessionId, [
-      {
-        type: 'session_meta',
-        timestamp: '2026-04-28T15:27:24.859Z',
-        payload: { id: historySessionId, cwd: workspace, timestamp: '2026-04-28T15:27:24.859Z' },
-      },
-      {
-        type: 'response_item',
-        timestamp: '2026-04-28T15:27:25.000Z',
-        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'native codex throttled user' }] },
-      },
-    ])
+    let nativeMessages = [
+      { role: 'system', kind: 'session_start', content: workspace, receivedAt: 1_800_000_000_000 },
+      { role: 'user', kind: 'standard', content: 'native codex throttled user', receivedAt: 1_800_000_001_000 },
+    ]
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
     const instance = new CliProviderInstance({
       type: 'codex-cli',
@@ -325,10 +257,12 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       category: 'cli',
       spawn: { command: 'codex', args: [] },
       canonicalHistory: {
-        format: 'codex-jsonl',
+        format: 'codex-provider-native',
         watchPath: '~/.codex/sessions/**/*.jsonl',
         mode: 'native-source',
+        scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
       },
+      scripts: providerNativeHistoryScripts(() => nativeMessages),
     } as any, workspace, [], 'runtime-1', undefined, {
       providerSessionId: historySessionId,
       launchMode: 'resume',
@@ -359,18 +293,10 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       { role: 'user', kind: 'standard', content: 'native codex throttled user' },
     ])
 
-    writeCanonicalCodexSession(historySessionId, [
-      {
-        type: 'session_meta',
-        timestamp: '2026-04-28T15:27:24.859Z',
-        payload: { id: historySessionId, cwd: workspace, timestamp: '2026-04-28T15:27:24.859Z' },
-      },
-      {
-        type: 'response_item',
-        timestamp: '2026-04-28T15:27:26.000Z',
-        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'native codex updated user' }] },
-      },
-    ])
+    nativeMessages = [
+      { role: 'system', kind: 'session_start', content: workspace, receivedAt: 1_800_000_000_000 },
+      { role: 'user', kind: 'standard', content: 'native codex updated user', receivedAt: 1_800_000_002_000 },
+    ]
     instance.getState()
     expect(persistedHistory(instance)).toEqual([
       { role: 'system', kind: 'session_start', content: workspace },
@@ -397,10 +323,12 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       category: 'cli',
       spawn: { command: 'codex', args: [] },
       canonicalHistory: {
-        format: 'codex-jsonl',
+        format: 'codex-provider-native',
         watchPath: '~/.codex/sessions/**/*.jsonl',
         mode: 'native-source',
+        scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
       },
+      scripts: providerNativeHistoryScripts(() => null),
     } as any, workspace, [], 'runtime-1', undefined, {
       providerSessionId: historySessionId,
       launchMode: 'resume',
@@ -431,13 +359,12 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     expect(readSavedHistoryLines('codex-cli', historySessionId)).toEqual([])
   })
 
-  it('seeds the full canonical Hermes transcript instead of truncating resume history to 200 messages', async () => {
+  it('seeds the full provider-owned transcript instead of truncating resume history to 200 messages', async () => {
     const historySessionId = '20260422_002711_293d9a'
     const canonicalMessages = Array.from({ length: 333 }, (_, index) => ({
       role: index % 2 === 0 ? 'user' : 'assistant',
       content: `canonical message ${index + 1}`,
     }))
-    writeCanonicalHermesSession(historySessionId, canonicalMessages)
 
     const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
     const instance = new CliProviderInstance({
@@ -446,9 +373,16 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       category: 'cli',
       spawn: { command: 'hermes', args: [] },
       canonicalHistory: {
-        format: 'hermes-json',
+        format: 'hermes-provider-native',
         watchPath: '~/.hermes/sessions/session_{{sessionId}}.json',
+        scripts: { readSession: 'readNativeHistory', listSessions: 'listNativeHistory' },
       },
+      scripts: providerNativeHistoryScripts(() => canonicalMessages.map((message, index) => ({
+        role: message.role,
+        kind: 'standard',
+        content: message.content,
+        receivedAt: 1_800_000_000_000 + index,
+      }))),
     } as any, '/workspaces/adhdev', [], 'runtime-1', undefined, {
       providerSessionId: historySessionId,
       launchMode: 'resume',
