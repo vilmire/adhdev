@@ -104,7 +104,7 @@ describe('dashboard notifications', () => {
     expect(candidates[0]?.preview).toBe('Latest transcript bubble')
   })
 
-  it('uses compact preview for notification preview only when it is newer than the local transcript tail', () => {
+  it('keeps notification previews aligned with the rendered chat transcript instead of newer compact summaries', () => {
     const staleCompact = createConversation({
       sessionId: 'session-stale',
       tabKey: 'tab-stale',
@@ -135,7 +135,7 @@ describe('dashboard notifications', () => {
     expect(candidates.find(record => record.sessionId === 'session-stale')?.preview)
       .toBe('Assistant reply at same timestamp')
     expect(candidates.find(record => record.sessionId === 'session-newer')?.preview)
-      .toBe('Newer compact summary')
+      .toBe('Older transcript bubble')
   })
 
   it('does not keep task-complete candidates alive once daemon unread state cleared', () => {

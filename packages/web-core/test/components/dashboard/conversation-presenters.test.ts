@@ -103,7 +103,7 @@ describe('conversation presenters', () => {
         expect(getConversationPreviewText(conversation)).toBe('Latest transcript bubble')
     })
 
-    it('uses compact preview when it is newer than the local transcript tail', () => {
+    it('keeps inbox/card preview aligned with the rendered chat transcript even when compact preview is newer', () => {
         const conversation = createConversation({
             lastMessagePreview: 'Newest compact preview',
             lastMessageAt: 3000,
@@ -112,7 +112,7 @@ describe('conversation presenters', () => {
             ],
         })
 
-        expect(getConversationPreviewText(conversation)).toBe('Newest compact preview')
+        expect(getConversationPreviewText(conversation)).toBe('Older transcript bubble')
     })
 
     it('prefers the rich transcript tail over compact preview when transcript time is missing or tied', () => {

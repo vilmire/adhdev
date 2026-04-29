@@ -53,33 +53,15 @@ function getConversationLastMessage(conversation: ActiveConversation): Dashboard
         || conversation.messages[conversation.messages.length - 1]
 }
 
-function parseConversationMessageTimestamp(value: unknown): number {
-    if (typeof value === 'number' && Number.isFinite(value)) return value
-    if (typeof value === 'string') {
-        const parsed = Date.parse(value)
-        if (Number.isFinite(parsed)) return parsed
-    }
-    return 0
-}
-
-function getConversationMessageActivityAt(message: DashboardMessage | undefined): number {
-    return parseConversationMessageTimestamp(message?.receivedAt)
-        || parseConversationMessageTimestamp(message?.timestamp)
-        || 0
-}
-
 export function getConversationLastMessagePreview(conversation: ActiveConversation): string {
     const lastMessage = getConversationLastMessage(conversation)
     const messagePreview = normalizeTextContent(lastMessage?.content)
-    const messageAt = getConversationMessageActivityAt(lastMessage)
     const summaryPreview = normalizeTextContent(conversation.lastMessagePreview)
-    const summaryAt = typeof conversation.lastMessageAt === 'number' && Number.isFinite(conversation.lastMessageAt)
-        ? conversation.lastMessageAt
-        : 0
 
-    if (summaryPreview && !messagePreview) return summaryPreview
-    if (messagePreview && !summaryPreview) return messagePreview
-    if (summaryPreview && messagePreview && summaryAt > 0 && messageAt > 0 && summaryAt > messageAt) return summaryPreview
+    // Inbox/card/notification previews must describe the same transcript that
+    // ChatPane can render. Compact summaries are metadata-only and may be newer
+    // than the local transcript, but showing them while the opened chat still
+    // renders the older message makes the inbox and chat appear out of sync.
     if (messagePreview) return messagePreview
     if (summaryPreview) return summaryPreview
     return ''
