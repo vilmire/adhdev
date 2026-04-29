@@ -23,7 +23,7 @@ import { loadState, saveState } from '../config/state-store.js';
 import { resolveIdeLaunchWorkspace } from '../config/workspaces.js';
 import { appendRecentActivity, getRecentActivity, markSessionSeen, dismissSessionNotification, markSessionNotificationUnread } from '../config/recent-activity.js';
 import { getSavedProviderSessions } from '../config/saved-sessions.js';
-import { listSavedHistorySessions } from '../config/chat-history.js';
+import { listProviderHistorySessions } from '../config/chat-history.js';
 import { detectIDEs } from '../detection/ide-detector.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { SessionRegistry } from '../sessions/registry.js';
@@ -525,14 +525,19 @@ export class DaemonCommandRouter {
                 const wantsAll = args?.all === true;
                 const offset = wantsAll ? 0 : Math.max(0, Number(args?.offset) || 0);
                 const limit = wantsAll ? Number.MAX_SAFE_INTEGER : Math.max(1, Math.min(100, Number(args?.limit) || 30));
-                const { sessions: historySessions, hasMore } = listSavedHistorySessions(providerType, { offset, limit });
+                const providerMeta = this.deps.providerLoader.getMeta(providerType);
+                const { sessions: historySessions, hasMore, source } = listProviderHistorySessions(providerType, {
+                    canonicalHistory: providerMeta?.canonicalHistory,
+                    offset,
+                    limit,
+                    historyBehavior: providerMeta?.historyBehavior,
+                });
                 const state = loadState();
                 const savedSessions = getSavedProviderSessions(state, { providerType, kind });
                 const recentSessions = getRecentActivity(state, 200)
                     .filter(entry => entry.providerType === providerType && entry.kind === kind && entry.providerSessionId);
                 const savedSessionById = new Map(savedSessions.map(entry => [entry.providerSessionId, entry]));
                 const recentSessionById = new Map(recentSessions.map(entry => [entry.providerSessionId!, entry]));
-                const providerMeta = this.deps.providerLoader.getMeta(providerType);
                 const canResumeById = supportsExplicitSessionResume(providerMeta?.resume);
 
                 return {
@@ -557,6 +562,7 @@ export class DaemonCommandRouter {
                         };
                     }),
                     hasMore,
+                    source,
                 };
             }
 

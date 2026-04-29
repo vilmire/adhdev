@@ -92,6 +92,18 @@ function writeCanonicalClaudeProjectSession(workspace: string, historySessionId:
   )
 }
 
+function writeCanonicalCodexSession(historySessionId: string, lines: unknown[], datePath = ['2026', '04', '29']) {
+  const sessionDir = path.join(mockHomeDir, '.codex', 'sessions', ...datePath)
+  fs.mkdirSync(sessionDir, { recursive: true })
+  const filePath = path.join(sessionDir, `rollout-2026-04-29T00-27-22-${historySessionId}.jsonl`)
+  fs.writeFileSync(
+    filePath,
+    `${lines.map(line => JSON.stringify(line)).join('\n')}\n`,
+    'utf-8',
+  )
+  return filePath
+}
+
 describe('chat-history config helpers', () => {
   beforeEach(() => {
     mockHomeDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-chat-history-'))
@@ -287,6 +299,148 @@ describe('chat-history config helpers', () => {
       { role: 'assistant', kind: 'tool', content: '/workspaces/adhdev' },
       { role: 'assistant', kind: 'standard', content: 'native claude assistant reply' },
     ])
+  })
+
+  it('rebuilds codex saved history from the native ~/.codex rollout transcript', async () => {
+    const workspace = '/workspaces/adhdev'
+    const historySessionId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
+    writeHistorySession('codex-cli', historySessionId, 1)
+    writeCanonicalCodexSession(historySessionId, [
+      {
+        type: 'session_meta',
+        timestamp: '2026-04-28T15:27:24.859Z',
+        payload: { id: historySessionId, cwd: workspace, timestamp: '2026-04-28T15:27:24.859Z' },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-28T15:27:24.862Z',
+        payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'hidden developer instruction' }] },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-28T15:27:25.000Z',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'native codex user prompt' }] },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-28T15:27:26.000Z',
+        payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ cmd: 'pwd' }), call_id: 'call_pwd' },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-28T15:27:27.000Z',
+        payload: { type: 'function_call_output', call_id: 'call_pwd', output: '/workspaces/adhdev' },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-28T15:27:28.000Z',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'native codex assistant reply' }] },
+      },
+    ])
+
+    const { rebuildCodexSavedHistoryFromNativeSession, readChatHistory } = await import('../../src/config/chat-history.js')
+    expect(rebuildCodexSavedHistoryFromNativeSession(historySessionId, workspace)).toBe(true)
+
+    const rebuilt = readChatHistory('codex-cli', 0, 20, historySessionId)
+    expect(rebuilt.messages.map(message => ({ role: message.role, kind: message.kind, content: message.content }))).toEqual([
+      { role: 'system', kind: 'session_start', content: workspace },
+      { role: 'user', kind: 'standard', content: 'native codex user prompt' },
+      { role: 'assistant', kind: 'tool', content: 'exec_command: pwd' },
+      { role: 'assistant', kind: 'tool', content: '/workspaces/adhdev' },
+      { role: 'assistant', kind: 'standard', content: 'native codex assistant reply' },
+    ])
+  })
+
+  it('reads native-source histories directly without materializing a duplicate ADHDev mirror', async () => {
+    const workspace = '/workspaces/adhdev'
+    const claudeSessionId = '12345678-1234-4234-9234-1234567890ab'
+    const codexSessionId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
+    const hermesSessionId = '20260429_010203_native'
+
+    const hermesDir = path.join(mockHomeDir, '.hermes', 'sessions')
+    fs.mkdirSync(hermesDir, { recursive: true })
+    fs.writeFileSync(path.join(hermesDir, `session_${hermesSessionId}.json`), JSON.stringify({
+      session_id: hermesSessionId,
+      session_start: '2026-04-29T01:02:03.000Z',
+      last_updated: '2026-04-29T01:02:05.000Z',
+      messages: [
+        { role: 'user', content: 'native hermes user' },
+        { role: 'assistant', content: 'native hermes assistant' },
+      ],
+    }), 'utf-8')
+    writeCanonicalClaudeProjectSession(workspace, claudeSessionId, [
+      {
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'text', text: 'native claude direct user' }] },
+        timestamp: '2026-04-29T02:00:00.000Z',
+        sessionId: claudeSessionId,
+        cwd: workspace,
+      },
+      {
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'native claude direct assistant' }] },
+        timestamp: '2026-04-29T02:00:01.000Z',
+        sessionId: claudeSessionId,
+        cwd: workspace,
+      },
+    ])
+    writeCanonicalCodexSession(codexSessionId, [
+      {
+        type: 'session_meta',
+        timestamp: '2026-04-29T03:00:00.000Z',
+        payload: { id: codexSessionId, cwd: workspace, timestamp: '2026-04-29T03:00:00.000Z' },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-29T03:00:01.000Z',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'native codex direct user' }] },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-29T03:00:02.000Z',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'native codex direct assistant' }] },
+      },
+    ])
+
+    const { listProviderHistorySessions, readProviderChatHistory } = await import('../../src/config/chat-history.js')
+
+    expect(readProviderChatHistory('hermes-cli', {
+      canonicalHistory: { format: 'hermes-json', watchPath: '~/.hermes/sessions/session_{{sessionId}}.json', mode: 'native-source' },
+      historySessionId: hermesSessionId,
+      offset: 0,
+      limit: 20,
+    }).messages.map(message => message.content)).toEqual(['native hermes user', 'native hermes assistant'])
+
+    expect(readProviderChatHistory('claude-cli', {
+      canonicalHistory: { format: 'claude-jsonl', watchPath: '~/.claude/projects/{{workspace}}/{{sessionId}}.jsonl', mode: 'native-source' },
+      historySessionId: claudeSessionId,
+      workspace,
+      offset: 0,
+      limit: 20,
+    }).messages.map(message => message.content)).toEqual([workspace, 'native claude direct user', 'native claude direct assistant'])
+
+    expect(readProviderChatHistory('codex-cli', {
+      canonicalHistory: { format: 'codex-jsonl', watchPath: '~/.codex/sessions/**/*.jsonl', mode: 'native-source' },
+      historySessionId: codexSessionId,
+      workspace,
+      offset: 0,
+      limit: 20,
+    }).messages.map(message => message.content)).toEqual([workspace, 'native codex direct user', 'native codex direct assistant'])
+
+    expect(listProviderHistorySessions('codex-cli', {
+      canonicalHistory: { format: 'codex-jsonl', watchPath: '~/.codex/sessions/**/*.jsonl', mode: 'native-source' },
+      offset: 0,
+      limit: 20,
+    }).sessions).toEqual([expect.objectContaining({
+      historySessionId: codexSessionId,
+      messageCount: 3,
+      preview: 'native codex direct assistant',
+      workspace,
+    })])
+
+    expect(fs.existsSync(path.join(mockHomeDir, '.adhdev', 'history', 'hermes-cli'))).toBe(false)
+    expect(fs.existsSync(path.join(mockHomeDir, '.adhdev', 'history', 'claude-cli'))).toBe(false)
+    expect(fs.existsSync(path.join(mockHomeDir, '.adhdev', 'history', 'codex-cli'))).toBe(false)
   })
 
   it('persists session-level saved-history aggregates inside the on-disk index', async () => {

@@ -13,7 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { buildRuntimeSystemChatMessage } from '../providers/chat-message-normalization.js';
-import type { ProviderHistoryBehavior } from '../providers/contracts.js';
+import type { ProviderCanonicalHistoryConfig, ProviderHistoryBehavior } from '../providers/contracts.js';
 
 const HISTORY_DIR = path.join(os.homedir(), '.adhdev', 'history');
 const RETAIN_DAYS = 30;
@@ -170,6 +170,9 @@ export interface SavedHistorySessionSummary {
     lastMessageAt: number;
     preview?: string;
     workspace?: string;
+    source?: 'adhdev-mirror' | 'provider-native';
+    sourcePath?: string;
+    sourceMtimeMs?: number;
 }
 
 function sortSavedHistorySessionSummaries(summaries: SavedHistorySessionSummary[]): SavedHistorySessionSummary[] {
@@ -1138,6 +1141,37 @@ export class ChatHistoryWriter {
  * the newest N messages are skipped so older-history pagination can avoid
  * duplicating the live transcript tail already shown in the UI.
  */
+function pageHistoryRecords(
+    agentType: string,
+    records: HistoryMessage[],
+    offset: number = 0,
+    limit: number = 30,
+    excludeRecentCount: number = 0,
+    historyBehavior?: ProviderHistoryBehavior,
+): { messages: HistoryMessage[]; hasMore: boolean } {
+    const allMessages = records
+        .map((message) => sanitizeHistoryMessage(agentType, message))
+        .filter(Boolean) as HistoryMessage[];
+    allMessages.sort((a, b) => a.receivedAt - b.receivedAt);
+    const chronological: HistoryMessage[] = [];
+    let lastTurn: HistoryMessage | null = null;
+    for (const message of allMessages) {
+        const previous = chronological[chronological.length - 1];
+        if (isAdjacentHistoryDuplicate(agentType, previous, message)) continue;
+        if (message.role !== 'system' && isAdjacentHistoryDuplicate(agentType, lastTurn, message)) continue;
+        chronological.push(message);
+        if (message.role !== 'system') lastTurn = message;
+    }
+    const collapsed = collapseReplayAssistantTurns(chronological, historyBehavior);
+    const boundedLimit = Math.max(1, limit);
+    const boundedOffset = Math.max(0, offset);
+    const boundedExclude = Math.max(0, Math.min(excludeRecentCount, collapsed.length));
+    const endExclusive = Math.max(0, collapsed.length - boundedExclude - boundedOffset);
+    const startInclusive = Math.max(0, endExclusive - boundedLimit);
+    const sliced = collapsed.slice(startInclusive, endExclusive);
+    return { messages: sliced, hasMore: startInclusive > 0 };
+}
+
 export function readChatHistory(
     agentType: string,
     offset: number = 0,
@@ -1175,29 +1209,7 @@ export function readChatHistory(
             }
         }
 
-        allMessages.sort((a, b) => a.receivedAt - b.receivedAt);
-        const chronological: HistoryMessage[] = [];
-        let lastTurn: HistoryMessage | null = null;
-        for (const message of allMessages) {
-            const previous = chronological[chronological.length - 1];
-            if (isAdjacentHistoryDuplicate(agentType, previous, message)) continue;
-            if (message.role !== 'system' && isAdjacentHistoryDuplicate(agentType, lastTurn, message)) continue;
-            chronological.push(message);
-            if (message.role !== 'system') lastTurn = message;
-        }
-        const collapsed = collapseReplayAssistantTurns(chronological, historyBehavior);
-
- // Page backwards from the newest saved messages while keeping the returned
- // slice in chronological order for prepend-based UI rendering.
-        const boundedLimit = Math.max(1, limit);
-        const boundedOffset = Math.max(0, offset);
-        const boundedExclude = Math.max(0, Math.min(excludeRecentCount, collapsed.length));
-        const endExclusive = Math.max(0, collapsed.length - boundedExclude - boundedOffset);
-        const startInclusive = Math.max(0, endExclusive - boundedLimit);
-        const sliced = collapsed.slice(startInclusive, endExclusive);
-        const hasMore = startInclusive > 0;
-
-        return { messages: sliced, hasMore };
+        return pageHistoryRecords(agentType, allMessages, offset, limit, excludeRecentCount, historyBehavior);
     } catch {
         return { messages: [], hasMore: false };
     }
@@ -1348,6 +1360,57 @@ function rewriteCanonicalSavedHistory(agentType: string, historySessionId: strin
         return true;
     } catch {
         return false;
+    }
+}
+
+function buildHermesNativeHistoryRecords(historySessionId: string): HistoryMessage[] | null {
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
+    if (!normalizedSessionId) return null;
+    try {
+        const sessionFilePath = path.join(os.homedir(), '.hermes', 'sessions', `session_${normalizedSessionId}.json`);
+        if (!fs.existsSync(sessionFilePath)) return null;
+        const raw = JSON.parse(fs.readFileSync(sessionFilePath, 'utf-8')) as {
+            session_start?: string;
+            last_updated?: string;
+            messages?: Array<Record<string, unknown>>;
+        };
+        const canonicalMessages = Array.isArray(raw.messages) ? raw.messages : [];
+        const records: HistoryMessage[] = [];
+        let fallbackTs = Date.parse(raw.session_start || raw.last_updated || '') || Date.now();
+        for (const message of canonicalMessages) {
+            const role = String(message.role || '').trim();
+            const content = normalizeCanonicalHermesMessageContent(message.content);
+            if (!content) continue;
+            const receivedAt = extractCanonicalHermesMessageTimestamp(message, fallbackTs);
+            fallbackTs = receivedAt + 1;
+            if (role === 'user' || role === 'assistant') {
+                records.push({
+                    ts: new Date(receivedAt).toISOString(),
+                    receivedAt,
+                    role,
+                    content,
+                    kind: 'standard',
+                    agent: 'hermes-cli',
+                    historySessionId: normalizedSessionId,
+                });
+                continue;
+            }
+            if (role === 'tool') {
+                records.push({
+                    ts: new Date(receivedAt).toISOString(),
+                    receivedAt,
+                    role: 'assistant',
+                    content,
+                    kind: 'tool',
+                    senderName: 'Tool',
+                    agent: 'hermes-cli',
+                    historySessionId: normalizedSessionId,
+                });
+            }
+        }
+        return records;
+    } catch {
+        return null;
     }
 }
 
@@ -1523,6 +1586,76 @@ function extractClaudeUserContentParts(content: unknown): Array<{ role: 'user' |
     return parts;
 }
 
+function buildClaudeNativeHistoryRecords(historySessionId: string, workspace?: string): HistoryMessage[] | null {
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
+    if (!normalizedSessionId) return null;
+    try {
+        const transcriptPath = resolveClaudeProjectTranscriptPath(normalizedSessionId, workspace);
+        if (!transcriptPath) return null;
+        const lines = fs.readFileSync(transcriptPath, 'utf-8').split('\n').filter(Boolean);
+        const records: HistoryMessage[] = [];
+        let fallbackTs = Date.now();
+        for (const line of lines) {
+            let parsed: Record<string, unknown> | null = null;
+            try { parsed = JSON.parse(line) as Record<string, unknown>; } catch { parsed = null; }
+            if (!parsed) continue;
+            const parsedSessionId = String(parsed.sessionId || '').trim();
+            if (parsedSessionId && parsedSessionId !== normalizedSessionId) continue;
+            const receivedAt = extractTimestampValue(parsed.timestamp) || fallbackTs;
+            fallbackTs = receivedAt + 1;
+            const parsedWorkspace = String(parsed.cwd || workspace || '').trim();
+            if (records.length === 0 && parsedWorkspace) {
+                records.push({
+                    ts: new Date(receivedAt).toISOString(),
+                    receivedAt,
+                    role: 'system',
+                    kind: 'session_start',
+                    content: parsedWorkspace,
+                    agent: 'claude-cli',
+                    historySessionId: normalizedSessionId,
+                    workspace: parsedWorkspace,
+                });
+            }
+            const type = String(parsed.type || '').trim();
+            const message = parsed.message && typeof parsed.message === 'object'
+                ? parsed.message as Record<string, unknown>
+                : null;
+            if (type === 'user' && message) {
+                for (const part of extractClaudeUserContentParts(message.content)) {
+                    records.push({
+                        ts: new Date(receivedAt).toISOString(),
+                        receivedAt,
+                        role: part.role,
+                        content: part.content,
+                        kind: part.kind,
+                        senderName: part.senderName,
+                        agent: 'claude-cli',
+                        historySessionId: normalizedSessionId,
+                    });
+                }
+                continue;
+            }
+            if (type === 'assistant' && message) {
+                for (const part of extractClaudeAssistantContentParts(message.content)) {
+                    records.push({
+                        ts: new Date(receivedAt).toISOString(),
+                        receivedAt,
+                        role: 'assistant',
+                        content: part.content,
+                        kind: part.kind,
+                        senderName: part.senderName,
+                        agent: 'claude-cli',
+                        historySessionId: normalizedSessionId,
+                    });
+                }
+            }
+        }
+        return records;
+    } catch {
+        return null;
+    }
+}
+
 export function rebuildClaudeSavedHistoryFromNativeProject(historySessionId: string, workspace?: string): boolean {
     const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
     if (!normalizedSessionId) return false;
@@ -1604,4 +1737,388 @@ export function rebuildClaudeSavedHistoryFromNativeProject(historySessionId: str
     } catch {
         return false;
     }
+}
+
+function isUuidLikeSessionId(sessionId: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId);
+}
+
+function readCodexSessionMeta(filePath: string): Record<string, unknown> | null {
+    try {
+        const firstLine = fs.readFileSync(filePath, 'utf-8').split('\n').find(Boolean);
+        if (!firstLine) return null;
+        const parsed = JSON.parse(firstLine) as Record<string, unknown>;
+        if (String(parsed.type || '') !== 'session_meta') return null;
+        const payload = parsed.payload && typeof parsed.payload === 'object'
+            ? parsed.payload as Record<string, unknown>
+            : null;
+        return payload;
+    } catch {
+        return null;
+    }
+}
+
+export function resolveCodexSessionTranscriptPath(historySessionId: string, workspace?: string): string | null {
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
+    if (!normalizedSessionId || !isUuidLikeSessionId(normalizedSessionId)) return null;
+    const sessionsDir = path.join(os.homedir(), '.codex', 'sessions');
+    if (!fs.existsSync(sessionsDir)) return null;
+    const normalizedWorkspace = typeof workspace === 'string' ? workspace.trim() : '';
+    const candidates: Array<{ path: string; mtimeMs: number; workspaceMatches: boolean; metaMatches: boolean }> = [];
+    const stack = [sessionsDir];
+    while (stack.length > 0) {
+        const current = stack.pop();
+        if (!current) continue;
+        let entries: fs.Dirent[] = [];
+        try {
+            entries = fs.readdirSync(current, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+        for (const entry of entries) {
+            const entryPath = path.join(current, entry.name);
+            if (entry.isDirectory()) {
+                stack.push(entryPath);
+                continue;
+            }
+            if (!entry.isFile() || !entry.name.endsWith('.jsonl') || !entry.name.includes(normalizedSessionId)) continue;
+            const meta = readCodexSessionMeta(entryPath);
+            const metaSessionId = String(meta?.id || '').trim();
+            if (metaSessionId && metaSessionId !== normalizedSessionId) continue;
+            const metaWorkspace = String(meta?.cwd || '').trim();
+            let mtimeMs = 0;
+            try { mtimeMs = fs.statSync(entryPath).mtimeMs; } catch { /* ignore */ }
+            candidates.push({
+                path: entryPath,
+                mtimeMs,
+                workspaceMatches: !!normalizedWorkspace && metaWorkspace === normalizedWorkspace,
+                metaMatches: metaSessionId === normalizedSessionId,
+            });
+        }
+    }
+    candidates.sort((a, b) => Number(b.workspaceMatches) - Number(a.workspaceMatches)
+        || Number(b.metaMatches) - Number(a.metaMatches)
+        || b.mtimeMs - a.mtimeMs);
+    return candidates[0]?.path || null;
+}
+
+function flattenCodexContent(content: unknown): string {
+    if (typeof content === 'string') return content.trim();
+    if (content == null) return '';
+    if (Array.isArray(content)) {
+        return content
+            .map((entry) => flattenCodexContent(entry))
+            .filter(Boolean)
+            .join('\n')
+            .trim();
+    }
+    if (typeof content === 'object') {
+        const record = content as Record<string, unknown>;
+        if (typeof record.text === 'string') return record.text.trim();
+        if (typeof record.content === 'string' || Array.isArray(record.content)) return flattenCodexContent(record.content);
+        if (typeof record.output === 'string') return record.output.trim();
+        if (typeof record.message === 'string') return record.message.trim();
+    }
+    return '';
+}
+
+function summarizeCodexToolCall(payload: Record<string, unknown>): string {
+    const name = String(payload.name || payload.type || 'tool').trim() || 'tool';
+    const rawArguments = payload.arguments ?? payload.input;
+    let argumentValue = '';
+    if (typeof rawArguments === 'string') {
+        const trimmed = rawArguments.trim();
+        try {
+            const parsed = JSON.parse(trimmed) as unknown;
+            argumentValue = summarizeCodexToolArguments(parsed);
+        } catch {
+            argumentValue = trimmed;
+        }
+    } else {
+        argumentValue = summarizeCodexToolArguments(rawArguments);
+    }
+    return argumentValue ? `${name}: ${argumentValue}` : name;
+}
+
+function summarizeCodexToolArguments(value: unknown): string {
+    if (typeof value === 'string') return value.trim();
+    if (Array.isArray(value)) return value.map((entry) => String(entry)).join(' ').trim();
+    if (!value || typeof value !== 'object') return '';
+    const record = value as Record<string, unknown>;
+    const direct = record.command || record.cmd || record.query || record.path || record.prompt;
+    if (typeof direct === 'string') return direct.trim();
+    if (Array.isArray(direct)) return direct.map((entry) => String(entry)).join(' ').trim();
+    try {
+        return JSON.stringify(record).trim();
+    } catch {
+        return '';
+    }
+}
+
+function codexToolOutputContent(payload: Record<string, unknown>): string {
+    const output = payload.output ?? payload.result ?? payload.content;
+    const text = flattenCodexContent(output);
+    if (text) return text;
+    if (output && typeof output === 'object') {
+        try { return JSON.stringify(output).trim(); } catch { return ''; }
+    }
+    return '';
+}
+
+function buildCodexNativeHistoryRecords(historySessionId: string, workspace?: string): HistoryMessage[] | null {
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
+    if (!normalizedSessionId || !isUuidLikeSessionId(normalizedSessionId)) return null;
+    try {
+        const transcriptPath = resolveCodexSessionTranscriptPath(normalizedSessionId, workspace);
+        if (!transcriptPath) return null;
+        const lines = fs.readFileSync(transcriptPath, 'utf-8').split('\n').filter(Boolean);
+        const records: HistoryMessage[] = [];
+        let fallbackTs = Date.now();
+        for (const line of lines) {
+            let parsed: Record<string, unknown> | null = null;
+            try { parsed = JSON.parse(line) as Record<string, unknown>; } catch { parsed = null; }
+            if (!parsed) continue;
+            const receivedAt = extractTimestampValue(parsed.timestamp) || fallbackTs;
+            fallbackTs = receivedAt + 1;
+            const type = String(parsed.type || '').trim();
+            const payload = parsed.payload && typeof parsed.payload === 'object'
+                ? parsed.payload as Record<string, unknown>
+                : null;
+            if (!payload) continue;
+            if (type === 'session_meta') {
+                const parsedSessionId = String(payload.id || '').trim();
+                if (parsedSessionId && parsedSessionId !== normalizedSessionId) return null;
+                const parsedWorkspace = String(payload.cwd || workspace || '').trim();
+                if (records.length === 0 && parsedWorkspace) {
+                    records.push({
+                        ts: new Date(receivedAt).toISOString(),
+                        receivedAt,
+                        role: 'system',
+                        kind: 'session_start',
+                        content: parsedWorkspace,
+                        agent: 'codex-cli',
+                        historySessionId: normalizedSessionId,
+                        workspace: parsedWorkspace,
+                    });
+                }
+                continue;
+            }
+            if (type !== 'response_item') continue;
+            const payloadType = String(payload.type || '').trim();
+            if (payloadType === 'message') {
+                const role = String(payload.role || '').trim();
+                if (role !== 'user' && role !== 'assistant') continue;
+                const content = flattenCodexContent(payload.content);
+                if (!content) continue;
+                records.push({
+                    ts: new Date(receivedAt).toISOString(),
+                    receivedAt,
+                    role,
+                    content,
+                    kind: 'standard',
+                    agent: 'codex-cli',
+                    historySessionId: normalizedSessionId,
+                });
+                continue;
+            }
+            if (payloadType === 'function_call' || payloadType === 'custom_tool_call') {
+                const content = summarizeCodexToolCall(payload);
+                if (!content) continue;
+                records.push({
+                    ts: new Date(receivedAt).toISOString(),
+                    receivedAt,
+                    role: 'assistant',
+                    content,
+                    kind: 'tool',
+                    senderName: 'Tool',
+                    agent: 'codex-cli',
+                    historySessionId: normalizedSessionId,
+                });
+                continue;
+            }
+            if (payloadType === 'function_call_output' || payloadType === 'custom_tool_call_output') {
+                const content = codexToolOutputContent(payload);
+                if (!content) continue;
+                records.push({
+                    ts: new Date(receivedAt).toISOString(),
+                    receivedAt,
+                    role: 'assistant',
+                    content,
+                    kind: 'tool',
+                    senderName: 'Tool',
+                    agent: 'codex-cli',
+                    historySessionId: normalizedSessionId,
+                });
+            }
+        }
+        return records;
+    } catch {
+        return null;
+    }
+}
+
+export function rebuildCodexSavedHistoryFromNativeSession(historySessionId: string, workspace?: string): boolean {
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
+    if (!normalizedSessionId || !isUuidLikeSessionId(normalizedSessionId)) return false;
+    const records = buildCodexNativeHistoryRecords(normalizedSessionId, workspace);
+    if (!records || records.length === 0) return false;
+    const existingSessionStart = readExistingSessionStartRecord('codex-cli', normalizedSessionId);
+    const recordsToWrite = existingSessionStart && records[0]?.kind !== 'session_start'
+        ? [{ ...existingSessionStart, historySessionId: normalizedSessionId }, ...records]
+        : records;
+    return rewriteCanonicalSavedHistory('codex-cli', normalizedSessionId, recordsToWrite);
+}
+
+export function isNativeSourceCanonicalHistory(canonicalHistory?: ProviderCanonicalHistoryConfig): boolean {
+    if (!canonicalHistory) return false;
+    if ((canonicalHistory as any).mode === 'disabled') return false;
+    if ((canonicalHistory as any).mode === 'materialized-mirror') return false;
+    return true;
+}
+
+function buildNativeHistoryRecords(
+    canonicalHistory: ProviderCanonicalHistoryConfig | undefined,
+    historySessionId: string | undefined,
+    workspace?: string,
+): HistoryMessage[] | null {
+    const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || '');
+    if (!canonicalHistory || !normalizedSessionId || !isNativeSourceCanonicalHistory(canonicalHistory)) return null;
+    if (canonicalHistory.format === 'hermes-json') return buildHermesNativeHistoryRecords(normalizedSessionId);
+    if (canonicalHistory.format === 'claude-jsonl') return buildClaudeNativeHistoryRecords(normalizedSessionId, workspace);
+    if (canonicalHistory.format === 'codex-jsonl') return buildCodexNativeHistoryRecords(normalizedSessionId, workspace);
+    return null;
+}
+
+export function readProviderChatHistory(
+    agentType: string,
+    options: {
+        canonicalHistory?: ProviderCanonicalHistoryConfig;
+        historySessionId?: string;
+        workspace?: string;
+        offset?: number;
+        limit?: number;
+        excludeRecentCount?: number;
+        historyBehavior?: ProviderHistoryBehavior;
+    } = {},
+): { messages: HistoryMessage[]; hasMore: boolean; source: 'provider-native' | 'adhdev-mirror' | 'native-unavailable' } {
+    if (isNativeSourceCanonicalHistory(options.canonicalHistory) && options.historySessionId) {
+        const records = buildNativeHistoryRecords(options.canonicalHistory, options.historySessionId, options.workspace);
+        if (!records) return { messages: [], hasMore: false, source: 'native-unavailable' };
+        return {
+            ...pageHistoryRecords(agentType, records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior),
+            source: 'provider-native',
+        };
+    }
+    return {
+        ...readChatHistory(agentType, options.offset || 0, options.limit || 30, options.historySessionId, options.excludeRecentCount || 0, options.historyBehavior),
+        source: 'adhdev-mirror',
+    };
+}
+
+function buildNativeSessionSummary(
+    agentType: string,
+    historySessionId: string,
+    records: HistoryMessage[],
+    sourcePath: string,
+): SavedHistorySessionSummary | null {
+    const visible = pageHistoryRecords(agentType, records, 0, Number.MAX_SAFE_INTEGER).messages;
+    if (visible.length === 0) return null;
+    let sourceMtimeMs = 0;
+    try { sourceMtimeMs = fs.statSync(sourcePath).mtimeMs; } catch { /* ignore */ }
+    const firstMessageAt = visible[0]?.receivedAt || sourceMtimeMs || Date.now();
+    const lastMessageAt = visible[visible.length - 1]?.receivedAt || firstMessageAt;
+    const lastNonSystem = [...visible].reverse().find((message) => message.role !== 'system') || visible[visible.length - 1];
+    const firstSystem = visible.find((message) => message.kind === 'session_start');
+    return {
+        historySessionId,
+        sessionTitle: lastNonSystem?.content,
+        messageCount: visible.length,
+        firstMessageAt,
+        lastMessageAt,
+        preview: lastNonSystem?.content,
+        workspace: firstSystem?.workspace || (firstSystem?.kind === 'session_start' ? firstSystem.content : undefined),
+        source: 'provider-native',
+        sourcePath,
+        sourceMtimeMs,
+    };
+}
+
+function listFilesRecursive(root: string, predicate: (entryPath: string, entry: fs.Dirent) => boolean): string[] {
+    if (!fs.existsSync(root)) return [];
+    const results: string[] = [];
+    const stack = [root];
+    while (stack.length > 0) {
+        const current = stack.pop();
+        if (!current) continue;
+        let entries: fs.Dirent[] = [];
+        try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
+        for (const entry of entries) {
+            const entryPath = path.join(current, entry.name);
+            if (entry.isDirectory()) {
+                stack.push(entryPath);
+                continue;
+            }
+            if (predicate(entryPath, entry)) results.push(entryPath);
+        }
+    }
+    return results;
+}
+
+function collectNativeHistorySessionSummaries(agentType: string, canonicalHistory: ProviderCanonicalHistoryConfig): SavedHistorySessionSummary[] {
+    const summaries: SavedHistorySessionSummary[] = [];
+    if (canonicalHistory.format === 'hermes-json') {
+        const root = path.join(os.homedir(), '.hermes', 'sessions');
+        for (const filePath of listFilesRecursive(root, (_entryPath, entry) => entry.isFile() && /^session_.+\.json$/.test(entry.name))) {
+            const fileName = path.basename(filePath);
+            const historySessionId = fileName.replace(/^session_/, '').replace(/\.json$/, '');
+            const records = buildHermesNativeHistoryRecords(historySessionId);
+            const summary = records ? buildNativeSessionSummary(agentType, historySessionId, records, filePath) : null;
+            if (summary) summaries.push(summary);
+        }
+    } else if (canonicalHistory.format === 'claude-jsonl') {
+        const root = path.join(os.homedir(), '.claude', 'projects');
+        for (const filePath of listFilesRecursive(root, (_entryPath, entry) => entry.isFile() && entry.name.endsWith('.jsonl'))) {
+            const historySessionId = path.basename(filePath, '.jsonl');
+            const records = buildClaudeNativeHistoryRecords(historySessionId);
+            const summary = records ? buildNativeSessionSummary(agentType, historySessionId, records, filePath) : null;
+            if (summary) summaries.push(summary);
+        }
+    } else if (canonicalHistory.format === 'codex-jsonl') {
+        const root = path.join(os.homedir(), '.codex', 'sessions');
+        const uuidPattern = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+        for (const filePath of listFilesRecursive(root, (_entryPath, entry) => entry.isFile() && entry.name.endsWith('.jsonl'))) {
+            const meta = readCodexSessionMeta(filePath);
+            const historySessionId = String(meta?.id || path.basename(filePath).match(uuidPattern)?.[1] || '').trim();
+            if (!historySessionId) continue;
+            const records = buildCodexNativeHistoryRecords(historySessionId, String(meta?.cwd || '').trim() || undefined);
+            const summary = records ? buildNativeSessionSummary(agentType, historySessionId, records, filePath) : null;
+            if (summary) summaries.push(summary);
+        }
+    }
+    return sortSavedHistorySessionSummaries(summaries);
+}
+
+export function listProviderHistorySessions(
+    agentType: string,
+    options: {
+        canonicalHistory?: ProviderCanonicalHistoryConfig;
+        offset?: number;
+        limit?: number;
+        historyBehavior?: ProviderHistoryBehavior;
+    } = {},
+): { sessions: SavedHistorySessionSummary[]; hasMore: boolean; source: 'provider-native' | 'adhdev-mirror' } {
+    if (isNativeSourceCanonicalHistory(options.canonicalHistory)) {
+        const offset = Math.max(0, options.offset || 0);
+        const limit = Math.max(1, options.limit || 30);
+        const summaries = collectNativeHistorySessionSummaries(agentType, options.canonicalHistory!);
+        return {
+            sessions: summaries.slice(offset, offset + limit),
+            hasMore: offset + limit < summaries.length,
+            source: 'provider-native',
+        };
+    }
+    return {
+        ...listSavedHistorySessions(agentType, { offset: options.offset, limit: options.limit }, options.historyBehavior),
+        source: 'adhdev-mirror',
+    };
 }

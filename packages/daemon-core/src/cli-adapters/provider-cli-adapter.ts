@@ -239,6 +239,20 @@ function sanitizeCommittedMessageForDisplay<T extends { role?: string; kind?: st
     return { ...message, content };
 }
 
+export function trimLastAssistantEchoForCliMessages(messages: CliChatMessage[], prompt: string | undefined): void {
+    if (!prompt) return;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (!message || message.role !== 'assistant' || typeof message.content !== 'string') continue;
+        if ((message.kind || 'standard') !== 'standard') continue;
+        message.content = trimPromptEchoPrefix(message.content, prompt);
+        if (!message.content.trim()) {
+            messages.splice(index, 1);
+        }
+        return;
+    }
+}
+
 // ─── Adapter ────────────────────────────────────────
 
 export class ProviderCliAdapter implements CliAdapter {
@@ -428,7 +442,16 @@ export class ProviderCliAdapter implements CliAdapter {
         return null;
     }
 
+    private providerOwnsTranscript(): boolean {
+        return this.provider.transcriptAuthority === 'provider';
+    }
+
+    private shouldUseFullProviderTranscriptContext(): boolean {
+        return this.providerOwnsTranscript() && this.provider.transcriptContext === 'full';
+    }
+
     private selectParseBaseMessages(baseMessages: CliChatMessage[]): CliChatMessage[] {
+        if (this.shouldUseFullProviderTranscriptContext()) return baseMessages;
         if (baseMessages.length <= ProviderCliAdapter.PARSE_MESSAGE_TAIL_LIMIT) return baseMessages;
         return baseMessages.slice(-ProviderCliAdapter.PARSE_MESSAGE_TAIL_LIMIT);
     }
@@ -1044,9 +1067,7 @@ export class ProviderCliAdapter implements CliAdapter {
     }
 
     private trimLastAssistantEcho(messages: CliChatMessage[], prompt: string | undefined): void {
-        if (!prompt) return;
-        const last = [...messages].reverse().find((m) => m.role === 'assistant' && typeof m.content === 'string');
-        if (last) last.content = trimPromptEchoPrefix(last.content, prompt);
+        trimLastAssistantEchoForCliMessages(messages, prompt);
     }
 
     private clearAllTimers(): void {
@@ -2033,6 +2054,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 messages: hydratedMessages,
                 activeModal: parsed.activeModal ?? this.activeModal,
                 providerSessionId: typeof parsed.providerSessionId === 'string' ? parsed.providerSessionId : undefined,
+                ...(this.providerOwnsTranscript() ? { transcriptAuthority: 'provider', coverage: this.shouldUseFullProviderTranscriptContext() ? 'full' : 'tail' } : {}),
             };
         } else {
             const messages = [...this.committedMessages];

@@ -33,8 +33,19 @@ function writeCanonicalClaudeProjectSession(workspace: string, historySessionId:
   )
 }
 
+function writeCanonicalCodexSession(historySessionId: string, lines: unknown[]) {
+  const sessionDir = path.join(mockHomeDir, '.codex', 'sessions', '2026', '04', '29')
+  fs.mkdirSync(sessionDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(sessionDir, `rollout-2026-04-29T00-27-22-${historySessionId}.jsonl`),
+    `${lines.map(line => JSON.stringify(line)).join('\n')}\n`,
+    'utf-8',
+  )
+}
+
 function readSavedHistoryLines(agentType: string, historySessionId: string): Array<{ role: string; kind?: string; content: string }> {
   const dir = path.join(mockHomeDir, '.adhdev', 'history', agentType)
+  if (!fs.existsSync(dir)) return []
   const prefix = `${historySessionId}_`
   const file = fs.readdirSync(dir).find((entry) => entry.startsWith(prefix) && entry.endsWith('.jsonl'))
   if (!file) return []
@@ -43,6 +54,11 @@ function readSavedHistoryLines(agentType: string, historySessionId: string): Arr
     .filter(Boolean)
     .map((line) => JSON.parse(line))
     .map((entry) => ({ role: entry.role, kind: entry.kind, content: entry.content }))
+}
+
+function persistedHistory(instance: any): Array<{ role: string; kind?: string; content: string }> {
+  return (instance.lastPersistedHistoryMessages || [])
+    .map((entry: any) => ({ role: entry.role, kind: entry.kind, content: entry.content }))
 }
 
 describe('CliProviderInstance canonical Hermes saved-history sync', () => {
@@ -106,7 +122,8 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     instance.getState()
 
     expect(instance.historyWriter.appendNewMessages).not.toHaveBeenCalled()
-    expect(readSavedHistoryLines('hermes-cli', historySessionId)).toEqual([
+    expect(readSavedHistoryLines('hermes-cli', historySessionId)).toEqual([])
+    expect(persistedHistory(instance)).toEqual([
       { role: 'user', kind: 'standard', content: 'canonical user prompt' },
       { role: 'assistant', kind: 'standard', content: 'canonical assistant reply' },
       { role: 'assistant', kind: 'tool', content: 'canonical tool output' },
@@ -187,12 +204,94 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     instance.getState()
 
     expect(instance.historyWriter.appendNewMessages).not.toHaveBeenCalled()
-    expect(readSavedHistoryLines('claude-cli', historySessionId)).toEqual([
+    expect(readSavedHistoryLines('claude-cli', historySessionId)).toEqual([])
+    expect(persistedHistory(instance)).toEqual([
       { role: 'system', kind: 'session_start', content: workspace },
       { role: 'user', kind: 'standard', content: 'native claude user prompt' },
       { role: 'assistant', kind: 'tool', content: 'Bash: pwd' },
       { role: 'assistant', kind: 'tool', content: '/workspaces/adhdev' },
       { role: 'assistant', kind: 'standard', content: 'native claude assistant reply' },
+    ])
+  })
+
+  it('prefers canonical ~/.codex rollout history over parsed synthetic terminal chatter for codex saved-history', async () => {
+    const workspace = '/workspaces/adhdev'
+    const historySessionId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
+    writeCanonicalCodexSession(historySessionId, [
+      {
+        type: 'session_meta',
+        timestamp: '2026-04-28T15:27:24.859Z',
+        payload: { id: historySessionId, cwd: workspace, timestamp: '2026-04-28T15:27:24.859Z' },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-28T15:27:25.000Z',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'native codex user prompt' }] },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-28T15:27:26.000Z',
+        payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ cmd: 'pwd' }), call_id: 'call_pwd' },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-28T15:27:27.000Z',
+        payload: { type: 'function_call_output', call_id: 'call_pwd', output: '/workspaces/adhdev' },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-28T15:27:28.000Z',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'native codex assistant reply' }] },
+      },
+    ])
+
+    const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
+    const instance = new CliProviderInstance({
+      type: 'codex-cli',
+      name: 'Codex CLI',
+      category: 'cli',
+      spawn: { command: 'codex', args: [] },
+      canonicalHistory: {
+        format: 'codex-jsonl',
+        watchPath: '~/.codex/sessions/**/*.jsonl',
+      },
+    } as any, workspace, [], 'runtime-1', undefined, {
+      providerSessionId: historySessionId,
+      launchMode: 'resume',
+    }) as any
+
+    instance.historyWriter = {
+      appendNewMessages: vi.fn(),
+      compactHistorySession: vi.fn(),
+      seedSessionHistory: vi.fn(),
+      appendSystemMarker: vi.fn(),
+      promoteHistorySession: vi.fn(),
+      writeSessionStart: vi.fn(),
+    }
+    instance.adapter = {
+      getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        title: 'Codex CLI',
+        messages: [
+          { role: 'user', kind: 'standard', content: 'synthetic codex user', receivedAt: 1000 },
+          { role: 'assistant', kind: 'tool', senderName: 'Tool', content: 'synthetic codex tool', receivedAt: 2000 },
+        ],
+      }),
+      getRuntimeMetadata: () => null,
+      seedCommittedMessages: vi.fn(),
+    }
+
+    instance.getState()
+
+    expect(instance.historyWriter.appendNewMessages).not.toHaveBeenCalled()
+    expect(readSavedHistoryLines('codex-cli', historySessionId)).toEqual([])
+    expect(persistedHistory(instance)).toEqual([
+      { role: 'system', kind: 'session_start', content: workspace },
+      { role: 'user', kind: 'standard', content: 'native codex user prompt' },
+      { role: 'assistant', kind: 'tool', content: 'exec_command: pwd' },
+      { role: 'assistant', kind: 'tool', content: '/workspaces/adhdev' },
+      { role: 'assistant', kind: 'standard', content: 'native codex assistant reply' },
     ])
   })
 

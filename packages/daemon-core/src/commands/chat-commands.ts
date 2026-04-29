@@ -9,7 +9,7 @@ import { flattenContent, normalizeInputEnvelope, type InputEnvelope, type Provid
 import { assertProviderSupportsDeclaredInput, assertTextOnlyInput } from '../providers/provider-input-support.js';
 import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
 import type { ProviderInstance } from '../providers/provider-instance.js';
-import { readChatHistory } from '../config/chat-history.js';
+import { readProviderChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import { recordDebugTrace } from '../logging/debug-trace.js';
 import { buildChatMessageSignature } from '../chat/chat-signatures.js';
@@ -564,7 +564,20 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
             const visibleCount = Array.isArray(status?.messages) ? status.messages.length : 0;
             if (visibleCount > excludeRecentCount) excludeRecentCount = visibleCount;
         }
-        const result = readChatHistory(agentStr, offset || 0, limit || 30, historySessionId, excludeRecentCount);
+        const workspace = typeof args?.workspace === 'string'
+            ? args.workspace
+            : typeof (h.currentSession as any)?.workspace === 'string'
+                ? (h.currentSession as any).workspace
+                : undefined;
+        const result = readProviderChatHistory(agentStr, {
+            canonicalHistory: provider?.canonicalHistory,
+            historySessionId,
+            workspace,
+            offset: offset || 0,
+            limit: limit || 30,
+            excludeRecentCount,
+            historyBehavior: provider?.historyBehavior,
+        });
         return { success: true, ...result, agent: agentStr };
     } catch (e: any) {
         return { success: false, error: e.message };
@@ -595,8 +608,11 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ? parsedStatus as Record<string, any>
                 : null;
             const adapterStatus = adapter.getStatus();
+            const parsedIsProviderAuthoritative = parsedRecord?.transcriptAuthority === 'provider'
+                || parsedRecord?.coverage === 'full';
             const shouldPreferAdapterMessages =
-                Array.isArray(adapterStatus.messages)
+                !parsedIsProviderAuthoritative
+                && Array.isArray(adapterStatus.messages)
                 && adapterStatus.messages.length > 0
                 && Array.isArray(parsedRecord?.messages)
                 && adapterStatus.messages.length > parsedRecord.messages.length;
@@ -619,6 +635,12 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
             const providerSessionId = typeof parsedRecord?.providerSessionId === 'string'
                 ? parsedRecord.providerSessionId
                 : undefined;
+            const transcriptAuthority = parsedRecord?.transcriptAuthority === 'provider' || parsedRecord?.transcriptAuthority === 'daemon'
+                ? parsedRecord.transcriptAuthority
+                : undefined;
+            const coverage = parsedRecord?.coverage === 'full' || parsedRecord?.coverage === 'tail' || parsedRecord?.coverage === 'current-turn'
+                ? parsedRecord.coverage
+                : undefined;
             if (status) {
                 LOG.debug('Command', `[read_chat] cli-like resolved provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord?.status || '')} shouldPreferAdapterMessages=${String(shouldPreferAdapterMessages)} adapterMsgCount=${Array.isArray(adapterStatus.messages) ? adapterStatus.messages.length : 0} parsedMsgCount=${Array.isArray(parsedRecord?.messages) ? parsedRecord.messages.length : 0} returnedMsgCount=${Array.isArray((status as any).messages) ? (status as any).messages.length : 0}`);
                 return buildReadChatCommandResult({
@@ -638,6 +660,8 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     },
                     ...(title ? { title } : {}),
                     ...(providerSessionId ? { providerSessionId } : {}),
+                    ...(transcriptAuthority ? { transcriptAuthority } : {}),
+                    ...(coverage ? { coverage } : {}),
                 }, args);
             }
         }

@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const readChatHistoryMock = vi.fn()
+const readProviderChatHistoryMock = vi.fn()
 
 vi.mock('../../src/config/chat-history.js', () => ({
-  readChatHistory: readChatHistoryMock,
+  readProviderChatHistory: readProviderChatHistoryMock,
 }))
 
 describe('handleChatHistory', () => {
   it('excludes the live transcript tail when paging older CLI history', async () => {
     const { handleChatHistory } = await import('../../src/commands/chat-commands.js')
 
-    readChatHistoryMock.mockReturnValue({
+    readProviderChatHistoryMock.mockReturnValue({
       messages: [{ role: 'user', content: 'older message' }],
       hasMore: true,
     })
@@ -38,7 +38,15 @@ describe('handleChatHistory', () => {
       limit: 30,
     })
 
-    expect(readChatHistoryMock).toHaveBeenCalledWith('hermes-cli', 0, 30, 'history-1', 50)
+    expect(readProviderChatHistoryMock).toHaveBeenCalledWith('hermes-cli', {
+      canonicalHistory: undefined,
+      historySessionId: 'history-1',
+      workspace: undefined,
+      offset: 0,
+      limit: 30,
+      excludeRecentCount: 50,
+      historyBehavior: undefined,
+    })
     expect(result).toMatchObject({
       success: true,
       messages: [{ role: 'user', content: 'older message' }],

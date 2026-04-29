@@ -36,7 +36,10 @@ export interface ReadChatResult {
   controlValues?: Record<string, string | number | boolean>;
   /** Flexible always-visible metadata for compact/live surfaces. */
   summaryMetadata?: ProviderSummaryMetadata;
-/** Provider-driven UI effects derived from chat state */
+  /** Provider-owned transcript authority/coverage hints for daemon/dashboard sync. */
+  transcriptAuthority?: 'provider' | 'daemon';
+  coverage?: 'full' | 'tail' | 'current-turn';
+  /** Provider-driven UI effects derived from chat state */
   effects?: ProviderEffect[];
 }
 
@@ -609,13 +612,23 @@ export interface ProviderCanonicalHistoryConfig {
    * Native history format.
    * - 'hermes-json': single JSON file per session (~/.hermes/sessions/session_{{sessionId}}.json)
    * - 'claude-jsonl': JSONL transcript under ~/.claude/projects/
+   * - 'codex-jsonl': rollout JSONL transcript under ~/.codex/sessions/YYYY/MM/DD/
    */
-  format: 'hermes-json' | 'claude-jsonl';
+  format: 'hermes-json' | 'claude-jsonl' | 'codex-jsonl';
   /**
    * Path to the native history file. Supports ~ and {{sessionId}} placeholder.
    * e.g. "~/.hermes/sessions/session_{{sessionId}}.json"
    */
   watchPath: string;
+  /**
+   * How ADHDev should use native history.
+   * - 'native-source': provider-native files are canonical; ADHDev reads them directly and keeps only in-memory/thin projections.
+   * - 'materialized-mirror': transitional compatibility mode; native files are rewritten into ~/.adhdev/history before read/list.
+   * - 'disabled': ignore native history and use ADHDev mirror only.
+   *
+   * Omitted mode defaults to 'native-source'.
+   */
+  mode?: 'native-source' | 'materialized-mirror' | 'disabled';
 }
 
 /**

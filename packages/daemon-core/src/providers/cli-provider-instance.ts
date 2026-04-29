@@ -17,7 +17,7 @@ import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
-import { ChatHistoryWriter, readChatHistory, rebuildClaudeSavedHistoryFromNativeProject, rebuildHermesSavedHistoryFromCanonicalSession } from '../config/chat-history.js';
+import { ChatHistoryWriter, isNativeSourceCanonicalHistory, readChatHistory, readProviderChatHistory, rebuildClaudeSavedHistoryFromNativeProject, rebuildCodexSavedHistoryFromNativeSession, rebuildHermesSavedHistoryFromCanonicalSession, resolveCodexSessionTranscriptPath } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
@@ -184,6 +184,8 @@ export class CliProviderInstance implements ProviderInstance {
     private lastCanonicalHermesWatchPath: string | undefined = undefined;
     private lastCanonicalClaudeRebuildMtimeMs = 0;
     private lastCanonicalClaudeCheckAt = 0;
+    private lastCanonicalCodexRebuildMtimeMs = 0;
+    private lastCanonicalCodexCheckAt = 0;
     private cachedSqliteDb: {
         prepare(sql: string): { get(...values: Array<string | number>): unknown };
         close(): void;
@@ -1047,6 +1049,26 @@ export class CliProviderInstance implements ProviderInstance {
         const canonicalHistory = this.provider.canonicalHistory;
         if (!canonicalHistory) return false;
 
+        if (isNativeSourceCanonicalHistory(canonicalHistory)) {
+            const restoredHistory = readProviderChatHistory(this.type, {
+                canonicalHistory,
+                historySessionId: this.providerSessionId,
+                workspace: this.workingDir,
+                offset: 0,
+                limit: Number.MAX_SAFE_INTEGER,
+                historyBehavior: this.provider.historyBehavior,
+            });
+            if (restoredHistory.source !== 'provider-native') return false;
+            this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
+                role: message.role,
+                content: message.content,
+                kind: message.kind,
+                senderName: message.senderName,
+                receivedAt: message.receivedAt,
+            }));
+            return true;
+        }
+
         try {
             let rebuilt = false;
             if (canonicalHistory.format === 'hermes-json') {
@@ -1085,6 +1107,22 @@ export class CliProviderInstance implements ProviderInstance {
                 if (transcriptMtime > 0 && transcriptMtime <= this.lastCanonicalClaudeRebuildMtimeMs) return true;
                 rebuilt = rebuildClaudeSavedHistoryFromNativeProject(this.providerSessionId, this.workingDir);
                 if (rebuilt) this.lastCanonicalClaudeRebuildMtimeMs = transcriptMtime || Date.now();
+            } else if (canonicalHistory.format === 'codex-jsonl') {
+                // Codex stores rollout transcripts under ~/.codex/sessions/YYYY/MM/DD/.
+                // Resolving requires a recursive lookup, so throttle the probe like Claude.
+                const now = Date.now();
+                if (now - this.lastCanonicalCodexCheckAt < 2_000 && this.lastCanonicalCodexRebuildMtimeMs !== 0) {
+                    return true;
+                }
+                this.lastCanonicalCodexCheckAt = now;
+                const transcriptFile = resolveCodexSessionTranscriptPath(this.providerSessionId, this.workingDir);
+                let transcriptMtime = 0;
+                if (transcriptFile) {
+                    try { transcriptMtime = fs.statSync(transcriptFile).mtimeMs; } catch { /* not found yet */ }
+                }
+                if (transcriptMtime > 0 && transcriptMtime <= this.lastCanonicalCodexRebuildMtimeMs) return true;
+                rebuilt = rebuildCodexSavedHistoryFromNativeSession(this.providerSessionId, this.workingDir);
+                if (rebuilt) this.lastCanonicalCodexRebuildMtimeMs = transcriptMtime || Date.now();
             }
             if (!rebuilt) return false;
             const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId, 0, this.provider.historyBehavior);
@@ -1104,8 +1142,19 @@ export class CliProviderInstance implements ProviderInstance {
     private restorePersistedHistoryFromCurrentSession(): void {
         if (!this.providerSessionId) return;
         this.syncCanonicalSavedHistoryIfNeeded();
-        this.historyWriter.compactHistorySession(this.type, this.providerSessionId, this.provider.historyBehavior);
-        const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId, 0, this.provider.historyBehavior);
+        const restoredHistory = isNativeSourceCanonicalHistory(this.provider.canonicalHistory)
+            ? readProviderChatHistory(this.type, {
+                canonicalHistory: this.provider.canonicalHistory,
+                historySessionId: this.providerSessionId,
+                workspace: this.workingDir,
+                offset: 0,
+                limit: Number.MAX_SAFE_INTEGER,
+                historyBehavior: this.provider.historyBehavior,
+            })
+            : (() => {
+                this.historyWriter.compactHistorySession(this.type, this.providerSessionId!, this.provider.historyBehavior);
+                return readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId, 0, this.provider.historyBehavior);
+            })();
         this.historyWriter.seedSessionHistory(
             this.type,
             restoredHistory.messages,

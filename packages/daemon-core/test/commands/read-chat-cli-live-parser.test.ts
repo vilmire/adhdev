@@ -99,6 +99,68 @@ describe('handleReadChat for CLI adapters', () => {
     ])
   })
 
+  it('does not replace a provider-authoritative parsed transcript with longer adapter history', async () => {
+    const getScriptParsedStatus = vi.fn(() => ({
+      status: 'generating',
+      messages: [
+        { role: 'user', content: 'current prompt', providerUnitKey: 'provider:user:current' },
+        { role: 'assistant', content: 'canonical current answer', providerUnitKey: 'provider:assistant:current' },
+      ],
+      activeModal: null,
+      title: 'Hermes Agent',
+      transcriptAuthority: 'provider',
+      coverage: 'full',
+    }))
+
+    const adapter = {
+      cliType: 'hermes-cli',
+      cliName: 'Hermes Agent',
+      workingDir: '/tmp/project',
+      spawn: async () => {},
+      sendMessage: async () => {},
+      getStatus: () => ({
+        status: 'generating',
+        messages: [
+          { role: 'user', content: 'stale prompt' },
+          { role: 'assistant', content: 'stale answer' },
+          { role: 'assistant', content: 'stale duplicate that used to win by count' },
+        ],
+        activeModal: null,
+      }),
+      getScriptParsedStatus,
+      getPartialResponse: () => '',
+      shutdown: () => {},
+      cancel: () => {},
+      isProcessing: () => true,
+      isReady: () => true,
+      setOnStatusChange: () => {},
+    }
+
+    const result = await handleReadChat({
+      getCdp: () => null,
+      getProvider: () => ({ type: 'hermes-cli', category: 'cli' }),
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      getCliAdapter: () => adapter as any,
+      currentManagerKey: undefined,
+      currentIdeType: undefined,
+      currentProviderType: undefined,
+      currentSession: undefined,
+      agentStream: null,
+      ctx: {},
+      historyWriter: { appendNewMessages: () => {} },
+    } as any, { agentType: 'hermes-cli' })
+
+    expect(result.success).toBe(true)
+    expect(result.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'current prompt', providerUnitKey: 'provider:user:current' }),
+      expect.objectContaining({ role: 'assistant', content: 'canonical current answer', providerUnitKey: 'provider:assistant:current' }),
+    ])
+    expect((result as any).debugReadChat?.shouldPreferAdapterMessages).toBe(false)
+    expect((result as any).transcriptAuthority).toBe('provider')
+    expect((result as any).coverage).toBe('full')
+  })
+
   it('maps internal startup CLI status to a read_chat-compatible status so restored history can hydrate immediately', async () => {
     const adapter = {
       cliType: 'hermes-cli',

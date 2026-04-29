@@ -31,6 +31,8 @@ export interface ParsedSession {
     messages: any[];
     modal: { message: string; buttons: string[] } | null;
     parsedStatus: string | null;
+    transcriptAuthority?: 'provider' | 'daemon';
+    coverage?: 'full' | 'tail' | 'current-turn';
 }
 
 export interface CliScripts {
@@ -122,6 +124,10 @@ export interface CliProviderModule {
     submitStrategy?: 'wait_for_echo' | 'immediate';
     /** Allow sending another prompt while the CLI is still generating so users can intervene mid-turn. */
     allowInputDuringGeneration?: boolean;
+    /** When provider-owned, daemon treats provider parser output as canonical transcript authority. */
+    transcriptAuthority?: 'provider' | 'daemon';
+    /** Full context lets provider-owned parsers canonicalize retained history instead of daemon prefix stitching. */
+    transcriptContext?: 'full' | 'tail';
     scripts?: CliScripts;
     spawn: {
         command: string;

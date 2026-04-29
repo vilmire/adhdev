@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { appendBoundedText, ProviderCliAdapter, sanitizeCliStandardMessageContent } from '../../src/cli-adapters/provider-cli-adapter.js'
+import { appendBoundedText, ProviderCliAdapter, sanitizeCliStandardMessageContent, trimLastAssistantEchoForCliMessages } from '../../src/cli-adapters/provider-cli-adapter.js'
 import { buildCliParseInput, normalizeCliParsedMessages } from '../../src/cli-adapters/provider-cli-parse.js'
 import { normalizeComparableMessageContent } from '../../src/cli-adapters/provider-cli-shared.js'
 import { LOG } from '../../src/logging/logger.js'
@@ -69,6 +69,21 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     expect(normalized[1]?.content).toBe(reflowed)
   })
 
+  it('removes a prompt-echo assistant row when echo trimming empties the last standard bubble', () => {
+    const messages: any[] = [
+      { role: 'user', kind: 'standard', content: 'Run self-test and include MARKER' },
+      { role: 'assistant', kind: 'terminal', senderName: 'Terminal', content: '$ python3 game.py --self-test\nMARKER' },
+      { role: 'assistant', kind: 'standard', content: 'Run self-test and include MARKER' },
+    ]
+
+    trimLastAssistantEchoForCliMessages(messages, 'Run self-test and include MARKER')
+
+    expect(messages).toEqual([
+      { role: 'user', kind: 'standard', content: 'Run self-test and include MARKER' },
+      { role: 'assistant', kind: 'terminal', senderName: 'Terminal', content: '$ python3 game.py --self-test\nMARKER' },
+    ])
+  })
+
   it('preserves provider-owned bubble identity when normalizing CLI parsed messages', () => {
     const normalized = normalizeCliParsedMessages([
       {
@@ -110,6 +125,54 @@ describe('ProviderCliAdapter message fallback shaping', () => {
       bubbleState: 'streaming',
       _turnKey: 'turn-assistant-1',
     })
+  })
+
+  it('uses full committed history as provider parse context when transcript ownership is provider-owned', () => {
+    const adapter = new ProviderCliAdapter({
+      type: 'provider-owned-cli',
+      name: 'Provider Owned CLI',
+      category: 'cli',
+      binary: 'provider-owned-cli',
+      transcriptAuthority: 'provider',
+      transcriptContext: 'full',
+      spawn: {
+        command: 'provider-owned-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {},
+    } as any, '/tmp/project', [])
+    const messages = Array.from({ length: 125 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `message ${index}`,
+    }))
+
+    expect((adapter as any).selectParseBaseMessages(messages)).toHaveLength(125)
+  })
+
+  it('tails committed history by default for legacy provider parse context', () => {
+    const adapter = new ProviderCliAdapter({
+      type: 'legacy-cli',
+      name: 'Legacy CLI',
+      category: 'cli',
+      binary: 'legacy-cli',
+      spawn: {
+        command: 'legacy-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {},
+    } as any, '/tmp/project', [])
+    const messages = Array.from({ length: 125 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `message ${index}`,
+    }))
+
+    const selected = (adapter as any).selectParseBaseMessages(messages)
+    expect(selected).toHaveLength(100)
+    expect(selected[0]?.content).toBe('message 25')
   })
 
   it('logs unresolved missing CLI scripts as info instead of warning noise', () => {
