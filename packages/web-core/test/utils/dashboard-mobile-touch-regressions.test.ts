@@ -27,13 +27,14 @@ describe('dashboard mobile/touch regressions', () => {
     expect(css).toContain('text-overflow: clip;')
   })
 
-  it('keeps mobile inbox reconnect empty-state copy compact', () => {
+  it('keeps mobile inbox reconnect empty-state copy compact and single-owned', () => {
     const source = readSource('components/dashboard/DashboardMobileChatInbox.tsx')
 
     expect(source).toContain("'Reconnecting'")
     expect(source).toContain("'Restoring the server connection…'")
     expect(source).not.toContain('Connecting to server')
     expect(source).not.toContain('Establishing connection to the server')
+    expect(source).not.toContain('MobileSpinner label=')
   })
 
   it('does not render the top-right timestamp when the Done chip owns that corner', () => {

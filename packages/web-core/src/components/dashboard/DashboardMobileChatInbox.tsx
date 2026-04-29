@@ -173,18 +173,13 @@ function DashboardMobileChatItem({
     )
 }
 
-function MobileSpinner({ size = 32, label }: { size?: number; label?: string }) {
+function MobileSpinner({ size = 32 }: { size?: number }) {
     return (
         <div className="flex flex-col items-center gap-2.5">
             <div 
                 className="rounded-full animate-spin border-[2.5px] border-accent-primary/20 border-t-accent-primary-light"
                 style={{ width: size, height: size }}
             />
-            {label && (
-                <div className="text-xs font-semibold text-accent-primary-light tracking-tight">
-                    {label}
-                </div>
-            )}
         </div>
     )
 }
@@ -247,7 +242,7 @@ export default function DashboardMobileChatInbox({
                     <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
                         {isDisconnected ? (
                             <MobileEmptyHero
-                                icon={<MobileSpinner label="Reconnecting…" />}
+                                icon={<MobileSpinner />}
                                 title={
                                     wsStatus === 'offline'
                                         ? 'Network offline'
