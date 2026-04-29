@@ -17,7 +17,7 @@ import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
 import type { PtyRuntimeMetadata, PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import { StatusMonitor } from './status-monitor.js';
-import { ChatHistoryWriter, isNativeSourceCanonicalHistory, readChatHistory, readProviderChatHistory, rebuildClaudeSavedHistoryFromNativeProject, rebuildCodexSavedHistoryFromNativeSession, rebuildHermesSavedHistoryFromCanonicalSession, resolveCodexSessionTranscriptPath } from '../config/chat-history.js';
+import { ChatHistoryWriter, isNativeSourceCanonicalHistory, materializeProviderNativeHistory, readChatHistory, readProviderChatHistory } from '../config/chat-history.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
 import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from './control-effects.js';
@@ -179,13 +179,8 @@ export class CliProviderInstance implements ProviderInstance {
     private historyWriter: ChatHistoryWriter;
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     private lastPersistedHistoryMessages: PersistableCliHistoryMessage[] = [];
-    private lastCanonicalHermesSyncMtimeMs = 0;
-    private lastCanonicalHermesExistCheckAt = 0;
-    private lastCanonicalHermesWatchPath: string | undefined = undefined;
-    private lastCanonicalClaudeRebuildMtimeMs = 0;
-    private lastCanonicalClaudeCheckAt = 0;
-    private lastCanonicalCodexRebuildMtimeMs = 0;
-    private lastCanonicalCodexCheckAt = 0;
+    private lastNativeSourceCanonicalCheckAt = 0;
+    private lastNativeSourceCanonicalCacheKey: string | undefined = undefined;
     private cachedSqliteDb: {
         prepare(sql: string): { get(...values: Array<string | number>): unknown };
         close(): void;
@@ -1050,6 +1045,14 @@ export class CliProviderInstance implements ProviderInstance {
         if (!canonicalHistory) return false;
 
         if (isNativeSourceCanonicalHistory(canonicalHistory)) {
+            const cacheKey = [this.type, this.providerSessionId, this.workingDir].join('\0');
+            const now = Date.now();
+            if (cacheKey === this.lastNativeSourceCanonicalCacheKey && now - this.lastNativeSourceCanonicalCheckAt < 2_000) {
+                return true;
+            }
+            this.lastNativeSourceCanonicalCacheKey = cacheKey;
+            this.lastNativeSourceCanonicalCheckAt = now;
+
             const restoredHistory = readProviderChatHistory(this.type, {
                 canonicalHistory,
                 historySessionId: this.providerSessionId,
@@ -1058,73 +1061,30 @@ export class CliProviderInstance implements ProviderInstance {
                 limit: Number.MAX_SAFE_INTEGER,
                 historyBehavior: this.provider.historyBehavior,
             });
-            if (restoredHistory.source !== 'provider-native') return false;
-            this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
-                role: message.role,
-                content: message.content,
-                kind: message.kind,
-                senderName: message.senderName,
-                receivedAt: message.receivedAt,
-            }));
+            if (restoredHistory.source === 'provider-native') {
+                this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
+                    role: message.role,
+                    content: message.content,
+                    kind: message.kind,
+                    senderName: message.senderName,
+                    receivedAt: message.receivedAt,
+                }));
+            }
             return true;
         }
 
         try {
-            let rebuilt = false;
-            if (canonicalHistory.format === 'hermes-json') {
-                const watchPath = canonicalHistory.watchPath
-                    .replace(/^~/, os.homedir())
-                    .replace('{{sessionId}}', this.providerSessionId);
-                // Throttle existsSync: check file existence at most once per 2s
-                const now = Date.now();
-                if (watchPath !== this.lastCanonicalHermesWatchPath || now - this.lastCanonicalHermesExistCheckAt >= 2_000) {
-                    this.lastCanonicalHermesWatchPath = watchPath;
-                    this.lastCanonicalHermesExistCheckAt = now;
-                    if (!fs.existsSync(watchPath)) return false;
-                } else if (this.lastCanonicalHermesSyncMtimeMs === 0) {
-                    // First check: file existence not yet confirmed, must verify
-                    if (!fs.existsSync(watchPath)) return false;
-                }
-                const stat = fs.statSync(watchPath);
-                if (stat.mtimeMs <= this.lastCanonicalHermesSyncMtimeMs) return true;
-                rebuilt = rebuildHermesSavedHistoryFromCanonicalSession(this.providerSessionId);
-                if (rebuilt) this.lastCanonicalHermesSyncMtimeMs = stat.mtimeMs;
-            } else if (canonicalHistory.format === 'claude-jsonl') {
-                // Throttle: only check for changes at most once per 2s
-                const now = Date.now();
-                if (now - this.lastCanonicalClaudeCheckAt < 2_000 && this.lastCanonicalClaudeRebuildMtimeMs !== 0) {
-                    return true;
-                }
-                this.lastCanonicalClaudeCheckAt = now;
-                // Only rebuild if the transcript file has changed since last rebuild
-                const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
-                const workspaceSegment = typeof this.workingDir === 'string'
-                    ? this.workingDir.replace(/[\\/]/g, '-').replace(/^-+/, '')
-                    : '';
-                const transcriptFile = path.join(claudeProjectsDir, workspaceSegment, `${this.providerSessionId}.jsonl`);
-                let transcriptMtime = 0;
-                try { transcriptMtime = fs.statSync(transcriptFile).mtimeMs; } catch { /* not found yet */ }
-                if (transcriptMtime > 0 && transcriptMtime <= this.lastCanonicalClaudeRebuildMtimeMs) return true;
-                rebuilt = rebuildClaudeSavedHistoryFromNativeProject(this.providerSessionId, this.workingDir);
-                if (rebuilt) this.lastCanonicalClaudeRebuildMtimeMs = transcriptMtime || Date.now();
-            } else if (canonicalHistory.format === 'codex-jsonl') {
-                // Codex stores rollout transcripts under ~/.codex/sessions/YYYY/MM/DD/.
-                // Resolving requires a recursive lookup, so throttle the probe like Claude.
-                const now = Date.now();
-                if (now - this.lastCanonicalCodexCheckAt < 2_000 && this.lastCanonicalCodexRebuildMtimeMs !== 0) {
-                    return true;
-                }
-                this.lastCanonicalCodexCheckAt = now;
-                const transcriptFile = resolveCodexSessionTranscriptPath(this.providerSessionId, this.workingDir);
-                let transcriptMtime = 0;
-                if (transcriptFile) {
-                    try { transcriptMtime = fs.statSync(transcriptFile).mtimeMs; } catch { /* not found yet */ }
-                }
-                if (transcriptMtime > 0 && transcriptMtime <= this.lastCanonicalCodexRebuildMtimeMs) return true;
-                rebuilt = rebuildCodexSavedHistoryFromNativeSession(this.providerSessionId, this.workingDir);
-                if (rebuilt) this.lastCanonicalCodexRebuildMtimeMs = transcriptMtime || Date.now();
+            const cacheKey = [this.type, this.providerSessionId, this.workingDir, canonicalHistory.mode || 'materialized-mirror'].join('\0');
+            const now = Date.now();
+            if (cacheKey === this.lastNativeSourceCanonicalCacheKey && now - this.lastNativeSourceCanonicalCheckAt < 2_000) {
+                return true;
             }
-            if (!rebuilt) return false;
+            this.lastNativeSourceCanonicalCacheKey = cacheKey;
+            this.lastNativeSourceCanonicalCheckAt = now;
+
+            if (!materializeProviderNativeHistory(this.type, canonicalHistory, this.providerSessionId, this.workingDir)) {
+                return false;
+            }
             const restoredHistory = readChatHistory(this.type, 0, Number.MAX_SAFE_INTEGER, this.providerSessionId, 0, this.provider.historyBehavior);
             this.lastPersistedHistoryMessages = restoredHistory.messages.map((message) => ({
                 role: message.role,

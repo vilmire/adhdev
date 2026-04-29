@@ -62,6 +62,14 @@ function persistedHistory(instance: any): Array<{ role: string; kind?: string; c
 }
 
 describe('CliProviderInstance canonical Hermes saved-history sync', () => {
+  it('keeps provider-native history format dispatch out of the live CLI lifecycle shell', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src', 'providers', 'cli-provider-instance.ts'), 'utf-8')
+
+    expect(source).not.toMatch(/canonicalHistory\.format\s*===/)
+    expect(source).not.toMatch(/rebuild(?:Hermes|Claude|Codex)SavedHistory/)
+    expect(source).not.toMatch(/resolveCodexSessionTranscriptPath/)
+  })
+
   beforeEach(() => {
     mockHomeDir = fs.mkdtempSync(path.join(process.cwd(), 'tmp-cli-provider-canonical-history-'))
     vi.resetModules()
@@ -293,6 +301,134 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
       { role: 'assistant', kind: 'tool', content: '/workspaces/adhdev' },
       { role: 'assistant', kind: 'standard', content: 'native codex assistant reply' },
     ])
+  })
+
+  it('throttles native-source history reads on repeated status ticks', async () => {
+    const workspace = '/workspaces/adhdev'
+    const historySessionId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
+    writeCanonicalCodexSession(historySessionId, [
+      {
+        type: 'session_meta',
+        timestamp: '2026-04-28T15:27:24.859Z',
+        payload: { id: historySessionId, cwd: workspace, timestamp: '2026-04-28T15:27:24.859Z' },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-28T15:27:25.000Z',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'native codex throttled user' }] },
+      },
+    ])
+    const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
+    const instance = new CliProviderInstance({
+      type: 'codex-cli',
+      name: 'Codex CLI',
+      category: 'cli',
+      spawn: { command: 'codex', args: [] },
+      canonicalHistory: {
+        format: 'codex-jsonl',
+        watchPath: '~/.codex/sessions/**/*.jsonl',
+        mode: 'native-source',
+      },
+    } as any, workspace, [], 'runtime-1', undefined, {
+      providerSessionId: historySessionId,
+      launchMode: 'resume',
+    }) as any
+
+    instance.historyWriter = {
+      appendNewMessages: vi.fn(),
+      compactHistorySession: vi.fn(),
+      seedSessionHistory: vi.fn(),
+      appendSystemMarker: vi.fn(),
+      promoteHistorySession: vi.fn(),
+      writeSessionStart: vi.fn(),
+    }
+    instance.adapter = {
+      getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        title: 'Codex CLI',
+        messages: [{ role: 'user', kind: 'standard', content: 'synthetic codex user', receivedAt: 1000 }],
+      }),
+      getRuntimeMetadata: () => null,
+      seedCommittedMessages: vi.fn(),
+    }
+
+    instance.getState()
+    expect(persistedHistory(instance)).toEqual([
+      { role: 'system', kind: 'session_start', content: workspace },
+      { role: 'user', kind: 'standard', content: 'native codex throttled user' },
+    ])
+
+    writeCanonicalCodexSession(historySessionId, [
+      {
+        type: 'session_meta',
+        timestamp: '2026-04-28T15:27:24.859Z',
+        payload: { id: historySessionId, cwd: workspace, timestamp: '2026-04-28T15:27:24.859Z' },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-28T15:27:26.000Z',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'native codex updated user' }] },
+      },
+    ])
+    instance.getState()
+    expect(persistedHistory(instance)).toEqual([
+      { role: 'system', kind: 'session_start', content: workspace },
+      { role: 'user', kind: 'standard', content: 'native codex throttled user' },
+    ])
+
+    instance.lastNativeSourceCanonicalCheckAt = 0
+    instance.getState()
+    expect(persistedHistory(instance)).toEqual([
+      { role: 'system', kind: 'session_start', content: workspace },
+      { role: 'user', kind: 'standard', content: 'native codex updated user' },
+    ])
+    expect(instance.historyWriter.appendNewMessages).not.toHaveBeenCalled()
+  })
+
+  it('does not materialize synthetic mirror history when native-source history is temporarily unavailable', async () => {
+    const workspace = '/workspaces/adhdev'
+    const historySessionId = '019dd4b3-bea7-74a0-a5ca-e894370e9c94'
+
+    const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
+    const instance = new CliProviderInstance({
+      type: 'codex-cli',
+      name: 'Codex CLI',
+      category: 'cli',
+      spawn: { command: 'codex', args: [] },
+      canonicalHistory: {
+        format: 'codex-jsonl',
+        watchPath: '~/.codex/sessions/**/*.jsonl',
+        mode: 'native-source',
+      },
+    } as any, workspace, [], 'runtime-1', undefined, {
+      providerSessionId: historySessionId,
+      launchMode: 'resume',
+    }) as any
+
+    instance.historyWriter = {
+      appendNewMessages: vi.fn(),
+      compactHistorySession: vi.fn(),
+      seedSessionHistory: vi.fn(),
+      appendSystemMarker: vi.fn(),
+      promoteHistorySession: vi.fn(),
+      writeSessionStart: vi.fn(),
+    }
+    instance.adapter = {
+      getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        title: 'Codex CLI',
+        messages: [{ role: 'user', kind: 'standard', content: 'synthetic codex user', receivedAt: 1000 }],
+      }),
+      getRuntimeMetadata: () => null,
+      seedCommittedMessages: vi.fn(),
+    }
+
+    instance.getState()
+
+    expect(instance.historyWriter.appendNewMessages).not.toHaveBeenCalled()
+    expect(readSavedHistoryLines('codex-cli', historySessionId)).toEqual([])
   })
 
   it('seeds the full canonical Hermes transcript instead of truncating resume history to 200 messages', async () => {

@@ -419,13 +419,19 @@ describe('chat-history config helpers', () => {
       limit: 20,
     }).messages.map(message => message.content)).toEqual([workspace, 'native claude direct user', 'native claude direct assistant'])
 
-    expect(readProviderChatHistory('codex-cli', {
+    const codexReadResult = readProviderChatHistory('codex-cli', {
       canonicalHistory: { format: 'codex-jsonl', watchPath: '~/.codex/sessions/**/*.jsonl', mode: 'native-source' },
       historySessionId: codexSessionId,
       workspace,
       offset: 0,
       limit: 20,
-    }).messages.map(message => message.content)).toEqual([workspace, 'native codex direct user', 'native codex direct assistant'])
+    })
+    expect(codexReadResult.messages.map(message => message.content)).toEqual([workspace, 'native codex direct user', 'native codex direct assistant'])
+    expect(codexReadResult).toMatchObject({
+      source: 'provider-native',
+      sourcePath: expect.stringContaining(codexSessionId),
+      sourceMtimeMs: expect.any(Number),
+    })
 
     expect(listProviderHistorySessions('codex-cli', {
       canonicalHistory: { format: 'codex-jsonl', watchPath: '~/.codex/sessions/**/*.jsonl', mode: 'native-source' },
@@ -441,6 +447,57 @@ describe('chat-history config helpers', () => {
     expect(fs.existsSync(path.join(mockHomeDir, '.adhdev', 'history', 'hermes-cli'))).toBe(false)
     expect(fs.existsSync(path.join(mockHomeDir, '.adhdev', 'history', 'claude-cli'))).toBe(false)
     expect(fs.existsSync(path.join(mockHomeDir, '.adhdev', 'history', 'codex-cli'))).toBe(false)
+  })
+
+  it('builds provider-native summaries from each listed source path without re-resolving duplicate session ids', async () => {
+    const workspace = '/workspaces/adhdev'
+    const codexSessionId = '119dd4b3-bea7-74a0-a5ca-e894370e9c94'
+    const olderPath = writeCanonicalCodexSession(codexSessionId, [
+      {
+        type: 'session_meta',
+        timestamp: '2026-04-28T03:00:00.000Z',
+        payload: { id: codexSessionId, cwd: workspace, timestamp: '2026-04-28T03:00:00.000Z' },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-28T03:00:01.000Z',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'older duplicate prompt' }] },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-28T03:00:02.000Z',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'older duplicate answer' }] },
+      },
+    ], ['2026', '04', '28'])
+    const newerPath = writeCanonicalCodexSession(codexSessionId, [
+      {
+        type: 'session_meta',
+        timestamp: '2026-04-29T03:00:00.000Z',
+        payload: { id: codexSessionId, cwd: workspace, timestamp: '2026-04-29T03:00:00.000Z' },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-29T03:00:01.000Z',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'newer duplicate prompt' }] },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-04-29T03:00:02.000Z',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'newer duplicate answer' }] },
+      },
+    ], ['2026', '04', '29'])
+
+    const { listProviderHistorySessions } = await import('../../src/config/chat-history.js')
+    const sessions = listProviderHistorySessions('codex-cli', {
+      canonicalHistory: { format: 'codex-jsonl', watchPath: '~/.codex/sessions/**/*.jsonl', mode: 'native-source' },
+      offset: 0,
+      limit: 20,
+    }).sessions
+
+    expect(sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ historySessionId: codexSessionId, sourcePath: olderPath, preview: 'older duplicate answer' }),
+      expect.objectContaining({ historySessionId: codexSessionId, sourcePath: newerPath, preview: 'newer duplicate answer' }),
+    ]))
   })
 
   it('persists session-level saved-history aggregates inside the on-disk index', async () => {

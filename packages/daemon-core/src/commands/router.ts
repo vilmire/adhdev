@@ -559,6 +559,9 @@ export class DaemonCommandRouter {
                             firstMessageAt: session.firstMessageAt,
                             lastMessageAt: session.lastMessageAt,
                             canResume: !!(saved?.workspace || recent?.workspace || session.workspace) && canResumeById,
+                            historySource: session.source,
+                            sourcePath: session.sourcePath,
+                            sourceMtimeMs: session.sourceMtimeMs,
                         };
                     }),
                     hasMore,
