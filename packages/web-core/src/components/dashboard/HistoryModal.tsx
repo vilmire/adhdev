@@ -35,6 +35,7 @@ export interface SavedSessionHistoryEntry {
     firstMessageAt: number;
     lastMessageAt: number;
     canResume: boolean;
+    workspaceFallbackSource?: 'selected-workspace';
 }
 
 function formatSavedSessionTime(timestamp?: number) {
@@ -60,6 +61,7 @@ export interface HistoryModalProps {
     isSavedSessionsLoading?: boolean;
     isResumingSavedSessionId?: string | null;
     savedHistoryFilters?: SavedHistoryFilterState;
+    missingWorkspaceResumePath?: string | null;
     onSavedHistoryFiltersChange?: (next: SavedHistoryFilterState) => void;
     onClose: () => void;
     onNewChat: () => void;
@@ -71,7 +73,7 @@ export interface HistoryModalProps {
 export default function HistoryModal({
     activeConv, ides, isCreatingChat, isRefreshingHistory,
     savedSessions = [], isSavedSessionsLoading = false, isResumingSavedSessionId = null,
-    savedHistoryFilters, onSavedHistoryFiltersChange,
+    savedHistoryFilters, missingWorkspaceResumePath, onSavedHistoryFiltersChange,
     onClose, onNewChat, onSwitchSession, onRefreshHistory, onResumeSavedSession,
 }: HistoryModalProps) {
     const ideEntry = ides.find(i => i.id === activeConv.routeId);
@@ -80,6 +82,7 @@ export default function HistoryModal({
     const isSavedSessionMode = isCliConv(activeConv) && !isAcpConv(activeConv);
     const [localFilters, setLocalFilters] = useState<SavedHistoryFilterState>(() => createSavedHistoryFilterState());
     const filters = savedHistoryFilters || localFilters;
+    const normalizedMissingWorkspaceResumePath = String(missingWorkspaceResumePath || '').trim();
     const setFilters = (next: SavedHistoryFilterState) => {
         if (onSavedHistoryFiltersChange) {
             onSavedHistoryFiltersChange(next)
@@ -87,15 +90,30 @@ export default function HistoryModal({
         }
         setLocalFilters(next)
     }
+    const displaySavedSessions = useMemo(
+        () => savedSessions.map(session => {
+            const sessionWorkspace = String(session.workspace || '').trim();
+            if (session.canResume || sessionWorkspace || !normalizedMissingWorkspaceResumePath) {
+                return session;
+            }
+            return {
+                ...session,
+                workspace: normalizedMissingWorkspaceResumePath,
+                canResume: true,
+                workspaceFallbackSource: 'selected-workspace' as const,
+            };
+        }),
+        [normalizedMissingWorkspaceResumePath, savedSessions],
+    );
     const filteredSavedSessions = useMemo(
-        () => prepareSavedHistoryEntries(savedSessions, {
+        () => prepareSavedHistoryEntries(displaySavedSessions, {
             textQuery: filters.textQuery,
             workspaceQuery: filters.workspaceQuery,
             modelQuery: filters.modelQuery,
             resumableOnly: filters.resumableOnly,
             sortMode: filters.sortMode,
         }),
-        [filters.modelQuery, filters.resumableOnly, filters.sortMode, filters.textQuery, filters.workspaceQuery, savedSessions],
+        [displaySavedSessions, filters.modelQuery, filters.resumableOnly, filters.sortMode, filters.textQuery, filters.workspaceQuery],
     );
 
     const content = (
@@ -171,6 +189,7 @@ export default function HistoryModal({
                             {filteredSavedSessions.map((session) => {
                                 const isActive = activeConv.providerSessionId === session.providerSessionId;
                                 const isDisabled = isActive || !session.canResume || !!isResumingSavedSessionId;
+                                const usesSelectedWorkspace = session.workspaceFallbackSource === 'selected-workspace';
                                 return (
                                     <button
                                         key={session.id}
@@ -207,6 +226,7 @@ export default function HistoryModal({
                                         <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-text-muted">
                                             <div className="truncate">
                                                 {session.workspace || 'Workspace unknown'}
+                                                {usesSelectedWorkspace ? ' · selected workspace' : ''}
                                                 {getProviderSummaryLine(session.summaryMetadata) ? ` · ${getProviderSummaryLine(session.summaryMetadata)}` : ''}
                                                 {session.messageCount > 0 ? ` · ${session.messageCount} msgs` : ''}
                                             </div>
@@ -215,6 +235,8 @@ export default function HistoryModal({
                                                     ? 'ACTIVE'
                                                     : !session.canResume
                                                         ? 'MISSING WORKSPACE'
+                                                        : usesSelectedWorkspace
+                                                            ? 'RESUME IN SELECTED WORKSPACE'
                                                         : isResumingSavedSessionId === session.providerSessionId
                                                             ? 'RESUMING...'
                                                             : 'RESUME'}

@@ -1147,6 +1147,7 @@ export default function AgentTab({
                     isSavedSessionsLoading={savedSessionsLoading}
                     isResumingSavedSessionId={resumingSavedSessionId}
                     savedHistoryFilters={resumeHistoryFilters}
+                    missingWorkspaceResumePath={resolvedWorkspacePath || null}
                     onSavedHistoryFiltersChange={setResumeHistoryFilters}
                     onClose={() => setResumeHistoryOpen(false)}
                     onNewChat={() => {

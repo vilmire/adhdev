@@ -88,6 +88,40 @@ describe('HistoryModal saved-history wording', () => {
     expect(html).toContain('value="messages"')
   })
 
+  it('offers an explicit selected-workspace resume action for native histories missing workspace', () => {
+    const html = renderHistoryModal({
+      routeId: 'machine-1',
+      transport: 'pty',
+      mode: 'chat',
+      agentName: 'Hermes',
+      agentType: 'hermes-cli',
+      status: 'idle',
+      title: 'Hermes',
+      messages: [],
+    } as ActiveConversation, {
+      missingWorkspaceResumePath: '/workspaces/adhdev',
+      savedSessions: [{
+        id: 'native-session-1',
+        providerSessionId: 'native-session-1',
+        providerType: 'hermes-cli',
+        providerName: 'Hermes',
+        kind: 'cli',
+        title: 'Native Hermes compacted session',
+        preview: 'Workspace metadata is absent from native history.',
+        workspace: null,
+        messageCount: 5,
+        firstMessageAt: 1,
+        lastMessageAt: 2,
+        canResume: false,
+      }],
+    })
+
+    expect(html).toContain('/workspaces/adhdev')
+    expect(html).toContain('selected workspace')
+    expect(html).toContain('RESUME IN SELECTED WORKSPACE')
+    expect(html).not.toContain('MISSING WORKSPACE')
+  })
+
   it('keeps chat history wording for non-saved-session mode', () => {
     const html = renderHistoryModal({
       routeId: 'machine-1',
