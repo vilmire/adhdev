@@ -78,6 +78,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const initialLoaded: boolean = daemonCtx.initialLoaded ?? true
     const machineEntry = allIdes.find((entry): entry is MachineDaemonEntry => entry.id === machineId && entry.type === 'adhdev-daemon')
     const isStandalone = allIdes.some(entry => entry.type === 'adhdev-daemon')
+    const machineRetryStatus = machineId ? daemonCtx.connectionRetryStatuses?.[machineId] : undefined
+    const isMachineBlocked = !!machineRetryStatus?.blocked
     const [activeTab, setActiveTab] = useState<TabId>('workspace')
     const [workspaceCategoryHint, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
     const recentLaunchActionRef = useRef<(() => Promise<void>) | null>(null)
@@ -468,7 +470,21 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                         <button onClick={() => actions.setEditingNickname(false)} className="flex items-center justify-center px-3 py-1 rounded bg-[#ffffff0a] text-text-muted hover:bg-[#ffffff14] hover:text-text-primary text-sm font-medium transition-colors">Cancel</button>
                                     </div>
                                 )}
-                                <span className="w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)] shrink-0" />
+                                {isMachineBlocked ? (
+                                    <>
+                                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0" />
+                                        {daemonCtx.retryConnection && machineId && (
+                                            <button
+                                                onClick={() => daemonCtx.retryConnection!(machineId)}
+                                                className="px-2.5 py-0.5 rounded text-[11px] font-semibold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors"
+                                            >
+                                                Reconnect
+                                            </button>
+                                        )}
+                                    </>
+                                ) : (
+                                    <span className="w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)] shrink-0" />
+                                )}
                             </div>
                             <div className="flex flex-wrap gap-x-3 gap-y-1 items-center mt-1.5 text-xs text-text-secondary opacity-80">
                                 <span className="font-mono bg-[#ffffff08] px-1.5 py-0.5 rounded">{machine.platform} · {machine.arch}</span>

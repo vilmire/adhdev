@@ -70,6 +70,8 @@ export default function MachinesPage() {
     const loadMachineRuntime = useDaemonMachineRuntimeLoader()
     const connectionStates = daemonCtx.connectionStates || {}
     const connectionTransports = daemonCtx.connectionTransports || {}
+    const connectionRetryStatuses = daemonCtx.connectionRetryStatuses || {}
+    const retryConnection = daemonCtx.retryConnection
     const { icons: providerIcons, labels: providerLabels } = buildProviderMaps(daemons)
     const getIcon = (type: string) => providerIcons[type] || ''
     const machines = groupByMachine(daemons, providerLabels)
@@ -235,12 +237,16 @@ export default function MachinesPage() {
                         const cpuPct = machine.system?.cpus ? Math.min(Math.round((cpuLoad / machine.system.cpus) * 100), 100) : 0
                         const connState = connectionStates[machine.machineId]
                         const transport = connectionTransports[machine.machineId]
-                        const isConnecting = isOnline && (connState === 'new' || connState === 'connecting')
+                        const retryStatus = connectionRetryStatuses[machine.machineId]
+                        const isBlocked = isOnline && !!retryStatus?.blocked
+                        const isConnecting = isOnline && !isBlocked && (connState === 'new' || connState === 'connecting')
                         const machineDotColor = connState === 'connected'
                             ? '#22c55e'
-                            : isConnecting
-                                ? 'var(--accent-primary-light)'
-                                : '#64748b'
+                            : isBlocked
+                                ? '#ef4444'
+                                : isConnecting
+                                    ? 'var(--accent-primary-light)'
+                                    : '#64748b'
                         const totalAgents = machine.ideSessions.length + machine.cliSessions.length + machine.acpSessions.length
 
                         return (
@@ -249,7 +255,24 @@ export default function MachinesPage() {
                                 className={`machine-card${isOnline ? '' : ' offline'}`}
                             >
                                 {/* Connection overlay */}
-                                {isConnecting && (
+                                {isBlocked ? (
+                                    <div className="p2p-overlay">
+                                        <div className="text-[11px] font-semibold tracking-tight text-red-400">
+                                            Connection failed
+                                        </div>
+                                        <div className="text-[10px] text-text-muted">
+                                            {machine.nickname || machine.hostname}
+                                        </div>
+                                        {retryConnection && (
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); retryConnection(machine.machineId) }}
+                                                className="mt-1 px-3 py-1 rounded-md text-[10px] font-semibold bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors"
+                                            >
+                                                Reconnect
+                                            </button>
+                                        )}
+                                    </div>
+                                ) : isConnecting && (
                                     <div className="p2p-overlay">
                                         <div
                                             className="w-7 h-7 rounded-full"

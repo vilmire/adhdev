@@ -54,6 +54,8 @@ export interface BaseDaemonContextValue {
     p2pStates?: Record<string, string>
     /** User role for admin gating */
     userRole?: string
+    /** Per-daemon P2P reconnect status (blocked after exhausting auto budget) */
+    connectionRetryStatuses?: Record<string, { attempts: number; maxAttempts: number; blocked: boolean; nextRetryAt?: number }>
 }
 
 /** Data injection interface (used by standalone/cloud) */
@@ -82,6 +84,7 @@ const BaseDaemonCtx = createContext<BaseDaemonContextValue>({
     isP2PActive: false,
     p2pStates: {},
     userRole: undefined,
+    connectionRetryStatuses: undefined,
 })
 
 const ActionsCtx = createContext<BaseDaemonActions>({
@@ -845,6 +848,8 @@ export interface ConnectionOverrides {
     isP2PActive?: boolean
     p2pStates?: Record<string, string>
     userRole?: string
+    /** Per-daemon P2P reconnect status (blocked after exhausting auto budget) */
+    connectionRetryStatuses?: Record<string, { attempts: number; maxAttempts: number; blocked: boolean; nextRetryAt?: number }>
 }
 
 export function BaseDaemonProvider({ children, connectionOverrides }: {
@@ -917,6 +922,7 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
         isP2PActive: co?.isP2PActive ?? false,
         p2pStates: co?.p2pStates ?? {},
         userRole: co?.userRole,
+        connectionRetryStatuses: co?.connectionRetryStatuses,
         userName,
         setUserName,
     }), [
@@ -935,6 +941,7 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
         co?.isP2PActive,
         co?.p2pStates,
         co?.userRole,
+        co?.connectionRetryStatuses,
         userName,
     ])
 
