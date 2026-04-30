@@ -6,7 +6,8 @@ import { formatRelativeTime, getConversationViewStates, type MobileConversationL
 import type { ActiveConversation } from './types'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 import { getConversationMetaText, getConversationStatusHint, getConversationTitle } from './conversation-presenters'
-import { buildChatDebugBundleClipboardText, buildChatFrontendDebugSnapshot } from './chat-debug-bundle'
+import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot } from './chat-debug-bundle'
+import { eventManager } from '../../managers/EventManager'
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
 import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands'
 import {
@@ -267,7 +268,16 @@ export default function DashboardMobileChatInbox({
             delivery: 'daemon_file',
             frontendSnapshot,
         })
-        await navigator.clipboard.writeText(buildChatDebugBundleClipboardText(unwrapCommandResult(raw)))
+        const result = unwrapCommandResult(raw)
+        const text = buildChatDebugBundleClipboardText(result)
+        let locatorCopied = true
+        try {
+            await navigator.clipboard.writeText(text)
+        } catch (clipboardError) {
+            locatorCopied = false
+            console.warn('[chat-debug-bundle] failed to copy mobile inbox debug bundle locator', clipboardError)
+        }
+        eventManager.showToast(buildChatDebugBundleToastMessage(result, { locatorCopied }), locatorCopied ? 'success' : 'warning')
     }, [actionLogs, sendDaemonCommand])
     const effectiveCollectChatDebugBundle = onCollectChatDebugBundle || collectMobileInboxChatDebugBundle
     const handleHiddenConversationContextMenu = useCallback((event: MouseEvent<HTMLButtonElement>, conversation: ActiveConversation) => {
@@ -275,6 +285,7 @@ export default function DashboardMobileChatInbox({
         event.stopPropagation()
         void Promise.resolve(effectiveCollectChatDebugBundle(conversation)).catch((error) => {
             console.warn('[chat-debug-bundle] failed to collect mobile inbox debug bundle', error)
+            eventManager.showToast('Chat debug signal failed. Check the browser console or P2P connection.', 'warning')
         })
     }, [effectiveCollectChatDebugBundle])
 

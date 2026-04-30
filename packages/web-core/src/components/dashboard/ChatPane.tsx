@@ -10,7 +10,8 @@ import { getVisibleBarControls } from './ControlsBar';
 import { useControlsBarVisibility } from '../../hooks/useControlsBarVisibility';
 import { useTransport } from '../../context/TransportContext';
 import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands';
-import { buildChatDebugBundleClipboardText, buildChatFrontendDebugSnapshot, recordControlsToggleDebugGesture, type ControlsToggleDebugGestureState } from './chat-debug-bundle';
+import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, recordControlsToggleDebugGesture, type ControlsToggleDebugGestureState } from './chat-debug-bundle';
+import { eventManager } from '../../managers/EventManager';
 import ConversationMetaChips from './ConversationMetaChips';
 import { getConversationViewStates } from './DashboardMobileChatShared';
 import type { ActiveConversation } from './types';
@@ -208,7 +209,14 @@ export default function ChatPane({
         });
         const result = unwrapCommandResult(raw);
         const text = buildChatDebugBundleClipboardText(result);
-        await navigator.clipboard.writeText(text);
+        let locatorCopied = true;
+        try {
+            await navigator.clipboard.writeText(text);
+        } catch (clipboardError) {
+            locatorCopied = false;
+            console.warn('[chat-debug-bundle] failed to copy debug bundle locator', clipboardError);
+        }
+        eventManager.showToast(buildChatDebugBundleToastMessage(result, { locatorCopied }), locatorCopied ? 'success' : 'warning');
     }, [
         activeConv,
         actionLogs,
@@ -235,6 +243,7 @@ export default function ChatPane({
         if (!result.shouldCollect) return;
         void collectChatDebugBundle().catch((error) => {
             console.warn('[chat-debug-bundle] failed to collect debug bundle', error);
+            eventManager.showToast('Chat debug signal failed. Check the browser console or P2P connection.', 'warning');
         });
     }, [collectChatDebugBundle]);
     const emptyState = useMemo(() => {

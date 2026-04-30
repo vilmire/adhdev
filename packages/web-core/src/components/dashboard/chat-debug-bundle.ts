@@ -142,6 +142,16 @@ export function buildChatFrontendDebugSnapshot(options: BuildChatFrontendDebugSn
     return sanitizeFrontendDebugValue(snapshot) as Record<string, unknown>
 }
 
+export function buildChatDebugBundleToastMessage(result: unknown, options: { locatorCopied?: boolean } = {}): string {
+    const body = result && typeof result === 'object' ? result as Record<string, unknown> : {}
+    const locatorStatus = options.locatorCopied === false ? 'locator copy failed' : 'locator copied'
+    if (body.delivery === 'daemon_file') {
+        const bundleId = typeof body.bundleId === 'string' && body.bundleId.trim() ? ` (${body.bundleId})` : ''
+        return `Chat debug signal sent${bundleId}; saved on daemon, ${locatorStatus}.`
+    }
+    return `Chat debug signal sent; ${locatorStatus}.`
+}
+
 export function buildChatDebugBundleClipboardText(result: unknown): string {
     const body = result && typeof result === 'object' ? result as Record<string, unknown> : {}
     if (body.delivery === 'daemon_file') {

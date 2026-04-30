@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildChatDebugBundleClipboardText, buildChatFrontendDebugSnapshot, recordControlsToggleDebugGesture } from '../../../src/components/dashboard/chat-debug-bundle'
+import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, recordControlsToggleDebugGesture } from '../../../src/components/dashboard/chat-debug-bundle'
 
 describe('chat frontend debug bundle helpers', () => {
   it('builds a bounded frontend snapshot for the active conversation', () => {
@@ -43,7 +43,7 @@ describe('chat frontend debug bundle helpers', () => {
         isVisible: true,
       },
       now: 123,
-      locationHref: 'https://adhf.dev/dashboard?token=secret-token-1234567890',
+      locationHref: 'https://adhf.dev/dashboard?token=[REDACTED]',
     })
 
     expect(snapshot.activeConversation).toMatchObject({
@@ -88,5 +88,17 @@ describe('chat frontend debug bundle helpers', () => {
     expect(text).toContain('chat-debug-20260430T123456Z-session_1-abcd1234')
     expect(text).toContain('/Users/test/.adhdev/debug-bundles/chat/chat-debug-20260430T123456Z-session_1-abcd1234.json')
     expect(text).not.toContain('```json')
+  })
+
+  it('builds a user-facing sent signal message for daemon-file delivery', () => {
+    const message = buildChatDebugBundleToastMessage({
+      delivery: 'daemon_file',
+      bundleId: 'chat-debug-20260430T123456Z-session_1-abcd1234',
+      savedPath: '/Users/test/.adhdev/debug-bundles/chat/chat-debug-20260430T123456Z-session_1-abcd1234.json',
+    })
+
+    expect(message).toContain('Chat debug signal sent')
+    expect(message).toContain('chat-debug-20260430T123456Z-session_1-abcd1234')
+    expect(message).toContain('locator copied')
   })
 })
