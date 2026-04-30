@@ -36,7 +36,7 @@ import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../sessi
 import { buildSessionEntries } from '../status/builders.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
-import { spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
+import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
 import * as fs from 'fs';
 
 // ─── Types ───
@@ -847,23 +847,22 @@ export class DaemonCommandRouter {
             case 'daemon_upgrade': {
                 LOG.info('Upgrade', 'Remote upgrade requested from dashboard');
                 try {
-                    const { execSync } = await import('child_process');
-
                     // Detect package name for upgrade
                     const isStandalone = this.deps.packageName === '@adhdev/daemon-standalone'
                         || process.argv[1]?.includes('daemon-standalone');
                     const pkgName = isStandalone ? '@adhdev/daemon-standalone' : 'adhdev';
+                    const npmSurface = resolveCurrentGlobalInstallSurface({ packageName: pkgName });
 
                     // Check latest version
-                    const latest = execSync(`npm view ${pkgName} version`, { encoding: 'utf-8', timeout: 10000 }).trim();
+                    const latest = String(execNpmCommandSync(['view', pkgName, 'version'], { encoding: 'utf-8', timeout: 10000 }, npmSurface)).trim();
                     LOG.info('Upgrade', `Latest ${pkgName}: v${latest}`);
                     let currentInstalled: string | null = null;
                     try {
-                        const currentJson = execSync(`npm ls -g ${pkgName} --depth=0 --json`, {
+                        const currentJson = String(execNpmCommandSync(['ls', '-g', pkgName, '--depth=0', '--json'], {
                             encoding: 'utf-8',
                             timeout: 10000,
                             stdio: ['pipe', 'pipe', 'pipe'],
-                        }).trim();
+                        }, npmSurface)).trim();
                         const parsed = JSON.parse(currentJson);
                         currentInstalled = parsed?.dependencies?.[pkgName]?.version || null;
                     } catch {

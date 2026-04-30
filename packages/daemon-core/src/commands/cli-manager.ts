@@ -52,7 +52,10 @@ function commandExists(command: string): boolean {
         return existsSync(expandExecutable(trimmed));
     }
     try {
-        execFileSync(process.platform === 'win32' ? 'where' : 'which', [trimmed], { stdio: 'ignore' });
+        execFileSync(process.platform === 'win32' ? 'where' : 'which', [trimmed], {
+            stdio: 'ignore',
+            ...(process.platform === 'win32' ? { windowsHide: true } : {}),
+        });
         return true;
     } catch {
         return false;

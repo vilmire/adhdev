@@ -277,7 +277,12 @@ export function findBinary(name: string): string {
     const isWin = os.platform() === 'win32';
     try {
         const cmd = isWin ? `where ${trimmed}` : `which ${trimmed}`;
-        return execSync(cmd, { encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).trim().split('\n')[0].trim();
+        return execSync(cmd, {
+            encoding: 'utf-8',
+            timeout: 5000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            ...(isWin ? { windowsHide: true } : {}),
+        }).trim().split('\n')[0].trim();
     } catch {
         return isWin ? `${trimmed}.cmd` : trimmed;
     }

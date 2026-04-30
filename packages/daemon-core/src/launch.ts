@@ -469,7 +469,7 @@ async function launchMacOS(ide: IDEInfo, port: number, workspace?: string, newWi
 
     if (!useAppLauncher && ide.cliCommand) {
  // CLI based execute
-        spawn(ide.cliCommand, args, { detached: true, stdio: 'ignore' }).unref();
+        spawn(ide.cliCommand, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
     } else if (appName) {
  // Fallback to `open -a` when no CLI wrapper is available or the provider prefers it.
         const openArgs = ['-a', appName, '--args', ...args];
@@ -509,7 +509,7 @@ async function launchLinux(ide: IDEInfo, port: number, workspace?: string, newWi
     if (newWindow) args.push('--new-window');
     if (workspace) args.push(workspace);
 
-    spawn(cli, args, { detached: true, stdio: 'ignore' }).unref();
+    spawn(cli, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
 }
 
 export function getAvailableIdeIds(): string[] {

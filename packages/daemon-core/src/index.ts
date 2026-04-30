@@ -140,15 +140,18 @@ export type { CommandResult, CommandContext } from './commands/handler.js';
 export { DaemonCommandRouter } from './commands/router.js';
 export type { CommandRouterDeps, CommandRouterResult } from './commands/router.js';
 export {
-    maybeRunDaemonUpgradeHelperFromEnv,
-    spawnDetachedDaemonUpgradeHelper,
-    resolveCurrentGlobalInstallSurface,
-    buildPinnedGlobalInstallCommand,
+  maybeRunDaemonUpgradeHelperFromEnv,
+  spawnDetachedDaemonUpgradeHelper,
+  resolveCurrentGlobalInstallSurface,
+  buildPinnedGlobalInstallCommand,
+  execNpmCommandSync,
+  getNpmExecOptions,
 } from './commands/upgrade-helper.js';
 export type {
-    DaemonUpgradeHelperPayload,
-    CurrentGlobalInstallSurface,
-    PinnedGlobalInstallCommand,
+  DaemonUpgradeHelperPayload,
+  CurrentGlobalInstallSurface,
+  PinnedGlobalInstallCommand,
+  NpmExecOptions,
 } from './commands/upgrade-helper.js';
 
 // ── Status ──

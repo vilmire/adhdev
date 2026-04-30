@@ -662,6 +662,7 @@ export class AcpProviderInstance implements ProviderInstance {
             env,
             stdio: ['pipe', 'pipe', 'pipe'],
             shell: spawnConfig.shell || false,
+            ...(process.platform === 'win32' ? { windowsHide: true } : {}),
         });
 
  // stderr → log + auth failure detection

@@ -60,7 +60,11 @@ function resolveCommandPath(command: string): string | null {
 /** Run a shell command with timeout, returning stdout or null on failure */
 function execAsync(cmd: string, timeoutMs = 5000): Promise<string | null> {
     return new Promise((resolve) => {
-        const child = exec(cmd, { encoding: 'utf-8', timeout: timeoutMs }, (err, stdout) => {
+        const child = exec(cmd, {
+            encoding: 'utf-8',
+            timeout: timeoutMs,
+            ...(process.platform === 'win32' ? { windowsHide: true } : {}),
+        }, (err, stdout) => {
             if (err || !stdout?.trim()) {
                 resolve(null);
             } else {
