@@ -335,6 +335,10 @@ export default function DashboardMainView({
                 handleOpenShortcutHelp()
                 return
             }
+            if (actionId === 'openNewSession') {
+                openNewSession()
+                return
+            }
             if (actionId === 'hideCurrentTab') {
                 if (activeConv) onHideConversation(activeConv)
                 return
@@ -812,7 +816,7 @@ export default function DashboardMainView({
                                 </div>
 
                                 <div className="text-[11px] text-text-muted mt-4">
-                                    Use modifier shortcuts like {isMac ? '⌥S' : 'Ctrl+Alt+S'}. Press Esc to stop listening.
+                                    Use sequence shortcuts like {isMac ? 'N, T→, S→, M↓' : 'N, T→, S→, M↓'}, or set your own modifier combo. Press Esc to stop listening.
                                 </div>
                             </>
                         )}

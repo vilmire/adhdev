@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 export type DashboardActionShortcutId =
     | 'openShortcutHelp'
+    | 'openNewSession'
     | 'hideCurrentTab'
     | 'toggleHiddenTabs'
     | 'openHistoryForActiveTab'
@@ -36,20 +37,44 @@ export interface DashboardActionShortcutDefinition {
 
 export const ACTION_SHORTCUTS_KEY = 'adhdev-dashboard-action-shortcuts'
 const SEQUENCE_TIMEOUT_MS = 1200
-const LEGACY_ACTION_SHORTCUTS: Partial<Record<DashboardActionShortcutId, string>> = {
-    toggleHiddenTabs: 'G H',
-    setActiveTabShortcut: 'G S',
-    selectPreviousGroupTab: 'G K',
-    selectNextGroupTab: 'G J',
-    splitActiveTabRight: '⌘+⌥+\\',
-    focusLeftPane: '⌘+⌥+←',
-    focusRightPane: '⌘+⌥+→',
-    moveActiveTabToLeftPane: '⌘+⌥+⇧+←',
-    moveActiveTabToRightPane: '⌘+⌥+⇧+→',
-    triggerPrimaryApprovalAction: '⌥+A',
-    triggerSecondaryApprovalAction: '⌥+D',
-    toggleCliView: 'T',
-}
+const LEGACY_ACTION_SHORTCUTS: Array<[DashboardActionShortcutId, string]> = [
+    ['toggleHiddenTabs', 'G H'],
+    ['setActiveTabShortcut', 'G S'],
+    ['selectPreviousGroupTab', 'G K'],
+    ['selectPreviousGroupTab', '⌥+['],
+    ['selectPreviousGroupTab', 'Ctrl+Alt+['],
+    ['selectNextGroupTab', 'G J'],
+    ['selectNextGroupTab', '⌥+]'],
+    ['selectNextGroupTab', 'Ctrl+Alt+]'],
+    ['splitActiveTabDown', '⌘+⌥+-'],
+    ['splitActiveTabDown', 'Ctrl+Alt+-'],
+    ['splitActiveTabRight', '⌘+⌥+\\'],
+    ['splitActiveTabRight', '⌘+⌥+='],
+    ['splitActiveTabRight', 'Ctrl+Alt+\\'],
+    ['focusLeftPane', '⌘+⌥+←'],
+    ['focusLeftPane', '⌘+⌥+['],
+    ['focusLeftPane', 'Ctrl+Alt+←'],
+    ['focusRightPane', '⌘+⌥+→'],
+    ['focusRightPane', '⌘+⌥+]'],
+    ['focusRightPane', 'Ctrl+Alt+→'],
+    ['focusUpPane', '⌘+⌥+U'],
+    ['focusUpPane', 'Ctrl+Alt+↑'],
+    ['focusDownPane', '⌘+⌥+J'],
+    ['focusDownPane', 'Ctrl+Alt+↓'],
+    ['moveActiveTabToLeftPane', '⌘+⌥+⇧+←'],
+    ['moveActiveTabToLeftPane', '⌘+⌥+,'],
+    ['moveActiveTabToLeftPane', 'Ctrl+Alt+Shift+←'],
+    ['moveActiveTabToRightPane', '⌘+⌥+⇧+→'],
+    ['moveActiveTabToRightPane', '⌘+⌥+.'],
+    ['moveActiveTabToRightPane', 'Ctrl+Alt+Shift+→'],
+    ['moveActiveTabToUpPane', '⌘+⌥+I'],
+    ['moveActiveTabToUpPane', 'Ctrl+Alt+Shift+↑'],
+    ['moveActiveTabToDownPane', '⌘+⌥+K'],
+    ['moveActiveTabToDownPane', 'Ctrl+Alt+Shift+↓'],
+    ['triggerPrimaryApprovalAction', '⌥+A'],
+    ['triggerSecondaryApprovalAction', '⌥+D'],
+    ['toggleCliView', 'T'],
+]
 
 export function isMacPlatform() {
     return typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent)
@@ -59,6 +84,8 @@ export function getDefaultShortcut(actionId: DashboardActionShortcutId, isMac: b
     switch (actionId) {
         case 'openShortcutHelp':
             return '?'
+        case 'openNewSession':
+            return 'N'
         case 'hideCurrentTab':
             return isMac ? '⌥+X' : 'Ctrl+Alt+X'
         case 'toggleHiddenTabs':
@@ -74,25 +101,25 @@ export function getDefaultShortcut(actionId: DashboardActionShortcutId, isMac: b
         case 'dockActiveTab':
             return isMac ? '⌥+D' : 'Ctrl+Alt+D'
         case 'splitActiveTabRight':
-            return isMac ? '⌘+⌥+=' : 'Ctrl+Alt+\\'
+            return isMac ? 'S →' : 'S →'
         case 'splitActiveTabDown':
-            return isMac ? '⌘+⌥+-' : 'Ctrl+Alt+-'
+            return isMac ? 'S ↓' : 'S ↓'
         case 'focusLeftPane':
-            return isMac ? '⌘+⌥+[' : 'Ctrl+Alt+←'
+            return isMac ? 'F ←' : 'F ←'
         case 'focusRightPane':
-            return isMac ? '⌘+⌥+]' : 'Ctrl+Alt+→'
+            return isMac ? 'F →' : 'F →'
         case 'focusUpPane':
-            return isMac ? '⌘+⌥+U' : 'Ctrl+Alt+↑'
+            return isMac ? 'F ↑' : 'F ↑'
         case 'focusDownPane':
-            return isMac ? '⌘+⌥+J' : 'Ctrl+Alt+↓'
+            return isMac ? 'F ↓' : 'F ↓'
         case 'moveActiveTabToLeftPane':
-            return isMac ? '⌘+⌥+,' : 'Ctrl+Alt+Shift+←'
+            return isMac ? 'M ←' : 'M ←'
         case 'moveActiveTabToRightPane':
-            return isMac ? '⌘+⌥+.' : 'Ctrl+Alt+Shift+→'
+            return isMac ? 'M →' : 'M →'
         case 'moveActiveTabToUpPane':
-            return isMac ? '⌘+⌥+I' : 'Ctrl+Alt+Shift+↑'
+            return isMac ? 'M ↑' : 'M ↑'
         case 'moveActiveTabToDownPane':
-            return isMac ? '⌘+⌥+K' : 'Ctrl+Alt+Shift+↓'
+            return isMac ? 'M ↓' : 'M ↓'
         case 'triggerPrimaryApprovalAction':
             return isMac ? '⌥+J' : 'Ctrl+Alt+J'
         case 'triggerSecondaryApprovalAction':
@@ -102,9 +129,9 @@ export function getDefaultShortcut(actionId: DashboardActionShortcutId, isMac: b
         case 'setActiveTabShortcut':
             return isMac ? '⌥+S' : 'Ctrl+Alt+S'
         case 'selectPreviousGroupTab':
-            return isMac ? '⌥+[' : 'Ctrl+Alt+['
+            return isMac ? 'T ←' : 'T ←'
         case 'selectNextGroupTab':
-            return isMac ? '⌥+]' : 'Ctrl+Alt+]'
+            return isMac ? 'T →' : 'T →'
         case 'toggleCliView':
             return isMac ? '⌥+T' : 'Ctrl+Alt+T'
     }
@@ -117,6 +144,12 @@ export function getActionShortcutDefinitions(isMac: boolean): DashboardActionSho
             label: 'Open shortcuts',
             description: 'Show the keyboard shortcuts panel.',
             defaultShortcut: getDefaultShortcut('openShortcutHelp', isMac),
+        },
+        {
+            id: 'openNewSession',
+            label: 'New session',
+            description: 'Open the new session launcher.',
+            defaultShortcut: getDefaultShortcut('openNewSession', isMac),
         },
         {
             id: 'hideCurrentTab',
@@ -280,7 +313,7 @@ export function readActionShortcuts(isMac: boolean) {
     try {
         const parsed = JSON.parse(localStorage.getItem(ACTION_SHORTCUTS_KEY) || '{}') as Partial<Record<DashboardActionShortcutId, string>>
         const merged = { ...defaults, ...parsed }
-        for (const [actionId, legacyShortcut] of Object.entries(LEGACY_ACTION_SHORTCUTS) as [DashboardActionShortcutId, string][]) {
+        for (const [actionId, legacyShortcut] of LEGACY_ACTION_SHORTCUTS) {
             if (merged[actionId] === legacyShortcut) {
                 merged[actionId] = defaults[actionId]
             }

@@ -329,7 +329,7 @@ export default function DashboardHeader({
                                     type="button"
                                     onClick={onOpenNewSession}
                                     className="btn btn-secondary btn-sm ml-2"
-                                    title={DASHBOARD_NEW_SESSION_LABEL}
+                                    title={`${DASHBOARD_NEW_SESSION_LABEL}${actionShortcuts?.openNewSession ? ` (${actionShortcuts.openNewSession})` : ''}`}
                                     aria-label={DASHBOARD_NEW_SESSION_LABEL}
                                 >
                                     <IconPlus size={14} />
