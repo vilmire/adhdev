@@ -18,10 +18,17 @@ function renderBanner(props: Partial<React.ComponentProps<typeof ConnectionBanne
 }
 
 describe('ConnectionBanner', () => {
-  it('waits at least five seconds before surfacing reconnect actions by default', () => {
+  it('waits at least five seconds before surfacing reconnect status by default', () => {
     const source = readComponentSource()
 
     expect(source).toContain('DEFAULT_RECONNECT_BANNER_DELAY_MS = 5000')
+  })
+
+  it('waits longer before surfacing the manual reconnect action by default', () => {
+    const source = readComponentSource()
+
+    expect(source).toContain('DEFAULT_RECONNECT_ACTION_DELAY_MS = 12000')
+    expect(source).toContain('reconnectActionDelayMs?: number')
   })
 
   it('renders reconnecting status as a fixed top overlay instead of an inline page banner', () => {
@@ -33,9 +40,33 @@ describe('ConnectionBanner', () => {
 
     expect(html).toContain('Reconnecting')
     expect(html).not.toContain('Reconnecting to server')
-    expect(html).toContain('Reconnect now')
+    expect(html).not.toContain('Reconnect now')
     expect(html).toContain('fixed left-1/2 top-4 z-[1400]')
     expect(html).toContain('translateX(-50%)')
+  })
+
+  it('renders the manual reconnect action only after its later action delay elapses', () => {
+    const html = renderBanner({
+      wsStatus: 'reconnecting',
+      onReconnect: () => {},
+      reconnectDelayMs: 0,
+      reconnectActionDelayMs: 0,
+    })
+
+    expect(html).toContain('Reconnecting')
+    expect(html).toContain('Reconnect now')
+  })
+
+  it('stacks the manual reconnect action on narrow mobile widths instead of forcing a single crowded row', () => {
+    const html = renderBanner({
+      wsStatus: 'reconnecting',
+      onReconnect: () => {},
+      reconnectDelayMs: 0,
+      reconnectActionDelayMs: 0,
+    })
+
+    expect(html).toContain('flex-wrap')
+    expect(html).toContain('basis-full sm:basis-auto')
   })
 
   it('does not render transient reconnecting status before the grace period elapses', () => {

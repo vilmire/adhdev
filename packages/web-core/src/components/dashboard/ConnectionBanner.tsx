@@ -15,9 +15,16 @@ export interface ConnectionBannerProps {
      * do not surface that as an alarming toast unless it persists.
      */
     reconnectDelayMs?: number;
+    /**
+     * Longer delay before showing the manual reconnect action. The compact status
+     * toast should appear first; the button is only for a reconnect that is
+     * staying stuck long enough to need user intervention.
+     */
+    reconnectActionDelayMs?: number;
 }
 
 const DEFAULT_RECONNECT_BANNER_DELAY_MS = 5000;
+const DEFAULT_RECONNECT_ACTION_DELAY_MS = 12000;
 
 function isReconnectLikeStatus(status: string): boolean {
     return status === 'disconnected' || status === 'reconnecting';
@@ -29,9 +36,11 @@ export default function ConnectionBanner({
     loginUrl,
     onReconnect,
     reconnectDelayMs = DEFAULT_RECONNECT_BANNER_DELAY_MS,
+    reconnectActionDelayMs = DEFAULT_RECONNECT_ACTION_DELAY_MS,
 }: ConnectionBannerProps) {
     const reconnectLikeStatus = isReconnectLikeStatus(wsStatus);
     const [showReconnectState, setShowReconnectState] = useState(() => !reconnectLikeStatus || reconnectDelayMs <= 0);
+    const [showReconnectAction, setShowReconnectAction] = useState(() => !reconnectLikeStatus || reconnectActionDelayMs <= 0);
     const reconnectBannerWasVisibleRef = useRef(false);
 
     useEffect(() => {
@@ -57,9 +66,29 @@ export default function ConnectionBanner({
         return () => clearTimeout(timer);
     }, [reconnectDelayMs, reconnectLikeStatus]);
 
+    useEffect(() => {
+        if (!reconnectLikeStatus) {
+            setShowReconnectAction(false);
+            return;
+        }
+
+        if (reconnectActionDelayMs <= 0) {
+            setShowReconnectAction(true);
+            return;
+        }
+
+        setShowReconnectAction(false);
+        const timer = setTimeout(() => {
+            setShowReconnectAction(true);
+        }, reconnectActionDelayMs);
+
+        return () => clearTimeout(timer);
+    }, [reconnectActionDelayMs, reconnectLikeStatus]);
+
     const showDisconnected = reconnectLikeStatus
         ? showReconnectState
         : wsStatus === 'offline' || wsStatus === 'auth_failed';
+    const showManualReconnectAction = Boolean(onReconnect && wsStatus !== 'auth_failed' && (!reconnectLikeStatus || showReconnectAction));
     const showConnectedConfirmation = useMemo(() => {
         if (!showReconnected || wsStatus !== 'connected') return false;
         // If the reconnect state resolved inside the grace period, suppress the
@@ -96,7 +125,7 @@ export default function ConnectionBanner({
             {showDisconnected && (
                 <div className={overlayClassName} style={overlayStyle}>
                     <div
-                        className="pointer-events-auto max-w-[min(720px,calc(100vw-24px))] rounded-2xl border px-4 py-3 text-[13px] font-semibold flex items-center gap-2.5 justify-center shadow-[0_18px_40px_rgba(2,6,23,0.24)] backdrop-blur-xl"
+                        className="pointer-events-auto max-w-[min(720px,calc(100vw-24px))] rounded-2xl border px-3 py-2.5 sm:px-4 sm:py-3 text-[13px] font-semibold flex flex-wrap items-center gap-x-2.5 gap-y-2 justify-center shadow-[0_18px_40px_rgba(2,6,23,0.24)] backdrop-blur-xl"
                         style={{
                             background: gradients[bannerColor],
                             border: borders[bannerColor],
@@ -125,11 +154,11 @@ export default function ConnectionBanner({
                                 ) : 'Connection failed — refresh the page or try again shortly.'
                             )}
                         </span>
-                        {onReconnect && wsStatus !== 'auth_failed' && (
+                        {showManualReconnectAction && (
                             <button
                                 type="button"
-                                className="ml-1 shrink-0 px-2.5 py-1 rounded-md border border-current/30 text-[12px] font-semibold hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
-                                onClick={onReconnect}
+                                className="basis-full sm:basis-auto mx-auto sm:mx-0 sm:ml-1 shrink-0 px-2.5 py-1 rounded-md border border-current/30 text-[12px] font-semibold hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
+                                onClick={() => onReconnect?.()}
                                 disabled={wsStatus === 'offline'}
                             >
                                 Reconnect now
