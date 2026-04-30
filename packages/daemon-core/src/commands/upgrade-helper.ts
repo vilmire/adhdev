@@ -17,14 +17,17 @@ export interface DaemonUpgradeHelperPayload {
 
 export interface CurrentGlobalInstallSurface {
   npmExecutable: string;
+  npmArgsPrefix?: string[];
   packageRoot: string | null;
   installPrefix: string | null;
+  execOptions?: { shell: boolean };
 }
 
 export interface PinnedGlobalInstallCommand {
   command: string;
   args: string[];
   surface: CurrentGlobalInstallSurface;
+  execOptions: { shell: boolean };
 }
 
 function getUpgradeLogPath(): string {
@@ -43,18 +46,32 @@ function appendUpgradeLog(message: string): void {
   }
 }
 
-function resolveSiblingNpmExecutable(nodeExecutable: string): string {
+function resolveSiblingNpmInvocation(nodeExecutable: string, platform: NodeJS.Platform = process.platform): {
+  executable: string;
+  argsPrefix: string[];
+  execOptions: { shell: boolean };
+} {
   const binDir = path.dirname(nodeExecutable);
-  const candidates = process.platform === 'win32'
-    ? ['npm.cmd', 'npm.exe', 'npm']
-    : ['npm'];
-  for (const candidate of candidates) {
+  if (platform === 'win32') {
+    const npmCliPath = path.join(binDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    if (fs.existsSync(npmCliPath)) {
+      return { executable: nodeExecutable, argsPrefix: [npmCliPath], execOptions: { shell: false } };
+    }
+    for (const candidate of ['npm.exe', 'npm']) {
+      const candidatePath = path.join(binDir, candidate);
+      if (fs.existsSync(candidatePath)) {
+        return { executable: candidatePath, argsPrefix: [], execOptions: { shell: false } };
+      }
+    }
+    return { executable: nodeExecutable, argsPrefix: [npmCliPath], execOptions: { shell: false } };
+  }
+  for (const candidate of ['npm']) {
     const candidatePath = path.join(binDir, candidate);
     if (fs.existsSync(candidatePath)) {
-      return candidatePath;
+      return { executable: candidatePath, argsPrefix: [], execOptions: { shell: false } };
     }
   }
-  return 'npm';
+  return { executable: 'npm', argsPrefix: [], execOptions: { shell: false } };
 }
 
 function findCurrentPackageRoot(currentCliPath: string | undefined, packageName: string): string | null {
@@ -117,12 +134,16 @@ export function resolveCurrentGlobalInstallSurface(options: {
   packageName: string;
   currentCliPath?: string;
   nodeExecutable?: string;
+  platform?: NodeJS.Platform;
 }): CurrentGlobalInstallSurface {
   const packageRoot = findCurrentPackageRoot(options.currentCliPath || process.argv[1], options.packageName);
+  const npmInvocation = resolveSiblingNpmInvocation(options.nodeExecutable || process.execPath, options.platform);
   return {
-    npmExecutable: resolveSiblingNpmExecutable(options.nodeExecutable || process.execPath),
+    npmExecutable: npmInvocation.executable,
+    npmArgsPrefix: npmInvocation.argsPrefix,
     packageRoot,
     installPrefix: packageRoot ? resolveInstallPrefixFromPackageRoot(packageRoot, options.packageName) : null,
+    execOptions: npmInvocation.execOptions,
   };
 }
 
@@ -131,9 +152,10 @@ export function buildPinnedGlobalInstallCommand(options: {
   targetVersion: string;
   currentCliPath?: string;
   nodeExecutable?: string;
+  platform?: NodeJS.Platform;
 }): PinnedGlobalInstallCommand {
   const surface = resolveCurrentGlobalInstallSurface(options);
-  const args = ['install', '-g', `${options.packageName}@${options.targetVersion || 'latest'}`, '--force'];
+  const args = [...(surface.npmArgsPrefix || []), 'install', '-g', `${options.packageName}@${options.targetVersion || 'latest'}`, '--force'];
   if (surface.installPrefix) {
     args.push('--prefix', surface.installPrefix);
   }
@@ -141,11 +163,12 @@ export function buildPinnedGlobalInstallCommand(options: {
     command: surface.npmExecutable,
     args,
     surface,
+    execOptions: surface.execOptions || getNpmExecOptions(options.platform),
   };
 }
 
-function getNpmExecOptions(): { shell: boolean } {
-  return { shell: process.platform === 'win32' };
+function getNpmExecOptions(_platform: NodeJS.Platform = process.platform): { shell: boolean } {
+  return { shell: false };
 }
 
 function killPid(pid: number): boolean {
@@ -249,12 +272,11 @@ function removeDaemonPidFile(): void {
 }
 
 function cleanupStaleGlobalInstallDirs(pkgName: string, surface: CurrentGlobalInstallSurface): void {
-  const npmExecOpts = getNpmExecOptions();
   const prefixArgs = surface.installPrefix ? ['--prefix', surface.installPrefix] : [];
-  const npmRoot = execFileSync(surface.npmExecutable, ['root', '-g', ...prefixArgs], { encoding: 'utf8', ...npmExecOpts }).trim();
+  const npmRoot = execFileSync(surface.npmExecutable, [...(surface.npmArgsPrefix || []), 'root', '-g', ...prefixArgs], { encoding: 'utf8', ...surface.execOptions }).trim();
   if (!npmRoot) return;
   const npmPrefix = surface.installPrefix
-    || execFileSync(surface.npmExecutable, ['prefix', '-g', ...prefixArgs], { encoding: 'utf8', ...npmExecOpts }).trim();
+    || execFileSync(surface.npmExecutable, [...(surface.npmArgsPrefix || []), 'prefix', '-g', ...prefixArgs], { encoding: 'utf8', ...surface.execOptions }).trim();
   const binDir = process.platform === 'win32' ? npmPrefix : path.join(npmPrefix, 'bin');
   const packageBaseName = pkgName.startsWith('@') ? pkgName.split('/')[1] : pkgName;
   const binNames = new Set<string>([packageBaseName]);
@@ -331,7 +353,7 @@ async function runDaemonUpgradeHelper(payload: DaemonUpgradeHelperPayload): Prom
       encoding: 'utf8',
       stdio: 'pipe',
       maxBuffer: 20 * 1024 * 1024,
-      ...getNpmExecOptions(),
+      ...installCommand.execOptions,
     },
   );
   if (installOutput.trim()) {

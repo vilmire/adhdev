@@ -99,4 +99,30 @@ describe('upgrade helper install surface', () => {
       real(fixture.prefixRoot),
     ])
   })
+
+  it('runs Windows npm through npm-cli.js without shelling out to npm.cmd', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-upgrade-surface-win-'))
+    tempRoots.push(tempRoot)
+    const prefixRoot = path.join(tempRoot, 'portable node')
+    const nodePath = path.join(prefixRoot, 'node.exe')
+    const npmCmdPath = path.join(prefixRoot, 'npm.cmd')
+    const npmCliPath = path.join(prefixRoot, 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    fs.mkdirSync(path.dirname(npmCliPath), { recursive: true })
+    fs.writeFileSync(nodePath, '', 'utf8')
+    fs.writeFileSync(npmCmdPath, '', 'utf8')
+    fs.writeFileSync(npmCliPath, '', 'utf8')
+
+    const install = buildPinnedGlobalInstallCommand({
+      packageName: 'adhdev',
+      targetVersion: 'latest',
+      nodeExecutable: nodePath,
+      platform: 'win32',
+    })
+
+    expect(install.command).toBe(nodePath)
+    expect(install.args[0]).toBe(npmCliPath)
+    expect(install.surface.npmArgsPrefix).toEqual([npmCliPath])
+    expect(install.surface.execOptions).toEqual({ shell: false })
+    expect(install.execOptions).toEqual({ shell: false })
+  })
 })
