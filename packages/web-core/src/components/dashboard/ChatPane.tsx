@@ -7,6 +7,10 @@ import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import ChatControlsSection from './ChatControlsSection';
 import ChatInputBar from './ChatInputBar';
 import { getVisibleBarControls } from './ControlsBar';
+import { useControlsBarVisibility } from '../../hooks/useControlsBarVisibility';
+import { useTransport } from '../../context/TransportContext';
+import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands';
+import { buildChatDebugBundleClipboardText, buildChatFrontendDebugSnapshot, recordControlsToggleDebugGesture, type ControlsToggleDebugGestureState } from './chat-debug-bundle';
 import ConversationMetaChips from './ConversationMetaChips';
 import { getConversationViewStates } from './DashboardMobileChatShared';
 import type { ActiveConversation } from './types';
@@ -60,7 +64,10 @@ export default function ChatPane({
     isVisible = true,
 }: ChatPaneProps) {
     const receivedAtCache = useRef<Map<string, number>>(new Map());
+    const debugGestureStateRef = useRef<ControlsToggleDebugGestureState | undefined>(undefined);
     const loadDaemonMetadata = useDaemonMetadataLoader();
+    const { sendCommand } = useTransport();
+    const { isVisible: areControlsVisible } = useControlsBarVisibility();
     useDevRenderTrace('ChatPane', {
         tabKey: activeConv.tabKey,
         messageCount: activeConv.messages.length,
@@ -170,6 +177,65 @@ export default function ChatPane({
             .sort((a, b) => a.timestamp - b.timestamp),
         [actionLogs, activeConv.tabKey],
     );
+
+    const collectChatDebugBundle = useCallback(async () => {
+        if (!daemonId) return;
+        const frontendSnapshot = buildChatFrontendDebugSnapshot({
+            activeConv,
+            visibleMessages: allMessages,
+            actionLogs,
+            controls: controlsContext.targetEntry?.providerControls,
+            controlValues: controlsContext.targetEntry?.controlValues,
+            visibleBarControlCount: visibleBarControls.length,
+            chatTailState: {
+                hasMoreHistory,
+                historyError: loadError,
+                historyMessages,
+            },
+            ui: {
+                controlsVisible: areControlsVisible,
+                visibleLiveCount,
+                hiddenLiveCount,
+                isInputActive,
+                isVisible,
+            },
+        });
+        const raw = await sendCommand(daemonId, 'get_chat_debug_bundle', {
+            agentType: controlsContext.providerType || activeConv.agentType,
+            targetSessionId: activeConv.sessionId,
+            frontendSnapshot,
+        });
+        const result = unwrapCommandResult(raw);
+        const text = buildChatDebugBundleClipboardText(result);
+        await navigator.clipboard.writeText(text);
+    }, [
+        activeConv,
+        actionLogs,
+        allMessages,
+        areControlsVisible,
+        controlsContext.providerType,
+        controlsContext.targetEntry?.controlValues,
+        controlsContext.targetEntry?.providerControls,
+        daemonId,
+        hasMoreHistory,
+        hiddenLiveCount,
+        historyMessages,
+        isInputActive,
+        isVisible,
+        loadError,
+        sendCommand,
+        visibleBarControls.length,
+        visibleLiveCount,
+    ]);
+
+    const handleControlsToggleDebugGesture = useCallback(() => {
+        const result = recordControlsToggleDebugGesture(debugGestureStateRef.current);
+        debugGestureStateRef.current = result.state;
+        if (!result.shouldCollect) return;
+        void collectChatDebugBundle().catch((error) => {
+            console.warn('[chat-debug-bundle] failed to collect debug bundle', error);
+        });
+    }, [collectChatDebugBundle]);
     const emptyState = useMemo(() => {
         if (liveMessages.length !== 0) return undefined;
         if (activeConv.connectionState === 'connecting' || activeConv.connectionState === 'new') {
@@ -278,6 +344,7 @@ export default function ChatPane({
                     onSend={handleSendChat}
                     isActive={isInputActive}
                     showControlsToggle={visibleBarControls.length > 0}
+                    onControlsToggle={handleControlsToggleDebugGesture}
                 />
             )}
         </div>

@@ -431,6 +431,7 @@ export class DaemonCommandHandler implements CommandHelpers {
         switch (cmd) {
             // ─── Chat commands (chat-commands.ts) ───────────────
             case 'read_chat': return Chat.handleReadChat(this, args);
+            case 'get_chat_debug_bundle': return Chat.handleGetChatDebugBundle(this, args);
             case 'chat_history': return Chat.handleChatHistory(this, args);
             case 'send_chat': return Chat.handleSendChat(this, args);
             case 'list_chats': return Chat.handleListChats(this, args);

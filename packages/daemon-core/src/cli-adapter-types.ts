@@ -41,6 +41,7 @@ export interface CliAdapter {
     sendMessage(text: string): Promise<void>;
     getStatus(): CliAdapterStatus;
     getScriptParsedStatus?(): unknown;
+    getDebugSnapshot?(): unknown;
     invokeScript?(scriptName: string, args?: Record<string, unknown>): Promise<unknown>;
     getPartialResponse(): string;
     saveAndStop?(): Promise<void>;

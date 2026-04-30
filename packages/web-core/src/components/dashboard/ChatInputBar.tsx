@@ -11,6 +11,7 @@ interface ChatInputBarProps {
     isActive?: boolean;
     showControlsToggle?: boolean;
     animateVisibility?: boolean;
+    onControlsToggle?: () => void;
 }
 
 export function shouldDisableChatSendButton({
@@ -33,6 +34,7 @@ const ChatInputBar = memo(function ChatInputBar({
     isActive = true,
     showControlsToggle = false,
     animateVisibility = true,
+    onControlsToggle,
 }: ChatInputBarProps) {
     const chatInputRef = useRef<HTMLInputElement>(null);
     const [draftInput, setDraftInput] = useState('');
@@ -76,7 +78,10 @@ const ChatInputBar = memo(function ChatInputBar({
                 {showControlsToggle && (
                     <button
                         type="button"
-                        onClick={toggleControlsVisibility}
+                        onClick={() => {
+                            toggleControlsVisibility();
+                            onControlsToggle?.();
+                        }}
                         aria-label={areControlsVisible ? 'Hide controls' : 'Show controls'}
                         aria-pressed={areControlsVisible}
                         title={areControlsVisible ? 'Hide controls' : 'Show controls'}

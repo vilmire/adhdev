@@ -2545,6 +2545,88 @@ export class ProviderCliAdapter implements CliAdapter {
         return this.responseBuffer;
     }
 
+    getDebugSnapshot(): Record<string, unknown> {
+        const screenText = this.readTerminalScreenText();
+        const parsedResult = this.parsedStatusCache?.result && typeof this.parsedStatusCache.result === 'object'
+            ? this.parsedStatusCache.result as Record<string, any>
+            : null;
+        return {
+            cliType: this.cliType,
+            cliName: this.cliName,
+            workingDir: this.workingDir,
+            currentStatus: this.currentStatus,
+            ready: this.ready,
+            isWaitingForResponse: this.isWaitingForResponse,
+            activeModal: this.activeModal,
+            parseErrorMessage: this.parseErrorMessage,
+            messageCounts: {
+                committed: this.committedMessages.length,
+                structured: this.structuredMessages.length,
+                visible: this.messages.length,
+                parsedCache: Array.isArray(parsedResult?.messages) ? parsedResult.messages.length : undefined,
+            },
+            buffers: {
+                accumulatedLength: this.accumulatedBuffer.length,
+                accumulatedRawLength: this.accumulatedRawBuffer.length,
+                recentOutputLength: this.recentOutputBuffer.length,
+                responseLength: this.responseBuffer.length,
+                startupLength: this.startupBuffer.length,
+                accumulatedTail: this.accumulatedBuffer.slice(-24_000),
+                accumulatedRawTail: this.accumulatedRawBuffer.slice(-24_000),
+                recentOutputTail: this.recentOutputBuffer.slice(-12_000),
+                responseTail: this.responseBuffer.slice(-12_000),
+            },
+            terminal: {
+                screenText,
+                lastScreenSnapshot: this.lastScreenSnapshot,
+                lastScreenText: this.lastScreenText,
+                lastOutputAt: this.lastOutputAt,
+                lastNonEmptyOutputAt: this.lastNonEmptyOutputAt,
+                lastScreenChangeAt: this.lastScreenChangeAt,
+                lastScreenSnapshotReadAt: this.lastScreenSnapshotReadAt,
+            },
+            parser: {
+                scriptNames: listCliScriptNames(this.cliScripts),
+                traceSessionId: this.traceSessionId,
+                traceSeq: this.traceSeq,
+                currentTurnScope: this.currentTurnScope,
+                parsedStatusCache: parsedResult
+                    ? {
+                        id: parsedResult.id,
+                        status: parsedResult.status,
+                        title: parsedResult.title,
+                        providerSessionId: parsedResult.providerSessionId,
+                        transcriptAuthority: parsedResult.transcriptAuthority,
+                        coverage: parsedResult.coverage,
+                        messageCount: Array.isArray(parsedResult.messages) ? parsedResult.messages.length : undefined,
+                        activeModal: parsedResult.activeModal,
+                    }
+                    : null,
+                pendingScriptStatus: this.pendingScriptStatus,
+                pendingScriptStatusSince: this.pendingScriptStatusSince,
+            },
+            runtimeMetadata: this.getRuntimeMetadata(),
+            statusHistory: this.statusHistory.slice(-80),
+            traceEntries: this.traceEntries.slice(-120),
+            timing: {
+                spawnAt: this.spawnAt,
+                startupFirstOutputAt: this.startupFirstOutputAt,
+                submitPendingUntil: this.submitPendingUntil,
+                responseSettleIgnoreUntil: this.responseSettleIgnoreUntil,
+                responseEpoch: this.responseEpoch,
+                resizeSuppressUntil: this.resizeSuppressUntil,
+                lastApprovalResolvedAt: this.lastApprovalResolvedAt,
+                committedMessagesChangedAt: this.committedMessagesChangedAt,
+            },
+            finish: {
+                idleFinishCandidate: this.idleFinishCandidate,
+                finishRetryCount: this.finishRetryCount,
+                submitRetryUsed: this.submitRetryUsed,
+                submitRetryPromptSnippet: this.submitRetryPromptSnippet,
+            },
+        };
+    }
+
     getRuntimeMetadata(): PtyRuntimeMetadata | null {
         if (!this.ptyProcess || typeof this.ptyProcess.getMetadata !== 'function') return null;
         return this.ptyProcess.getMetadata();
