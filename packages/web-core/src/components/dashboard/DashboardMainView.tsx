@@ -816,7 +816,7 @@ export default function DashboardMainView({
                                 </div>
 
                                 <div className="text-[11px] text-text-muted mt-4">
-                                    Use sequence shortcuts like {isMac ? 'N, T→, S→, M↓' : 'N, T→, S→, M↓'}, or set your own modifier combo. Press Esc to stop listening.
+                                    Use modifier shortcuts like {isMac ? '⌘⇧Enter, ⌘⇧→, ⌘Ctrl⇧↓' : 'Ctrl+Shift+Enter, Ctrl+Shift+→, Ctrl+Alt+Shift+↓'}, or set your own combo. Dashboard action shortcuts are ignored while typing in text inputs.
                                 </div>
                             </>
                         )}

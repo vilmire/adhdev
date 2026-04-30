@@ -27,8 +27,38 @@ describe('dashboard action shortcut defaults', () => {
     vi.stubGlobal('localStorage', createStorageMock())
   })
 
-  it('uses directional sequence defaults for Mac pane and tab movement', () => {
+  it('uses low-accident modifier defaults for Mac navigation and session creation', () => {
     const expected: Partial<Record<DashboardActionShortcutId, string>> = {
+      openNewSession: '⌘+⇧+Enter',
+      splitActiveTabRight: '⌘+Ctrl+⇧+→',
+      splitActiveTabDown: '⌘+Ctrl+⇧+↓',
+      focusLeftPane: '',
+      focusRightPane: '',
+      focusUpPane: '',
+      focusDownPane: '',
+      moveActiveTabToLeftPane: '',
+      moveActiveTabToRightPane: '',
+      moveActiveTabToUpPane: '',
+      moveActiveTabToDownPane: '',
+      selectPreviousGroupTab: '⌘+⇧+←',
+      selectNextGroupTab: '⌘+⇧+→',
+    }
+
+    for (const [actionId, shortcut] of Object.entries(expected) as [DashboardActionShortcutId, string][]) {
+      expect(getDefaultShortcut(actionId, true)).toBe(shortcut)
+    }
+  })
+
+  it('uses modifier+arrow defaults without bare key sequences on non-Mac platforms', () => {
+    expect(getDefaultShortcut('openNewSession', false)).toBe('Ctrl+Shift+Enter')
+    expect(getDefaultShortcut('selectPreviousGroupTab', false)).toBe('Ctrl+Shift+←')
+    expect(getDefaultShortcut('selectNextGroupTab', false)).toBe('Ctrl+Shift+→')
+    expect(getDefaultShortcut('splitActiveTabRight', false)).toBe('Ctrl+Alt+Shift+→')
+    expect(getDefaultShortcut('splitActiveTabDown', false)).toBe('Ctrl+Alt+Shift+↓')
+  })
+
+  it('migrates old Mac movement defaults and rejected bare sequences to the safer defaults', () => {
+    localStorage.setItem(ACTION_SHORTCUTS_KEY, JSON.stringify({
       openNewSession: 'N',
       splitActiveTabRight: 'S →',
       splitActiveTabDown: 'S ↓',
@@ -42,14 +72,26 @@ describe('dashboard action shortcut defaults', () => {
       moveActiveTabToDownPane: 'M ↓',
       selectPreviousGroupTab: 'T ←',
       selectNextGroupTab: 'T →',
-    }
+    }))
 
-    for (const [actionId, shortcut] of Object.entries(expected) as [DashboardActionShortcutId, string][]) {
-      expect(getDefaultShortcut(actionId, true)).toBe(shortcut)
-    }
+    expect(readActionShortcuts(true)).toMatchObject({
+      openNewSession: '⌘+⇧+Enter',
+      splitActiveTabRight: '⌘+Ctrl+⇧+→',
+      splitActiveTabDown: '⌘+Ctrl+⇧+↓',
+      focusLeftPane: '',
+      focusRightPane: '',
+      focusUpPane: '',
+      focusDownPane: '',
+      moveActiveTabToLeftPane: '',
+      moveActiveTabToRightPane: '',
+      moveActiveTabToUpPane: '',
+      moveActiveTabToDownPane: '',
+      selectPreviousGroupTab: '⌘+⇧+←',
+      selectNextGroupTab: '⌘+⇧+→',
+    })
   })
 
-  it('migrates old Mac movement defaults to the new directional defaults', () => {
+  it('migrates old Mac modifier movement defaults to the safer defaults', () => {
     localStorage.setItem(ACTION_SHORTCUTS_KEY, JSON.stringify({
       splitActiveTabRight: '⌘+⌥+=',
       splitActiveTabDown: '⌘+⌥+-',
@@ -66,22 +108,22 @@ describe('dashboard action shortcut defaults', () => {
     }))
 
     expect(readActionShortcuts(true)).toMatchObject({
-      splitActiveTabRight: 'S →',
-      splitActiveTabDown: 'S ↓',
-      focusLeftPane: 'F ←',
-      focusRightPane: 'F →',
-      focusUpPane: 'F ↑',
-      focusDownPane: 'F ↓',
-      moveActiveTabToLeftPane: 'M ←',
-      moveActiveTabToRightPane: 'M →',
-      moveActiveTabToUpPane: 'M ↑',
-      moveActiveTabToDownPane: 'M ↓',
-      selectPreviousGroupTab: 'T ←',
-      selectNextGroupTab: 'T →',
+      splitActiveTabRight: '⌘+Ctrl+⇧+→',
+      splitActiveTabDown: '⌘+Ctrl+⇧+↓',
+      focusLeftPane: '',
+      focusRightPane: '',
+      focusUpPane: '',
+      focusDownPane: '',
+      moveActiveTabToLeftPane: '',
+      moveActiveTabToRightPane: '',
+      moveActiveTabToUpPane: '',
+      moveActiveTabToDownPane: '',
+      selectPreviousGroupTab: '⌘+⇧+←',
+      selectNextGroupTab: '⌘+⇧+→',
     })
   })
 
-  it('migrates old non-Mac movement defaults to the new directional defaults', () => {
+  it('migrates old non-Mac movement defaults to the safer defaults', () => {
     localStorage.setItem(ACTION_SHORTCUTS_KEY, JSON.stringify({
       splitActiveTabRight: 'Ctrl+Alt+\\',
       splitActiveTabDown: 'Ctrl+Alt+-',
@@ -98,18 +140,32 @@ describe('dashboard action shortcut defaults', () => {
     }))
 
     expect(readActionShortcuts(false)).toMatchObject({
-      splitActiveTabRight: 'S →',
-      splitActiveTabDown: 'S ↓',
-      focusLeftPane: 'F ←',
-      focusRightPane: 'F →',
-      focusUpPane: 'F ↑',
-      focusDownPane: 'F ↓',
-      moveActiveTabToLeftPane: 'M ←',
-      moveActiveTabToRightPane: 'M →',
-      moveActiveTabToUpPane: 'M ↑',
-      moveActiveTabToDownPane: 'M ↓',
-      selectPreviousGroupTab: 'T ←',
-      selectNextGroupTab: 'T →',
+      splitActiveTabRight: 'Ctrl+Alt+Shift+→',
+      splitActiveTabDown: 'Ctrl+Alt+Shift+↓',
+      focusLeftPane: '',
+      focusRightPane: '',
+      focusUpPane: '',
+      focusDownPane: '',
+      moveActiveTabToLeftPane: '',
+      moveActiveTabToRightPane: '',
+      moveActiveTabToUpPane: '',
+      moveActiveTabToDownPane: '',
+      selectPreviousGroupTab: 'Ctrl+Shift+←',
+      selectNextGroupTab: 'Ctrl+Shift+→',
+    })
+  })
+
+  it('preserves user-customized shortcuts instead of replacing every non-default value', () => {
+    localStorage.setItem(ACTION_SHORTCUTS_KEY, JSON.stringify({
+      openNewSession: 'Ctrl+Alt+N',
+      splitActiveTabRight: 'Ctrl+Alt+R',
+      selectNextGroupTab: 'Ctrl+Alt+T',
+    }))
+
+    expect(readActionShortcuts(false)).toMatchObject({
+      openNewSession: 'Ctrl+Alt+N',
+      splitActiveTabRight: 'Ctrl+Alt+R',
+      selectNextGroupTab: 'Ctrl+Alt+T',
     })
   })
 })

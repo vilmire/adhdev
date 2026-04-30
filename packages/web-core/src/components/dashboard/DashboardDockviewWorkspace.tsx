@@ -1922,7 +1922,7 @@ export default function DashboardDockviewWorkspace({
                 if (!combo) return
 
                 const hasModifier = event.metaKey || event.ctrlKey || event.altKey
-                if (isEditableTarget(event.target) && !hasModifier) return
+                if (isEditableTarget(event.target)) return
 
                 const actionShortcuts = readActionShortcuts(isMac)
                 const supportedEntries = (Object.entries(actionShortcuts) as [DashboardActionShortcutId, string][])

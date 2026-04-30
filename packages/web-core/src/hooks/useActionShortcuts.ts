@@ -39,36 +39,49 @@ export const ACTION_SHORTCUTS_KEY = 'adhdev-dashboard-action-shortcuts'
 const SEQUENCE_TIMEOUT_MS = 1200
 const LEGACY_ACTION_SHORTCUTS: Array<[DashboardActionShortcutId, string]> = [
     ['toggleHiddenTabs', 'G H'],
+    ['openNewSession', 'N'],
     ['setActiveTabShortcut', 'G S'],
     ['selectPreviousGroupTab', 'G K'],
+    ['selectPreviousGroupTab', 'T ←'],
     ['selectPreviousGroupTab', '⌥+['],
     ['selectPreviousGroupTab', 'Ctrl+Alt+['],
     ['selectNextGroupTab', 'G J'],
+    ['selectNextGroupTab', 'T →'],
     ['selectNextGroupTab', '⌥+]'],
     ['selectNextGroupTab', 'Ctrl+Alt+]'],
+    ['splitActiveTabDown', 'S ↓'],
     ['splitActiveTabDown', '⌘+⌥+-'],
     ['splitActiveTabDown', 'Ctrl+Alt+-'],
+    ['splitActiveTabRight', 'S →'],
     ['splitActiveTabRight', '⌘+⌥+\\'],
     ['splitActiveTabRight', '⌘+⌥+='],
     ['splitActiveTabRight', 'Ctrl+Alt+\\'],
+    ['focusLeftPane', 'F ←'],
     ['focusLeftPane', '⌘+⌥+←'],
     ['focusLeftPane', '⌘+⌥+['],
     ['focusLeftPane', 'Ctrl+Alt+←'],
+    ['focusRightPane', 'F →'],
     ['focusRightPane', '⌘+⌥+→'],
     ['focusRightPane', '⌘+⌥+]'],
     ['focusRightPane', 'Ctrl+Alt+→'],
+    ['focusUpPane', 'F ↑'],
     ['focusUpPane', '⌘+⌥+U'],
     ['focusUpPane', 'Ctrl+Alt+↑'],
+    ['focusDownPane', 'F ↓'],
     ['focusDownPane', '⌘+⌥+J'],
     ['focusDownPane', 'Ctrl+Alt+↓'],
+    ['moveActiveTabToLeftPane', 'M ←'],
     ['moveActiveTabToLeftPane', '⌘+⌥+⇧+←'],
     ['moveActiveTabToLeftPane', '⌘+⌥+,'],
     ['moveActiveTabToLeftPane', 'Ctrl+Alt+Shift+←'],
+    ['moveActiveTabToRightPane', 'M →'],
     ['moveActiveTabToRightPane', '⌘+⌥+⇧+→'],
     ['moveActiveTabToRightPane', '⌘+⌥+.'],
     ['moveActiveTabToRightPane', 'Ctrl+Alt+Shift+→'],
+    ['moveActiveTabToUpPane', 'M ↑'],
     ['moveActiveTabToUpPane', '⌘+⌥+I'],
     ['moveActiveTabToUpPane', 'Ctrl+Alt+Shift+↑'],
+    ['moveActiveTabToDownPane', 'M ↓'],
     ['moveActiveTabToDownPane', '⌘+⌥+K'],
     ['moveActiveTabToDownPane', 'Ctrl+Alt+Shift+↓'],
     ['triggerPrimaryApprovalAction', '⌥+A'],
@@ -85,7 +98,7 @@ export function getDefaultShortcut(actionId: DashboardActionShortcutId, isMac: b
         case 'openShortcutHelp':
             return '?'
         case 'openNewSession':
-            return 'N'
+            return isMac ? '⌘+⇧+Enter' : 'Ctrl+Shift+Enter'
         case 'hideCurrentTab':
             return isMac ? '⌥+X' : 'Ctrl+Alt+X'
         case 'toggleHiddenTabs':
@@ -101,25 +114,25 @@ export function getDefaultShortcut(actionId: DashboardActionShortcutId, isMac: b
         case 'dockActiveTab':
             return isMac ? '⌥+D' : 'Ctrl+Alt+D'
         case 'splitActiveTabRight':
-            return isMac ? 'S →' : 'S →'
+            return isMac ? '⌘+Ctrl+⇧+→' : 'Ctrl+Alt+Shift+→'
         case 'splitActiveTabDown':
-            return isMac ? 'S ↓' : 'S ↓'
+            return isMac ? '⌘+Ctrl+⇧+↓' : 'Ctrl+Alt+Shift+↓'
         case 'focusLeftPane':
-            return isMac ? 'F ←' : 'F ←'
+            return ''
         case 'focusRightPane':
-            return isMac ? 'F →' : 'F →'
+            return ''
         case 'focusUpPane':
-            return isMac ? 'F ↑' : 'F ↑'
+            return ''
         case 'focusDownPane':
-            return isMac ? 'F ↓' : 'F ↓'
+            return ''
         case 'moveActiveTabToLeftPane':
-            return isMac ? 'M ←' : 'M ←'
+            return ''
         case 'moveActiveTabToRightPane':
-            return isMac ? 'M →' : 'M →'
+            return ''
         case 'moveActiveTabToUpPane':
-            return isMac ? 'M ↑' : 'M ↑'
+            return ''
         case 'moveActiveTabToDownPane':
-            return isMac ? 'M ↓' : 'M ↓'
+            return ''
         case 'triggerPrimaryApprovalAction':
             return isMac ? '⌥+J' : 'Ctrl+Alt+J'
         case 'triggerSecondaryApprovalAction':
@@ -129,9 +142,9 @@ export function getDefaultShortcut(actionId: DashboardActionShortcutId, isMac: b
         case 'setActiveTabShortcut':
             return isMac ? '⌥+S' : 'Ctrl+Alt+S'
         case 'selectPreviousGroupTab':
-            return isMac ? 'T ←' : 'T ←'
+            return isMac ? '⌘+⇧+←' : 'Ctrl+Shift+←'
         case 'selectNextGroupTab':
-            return isMac ? 'T →' : 'T →'
+            return isMac ? '⌘+⇧+→' : 'Ctrl+Shift+→'
         case 'toggleCliView':
             return isMac ? '⌥+T' : 'Ctrl+Alt+T'
     }
@@ -451,7 +464,7 @@ export function useActionShortcuts({
             if (!combo) return
 
             const hasModifier = event.metaKey || event.ctrlKey || event.altKey
-            if (isEditableTarget(event.target) && !hasModifier) return
+            if (isEditableTarget(event.target)) return
 
             const currentParts = sequenceRef.current.parts
             const nextParts = hasModifier
