@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildChatFrontendDebugSnapshot, recordControlsToggleDebugGesture } from '../../../src/components/dashboard/chat-debug-bundle'
+import { buildChatDebugBundleClipboardText, buildChatFrontendDebugSnapshot, recordControlsToggleDebugGesture } from '../../../src/components/dashboard/chat-debug-bundle'
 
 describe('chat frontend debug bundle helpers', () => {
   it('builds a bounded frontend snapshot for the active conversation', () => {
@@ -73,5 +73,20 @@ describe('chat frontend debug bundle helpers', () => {
 
     expect(firedAt).toBe(1900)
     expect(state.count).toBe(0)
+  })
+
+  it('formats daemon-file delivery as a small locator instead of the full bundle body', () => {
+    const text = buildChatDebugBundleClipboardText({
+      delivery: 'daemon_file',
+      bundleId: 'chat-debug-20260430T123456Z-session_1-abcd1234',
+      savedPath: '/Users/test/.adhdev/debug-bundles/chat/chat-debug-20260430T123456Z-session_1-abcd1234.json',
+      sizeBytes: 12345,
+      summary: { targetSessionId: 'session_1', providerType: 'hermes', transport: 'pty' },
+    })
+
+    expect(text).toContain('ADHDev Chat Debug Bundle saved on daemon')
+    expect(text).toContain('chat-debug-20260430T123456Z-session_1-abcd1234')
+    expect(text).toContain('/Users/test/.adhdev/debug-bundles/chat/chat-debug-20260430T123456Z-session_1-abcd1234.json')
+    expect(text).not.toContain('```json')
   })
 })

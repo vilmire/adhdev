@@ -203,6 +203,7 @@ export default function ChatPane({
         const raw = await sendCommand(daemonId, 'get_chat_debug_bundle', {
             agentType: controlsContext.providerType || activeConv.agentType,
             targetSessionId: activeConv.sessionId,
+            delivery: 'daemon_file',
             frontendSnapshot,
         });
         const result = unwrapCommandResult(raw);

@@ -1,3 +1,6 @@
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { handleGetChatDebugBundle, sanitizeDebugBundleValue } from '../../src/commands/chat-commands.js'
 import { DaemonCommandHandler } from '../../src/commands/handler.js'
@@ -87,6 +90,78 @@ describe('chat debug bundle', () => {
     expect(serialized).not.toContain('secret-token-1234567890')
     expect(serialized).not.toContain('abc123456789')
     expect(result.text).toContain('ADHDev Chat Debug Bundle')
+  })
+
+  it('stores combined frontend and daemon evidence on the daemon when file delivery is requested', async () => {
+    const previousDir = process.env.ADHDEV_DEBUG_BUNDLE_DIR
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-chat-debug-bundle-'))
+    process.env.ADHDEV_DEBUG_BUNDLE_DIR = tempRoot
+    try {
+      const adapter = {
+        cliType: 'hermes',
+        cliName: 'Hermes CLI',
+        workingDir: '/tmp/project',
+        getStatus: vi.fn(() => ({ status: 'idle', messages: [{ role: 'assistant', content: 'daemon side' }] })),
+        getScriptParsedStatus: vi.fn(() => ({ status: 'idle' })),
+        getPartialResponse: vi.fn(() => 'partial daemon evidence'),
+        getDebugSnapshot: vi.fn(() => ({ terminalScreenText: 'daemon terminal evidence' })),
+        isProcessing: () => false,
+        isReady: () => true,
+      }
+
+      const result = await handleGetChatDebugBundle({
+        getProvider: () => ({ type: 'hermes', name: 'Hermes CLI', category: 'cli', scripts: {} }),
+        getCliAdapter: () => adapter,
+        getCdp: () => null,
+        currentSession: {
+          sessionId: 'session_1',
+          providerType: 'hermes',
+          transport: 'pty',
+          adapterKey: 'cli:hermes:session_1',
+        },
+        currentProviderType: 'hermes',
+        currentManagerKey: undefined,
+        currentIdeType: undefined,
+        agentStream: null,
+        ctx: {
+          sessionRegistry: { get: () => ({ sessionId: 'session_1', instanceKey: 'cli:hermes:session_1' }) },
+          instanceManager: { getInstance: () => null },
+        },
+        historyWriter: { appendNewMessages: () => {} },
+        evaluateProviderScript: vi.fn(),
+        getProviderScript: () => null,
+      } as any, {
+        targetSessionId: 'session_1',
+        delivery: 'daemon_file',
+        frontendSnapshot: {
+          activeConversation: { sessionId: 'session_1' },
+          visibleMessagesTail: [{ role: 'user', content: 'frontend side' }],
+        },
+      })
+
+      expect(result).toMatchObject({
+        success: true,
+        delivery: 'daemon_file',
+        bundleId: expect.stringMatching(/^chat-debug-/),
+        savedPath: expect.stringContaining(tempRoot),
+      })
+      expect(result.bundle).toBeUndefined()
+      expect(result.text).toBeUndefined()
+      const savedPath = String(result.savedPath)
+      const saved = JSON.parse(fs.readFileSync(savedPath, 'utf8'))
+      expect(saved.frontend.visibleMessagesTail[0].content).toBe('frontend side')
+      expect(saved.cli.debugSnapshot.terminalScreenText).toBe('daemon terminal evidence')
+      expect(saved.readChat).toBeTruthy()
+      expect(result.summary).toMatchObject({
+        targetSessionId: 'session_1',
+        providerType: 'hermes',
+        transport: 'pty',
+      })
+    } finally {
+      if (previousDir === undefined) delete process.env.ADHDEV_DEBUG_BUNDLE_DIR
+      else process.env.ADHDEV_DEBUG_BUNDLE_DIR = previousDir
+      fs.rmSync(tempRoot, { recursive: true, force: true })
+    }
   })
 
   it('redacts secret-looking object fields and inline credentials recursively', () => {

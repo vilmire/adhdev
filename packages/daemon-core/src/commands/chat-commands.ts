@@ -3,6 +3,10 @@
  *                 setMode, changeModel, setThoughtLevel, resolveAction, chatHistory
  */
 
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { CommandResult, CommandHelpers } from './handler.js';
 import type { CliAdapter } from '../cli-adapter-types.js';
 import { flattenContent, normalizeInputEnvelope, type InputEnvelope, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
@@ -652,6 +656,61 @@ function buildDebugBundleText(bundle: Record<string, unknown>): string {
     ].join('\n');
 }
 
+function getChatDebugBundleDir(): string {
+    const override = typeof process.env.ADHDEV_DEBUG_BUNDLE_DIR === 'string'
+        ? process.env.ADHDEV_DEBUG_BUNDLE_DIR.trim()
+        : '';
+    return override || path.join(os.homedir(), '.adhdev', 'debug-bundles', 'chat');
+}
+
+function safeBundleIdSegment(value: unknown, fallback: string): string {
+    const normalized = String(value || fallback)
+        .trim()
+        .replace(/[^A-Za-z0-9_.-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 80);
+    return normalized || fallback;
+}
+
+function createChatDebugBundleId(targetSessionId: string): string {
+    const timestamp = new Date().toISOString().replace(/[-:.]/g, '').replace('T', 'T').replace('Z', 'Z');
+    const sessionSegment = safeBundleIdSegment(targetSessionId, 'unknown-session');
+    return `chat-debug-${timestamp}-${sessionSegment}-${randomUUID().slice(0, 8)}`;
+}
+
+function buildChatDebugBundleSummary(bundle: Record<string, unknown>): Record<string, unknown> {
+    const target = bundle.target && typeof bundle.target === 'object' ? bundle.target as Record<string, unknown> : {};
+    const readChat = bundle.readChat && typeof bundle.readChat === 'object' ? bundle.readChat as Record<string, unknown> : {};
+    const cli = bundle.cli && typeof bundle.cli === 'object' ? bundle.cli as Record<string, unknown> : null;
+    const frontend = bundle.frontend && typeof bundle.frontend === 'object' ? bundle.frontend as Record<string, unknown> : null;
+    return {
+        createdAt: bundle.createdAt,
+        targetSessionId: target.targetSessionId,
+        providerType: target.providerType,
+        transport: target.transport,
+        readChatSuccess: readChat.success,
+        readChatStatus: readChat.status,
+        readChatTotalMessages: readChat.totalMessages,
+        cliStatus: cli?.status,
+        cliMessageCount: cli?.messageCount,
+        hasFrontendSnapshot: !!frontend,
+    };
+}
+
+function storeChatDebugBundleOnDaemon(bundle: Record<string, unknown>, targetSessionId: string): { bundleId: string; savedPath: string; sizeBytes: number } {
+    const bundleId = createChatDebugBundleId(targetSessionId);
+    const dir = getChatDebugBundleDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const savedPath = path.join(dir, `${bundleId}.json`);
+    const json = `${JSON.stringify(bundle, null, 2)}\n`;
+    fs.writeFileSync(savedPath, json, { encoding: 'utf8', mode: 0o600 });
+    return { bundleId, savedPath, sizeBytes: Buffer.byteLength(json, 'utf8') };
+}
+
+function isDaemonFileDebugDelivery(args: any): boolean {
+    return args?.delivery === 'daemon_file' || args?.delivery === 'file';
+}
+
 export async function handleGetChatDebugBundle(h: CommandHelpers, args: any): Promise<CommandResult> {
     const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     if (!targetSessionId && !h.currentSession) {
@@ -751,6 +810,20 @@ export async function handleGetChatDebugBundle(h: CommandHelpers, args: any): Pr
     };
 
     const bundle = sanitizeDebugBundleValue(rawBundle) as Record<string, unknown>;
+    if (isDaemonFileDebugDelivery(args)) {
+        const summary = buildChatDebugBundleSummary(bundle);
+        const stored = storeChatDebugBundleOnDaemon(bundle, targetSessionId || String(summary.targetSessionId || 'unknown-session'));
+        LOG.info('Command', `[get_chat_debug_bundle] saved daemon_file bundle id=${stored.bundleId} path=${stored.savedPath} sizeBytes=${stored.sizeBytes} targetSessionId=${summary.targetSessionId || ''} providerType=${summary.providerType || ''} transport=${summary.transport || ''}`);
+        return {
+            success: true,
+            delivery: 'daemon_file',
+            bundleId: stored.bundleId,
+            savedPath: stored.savedPath,
+            sizeBytes: stored.sizeBytes,
+            createdAt: bundle.createdAt,
+            summary,
+        };
+    }
     return {
         success: true,
         bundle,

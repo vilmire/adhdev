@@ -264,6 +264,7 @@ export default function DashboardMobileChatInbox({
         })
         const raw = await sendDaemonCommand(routeTarget, 'get_chat_debug_bundle', {
             ...getProviderArgs(conversation),
+            delivery: 'daemon_file',
             frontendSnapshot,
         })
         await navigator.clipboard.writeText(buildChatDebugBundleClipboardText(unwrapCommandResult(raw)))

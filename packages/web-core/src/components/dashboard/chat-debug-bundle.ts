@@ -144,6 +144,23 @@ export function buildChatFrontendDebugSnapshot(options: BuildChatFrontendDebugSn
 
 export function buildChatDebugBundleClipboardText(result: unknown): string {
     const body = result && typeof result === 'object' ? result as Record<string, unknown> : {}
+    if (body.delivery === 'daemon_file') {
+        const lines = [
+            '# ADHDev Chat Debug Bundle saved on daemon',
+            '',
+            `bundleId: ${String(body.bundleId || '')}`,
+            `savedPath: ${String(body.savedPath || '')}`,
+            `sizeBytes: ${String(body.sizeBytes || '')}`,
+            `createdAt: ${String(body.createdAt || '')}`,
+        ]
+        if (body.summary && typeof body.summary === 'object') {
+            lines.push('', 'summary:', JSON.stringify(body.summary, null, 2))
+        }
+        if (Array.isArray(body.warnings) && body.warnings.length > 0) {
+            lines.push('', 'warnings:', ...body.warnings.map((warning) => `- ${String(warning)}`))
+        }
+        return lines.join('\n')
+    }
     if (typeof body.text === 'string') return body.text
     if (body.bundle && typeof body.bundle === 'object') {
         return `# ADHDev Chat Debug Bundle\n\n\`\`\`json\n${JSON.stringify(body.bundle, null, 2)}\n\`\`\``
