@@ -18,7 +18,7 @@ export function parseCliScriptResult(result: unknown): { success: boolean; paylo
   return { success: true, payload: result }
 }
 
-export function getCliScriptCommand(payload: any): { type: string; text?: string } | null {
+export function getCliScriptCommand(payload: any): { type: string; text?: string; enterCount?: number } | null {
   if (!payload || typeof payload !== 'object') return null
 
   if (typeof payload.sendMessage === 'string' && payload.sendMessage.trim()) {
@@ -35,5 +35,8 @@ export function getCliScriptCommand(payload: any): { type: string; text?: string
       ? command.message.trim()
       : ''
   if (!text) return null
-  return { type: command.type, text }
+  const enterCount = Number.isInteger(command.enterCount) && command.enterCount > 0 && command.enterCount <= 5
+    ? command.enterCount
+    : undefined
+  return { type: command.type, text, ...(enterCount ? { enterCount } : {}) }
 }

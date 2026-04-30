@@ -343,7 +343,12 @@ async function executeProviderScript(h: CommandHelpers, args: any, scriptName: s
             if (cliCommand?.type === 'send_message' && cliCommand.text) {
                 await adapter.sendMessage(cliCommand.text);
             } else if (cliCommand?.type === 'pty_write' && cliCommand.text && adapter.writeRaw) {
+                const enterCount = cliCommand.enterCount || 1;
                 await adapter.writeRaw(cliCommand.text + '\r');
+                for (let i = 1; i < enterCount; i += 1) {
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                    await adapter.writeRaw('\r');
+                }
             }
             applyProviderPatch(h, args, parsed.payload);
             return {
