@@ -193,6 +193,9 @@ export async function handleSetProviderSourceConfig(h: CommandHelpers, args: any
     });
     loader.reload();
     loader.registerToDetector();
+    const refreshedInstances = h.ctx.instanceManager
+        ? h.ctx.instanceManager.refreshProviderDefinitions((providerType) => loader.resolve(providerType))
+        : 0;
     await h.ctx.onProviderSourceConfigChanged?.();
 
     LOG.info(
@@ -200,7 +203,7 @@ export async function handleSetProviderSourceConfig(h: CommandHelpers, args: any
         `[set_provider_source_config] mode=${sourceConfig.sourceMode} explicitProviderDir=${sourceConfig.explicitProviderDir || '-'} userDir=${sourceConfig.userDir}`,
     );
 
-    return { success: true, reloaded: true, ...sourceConfig };
+    return { success: true, reloaded: true, refreshedInstances, ...sourceConfig };
 }
 
 // ─── Extension Script Execution (Model/Mode) ─────

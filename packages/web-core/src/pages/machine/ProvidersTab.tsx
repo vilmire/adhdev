@@ -184,7 +184,7 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand }
                 <div className="flex items-center justify-between gap-3 mb-3">
                     <div>
                         <div className="text-[11px] font-semibold uppercase tracking-wider text-violet-400">Provider source config</div>
-                        <div className="text-[11px] text-text-muted mt-1">Affects provider resolution, fix/verify flows, and new launches. Existing running sessions may need restart.</div>
+                        <div className="text-[11px] text-text-muted mt-1">Affects provider resolution, fix/verify flows, and new launches. Running CLI sessions refresh provider scripts/config; process binary changes still apply on next launch.</div>
                     </div>
                     <button onClick={fetchSourceConfig} className="machine-btn text-[10px]">↻ Refresh source</button>
                 </div>
