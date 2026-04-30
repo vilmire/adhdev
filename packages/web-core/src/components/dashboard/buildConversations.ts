@@ -90,6 +90,7 @@ export function buildIdeConversations(
     const machineName = context.machineName;
     const connectionState = context.connectionState;
     const workspaceName = getWorkspaceName(ide);
+    const workspacePath = ide.workspace || '';
     const providerLabel = getAgentDisplayName(ide.type, { agentName: ide.cliName });
     const ideLabel = (isCliConv(ide) || isAcpConv(ide)) ? providerLabel : formatIdeType(ide.type);
     const streams: {
@@ -181,6 +182,7 @@ export function buildIdeConversations(
             resume: ide.resume,
             hostIdeType: !isCliConv(ide) && !isAcpConv(ide) ? ide.type : undefined,
             workspaceName,
+            workspacePath,
             displayPrimary: effectiveNativeTitle
                 || workspaceName
                 || (isCliConv(ide)
@@ -239,6 +241,7 @@ export function buildIdeConversations(
             messages: serverMsgs,
             hostIdeType: ide.type,
             workspaceName,
+            workspacePath,
             displayPrimary: effectiveStreamTitle || workspaceName || stream.agentName || ideLabel,
             displaySecondary: `${ideLabel} · ${stream.agentName}`,
             cdpConnected: ide.cdpConnected,
@@ -274,6 +277,7 @@ export function buildIdeConversations(
             messages: [],
             hostIdeType: ide.type,
             workspaceName,
+            workspacePath,
             displayPrimary: workspaceName || ideLabel,
             displaySecondary: ideLabel,
             cdpConnected: ide.cdpConnected,

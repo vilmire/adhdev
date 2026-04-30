@@ -336,6 +336,7 @@ export default function DashboardNewSessionDialog({
             messages: [],
             ideType: selectedTarget,
             workspaceName: resolvedWorkspacePath,
+            workspacePath: resolvedWorkspacePath,
             displayPrimary: providerLabel,
             displaySecondary: 'CLI',
             streamSource: 'native',

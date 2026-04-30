@@ -314,6 +314,7 @@ export default function AgentTab({
             messages: [],
             ideType: selectedType,
             workspaceName: resolvedWorkspacePath,
+            workspacePath: resolvedWorkspacePath,
             displayPrimary: providerLabel,
             displaySecondary: 'CLI',
             streamSource: 'native',

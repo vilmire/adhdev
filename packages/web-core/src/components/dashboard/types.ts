@@ -25,6 +25,8 @@ export interface ActiveConversation {
     resume?: import('../../types').ProviderResumeCapability;
     hostIdeType?: string;
     workspaceName: string;
+    /** Full workspace path, when available. workspaceName is display-only/basename. */
+    workspacePath?: string;
     displayPrimary: string;
     displaySecondary: string;
     cdpConnected?: boolean;

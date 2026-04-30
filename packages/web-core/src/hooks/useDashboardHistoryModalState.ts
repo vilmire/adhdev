@@ -23,6 +23,15 @@ interface UseDashboardHistoryModalStateOptions {
   setSearchParams: SetURLSearchParams
 }
 
+function getConversationWorkspacePath(conversation: ActiveConversation | undefined | null): string {
+  if (!conversation) return ''
+  const workspacePath = String(conversation.workspacePath || '').trim()
+  if (workspacePath) return workspacePath
+  const workspaceName = String(conversation.workspaceName || '').trim()
+  if (/^(?:~\/|\/|[A-Za-z]:[\\/])/.test(workspaceName)) return workspaceName
+  return ''
+}
+
 export function useDashboardHistoryModalState({
   activeConv,
   remoteDialogConv,
@@ -52,7 +61,8 @@ export function useDashboardHistoryModalState({
     if (!historyTargetConv || !isSavedSessionHistoryTarget) return null
     const routeTarget = historyTargetConv.daemonId || historyTargetConv.routeId || ''
     const providerType = getConversationProviderType(historyTargetConv)
-    return `${routeTarget}:${providerType}`
+    const workspace = getConversationWorkspacePath(historyTargetConv)
+    return `${routeTarget}:${providerType}:${historyTargetConv.providerSessionId || ''}:${workspace}`
   }, [historyTargetConv, isSavedSessionHistoryTarget])
 
   const {
@@ -84,11 +94,14 @@ export function useDashboardHistoryModalState({
     try {
       const routeTarget = historyTargetConv.daemonId || historyTargetConv.routeId
       const providerType = getConversationProviderType(historyTargetConv)
+      const workspace = getConversationWorkspacePath(historyTargetConv)
       const raw: any = await sendDaemonCommand(routeTarget, 'list_saved_sessions', {
         agentType: providerType,
         providerType,
         kind: 'cli',
         limit: 50,
+        ...(historyTargetConv.providerSessionId ? { providerSessionId: historyTargetConv.providerSessionId } : {}),
+        ...(workspace ? { workspace } : {}),
       })
       const result = raw?.result ?? raw
       setSavedHistorySessions(Array.isArray(result?.sessions) ? result.sessions : [])

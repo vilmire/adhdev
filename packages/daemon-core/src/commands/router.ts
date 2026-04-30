@@ -525,6 +525,12 @@ export class DaemonCommandRouter {
                 const wantsAll = args?.all === true;
                 const offset = wantsAll ? 0 : Math.max(0, Number(args?.offset) || 0);
                 const limit = wantsAll ? Number.MAX_SAFE_INTEGER : Math.max(1, Math.min(100, Number(args?.limit) || 30));
+                const requestedWorkspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';
+                const requestedProviderSessionId = typeof args?.providerSessionId === 'string'
+                    ? args.providerSessionId.trim()
+                    : typeof args?.activeProviderSessionId === 'string'
+                        ? args.activeProviderSessionId.trim()
+                        : '';
                 const providerMeta = this.deps.providerLoader.resolve?.(providerType) || this.deps.providerLoader.getMeta(providerType);
                 const { sessions: historySessions, hasMore, source } = listProviderHistorySessions(providerType, {
                     canonicalHistory: providerMeta?.canonicalHistory,
@@ -546,6 +552,10 @@ export class DaemonCommandRouter {
                     sessions: historySessions.map(session => {
                         const saved = savedSessionById.get(session.historySessionId);
                         const recent = recentSessionById.get(session.historySessionId);
+                        const workspace = saved?.workspace
+                            || recent?.workspace
+                            || session.workspace
+                            || (requestedWorkspace && requestedProviderSessionId === session.historySessionId ? requestedWorkspace : undefined);
                         return {
                             id: session.historySessionId,
                             providerSessionId: session.historySessionId,
@@ -553,13 +563,13 @@ export class DaemonCommandRouter {
                             providerName: saved?.providerName || recent?.providerName || providerType,
                             kind: saved?.kind || recent?.kind || kind,
                             title: saved?.title || recent?.title || session.sessionTitle || session.preview || providerType,
-                            workspace: saved?.workspace || recent?.workspace || session.workspace,
+                            workspace,
                             summaryMetadata: saved?.summaryMetadata || recent?.summaryMetadata,
                             preview: session.preview,
                             messageCount: session.messageCount,
                             firstMessageAt: session.firstMessageAt,
                             lastMessageAt: session.lastMessageAt,
-                            canResume: !!(saved?.workspace || recent?.workspace || session.workspace) && canResumeById,
+                            canResume: !!workspace && canResumeById,
                             historySource: session.source,
                             sourcePath: session.sourcePath,
                             sourceMtimeMs: session.sourceMtimeMs,
