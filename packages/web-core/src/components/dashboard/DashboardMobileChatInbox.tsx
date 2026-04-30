@@ -1,13 +1,20 @@
+import { useCallback } from 'react'
+import type { MouseEvent } from 'react'
 import { IconBell, IconSettings, IconChat } from '../Icons'
 import InstallCommand from '../InstallCommand'
 import { formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 import { getConversationMetaText, getConversationStatusHint, getConversationTitle } from './conversation-presenters'
+import { buildChatDebugBundleClipboardText, buildChatFrontendDebugSnapshot } from './chat-debug-bundle'
+import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
+import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands'
 import {
     DASHBOARD_NEW_SESSION_DESCRIPTION,
     DASHBOARD_NEW_SESSION_LABEL,
 } from './dashboard-session-cta'
+
+type MobileInboxDebugBundleCollector = (conversation: ActiveConversation) => void | Promise<void>
 
 interface DashboardMobileChatInboxProps {
     section: DashboardMobileSection
@@ -18,6 +25,8 @@ interface DashboardMobileChatInboxProps {
     hiddenConversations: ActiveConversation[]
     machineCards: MobileMachineCard[]
     getAvatarText: (primary: string) => string
+    actionLogs: { routeId: string; text: string; timestamp: number }[]
+    sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     onOpenConversation: (conversation: ActiveConversation) => void
     onShowConversation: (conversation: ActiveConversation) => void
     onShowAllHidden: () => void
@@ -28,6 +37,7 @@ interface DashboardMobileChatInboxProps {
     wsStatus?: string
     isConnected?: boolean
     isStandalone?: boolean
+    onCollectChatDebugBundle?: MobileInboxDebugBundleCollector
 }
 
 function InboxSectionHeader({
@@ -83,11 +93,13 @@ function DashboardMobileChatItem({
     type,
     getAvatarText,
     onOpenConversation,
+    onCollectChatDebugBundle,
 }: {
     item: MobileConversationListItem
     type: 'needs_attention' | 'task_complete' | 'working' | 'earlier'
     getAvatarText: (primary: string) => string
     onOpenConversation: (c: ActiveConversation) => void
+    onCollectChatDebugBundle?: MobileInboxDebugBundleCollector
 }) {
     const isUnread = type === 'needs_attention' || type === 'task_complete'
     const isWorking = type === 'working'
@@ -117,12 +129,22 @@ function DashboardMobileChatItem({
     const timestampClassName = isEarlier ? 'text-text-muted opacity-80' : 'text-text-muted'
     const shouldShowTimestamp = !isWorking && !isTaskComplete
     const warningTextClassName = 'text-[color:var(--status-warning)]'
+    const handleConversationContextMenu = (event: MouseEvent<HTMLButtonElement>) => {
+        if (!onCollectChatDebugBundle) return
+        event.preventDefault()
+        event.stopPropagation()
+        const result = onCollectChatDebugBundle?.(item.conversation)
+        void Promise.resolve(result).catch((error) => {
+            console.warn('[chat-debug-bundle] failed to collect mobile inbox debug bundle', error)
+        })
+    }
     
     return (
         <button
             key={item.conversation.tabKey}
             className={`group flex items-start gap-3.5 px-4 py-3.5 w-full text-left relative overflow-hidden transition-colors active:scale-[0.995] ${rowClassName}`}
             onClick={() => onOpenConversation(item.conversation)}
+            onContextMenu={handleConversationContextMenu}
             type="button"
         >
             {(isUnread || isWorking) ? (
@@ -193,6 +215,8 @@ export default function DashboardMobileChatInbox({
     hiddenConversations,
     machineCards,
     getAvatarText,
+    actionLogs,
+    sendDaemonCommand,
     onOpenConversation,
     onShowConversation,
     onShowAllHidden,
@@ -202,6 +226,7 @@ export default function DashboardMobileChatInbox({
     onSectionChange,
     wsStatus = 'connected',
     isStandalone = false,
+    onCollectChatDebugBundle,
 }: DashboardMobileChatInboxProps) {
     const isDisconnected = wsStatus === 'disconnected' || wsStatus === 'reconnecting' || wsStatus === 'offline' || wsStatus === 'auth_failed'
     const hasMachines = machineCards.length > 0
@@ -215,6 +240,42 @@ export default function DashboardMobileChatInbox({
     const contentPaddingClass = isStandalone
         ? 'px-3 pb-3'
         : 'px-3 pb-[calc(12px+env(safe-area-inset-bottom,0px))]'
+    const collectMobileInboxChatDebugBundle = useCallback(async (conversation: ActiveConversation) => {
+        const routeTarget = getRouteTarget(conversation)
+        if (!routeTarget) return
+        const liveMessages = Array.isArray(conversation.messages) ? conversation.messages : []
+        const frontendSnapshot = buildChatFrontendDebugSnapshot({
+            activeConv: conversation,
+            visibleMessages: liveMessages,
+            actionLogs,
+            visibleBarControlCount: 0,
+            chatTailState: {
+                hasMoreHistory: false,
+                historyError: null,
+                historyMessages: [],
+            },
+            ui: {
+                controlsVisible: false,
+                visibleLiveCount: liveMessages.length,
+                hiddenLiveCount: 0,
+                isInputActive: false,
+                isVisible: true,
+            },
+        })
+        const raw = await sendDaemonCommand(routeTarget, 'get_chat_debug_bundle', {
+            ...getProviderArgs(conversation),
+            frontendSnapshot,
+        })
+        await navigator.clipboard.writeText(buildChatDebugBundleClipboardText(unwrapCommandResult(raw)))
+    }, [actionLogs, sendDaemonCommand])
+    const effectiveCollectChatDebugBundle = onCollectChatDebugBundle || collectMobileInboxChatDebugBundle
+    const handleHiddenConversationContextMenu = useCallback((event: MouseEvent<HTMLButtonElement>, conversation: ActiveConversation) => {
+        event.preventDefault()
+        event.stopPropagation()
+        void Promise.resolve(effectiveCollectChatDebugBundle(conversation)).catch((error) => {
+            console.warn('[chat-debug-bundle] failed to collect mobile inbox debug bundle', error)
+        })
+    }, [effectiveCollectChatDebugBundle])
 
     return (
         <div className="flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-primary">
@@ -329,6 +390,7 @@ export default function DashboardMobileChatInbox({
                                         type="needs_attention"
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
+                                        onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                     />
                                 </div>
                             ))}
@@ -347,6 +409,7 @@ export default function DashboardMobileChatInbox({
                                         type="task_complete"
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
+                                        onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                     />
                                 </div>
                             ))}
@@ -365,6 +428,7 @@ export default function DashboardMobileChatInbox({
                                         type="working"
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
+                                        onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                     />
                                 </div>
                             ))}
@@ -386,6 +450,7 @@ export default function DashboardMobileChatInbox({
                                             type="earlier"
                                             getAvatarText={getAvatarText}
                                             onOpenConversation={onOpenConversation}
+                                            onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                         />
                                     </div>
                                 ))}
@@ -459,6 +524,7 @@ export default function DashboardMobileChatInbox({
                                     key={conversation.tabKey}
                                     className={`flex items-start gap-3.5 px-4 py-3.5 w-full text-left transition-colors active:scale-[0.995] opacity-50 saturate-0 ${index > 0 ? 'border-t border-border-subtle/70' : ''}`}
                                     onClick={() => onShowConversation(conversation)}
+                                    onContextMenu={(event) => handleHiddenConversationContextMenu(event, conversation)}
                                     type="button"
                                 >
                                     <span className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0 bg-bg-primary border border-border-subtle text-text-secondary">

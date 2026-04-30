@@ -44,6 +44,20 @@ describe('dashboard mobile/touch regressions', () => {
     expect(source).toContain('{shouldShowTimestamp && <span')
   })
 
+  it('supports copying a chat debug bundle directly from mobile inbox rows', () => {
+    const inboxSource = readSource('components/dashboard/DashboardMobileChatInbox.tsx')
+    const modeSource = readSource('components/dashboard/DashboardMobileChatMode.tsx')
+
+    expect(inboxSource).toContain('handleConversationContextMenu')
+    expect(inboxSource).toContain('onCollectChatDebugBundle?.(item.conversation)')
+    expect(inboxSource).toContain("type MobileInboxDebugBundleCollector = (conversation: ActiveConversation) => void | Promise<void>")
+    expect(inboxSource).toContain('buildChatFrontendDebugSnapshot')
+    expect(inboxSource).toContain("sendDaemonCommand(routeTarget, 'get_chat_debug_bundle'")
+    expect(inboxSource).toContain('buildChatDebugBundleClipboardText(unwrapCommandResult(raw))')
+    expect(modeSource).toContain('actionLogs={actionLogs}')
+    expect(modeSource).toContain('sendDaemonCommand={sendDaemonCommand}')
+  })
+
   it('makes dashboard tab drag handles non-text-selectable on touch devices', () => {
     const css = readSource('index.css')
 

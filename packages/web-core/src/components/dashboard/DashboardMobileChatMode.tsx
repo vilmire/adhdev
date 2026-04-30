@@ -329,6 +329,8 @@ export default function DashboardMobileChatMode({
                     hiddenConversations={hiddenConversations}
                     machineCards={machineCards}
                     getAvatarText={getAvatarText}
+                    actionLogs={actionLogs}
+                    sendDaemonCommand={sendDaemonCommand}
                     onOpenConversation={navigation.openConversation}
                     onShowConversation={onShowHiddenConversation}
                     onShowAllHidden={onShowAllHiddenConversations}
