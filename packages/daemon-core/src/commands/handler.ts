@@ -380,6 +380,7 @@ export class DaemonCommandHandler implements CommandHelpers {
 
         const sessionScopedCommands = new Set([
             'read_chat',
+            'get_chat_debug_bundle',
             'send_chat',
             'list_chats',
             'new_chat',

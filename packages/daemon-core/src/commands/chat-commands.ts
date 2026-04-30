@@ -653,9 +653,13 @@ function buildDebugBundleText(bundle: Record<string, unknown>): string {
 }
 
 export async function handleGetChatDebugBundle(h: CommandHelpers, args: any): Promise<CommandResult> {
+    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
+    if (!targetSessionId && !h.currentSession) {
+        return { success: false, error: 'No targetSessionId specified — cannot route command' };
+    }
+
     const provider = h.getProvider(args?.agentType);
     const transport = getTargetTransport(h, provider);
-    const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     const providerType = provider?.type || getCurrentProviderType(h, args?.agentType || '');
     const adapter = isCliLikeTransport(transport) ? getTargetedCliAdapter(h, args, provider?.type) : null;
     const targetInstance = getTargetInstance(h, args);

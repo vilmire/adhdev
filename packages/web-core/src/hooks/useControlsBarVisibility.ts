@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 export const CONTROLS_BAR_VISIBILITY_STORAGE_KEY = 'adhdev_controls_bar_visible'
 const CONTROLS_BAR_VISIBILITY_EVENT = 'adhdev:controlsbarvisibilitychange'
@@ -39,20 +39,32 @@ export function useControlsBarVisibility() {
             ? false
             : getStoredControlsBarVisibility(window.localStorage)
     ))
+    const isVisibleRef = useRef(isVisible)
+
+    const applyVisibility = useCallback((visible: boolean, emit = true) => {
+        isVisibleRef.current = visible
+        setIsVisible(visible)
+        if (typeof window !== 'undefined') {
+            setStoredControlsBarVisibility(visible, window.localStorage)
+        }
+        if (emit) emitControlsBarVisibilityChange(visible)
+    }, [])
 
     useEffect(() => {
         const handleControlsBarVisibilityEvent = (event: Event) => {
             const detail = (event as CustomEvent<{ visible?: boolean }>).detail
-            if (typeof detail?.visible === 'boolean') {
-                setIsVisible(detail.visible)
-                return
-            }
-            setIsVisible(getStoredControlsBarVisibility(window.localStorage))
+            const next = typeof detail?.visible === 'boolean'
+                ? detail.visible
+                : getStoredControlsBarVisibility(window.localStorage)
+            isVisibleRef.current = next
+            setIsVisible(next)
         }
 
         const handleStorage = (event: StorageEvent) => {
             if (event.key !== CONTROLS_BAR_VISIBILITY_STORAGE_KEY) return
-            setIsVisible(getStoredControlsBarVisibility(window.localStorage))
+            const next = getStoredControlsBarVisibility(window.localStorage)
+            isVisibleRef.current = next
+            setIsVisible(next)
         }
 
         window.addEventListener(CONTROLS_BAR_VISIBILITY_EVENT, handleControlsBarVisibilityEvent as EventListener)
@@ -64,23 +76,12 @@ export function useControlsBarVisibility() {
     }, [])
 
     const setVisibility = useCallback((visible: boolean) => {
-        setIsVisible(visible)
-        if (typeof window !== 'undefined') {
-            setStoredControlsBarVisibility(visible, window.localStorage)
-        }
-        emitControlsBarVisibilityChange(visible)
-    }, [])
+        applyVisibility(visible)
+    }, [applyVisibility])
 
     const toggleVisibility = useCallback(() => {
-        setIsVisible(current => {
-            const next = !current
-            if (typeof window !== 'undefined') {
-                setStoredControlsBarVisibility(next, window.localStorage)
-            }
-            emitControlsBarVisibilityChange(next)
-            return next
-        })
-    }, [])
+        applyVisibility(!isVisibleRef.current)
+    }, [applyVisibility])
 
     return { isVisible, setVisibility, toggleVisibility }
 }
