@@ -138,7 +138,7 @@ function DashboardHeaderNotificationItem({
                     {[notification.type === 'needs_attention' ? 'Action needed' : 'Task complete', timeLabel].filter(Boolean).join(' · ')}
                 </span>
                 {notification.preview ? (
-                    <span className="dashboard-header-inbox-item-meta">{notification.preview}</span>
+                    <span className="dashboard-header-inbox-item-meta dashboard-header-inbox-item-preview">{notification.preview}</span>
                 ) : null}
             </button>
             <div className="ml-3 flex shrink-0 items-center gap-1.5">

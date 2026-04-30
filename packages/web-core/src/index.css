@@ -2111,6 +2111,15 @@
         line-height: 1.25;
     }
 
+    .dashboard-header-inbox-item-preview {
+        display: -webkit-box;
+        width: 100%;
+        overflow: hidden;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        overflow-wrap: anywhere;
+    }
+
     .dashboard-header-item-shortcut {
         display: inline-flex;
         align-items: center;

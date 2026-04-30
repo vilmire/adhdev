@@ -3,6 +3,8 @@ import { formatIdeType } from '../../utils/daemon-utils'
 import { normalizeTextContent } from '../../utils/text'
 import { isAcpConv, isCliConv, isCliTerminalConv, type ActiveConversation, type DashboardMessage } from './types'
 
+export const DASHBOARD_NOTIFICATION_PREVIEW_MAX_CHARS = 180
+
 type ConversationTargetEntry = Pick<
     DaemonData,
     'type' | 'providerControls' | 'controlValues'
@@ -67,8 +69,23 @@ export function getConversationLastMessagePreview(conversation: ActiveConversati
     return ''
 }
 
+export function compactConversationNotificationPreview(
+    value: string,
+    maxChars = DASHBOARD_NOTIFICATION_PREVIEW_MAX_CHARS,
+): string {
+    const normalized = normalizeTextContent(value)
+    if (!normalized || maxChars <= 0) return ''
+
+    const chars = Array.from(normalized)
+    if (chars.length <= maxChars) return normalized
+
+    return `${chars.slice(0, Math.max(0, maxChars - 1)).join('').trimEnd()}…`
+}
+
 export function getConversationNotificationPreview(conversation: ActiveConversation): string {
-    return getConversationLastMessagePreview(conversation) || conversation.displaySecondary || ''
+    return compactConversationNotificationPreview(
+        getConversationLastMessagePreview(conversation) || conversation.displaySecondary || '',
+    )
 }
 
 export function getConversationMetaParts(conversation: ActiveConversation): string[] {

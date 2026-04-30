@@ -104,6 +104,25 @@ describe('dashboard notifications', () => {
     expect(candidates[0]?.preview).toBe('Latest transcript bubble')
   })
 
+  it('compacts long transcript text before showing it in the dashboard notification popover', () => {
+    const longTranscript = Array.from({ length: 60 }, (_, index) => `conversation-line-${index}`).join(' ')
+    const conversation = createConversation({
+      lastMessagePreview: '',
+      messages: [
+        { role: 'assistant', content: longTranscript, receivedAt: 2000 },
+      ],
+    })
+    const stateBySessionId = new Map<string, LiveSessionInboxState>([
+      ['session-1', createLiveState({ lastUpdated: 2000 })],
+    ])
+
+    const candidates = buildDashboardNotificationCandidates([conversation], stateBySessionId)
+
+    expect(candidates[0]?.preview.length).toBeLessThanOrEqual(180)
+    expect(candidates[0]?.preview.endsWith('…')).toBe(true)
+    expect(candidates[0]?.preview).not.toContain('conversation-line-59')
+  })
+
   it('keeps notification previews aligned with the rendered chat transcript instead of newer compact summaries', () => {
     const staleCompact = createConversation({
       sessionId: 'session-stale',
