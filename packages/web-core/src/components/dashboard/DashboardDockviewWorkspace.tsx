@@ -1552,6 +1552,16 @@ export default function DashboardDockviewWorkspace({
                 clientX: nativeEvent.clientX,
                 clientY: nativeEvent.clientY,
             })
+            const getPanelBounds = (element: HTMLElement | undefined | null) => {
+                const rect = element?.getBoundingClientRect()
+                if (!rect) return null
+                return {
+                    left: rect.left,
+                    right: rect.right,
+                    top: rect.top,
+                    bottom: rect.bottom,
+                }
+            }
             const isOutsideDockviewContainer = (point: { clientX: number; clientY: number }) => {
                 const rect = dockviewContainerRef.current?.getBoundingClientRect()
                 if (!rect) return false
@@ -1597,6 +1607,7 @@ export default function DashboardDockviewWorkspace({
                     }
                     controller.startDrag({
                         panelId: dragEvent.panel.id,
+                        selfPanelBounds: getPanelBounds(dragEvent.panel.group.element),
                         ...getDragPoint(dragEvent.nativeEvent),
                     })
                 }),
@@ -1618,14 +1629,14 @@ export default function DashboardDockviewWorkspace({
                 event.api.onDidDrop(() => controller.endDrag()),
                 event.api.onUnhandledDragOverEvent(unhandledEvent => {
                     if (!controller.isDragging()) return
-                    controller.markNoDropTarget(getDragPoint(unhandledEvent.nativeEvent))
+                    controller.markSelfPanel(getDragPoint(unhandledEvent.nativeEvent))
                 }),
             ]
             const handleDragOver = (nativeEvent: DragEvent) => {
                 if (!controller.isDragging()) return
                 const point = getDragPoint(nativeEvent)
                 if (isOutsideDockviewContainer(point)) {
-                    controller.markNoDropTarget(point)
+                    controller.markNonSelfPanel(point)
                 }
             }
             const handleDragEnd = () => controller.endDrag()

@@ -3,16 +3,20 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 describe('DashboardDockviewWorkspace Dockview idle drag floating behavior', () => {
-  it('only wires the delayed no-target detach controller for ordinary tab drags', () => {
+  it('wires idle floating only from near-still drag inside the original panel bounds', () => {
     const source = readFileSync(
       resolve(process.cwd(), 'src/components/dashboard/DashboardDockviewWorkspace.tsx'),
       'utf8',
     )
 
     expect(source).toContain('createDockviewIdleDragFloatController')
-    expect(source).toContain('DOCKVIEW_IDLE_DRAG_FLOAT_DELAY_MS')
-    expect(source).toContain('.onWillDragPanel')
+    expect(source).toContain('.onWillShowOverlay')
+    expect(source).toContain('.onWillDrop')
     expect(source).toContain('.onUnhandledDragOverEvent')
+    expect(source).toContain('selfPanelBounds: getPanelBounds')
+    expect(source).toContain('controller.markSelfPanel')
+    expect(source).toContain('controller.markNonSelfPanel')
+    expect(source).not.toContain('controller.markNoDropTarget')
     expect(source).not.toContain('dockviewDragDetach')
     expect(source).not.toContain('inDragMode: true')
   })
