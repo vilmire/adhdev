@@ -2,7 +2,7 @@
  * Shared types for Dashboard components
  */
 
-import type { SessionTransport } from '@adhdev/daemon-core';
+import type { GitCompactSummary, SessionTransport } from '@adhdev/daemon-core';
 import type { ChatMessage } from '../../types';
 
 export type CliConversationViewMode = 'terminal' | 'chat';
@@ -27,6 +27,8 @@ export interface ActiveConversation {
     workspaceName: string;
     /** Full workspace path, when available. workspaceName is display-only/basename. */
     workspacePath?: string;
+    /** Compact daemon-owned Git state for the backing session/workspace. */
+    git?: GitCompactSummary;
     displayPrimary: string;
     displaySecondary: string;
     cdpConnected?: boolean;

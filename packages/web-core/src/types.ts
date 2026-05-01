@@ -11,6 +11,7 @@ import type {
     ProviderResumeCapability,
     SessionEntry,
     SessionTransport,
+    GitCompactSummary,
     RuntimeWriteOwner,
     RuntimeAttachedClient,
     TerminalBackendStatus,
@@ -121,6 +122,7 @@ export interface BaseDaemonData {
     chats?: WebChatInfo[];
     activeChat?: SessionEntry['activeChat'];
     workspace?: string | null;
+    git?: GitCompactSummary;
     runtimeKey?: string;
     runtimeDisplayName?: string;
     runtimeWorkspaceLabel?: string;

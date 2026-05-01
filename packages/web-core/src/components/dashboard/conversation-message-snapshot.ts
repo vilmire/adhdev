@@ -1,7 +1,7 @@
 import type { SessionChatTailSnapshot } from './session-chat-tail-controller'
 import type { ActiveConversation, DashboardMessage } from './types'
 import { getConversationDaemonRouteId } from './conversation-selectors'
-import { getMessageTimestamp } from './message-utils'
+import { getLiveMessageUpdateKeys, getMessageTimestamp } from './message-utils'
 import { normalizeTextContent } from '../../utils/text'
 
 function buildChatSnapshotSignature(messages: DashboardMessage[], status?: string): string {
@@ -39,6 +39,38 @@ export function getConversationMessageAuthorityKey(conversation: ActiveConversat
     return daemonId && sessionId ? `${daemonId}::${sessionId}` : ''
 }
 
+function hasDuplicateLiveMessageUpdateKeys(messages: DashboardMessage[]): boolean {
+    const seen = new Set<string>()
+    for (const message of messages) {
+        for (const key of getLiveMessageUpdateKeys(message)) {
+            if (seen.has(key)) return true
+            seen.add(key)
+        }
+    }
+    return false
+}
+
+function haveAnySharedLiveMessageUpdateKey(
+    left: DashboardMessage | null | undefined,
+    right: DashboardMessage | null | undefined,
+): boolean {
+    const leftKeys = new Set(getLiveMessageUpdateKeys(left))
+    if (leftKeys.size === 0) return false
+    return getLiveMessageUpdateKeys(right).some((key) => leftKeys.has(key))
+}
+
+function shouldPreferLiveSnapshotOverDuplicateConversation(
+    conversationMessages: DashboardMessage[],
+    snapshotMessages: DashboardMessage[],
+): boolean {
+    if (snapshotMessages.length === 0 || conversationMessages.length <= snapshotMessages.length) return false
+    if (!hasDuplicateLiveMessageUpdateKeys(conversationMessages)) return false
+    return haveAnySharedLiveMessageUpdateKey(
+        conversationMessages[conversationMessages.length - 1],
+        snapshotMessages[snapshotMessages.length - 1],
+    )
+}
+
 function shouldOverlayWarmLiveMessages(conversation: ActiveConversation, liveMessages: DashboardMessage[]): boolean {
     if (liveMessages.length === 0) return false
     const existingMessages = Array.isArray(conversation.messages) ? conversation.messages : []
@@ -46,6 +78,7 @@ function shouldOverlayWarmLiveMessages(conversation: ActiveConversation, liveMes
 
     const existingAt = getLatestMessageTimestamp(existingMessages)
     const liveAt = getLatestMessageTimestamp(liveMessages)
+    if (existingAt > 0 && liveAt === existingAt && shouldPreferLiveSnapshotOverDuplicateConversation(existingMessages, liveMessages)) return true
     if (existingAt <= 0 || liveAt <= existingAt) return false
 
     const existingSignature = buildChatSnapshotSignature(existingMessages, conversation.status)
@@ -82,8 +115,13 @@ export function getConversationLiveMessages(
     if (conversationAt > 0 && (snapshotAt <= 0 || conversationAt > snapshotAt)) {
         return conversationMessages
     }
-    if (conversationAt > 0 && conversationAt === snapshotAt && conversationMessages.length >= snapshotMessages.length) {
-        return conversationMessages
+    if (conversationAt > 0 && conversationAt === snapshotAt) {
+        if (shouldPreferLiveSnapshotOverDuplicateConversation(conversationMessages, snapshotMessages)) {
+            return snapshotMessages
+        }
+        if (conversationMessages.length >= snapshotMessages.length) {
+            return conversationMessages
+        }
     }
     return snapshotMessages
 }

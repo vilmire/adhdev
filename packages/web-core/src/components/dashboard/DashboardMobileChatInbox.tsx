@@ -14,6 +14,7 @@ import {
     DASHBOARD_NEW_SESSION_DESCRIPTION,
     DASHBOARD_NEW_SESSION_LABEL,
 } from './dashboard-session-cta'
+import GitStatusPill from '../git/GitStatusPill'
 
 type MobileInboxDebugBundleCollector = (conversation: ActiveConversation) => void | Promise<void>
 
@@ -163,7 +164,8 @@ function DashboardMobileChatItem({
                     {shouldShowTimestamp && <span className={`text-[11px] font-medium shrink-0 ${timestampClassName}`}>{formatRelativeTime(item.timestamp)}</span>}
                 </div>
                 <div className={`text-[12px] font-medium truncate flex items-center ${metaClassName}`}>
-                    {metaText}
+                    <span className="truncate">{metaText}</span>
+                    <GitStatusPill git={item.conversation.git} compact className="ml-1 max-w-[6.5rem] shrink-0" />
                     {isReconnecting ? (
                         <>
                             <span className="mx-1 opacity-50">·</span>

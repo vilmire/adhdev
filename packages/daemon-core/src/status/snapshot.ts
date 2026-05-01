@@ -15,6 +15,7 @@ import { getHostMemorySnapshot } from '../system/host-memory.js';
 import { getTerminalBackendRuntimeStatus } from '../cli-adapters/terminal-screen.js';
 import { LOG } from '../logging/logger.js';
 import type { DaemonCdpManager } from '../cdp/manager.js';
+import type { GitCompactSummary } from '../git/git-types.js';
 import { buildSessionEntries, isCdpConnected, type SessionEntryProfile } from './builders.js';
 import { LIVE_STATUS_ACTIVE_CHAT_OPTIONS, normalizeActiveChatData } from './normalize.js';
 import type { ProviderState } from '../providers/provider-instance.js';
@@ -64,6 +65,7 @@ export interface StatusSnapshotOptions {
     p2p?: StatusReportPayload['p2p'];
     machineNickname?: string | null;
     profile?: SessionEntryProfile;
+    getGitSummaryForWorkspace?: (workspace: string) => GitCompactSummary | null | undefined;
 }
 
 export type StatusSnapshot = StatusReportPayload;
@@ -390,7 +392,10 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
     const unreadSourceSessions = buildSessionEntries(
         options.allStates,
         options.cdpManagers,
-        { profile: 'full' },
+        {
+            profile: 'full',
+            getGitSummaryForWorkspace: options.getGitSummaryForWorkspace,
+        },
     );
     const sessions = profile === 'full'
         ? unreadSourceSessions
@@ -399,7 +404,10 @@ export function buildStatusSnapshot(options: StatusSnapshotOptions): StatusSnaps
             : buildSessionEntries(
                 options.allStates,
                 options.cdpManagers,
-                { profile },
+                {
+                    profile,
+                    getGitSummaryForWorkspace: options.getGitSummaryForWorkspace,
+                },
             );
     const sessionsById = new Map(sessions.map((session) => [session.id, session]));
     for (const sourceSession of unreadSourceSessions) {

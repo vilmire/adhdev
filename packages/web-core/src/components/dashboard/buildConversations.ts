@@ -5,7 +5,7 @@
  * Reusable across Dashboard, mobile views, widgets, etc.
  */
 import type { DaemonData } from '../../types';
-import type { RecentSessionBucket } from '@adhdev/daemon-core';
+import type { GitCompactSummary, RecentSessionBucket } from '@adhdev/daemon-core';
 import { deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, getMachineDisplayName, isGenericAgentTitle } from '../../utils/daemon-utils';
 import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize';
 import { isCliConv, isAcpConv } from './types';
@@ -114,6 +114,7 @@ export function buildIdeConversations(
         lastUpdated?: number;
         inboxBucket?: RecentSessionBucket;
         surfaceHidden?: boolean;
+        git?: GitCompactSummary;
     }[] = Array.isArray(ide.childSessions)
         ? ide.childSessions.map(child => ({
             sessionId: child.id,
@@ -136,6 +137,7 @@ export function buildIdeConversations(
             lastUpdated: child.lastUpdated,
             inboxBucket: child.inboxBucket,
             surfaceHidden: child.surfaceHidden,
+            git: child.git,
         }))
         : [];
     const useConversationFirst = isConversationFirstIde(ide);
@@ -183,6 +185,7 @@ export function buildIdeConversations(
             hostIdeType: !isCliConv(ide) && !isAcpConv(ide) ? ide.type : undefined,
             workspaceName,
             workspacePath,
+            git: ide.git,
             displayPrimary: effectiveNativeTitle
                 || workspaceName
                 || (isCliConv(ide)
@@ -242,6 +245,7 @@ export function buildIdeConversations(
             hostIdeType: ide.type,
             workspaceName,
             workspacePath,
+            git: stream.git || ide.git,
             displayPrimary: effectiveStreamTitle || workspaceName || stream.agentName || ideLabel,
             displaySecondary: `${ideLabel} · ${stream.agentName}`,
             cdpConnected: ide.cdpConnected,
@@ -278,6 +282,7 @@ export function buildIdeConversations(
             hostIdeType: ide.type,
             workspaceName,
             workspacePath,
+            git: ide.git,
             displayPrimary: workspaceName || ideLabel,
             displaySecondary: ideLabel,
             cdpConnected: ide.cdpConnected,

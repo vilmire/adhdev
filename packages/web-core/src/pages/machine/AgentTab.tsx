@@ -33,11 +33,13 @@ import { getDashboardActiveTabHref } from '../../utils/dashboard-route-paths'
 import { createSavedHistoryFilterState, type SavedHistoryFilterState } from '../../utils/saved-history-filter-state'
 import { IconChat, IconMonitor, IconSearch, IconPlay, IconRefresh, IconX } from '../../components/Icons'
 import type { MachineData, IdeSessionEntry, CliSessionEntry, AcpSessionEntry, ProviderInfo } from './types'
+import type { GitCompactSummary } from '@adhdev/daemon-core'
 import type { useMachineActions } from './useMachineActions'
 import HistoryModal, { type SavedSessionHistoryEntry } from '../../components/dashboard/HistoryModal'
 import type { ActiveConversation } from '../../components/dashboard/types'
 import { describeMuxOwner } from '../../utils/mux-ui'
 import CliViewModeToggle from '../../components/dashboard/CliViewModeToggle'
+import GitStatusPill from '../../components/git/GitStatusPill'
 import WorkspaceBrowseDialog from '../../components/machine/WorkspaceBrowseDialog'
 import LaunchConfirmDialog from '../../components/machine/LaunchConfirmDialog'
 import SavedHistoryLaunchSection from '../../components/SavedHistoryLaunchSection'
@@ -54,7 +56,7 @@ type AgentCategory = LaunchableProviderCategory
 interface SavedSessionOption extends SavedSessionHistoryEntry {}
 
 // Union type for running entries
-type AgentEntry = IdeSessionEntry | CliSessionEntry | AcpSessionEntry
+type AgentEntry = (IdeSessionEntry | CliSessionEntry | AcpSessionEntry) & { git?: GitCompactSummary }
 
 interface AgentTabProps {
     category: AgentCategory
@@ -852,8 +854,9 @@ export default function AgentTab({
                                                 {getName(entry)}
                                                 {ide?.version && <span className="text-[10px] text-text-muted ml-1.5">v{ide.version}</span>}
                                             </div>
-                                            <div className="text-[11px] text-text-muted flex gap-2">
-                                                <span>{entry.workspace || '—'}</span>
+                                            <div className="text-[11px] text-text-muted flex min-w-0 flex-wrap items-center gap-2">
+                                                <span className="truncate">{entry.workspace || '—'}</span>
+                                                <GitStatusPill git={entry.git} compact className="max-w-[8rem] shrink-0" />
                                                 {cli?.mode && (
                                                     <span className={cli.mode === 'chat' ? 'text-violet-400' : 'text-text-secondary'}>
                                                         {cli.mode === 'chat' ? 'Chat view' : 'Terminal view'}

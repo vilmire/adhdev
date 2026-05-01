@@ -9,6 +9,7 @@
  */
 
 import type { DaemonCdpManager } from '../cdp/manager.js';
+import type { GitCompactSummary } from '../git/git-types.js';
 import type { SessionEntry, SessionCapability } from '../shared-types.js';
 import type {
     IdeProviderState,
@@ -34,6 +35,7 @@ export type SessionEntryProfile = 'full' | 'live' | 'metadata';
 
 export interface SessionEntryBuildOptions {
     profile?: SessionEntryProfile;
+    getGitSummaryForWorkspace?: (workspace: string) => GitCompactSummary | null | undefined;
 }
 
 function getActiveChatOptions(profile: SessionEntryProfile): NormalizeActiveChatOptions {
@@ -51,6 +53,14 @@ function shouldIncludeSessionMetadata(profile: SessionEntryProfile): boolean {
 
 function shouldIncludeRuntimeMetadata(profile: SessionEntryProfile): boolean {
     return true;
+}
+
+function getGitSummaryForWorkspace(
+    workspace: string | null | undefined,
+    options: SessionEntryBuildOptions,
+): GitCompactSummary | undefined {
+    if (!workspace) return undefined;
+    return options.getGitSummaryForWorkspace?.(workspace) || undefined;
 }
 
 // ─── CDP Manager lookup helpers ──────────────────────
@@ -150,6 +160,8 @@ function buildIdeWorkspaceSession(
     const controlValues = normalizeProviderStateControlValues(state.controlValues);
     const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
     const includeSessionControls = shouldIncludeSessionControls(profile);
+    const workspace = state.workspace || null;
+    const git = getGitSummaryForWorkspace(workspace, options);
     const title = activeChat?.title || state.name;
     return {
         id: state.instanceId || state.type,
@@ -162,7 +174,8 @@ function buildIdeWorkspaceSession(
             activeModal: activeChat?.activeModal || null,
         }),
         title,
-        workspace: state.workspace || null,
+        workspace,
+        ...(git && { git }),
         activeChat,
         ...(summaryMetadata && { summaryMetadata }),
         ...(includeSessionMetadata && { capabilities: state.sessionCapabilities || IDE_SESSION_CAPABILITIES }),
@@ -188,6 +201,8 @@ function buildExtensionAgentSession(
     const controlValues = normalizeProviderStateControlValues(ext.controlValues);
     const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
     const includeSessionControls = shouldIncludeSessionControls(profile);
+    const workspace = parent.workspace || null;
+    const git = getGitSummaryForWorkspace(workspace, options);
     return {
         id: ext.instanceId || `${parent.instanceId}:${ext.type}`,
         parentId: parent.instanceId || parent.type,
@@ -200,7 +215,8 @@ function buildExtensionAgentSession(
             activeModal: activeChat?.activeModal || null,
         }),
         title: activeChat?.title || ext.name,
-        workspace: parent.workspace || null,
+        workspace,
+        ...(git && { git }),
         activeChat,
         ...(summaryMetadata && { summaryMetadata }),
         ...(includeSessionMetadata && { capabilities: ext.sessionCapabilities || EXTENSION_SESSION_CAPABILITIES }),
@@ -249,6 +265,8 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
     const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
     const includeRuntimeMetadata = shouldIncludeRuntimeMetadata(profile);
     const includeSessionControls = shouldIncludeSessionControls(profile);
+    const workspace = state.workspace || null;
+    const git = getGitSummaryForWorkspace(workspace, options);
     return {
         id: state.instanceId,
         parentId: null,
@@ -261,7 +279,8 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
             activeModal: activeChat?.activeModal || null,
         }),
         title: activeChat?.title || state.name,
-        workspace: state.workspace || null,
+        workspace,
+        ...(git && { git }),
         ...(includeRuntimeMetadata && {
             runtimeKey: state.runtime?.runtimeKey,
             runtimeDisplayName: state.runtime?.displayName,
@@ -297,6 +316,8 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
     const controlValues = normalizeProviderStateControlValues(state.controlValues);
     const includeSessionMetadata = shouldIncludeSessionMetadata(profile);
     const includeSessionControls = shouldIncludeSessionControls(profile);
+    const workspace = state.workspace || null;
+    const git = getGitSummaryForWorkspace(workspace, options);
     return {
         id: state.instanceId,
         parentId: null,
@@ -308,7 +329,8 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
             activeModal: activeChat?.activeModal || null,
         }),
         title: activeChat?.title || state.name,
-        workspace: state.workspace || null,
+        workspace,
+        ...(git && { git }),
         activeChat,
         ...(summaryMetadata && { summaryMetadata }),
         ...(includeSessionMetadata && { capabilities: ACP_SESSION_CAPABILITIES }),

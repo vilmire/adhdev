@@ -16,6 +16,7 @@ import { DASHBOARD_NEW_SESSION_LABEL } from './dashboard-session-cta';
 import type { DashboardActionShortcutId } from '../../hooks/useActionShortcuts';
 import { formatRelativeTime } from '../../utils/time';
 import type { DashboardNotificationRecord } from '../../utils/dashboard-notifications';
+import GitStatusPill from '../git/GitStatusPill';
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -360,6 +361,7 @@ export default function DashboardHeader({
                         >
                             {getConversationTitle(activeConv)}
                         </span>
+                        <GitStatusPill git={activeConv.git} compact className="max-w-[8rem] shrink-0" />
 
                         {(isCliActive || isAcpActive) && onStopCli && (
                             <>

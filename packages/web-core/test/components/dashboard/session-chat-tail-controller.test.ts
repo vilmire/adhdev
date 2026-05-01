@@ -551,6 +551,75 @@ describe('SessionChatTailController registry', () => {
     })
   })
 
+  it('updates a streaming bubble in place when append updates reuse the same provider unit key', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+    const duplicateUnitKey = 'hermes-cli:turn_1:assistant:standard:0'
+    const firstChunk = {
+      role: 'assistant',
+      content: 'partial answer',
+      id: 'hermes_1m3osyj',
+      bubbleState: 'streaming',
+      timestamp: 10,
+    } as any
+    const secondChunk = {
+      ...firstChunk,
+      bubbleId: 'hermes_1m3osyj',
+      providerUnitKey: duplicateUnitKey,
+      content: 'partial answer with more text',
+      bubbleState: 'streaming',
+      timestamp: 11,
+    } as any
+    const finalChunk = {
+      ...firstChunk,
+      bubbleId: 'hermes_1m3osyj',
+      providerUnitKey: duplicateUnitKey,
+      content: 'partial answer with more text done',
+      bubbleState: 'final',
+      timestamp: 12,
+    } as any
+
+    controller.hydrateLiveMessages([
+      { role: 'user', content: 'hello', id: 'msg-1', timestamp: 1 } as any,
+      firstChunk,
+    ])
+    controller.retain()
+
+    manager.publish(createUpdate({
+      messages: [secondChunk],
+      syncMode: 'append',
+      totalMessages: 2,
+      lastMessageSignature: buildLastMessageSignature(secondChunk),
+    }))
+    manager.publish(createUpdate({
+      messages: [finalChunk],
+      syncMode: 'append',
+      totalMessages: 2,
+      lastMessageSignature: buildLastMessageSignature(finalChunk),
+    }))
+
+    const snapshot = controller.getSnapshot()
+    expect(snapshot.liveMessages.map(message => (message as any).content)).toEqual([
+      'hello',
+      'partial answer with more text done',
+    ])
+    expect(snapshot.liveMessages.filter(message => (message as any).providerUnitKey === duplicateUnitKey)).toHaveLength(1)
+    expect(snapshot.liveMessages[1]).toMatchObject({
+      id: 'hermes_1m3osyj',
+      bubbleState: 'final',
+      timestamp: 12,
+    })
+  })
+
   it('passes the currently hydrated live tail length when loading older history', async () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()

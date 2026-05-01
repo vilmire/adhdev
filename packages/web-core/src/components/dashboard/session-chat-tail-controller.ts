@@ -6,7 +6,7 @@ import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
 import { getConversationHistorySessionId } from './conversation-identity'
 import { getConversationDaemonRouteId } from './conversation-selectors'
-import { getMessageTimestamp, excludeMessagesPresentInLiveFeed } from './message-utils'
+import { getLiveMessageUpdateKeys, getMessageTimestamp, excludeMessagesPresentInLiveFeed } from './message-utils'
 
 export interface SessionChatTailSnapshot {
   liveMessages: DashboardMessage[]
@@ -127,6 +127,36 @@ function shouldHydrateLiveMessages(
   return true
 }
 
+function appendOrReplaceLiveMessageUpdates(
+  previousMessages: DashboardMessage[],
+  incomingMessages: DashboardMessage[],
+): DashboardMessage[] {
+  if (incomingMessages.length === 0) return previousMessages
+  const nextMessages = [...previousMessages]
+  const indexByKey = new Map<string, number>()
+  const rememberKeys = (message: DashboardMessage, index: number) => {
+    for (const key of getLiveMessageUpdateKeys(message)) {
+      indexByKey.set(key, index)
+    }
+  }
+  nextMessages.forEach(rememberKeys)
+
+  for (const incoming of incomingMessages) {
+    const incomingKeys = getLiveMessageUpdateKeys(incoming)
+    const existingIndex = incomingKeys
+      .map((key) => indexByKey.get(key))
+      .find((index): index is number => index !== undefined)
+    if (existingIndex !== undefined) {
+      nextMessages[existingIndex] = incoming
+      rememberKeys(incoming, existingIndex)
+      continue
+    }
+    nextMessages.push(incoming)
+    rememberKeys(incoming, nextMessages.length - 1)
+  }
+  return nextMessages
+}
+
 export function applyReadChatSync(
   previousMessages: DashboardMessage[],
   result: Partial<ReadChatSyncResult>,
@@ -136,7 +166,7 @@ export function applyReadChatSync(
     case 'noop':
       return previousMessages
     case 'append':
-      return [...previousMessages, ...incomingMessages]
+      return appendOrReplaceLiveMessageUpdates(previousMessages, incomingMessages)
     case 'replace_tail': {
       const replaceFrom = Math.max(0, Math.min(Number(result.replaceFrom ?? previousMessages.length), previousMessages.length))
       return [

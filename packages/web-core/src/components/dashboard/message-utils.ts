@@ -11,10 +11,35 @@ export type MessageLike = {
     role?: string
     content?: unknown
     id?: string
+    bubbleId?: string
+    providerUnitKey?: string
     _localId?: string
     _turnKey?: string
     receivedAt?: number | string
     timestamp?: number
+}
+
+export function getLiveMessageUpdateKeys(message: MessageLike | null | undefined): string[] {
+    if (!message || typeof message !== 'object') return []
+    const role = String(message.role || '')
+    return [
+        typeof message.providerUnitKey === 'string' && message.providerUnitKey.trim()
+            ? `${role}:providerUnitKey:${message.providerUnitKey.trim()}`
+            : '',
+        typeof message.bubbleId === 'string' && message.bubbleId.trim()
+            ? `${role}:bubbleId:${message.bubbleId.trim()}`
+            : '',
+        typeof message.id === 'string' && message.id.trim()
+            ? `${role}:id:${message.id.trim()}`
+            : '',
+        typeof message._localId === 'string' && message._localId.trim()
+            ? `${role}:localId:${message._localId.trim()}`
+            : '',
+    ].filter(Boolean)
+}
+
+export function getLiveMessageUpdateKey(message: MessageLike | null | undefined): string {
+    return getLiveMessageUpdateKeys(message)[0] || ''
 }
 
 export function getMessageTimestamp(message: Pick<MessageLike, 'receivedAt' | 'timestamp'> | null | undefined): number {

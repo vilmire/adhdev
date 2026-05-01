@@ -169,6 +169,30 @@ describe('conversation message authority snapshot', () => {
         ])
     })
 
+    it('prefers a shorter chat-tail snapshot over a duplicate streaming fallback with the same latest bubble identity', () => {
+        const duplicateUnitKey = 'hermes-cli:turn_1:assistant:standard:0'
+        const conversation = createConversation({
+            messages: [
+                { role: 'user', content: 'hello', id: 'msg-1', receivedAt: 1000 },
+                { role: 'assistant', content: 'partial', id: 'hermes_1m3osyj', bubbleId: 'hermes_1m3osyj', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', receivedAt: 3000 },
+                { role: 'assistant', content: 'partial longer', id: 'hermes_1m3osyj', bubbleId: 'hermes_1m3osyj', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', receivedAt: 3000 },
+                { role: 'assistant', content: 'partial longer final', id: 'hermes_1m3osyj', bubbleId: 'hermes_1m3osyj', providerUnitKey: duplicateUnitKey, bubbleState: 'final', receivedAt: 3000 },
+            ],
+        })
+        const snapshot = createSnapshot([
+            { role: 'user', content: 'hello', id: 'msg-1', receivedAt: 1000 },
+            { role: 'assistant', content: 'partial longer final', id: 'hermes_1m3osyj', bubbleId: 'hermes_1m3osyj', providerUnitKey: duplicateUnitKey, bubbleState: 'final', receivedAt: 3000 },
+        ])
+
+        const liveMessages = getConversationLiveMessages(conversation, snapshot)
+        const [authoritative] = applyConversationMessageSnapshots([conversation], new Map([
+            [getConversationMessageAuthorityKey(conversation), snapshot],
+        ]))
+
+        expect(liveMessages.map(message => message.content)).toEqual(['hello', 'partial longer final'])
+        expect(authoritative?.messages.map(message => message.content)).toEqual(['hello', 'partial longer final'])
+    })
+
     it('does not let a stale chat-tail controller snapshot mask a newer conversation transcript in ChatPane', () => {
         const conversation = createConversation({
             messages: [

@@ -44,6 +44,7 @@ export type {
   SessionHostDiagnosticsSubscriptionParams,
   SessionModalSubscriptionParams,
   DaemonMetadataSubscriptionParams,
+  WorkspaceGitSubscriptionParams,
   SessionChatTailUpdate,
   MachineRuntimeUpdate,
   SessionHostDiagnosticsUpdate,
@@ -80,6 +81,9 @@ export type {
   AcpProviderState,
   ExtensionProviderState,
 } from './shared-types.js';
+
+// ── Git Surface ──
+export * from './git/index.js';
 
 // These types live in shared-types-extra.ts — imported directly because
 // rollup-dts cannot resolve re-exports from shared-types.ts for them.

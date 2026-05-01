@@ -44,6 +44,34 @@ export type { ProviderErrorReason } from './providers/provider-instance.js';
 import type { ActiveChatData as _ActiveChatData, ProviderErrorReason as _ProviderErrorReason } from './providers/provider-instance.js';
 import type { WorkspaceEntry } from './config/workspaces.js';
 import type { ProviderResumeCapability } from './providers/contracts.js';
+import type {
+    GitCompactSummary,
+    GitDiffSummary,
+    GitFailureReason,
+    GitRepoIdentity,
+    GitRepoStatus,
+    GitSnapshot,
+    GitSnapshotCompareSummary,
+    GitSnapshotReason,
+    GitWorkspaceUpdate,
+    WorkspaceGitSubscriptionParams,
+} from './git/git-types.js';
+
+export type {
+    GitCommandName,
+    GitCompactSummary,
+    GitDiffSummary,
+    GitFailureReason,
+    GitFileChange,
+    GitFileChangeStatus,
+    GitRepoIdentity,
+    GitRepoStatus,
+    GitSnapshot,
+    GitSnapshotCompareSummary,
+    GitSnapshotReason,
+    GitWorkspaceUpdate,
+    WorkspaceGitSubscriptionParams,
+} from './git/git-types.js';
 
 export interface SessionActiveChatData extends Omit<_ActiveChatData, 'messages'> {
     messages?: _ActiveChatData['messages'];
@@ -178,7 +206,7 @@ export interface SessionHostDiagnosticsSnapshot {
     recentTransitions: SessionHostRuntimeTransition[];
 }
 
-export type TransportTopic = 'session.chat_tail' | 'session.runtime_output' | 'machine.runtime' | 'session_host.diagnostics' | 'session.modal' | 'daemon.metadata';
+export type TransportTopic = 'session.chat_tail' | 'session.runtime_output' | 'machine.runtime' | 'session_host.diagnostics' | 'session.modal' | 'daemon.metadata' | 'workspace.git';
 
 export interface SessionChatTailSubscriptionParams extends ReadChatCursor {
     targetSessionId: string;
@@ -272,6 +300,7 @@ export interface TopicUpdateEnvelopeMap {
     'session_host.diagnostics': SessionHostDiagnosticsUpdate;
     'session.modal': SessionModalUpdate;
     'daemon.metadata': DaemonMetadataUpdate;
+    'workspace.git': GitWorkspaceUpdate;
 }
 
 export type TopicUpdateEnvelope = TopicUpdateEnvelopeMap[TransportTopic];
@@ -283,6 +312,7 @@ export interface SubscribeRequestMap {
     'session_host.diagnostics': SessionHostDiagnosticsSubscriptionParams;
     'session.modal': SessionModalSubscriptionParams;
     'daemon.metadata': DaemonMetadataSubscriptionParams;
+    'workspace.git': WorkspaceGitSubscriptionParams;
 }
 
 export type SubscribeRequest =
@@ -327,6 +357,7 @@ export interface SessionEntry {
     status: SessionStatus;
     title: string;
     workspace?: string | null;
+    git?: GitCompactSummary;
     runtimeKey?: string;
     runtimeDisplayName?: string;
     runtimeWorkspaceLabel?: string;
@@ -378,6 +409,7 @@ export interface CompactSessionEntry {
     status: SessionStatus;
     title: string;
     workspace: string | null;
+    git?: GitCompactSummary;
     cdpConnected?: boolean;
     runtimeKey?: string;
     runtimeDisplayName?: string;

@@ -32,6 +32,7 @@ import * as Cdp from './cdp-commands.js';
 import * as Stream from './stream-commands.js';
 import * as WorkspaceCmd from './workspace-commands.js';
 import { getWorkspaceState } from '../config/workspaces.js';
+import { handleGitCommand, isGitCommandName, type GitCommandServices } from '../git/git-commands.js';
 
 export interface CommandResult {
     success: boolean;
@@ -48,6 +49,7 @@ export interface CommandContext {
     sessionRegistry?: SessionRegistry;
     onProviderSettingChanged?: (providerType: string, key: string, value: any) => Promise<void> | void;
     onProviderSourceConfigChanged?: () => Promise<void> | void;
+    gitCommandServices?: GitCommandServices;
 }
 
 /**
@@ -377,6 +379,13 @@ export class DaemonCommandHandler implements CommandHelpers {
         this._currentRoute = this.resolveRoute(args);
         const startedAt = Date.now();
         this.logCommandStart(cmd, args);
+        let result: CommandResult;
+
+        if (isGitCommandName(cmd)) {
+            result = await handleGitCommand(cmd, args, this._ctx.gitCommandServices);
+            this.logCommandEnd(cmd, result, startedAt);
+            return result;
+        }
 
         const sessionScopedCommands = new Set([
             'read_chat',
@@ -406,7 +415,6 @@ export class DaemonCommandHandler implements CommandHelpers {
         }
 
         // Commands without ideType CDP silently fail (prevent P2P retry spam)
-        let result: CommandResult;
         if (!this._currentRoute.session && !this._currentRoute.managerKey && !this._currentRoute.providerType) {
             const cdpCommands = ['send_chat', 'read_chat', 'list_chats', 'new_chat', 'switch_chat', 'set_mode', 'change_model', 'set_thought_level', 'resolve_action'];
             if (cdpCommands.includes(cmd)) {

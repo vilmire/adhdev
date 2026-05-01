@@ -4,6 +4,7 @@ import { useTabShortcuts } from '../../hooks/useTabShortcuts'
 import type { ActiveConversation } from './types'
 import { getConversationViewStates } from './DashboardMobileChatShared'
 import { getConversationTabMetaText, getConversationTitle } from './conversation-presenters'
+import GitStatusPill from '../git/GitStatusPill'
 
 const preventContextMenuButtonFocus = (event: React.MouseEvent<HTMLButtonElement>) => {
     // Keep context-menu clicks from moving focus into the fixed menu overlay,
@@ -195,14 +196,15 @@ const PaneGroupTabBarItem = memo(function PaneGroupTabBarItem({
             </div>
             <div className="adhdev-dockview-tab-copy">
                 <span className="adhdev-dockview-tab-primary" title={getConversationTitle(conv)}>{getConversationTitle(conv)}</span>
-                <span className="adhdev-dockview-tab-meta">
+                <span className="adhdev-dockview-tab-meta inline-flex min-w-0 items-center gap-1">
                     {isReconnecting ? (
-                        <span className="adhdev-dockview-tab-reconnecting">{getConversationTabMetaText(conv)}</span>
+                        <span className="adhdev-dockview-tab-reconnecting truncate">{getConversationTabMetaText(conv)}</span>
                     ) : viewStates.isConnecting ? (
-                        <span className="adhdev-dockview-tab-connecting">{getConversationTabMetaText(conv)}<span className="connecting-dots"></span></span>
+                        <span className="adhdev-dockview-tab-connecting truncate">{getConversationTabMetaText(conv)}<span className="connecting-dots"></span></span>
                     ) : (
-                        getConversationTabMetaText(conv)
+                        <span className="truncate">{getConversationTabMetaText(conv)}</span>
                     )}
+                    <GitStatusPill git={conv.git} compact className="max-w-[6.5rem] shrink-0" />
                 </span>
             </div>
             {shortcut && (
