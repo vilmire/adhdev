@@ -899,8 +899,9 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
         const provider = h.getProvider(agentType);
         const agentStr = provider?.type || agentType || getCurrentProviderType(h);
         const transport = getTargetTransport(h, provider);
+        const hasExplicitExcludeRecentCount = args?.excludeRecentCount !== undefined && args?.excludeRecentCount !== null;
         let excludeRecentCount = Math.max(0, Number(args?.excludeRecentCount || 0));
-        if (isCliLikeTransport(transport)) {
+        if (!hasExplicitExcludeRecentCount && isCliLikeTransport(transport)) {
             const adapter = getTargetedCliAdapter(h, args, provider?.type);
             const status = adapter?.getStatus?.();
             const visibleCount = Array.isArray(status?.messages) ? status.messages.length : 0;

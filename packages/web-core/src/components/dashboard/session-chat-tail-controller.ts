@@ -17,6 +17,11 @@ export interface SessionChatTailSnapshot {
   historyError: string | null
 }
 
+export interface SessionChatHistoryPageRequest {
+  offset: number
+  excludeRecentCount: number
+}
+
 export interface SessionChatTailControllerOptions {
   manager?: SubscriptionManager
   sendData?: (daemonId: string, data: any) => boolean
@@ -257,7 +262,7 @@ export class SessionChatTailController {
     }, 0)
   }
 
-  async loadHistoryPage(loader: () => Promise<{ messages?: DashboardMessage[]; hasMore?: boolean }>): Promise<void> {
+  async loadHistoryPage(loader: (request: SessionChatHistoryPageRequest) => Promise<{ messages?: DashboardMessage[]; hasMore?: boolean }>): Promise<void> {
     if (this.loadHistoryPromise) return this.loadHistoryPromise
     this.snapshot = {
       ...this.snapshot,
@@ -266,7 +271,10 @@ export class SessionChatTailController {
     this.emit()
     const run = (async () => {
       try {
-        const result = await loader()
+        const result = await loader({
+          offset: this.snapshot.historyOffset,
+          excludeRecentCount: this.snapshot.liveMessages.length,
+        })
         const nextMessages = Array.isArray(result.messages) ? result.messages : []
         this.snapshot = {
           ...this.snapshot,
@@ -551,14 +559,15 @@ export function useSessionChatTailController(
 
   const loadHistoryPage = useCallback(async () => {
     if (!controller || !daemonId || !sessionId) return
-    await controller.loadHistoryPage(async () => {
+    await controller.loadHistoryPage(async ({ offset, excludeRecentCount }) => {
       const agentType = activeConv.agentType
       const raw = await sendCommand(daemonId, 'chat_history', {
         agentType,
-        offset: controller.getSnapshot().historyOffset,
+        offset,
         limit: 30,
         targetSessionId: sessionId,
         historySessionId,
+        excludeRecentCount,
       })
       const result = raw && typeof raw === 'object' && 'result' in (raw as Record<string, unknown>)
         ? (raw as { result?: { messages?: DashboardMessage[]; hasMore?: boolean } }).result || {}

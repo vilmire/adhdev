@@ -551,6 +551,35 @@ describe('SessionChatTailController registry', () => {
     })
   })
 
+  it('passes the currently hydrated live tail length when loading older history', async () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 1000,
+    })
+    const hydratedTail = Array.from({ length: 1000 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `live-tail-${index + 1}`,
+      id: `live-tail-${index + 1}`,
+      timestamp: index + 1,
+    })) as any
+    const loadHistory = vi.fn().mockResolvedValue({ messages: [], hasMore: true })
+
+    controller.hydrateLiveMessages(hydratedTail)
+    await controller.loadHistoryPage(loadHistory)
+
+    expect(loadHistory).toHaveBeenCalledWith({
+      offset: 0,
+      excludeRecentCount: 1000,
+    })
+  })
+
   it('persists loaded history pages across controller reacquisition for the same session', async () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
