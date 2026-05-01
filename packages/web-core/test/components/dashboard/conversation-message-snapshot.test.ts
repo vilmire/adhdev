@@ -150,6 +150,25 @@ describe('conversation message authority snapshot', () => {
         expect(visibleMessages.map(message => message.content)).toEqual(['history', 'live two'])
     })
 
+    it('uses a longer chat-tail snapshot when the latest timestamp ties the conversation fallback', () => {
+        const conversation = createConversation({
+            messages: [
+                { role: 'assistant', content: 'fallback latest only', id: 'fallback-1', receivedAt: 3000 },
+            ],
+        })
+        const snapshot = createSnapshot([
+            { role: 'user', content: 'snapshot earlier same turn', id: 'snapshot-1', receivedAt: 2000 },
+            { role: 'assistant', content: 'snapshot latest tied timestamp', id: 'snapshot-2', receivedAt: 3000 },
+        ])
+
+        const liveMessages = getConversationLiveMessages(conversation, snapshot)
+
+        expect(liveMessages.map(message => message.content)).toEqual([
+            'snapshot earlier same turn',
+            'snapshot latest tied timestamp',
+        ])
+    })
+
     it('does not let a stale chat-tail controller snapshot mask a newer conversation transcript in ChatPane', () => {
         const conversation = createConversation({
             messages: [

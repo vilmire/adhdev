@@ -107,4 +107,63 @@ describe('handleChatHistory', () => {
       agent: 'hermes-cli',
     })
   })
+
+  it('falls back to the provider-authoritative parsed transcript length for CLI history exclusion', async () => {
+    const { handleChatHistory } = await import('../../src/commands/chat-commands.js')
+
+    readProviderChatHistoryMock.mockReturnValue({
+      messages: [{ role: 'assistant', content: 'older parsed history' }],
+      hasMore: true,
+    })
+    const parsedMessages = Array.from({ length: 125 }, (_, index) => ({
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `parsed-visible-${index + 1}`,
+    }))
+    const adapter = {
+      getStatus: () => ({ status: 'idle', messages: [] }),
+      getScriptParsedStatus: () => JSON.stringify({
+        status: 'idle',
+        coverage: 'full',
+        transcriptAuthority: 'provider',
+        messages: parsedMessages,
+      }),
+    }
+
+    await handleChatHistory({
+      getProvider: () => ({ type: 'hermes-cli', category: 'cli' }),
+      getCliAdapter: () => adapter as any,
+      currentProviderType: undefined,
+      currentSession: undefined,
+    } as any, {
+      agentType: 'hermes-cli',
+      targetSessionId: 'session-1',
+      historySessionId: 'history-1',
+    })
+
+    expect(readProviderChatHistoryMock).toHaveBeenCalledWith('hermes-cli', expect.objectContaining({
+      excludeRecentCount: 125,
+    }))
+  })
+
+  it('treats a malformed frontend exclude count as zero instead of poisoning pagination with NaN', async () => {
+    const { handleChatHistory } = await import('../../src/commands/chat-commands.js')
+
+    readProviderChatHistoryMock.mockReturnValue({ messages: [], hasMore: false })
+
+    await handleChatHistory({
+      getProvider: () => ({ type: 'hermes-cli', category: 'cli' }),
+      getCliAdapter: () => ({ getStatus: () => ({ status: 'idle', messages: [] }) }) as any,
+      currentProviderType: undefined,
+      currentSession: undefined,
+    } as any, {
+      agentType: 'hermes-cli',
+      targetSessionId: 'session-1',
+      historySessionId: 'history-1',
+      excludeRecentCount: 'not-a-number',
+    })
+
+    expect(readProviderChatHistoryMock).toHaveBeenCalledWith('hermes-cli', expect.objectContaining({
+      excludeRecentCount: 0,
+    }))
+  })
 })

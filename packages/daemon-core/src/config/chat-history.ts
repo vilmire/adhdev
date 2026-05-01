@@ -1141,6 +1141,11 @@ export class ChatHistoryWriter {
  * the newest N messages are skipped so older-history pagination can avoid
  * duplicating the live transcript tail already shown in the UI.
  */
+function normalizePaginationNumber(value: number, fallback: number, min: number): number {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Math.max(min, numeric) : fallback;
+}
+
 function pageHistoryRecords(
     agentType: string,
     records: HistoryMessage[],
@@ -1163,9 +1168,12 @@ function pageHistoryRecords(
         if (message.role !== 'system') lastTurn = message;
     }
     const collapsed = collapseReplayAssistantTurns(chronological, historyBehavior);
-    const boundedLimit = Math.max(1, limit);
-    const boundedOffset = Math.max(0, offset);
-    const boundedExclude = Math.max(0, Math.min(excludeRecentCount, collapsed.length));
+    const boundedLimit = normalizePaginationNumber(limit, 30, 1);
+    const boundedOffset = normalizePaginationNumber(offset, 0, 0);
+    const boundedExclude = Math.min(
+        normalizePaginationNumber(excludeRecentCount, 0, 0),
+        collapsed.length,
+    );
     const endExclusive = Math.max(0, collapsed.length - boundedExclude - boundedOffset);
     const startInclusive = Math.max(0, endExclusive - boundedLimit);
     const sliced = collapsed.slice(startInclusive, endExclusive);

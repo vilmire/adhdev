@@ -869,6 +869,33 @@ function getStateLastSignature(state: any): string {
     return `${last.role || ''}:${String(last.content || '').replace(/\s+/g, ' ').trim()}`;
 }
 
+function toNonNegativeNumber(value: any): number {
+    const numeric = Number(value ?? 0);
+    return Number.isFinite(numeric) ? Math.max(0, numeric) : 0;
+}
+
+function getCliVisibleTranscriptCount(adapter: any): number {
+    const adapterStatus = adapter?.getStatus?.() || {};
+    const adapterMessages = Array.isArray(adapterStatus.messages) ? adapterStatus.messages : [];
+    let parsedRecord: Record<string, any> | null = null;
+    if (typeof adapter?.getScriptParsedStatus === 'function') {
+        try {
+            const parsed = parseMaybeJson(adapter.getScriptParsedStatus());
+            parsedRecord = parsed && typeof parsed === 'object' ? parsed as Record<string, any> : null;
+        } catch {
+            parsedRecord = null;
+        }
+    }
+    const parsedMessages = Array.isArray(parsedRecord?.messages) ? parsedRecord.messages : [];
+    if (!parsedRecord) return adapterMessages.length;
+    const parsedIsProviderAuthoritative = parsedRecord.transcriptAuthority === 'provider'
+        || parsedRecord.coverage === 'full';
+    const shouldPreferAdapterMessages = !parsedIsProviderAuthoritative
+        && adapterMessages.length > 0
+        && adapterMessages.length > parsedMessages.length;
+    return shouldPreferAdapterMessages ? adapterMessages.length : parsedMessages.length;
+}
+
 async function getStableExtensionBaseline(h: CommandHelpers): Promise<any | null> {
     const first = await readExtensionChatState(h);
     if (getStateMessageCount(first) > 0 || getStateLastSignature(first)) return first;
@@ -900,11 +927,10 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
         const agentStr = provider?.type || agentType || getCurrentProviderType(h);
         const transport = getTargetTransport(h, provider);
         const hasExplicitExcludeRecentCount = args?.excludeRecentCount !== undefined && args?.excludeRecentCount !== null;
-        let excludeRecentCount = Math.max(0, Number(args?.excludeRecentCount || 0));
+        let excludeRecentCount = toNonNegativeNumber(args?.excludeRecentCount);
         if (!hasExplicitExcludeRecentCount && isCliLikeTransport(transport)) {
             const adapter = getTargetedCliAdapter(h, args, provider?.type);
-            const status = adapter?.getStatus?.();
-            const visibleCount = Array.isArray(status?.messages) ? status.messages.length : 0;
+            const visibleCount = getCliVisibleTranscriptCount(adapter);
             if (visibleCount > excludeRecentCount) excludeRecentCount = visibleCount;
         }
         const workspace = typeof args?.workspace === 'string'

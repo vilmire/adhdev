@@ -580,6 +580,51 @@ describe('SessionChatTailController registry', () => {
     })
   })
 
+  it('dedupes a history page against live messages that arrive while the page is loading', async () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+    const initialLive = [
+      { role: 'user', content: 'live 1', id: 'live-1', timestamp: 1 } as any,
+      { role: 'assistant', content: 'live 2', id: 'live-2', timestamp: 2 } as any,
+    ]
+    const liveArrivedDuringLoad = { role: 'assistant', content: 'live 3', id: 'live-3', timestamp: 3 } as any
+    let resolveHistory!: (value: { messages: any[]; hasMore: boolean }) => void
+    const loadHistory = vi.fn(() => new Promise<{ messages: any[]; hasMore: boolean }>((resolve) => {
+      resolveHistory = resolve
+    }))
+
+    controller.hydrateLiveMessages(initialLive)
+    controller.retain()
+    const pendingLoad = controller.loadHistoryPage(loadHistory)
+    manager.publish(createUpdate({
+      messages: [...initialLive, liveArrivedDuringLoad],
+      syncMode: 'full',
+      totalMessages: 3,
+      lastMessageSignature: buildLastMessageSignature(liveArrivedDuringLoad),
+    }))
+    resolveHistory({
+      messages: [
+        { role: 'assistant', content: 'older history', id: 'history-1', timestamp: 0 } as any,
+        liveArrivedDuringLoad,
+      ],
+      hasMore: true,
+    })
+    await pendingLoad
+
+    const snapshot = controller.getSnapshot()
+    expect(snapshot.historyMessages.map(message => (message as any).content)).toEqual(['older history'])
+    expect(snapshot.historyOffset).toBe(2)
+  })
+
   it('persists loaded history pages across controller reacquisition for the same session', async () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()

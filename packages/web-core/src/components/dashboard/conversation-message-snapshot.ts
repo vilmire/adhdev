@@ -79,7 +79,10 @@ export function getConversationLiveMessages(
 
     const conversationAt = getLatestMessageTimestamp(conversationMessages)
     const snapshotAt = getLatestMessageTimestamp(snapshotMessages)
-    if (conversationAt > 0 && (snapshotAt <= 0 || conversationAt >= snapshotAt)) {
+    if (conversationAt > 0 && (snapshotAt <= 0 || conversationAt > snapshotAt)) {
+        return conversationMessages
+    }
+    if (conversationAt > 0 && conversationAt === snapshotAt && conversationMessages.length >= snapshotMessages.length) {
         return conversationMessages
     }
     return snapshotMessages

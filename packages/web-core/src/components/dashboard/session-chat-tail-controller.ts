@@ -6,7 +6,7 @@ import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
 import { getConversationHistorySessionId } from './conversation-identity'
 import { getConversationDaemonRouteId } from './conversation-selectors'
-import { getMessageTimestamp } from './message-utils'
+import { getMessageTimestamp, excludeMessagesPresentInLiveFeed } from './message-utils'
 
 export interface SessionChatTailSnapshot {
   liveMessages: DashboardMessage[]
@@ -276,9 +276,10 @@ export class SessionChatTailController {
           excludeRecentCount: this.snapshot.liveMessages.length,
         })
         const nextMessages = Array.isArray(result.messages) ? result.messages : []
+        const visibleHistoryMessages = excludeMessagesPresentInLiveFeed(nextMessages, this.snapshot.liveMessages)
         this.snapshot = {
           ...this.snapshot,
-          historyMessages: [...nextMessages, ...this.snapshot.historyMessages],
+          historyMessages: [...visibleHistoryMessages, ...this.snapshot.historyMessages],
           historyOffset: this.snapshot.historyOffset + nextMessages.length,
           hasMoreHistory: result.hasMore === true,
           historyError: null,

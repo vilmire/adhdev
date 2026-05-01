@@ -122,6 +122,18 @@ describe('chat-history config helpers', () => {
     expect(secondPage.hasMore).toBe(false)
   })
 
+  it('clamps malformed numeric pagination values instead of returning an empty history page', async () => {
+    writeHistorySession('hermes-cli', 'history-1', 10)
+    const { readChatHistory } = await import('../../src/config/chat-history.js')
+
+    const page = readChatHistory('hermes-cli', Number.NaN as any, Number.NaN as any, 'history-1', Number.NaN as any)
+
+    expect(page.messages.map(message => message.content)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `msg-${index + 1}`),
+    )
+    expect(page.hasMore).toBe(false)
+  })
+
   it('invalidates persisted session aggregates when the raw history file is newer than the index', async () => {
     const filePath = writeHistorySession('hermes-cli', '20260417_030305_theta', 2)
     const { listSavedHistorySessions } = await import('../../src/config/chat-history.js')
