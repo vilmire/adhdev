@@ -83,19 +83,23 @@ async function checkPendingCloud(
   } else {
     const data = await transport.listDaemons();
     const daemons: any[] = data?.daemons ?? [];
-    await Promise.allSettled(
-      daemons.map(async (d) => {
-        try {
-          const daemonStatus = await transport.getDaemonStatus(d.id);
-          const sessions: any[] = daemonStatus?.sessions ?? [];
-          for (const s of sessions) {
-            if (s.status === 'waiting_approval') pending.push({ daemonId: d.id, session: s });
+
+    // Process in batches of 5 to avoid flooding the API with concurrent requests
+    for (let i = 0; i < daemons.length; i += 5) {
+      await Promise.allSettled(
+        daemons.slice(i, i + 5).map(async (d) => {
+          try {
+            const daemonStatus = await transport.getDaemonStatus(d.id);
+            const sessions: any[] = daemonStatus?.sessions ?? [];
+            for (const s of sessions) {
+              if (s.status === 'waiting_approval') pending.push({ daemonId: d.id, session: s });
+            }
+          } catch {
+            // skip unreachable daemons
           }
-        } catch {
-          // skip unreachable daemons
-        }
-      }),
-    );
+        }),
+      );
+    }
   }
 
   if (format === 'json') {
