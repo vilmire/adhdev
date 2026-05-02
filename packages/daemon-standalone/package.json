@@ -1,6 +1,6 @@
 {
   "name": "@adhdev/daemon-standalone",
-  "version": "0.9.55",
+  "version": "0.9.56",
   "description": "ADHDev standalone daemon \u2014 embedded HTTP/WS server for local dashboard",
   "main": "dist/index.js",
   "bin": {
