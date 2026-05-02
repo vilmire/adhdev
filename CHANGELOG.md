@@ -2,6 +2,14 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.9.62] - 2026-05-03
+
+### Added
+- **mcp-server**: Add `list_daemons` and `stop_session` tools, including cloud transport support for daemon listing and session stop commands.
+
+### Fixed
+- **mcp-server**: Allow shortcut stop requests to auto-resolve the session type from current daemon state.
+
 ## [0.9.61] - 2026-05-03
 
 ### Fixed
