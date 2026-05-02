@@ -24,6 +24,12 @@ export interface CliSessionStatus {
     activeModal: { message: string; buttons: string[] } | null;
     errorMessage?: string;
     errorReason?: string;
+    bufferState?: {
+        responseBuffer?: { truncated: boolean; droppedChars: number; maxChars: number };
+        recentOutputBuffer?: { truncated: boolean; droppedChars: number; maxChars: number };
+        accumulatedBuffer?: { truncated: boolean; droppedChars: number; maxChars: number };
+        accumulatedRawBuffer?: { truncated: boolean; droppedChars: number; maxChars: number };
+    };
 }
 
 export interface ParsedSession {

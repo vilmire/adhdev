@@ -100,4 +100,29 @@ describe('ProviderCliAdapter turn scope offset drift', () => {
     expect(adapter.currentTurnScope.bufferStart).toBe(before.bufferStart)
     expect(adapter.currentTurnScope.rawBufferStart).toBe(before.rawBufferStart)
   })
+
+  it('surfaces rolling buffer truncation metadata instead of silently hiding cap hits', () => {
+    const adapter = buildAdapter()
+    const MAX = (ProviderCliAdapter as any).MAX_ACCUMULATED_BUFFER as number
+
+    adapter.isWaitingForResponse = true
+    adapter.handleOutput('z'.repeat(MAX + 5000))
+
+    const status = adapter.getStatus({ allowParse: false }) as any
+    expect(status.bufferState?.responseBuffer).toMatchObject({
+      truncated: true,
+      maxChars: 8000,
+    })
+    expect(status.bufferState?.responseBuffer?.droppedChars).toBeGreaterThan(0)
+    expect(status.bufferState?.recentOutputBuffer).toMatchObject({
+      truncated: true,
+      maxChars: 1000,
+    })
+    expect(status.bufferState?.recentOutputBuffer?.droppedChars).toBeGreaterThan(0)
+    expect(status.bufferState?.accumulatedBuffer).toMatchObject({
+      truncated: true,
+      maxChars: MAX,
+    })
+    expect(status.bufferState?.accumulatedBuffer?.droppedChars).toBeGreaterThan(0)
+  })
 })

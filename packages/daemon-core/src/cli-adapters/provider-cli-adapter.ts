@@ -341,6 +341,12 @@ export class ProviderCliAdapter implements CliAdapter {
     private accumulatedRawBuffer: string = '';
     /** Current visible terminal screen snapshot */
     private terminalScreen = new TerminalScreen(24, 80);
+    private static readonly MAX_RESPONSE_BUFFER = 8000;
+    private static readonly MAX_RECENT_OUTPUT_BUFFER = 1000;
+    private responseBufferDroppedChars = 0;
+    private recentOutputDroppedChars = 0;
+    private accumulatedBufferDroppedChars = 0;
+    private accumulatedRawBufferDroppedChars = 0;
     /** Max accumulated buffer size. Sized to comfortably hold a single long
      *  Hermes turn (tool calls + reasoning + final bubble) without the
      *  rolling window pushing the turn's ╭─ opening line out of view. */
@@ -370,6 +376,27 @@ export class ProviderCliAdapter implements CliAdapter {
     private readonly providerResolutionMeta: ProviderResolutionMeta;
     private static readonly FINISH_RETRY_DELAY_MS = 300;
     private static readonly MAX_FINISH_RETRIES = 2;
+
+    private getBufferState(): NonNullable<CliSessionStatus['bufferState']> | undefined {
+        const build = (droppedChars: number, maxChars: number) => droppedChars > 0
+            ? { truncated: true, droppedChars, maxChars }
+            : undefined;
+        const responseBuffer = build(this.responseBufferDroppedChars, ProviderCliAdapter.MAX_RESPONSE_BUFFER);
+        const recentOutputBuffer = build(this.recentOutputDroppedChars, ProviderCliAdapter.MAX_RECENT_OUTPUT_BUFFER);
+        const accumulatedBuffer = build(this.accumulatedBufferDroppedChars, ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
+        const accumulatedRawBuffer = build(this.accumulatedRawBufferDroppedChars, ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
+        if (!responseBuffer && !recentOutputBuffer && !accumulatedBuffer && !accumulatedRawBuffer) return undefined;
+        return {
+            ...(responseBuffer ? { responseBuffer } : {}),
+            ...(recentOutputBuffer ? { recentOutputBuffer } : {}),
+            ...(accumulatedBuffer ? { accumulatedBuffer } : {}),
+            ...(accumulatedRawBuffer ? { accumulatedRawBuffer } : {}),
+        };
+    }
+
+    private recordBoundedAppendDrop(previousLength: number, appendedLength: number, nextLength: number): number {
+        return Math.max(0, (previousLength + appendedLength) - nextLength);
+    }
 
     private buildCommittedMessagesActivitySignature(): string {
         const last = this.committedMessages[this.committedMessages.length - 1];
@@ -847,7 +874,9 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         if (this.isWaitingForResponse && cleanData) {
-            this.responseBuffer = appendBoundedText(this.responseBuffer, cleanData, 8000);
+            const previousResponseLen = this.responseBuffer.length;
+            this.responseBuffer = appendBoundedText(this.responseBuffer, cleanData, ProviderCliAdapter.MAX_RESPONSE_BUFFER);
+            this.responseBufferDroppedChars += this.recordBoundedAppendDrop(previousResponseLen, cleanData.length, this.responseBuffer.length);
         }
 
         // Server log forwarding
@@ -860,17 +889,22 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         // Rolling buffers
+        const prevRecentLen = this.recentOutputBuffer.length;
         const prevAccumulatedLen = this.accumulatedBuffer.length;
         const prevAccumulatedRawLen = this.accumulatedRawBuffer.length;
-        this.recentOutputBuffer = appendBoundedText(this.recentOutputBuffer, cleanData, 1000);
+        this.recentOutputBuffer = appendBoundedText(this.recentOutputBuffer, cleanData, ProviderCliAdapter.MAX_RECENT_OUTPUT_BUFFER);
         this.accumulatedBuffer = appendBoundedText(this.accumulatedBuffer, cleanData, ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
         this.accumulatedRawBuffer = appendBoundedText(this.accumulatedRawBuffer, rawData, ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
+        const droppedRecent = this.recordBoundedAppendDrop(prevRecentLen, cleanData.length, this.recentOutputBuffer.length);
+        const droppedClean = this.recordBoundedAppendDrop(prevAccumulatedLen, cleanData.length, this.accumulatedBuffer.length);
+        const droppedRaw = this.recordBoundedAppendDrop(prevAccumulatedRawLen, rawData.length, this.accumulatedRawBuffer.length);
+        this.recentOutputDroppedChars += droppedRecent;
+        this.accumulatedBufferDroppedChars += droppedClean;
+        this.accumulatedRawBufferDroppedChars += droppedRaw;
         // Keep turn-scope offsets aligned with the truncated buffer so scoped
         // parses don't lose the beginning of a long turn (e.g. the Hermes
         // ╭─ opening line) when the rolling window sheds bytes.
         if (this.currentTurnScope) {
-            const droppedClean = (prevAccumulatedLen + cleanData.length) - this.accumulatedBuffer.length;
-            const droppedRaw = (prevAccumulatedRawLen + rawData.length) - this.accumulatedRawBuffer.length;
             if (droppedClean > 0) {
                 this.currentTurnScope.bufferStart = Math.max(0, this.currentTurnScope.bufferStart - droppedClean);
             }
@@ -1805,6 +1839,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 effectiveModal = parsedModal;
             }
         }
+        const bufferState = this.getBufferState();
         return {
             status: effectiveStatus,
             messages: [...this.committedMessages],
@@ -1812,6 +1847,7 @@ export class ProviderCliAdapter implements CliAdapter {
             activeModal: effectiveModal,
             errorMessage: this.parseErrorMessage || undefined,
             errorReason: this.parseErrorMessage ? 'parse_error' : undefined,
+            ...(bufferState ? { bufferState } : {}),
         };
     }
 
@@ -2056,10 +2092,12 @@ export class ProviderCliAdapter implements CliAdapter {
                 messages: hydratedMessages,
                 activeModal: parsed.activeModal ?? this.activeModal,
                 providerSessionId: typeof parsed.providerSessionId === 'string' ? parsed.providerSessionId : undefined,
+                ...(this.getBufferState() ? { bufferState: this.getBufferState() } : {}),
                 ...(this.providerOwnsTranscript() ? { transcriptAuthority: 'provider', coverage: this.shouldUseFullProviderTranscriptContext() ? 'full' : 'tail' } : {}),
             };
         } else {
             const messages = [...this.committedMessages];
+            const bufferState = this.getBufferState();
             result = {
                 id: 'cli_session',
                 status: this.currentStatus,
@@ -2073,6 +2111,7 @@ export class ProviderCliAdapter implements CliAdapter {
                         : message.timestamp,
                 })),
                 activeModal: this.activeModal,
+                ...(bufferState ? { bufferState } : {}),
             };
         }
 
