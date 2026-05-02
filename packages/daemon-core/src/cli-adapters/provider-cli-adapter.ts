@@ -598,6 +598,7 @@ export class ProviderCliAdapter implements CliAdapter {
     private readonly sendDelayMs: number;
     private readonly sendKey: string;
     private readonly submitStrategy: 'wait_for_echo' | 'immediate';
+    private readonly requirePromptEchoBeforeSubmit: boolean;
     private static readonly SCRIPT_STATUS_DEBOUNCE_MS = 3000;
 
     constructor(
@@ -620,6 +621,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.sendDelayMs = resolvedConfig.sendDelayMs;
         this.sendKey = resolvedConfig.sendKey;
         this.submitStrategy = resolvedConfig.submitStrategy;
+        this.requirePromptEchoBeforeSubmit = resolvedConfig.requirePromptEchoBeforeSubmit;
         this.providerResolutionMeta = resolvedConfig.providerResolutionMeta;
 
         // Scripts are required — loaded by ProviderLoader via compatibility array
@@ -2392,6 +2394,22 @@ export class ProviderCliAdapter implements CliAdapter {
         }
 
         if (elapsed >= state.maxEchoWaitMs) {
+            const diagnostic = {
+                elapsed,
+                maxEchoWaitMs: state.maxEchoWaitMs,
+                submitDelayMs: state.submitDelayMs,
+                promptSnippet: state.normalizedPromptSnippet,
+                requirePromptEchoBeforeSubmit: this.requirePromptEchoBeforeSubmit,
+                screenText: summarizeCliTraceText(screenText, 1000),
+            };
+            this.recordTrace('submit_echo_missing', diagnostic);
+            if (this.requirePromptEchoBeforeSubmit) {
+                const message = `${this.cliName} prompt echo was not observed on the PTY screen before submit`;
+                LOG.warn('CLI', `[${this.cliType}] ${message} elapsed=${elapsed}ms maxEchoWaitMs=${state.maxEchoWaitMs} screen=${JSON.stringify(diagnostic.screenText).slice(0, 240)}`);
+                completion.rejectOnce(new Error(message));
+                return;
+            }
+            LOG.warn('CLI', `[${this.cliType}] prompt echo was not observed before submit; sending submit key anyway elapsed=${elapsed}ms maxEchoWaitMs=${state.maxEchoWaitMs}`);
             this.submitSendKey(state, completion);
             return;
         }
@@ -2880,6 +2898,7 @@ export class ProviderCliAdapter implements CliAdapter {
             sendDelayMs: this.sendDelayMs,
             sendKey: this.sendKey,
             submitStrategy: this.submitStrategy,
+            requirePromptEchoBeforeSubmit: this.requirePromptEchoBeforeSubmit,
             submitPendingUntil: this.submitPendingUntil,
             responseSettleIgnoreUntil: this.responseSettleIgnoreUntil,
             resizeSuppressUntil: this.resizeSuppressUntil,

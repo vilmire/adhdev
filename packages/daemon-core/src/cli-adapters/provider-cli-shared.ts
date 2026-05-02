@@ -122,6 +122,8 @@ export interface CliProviderModule {
     sendDelayMs?: number;
     sendKey?: string;
     submitStrategy?: 'wait_for_echo' | 'immediate';
+    /** Require the typed prompt to be visible on the PTY screen before sending Enter. */
+    requirePromptEchoBeforeSubmit?: boolean;
     /** Allow sending another prompt while the CLI is still generating so users can intervene mid-turn. */
     allowInputDuringGeneration?: boolean;
     /** When provider-owned, daemon treats provider parser output as canonical transcript authority. */

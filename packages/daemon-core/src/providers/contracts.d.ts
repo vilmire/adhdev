@@ -339,6 +339,14 @@ export interface ProviderModule {
     sessionProbe?: ProviderSessionProbe;
     /** Allow sending another prompt while the CLI is still generating so users can intervene mid-turn. */
     allowInputDuringGeneration?: boolean;
+    /** Delay before submitting typed CLI input (provider-specific TUI tuning) */
+    sendDelayMs?: number;
+    /** Submit key used after typing into CLI PTY (default: carriage return) */
+    sendKey?: string;
+    /** How the CLI adapter decides when to submit typed input */
+    submitStrategy?: 'wait_for_echo' | 'immediate';
+    /** If true, typed input must echo on the PTY screen before the adapter sends Enter. */
+    requirePromptEchoBeforeSubmit?: boolean;
     /** Approval button priority hints used when auto-approve must pick a positive action */
     approvalPositiveHints?: string[];
     scripts?: ProviderScripts;

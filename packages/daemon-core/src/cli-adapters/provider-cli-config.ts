@@ -29,6 +29,7 @@ export interface ResolvedCliAdapterConfig {
     sendDelayMs: number;
     sendKey: string;
     submitStrategy: 'wait_for_echo' | 'immediate';
+    requirePromptEchoBeforeSubmit: boolean;
     providerResolutionMeta: ProviderResolutionMeta;
 }
 
@@ -55,6 +56,7 @@ export function resolveCliAdapterConfig(provider: CliProviderModule): ResolvedCl
             ? provider.sendKey
             : '\r',
         submitStrategy: provider.submitStrategy === 'immediate' ? 'immediate' : 'wait_for_echo',
+        requirePromptEchoBeforeSubmit: provider.requirePromptEchoBeforeSubmit === true,
         providerResolutionMeta: {
             type: provider.type,
             name: provider.name,

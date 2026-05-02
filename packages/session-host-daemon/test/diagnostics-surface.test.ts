@@ -165,6 +165,58 @@ test('getHostDiagnostics strips launch env from diagnostics records to keep payl
   assert.equal(record.launchCommand.env?.HUGE_ONE?.length, 4096)
 })
 
+test('send_input records a diagnostic when a runtime write produces no output', async () => {
+  const server = new SessionHostServer({ appName: 'adhdev-test-send-input-no-output' }) as any
+  const record = buildRecord({ sessionId: 'wedged-hermes', lifecycle: 'running' })
+  const writes: string[] = []
+
+  server.registry.restoreSession(record)
+  server.runtimes.set(record.sessionId, { write: (data: string) => writes.push(data) })
+
+  const response = await server.handleRequest({
+    type: 'send_input',
+    payload: { sessionId: record.sessionId, clientId: 'dashboard', data: 'hello' },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 350))
+
+  const diagnostics = server.getHostDiagnostics({ includeSessions: false, limit: 20 })
+  const warning = diagnostics.recentLogs.find((entry: any) => entry.message.includes('send_input produced no terminal output'))
+
+  assert.equal(response.success, true)
+  assert.deepEqual(writes, ['hello'])
+  assert.equal(warning?.level, 'warn')
+  assert.equal(warning?.sessionId, record.sessionId)
+  assert.equal(warning?.data?.clientId, 'dashboard')
+  assert.equal(warning?.data?.inputLength, 5)
+  assert.equal(warning?.data?.beforeSnapshotSeq, 0)
+  assert.equal(warning?.data?.afterSnapshotSeq, 0)
+  assert.equal(warning?.data?.input, undefined)
+})
+
+test('send_input no-output diagnostic is suppressed when terminal output advances', async () => {
+  const server = new SessionHostServer({ appName: 'adhdev-test-send-input-output' }) as any
+  const record = buildRecord({ sessionId: 'healthy-hermes', lifecycle: 'running' })
+
+  server.registry.restoreSession(record)
+  server.runtimes.set(record.sessionId, {
+    write: (data: string) => server.registry.appendOutput(record.sessionId, data),
+  })
+
+  const response = await server.handleRequest({
+    type: 'send_input',
+    payload: { sessionId: record.sessionId, clientId: 'dashboard', data: 'hello' },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 350))
+
+  const diagnostics = server.getHostDiagnostics({ includeSessions: false, limit: 20 })
+
+  assert.equal(response.success, true)
+  assert.equal(
+    diagnostics.recentLogs.some((entry: any) => entry.message.includes('send_input produced no terminal output')),
+    false,
+  )
+})
+
 test('getHostDiagnostics applies limit to recovery and inactive session groups without dropping live runtimes', () => {
   const server = new SessionHostServer({ appName: 'adhdev-test-surface-limit' })
 

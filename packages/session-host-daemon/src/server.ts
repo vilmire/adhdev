@@ -51,6 +51,7 @@ export class SessionHostServer extends EventEmitter {
   private recentRequests: SessionHostRequestTrace[] = [];
   private recentTransitions: SessionHostRuntimeTransition[] = [];
   private exitWaiters = new Map<string, Array<(exitCode: number | null) => void>>();
+  private lastNoOutputInputWarnAt = new Map<string, number>();
 
   constructor(options: SessionHostServerOptions = {}) {
     super();
@@ -222,7 +223,15 @@ export class SessionHostServer extends EventEmitter {
           if (session?.writeOwner && session.writeOwner.clientId !== request.payload.clientId) {
             return { success: false, error: `Write owned by ${session.writeOwner.clientId}` };
           }
-          this.requireRuntime(request.payload.sessionId).write(request.payload.data);
+          const runtime = this.requireRuntime(request.payload.sessionId);
+          const beforeSnapshotSeq = this.registry.getSnapshot(request.payload.sessionId)?.seq ?? 0;
+          runtime.write(request.payload.data);
+          this.scheduleNoOutputInputDiagnostic({
+            sessionId: request.payload.sessionId,
+            clientId: request.payload.clientId,
+            input: request.payload.data,
+            beforeSnapshotSeq,
+          });
           return { success: true, result: this.registry.getSession(request.payload.sessionId) };
         }
         case 'resize_session': {
@@ -541,6 +550,64 @@ export class SessionHostServer extends EventEmitter {
         { requestId: trace.requestId, clientId: trace.clientId },
       );
     }
+  }
+
+  private scheduleNoOutputInputDiagnostic(params: {
+    sessionId: string;
+    clientId: string;
+    input: string;
+    beforeSnapshotSeq: number;
+  }): void {
+    if (!params.input || /^\x1b/.test(params.input)) {
+      return;
+    }
+
+    const hasPotentialEcho = /[^\x00-\x1F\x7F]/.test(params.input);
+    if (!hasPotentialEcho && params.input !== '\r' && params.input !== '\n') {
+      return;
+    }
+
+    setTimeout(() => {
+      let afterSnapshotSeq = params.beforeSnapshotSeq;
+      try {
+        afterSnapshotSeq = this.registry.getSnapshot(params.sessionId)?.seq ?? params.beforeSnapshotSeq;
+      } catch {
+        return;
+      }
+      if (afterSnapshotSeq > params.beforeSnapshotSeq) {
+        return;
+      }
+
+      const now = Date.now();
+      const lastWarnAt = this.lastNoOutputInputWarnAt.get(params.sessionId) || 0;
+      if (now - lastWarnAt < 10_000) {
+        return;
+      }
+      this.lastNoOutputInputWarnAt.set(params.sessionId, now);
+      const record = this.registry.getSession(params.sessionId);
+      this.recordHostLog(
+        'warn',
+        'send_input produced no terminal output after PTY write; runtime may be ignoring stdin or stuck in a hidden input reader',
+        params.sessionId,
+        {
+          clientId: params.clientId,
+          inputLength: params.input.length,
+          beforeSnapshotSeq: params.beforeSnapshotSeq,
+          afterSnapshotSeq,
+          lifecycle: record?.lifecycle,
+          osPid: record?.osPid,
+          providerType: record?.providerType,
+        },
+      );
+      this.recordRuntimeTransition(
+        params.sessionId,
+        'send_input_no_output_after_write',
+        record?.lifecycle,
+        `clientId=${params.clientId} inputLength=${params.input.length} seq=${params.beforeSnapshotSeq}`,
+        false,
+        'no terminal output after PTY write',
+      );
+    }, 250);
   }
 
   private recordRuntimeTransition(

@@ -173,6 +173,27 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.isWaitingForResponse).toBe(false)
   })
 
+  it('rejects required-echo sends when typed prompt never appears on the PTY screen', async () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.submitStrategy = 'wait_for_echo'
+    adapter.requirePromptEchoBeforeSubmit = true
+    adapter.sendDelayMs = 0
+    adapter.terminalScreen = { getText: () => '⚕ ❯ \n' }
+
+    const sendPromise = adapter.sendMessage('prompt that never echoes')
+    const rejection = expect(sendPromise).rejects.toThrow('prompt echo was not observed')
+    await vi.runAllTicks()
+    await vi.advanceTimersByTimeAsync(2500)
+
+    await rejection
+    expect(adapter.ptyProcess.write).toHaveBeenCalledTimes(1)
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('prompt that never echoes')
+    expect(adapter.committedMessages).toHaveLength(0)
+    expect(adapter.isWaitingForResponse).toBe(false)
+  })
+
   it('surfaces writeRaw when the runtime is missing or rejects input', async () => {
     const adapter = buildAdapter()
     adapter.ptyProcess = null

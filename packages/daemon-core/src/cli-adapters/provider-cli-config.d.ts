@@ -25,6 +25,7 @@ export interface ResolvedCliAdapterConfig {
     sendDelayMs: number;
     sendKey: string;
     submitStrategy: 'wait_for_echo' | 'immediate';
+    requirePromptEchoBeforeSubmit: boolean;
     providerResolutionMeta: ProviderResolutionMeta;
 }
 export declare function resolveCliAdapterConfig(provider: CliProviderModule): ResolvedCliAdapterConfig;
