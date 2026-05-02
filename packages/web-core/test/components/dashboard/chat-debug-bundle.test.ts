@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest'
-import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, recordControlsToggleDebugGesture } from '../../../src/components/dashboard/chat-debug-bundle'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, copyChatDebugBundleTextToClipboard, recordControlsToggleDebugGesture } from '../../../src/components/dashboard/chat-debug-bundle'
 
 describe('chat frontend debug bundle helpers', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   it('builds a bounded frontend snapshot for the active conversation', () => {
     const snapshot = buildChatFrontendDebugSnapshot({
       activeConv: {
@@ -100,5 +104,19 @@ describe('chat frontend debug bundle helpers', () => {
     expect(message).toContain('Chat debug signal sent')
     expect(message).toContain('chat-debug-20260430T123456Z-session_1-abcd1234')
     expect(message).toContain('locator copied')
+  })
+
+  it('falls back to a manual locator prompt when clipboard copy paths fail', async () => {
+    const prompt = vi.fn()
+    vi.stubGlobal('navigator', {})
+    vi.stubGlobal('document', undefined)
+    vi.stubGlobal('window', { prompt })
+
+    const status = await copyChatDebugBundleTextToClipboard('bundleId: chat-debug-123')
+
+    expect(status).toBe('manual')
+    expect(prompt).toHaveBeenCalledWith('Copy ADHDev chat debug locator:', 'bundleId: chat-debug-123')
+    expect(buildChatDebugBundleToastMessage({ delivery: 'daemon_file', bundleId: 'chat-debug-123' }, { locatorCopyStatus: status }))
+      .toContain('locator shown for manual copy')
   })
 })

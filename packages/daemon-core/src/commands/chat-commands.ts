@@ -243,6 +243,8 @@ export function collapseReplayDuplicatesFromReadChat(messages: ChatMessage[]): C
     const collapsed: ChatMessage[] = [];
     const replaySignaturesInCurrentTurn = new Set<string>();
     let stableAssistantAnswerContentInCurrentTurn = '';
+    let stableAssistantAnswerCollapsedIndex = -1;
+    let stableAssistantAnswerHadInterveningActivity = false;
     let previousReplaySignature = '';
 
     for (const message of messages) {
@@ -250,13 +252,31 @@ export function collapseReplayDuplicatesFromReadChat(messages: ChatMessage[]): C
         if (info?.role === 'user') {
             replaySignaturesInCurrentTurn.clear();
             stableAssistantAnswerContentInCurrentTurn = '';
+            stableAssistantAnswerCollapsedIndex = -1;
+            stableAssistantAnswerHadInterveningActivity = false;
             previousReplaySignature = '';
         }
 
         if (info?.collapsible && info.signature) {
             if (previousReplaySignature === info.signature) continue;
             if (replaySignaturesInCurrentTurn.has(info.signature)) continue;
-            if (isReplayedAssistantAnswerAfterStableAnswerInfo(info, stableAssistantAnswerContentInCurrentTurn)) continue;
+            if (isReplayedAssistantAnswerAfterStableAnswerInfo(info, stableAssistantAnswerContentInCurrentTurn)) {
+                const isAdjacentFullerAssistantAnswer =
+                    info.role === 'assistant'
+                    && (!info.kind || info.kind === 'standard')
+                    && stableAssistantAnswerCollapsedIndex >= 0
+                    && stableAssistantAnswerCollapsedIndex === collapsed.length - 1
+                    && !stableAssistantAnswerHadInterveningActivity
+                    && info.content.length > stableAssistantAnswerContentInCurrentTurn.length
+                    && info.content.startsWith(stableAssistantAnswerContentInCurrentTurn);
+                if (isAdjacentFullerAssistantAnswer) {
+                    collapsed[stableAssistantAnswerCollapsedIndex] = message;
+                    replaySignaturesInCurrentTurn.add(info.signature);
+                    stableAssistantAnswerContentInCurrentTurn = info.content;
+                    previousReplaySignature = info.signature;
+                }
+                continue;
+            }
         }
 
         collapsed.push(message);
@@ -266,6 +286,14 @@ export function collapseReplayDuplicatesFromReadChat(messages: ChatMessage[]): C
         }
         if (isStableReadChatAssistantAnswerInfo(info)) {
             stableAssistantAnswerContentInCurrentTurn = info?.content || '';
+            stableAssistantAnswerCollapsedIndex = collapsed.length - 1;
+            stableAssistantAnswerHadInterveningActivity = false;
+        } else if (
+            stableAssistantAnswerContentInCurrentTurn
+            && info?.role === 'assistant'
+            && (!info.kind || info.kind !== 'standard')
+        ) {
+            stableAssistantAnswerHadInterveningActivity = true;
         }
     }
 

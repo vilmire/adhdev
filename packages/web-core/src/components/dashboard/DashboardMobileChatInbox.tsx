@@ -6,7 +6,7 @@ import { formatRelativeTime, getConversationViewStates, type MobileConversationL
 import type { ActiveConversation } from './types'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 import { getConversationMetaText, getConversationStatusHint, getConversationTitle } from './conversation-presenters'
-import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot } from './chat-debug-bundle'
+import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, copyChatDebugBundleTextToClipboard } from './chat-debug-bundle'
 import { eventManager } from '../../managers/EventManager'
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
 import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands'
@@ -296,36 +296,14 @@ export default function DashboardMobileChatInbox({
         })
         const result = unwrapCommandResult(raw)
         const text = buildChatDebugBundleClipboardText(result)
-        let locatorCopied = false
-        if (navigator.clipboard?.writeText && window.isSecureContext) {
-            try {
-                await navigator.clipboard.writeText(text)
-                locatorCopied = true
-            } catch (clipboardError) {
-                console.warn('[chat-debug-bundle] clipboard API failed, trying execCommand fallback', clipboardError)
-            }
+        const locatorCopyStatus = await copyChatDebugBundleTextToClipboard(text)
+        if (locatorCopyStatus === 'failed') {
+            console.warn('[chat-debug-bundle] failed to copy or present mobile inbox debug bundle locator')
         }
-        if (!locatorCopied) {
-            let textarea: HTMLTextAreaElement | null = null
-            try {
-                textarea = document.createElement('textarea')
-                textarea.value = text
-                textarea.setAttribute('readonly', 'true')
-                textarea.style.cssText = 'position:fixed;left:-9999px;top:0'
-                document.body.appendChild(textarea)
-                textarea.focus()
-                textarea.select()
-                locatorCopied = document.execCommand('copy')
-            } catch {
-                // execCommand not supported
-            } finally {
-                textarea?.remove()
-            }
-        }
-        if (!locatorCopied) {
-            console.warn('[chat-debug-bundle] failed to copy mobile inbox debug bundle locator to clipboard')
-        }
-        eventManager.showToast(buildChatDebugBundleToastMessage(result, { locatorCopied }), locatorCopied ? 'success' : 'warning')
+        eventManager.showToast(
+            buildChatDebugBundleToastMessage(result, { locatorCopyStatus }),
+            locatorCopyStatus === 'failed' ? 'warning' : 'success',
+        )
     }, [actionLogs, sendDaemonCommand])
     const effectiveCollectChatDebugBundle = onCollectChatDebugBundle || collectMobileInboxChatDebugBundle
 

@@ -142,14 +142,64 @@ export function buildChatFrontendDebugSnapshot(options: BuildChatFrontendDebugSn
     return sanitizeFrontendDebugValue(snapshot) as Record<string, unknown>
 }
 
-export function buildChatDebugBundleToastMessage(result: unknown, options: { locatorCopied?: boolean } = {}): string {
+export type ChatDebugBundleLocatorCopyStatus = 'copied' | 'manual' | 'failed'
+
+export function buildChatDebugBundleToastMessage(
+    result: unknown,
+    options: { locatorCopied?: boolean; locatorCopyStatus?: ChatDebugBundleLocatorCopyStatus } = {},
+): string {
     const body = result && typeof result === 'object' ? result as Record<string, unknown> : {}
-    const locatorStatus = options.locatorCopied === false ? 'locator copy failed' : 'locator copied'
+    const copyStatus = options.locatorCopyStatus ?? (options.locatorCopied === false ? 'failed' : 'copied')
+    const locatorStatus = copyStatus === 'copied'
+        ? 'locator copied'
+        : copyStatus === 'manual'
+            ? 'locator shown for manual copy'
+            : 'locator copy failed'
     if (body.delivery === 'daemon_file') {
         const bundleId = typeof body.bundleId === 'string' && body.bundleId.trim() ? ` (${body.bundleId})` : ''
         return `Chat debug signal sent${bundleId}; saved on daemon, ${locatorStatus}.`
     }
     return `Chat debug signal sent; ${locatorStatus}.`
+}
+
+export async function copyChatDebugBundleTextToClipboard(text: string): Promise<ChatDebugBundleLocatorCopyStatus> {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText && typeof window !== 'undefined' && window.isSecureContext) {
+        try {
+            await navigator.clipboard.writeText(text)
+            return 'copied'
+        } catch (clipboardError) {
+            console.warn('[chat-debug-bundle] clipboard API failed, trying execCommand fallback', clipboardError)
+        }
+    }
+
+    if (typeof document !== 'undefined' && document.body) {
+        let textarea: HTMLTextAreaElement | null = null
+        try {
+            textarea = document.createElement('textarea')
+            textarea.value = text
+            textarea.setAttribute('readonly', 'true')
+            textarea.style.cssText = 'position:fixed;left:-9999px;top:0'
+            document.body.appendChild(textarea)
+            textarea.focus()
+            textarea.select()
+            if (document.execCommand('copy')) return 'copied'
+        } catch {
+            // execCommand not supported
+        } finally {
+            textarea?.remove()
+        }
+    }
+
+    if (typeof window !== 'undefined' && typeof window.prompt === 'function') {
+        try {
+            window.prompt('Copy ADHDev chat debug locator:', text)
+            return 'manual'
+        } catch {
+            // prompt unavailable or blocked
+        }
+    }
+
+    return 'failed'
 }
 
 export function buildChatDebugBundleClipboardText(result: unknown): string {

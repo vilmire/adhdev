@@ -443,6 +443,49 @@ describe('handleReadChat for CLI adapters', () => {
     ])
   })
 
+  it('keeps the full adjacent assistant answer when a terminal replay first exposes a prefix', () => {
+    const prefixAnswer = [
+      '내 생각은 이래.',
+      '',
+      '1. MCP 서버는 방향이 좋음',
+      'ADHDev를 “대시보드 앱”에서 “다른 에이전트/툴이 호출할 수 있는 agent-control substrate”로 확장하는 가장 자연스러운 표면이야.',
+      '',
+      '지금 구조도 나쁘지 않음:',
+      '- oss/packages/mcp-server 가 stdio MCP server',
+      '- local mode는 standalone daemon HTTP API',
+    ].join('\n')
+    const fullAnswer = `${prefixAnswer}\n- cloud mode는 Cloud REST shortcuts API + adk_* API key\n\n${'추가 설명 '.repeat(80)}`
+
+    const collapsed = collapseReplayDuplicatesFromReadChat([
+      { role: 'user', content: '지금 mcp 서버하고 데몬p2p 메시에 대해서 어떻게 생각해?' },
+      { role: 'assistant', kind: 'tool', senderName: 'Tool', content: 'read docs/ARCHITECTURE.md' },
+      { role: 'assistant', content: prefixAnswer, id: 'hermes_prefix' },
+      { role: 'assistant', content: fullAnswer, id: 'hermes_full' },
+    ] as any)
+
+    expect(collapsed).toHaveLength(3)
+    expect(collapsed[2]).toEqual(expect.objectContaining({ id: 'hermes_full', content: fullAnswer }))
+    expect(collapsed.map((message: any) => message.id)).not.toContain('hermes_prefix')
+  })
+
+  it('does not move a fuller assistant answer across intervening replay rows', () => {
+    const prefixAnswer = `${'prefix answer '.repeat(20)}끝`
+    const fullAnswer = `${prefixAnswer}\n${'full answer continuation '.repeat(20)}`
+
+    const collapsed = collapseReplayDuplicatesFromReadChat([
+      { role: 'user', content: 'debug ordering' },
+      { role: 'assistant', content: prefixAnswer, id: 'hermes_prefix' },
+      { role: 'system', content: 'status update', id: 'system_intervening' },
+      { role: 'assistant', content: fullAnswer, id: 'hermes_full' },
+    ] as any)
+
+    expect(collapsed.map((message: any) => message.id)).toEqual([
+      undefined,
+      'hermes_prefix',
+      'system_intervening',
+    ])
+  })
+
   it('normalizes each large read_chat replay message only once while collapsing duplicates', () => {
     const contentAccesses = { count: 0 }
     const repeatedAnswer = 'final answer '.repeat(20_000)
