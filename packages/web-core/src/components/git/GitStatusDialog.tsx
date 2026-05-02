@@ -22,7 +22,7 @@ interface FileDiffState {
     error: string | null
 }
 
-type ActionKind = 'checkpoint' | 'stash' | 'checkout_files' | null
+type ActionKind = 'checkpoint' | 'stash' | 'stash_pop' | 'checkout_files' | null
 
 function buildPRSummary(branch: string | null, diffSummary: GitDiffSummary): string {
     const parts = [`Branch: ${branch || 'unknown'}`]
@@ -114,6 +114,10 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                     message: actionMessage,
                     includeUntracked,
                 })
+            } else if (pendingAction === 'stash_pop') {
+                res = await sendCommand(daemonId, 'git_stash_pop', {
+                    workspace,
+                })
             } else if (pendingAction === 'checkout_files' && selectedFile) {
                 res = await sendCommand(daemonId, 'git_checkout_files', {
                     workspace,
@@ -130,6 +134,8 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                 setActionSuccess(`Checkpoint created: ${body?.checkpoint?.commit?.slice(0, 7) ?? 'done'}`)
             } else if (pendingAction === 'stash') {
                 setActionSuccess(`Stashed as ${body?.stash?.stashRef ?? 'stash@{0}'}`)
+            } else if (pendingAction === 'stash_pop') {
+                setActionSuccess('Stash restored')
             } else {
                 setActionSuccess('File reverted')
                 setSelectedFile(null)
@@ -293,6 +299,20 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                         Stash
                     </button>
                     <button
+                        onClick={() => openAction('stash_pop')}
+                        disabled={hasConflicts || !status?.stashCount}
+                        title={
+                            hasConflicts
+                                ? 'Resolve conflicts before restoring a stash'
+                                : status?.stashCount
+                                    ? 'Restore the latest stash'
+                                    : 'No stashes to restore'
+                        }
+                        className="rounded px-2 py-1 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed border border-border/50 hover:border-border"
+                    >
+                        Pop stash
+                    </button>
+                    <button
                         onClick={() => openAction('checkout_files')}
                         disabled={!selectedFile}
                         title={selectedFile ? `Revert changes to ${selectedFile.path}` : 'Select a file to revert'}
@@ -322,6 +342,7 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                         <p className="text-sm font-semibold text-text-primary">
                             {pendingAction === 'checkpoint' && 'Create checkpoint commit'}
                             {pendingAction === 'stash' && 'Stash changes'}
+                            {pendingAction === 'stash_pop' && 'Restore latest stash?'}
                             {pendingAction === 'checkout_files' && `Revert changes to ${selectedFile?.path ?? 'file'}?`}
                         </p>
 
