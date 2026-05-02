@@ -863,7 +863,7 @@ export default function AgentTab({
                                                         type="button"
                                                         className="appearance-none bg-transparent border-0 p-0 cursor-pointer"
                                                         title="Open git status"
-                                                        onClick={(e) => { e.stopPropagation(); onOpenGitDialog(machine.daemonId ?? machineId, entry.workspace!); }}
+                                                        onClick={(e) => { e.stopPropagation(); onOpenGitDialog(entry.daemonId ?? machineId, entry.workspace!); }}
                                                     >
                                                         <GitStatusPill git={entry.git} compact className="max-w-[8rem] shrink-0" />
                                                     </button>
