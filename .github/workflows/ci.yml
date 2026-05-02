@@ -79,6 +79,7 @@ jobs:
           path: |
             packages/session-host-core/dist
             packages/session-host-daemon/dist
+            packages/mcp-server/dist
             packages/daemon-core/dist
             packages/daemon-standalone/dist
             packages/web-standalone/dist
@@ -181,6 +182,12 @@ jobs:
       - name: Publish @adhdev/ghostty-vt-node
         if: env.NODE_AUTH_TOKEN != '' && steps.ghostty_release.outputs.publish == 'true'
         run: cd packages/ghostty-vt-node && npm publish --access public --ignore-scripts || echo '⚠️ ghostty-vt-node publish skipped (version may already exist)'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish @adhdev/mcp-server
+        if: env.NODE_AUTH_TOKEN != ''
+        run: cd packages/mcp-server && npm publish --access public --ignore-scripts || echo '⚠️ mcp-server publish skipped (version may already exist)'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

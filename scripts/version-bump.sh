@@ -132,6 +132,18 @@ for pkg in "${PACKAGES[@]}"; do
     fi
 done
 
+MCP_SERVER_SOURCE="packages/mcp-server/src/server.ts"
+if [ -f "$MCP_SERVER_SOURCE" ]; then
+    node -e "
+        const fs = require('fs');
+        const file = '$MCP_SERVER_SOURCE';
+        const content = fs.readFileSync(file, 'utf-8');
+        const updated = content.replace(/name: 'adhdev-mcp-server', version: '[^']+'/, \"name: 'adhdev-mcp-server', version: '$NEW_VERSION'\");
+        fs.writeFileSync(file, updated);
+    "
+    echo "  ✅ $MCP_SERVER_SOURCE → $NEW_VERSION"
+fi
+
 # ── CHANGELOG stub ──
 
 TODAY=$(date +%Y-%m-%d)
