@@ -18,12 +18,14 @@ import { LocalTransport } from './transports/local.js';
 import { CloudTransport } from './transports/cloud.js';
 
 import { LIST_SESSIONS_TOOL, listSessions } from './tools/list-sessions.js';
+import { LIST_DAEMONS_TOOL, listDaemons } from './tools/list-daemons.js';
 import { READ_CHAT_TOOL, readChat } from './tools/read-chat.js';
 import { SEND_CHAT_TOOL, sendChat } from './tools/send-chat.js';
 import { APPROVE_TOOL, approve } from './tools/approve.js';
 import { SCREENSHOT_TOOL, screenshot } from './tools/screenshot.js';
 import { GIT_STATUS_TOOL, gitStatus } from './tools/git-status.js';
 import { LAUNCH_SESSION_TOOL, launchSession } from './tools/launch-session.js';
+import { STOP_SESSION_TOOL, stopSession } from './tools/stop-session.js';
 import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
 
 export interface AdhdevMcpServerOptions {
@@ -59,8 +61,10 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
   //   both:  list_sessions, launch_session, read_chat, send_chat, approve, git_status
   //   local: + screenshot (requires P2P / local daemon access)
   const allTools = [
+    LIST_DAEMONS_TOOL,
     LIST_SESSIONS_TOOL,
     LAUNCH_SESSION_TOOL,
+    STOP_SESSION_TOOL,
     CHECK_PENDING_TOOL,
     READ_CHAT_TOOL,
     SEND_CHAT_TOOL,
@@ -82,6 +86,10 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
 
     try {
       switch (name) {
+        case 'list_daemons': {
+          const text = await listDaemons(transport, { format: a.format });
+          return { content: [{ type: 'text', text }] };
+        }
         case 'list_sessions': {
           const text = await listSessions(transport, { format: a.format, daemon_id: a.daemon_id });
           return { content: [{ type: 'text', text }] };
@@ -118,6 +126,14 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
             workspace: a.workspace,
             model: a.model,
             daemon_id: a.daemon_id,
+          });
+          return { content: [{ type: 'text', text }] };
+        }
+        case 'stop_session': {
+          const text = await stopSession(transport, {
+            session_id: a.session_id,
+            daemon_id: a.daemon_id,
+            type: a.type,
           });
           return { content: [{ type: 'text', text }] };
         }

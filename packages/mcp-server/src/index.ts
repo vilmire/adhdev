@@ -69,8 +69,8 @@ Environment variables:
   ADHDEV_API_KEY      API key (cloud mode)
   ADHDEV_PASSWORD     Daemon password (local mode)
 
-Local mode tools:   list_sessions, launch_session, check_pending, read_chat, send_chat, approve, git_status, screenshot
-Cloud mode tools:   list_sessions, launch_session, check_pending, read_chat, send_chat, approve, git_status
+Local mode tools:   list_daemons, list_sessions, launch_session, stop_session, check_pending, read_chat, send_chat, approve, git_status, screenshot
+Cloud mode tools:   list_daemons, list_sessions, launch_session, stop_session, check_pending, read_chat, send_chat, approve, git_status
 `.trim());
 }
 
