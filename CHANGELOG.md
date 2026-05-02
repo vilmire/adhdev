@@ -2,6 +2,12 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.9.61] - 2026-05-03
+
+### Fixed
+- **mcp-server**: Restore cloud `list_sessions` behavior for ADHDev's P2P-first architecture instead of assuming direct session reads from the cloud transport.
+- **mcp-server**: Limit cloud `check_pending` fan-out to five daemons per batch and clean up screenshot tool schema handling.
+
 ## [0.9.60] - 2026-05-03
 
 ### Added
