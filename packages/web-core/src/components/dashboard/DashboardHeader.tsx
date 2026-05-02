@@ -49,6 +49,7 @@ export interface DashboardHeaderProps {
     onOpenDashboardGuide?: () => void;
     guideNudgeVisible?: boolean;
     actionShortcuts?: Partial<Record<DashboardActionShortcutId, string>>;
+    onOpenGitDialog?: (daemonId: string, workspace: string) => void;
 }
 
 type DashboardHeaderConnectionState = {
@@ -189,6 +190,7 @@ export default function DashboardHeader({
     onMarkNotificationRead,
     onMarkNotificationUnread,
     onDeleteNotification,
+    onOpenGitDialog,
 }: DashboardHeaderProps) {
     const { ides, p2pStates = {} } = useBaseDaemons();
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
@@ -361,7 +363,18 @@ export default function DashboardHeader({
                         >
                             {getConversationTitle(activeConv)}
                         </span>
-                        <GitStatusPill git={activeConv.git} compact className="max-w-[8rem] shrink-0" />
+                        {onOpenGitDialog && activeConv.git && activeConv.daemonId && activeConv.workspacePath ? (
+                            <button
+                                type="button"
+                                className="appearance-none bg-transparent border-0 p-0 cursor-pointer"
+                                title="Open git status"
+                                onClick={() => onOpenGitDialog(activeConv.daemonId!, activeConv.workspacePath!)}
+                            >
+                                <GitStatusPill git={activeConv.git} compact className="max-w-[8rem] shrink-0" />
+                            </button>
+                        ) : (
+                            <GitStatusPill git={activeConv.git} compact className="max-w-[8rem] shrink-0" />
+                        )}
 
                         {(isCliActive || isAcpActive) && onStopCli && (
                             <>

@@ -37,6 +37,7 @@ import SessionHostPanel from './machine/SessionHostPanel'
 import LaunchPickModal from './machine/LaunchPickModal'
 import MachineCommandCenter from './machine/MachineCommandCenter'
 import MachineWorkspaceTab from './machine/MachineWorkspaceTab'
+import { GitStatusDialog } from '../components/git/GitStatusDialog'
 import LaunchConfirmDialog from '../components/machine/LaunchConfirmDialog'
 import { buildLaunchWorkspaceOptions } from '../components/machine/launchWorkspaceOptions'
 import type { LaunchWorkspaceOption } from './machine/types'
@@ -81,6 +82,10 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     const machineRetryStatus = machineId ? daemonCtx.connectionRetryStatuses?.[machineId] : undefined
     const isMachineBlocked = !!machineRetryStatus?.blocked
     const [activeTab, setActiveTab] = useState<TabId>('workspace')
+    const [gitDialogTarget, setGitDialogTarget] = useState<{ daemonId: string; workspace: string } | null>(null)
+    const handleOpenGitDialog = useCallback((daemonId: string, workspace: string) => {
+        setGitDialogTarget({ daemonId, workspace })
+    }, [])
     const [workspaceCategoryHint, setWorkspaceCategoryHint] = useState<'ide' | 'cli' | 'acp'>('ide')
     const recentLaunchActionRef = useRef<(() => Promise<void>) | null>(null)
     const [recentLaunchConfirm, setRecentLaunchConfirm] = useState<{
@@ -558,6 +563,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 initialWorkspaceId={requestedWorkspaceId}
                                 initialWorkspacePath={requestedWorkspacePath}
                                 sendDaemonCommand={sendDaemonCommand}
+                                onOpenGitDialog={handleOpenGitDialog}
                                 />
                             </div>
                         )}
@@ -629,6 +635,13 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                 />
             )}
 
+            {gitDialogTarget && (
+                <GitStatusDialog
+                    daemonId={gitDialogTarget.daemonId}
+                    workspace={gitDialogTarget.workspace}
+                    onClose={() => setGitDialogTarget(null)}
+                />
+            )}
             {/* Toast Notifications */}
             <ToastContainer
                 toasts={daemonCtx.toasts || []}

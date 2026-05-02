@@ -70,6 +70,7 @@ interface AgentTabProps {
     sendDaemonCommand?: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     initialWorkspaceId?: string | null
     initialWorkspacePath?: string | null
+    onOpenGitDialog?: (daemonId: string, workspace: string) => void
 }
 
 // ─── Category Config ────────────────────────────────
@@ -91,6 +92,7 @@ export default function AgentTab({
     category, machine, machineId, providers, managedEntries, getIcon, actions, sendDaemonCommand,
     initialWorkspaceId,
     initialWorkspacePath,
+    onOpenGitDialog,
 }: AgentTabProps) {
     const navigate = useNavigate()
     const {
@@ -856,7 +858,18 @@ export default function AgentTab({
                                             </div>
                                             <div className="text-[11px] text-text-muted flex min-w-0 flex-wrap items-center gap-2">
                                                 <span className="truncate">{entry.workspace || '—'}</span>
-                                                <GitStatusPill git={entry.git} compact className="max-w-[8rem] shrink-0" />
+                                                {onOpenGitDialog && entry.git && entry.workspace ? (
+                                                    <button
+                                                        type="button"
+                                                        className="appearance-none bg-transparent border-0 p-0 cursor-pointer"
+                                                        title="Open git status"
+                                                        onClick={(e) => { e.stopPropagation(); onOpenGitDialog(machine.daemonId ?? machineId, entry.workspace!); }}
+                                                    >
+                                                        <GitStatusPill git={entry.git} compact className="max-w-[8rem] shrink-0" />
+                                                    </button>
+                                                ) : (
+                                                    <GitStatusPill git={entry.git} compact className="max-w-[8rem] shrink-0" />
+                                                )}
                                                 {cli?.mode && (
                                                     <span className={cli.mode === 'chat' ? 'text-violet-400' : 'text-text-secondary'}>
                                                         {cli.mode === 'chat' ? 'Chat view' : 'Terminal view'}

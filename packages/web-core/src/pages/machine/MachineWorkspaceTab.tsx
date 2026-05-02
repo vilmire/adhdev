@@ -24,6 +24,7 @@ interface MachineWorkspaceTabProps {
     initialWorkspaceId?: string | null
     initialWorkspacePath?: string | null
     sendDaemonCommand?: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
+    onOpenGitDialog?: (daemonId: string, workspace: string) => void
 }
 
 const WORKSPACE_SECTIONS: { id: WorkspaceLaunchKind; label: string; helper: string }[] = [
@@ -45,6 +46,7 @@ export default function MachineWorkspaceTab({
     initialWorkspaceId,
     initialWorkspacePath,
     sendDaemonCommand,
+    onOpenGitDialog,
 }: MachineWorkspaceTabProps) {
     const [activeCategory, setActiveCategory] = useState<WorkspaceLaunchKind>(initialCategory)
 
@@ -106,6 +108,7 @@ export default function MachineWorkspaceTab({
                     sendDaemonCommand={sendDaemonCommand}
                     initialWorkspaceId={initialWorkspaceId}
                     initialWorkspacePath={initialWorkspacePath}
+                    onOpenGitDialog={onOpenGitDialog}
                 />
             )}
 
@@ -121,6 +124,7 @@ export default function MachineWorkspaceTab({
                     sendDaemonCommand={sendDaemonCommand}
                     initialWorkspaceId={initialWorkspaceId}
                     initialWorkspacePath={initialWorkspacePath}
+                    onOpenGitDialog={onOpenGitDialog}
                 />
             )}
 
@@ -136,6 +140,7 @@ export default function MachineWorkspaceTab({
                     sendDaemonCommand={sendDaemonCommand}
                     initialWorkspaceId={initialWorkspaceId}
                     initialWorkspacePath={initialWorkspacePath}
+                    onOpenGitDialog={onOpenGitDialog}
                 />
             )}
         </div>

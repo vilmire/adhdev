@@ -8,6 +8,7 @@ import DashboardMobileChatMode from './DashboardMobileChatMode'
 import DashboardPaneWorkspace from './DashboardPaneWorkspace'
 import DashboardDockviewWorkspace from './DashboardDockviewWorkspace'
 import DashboardNewSessionDialog from './DashboardNewSessionDialog'
+import { GitStatusDialog } from '../git/GitStatusDialog'
 import type { DashboardMobileSection } from './DashboardMobileBottomNav'
 import { useActionShortcuts, type DashboardActionShortcutDefinition } from '../../hooks/useActionShortcuts'
 import { getProviderArgs, getRouteTarget } from '../../hooks/dashboardCommandUtils'
@@ -259,6 +260,11 @@ export default function DashboardMainView({
         showMobileChatMode,
         visibleConversationCount: visibleConversations.length,
     })
+
+    const [gitDialogTarget, setGitDialogTarget] = React.useState<{ daemonId: string; workspace: string } | null>(null)
+    const handleOpenGitDialog = React.useCallback((daemonId: string, workspace: string) => {
+        setGitDialogTarget({ daemonId, workspace })
+    }, [])
 
     const handleShowHiddenConversationWithRestore = React.useCallback((conversation: ActiveConversation) => {
         flushSync(() => {
@@ -532,6 +538,7 @@ export default function DashboardMainView({
                     onStopCli={onStopCli}
                     activeCliViewMode={activeCliViewMode}
                     onSetCliViewMode={onSetActiveCliViewMode}
+                    onOpenGitDialog={handleOpenGitDialog}
                 />
             )}
 
@@ -629,6 +636,13 @@ export default function DashboardMainView({
                     onLaunchIde={onLaunchMachineIde}
                     onLaunchProvider={onLaunchMachineProvider}
                     onListSavedSessions={onListMachineSavedSessions}
+                />
+            )}
+            {gitDialogTarget && (
+                <GitStatusDialog
+                    daemonId={gitDialogTarget.daemonId}
+                    workspace={gitDialogTarget.workspace}
+                    onClose={() => setGitDialogTarget(null)}
                 />
             )}
             {shortcutHelpOpen && (
