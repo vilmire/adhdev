@@ -1,7 +1,7 @@
 {
   "name": "@adhdev/mcp-server",
-  "version": "0.9.59",
-  "description": "ADHDev MCP server — expose IDE agents as MCP tools",
+  "version": "0.9.60",
+  "description": "ADHDev MCP server \u2014 expose IDE agents as MCP tools",
   "main": "dist/index.js",
   "bin": {
     "adhdev-mcp": "./dist/index.js"

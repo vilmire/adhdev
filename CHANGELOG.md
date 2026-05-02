@@ -2,6 +2,19 @@
 
 All notable changes to ADHDev will be documented in this file.
 
+## [0.9.60] - 2026-05-03
+
+### Added
+- **mcp-server**: Add `check_pending`, `launch_session`, cloud `git_status`, and daemon-status transport support for richer MCP-driven ADHDev control.
+- **mcp-server**: Add `format: 'json'` structured output to `list_sessions`, `check_pending`, `read_chat`, and `git_status`.
+
+### Fixed
+- **daemon-core / web-core**: Preserve the full adjacent assistant answer when CLI terminal replay first exposes only a prefix, preventing chat bubbles from staying visually truncated until the next send/refresh.
+- **web-core**: Fall back from Clipboard API to `execCommand` and then a manual copy prompt for daemon-saved chat debug bundle locators.
+
+### Changed
+- **docs**: Backfill missed OSS changelog entries through `0.9.59`.
+
 ## [0.9.59] - 2026-05-02
 
 ### Fixed
