@@ -201,6 +201,7 @@ export {
     getWorkspaceGitSubscriptionKey,
     readGitStatusCommandResponse,
     readGitDiffSummaryCommandResponse,
+    readGitDiffFileCommandResponse,
     DEFAULT_WORKSPACE_GIT_REFRESH_MS,
 } from './hooks/useWorkspaceGitStatus'
 export type { UseWorkspaceGitStatusOptions, UseWorkspaceGitStatusResult } from './hooks/useWorkspaceGitStatus'

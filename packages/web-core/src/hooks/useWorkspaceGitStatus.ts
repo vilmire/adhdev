@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { GitDiffSummary, GitRepoStatus, GitWorkspaceUpdate, SubscribeRequest } from '@adhdev/daemon-core'
+import type { GitDiffSummary, GitFileDiff, GitRepoStatus, GitWorkspaceUpdate, SubscribeRequest } from '@adhdev/daemon-core'
 import { useTransport } from '../context/TransportContext'
 import { subscriptionManager } from '../managers/SubscriptionManager'
 
@@ -79,6 +79,29 @@ export function readGitDiffSummaryCommandResponse(response: any): { diffSummary:
     }
     if (body?.diffSummary) return { diffSummary: body.diffSummary as GitDiffSummary, error: null }
     return { diffSummary: null, error: getErrorMessage(body, 'Git diff summary response did not include diffSummary') }
+}
+
+function isOptionalBoolean(value: unknown): boolean {
+    return value === undefined || typeof value === 'boolean'
+}
+
+function isGitFileDiff(value: unknown): value is GitFileDiff {
+    if (!value || typeof value !== 'object') return false
+    const record = value as Record<string, unknown>
+    return typeof record.path === 'string'
+        && typeof record.diff === 'string'
+        && isOptionalBoolean(record.binary)
+        && isOptionalBoolean(record.truncated)
+        && isOptionalBoolean(record.staged)
+}
+
+export function readGitDiffFileCommandResponse(response: any): { diff: GitFileDiff | null; error: string | null } {
+    const body = unwrapDaemonCommandResult(response)
+    if (body?.success === false) {
+        return { diff: null, error: getErrorMessage(body, 'Git file diff request failed') }
+    }
+    if (isGitFileDiff(body?.diff)) return { diff: body.diff, error: null }
+    return { diff: null, error: getErrorMessage(body, 'Git file diff response did not include a valid diff object') }
 }
 
 export function useWorkspaceGitStatus({

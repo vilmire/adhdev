@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import type { GitDiffSummary, GitFileChange } from '@adhdev/daemon-core'
 import { useTransport } from '../../context/TransportContext'
 import { useGitRemoteUrl } from '../../hooks/useGitRemoteUrl'
-import { useWorkspaceGitStatus } from '../../hooks/useWorkspaceGitStatus'
+import { readGitDiffFileCommandResponse, useWorkspaceGitStatus } from '../../hooks/useWorkspaceGitStatus'
 import { IconX } from '../Icons'
 import GitChangeList from './GitChangeList'
 import GitDiffPreview from './GitDiffPreview'
@@ -63,16 +63,16 @@ export default function GitStatusDialog({ daemonId, workspace, onClose }: GitSta
                 path: file.path,
                 staged: file.staged,
             })
-            const body = res?.result ?? res
-            if (body?.success === false || body?.error) {
-                setSelectedFile({ path: file.path, diff: '', binary: false, truncated: false, loading: false, error: body?.error ?? 'Failed to load diff' })
+            const diffResult = readGitDiffFileCommandResponse(res)
+            if (diffResult.error || !diffResult.diff) {
+                setSelectedFile({ path: file.path, diff: '', binary: false, truncated: false, loading: false, error: diffResult.error ?? 'Failed to load diff' })
                 return
             }
             setSelectedFile({
                 path: file.path,
-                diff: body?.diff ?? '',
-                binary: body?.binary ?? false,
-                truncated: body?.truncated ?? false,
+                diff: diffResult.diff.diff,
+                binary: diffResult.diff.binary ?? false,
+                truncated: diffResult.diff.truncated ?? false,
                 loading: false,
                 error: null,
             })
