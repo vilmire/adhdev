@@ -624,7 +624,7 @@ export class DaemonCliManager {
                 resolvedDir,
                 resolvedCliArgs,
                 resolvedProvider,
-                {},
+                this.providerLoader.getSettings(normalizedType),
                 false,
                 {
                     providerSessionId: sessionBinding.providerSessionId,

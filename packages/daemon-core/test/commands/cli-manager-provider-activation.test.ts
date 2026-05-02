@@ -94,6 +94,45 @@ describe('DaemonCliManager provider activation', () => {
     );
   });
 
+  it('passes persisted provider settings into enabled CLI runtime instances', async () => {
+    const executable = join(providerRoot, 'bin', 'sample-cli');
+    mkdirSync(join(providerRoot, 'bin'), { recursive: true });
+    writeFileSync(executable, '#!/bin/sh\nexit 0\n', 'utf-8');
+    chmodSync(executable, 0o755);
+
+    writeProvider(providerRoot, 'cli', 'sample-cli', {
+      type: 'sample-cli',
+      name: 'Sample CLI',
+      displayName: 'Sample CLI',
+      category: 'cli',
+      spawn: { command: 'sample-cli-definitely-missing' },
+      patterns: ['sample'],
+      settings: {
+        autoApprove: { type: 'boolean', default: false, public: true },
+      },
+    });
+    testConfig.machineProviders['sample-cli'] = {
+      enabled: true,
+      executable,
+    };
+    testConfig.providerSettings['sample-cli'] = {
+      autoApprove: true,
+    };
+    const loader = new TestProviderLoader(providerRoot, testConfig);
+    loader.loadAll();
+
+    const addInstance = vi.fn();
+    const removeInstance = vi.fn();
+    await createManager(loader, {
+      getInstanceManager: () => ({ addInstance, removeInstance }),
+      getSessionRegistry: () => ({ register: vi.fn() }),
+    }).startSession('sample-cli', workingDir);
+
+    expect(addInstance).toHaveBeenCalledTimes(1);
+    const context = addInstance.mock.calls[0][2] as any;
+    expect(context.settings).toMatchObject({ autoApprove: true });
+  });
+
   it('uses machine executable and argv overrides for enabled ACP runtime launches', async () => {
     const executable = join(providerRoot, 'bin', 'sample-acp');
     mkdirSync(join(providerRoot, 'bin'), { recursive: true });
