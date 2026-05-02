@@ -143,6 +143,45 @@ describe('ProviderCliAdapter Hermes idle finish debounce', () => {
     expect(adapter.committedMessages[1].content).toBe('done')
   })
 
+  it('commits immediately when detectStatus returns idle (stale-interrupt freeze fix)', () => {
+    // Regression: after a long Hermes response scrolls both ╭─ and ╰─ off the
+    // viewport, detect_status.js used to return 'generating' because the tail
+    // still contained "Enter to interrupt, Ctrl+C to cancel" from mid-turn
+    // scroll content, even though the current screen showed a bare ❯ prompt.
+    // The fix makes detect_status suppress that stale interrupt signal, returning
+    // 'idle' — which lets the adapter commit the turn immediately via
+    // maybeCommitVisibleIdleTranscript.
+    const adapter = buildAdapter('hermes-cli')
+    adapter.committedMessages = [{ role: 'user', content: 'hello', timestamp: 1 }]
+    adapter.syncMessageViews()
+    adapter.currentStatus = 'generating'
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'hello',
+      startedAt: 10,
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
+    // Simulate the fixed detect_status.js: bare ❯ on screen, stale interrupt in
+    // tail, but detect_status now returns 'idle' (suppresses the stale signal).
+    adapter.runDetectStatus = vi.fn(() => 'idle')
+    adapter.parseCurrentTranscript = () => ({
+      status: 'idle',
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'Hermes response (scrolled off viewport)' },
+      ],
+    })
+
+    adapter.evaluateSettled()
+
+    expect(adapter.currentStatus).toBe('idle')
+    expect(adapter.isWaitingForResponse).toBe(false)
+    expect(adapter.currentTurnScope).toBeNull()
+    expect(adapter.committedMessages).toHaveLength(2)
+    expect(adapter.committedMessages[1].content).toBe('Hermes response (scrolled off viewport)')
+  })
+
   it('keeps the generating timeout from force-finishing while detectStatus still reports generating', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-15T15:00:00Z'))
