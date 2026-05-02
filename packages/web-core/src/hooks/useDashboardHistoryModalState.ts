@@ -65,6 +65,11 @@ export function useDashboardHistoryModalState({
     return `${routeTarget}:${providerType}:${historyTargetConv.providerSessionId || ''}:${workspace}`
   }, [historyTargetConv, isSavedSessionHistoryTarget])
 
+  const missingWorkspaceResumePath = useMemo(() => {
+    if (!historyTargetConv || !isSavedSessionHistoryTarget) return ''
+    return getConversationWorkspacePath(historyTargetConv)
+  }, [historyTargetConv, isSavedSessionHistoryTarget])
+
   const {
     isCreatingChat: isHistoryCreatingChat,
     isRefreshingHistory: isHistoryRefreshingHistory,
@@ -174,6 +179,7 @@ export function useDashboardHistoryModalState({
     savedHistorySessions,
     savedHistoryFilters,
     setSavedHistoryFilters,
+    missingWorkspaceResumePath,
     isSavedHistoryLoading,
     resumingSavedHistorySessionId,
     handleRefreshSavedHistory,

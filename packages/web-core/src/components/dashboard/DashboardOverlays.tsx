@@ -20,6 +20,7 @@ interface DashboardOverlaysProps {
         isRefreshingHistory: boolean
         savedSessions: SavedSessionHistoryEntry[]
         savedHistoryFilters: SavedHistoryFilterState
+        missingWorkspaceResumePath?: string | null
         onSavedHistoryFiltersChange: (next: SavedHistoryFilterState) => void
         isSavedSessionsLoading: boolean
         isResumingSavedSessionId: string | null
@@ -94,6 +95,7 @@ export default function DashboardOverlays({
                     isSavedSessionsLoading={historyModal.isSavedSessionsLoading}
                     isResumingSavedSessionId={historyModal.isResumingSavedSessionId}
                     savedHistoryFilters={historyModal.savedHistoryFilters}
+                    missingWorkspaceResumePath={historyModal.missingWorkspaceResumePath}
                     onSavedHistoryFiltersChange={historyModal.onSavedHistoryFiltersChange}
                     onClose={historyModal.onClose}
                     onNewChat={historyModal.onNewChat}
