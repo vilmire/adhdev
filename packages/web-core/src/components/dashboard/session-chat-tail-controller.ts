@@ -104,11 +104,12 @@ function buildChatSnapshotSignature(messages: DashboardMessage[], status?: strin
 }
 
 function getLatestMessageTimestamp(messages: DashboardMessage[]): number {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const timestamp = getMessageTimestamp(messages[index])
-    if (timestamp > 0) return timestamp
+  let max = 0
+  for (const message of messages) {
+    const ts = getMessageTimestamp(message)
+    if (ts > max) max = ts
   }
-  return 0
+  return max
 }
 
 function shouldHydrateLiveMessages(

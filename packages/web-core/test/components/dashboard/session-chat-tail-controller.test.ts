@@ -776,4 +776,45 @@ describe('SessionChatTailController registry', () => {
       hasMoreHistory: false,
     })
   })
+
+  it('accepts a hydrate update whose last message has an older timestamp than an earlier message in the same batch', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 1000,
+    })
+
+    controller.retain()
+    // Establish baseline: last message has ts=1000
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'prompt', id: 'msg-1', timestamp: 900 } as any,
+        { role: 'assistant', content: 'terminal output', id: 'msg-2', timestamp: 1000 } as any,
+      ],
+      syncMode: 'full',
+      replaceFrom: 0,
+      totalMessages: 2,
+      lastMessageSignature: 'sig-2',
+    }))
+
+    expect(controller.getSnapshot().liveMessages).toHaveLength(2)
+
+    // New update: a plan tool message with an older semantic timestamp (500) appears
+    // after the terminal message in stream order. Its timestamp is older than msg-2 (1000),
+    // but it is a genuinely new message that must not be dropped.
+    controller.hydrateLiveMessages([
+      { role: 'user', content: 'prompt', id: 'msg-1', timestamp: 900 } as any,
+      { role: 'assistant', content: 'terminal output', id: 'msg-2', timestamp: 1000 } as any,
+      { role: 'assistant', content: 'plan update 1 task(s)', id: 'msg-3', kind: 'tool', timestamp: 500 } as any,
+    ])
+
+    expect(controller.getSnapshot().liveMessages).toHaveLength(3)
+    expect(controller.getSnapshot().liveMessages[2]).toMatchObject({ id: 'msg-3', content: 'plan update 1 task(s)' })
+  })
 })
