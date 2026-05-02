@@ -83,7 +83,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     try {
       switch (name) {
         case 'list_sessions': {
-          const text = await listSessions(transport, { format: a.format });
+          const text = await listSessions(transport, { format: a.format, daemon_id: a.daemon_id });
           return { content: [{ type: 'text', text }] };
         }
         case 'read_chat': {
@@ -100,7 +100,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           return { content: [{ type: 'text', text }] };
         }
         case 'screenshot': {
-          const result = await screenshot(transport, { session_id: a.session_id, daemon_id: a.daemon_id });
+          const result = await screenshot(transport, { session_id: a.session_id });
           if (result.type === 'image') {
             return {
               content: [{ type: 'image', data: result.data, mimeType: result.mimeType }],

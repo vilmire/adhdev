@@ -3,17 +3,15 @@ import type { CloudTransport } from '../transports/cloud.js';
 
 export const SCREENSHOT_TOOL = {
   name: 'screenshot',
-  description: 'Capture a screenshot of the current IDE window. Returns the image.',
+  description:
+    'Capture a screenshot of the current IDE window. Returns the image. ' +
+    'Local mode only — screenshots require direct P2P access to the daemon and are not available in cloud mode.',
   inputSchema: {
     type: 'object' as const,
     properties: {
       session_id: {
         type: 'string',
         description: 'Target session ID. Omit to use the active session.',
-      },
-      daemon_id: {
-        type: 'string',
-        description: 'Daemon ID (cloud mode only).',
       },
     },
     required: [],
@@ -22,7 +20,7 @@ export const SCREENSHOT_TOOL = {
 
 export async function screenshot(
   transport: LocalTransport | CloudTransport,
-  args: { session_id?: string; daemon_id?: string },
+  args: { session_id?: string },
 ): Promise<{ type: 'image'; data: string; mimeType: string } | { type: 'text'; text: string }> {
   let result: any;
 
