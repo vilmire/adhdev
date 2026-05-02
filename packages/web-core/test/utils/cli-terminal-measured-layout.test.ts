@@ -217,6 +217,24 @@ describe('CLI terminal measured layout plumbing', () => {
     expect(paneSource.includes('clipboard.writeText(text)')).toBe(true)
   })
 
+  it('adds a mobile terminal control popover near Copy / zoom for keys that phone keyboards cannot type reliably', () => {
+    const paneSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/dashboard/CliTerminalPane.tsx'), 'utf8')
+
+    expect(paneSource.includes('const [terminalControlsOpen, setTerminalControlsOpen] = useState(false);')).toBe(true)
+    expect(paneSource.includes('const sendTerminalControlInput = (data: string) => {')).toBe(true)
+    expect(paneSource.includes("sendPtyInput?.(daemonRouteId, sessionId, data) ?? false")).toBe(true)
+    expect(paneSource.includes('aria-label="Open terminal control keys"')).toBe(true)
+    expect(paneSource.includes('aria-label="Terminal control keys"')).toBe(true)
+    expect(paneSource.includes("sendTerminalControlInput('\\u001b')")).toBe(true)
+    expect(paneSource.includes("sendTerminalControlInput('\\u001b[A')")).toBe(true)
+    expect(paneSource.includes("sendTerminalControlInput('\\u001b[B')")).toBe(true)
+    expect(paneSource.includes("sendTerminalControlInput('\\u001b[D')")).toBe(true)
+    expect(paneSource.includes("sendTerminalControlInput('\\u001b[C')")).toBe(true)
+    expect(paneSource.includes("sendTerminalControlInput('\\t')")).toBe(true)
+    expect(paneSource.includes("sendTerminalControlInput('\\u0003')")).toBe(true)
+    expect(paneSource.includes("sendTerminalControlInput('\\u0004')")).toBe(true)
+  })
+
   it('exposes terminal viewport scroll control through the renderer and lazy wrapper for older scrollback replay anchoring', () => {
     const terminalSource = fs.readFileSync(path.join(import.meta.dirname, '../../../terminal-render-web/src/index.tsx'), 'utf8')
     const wrapperSource = fs.readFileSync(path.join(import.meta.dirname, '../../src/components/CliTerminal.tsx'), 'utf8')

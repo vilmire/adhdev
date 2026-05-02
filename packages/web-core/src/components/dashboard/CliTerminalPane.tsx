@@ -47,6 +47,7 @@ export default function CliTerminalPane({
     const [mayHaveOlderRuntimeScrollback, setMayHaveOlderRuntimeScrollback] = useState(false);
     const [hasLoadedOlderRuntimeScrollback, setHasLoadedOlderRuntimeScrollback] = useState(false);
     const [terminalScale, setTerminalScale] = useState(1);
+    const [terminalControlsOpen, setTerminalControlsOpen] = useState(false);
     const [terminalViewport, setTerminalViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const [terminalIntrinsicViewport, setTerminalIntrinsicViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const [terminalScrollMetrics, setTerminalScrollMetrics] = useState<{ scrollTop: number; scrollHeight: number; clientHeight: number; atTop: boolean; canScroll: boolean }>({
@@ -173,6 +174,7 @@ export default function CliTerminalPane({
         clearCopyStatusTimeout();
         setScrollbackStatusMessage(null);
         setCopyStatusMessage(null);
+        setTerminalControlsOpen(false);
         setIsLoadingScrollback(false);
         setMayHaveOlderRuntimeScrollback(false);
         setHasLoadedOlderRuntimeScrollback(false);
@@ -195,6 +197,7 @@ export default function CliTerminalPane({
         clearCopyStatusTimeout();
         setScrollbackStatusMessage(null);
         setCopyStatusMessage(null);
+        setTerminalControlsOpen(false);
         setIsLoadingScrollback(false);
         setMayHaveOlderRuntimeScrollback(false);
         setHasLoadedOlderRuntimeScrollback(false);
@@ -409,6 +412,14 @@ export default function CliTerminalPane({
         setTransientCopyStatus(selection.trimEnd() ? 'Copied selection' : 'Copied visible terminal');
     };
 
+    const sendTerminalControlInput = (data: string) => {
+        if (!runtimeReady || !isVisible) return;
+        const sent = sendPtyInput?.(daemonRouteId, sessionId, data) ?? false;
+        if (!sent) {
+            setTransientCopyStatus('Terminal input failed');
+        }
+    };
+
     const loadOlderRuntimeScrollback = async () => {
         if (isLoadingScrollback) return;
         setIsLoadingScrollback(true);
@@ -603,6 +614,54 @@ export default function CliTerminalPane({
                     >
                         Copy
                     </button>
+                    <div className="relative">
+                        <button
+                            type="button"
+                            className="h-8 rounded-full border border-white/10 bg-black/35 px-3 text-[11px] font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55 disabled:cursor-not-allowed disabled:opacity-60"
+                            onClick={() => setTerminalControlsOpen((open) => !open)}
+                            disabled={!runtimeReady}
+                            aria-label="Open terminal control keys"
+                            aria-expanded={terminalControlsOpen}
+                            aria-controls="terminal-control-keys-popover"
+                            title="Open mobile-friendly terminal control keys"
+                        >
+                            Keys
+                        </button>
+                        {terminalControlsOpen && (
+                            <div
+                                id="terminal-control-keys-popover"
+                                role="dialog"
+                                aria-label="Terminal control keys"
+                                className="absolute right-0 top-10 w-56 rounded-2xl border border-white/10 bg-[#0b0d12]/95 p-3 text-white/85 shadow-2xl shadow-black/40 backdrop-blur-md"
+                            >
+                                <div className="mb-2 flex items-center justify-between gap-2">
+                                    <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/45">Terminal keys</span>
+                                    <button
+                                        type="button"
+                                        className="rounded-full px-2 py-0.5 text-[11px] text-white/55 transition-colors hover:bg-white/10 hover:text-white/85"
+                                        onClick={() => setTerminalControlsOpen(false)}
+                                        aria-label="Close terminal control keys"
+                                    >
+                                        ×
+                                    </button>
+                                </div>
+                                <div className="grid grid-cols-3 gap-1.5">
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u001b')}>Esc</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\t')}>Tab</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\r')}>Enter</button>
+                                    <span aria-hidden="true" />
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u001b[A')} aria-label="Arrow up">↑</button>
+                                    <span aria-hidden="true" />
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u001b[D')} aria-label="Arrow left">←</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u001b[B')} aria-label="Arrow down">↓</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[15px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u001b[C')} aria-label="Arrow right">→</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u0003')}>Ctrl-C</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u0004')}>Ctrl-D</button>
+                                    <button type="button" className="h-9 rounded-lg border border-white/10 bg-white/[0.06] text-[12px] font-semibold hover:bg-white/[0.12]" onClick={() => sendTerminalControlInput('\u007f')}>Bksp</button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
                     <button
                         type="button"
                         className="h-8 w-8 rounded-full border border-white/10 bg-black/35 text-sm font-semibold text-white/85 backdrop-blur-sm transition-colors hover:bg-black/55"
