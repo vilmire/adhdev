@@ -4,234 +4,174 @@ All notable changes to ADHDev will be documented in this file.
 
 ## [0.9.59] - 2026-05-02
 
-### Added
-- 
-
 ### Fixed
-- 
+- **release**: Publish the new MCP server package as part of the OSS release set.
 
-### Changed
-- 
 ## [0.9.58] - 2026-05-02
 
 ### Added
-- 
+- **web-core**: Add mobile terminal key controls for easier control-key/navigation input from touch devices.
 
-### Fixed
-- 
-
-### Changed
-- 
 ## [0.9.57] - 2026-05-02
 
 ### Added
-- 
+- **mcp-server / web-core**: Add the MCP server package and wire the Git Surface dialog into the dashboard.
 
 ### Fixed
-- 
+- **release**: Include the MCP server package in OSS versioning.
+- **web-core**: Open the Git dialog with the session daemon id, use the correct GitStatusDialog default import, collapse hidden mobile inbox chats, resume Hermes history from the current workspace, and accept hydrate updates with out-of-order tail timestamps.
+- **daemon-core**: Pass CLI provider settings into spawned sessions.
 
-### Changed
-- 
 ## [0.9.56] - 2026-05-02
 
 ### Added
-- 
+- **web-core**: Show Git workspace start/complete summaries as chat system bubbles.
 
 ### Fixed
-- 
+- **web-core**: Add a chat debug locator clipboard fallback, apply matching-signature chat-tail refreshes, unwrap Git file-diff responses, and surface Git stash-pop actions.
+- **daemon-core**: Surface CLI buffer truncation state in provider/session diagnostics.
 
-### Changed
-- 
 ## [0.9.55] - 2026-05-02
 
 ### Added
-- 
+- **daemon-core / session-host / web-core**: Complete Git Surface support with mutating actions, turn snapshots, source guards, GitHub Phase 1 wiring, CLI prompt-echo safeguards, and no-output input diagnostics.
 
 ### Fixed
-- 
+- **hermes-cli**: Add regression coverage for stale interrupt-prompt idle freezes.
 
-### Changed
-- 
 ## [0.9.54] - 2026-05-01
 
 ### Added
-- 
+- **daemon-core / web-core**: Add the read-only workspace Git surface.
 
-### Fixed
-- 
-
-### Changed
-- 
 ## [0.9.53] - 2026-05-01
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core / web-core**: Harden long chat-history pagination edges and fix pagination tail exclusion for large saved transcripts.
 
-### Changed
-- 
 ## [0.9.52] - 2026-05-01
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Refresh running provider scripts after source reload so active provider sessions pick up updated scripts without a daemon restart.
+- **web-core**: Update mobile debug-bundle toast regression coverage.
 
-### Changed
-- 
 ## [0.9.51] - 2026-05-01
 
 ### Added
-- 
+- **daemon-core / web-core**: Save chat debug bundles on the daemon and surface chat debug signal delivery toasts.
 
 ### Fixed
-- 
+- **web-core**: Float Dockview tabs after idle drag without requiring the older immediate drag-detach behavior.
 
-### Changed
-- 
 ## [0.9.50] - 2026-04-30
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Expose mobile inbox chat debug bundles, use safer directional dashboard shortcut defaults, and resume history in the selected/current Hermes workspace.
+- **daemon-core / web-core**: Harden chat debug bundle routing.
 
-### Changed
-- 
 ## [0.9.49] - 2026-04-30
 
 ### Added
-- 
+- **daemon-core / web-core**: Add chat debug bundles for support/debug export.
 
 ### Fixed
-- 
+- **web-core**: Surface blocked reconnect actions and delay reconnect action prompts on mobile.
+- **daemon-core**: Hide Windows upgrade and provider-launch probes from user-facing output.
 
-### Changed
-- 
 ## [0.9.48] - 2026-04-30
 
 ### Added
-- 
+- **web-core**: Show machine chips in the new-session dialog.
+- **daemon-core**: Support provider PTY enter-count behavior.
 
 ### Fixed
-- 
+- **web-core**: Compact dashboard notification previews.
+- **setup**: Avoid `npm.cmd` for Windows setup reinstalls.
 
-### Changed
-- 
 ## [0.9.47] - 2026-04-29
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Load native history scripts for saved sessions so saved-history refreshes use provider-native sources.
 
-### Changed
-- 
 ## [0.9.46] - 2026-04-29
 
-### Added
-- 
-
-### Fixed
-- 
-
 ### Changed
-- 
+- **daemon-core**: Prefer provider native-history scripts and remove the daemon-owned native-history adapter layer.
+- **provider tests**: Validate the native-history script contract.
+
 ## [0.9.45] - 2026-04-29
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Detect macOS app bundle processes for CLI/native history discovery.
+- **web-core**: Remove duplicate mobile reconnect labels and align inbox previews with chat transcripts.
 
 ### Changed
-- 
+- **daemon-core**: Read CLI history from native provider sources.
+
 ## [0.9.44] - 2026-04-29
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Strip repeated activity prefixes from assistant content.
+- **web-core**: Rearm terminal scrollback loading on reveal and stabilize dashboard chat scroll.
 
-### Changed
-- 
 ## [0.9.43] - 2026-04-28
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Preserve newer chat-tail hydration and avoid mobile inbox done-chip overlap.
 
-### Changed
-- 
 ## [0.9.42] - 2026-04-28
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Prefer newer chat transcripts over stale tail snapshots, replace chat edge snap with jump buttons, stabilize mobile live inbox ordering, support mobile terminal touch-scroll fallback, and keep single tildes literal in chat markdown.
+- **terminal / terminal-render-web**: Retain older output replay and preserve scroll on local input.
+- **daemon-core**: Preserve CLI workspace and message identity.
 
-### Changed
-- 
+### Performance
+- **session-host**: Limit diagnostics session payloads.
+
 ## [0.9.41] - 2026-04-28
 
-### Added
-- 
-
 ### Fixed
-- 
+- **web-core**: Preserve chat scroll across layout changes, wait for terminal replay before anchoring scrollback, and smooth dashboard pane transitions.
 
-### Changed
-- 
+### Performance
+- **daemon-core / session-host**: Add lightweight provider modal projections, resolve session modals by registry target, and avoid raw-only parse cache misses.
+
 ## [0.9.40] - 2026-04-28
 
-### Added
-- 
-
 ### Fixed
-- 
+- **daemon-core**: Hydrate preview-only chat tails.
+- **web-core**: Avoid chat autoscroll on status updates.
 
-### Changed
-- 
+### Performance
+- **daemon-core**: Reduce CLI transcript normalization load.
+- **web-core**: Reuse the last message hash for chat scroll work.
+
 ## [0.9.39] - 2026-04-28
 
 ### Added
-- 
+- **web-core**: Float Dockview panels on idle drag.
 
 ### Fixed
-- 
+- **web-core**: Gate older terminal scrollback loader paths.
 
-### Changed
-- 
+### Performance
+- **daemon-core**: Avoid rich CLI parsing on idle hot paths.
+
 ## [0.9.38] - 2026-04-27
 
-### Added
-- 
-
 ### Fixed
-- 
+- **terminal / web-core**: Keep loaded terminal scrollback visible.
+- **web-core**: Remove the custom Dockview drag-detach path after parity validation.
 
-### Changed
-- 
+### Performance
+- **daemon-core**: Avoid redundant CLI history writes.
+
 ## [0.9.37] - 2026-04-27
 
-### Added
-- 
+### Performance
+- **daemon-core**: Reduce chat tail hydration work on repeated live CLI output.
 
-### Fixed
-- 
-
-### Changed
-- 
 ## [0.9.36] - 2026-04-27
 
 ### Added
