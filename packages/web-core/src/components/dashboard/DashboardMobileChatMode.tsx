@@ -50,7 +50,6 @@ interface DashboardMobileChatModeProps {
     onStopCli?: (conversation?: ActiveConversation) => void | Promise<void>
     wsStatus?: string
     isConnected?: boolean
-    onShowHiddenConversation: (conversation: ActiveConversation) => void
     onShowAllHiddenConversations: () => void
     onHideConversation?: (conversation: ActiveConversation) => void
     onOpenNewSession?: () => void
@@ -84,7 +83,6 @@ export default function DashboardMobileChatMode({
     onStopCli,
     wsStatus,
     isConnected,
-    onShowHiddenConversation,
     onShowAllHiddenConversations,
     onHideConversation,
     onOpenNewSession,
@@ -332,8 +330,8 @@ export default function DashboardMobileChatMode({
                     actionLogs={actionLogs}
                     sendDaemonCommand={sendDaemonCommand}
                     onOpenConversation={navigation.openConversation}
-                    onShowConversation={onShowHiddenConversation}
                     onShowAllHidden={onShowAllHiddenConversations}
+                    onHideConversation={onHideConversation}
                     onOpenNewSession={onOpenNewSession}
                     onOpenMachine={navigation.openMachine}
                     onOpenSettings={() => navigate('/settings')}

@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import type { MouseEvent } from 'react'
-import { IconBell, IconSettings, IconChat } from '../Icons'
+import { IconBell, IconSettings, IconChat, IconEyeOff } from '../Icons'
 import InstallCommand from '../InstallCommand'
 import { formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
@@ -30,8 +30,8 @@ interface DashboardMobileChatInboxProps {
     actionLogs: { routeId: string; text: string; timestamp: number }[]
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     onOpenConversation: (conversation: ActiveConversation) => void
-    onShowConversation: (conversation: ActiveConversation) => void
     onShowAllHidden: () => void
+    onHideConversation?: (conversation: ActiveConversation) => void
     onOpenNewSession?: () => void
     onOpenMachine: (machineId: string) => void
     onOpenSettings: () => void
@@ -95,12 +95,14 @@ function DashboardMobileChatItem({
     type,
     getAvatarText,
     onOpenConversation,
+    onHideConversation,
     onCollectChatDebugBundle,
 }: {
     item: MobileConversationListItem
     type: 'needs_attention' | 'task_complete' | 'working' | 'earlier'
     getAvatarText: (primary: string) => string
     onOpenConversation: (c: ActiveConversation) => void
+    onHideConversation?: (conversation: ActiveConversation) => void
     onCollectChatDebugBundle?: MobileInboxDebugBundleCollector
 }) {
     const isUnread = type === 'needs_attention' || type === 'task_complete'
@@ -142,59 +144,81 @@ function DashboardMobileChatItem({
     }
     
     return (
-        <button
+        <div
             key={item.conversation.tabKey}
-            className={`group flex items-start gap-3.5 px-4 py-3.5 w-full text-left relative overflow-hidden transition-colors active:scale-[0.995] ${rowClassName}`}
-            onClick={() => onOpenConversation(item.conversation)}
-            onContextMenu={handleConversationContextMenu}
-            type="button"
+            className={`group relative overflow-hidden transition-colors active:scale-[0.995] ${rowClassName}`}
         >
-            {(isUnread || isWorking) ? (
-                <span className="pointer-events-none absolute left-0 top-3 bottom-3 w-[3px] rounded-r-full bg-accent-primary/80" />
-            ) : null}
-            <span
-                className={`w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${avatarClassName}`}
-                style={isUnread ? { color: 'var(--accent-on-primary)' } : undefined}
+            <button
+                className={`flex items-start gap-3.5 px-4 py-3.5 w-full text-left relative ${onHideConversation ? 'pb-2' : ''}`}
+                onClick={() => onOpenConversation(item.conversation)}
+                onContextMenu={handleConversationContextMenu}
+                type="button"
             >
-                {getAvatarText(title)}
-            </span>
-            <div className="flex-1 min-w-0 flex flex-col gap-0.5">
-                <div className="flex items-center justify-between gap-2">
-                    <span className={`text-[15px] font-bold truncate tracking-tight ${titleClassName}`}>{title}</span>
-                    {shouldShowTimestamp && <span className={`text-[11px] font-medium shrink-0 ${timestampClassName}`}>{formatRelativeTime(item.timestamp)}</span>}
-                </div>
-                <div className={`text-[12px] font-medium truncate flex items-center ${metaClassName}`}>
-                    <span className="truncate">{metaText}</span>
-                    <GitStatusPill git={item.conversation.git} compact className="ml-1 max-w-[6.5rem] shrink-0" />
-                    {isReconnecting ? (
-                        <>
-                            <span className="mx-1 opacity-50">·</span>
-                            <span className={`${warningTextClassName} animate-pulse`}>Reconnecting…</span>
-                        </>
-                    ) : isConnecting ? (
-                        <>
-                            <span className="mx-1 opacity-50">·</span>
-                            <span className="text-text-muted">Connecting…</span>
-                        </>
-                    ) : statusHint === 'Action needed' && (
-                        <>
-                            <span className="mx-1 opacity-50">·</span>
-                            <span className={warningTextClassName}>Action needed</span>
-                        </>
-                    )}
-                </div>
-                <div className={`mt-0.5 truncate text-[13px] ${previewClassName}`}>
-                    {item.preview}
-                </div>
-            </div>
-            {isUnread && !isTaskComplete && <span className="absolute top-5 right-4 w-2 h-2 rounded-full bg-accent-primary shadow-glow" />}
-            {isTaskComplete && (
-                <span className="absolute top-4 right-4 rounded-full border border-accent-primary/16 bg-accent-primary/10 px-2 py-0.5 text-[10px] font-bold text-accent-primary">
-                    Done
+                {(isUnread || isWorking) ? (
+                    <span className="pointer-events-none absolute left-0 top-3 bottom-3 w-[3px] rounded-r-full bg-accent-primary/80" />
+                ) : null}
+                <span
+                    className={`w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${avatarClassName}`}
+                    style={isUnread ? { color: 'var(--accent-on-primary)' } : undefined}
+                >
+                    {getAvatarText(title)}
                 </span>
+                <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                    <div className="flex items-center justify-between gap-2">
+                        <span className={`text-[15px] font-bold truncate tracking-tight ${titleClassName}`}>{title}</span>
+                        {shouldShowTimestamp && <span className={`text-[11px] font-medium shrink-0 ${timestampClassName}`}>{formatRelativeTime(item.timestamp)}</span>}
+                    </div>
+                    <div className={`text-[12px] font-medium truncate flex items-center ${metaClassName}`}>
+                        <span className="truncate">{metaText}</span>
+                        <GitStatusPill git={item.conversation.git} compact className="ml-1 max-w-[6.5rem] shrink-0" />
+                        {isReconnecting ? (
+                            <>
+                                <span className="mx-1 opacity-50">·</span>
+                                <span className={`${warningTextClassName} animate-pulse`}>Reconnecting…</span>
+                            </>
+                        ) : isConnecting ? (
+                            <>
+                                <span className="mx-1 opacity-50">·</span>
+                                <span className="text-text-muted">Connecting…</span>
+                            </>
+                        ) : statusHint === 'Action needed' && (
+                            <>
+                                <span className="mx-1 opacity-50">·</span>
+                                <span className={warningTextClassName}>Action needed</span>
+                            </>
+                        )}
+                    </div>
+                    <div className={`mt-0.5 truncate text-[13px] ${previewClassName}`}>
+                        {item.preview}
+                    </div>
+                </div>
+                {isUnread && !isTaskComplete && <span className="absolute top-5 right-4 w-2 h-2 rounded-full bg-accent-primary shadow-glow" />}
+                {isTaskComplete && (
+                    <span className="absolute top-4 right-4 rounded-full border border-accent-primary/16 bg-accent-primary/10 px-2 py-0.5 text-[10px] font-bold text-accent-primary">
+                        Done
+                    </span>
+                )}
+                {isWorking && <span className="absolute top-4 right-4 rounded-full bg-accent-primary/10 px-2 py-0.5 text-[10px] font-bold text-accent-primary">Live</span>}
+            </button>
+            {onHideConversation && (
+                <div className="flex justify-end px-4 pb-3 -mt-1">
+                    <button
+                        type="button"
+                        className="mobile-inbox-hide-button inline-flex items-center gap-1.5 rounded-full border border-border-subtle bg-bg-primary/70 px-2.5 py-1 text-[11px] font-semibold text-text-muted hover:border-border-default hover:text-text-primary"
+                        onClick={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            onHideConversation(item.conversation)
+                        }}
+                        aria-label={`Hide ${title}`}
+                        title="Hide conversation"
+                    >
+                        <IconEyeOff size={12} />
+                        <span>Hide</span>
+                    </button>
+                </div>
             )}
-            {isWorking && <span className="absolute top-4 right-4 rounded-full bg-accent-primary/10 px-2 py-0.5 text-[10px] font-bold text-accent-primary">Live</span>}
-        </button>
+        </div>
     )
 }
 
@@ -221,8 +245,8 @@ export default function DashboardMobileChatInbox({
     actionLogs,
     sendDaemonCommand,
     onOpenConversation,
-    onShowConversation,
     onShowAllHidden,
+    onHideConversation,
     onOpenNewSession,
     onOpenMachine,
     onOpenSettings,
@@ -304,14 +328,6 @@ export default function DashboardMobileChatInbox({
         eventManager.showToast(buildChatDebugBundleToastMessage(result, { locatorCopied }), locatorCopied ? 'success' : 'warning')
     }, [actionLogs, sendDaemonCommand])
     const effectiveCollectChatDebugBundle = onCollectChatDebugBundle || collectMobileInboxChatDebugBundle
-    const handleHiddenConversationContextMenu = useCallback((event: MouseEvent<HTMLButtonElement>, conversation: ActiveConversation) => {
-        event.preventDefault()
-        event.stopPropagation()
-        void Promise.resolve(effectiveCollectChatDebugBundle(conversation)).catch((error) => {
-            console.warn('[chat-debug-bundle] failed to collect mobile inbox debug bundle', error)
-            eventManager.showToast('Chat debug signal failed. Check the browser console or P2P connection.', 'warning')
-        })
-    }, [effectiveCollectChatDebugBundle])
 
     return (
         <div className="flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-primary">
@@ -426,6 +442,7 @@ export default function DashboardMobileChatInbox({
                                         type="needs_attention"
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
+                                        onHideConversation={onHideConversation}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                     />
                                 </div>
@@ -445,6 +462,7 @@ export default function DashboardMobileChatInbox({
                                         type="task_complete"
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
+                                        onHideConversation={onHideConversation}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                     />
                                 </div>
@@ -464,6 +482,7 @@ export default function DashboardMobileChatInbox({
                                         type="working"
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
+                                        onHideConversation={onHideConversation}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                     />
                                 </div>
@@ -486,6 +505,7 @@ export default function DashboardMobileChatInbox({
                                             type="earlier"
                                             getAvatarText={getAvatarText}
                                             onOpenConversation={onOpenConversation}
+                                            onHideConversation={onHideConversation}
                                             onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                         />
                                     </div>
@@ -544,40 +564,22 @@ export default function DashboardMobileChatInbox({
 
                 {section === 'chats' && hiddenConversations.length > 0 && (
                     <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
-                        <div className="mx-1 mt-4 mb-1 flex items-center justify-between gap-2 px-1 py-1 text-[12px] font-bold uppercase tracking-wider text-text-secondary">
-                            <span>Hidden</span>
-                            <button
-                                type="button"
-                                className="text-accent-primary normal-case font-semibold hover:underline"
-                                onClick={onShowAllHidden}
-                            >
-                                Restore all
-                            </button>
-                        </div>
-                        <InboxListSection className="bg-bg-secondary/25">
-                            {hiddenConversations.map((conversation, index) => (
-                                <button
-                                    key={conversation.tabKey}
-                                    className={`flex items-start gap-3.5 px-4 py-3.5 w-full text-left transition-colors active:scale-[0.995] opacity-50 saturate-0 ${index > 0 ? 'border-t border-border-subtle/70' : ''}`}
-                                    onClick={() => onShowConversation(conversation)}
-                                    onContextMenu={(event) => handleHiddenConversationContextMenu(event, conversation)}
-                                    type="button"
-                                >
-                                    <span className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0 bg-bg-primary border border-border-subtle text-text-secondary">
-                                        {getAvatarText(getConversationTitle(conversation))}
-                                    </span>
-                                    <div className="flex-1 min-w-0 flex flex-col gap-0.5">
-                                        <div className="flex items-center justify-between gap-2">
-                                            <span className="text-[15px] font-bold text-text-primary truncate tracking-tight">{getConversationTitle(conversation)}</span>
-                                            <span className="text-[11px] font-medium text-text-muted shrink-0">Hidden</span>
-                                        </div>
-                                        <div className="text-[12px] font-medium text-text-secondary truncate flex items-center">{getConversationMetaText(conversation)}</div>
-                                        <div className="text-[13px] text-text-muted truncate mt-0.5 opacity-90">
-                                            Tap to restore and open
-                                        </div>
+                        <InboxListSection className="mt-4 border-dashed bg-bg-secondary/20">
+                            <div className="flex items-center justify-between gap-3 px-4 py-3 text-left">
+                                <div className="min-w-0">
+                                    <div className="text-[12px] font-bold uppercase tracking-wider text-text-secondary">Hidden tabs</div>
+                                    <div className="mt-0.5 text-[13px] text-text-muted">
+                                        {hiddenConversations.length} collapsed {hiddenConversations.length === 1 ? 'conversation' : 'conversations'}
                                     </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    className="shrink-0 rounded-full border border-border-subtle bg-bg-primary/70 px-3 py-1.5 text-[12px] font-semibold text-accent-primary hover:border-border-default"
+                                    onClick={onShowAllHidden}
+                                >
+                                    Restore all
                                 </button>
-                            ))}
+                            </div>
                         </InboxListSection>
                     </section>
                 )}

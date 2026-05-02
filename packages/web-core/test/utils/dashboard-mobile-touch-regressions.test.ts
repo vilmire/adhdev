@@ -60,6 +60,22 @@ describe('dashboard mobile/touch regressions', () => {
     expect(modeSource).toContain('sendDaemonCommand={sendDaemonCommand}')
   })
 
+  it('keeps mobile hidden chats collapsed and lets visible inbox rows hide themselves', () => {
+    const inboxSource = readSource('components/dashboard/DashboardMobileChatInbox.tsx')
+    const modeSource = readSource('components/dashboard/DashboardMobileChatMode.tsx')
+    const mainViewSource = readSource('components/dashboard/DashboardMainView.tsx')
+
+    expect(inboxSource).toContain('onHideConversation?: (conversation: ActiveConversation) => void')
+    expect(inboxSource).toContain('mobile-inbox-hide-button')
+    expect(inboxSource).toContain('onHideConversation(item.conversation)')
+    expect(inboxSource).toContain('Hidden tabs')
+    expect(inboxSource).toContain('collapsed')
+    expect(inboxSource).not.toContain('hiddenConversations.map((conversation')
+    expect(inboxSource).not.toContain('Tap to restore and open')
+    expect(modeSource).toContain('onHideConversation={onHideConversation}')
+    expect(mainViewSource).toContain('onHideConversation={onHideConversation}')
+  })
+
   it('makes dashboard tab drag handles non-text-selectable on touch devices', () => {
     const css = readSource('index.css')
 

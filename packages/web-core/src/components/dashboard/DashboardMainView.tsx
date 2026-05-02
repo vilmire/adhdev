@@ -557,8 +557,8 @@ export default function DashboardMainView({
                     onStopCli={onStopCli}
                     wsStatus={wsStatus}
                     isConnected={isConnected}
-                    onShowHiddenConversation={handleShowHiddenConversationWithRestore}
                     onShowAllHiddenConversations={onShowAllHiddenConversations}
+                    onHideConversation={onHideConversation}
                     onOpenNewSession={openNewSession}
                     liveSessionInboxState={liveSessionInboxState}
                 />
