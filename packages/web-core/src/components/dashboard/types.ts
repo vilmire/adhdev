@@ -2,7 +2,7 @@
  * Shared types for Dashboard components
  */
 
-import type { GitCompactSummary, SessionTransport } from '@adhdev/daemon-core';
+import type { GitCompactSummary, RecentSessionBucket, SessionTransport } from '@adhdev/daemon-core';
 import type { ChatMessage } from '../../types';
 
 export type CliConversationViewMode = 'terminal' | 'chat';
@@ -37,6 +37,8 @@ export interface ActiveConversation {
     lastMessageAt?: number;
     lastMessageHash?: string;
     lastUpdated?: number;
+    inboxBucket?: RecentSessionBucket;
+    completionMarker?: string;
     modalButtons?: string[];
     modalMessage?: string;
     streamSource: 'native' | 'agent-stream';

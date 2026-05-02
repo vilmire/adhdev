@@ -113,6 +113,7 @@ export function buildIdeConversations(
         lastSeenAt?: number;
         lastUpdated?: number;
         inboxBucket?: RecentSessionBucket;
+        completionMarker?: string;
         surfaceHidden?: boolean;
         git?: GitCompactSummary;
     }[] = Array.isArray(ide.childSessions)
@@ -136,6 +137,7 @@ export function buildIdeConversations(
             lastSeenAt: child.lastSeenAt,
             lastUpdated: child.lastUpdated,
             inboxBucket: child.inboxBucket,
+            completionMarker: child.completionMarker,
             surfaceHidden: child.surfaceHidden,
             git: child.git,
         }))
@@ -198,6 +200,8 @@ export function buildIdeConversations(
             lastMessageAt: ide.lastMessageAt,
             lastMessageHash: ide.lastMessageHash,
             lastUpdated: ide.lastUpdated,
+            inboxBucket: ide.inboxBucket,
+            completionMarker: ide.completionMarker,
             modalButtons: hasRealModal ? modal.buttons : undefined,
             modalMessage: hasRealModal ? modal.message : undefined,
             streamSource: 'native',
@@ -254,6 +258,8 @@ export function buildIdeConversations(
             lastMessageAt: stream.lastMessageAt,
             lastMessageHash: stream.lastMessageHash,
             lastUpdated: stream.lastUpdated || ide.lastUpdated,
+            inboxBucket: stream.inboxBucket,
+            completionMarker: stream.completionMarker,
             modalButtons: hasModal ? stream.activeModal!.buttons : undefined,
             modalMessage: hasModal ? stream.activeModal!.message : undefined,
             streamSource: 'agent-stream',

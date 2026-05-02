@@ -39,7 +39,10 @@ describe('build conversations shared context', () => {
     })
 
     it('builds conversations through the shared scoped helper', () => {
-        const ide = createIdeEntry()
+        const ide = createIdeEntry({
+            inboxBucket: 'task_complete',
+            completionMarker: 'done-1',
+        })
         const conversations = buildScopedIdeConversations(ide, {
             machineNames: { 'machine-1': 'Studio Mac' },
             connectionStates: { 'machine-1': 'connected' },
@@ -53,6 +56,8 @@ describe('build conversations shared context', () => {
             connectionState: 'connected',
             tabKey: 'cursor-1',
             sessionCapabilities: ['read_chat', 'open_panel'],
+            inboxBucket: 'task_complete',
+            completionMarker: 'done-1',
         })
     })
 

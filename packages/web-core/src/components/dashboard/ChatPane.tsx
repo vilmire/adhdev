@@ -33,6 +33,7 @@ import { getDefaultChatTailHydrateLimit, getDefaultVisibleLiveMessages } from '.
 import { useSessionChatTailController } from './session-chat-tail-controller';
 import { buildVisibleConversationMessages, getConversationLiveMessages } from './conversation-message-snapshot';
 import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
+import { buildGitSystemBubbleMessages } from './git-system-bubbles';
 
 export interface ChatPaneProps {
     activeConv: ActiveConversation;
@@ -155,11 +156,15 @@ export default function ChatPane({
     }, [chatTailState, isLoadingMore, liveMessages.length, visibleLiveCount]);
 
     const { allMessages, receivedAtMap } = useMemo(() => {
-        const allMessages = buildVisibleConversationMessages({
+        const visibleMessages = buildVisibleConversationMessages({
             historyMessages,
             liveMessages,
             visibleLiveCount,
         });
+        const gitSystemMessages = buildGitSystemBubbleMessages(activeConv);
+        const allMessages = gitSystemMessages.length > 0
+            ? [...visibleMessages, ...gitSystemMessages]
+            : visibleMessages;
         const nextReceivedAtMap: Record<string, number> = {};
         allMessages.forEach((message, index: number) => {
             const messageKey = `${activeConv.tabKey}:${getChatMessageStableKey(message, index)}`;
@@ -171,7 +176,22 @@ export default function ChatPane({
             nextReceivedAtMap[getChatMessageStableKey(message, index)] = receivedAt;
         });
         return { allMessages, receivedAtMap: nextReceivedAtMap };
-    }, [activeConv.tabKey, hiddenLiveCount, historyMessages, liveMessages, visibleLiveCount]);
+    }, [
+        activeConv.tabKey,
+        activeConv.sessionId,
+        activeConv.status,
+        activeConv.inboxBucket,
+        activeConv.completionMarker,
+        activeConv.lastMessageHash,
+        activeConv.lastMessageAt,
+        activeConv.lastUpdated,
+        activeConv.workspacePath,
+        activeConv.git,
+        hiddenLiveCount,
+        historyMessages,
+        liveMessages,
+        visibleLiveCount,
+    ]);
     const visibleActionLogs = useMemo(
         () => actionLogs
             .filter(l => l.routeId === activeConv.tabKey)

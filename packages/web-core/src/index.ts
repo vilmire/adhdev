@@ -206,6 +206,11 @@ export {
 } from './hooks/useWorkspaceGitStatus'
 export type { UseWorkspaceGitStatusOptions, UseWorkspaceGitStatusResult } from './hooks/useWorkspaceGitStatus'
 export { useGitRemoteUrl, extractGitHubUrl } from './hooks/useGitRemoteUrl'
+export {
+    buildGitSystemBubbleMessages,
+    getGitSystemBubbleSummaryText,
+} from './components/dashboard/git-system-bubbles'
+export type { BuildGitSystemBubbleOptions } from './components/dashboard/git-system-bubbles'
 
 // ── CSS ──
 // Import '@adhdev/web-core/index.css' in your app entry
