@@ -43,6 +43,16 @@ export class CloudTransport {
     return res.json();
   }
 
+  /** Get all sessions for a daemon (returns CompactSessionEntry[]). */
+  async getDaemonStatus(daemonId: string): Promise<any> {
+    const res = await fetch(
+      `${this.baseUrl}/api/v1/daemons/${encodeURIComponent(daemonId)}/status`,
+      { headers: this.headers() },
+    );
+    if (!res.ok) throw new Error(`Daemon status failed: ${res.status}`);
+    return res.json();
+  }
+
   async readChat(targetId: string, opts: { limit?: number; sessionId?: string } = {}): Promise<any> {
     const params = new URLSearchParams();
     if (opts.limit) params.set('limit', String(opts.limit));
@@ -79,6 +89,29 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Approve failed: ${res.status}`);
+    return res.json();
+  }
+
+  async gitStatus(daemonId: string, workspace: string, includeDiff = true): Promise<any> {
+    const params = new URLSearchParams({ workspace, includeDiff: String(includeDiff) });
+    const res = await fetch(
+      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/git-status?${params}`,
+      { headers: this.headers() },
+    );
+    if (!res.ok) throw new Error(`Git status failed: ${res.status}`);
+    return res.json();
+  }
+
+  async launch(daemonId: string, opts: { type: string; dir?: string; model?: string }): Promise<any> {
+    const res = await fetch(
+      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/launch`,
+      {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(opts),
+      },
+    );
+    if (!res.ok) throw new Error(`Launch failed: ${res.status}`);
     return res.json();
   }
 
