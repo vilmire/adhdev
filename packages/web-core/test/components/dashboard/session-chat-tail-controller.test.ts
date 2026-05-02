@@ -551,6 +551,53 @@ describe('SessionChatTailController registry', () => {
     })
   })
 
+  it('applies a tail refresh with the same last signature when it restores an earlier missing assistant answer', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+    const restoredAnswer = { role: 'assistant', kind: 'standard', content: '완료했습니다. 최종 답변', id: 'msg-final', timestamp: 1 } as any
+    const nextUser = { role: 'user', content: '이어서', id: 'msg-user-next', timestamp: 2 } as any
+    const activityTail = { role: 'assistant', kind: 'terminal', content: '$ grep sendJsonMessage', id: 'msg-activity-tail', timestamp: 3 } as any
+
+    controller.hydrateLiveMessages([
+      nextUser,
+      activityTail,
+    ])
+    controller.retain()
+
+    manager.publish(createUpdate({
+      messages: [
+        restoredAnswer,
+        nextUser,
+        activityTail,
+      ],
+      syncMode: 'replace_tail',
+      replaceFrom: 0,
+      totalMessages: 3,
+      lastMessageSignature: buildLastMessageSignature(activityTail),
+    }))
+
+    const snapshot = controller.getSnapshot()
+    expect(snapshot.liveMessages.map(message => (message as any).content)).toEqual([
+      '완료했습니다. 최종 답변',
+      '이어서',
+      '$ grep sendJsonMessage',
+    ])
+    expect(snapshot.cursor).toMatchObject({
+      knownMessageCount: 3,
+      lastMessageSignature: buildLastMessageSignature(activityTail),
+      tailLimit: 60,
+    })
+  })
+
   it('updates a streaming bubble in place when append updates reuse the same provider unit key', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()

@@ -379,18 +379,20 @@ export class SessionChatTailController {
   private handleUpdate(update: SessionChatTailUpdate): void {
     if (update.error) return
 
-    // Guard: if the daemon's last-message signature already matches our current
-    // last message, liveMessages is already up to date (hydrateLiveMessages may
-    // have pre-populated it from the status report with messages the daemon would
-    // otherwise re-deliver as append/replace_tail, causing duplicates).
-    // Skip the sync but advance the cursor so reconnects use the correct position.
+    // If the daemon's last-message signature already matches our current tail,
+    // the cursor can still advance, but the payload is not necessarily redundant:
+    // a replace_tail/full-ish refresh may restore an earlier standard assistant
+    // answer that was missed while later tool/terminal rows already reached the
+    // browser. Apply non-empty payloads first; dedupe/update logic below prevents
+    // duplicate tail rows, while preserving those restored earlier messages.
     const updateLastSig = typeof update.lastMessageSignature === 'string'
       ? update.lastMessageSignature
       : ''
     const currentLastSig = buildLastMessageSignature(
       this.snapshot.liveMessages[this.snapshot.liveMessages.length - 1],
     )
-    if (update.syncMode !== 'full' && updateLastSig && currentLastSig === updateLastSig) {
+    const incomingMessages = Array.isArray(update.messages) ? update.messages as DashboardMessage[] : []
+    if (update.syncMode !== 'full' && updateLastSig && currentLastSig === updateLastSig && incomingMessages.length === 0) {
       const advancedCount = Math.max(
         this.snapshot.cursor.knownMessageCount,
         Number(update.totalMessages || 0),
@@ -414,11 +416,18 @@ export class SessionChatTailController {
     }
 
     const nextMessages = applyReadChatSync(this.snapshot.liveMessages, update)
+    const nextLastMessageSignature = updateLastSig
+      || buildLastMessageSignature(nextMessages[nextMessages.length - 1])
+    const nextTailMatchesDaemon = !!updateLastSig
+      && buildLastMessageSignature(nextMessages[nextMessages.length - 1]) === updateLastSig
+    const shouldAdvanceToDaemonTotal = update.syncMode !== 'full'
+      && nextTailMatchesDaemon
+      && Number(update.totalMessages || 0) > nextMessages.length
     const nextCursor: Required<ReadChatCursor> = {
-      knownMessageCount: nextMessages.length,
-      lastMessageSignature: typeof update.lastMessageSignature === 'string'
-        ? update.lastMessageSignature
-        : buildLastMessageSignature(nextMessages[nextMessages.length - 1]),
+      knownMessageCount: shouldAdvanceToDaemonTotal
+        ? Math.max(nextMessages.length, Number(update.totalMessages || 0))
+        : nextMessages.length,
+      lastMessageSignature: nextLastMessageSignature,
       tailLimit: this.snapshot.cursor.tailLimit,
     }
     const unchanged = buildChatSnapshotSignature(this.snapshot.liveMessages)
