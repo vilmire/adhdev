@@ -1,5 +1,6 @@
 import type { LocalTransport } from '../transports/local.js';
 import type { CloudTransport } from '../transports/cloud.js';
+import { FORMAT_PROP } from './list-sessions.js';
 
 export const READ_CHAT_TOOL = {
   name: 'read_chat',
@@ -19,6 +20,7 @@ export const READ_CHAT_TOOL = {
         type: 'string',
         description: 'Daemon ID (cloud mode only). Omit for local mode.',
       },
+      ...FORMAT_PROP,
     },
     required: [],
   },
@@ -26,32 +28,49 @@ export const READ_CHAT_TOOL = {
 
 export async function readChat(
   transport: LocalTransport | CloudTransport,
-  args: { session_id?: string; limit?: number; daemon_id?: string },
+  args: { session_id?: string; limit?: number; daemon_id?: string; format?: 'text' | 'json' },
 ): Promise<string> {
   const limit = args.limit ?? 50;
 
   if ('command' in transport) {
-    // LocalTransport
     const result = await (transport as LocalTransport).command('read_chat', {
       ...(args.session_id ? { targetSessionId: args.session_id } : {}),
       limit,
     });
-    return formatChatResult(result);
+    return formatChatResult(result, args.session_id, args.format);
   }
 
-  // CloudTransport
   if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
   const targetId = args.session_id ? `${args.daemon_id}:session:${args.session_id}` : args.daemon_id;
   const result = await (transport as CloudTransport).readChat(targetId, { limit, sessionId: args.session_id });
-  return formatChatResult(result);
+  return formatChatResult(result, args.session_id, args.format);
 }
 
-function formatChatResult(result: any): string {
-  if (!result?.success && result?.error) return `Error: ${result.error}`;
+function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'json'): string {
+  if (!result?.success && result?.error) {
+    if (format === 'json') return JSON.stringify({ error: result.error, messages: [] }, null, 2);
+    return `Error: ${result.error}`;
+  }
 
   const messages: any[] = result?.messages ?? result?.data?.messages ?? [];
-  if (messages.length === 0) return 'No messages in chat.';
 
+  if (format === 'json') {
+    return JSON.stringify({
+      session_id: sessionId ?? null,
+      messages: messages.slice(-50).map((m: any) => ({
+        role: m.role,
+        kind: m.kind ?? null,
+        content: typeof m.content === 'string'
+          ? m.content
+          : Array.isArray(m.content)
+            ? m.content.map((p: any) => (typeof p === 'string' ? p : p?.text ?? '')).join('')
+            : '',
+        timestamp: m.timestamp ?? null,
+      })),
+    }, null, 2);
+  }
+
+  if (messages.length === 0) return 'No messages in chat.';
   const lines = messages.slice(-50).map((m: any) => {
     const role = m.role === 'user' ? 'User' : m.role === 'assistant' ? 'Agent' : m.role;
     const content = typeof m.content === 'string'
@@ -62,6 +81,5 @@ function formatChatResult(result: any): string {
     const truncated = content.length > 500 ? `${content.slice(0, 500)}…` : content;
     return `[${role}] ${truncated}`;
   });
-
   return lines.join('\n\n');
 }

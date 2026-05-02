@@ -83,7 +83,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     try {
       switch (name) {
         case 'list_sessions': {
-          const text = await listSessions(transport);
+          const text = await listSessions(transport, { format: a.format });
           return { content: [{ type: 'text', text }] };
         }
         case 'read_chat': {
@@ -109,7 +109,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           return { content: [{ type: 'text', text: result.text }] };
         }
         case 'git_status': {
-          const text = await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, daemon_id: a.daemon_id });
+          const text = await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, daemon_id: a.daemon_id, format: a.format });
           return { content: [{ type: 'text', text }] };
         }
         case 'launch_session': {
@@ -122,7 +122,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           return { content: [{ type: 'text', text }] };
         }
         case 'check_pending': {
-          const text = await checkPending(transport, { daemon_id: a.daemon_id });
+          const text = await checkPending(transport, { daemon_id: a.daemon_id, format: a.format });
           return { content: [{ type: 'text', text }] };
         }
         default:
