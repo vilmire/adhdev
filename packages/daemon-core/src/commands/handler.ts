@@ -50,6 +50,8 @@ export interface CommandContext {
     onProviderSettingChanged?: (providerType: string, key: string, value: any) => Promise<void> | void;
     onProviderSourceConfigChanged?: () => Promise<void> | void;
     gitCommandServices?: GitCommandServices;
+    /** Fired synchronously before send_chat is dispatched; fire-and-forget for callers */
+    onBeforeSendChat?: (params: { workspace: string; sessionId: string }) => void;
 }
 
 /**
@@ -421,6 +423,20 @@ export class DaemonCommandHandler implements CommandHelpers {
                 result = { success: false, error: 'No targetSessionId specified — cannot route command' };
                 this.logCommandEnd(cmd, result, startedAt);
                 return result;
+            }
+        }
+
+        if (cmd === 'send_chat' && this._ctx.onBeforeSendChat) {
+            const sessionId = this._currentRoute.session?.sessionId;
+            const workspace = sessionId
+                ? (this._ctx.instanceManager?.getInstance(sessionId) as any)?.getState?.()?.workspace
+                : undefined;
+            if (workspace && sessionId) {
+                try {
+                    this._ctx.onBeforeSendChat({ workspace, sessionId });
+                } catch {
+                    // hook must not block send_chat
+                }
             }
         }
 

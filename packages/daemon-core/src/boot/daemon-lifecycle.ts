@@ -35,6 +35,7 @@ import {
 import { loadConfig } from '../config/config.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { IdeProviderInstance } from '../providers/ide-provider-instance.js';
+import { createDefaultGitCommandServices } from '../git/git-commands.js';
 
 // ─── Init Config ───
 
@@ -78,6 +79,9 @@ export interface DaemonInitConfig {
     statusInstanceId?: string;
     statusVersion?: string;
     statusDaemonMode?: boolean;
+
+    /** Fired before send_chat is dispatched — used for turn snapshot hooks */
+    onBeforeSendChat?: (params: { workspace: string; sessionId: string }) => void;
 }
 
 // ─── Result ───
@@ -256,6 +260,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         providerLoader,
         instanceManager,
         sessionRegistry,
+        gitCommandServices: createDefaultGitCommandServices(),
         onProviderSettingChanged: async (providerType) => {
             await refreshProviderAvailability(providerType);
             config.onStatusChange?.();
@@ -264,6 +269,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
             await refreshProviderAvailability();
             config.onStatusChange?.();
         },
+        onBeforeSendChat: config.onBeforeSendChat,
     });
 
     // 8. AgentStreamManager

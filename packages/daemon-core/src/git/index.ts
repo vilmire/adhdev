@@ -70,3 +70,6 @@ export type {
   GitLogEntry,
   GitLogResult,
 } from './git-commands.js';
+
+export { TurnSnapshotTracker } from './turn-snapshot-tracker.js';
+export type { TurnCompletedCallback } from './turn-snapshot-tracker.js';

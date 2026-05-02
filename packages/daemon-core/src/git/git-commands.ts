@@ -41,6 +41,18 @@ export interface GitLogResult extends GitRepoIdentity {
   lastCheckedAt: number;
 }
 
+export interface GitCheckpointResult extends GitRepoIdentity {
+  commit: string;
+  message: string;
+  lastCheckedAt: number;
+}
+
+export interface GitStashPushResult extends GitRepoIdentity {
+  stashRef: string;
+  message: string;
+  lastCheckedAt: number;
+}
+
 export interface GitCommandServices {
   getStatus?: (params: { workspace: string }) => Promise<GitRepoStatus> | GitRepoStatus;
   getDiffSummary?: (params: { workspace: string; staged?: boolean }) => Promise<GitDiffSummary> | GitDiffSummary;
@@ -63,6 +75,19 @@ export interface GitCommandServices {
     since?: string;
     until?: string;
   }) => Promise<GitLogResult> | GitLogResult;
+  checkpoint?: (params: {
+    workspace: string;
+    message: string;
+    includeUntracked?: boolean;
+  }) => Promise<GitCheckpointResult> | GitCheckpointResult;
+  stashPush?: (params: {
+    workspace: string;
+    message: string;
+    includeUntracked?: boolean;
+  }) => Promise<GitStashPushResult> | GitStashPushResult;
+  stashPop?: (params: { workspace: string; stashRef?: string }) => Promise<void>;
+  checkoutFiles?: (params: { workspace: string; paths: string[] }) => Promise<{ checkedOut: string[] }>;
+  getRemoteUrl?: (params: { workspace: string; remote?: string }) => Promise<{ remoteUrl: string; remote: string }>;
 }
 
 type GitCommandFailure = {
@@ -77,7 +102,12 @@ type GitCommandSuccess =
   | { success: true; diff: GitFileDiff }
   | { success: true; snapshot: GitSnapshot }
   | { success: true; compare: GitSnapshotCompareSummary }
-  | { success: true; log: GitLogResult };
+  | { success: true; log: GitLogResult }
+  | { success: true; checkpoint: GitCheckpointResult }
+  | { success: true; stash: GitStashPushResult }
+  | { success: true; stashPopped: true }
+  | { success: true; checkedOut: string[] }
+  | { success: true; remoteUrl: string; remote: string };
 
 export type GitCommandResult = GitCommandSuccess | GitCommandFailure;
 
@@ -92,13 +122,7 @@ const GIT_COMMAND_NAMES = new Set<GitCommandName>([
   'git_stash_push',
   'git_stash_pop',
   'git_checkout_files',
-]);
-
-const MUTATING_COMMAND_NAMES = new Set<GitCommandName>([
-  'git_checkpoint',
-  'git_stash_push',
-  'git_stash_pop',
-  'git_checkout_files',
+  'git_remote_url',
 ]);
 
 const SNAPSHOT_REASONS = new Set<GitSnapshotReason>([
@@ -146,6 +170,11 @@ export function createDefaultGitCommandServices(): GitCommandServices {
     }),
     compareSnapshots: ({ beforeSnapshotId, afterSnapshotId }) => defaultSnapshotStore.compare(beforeSnapshotId, afterSnapshotId),
     getLog: ({ workspace, limit, path: filePath, since, until }) => getGitLog(workspace, { limit, path: filePath, since, until }),
+    checkpoint: async ({ workspace, message, includeUntracked = false }) => gitCheckpoint(workspace, message, includeUntracked),
+    stashPush: async ({ workspace, message, includeUntracked = false }) => gitStashPush(workspace, message, includeUntracked),
+    stashPop: async ({ workspace, stashRef }) => gitStashPop(workspace, stashRef),
+    checkoutFiles: async ({ workspace, paths }) => gitCheckoutFiles(workspace, paths),
+    getRemoteUrl: async ({ workspace, remote = 'origin' }) => gitGetRemoteUrl(workspace, remote),
   };
 }
 
@@ -240,10 +269,6 @@ export async function handleGitCommand(
     return failure('invalid_args', `Unknown Git command: ${command}`);
   }
 
-  if (MUTATING_COMMAND_NAMES.has(command)) {
-    return failure('invalid_args', `${command} is not implemented in daemon-core read-only Git routing`);
-  }
-
   const workspaceResult = validateWorkspace(args);
   if ('success' in workspaceResult) return workspaceResult;
   const { workspace } = workspaceResult;
@@ -310,9 +335,181 @@ export async function handleGitCommand(
       return 'success' in log ? log : { success: true, log };
     }
 
+    case 'git_checkpoint': {
+      if (!services.checkpoint) return serviceNotImplemented(command);
+      const msg = validateMutatingMessage(args?.message);
+      if (typeof msg !== 'string') return msg;
+      const includeUntracked = Boolean(args?.includeUntracked);
+      const checkpoint = await runService(() => services.checkpoint!({ workspace, message: msg, includeUntracked }));
+      return 'success' in checkpoint ? checkpoint : { success: true, checkpoint };
+    }
+
+    case 'git_stash_push': {
+      if (!services.stashPush) return serviceNotImplemented(command);
+      const msg = validateMutatingMessage(args?.message);
+      if (typeof msg !== 'string') return msg;
+      const includeUntracked = Boolean(args?.includeUntracked);
+      const stash = await runService(() => services.stashPush!({ workspace, message: msg, includeUntracked }));
+      return 'success' in stash ? stash : { success: true, stash };
+    }
+
+    case 'git_stash_pop': {
+      if (!services.stashPop) return serviceNotImplemented(command);
+      const stashRef = optionalString(args?.stashRef);
+      if (stashRef !== undefined && !/^stash@\{\d+\}$/.test(stashRef)) {
+        return failure('invalid_args', 'stashRef must match stash@{N} format');
+      }
+      const popResult = await runService(() => services.stashPop!({ workspace, stashRef }));
+      if (popResult !== undefined && 'success' in (popResult as object)) return popResult as GitCommandFailure;
+      return { success: true, stashPopped: true };
+    }
+
+    case 'git_checkout_files': {
+      if (!services.checkoutFiles) return serviceNotImplemented(command);
+      const paths = args?.paths;
+      if (!Array.isArray(paths) || paths.length === 0) {
+        return failure('invalid_args', 'paths must be a non-empty array');
+      }
+      if (paths.length > 50) {
+        return failure('invalid_args', 'paths array exceeds maximum of 50 entries');
+      }
+      const checkoutResult = await runService(() => services.checkoutFiles!({ workspace, paths }));
+      return 'success' in checkoutResult ? checkoutResult : { success: true, checkedOut: (checkoutResult as { checkedOut: string[] }).checkedOut };
+    }
+
+    case 'git_remote_url': {
+      if (!services.getRemoteUrl) return serviceNotImplemented(command);
+      const remote = typeof args?.remote === 'string' && args.remote.trim() ? args.remote.trim() : 'origin';
+      const remoteResult = await runService(() => services.getRemoteUrl!({ workspace, remote }));
+      if ('success' in remoteResult) return remoteResult;
+      return { success: true, remoteUrl: remoteResult.remoteUrl, remote: remoteResult.remote };
+    }
+
     default:
       return failure('invalid_args', `Unknown Git command: ${command}`);
   }
+}
+
+function validateMutatingMessage(value: unknown): string | GitCommandFailure {
+  if (typeof value !== 'string' || !value.trim()) {
+    return failure('invalid_args', 'message must be a non-empty string');
+  }
+  const msg = value.trim();
+  if (msg.length > 200) {
+    return failure('invalid_args', 'message must be 200 characters or fewer');
+  }
+  return msg;
+}
+
+async function gitCheckpoint(
+  workspace: string,
+  message: string,
+  includeUntracked: boolean,
+): Promise<GitCheckpointResult> {
+  const repo = await resolveGitRepository(workspace);
+  const repoRoot = repo.repoRoot!;
+
+  const statusResult = await getGitRepoStatus(workspace);
+  if (statusResult.hasConflicts) {
+    throw new GitCommandError('conflict', 'Repository has conflicts — resolve before checkpointing');
+  }
+
+  const addArgs = includeUntracked ? ['-A'] : ['-u'];
+  await runGit(repo, ['add', ...addArgs], { cwd: repoRoot });
+
+  const fullMsg = `adhdev: checkpoint ${message}`;
+  let commitSha: string;
+  try {
+    await runGit(repo, ['commit', '-m', fullMsg], { cwd: repoRoot });
+    const revResult = await runGit(repo, ['rev-parse', 'HEAD'], { cwd: repoRoot });
+    commitSha = revResult.stdout.trim();
+  } catch (err: any) {
+    const output = (err?.stdout || '') + (err?.stderr || '');
+    if (/nothing to commit/i.test(output)) {
+      throw new GitCommandError('git_command_failed', 'Nothing to commit');
+    }
+    throw err;
+  }
+
+  return {
+    workspace: repo.workspace,
+    repoRoot,
+    isGitRepo: true,
+    commit: commitSha,
+    message: fullMsg,
+    lastCheckedAt: Date.now(),
+  };
+}
+
+async function gitStashPush(
+  workspace: string,
+  message: string,
+  includeUntracked: boolean,
+): Promise<GitStashPushResult> {
+  const repo = await resolveGitRepository(workspace);
+  const repoRoot = repo.repoRoot!;
+
+  const stashArgs = ['stash', 'push', '-m', message];
+  if (includeUntracked) stashArgs.push('--include-untracked');
+
+  const result = await runGit(repo, stashArgs, { cwd: repoRoot });
+  if (/No local changes to save/i.test(result.stdout + result.stderr)) {
+    throw new GitCommandError('git_command_failed', 'Nothing to stash');
+  }
+
+  return {
+    workspace: repo.workspace,
+    repoRoot,
+    isGitRepo: true,
+    stashRef: 'stash@{0}',
+    message,
+    lastCheckedAt: Date.now(),
+  };
+}
+
+async function gitStashPop(workspace: string, stashRef?: string): Promise<void> {
+  const repo = await resolveGitRepository(workspace);
+  const repoRoot = repo.repoRoot!;
+
+  const popArgs = stashRef ? ['stash', 'pop', stashRef] : ['stash', 'pop'];
+  await runGit(repo, popArgs, { cwd: repoRoot });
+}
+
+async function gitCheckoutFiles(workspace: string, paths: string[]): Promise<{ checkedOut: string[] }> {
+  const repo = await resolveGitRepository(workspace);
+  const repoRoot = repo.repoRoot!;
+
+  const normalizedPaths: string[] = [];
+  for (const p of paths) {
+    if (typeof p !== 'string' || !p.trim() || p.includes('\0')) {
+      throw new GitCommandError('invalid_args', `Invalid path: ${String(p)}`);
+    }
+    if (path.isAbsolute(p)) {
+      throw new GitCommandError('invalid_args', `Path must be repository-relative, not absolute: ${p}`);
+    }
+    const normalized = path.normalize(p.trim()).split(path.sep).join('/');
+    if (normalized.startsWith('../') || normalized === '..') {
+      throw new GitCommandError('path_outside_repo', `Path is outside repository root: ${p}`);
+    }
+    const absolutePath = path.resolve(repoRoot, normalized);
+    if (!isPathInside(repoRoot, absolutePath)) {
+      throw new GitCommandError('path_outside_repo', `Path is outside repository root: ${p}`);
+    }
+    normalizedPaths.push(normalized);
+  }
+
+  await runGit(repo, ['checkout', '--', ...normalizedPaths], { cwd: repoRoot });
+  return { checkedOut: normalizedPaths };
+}
+
+async function gitGetRemoteUrl(workspace: string, remote: string): Promise<{ remoteUrl: string; remote: string }> {
+  const repo = await resolveGitRepository(workspace);
+  const result = await runGit(repo, ['remote', 'get-url', remote], { cwd: repo.repoRoot! });
+  const remoteUrl = result.stdout.trim();
+  if (!remoteUrl) {
+    throw new GitCommandError('git_command_failed', `Remote '${remote}' has no URL`);
+  }
+  return { remoteUrl, remote };
 }
 
 function formatOptionalGitLogRangeArg(flag: '--since' | '--until', value: string | undefined): string[] {

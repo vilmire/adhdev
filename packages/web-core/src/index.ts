@@ -186,5 +186,25 @@ export { default as MachinesPage } from './pages/Machines'
 export { default as NotificationsPage } from './pages/Notifications'
 export { default as OnboardingModal } from './components/OnboardingModal'
 
+// ── Git ──
+export { default as GitStatusPill, getGitStatusPillLabel, getGitStatusPillTone } from './components/git/GitStatusPill'
+export type { GitStatusPillProps } from './components/git/GitStatusPill'
+export { default as GitChangeList } from './components/git/GitChangeList'
+export type { GitChangeListProps } from './components/git/GitChangeList'
+export { default as GitDiffPreview } from './components/git/GitDiffPreview'
+export type { GitDiffPreviewProps } from './components/git/GitDiffPreview'
+export { default as GitStatusDialog } from './components/git/GitStatusDialog'
+export type { GitStatusDialogProps } from './components/git/GitStatusDialog'
+export {
+    useWorkspaceGitStatus,
+    buildWorkspaceGitSubscribeRequest,
+    getWorkspaceGitSubscriptionKey,
+    readGitStatusCommandResponse,
+    readGitDiffSummaryCommandResponse,
+    DEFAULT_WORKSPACE_GIT_REFRESH_MS,
+} from './hooks/useWorkspaceGitStatus'
+export type { UseWorkspaceGitStatusOptions, UseWorkspaceGitStatusResult } from './hooks/useWorkspaceGitStatus'
+export { useGitRemoteUrl, extractGitHubUrl } from './hooks/useGitRemoteUrl'
+
 // ── CSS ──
 // Import '@adhdev/web-core/index.css' in your app entry

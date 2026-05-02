@@ -150,4 +150,5 @@ export type GitCommandName =
   | 'git_checkpoint'
   | 'git_stash_push'
   | 'git_stash_pop'
-  | 'git_checkout_files';
+  | 'git_checkout_files'
+  | 'git_remote_url';

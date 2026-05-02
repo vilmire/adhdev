@@ -1779,6 +1779,7 @@ class StandaloneServer {
       instanceId: `standalone_${machineId}`,
       version: pkgVersion,
       profile,
+      getGitSummaryForWorkspace: (workspace) => this.gitWorkspaceMonitor.getCompactSummary(workspace),
     });
   }
 
