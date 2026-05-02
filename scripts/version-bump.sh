@@ -104,6 +104,7 @@ PACKAGES=(
     "package.json"
     "packages/daemon-core/package.json"
     "packages/daemon-standalone/package.json"
+    "packages/mcp-server/package.json"
     "packages/session-host-core/package.json"
     "packages/session-host-daemon/package.json"
     "packages/terminal-mux-cli/package.json"
