@@ -344,6 +344,36 @@ function findLastMessageIndexBySignature(messages: ChatMessage[], signature: str
     return -1;
 }
 
+function isReadChatConversationAnchorMessage(message: ChatMessage | null | undefined): boolean {
+    if (!message) return false;
+    const role = String(message.role || '').trim().toLowerCase();
+    if (role !== 'user' && role !== 'assistant') return false;
+    const kind = String(message.kind || 'standard').trim().toLowerCase();
+    return !kind || kind === 'standard';
+}
+
+function buildVisibleReadChatTailMessages(messages: ChatMessage[], tailLimit: number): ChatMessage[] {
+    const totalMessages = messages.length;
+    if (tailLimit <= 0 || totalMessages <= tailLimit) return messages;
+
+    const tailMessages = messages.slice(-tailLimit);
+    if (tailMessages.some(isReadChatConversationAnchorMessage)) return tailMessages;
+
+    const hiddenMessages = messages.slice(0, totalMessages - tailLimit);
+    const anchors: ChatMessage[] = [];
+    const seenRoles = new Set<string>();
+    for (let index = hiddenMessages.length - 1; index >= 0 && anchors.length < 2; index -= 1) {
+        const message = hiddenMessages[index];
+        if (!isReadChatConversationAnchorMessage(message)) continue;
+        const role = String(message.role || '').trim().toLowerCase();
+        if (seenRoles.has(role)) continue;
+        seenRoles.add(role);
+        anchors.unshift(message);
+    }
+
+    return anchors.length > 0 ? [...anchors, ...tailMessages] : tailMessages;
+}
+
 function buildBoundedTailSync(messages: ChatMessage[], cursor: Required<ReadChatCursor>): {
     syncMode: ReadChatSyncMode;
     replaceFrom: number;
@@ -352,9 +382,7 @@ function buildBoundedTailSync(messages: ChatMessage[], cursor: Required<ReadChat
     lastMessageSignature: string;
 } {
     const totalMessages = messages.length;
-    const tailMessages = cursor.tailLimit > 0 && totalMessages > cursor.tailLimit
-        ? messages.slice(-cursor.tailLimit)
-        : messages;
+    const tailMessages = buildVisibleReadChatTailMessages(messages, cursor.tailLimit);
     return {
         syncMode: 'full',
         replaceFrom: 0,
@@ -495,8 +523,8 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any): Co
     const messages = collapseReplayDuplicatesFromReadChat(normalizeReadChatMessages(validatedPayload));
     const cursor = normalizeReadChatCursor(args);
     if (!cursor.knownMessageCount && !cursor.lastMessageSignature && cursor.tailLimit > 0 && messages.length > cursor.tailLimit) {
-        const tailMessages = messages.slice(-cursor.tailLimit);
-        const lastMessageSignature = getChatMessageSignature(tailMessages[tailMessages.length - 1]);
+        const tailMessages = buildVisibleReadChatTailMessages(messages, cursor.tailLimit);
+        const lastMessageSignature = getChatMessageSignature(messages[messages.length - 1]);
         return {
             success: true,
             ...validatedPayload,

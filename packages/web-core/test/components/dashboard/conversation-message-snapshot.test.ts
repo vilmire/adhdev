@@ -243,4 +243,54 @@ describe('conversation message authority snapshot', () => {
 
         expect(liveMessages.map(message => message.content)).toEqual(['new transcript last message'])
     })
+
+    it('keeps the latest conversational bubbles visible when a CLI activity flood fills the live tail window', () => {
+        const liveMessages = [
+            { role: 'user' as const, content: '고쳐줘', id: 'user-1', kind: 'standard', receivedAt: 1000 },
+            { role: 'assistant' as const, content: '수정 완료 요약', id: 'assistant-1', kind: 'standard', receivedAt: 2000 },
+            ...Array.from({ length: 60 }, (_, index) => ({
+                role: 'assistant' as const,
+                content: `tool activity ${index}`,
+                id: `tool-${index}`,
+                kind: index % 2 === 0 ? 'tool' : 'terminal',
+                receivedAt: 3000 + index,
+            })),
+        ]
+
+        const visibleMessages = buildVisibleConversationMessages({
+            historyMessages: [],
+            liveMessages,
+            visibleLiveCount: 50,
+        })
+
+        expect(visibleMessages.map(message => message.content).slice(0, 2)).toEqual(['고쳐줘', '수정 완료 요약'])
+        expect(visibleMessages).toHaveLength(52)
+        expect(visibleMessages.slice(2).map(message => message.content)).toEqual(
+            liveMessages.slice(-50).map(message => message.content),
+        )
+    })
+
+    it('does not add conversational anchors when the visible live window already contains one', () => {
+        const liveMessages = [
+            { role: 'user' as const, content: 'older prompt', id: 'user-older', kind: 'standard', receivedAt: 1000 },
+            ...Array.from({ length: 49 }, (_, index) => ({
+                role: 'assistant' as const,
+                content: `tool activity ${index}`,
+                id: `tool-${index}`,
+                kind: 'tool',
+                receivedAt: 2000 + index,
+            })),
+            { role: 'assistant' as const, content: 'visible answer', id: 'assistant-visible', kind: 'standard', receivedAt: 3000 },
+        ]
+
+        const visibleMessages = buildVisibleConversationMessages({
+            historyMessages: [],
+            liveMessages,
+            visibleLiveCount: 50,
+        })
+
+        expect(visibleMessages).toHaveLength(50)
+        expect(visibleMessages[0]?.content).toBe('tool activity 0')
+        expect(visibleMessages[49]?.content).toBe('visible answer')
+    })
 })
