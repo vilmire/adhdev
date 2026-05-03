@@ -275,7 +275,6 @@ export default function DashboardMobileChatMode({
                     onBack={navigation.backFromConversation}
                     onOpenNativeConversation={navigation.openNativeConversation}
                     onOpenMachine={navigation.openConversationMachine}
-                    onHideConversation={onHideConversation}
                     onOpenHistory={onOpenHistory}
                     onOpenRemote={onOpenRemote}
                     onStopCli={onStopCli}

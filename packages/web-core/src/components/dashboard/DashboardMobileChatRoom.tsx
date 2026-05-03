@@ -24,7 +24,6 @@ interface DashboardMobileChatRoomProps {
     onOpenMachine: (conversation: ActiveConversation) => void
     onOpenHistory: (conversation: ActiveConversation) => void
     onOpenRemote: (conversation: ActiveConversation) => void
-    onHideConversation?: (conversation: ActiveConversation) => void
     onStopCli?: (conversation?: ActiveConversation) => void | Promise<void>
     cliViewMode: CliConversationViewMode | null
     onSetCliViewMode: (mode: CliConversationViewMode) => void
@@ -49,7 +48,6 @@ export default function DashboardMobileChatRoom({
     onOpenMachine,
     onOpenHistory,
     onOpenRemote,
-    onHideConversation,
     onStopCli,
     cliViewMode,
     onSetCliViewMode,
@@ -115,11 +113,6 @@ export default function DashboardMobileChatRoom({
                     {!isAcp && !isCli && (
                         <button className="btn btn-secondary btn-sm" onClick={() => onOpenRemote(selectedConversation)} type="button">
                             <IconMonitor size={14} />
-                        </button>
-                    )}
-                    {onHideConversation && (
-                        <button className="btn btn-secondary btn-sm" onClick={() => onHideConversation(selectedConversation)} type="button" title="Close chat">
-                            <IconX size={14} />
                         </button>
                     )}
                 </div>

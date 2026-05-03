@@ -109,7 +109,7 @@ function HideConversationConfirmDialog({
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="mobile-hide-confirm-title"
-                className="card fade-in relative w-full max-w-[420px] overflow-hidden rounded-[24px] border border-border-subtle bg-bg-primary shadow-[0_20px_40px_rgba(0,0,0,0.4)]"
+                className="fade-in relative w-full sm:w-[min(92vw,420px)] max-h-[calc(100dvh-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px)-16px)] flex flex-col overflow-hidden rounded-[24px] sm:rounded-[18px] border border-border-subtle bg-bg-primary shadow-[0_20px_40px_rgba(0,0,0,0.4)]"
             >
                 <div className="flex items-start justify-between gap-3 border-b border-border-subtle bg-[var(--surface-primary)] px-4 py-4">
                     <div className="min-w-0">
