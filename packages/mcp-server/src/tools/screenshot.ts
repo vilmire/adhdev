@@ -1,5 +1,6 @@
 import type { LocalTransport } from '../transports/local.js';
 import type { CloudTransport } from '../transports/cloud.js';
+import { isLocalTransport } from '../transports/mode.js';
 
 export const SCREENSHOT_TOOL = {
   name: 'screenshot',
@@ -24,8 +25,8 @@ export async function screenshot(
 ): Promise<{ type: 'image'; data: string; mimeType: string } | { type: 'text'; text: string }> {
   let result: any;
 
-  if ('command' in transport) {
-    result = await (transport as LocalTransport).command('screenshot', {
+  if (isLocalTransport(transport)) {
+    result = await transport.command('screenshot', {
       ...(args.session_id ? { targetSessionId: args.session_id } : {}),
     });
   } else {

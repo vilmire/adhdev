@@ -1,5 +1,6 @@
 import type { LocalTransport } from '../transports/local.js';
 import type { CloudTransport } from '../transports/cloud.js';
+import { isLocalTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
 export const GIT_STATUS_TOOL = {
@@ -33,21 +34,21 @@ export async function gitStatus(
   let status: any;
   let diffSummary: any;
 
-  if ('command' in transport) {
-    const statusResult = await (transport as LocalTransport).command('git_status', {
+  if (isLocalTransport(transport)) {
+    const statusResult = await transport.command('git_status', {
       workspace: args.workspace,
     });
     status = statusResult?.status ?? statusResult;
 
     if (args.include_diff !== false) {
-      const diffResult = await (transport as LocalTransport).command('git_diff_summary', {
+      const diffResult = await transport.command('git_diff_summary', {
         workspace: args.workspace,
       });
       diffSummary = diffResult?.diffSummary ?? diffResult;
     }
   } else {
     if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
-    const result = await (transport as CloudTransport).gitStatus(
+    const result = await transport.gitStatus(
       args.daemon_id,
       args.workspace,
       args.include_diff !== false,

@@ -1,5 +1,6 @@
 import type { LocalTransport } from '../transports/local.js';
 import type { CloudTransport } from '../transports/cloud.js';
+import { isLocalTransport } from '../transports/mode.js';
 
 export const LAUNCH_SESSION_TOOL = {
   name: 'launch_session',
@@ -34,7 +35,7 @@ export async function launchSession(
   transport: LocalTransport | CloudTransport,
   args: { type: string; workspace?: string; model?: string; daemon_id?: string },
 ): Promise<string> {
-  if ('command' in transport) {
+  if (isLocalTransport(transport)) {
     // LocalTransport
     const isCliOrAcp =
       args.type.includes('-cli') || args.type.includes('-acp') || args.type === 'codex';
@@ -42,7 +43,7 @@ export async function launchSession(
     const payload: Record<string, unknown> = isCliOrAcp
       ? { cliType: args.type, dir: args.workspace ?? '~', ...(args.model ? { model: args.model } : {}) }
       : { ideType: args.type, enableCdp: true };
-    const result = await (transport as LocalTransport).command(commandType, payload);
+    const result = await transport.command(commandType, payload);
     if (result?.success === false) return `Error: ${result.error ?? 'launch failed'}`;
     const id = result?.id ?? result?.sessionId;
     return id ? `Session launched. id: ${id}, type: ${args.type}` : `Launched: ${JSON.stringify(result)}`;
@@ -50,7 +51,7 @@ export async function launchSession(
 
   // CloudTransport
   if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
-  const result = await (transport as CloudTransport).launch(args.daemon_id, {
+  const result = await transport.launch(args.daemon_id, {
     type: args.type,
     dir: args.workspace,
     model: args.model,

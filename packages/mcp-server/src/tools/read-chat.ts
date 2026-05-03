@@ -1,5 +1,6 @@
 import type { LocalTransport } from '../transports/local.js';
 import type { CloudTransport } from '../transports/cloud.js';
+import { isLocalTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
 export const READ_CHAT_TOOL = {
@@ -32,8 +33,8 @@ export async function readChat(
 ): Promise<string> {
   const limit = args.limit ?? 50;
 
-  if ('command' in transport) {
-    const result = await (transport as LocalTransport).command('read_chat', {
+  if (isLocalTransport(transport)) {
+    const result = await transport.command('read_chat', {
       ...(args.session_id ? { targetSessionId: args.session_id } : {}),
       limit,
     });
@@ -42,7 +43,7 @@ export async function readChat(
 
   if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
   const targetId = args.session_id ? `${args.daemon_id}:session:${args.session_id}` : args.daemon_id;
-  const result = await (transport as CloudTransport).readChat(targetId, { limit, sessionId: args.session_id });
+  const result = await transport.readChat(targetId, { limit, sessionId: args.session_id });
   return formatChatResult(result, args.session_id, args.format);
 }
 

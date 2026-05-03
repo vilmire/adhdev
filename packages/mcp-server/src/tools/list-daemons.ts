@@ -1,5 +1,6 @@
 import type { LocalTransport } from '../transports/local.js';
 import type { CloudTransport } from '../transports/cloud.js';
+import { isLocalTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
 export const LIST_DAEMONS_TOOL = {
@@ -23,9 +24,9 @@ export async function listDaemons(
 ): Promise<string> {
   const asJson = args.format === 'json';
 
-  if ('getStatus' in transport) {
+  if (isLocalTransport(transport)) {
     // Local: single standalone daemon — extract identity from status
-    const status = await (transport as LocalTransport).getStatus();
+    const status = await transport.getStatus();
     const daemon = {
       id: status?.id ?? status?.instanceId ?? 'standalone',
       hostname: status?.hostname ?? status?.machine?.hostname ?? 'localhost',
@@ -38,7 +39,7 @@ export async function listDaemons(
   }
 
   // Cloud: full daemon list from UserSessionDO
-  const data = await (transport as CloudTransport).listDaemons();
+  const data = await transport.listDaemons();
   const daemons: any[] = data?.daemons ?? [];
 
   if (asJson) {

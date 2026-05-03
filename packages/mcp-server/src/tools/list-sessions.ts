@@ -1,5 +1,6 @@
 import type { LocalTransport } from '../transports/local.js';
 import type { CloudTransport } from '../transports/cloud.js';
+import { isLocalTransport } from '../transports/mode.js';
 
 export const FORMAT_PROP = {
   format: {
@@ -34,9 +35,9 @@ export async function listSessions(
 ): Promise<string> {
   const asJson = args.format === 'json';
 
-  if ('getStatus' in transport) {
+  if (isLocalTransport(transport)) {
     // Local: single daemon, status endpoint has full SessionEntry[]
-    const status = await (transport as LocalTransport).getStatus();
+    const status = await transport.getStatus();
     const sessions: any[] = status?.sessions ?? [];
 
     if (asJson) {
@@ -65,7 +66,7 @@ export async function listSessions(
   // Cloud: UserSessionDO /list-daemons intentionally strips sessions[] (P2P architecture —
   // session data flows to dashboard via P2P DataChannel, not server WS).
   // MCP must fetch sessions directly from each DaemonConnectionDO's WS status cache.
-  return listSessionsCloud(transport as CloudTransport, args.daemon_id, asJson);
+  return listSessionsCloud(transport, args.daemon_id, asJson);
 }
 
 async function listSessionsCloud(

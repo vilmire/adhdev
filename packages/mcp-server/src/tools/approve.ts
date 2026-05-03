@@ -1,5 +1,6 @@
 import type { LocalTransport } from '../transports/local.js';
 import type { CloudTransport } from '../transports/cloud.js';
+import { isLocalTransport } from '../transports/mode.js';
 
 export const APPROVE_TOOL = {
   name: 'approve',
@@ -31,9 +32,9 @@ export async function approve(
 ): Promise<string> {
   const action = args.action === 'reject' ? 'reject' : 'approve';
 
-  if ('command' in transport) {
+  if (isLocalTransport(transport)) {
     // LocalTransport
-    const result = await (transport as LocalTransport).command('resolve_action', {
+    const result = await transport.command('resolve_action', {
       action,
       ...(args.session_id ? { targetSessionId: args.session_id } : {}),
     });
@@ -44,7 +45,7 @@ export async function approve(
   // CloudTransport
   if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
   const targetId = args.session_id ? `${args.daemon_id}:session:${args.session_id}` : args.daemon_id;
-  const result = await (transport as CloudTransport).approve(targetId, action);
+  const result = await transport.approve(targetId, action);
   if (result?.success === false) return `Error: ${result.error ?? 'approve failed'}`;
   return `Action ${action}d.`;
 }

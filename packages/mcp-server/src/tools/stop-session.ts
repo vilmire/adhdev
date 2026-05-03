@@ -1,5 +1,6 @@
 import type { LocalTransport } from '../transports/local.js';
 import type { CloudTransport } from '../transports/cloud.js';
+import { isLocalTransport } from '../transports/mode.js';
 
 export const STOP_SESSION_TOOL = {
   name: 'stop_session',
@@ -20,7 +21,7 @@ export const STOP_SESSION_TOOL = {
       type: {
         type: 'string',
         description:
-          'Provider type (e.g. hermes-cli, claude-cli). Cloud mode: auto-resolved from session_id if omitted.',
+          'Provider type (e.g. hermes-cli, claude-cli). Local mode auto-resolves from session_id if omitted; cloud mode forwards the session_id and omits type unless explicitly provided.',
       },
     },
     required: ['session_id'],
@@ -31,8 +32,8 @@ export async function stopSession(
   transport: LocalTransport | CloudTransport,
   args: { session_id: string; daemon_id?: string; type?: string },
 ): Promise<string> {
-  if ('command' in transport) {
-    const local = transport as LocalTransport;
+  if (isLocalTransport(transport)) {
+    const local = transport;
     let resolvedType = args.type;
 
     // Auto-resolve type from session status if not provided
@@ -56,7 +57,7 @@ export async function stopSession(
 
   // CloudTransport
   if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
-  const result = await (transport as CloudTransport).stop(args.daemon_id, {
+  const result = await transport.stop(args.daemon_id, {
     id: args.session_id,
     ...(args.type ? { type: args.type } : {}),
   });

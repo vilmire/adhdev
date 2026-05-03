@@ -1,5 +1,6 @@
 import type { LocalTransport } from '../transports/local.js';
 import type { CloudTransport } from '../transports/cloud.js';
+import { isLocalTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
 export const CHECK_PENDING_TOOL = {
@@ -25,10 +26,10 @@ export async function checkPending(
   transport: LocalTransport | CloudTransport,
   args: { daemon_id?: string; format?: 'text' | 'json' },
 ): Promise<string> {
-  if ('getStatus' in transport) {
-    return checkPendingLocal(transport as LocalTransport, args.format);
+  if (isLocalTransport(transport)) {
+    return checkPendingLocal(transport, args.format);
   }
-  return checkPendingCloud(transport as CloudTransport, args.daemon_id, args.format);
+  return checkPendingCloud(transport, args.daemon_id, args.format);
 }
 
 async function checkPendingLocal(
