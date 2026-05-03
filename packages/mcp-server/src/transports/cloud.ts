@@ -128,6 +128,46 @@ export class CloudTransport {
     return res.json();
   }
 
+  async gitLog(daemonId: string, workspace: string, opts: { limit?: number; file?: string; since?: string; until?: string } = {}): Promise<any> {
+    const params = new URLSearchParams({ workspace });
+    if (opts.limit) params.set('limit', String(opts.limit));
+    if (opts.file) params.set('file', opts.file);
+    if (opts.since) params.set('since', opts.since);
+    if (opts.until) params.set('until', opts.until);
+    const res = await fetch(
+      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/git-log?${params}`,
+      { headers: this.headers() },
+    );
+    if (!res.ok) throw new Error(`Git log failed: ${res.status}`);
+    return res.json();
+  }
+
+  async gitDiff(daemonId: string, workspace: string, opts: { file?: string; maxLines?: number; staged?: boolean } = {}): Promise<any> {
+    const params = new URLSearchParams({ workspace });
+    if (opts.file) params.set('file', opts.file);
+    if (opts.maxLines) params.set('maxLines', String(opts.maxLines));
+    if (opts.staged) params.set('staged', 'true');
+    const res = await fetch(
+      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/git-diff?${params}`,
+      { headers: this.headers() },
+    );
+    if (!res.ok) throw new Error(`Git diff failed: ${res.status}`);
+    return res.json();
+  }
+
+  async gitCheckpoint(daemonId: string, opts: { workspace: string; message: string; includeUntracked?: boolean }): Promise<any> {
+    const res = await fetch(
+      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/git-checkpoint`,
+      {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(opts),
+      },
+    );
+    if (!res.ok) throw new Error(`Git checkpoint failed: ${res.status}`);
+    return res.json();
+  }
+
   async ping(): Promise<boolean> {
     try {
       await this.listDaemons();

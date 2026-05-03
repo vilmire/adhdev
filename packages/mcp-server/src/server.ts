@@ -24,6 +24,9 @@ import { SEND_CHAT_TOOL, sendChat } from './tools/send-chat.js';
 import { APPROVE_TOOL, approve } from './tools/approve.js';
 import { SCREENSHOT_TOOL, screenshot } from './tools/screenshot.js';
 import { GIT_STATUS_TOOL, gitStatus } from './tools/git-status.js';
+import { GIT_LOG_TOOL, gitLog } from './tools/git-log.js';
+import { GIT_DIFF_TOOL, gitDiff } from './tools/git-diff.js';
+import { GIT_CHECKPOINT_TOOL, gitCheckpoint } from './tools/git-checkpoint.js';
 import { LAUNCH_SESSION_TOOL, launchSession } from './tools/launch-session.js';
 import { STOP_SESSION_TOOL, stopSession } from './tools/stop-session.js';
 import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
@@ -70,6 +73,9 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     SEND_CHAT_TOOL,
     APPROVE_TOOL,
     GIT_STATUS_TOOL,
+    GIT_LOG_TOOL,
+    GIT_DIFF_TOOL,
+    GIT_CHECKPOINT_TOOL,
     ...(isLocal ? [SCREENSHOT_TOOL] : []),
   ];
 
@@ -118,6 +124,18 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
         }
         case 'git_status': {
           const text = await gitStatus(transport, { workspace: a.workspace, include_diff: a.include_diff, daemon_id: a.daemon_id, format: a.format });
+          return { content: [{ type: 'text', text }] };
+        }
+        case 'git_log': {
+          const text = await gitLog(transport, { workspace: a.workspace, limit: a.limit, file: a.file, since: a.since, until: a.until, daemon_id: a.daemon_id, format: a.format });
+          return { content: [{ type: 'text', text }] };
+        }
+        case 'git_diff': {
+          const text = await gitDiff(transport, { workspace: a.workspace, file: a.file, max_lines: a.max_lines, staged: a.staged, daemon_id: a.daemon_id, format: a.format });
+          return { content: [{ type: 'text', text }] };
+        }
+        case 'git_checkpoint': {
+          const text = await gitCheckpoint(transport, { workspace: a.workspace, message: a.message, include_untracked: a.include_untracked, daemon_id: a.daemon_id });
           return { content: [{ type: 'text', text }] };
         }
         case 'launch_session': {
