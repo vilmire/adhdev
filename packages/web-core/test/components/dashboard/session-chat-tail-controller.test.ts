@@ -667,6 +667,68 @@ describe('SessionChatTailController registry', () => {
     })
   })
 
+  it('normalizes duplicate hydrated streaming rows with the same provider unit key', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+    const duplicateUnitKey = 'hermes-cli:turn_1_4ms0i2:assistant:standard:0'
+
+    controller.hydrateLiveMessages([
+      { role: 'user', content: '확실히 이제 제한에 대한 버그는 잡은거지?', id: 'user-1', timestamp: 1 } as any,
+      { role: 'assistant', content: '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨.', id: 'hermes_olooqs', bubbleId: 'hermes_olooqs', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', timestamp: 2 } as any,
+      { role: 'assistant', content: '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨. 확인된 것:', id: 'hermes_olooqs', bubbleId: 'hermes_olooqs', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', timestamp: 2 } as any,
+    ])
+
+    const snapshot = controller.getSnapshot()
+    expect(snapshot.liveMessages.map(message => (message as any).content)).toEqual([
+      '확실히 이제 제한에 대한 버그는 잡은거지?',
+      '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨. 확인된 것:',
+    ])
+    expect(snapshot.cursor.knownMessageCount).toBe(2)
+  })
+
+  it('normalizes duplicate rows inside a full daemon tail refresh', () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 60,
+    })
+    const duplicateUnitKey = 'hermes-cli:turn_1_4ms0i2:assistant:standard:0'
+
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'question', id: 'user-1', timestamp: 1 } as any,
+        { role: 'assistant', content: 'partial', id: 'hermes_olooqs', bubbleId: 'hermes_olooqs', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', timestamp: 2 } as any,
+        { role: 'assistant', content: 'partial plus', id: 'hermes_olooqs', bubbleId: 'hermes_olooqs', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', timestamp: 2 } as any,
+      ],
+      syncMode: 'full',
+      totalMessages: 3,
+      lastMessageSignature: buildLastMessageSignature({ role: 'assistant', content: 'partial plus', id: 'hermes_olooqs', timestamp: 2 } as any),
+    }))
+
+    const snapshot = controller.getSnapshot()
+    expect(snapshot.liveMessages.map(message => (message as any).content)).toEqual([
+      'question',
+      'partial plus',
+    ])
+    expect(snapshot.liveMessages.filter(message => (message as any).providerUnitKey === duplicateUnitKey)).toHaveLength(1)
+  })
+
   it('passes the currently hydrated live tail length when loading older history', async () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()

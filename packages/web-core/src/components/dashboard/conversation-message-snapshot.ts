@@ -63,8 +63,9 @@ function shouldPreferLiveSnapshotOverDuplicateConversation(
     conversationMessages: DashboardMessage[],
     snapshotMessages: DashboardMessage[],
 ): boolean {
-    if (snapshotMessages.length === 0 || conversationMessages.length <= snapshotMessages.length) return false
+    if (snapshotMessages.length === 0) return false
     if (!hasDuplicateLiveMessageUpdateKeys(conversationMessages)) return false
+    if (hasDuplicateLiveMessageUpdateKeys(snapshotMessages)) return false
     return haveAnySharedLiveMessageUpdateKey(
         conversationMessages[conversationMessages.length - 1],
         snapshotMessages[snapshotMessages.length - 1],

@@ -158,11 +158,15 @@ function appendOrReplaceLiveMessageUpdates(
   return nextMessages
 }
 
+function normalizeLiveMessageUpdates(messages: DashboardMessage[]): DashboardMessage[] {
+  return appendOrReplaceLiveMessageUpdates([], messages)
+}
+
 export function applyReadChatSync(
   previousMessages: DashboardMessage[],
   result: Partial<ReadChatSyncResult>,
 ): DashboardMessage[] {
-  const incomingMessages = Array.isArray(result.messages) ? result.messages as DashboardMessage[] : []
+  const incomingMessages = normalizeLiveMessageUpdates(Array.isArray(result.messages) ? result.messages as DashboardMessage[] : [])
   switch (result.syncMode) {
     case 'noop':
       return previousMessages
@@ -170,10 +174,7 @@ export function applyReadChatSync(
       return appendOrReplaceLiveMessageUpdates(previousMessages, incomingMessages)
     case 'replace_tail': {
       const replaceFrom = Math.max(0, Math.min(Number(result.replaceFrom ?? previousMessages.length), previousMessages.length))
-      return [
-        ...previousMessages.slice(0, replaceFrom),
-        ...incomingMessages,
-      ]
+      return appendOrReplaceLiveMessageUpdates(previousMessages.slice(0, replaceFrom), incomingMessages)
     }
     case 'full':
       return incomingMessages
@@ -246,7 +247,7 @@ export class SessionChatTailController {
   }
 
   hydrateLiveMessages(messages: DashboardMessage[]): void {
-    const incoming = Array.isArray(messages) ? messages : []
+    const incoming = normalizeLiveMessageUpdates(Array.isArray(messages) ? messages : [])
     if (!shouldHydrateLiveMessages(this.snapshot.liveMessages, incoming)) return
     const nextMessages = incoming
     const nextCursor = buildReadChatCursor(nextMessages, this.snapshot.cursor.tailLimit)

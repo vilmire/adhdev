@@ -193,6 +193,40 @@ describe('conversation message authority snapshot', () => {
         expect(authoritative?.messages.map(message => message.content)).toEqual(['hello', 'partial longer final'])
     })
 
+    it('prefers a same-length clean chat-tail snapshot over a duplicate streaming conversation fallback', () => {
+        const duplicateUnitKey = 'hermes-cli:turn_1_4ms0i2:assistant:standard:0'
+        const conversation = createConversation({
+            messages: [
+                { role: 'user', content: 'first prompt', id: 'user-0', receivedAt: 1000 },
+                { role: 'assistant', content: 'prior answer', id: 'prior-1', receivedAt: 2000 },
+                { role: 'user', content: '확실히 이제 제한에 대한 버그는 잡은거지?', id: 'user-1', receivedAt: 3000 },
+                { role: 'assistant', content: '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨. 확인된 것:', id: 'hermes_olooqs', bubbleId: 'hermes_olooqs', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', receivedAt: 4000 },
+                { role: 'assistant', content: '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨. 확인된 것:', id: 'hermes_olooqs', bubbleId: 'hermes_olooqs', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', receivedAt: 4000 },
+            ],
+        })
+        const snapshot = createSnapshot([
+            { role: 'user', content: 'older prompt restored by read_chat', id: 'user-restored', receivedAt: 500 },
+            { role: 'user', content: 'first prompt', id: 'user-0', receivedAt: 1000 },
+            { role: 'assistant', content: 'prior answer', id: 'prior-1', receivedAt: 2000 },
+            { role: 'user', content: '확실히 이제 제한에 대한 버그는 잡은거지?', id: 'user-1', receivedAt: 3000 },
+            { role: 'assistant', content: '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨. 확인된 것:', id: 'hermes_olooqs', bubbleId: 'hermes_olooqs', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', receivedAt: 4000 },
+        ])
+
+        const liveMessages = getConversationLiveMessages(conversation, snapshot)
+        const [authoritative] = applyConversationMessageSnapshots([conversation], new Map([
+            [getConversationMessageAuthorityKey(conversation), snapshot],
+        ]))
+
+        expect(liveMessages.map(message => message.content)).toEqual([
+            'older prompt restored by read_chat',
+            'first prompt',
+            'prior answer',
+            '확실히 이제 제한에 대한 버그는 잡은거지?',
+            '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨. 확인된 것:',
+        ])
+        expect(authoritative?.messages).toBe(snapshot.liveMessages)
+    })
+
     it('does not let a stale chat-tail controller snapshot mask a newer conversation transcript in ChatPane', () => {
         const conversation = createConversation({
             messages: [
