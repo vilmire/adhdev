@@ -53,6 +53,14 @@ export interface GitStashPushResult extends GitRepoIdentity {
   lastCheckedAt: number;
 }
 
+export interface GitPushResult extends GitRepoIdentity {
+  remote: string;
+  branch: string;
+  output: string;
+  newBranch: boolean;
+  lastCheckedAt: number;
+}
+
 export interface GitCommandServices {
   getStatus?: (params: { workspace: string }) => Promise<GitRepoStatus> | GitRepoStatus;
   getDiffSummary?: (params: { workspace: string; staged?: boolean }) => Promise<GitDiffSummary> | GitDiffSummary;
@@ -88,6 +96,7 @@ export interface GitCommandServices {
   stashPop?: (params: { workspace: string; stashRef?: string }) => Promise<void>;
   checkoutFiles?: (params: { workspace: string; paths: string[] }) => Promise<{ checkedOut: string[] }>;
   getRemoteUrl?: (params: { workspace: string; remote?: string }) => Promise<{ remoteUrl: string; remote: string }>;
+  push?: (params: { workspace: string; remote?: string; branch?: string; setUpstream?: boolean }) => Promise<GitPushResult>;
 }
 
 type GitCommandFailure = {
@@ -107,7 +116,8 @@ type GitCommandSuccess =
   | { success: true; stash: GitStashPushResult }
   | { success: true; stashPopped: true }
   | { success: true; checkedOut: string[] }
-  | { success: true; remoteUrl: string; remote: string };
+  | { success: true; remoteUrl: string; remote: string }
+  | { success: true; push: GitPushResult };
 
 export type GitCommandResult = GitCommandSuccess | GitCommandFailure;
 
@@ -123,6 +133,7 @@ const GIT_COMMAND_NAMES = new Set<GitCommandName>([
   'git_stash_pop',
   'git_checkout_files',
   'git_remote_url',
+  'git_push',
 ]);
 
 const SNAPSHOT_REASONS = new Set<GitSnapshotReason>([
@@ -175,6 +186,8 @@ export function createDefaultGitCommandServices(): GitCommandServices {
     stashPop: async ({ workspace, stashRef }) => gitStashPop(workspace, stashRef),
     checkoutFiles: async ({ workspace, paths }) => gitCheckoutFiles(workspace, paths),
     getRemoteUrl: async ({ workspace, remote = 'origin' }) => gitGetRemoteUrl(workspace, remote),
+    push: async ({ workspace, remote = 'origin', branch, setUpstream = false }) =>
+      gitPush(workspace, remote, branch, setUpstream),
   };
 }
 
@@ -385,6 +398,21 @@ export async function handleGitCommand(
       return { success: true, remoteUrl: remoteResult.remoteUrl, remote: remoteResult.remote };
     }
 
+    case 'git_push': {
+      if (!services.push) return serviceNotImplemented(command);
+      const remote = typeof args?.remote === 'string' && args.remote.trim() ? args.remote.trim() : 'origin';
+      const branch = typeof args?.branch === 'string' && args.branch.trim() ? args.branch.trim() : undefined;
+      const setUpstream = Boolean(args?.setUpstream);
+      if (!/^[a-zA-Z0-9_.\-]+$/.test(remote)) {
+        return failure('invalid_args', 'remote must contain only alphanumeric characters, dots, hyphens, and underscores');
+      }
+      if (branch !== undefined && !/^[a-zA-Z0-9/_.\-]+$/.test(branch)) {
+        return failure('invalid_args', 'branch must contain only alphanumeric characters, slashes, dots, hyphens, and underscores');
+      }
+      const pushResult = await runService(() => services.push!({ workspace, remote, branch, setUpstream }));
+      return 'success' in pushResult ? pushResult : { success: true, push: pushResult };
+    }
+
     default:
       return failure('invalid_args', `Unknown Git command: ${command}`);
   }
@@ -510,6 +538,61 @@ async function gitGetRemoteUrl(workspace: string, remote: string): Promise<{ rem
     throw new GitCommandError('git_command_failed', `Remote '${remote}' has no URL`);
   }
   return { remoteUrl, remote };
+}
+
+async function gitPush(
+  workspace: string,
+  remote: string,
+  branch: string | undefined,
+  setUpstream: boolean,
+): Promise<GitPushResult> {
+  const lastCheckedAt = Date.now();
+  const repo = await resolveGitRepository(workspace);
+  const repoRoot = repo.repoRoot!;
+
+  // Resolve branch name if not provided
+  let resolvedBranch = branch;
+  if (!resolvedBranch) {
+    const branchResult = await runGit(repo, ['symbolic-ref', '--short', 'HEAD'], { cwd: repoRoot });
+    resolvedBranch = branchResult.stdout.trim();
+    if (!resolvedBranch) {
+      throw new GitCommandError('git_command_failed', 'Cannot push: not on a branch (detached HEAD)');
+    }
+  }
+
+  const pushArgs = ['push'];
+  if (setUpstream) pushArgs.push('--set-upstream');
+  pushArgs.push(remote, resolvedBranch);
+
+  let output = '';
+  let newBranch = false;
+  try {
+    const result = await runGit(repo, pushArgs, { cwd: repoRoot });
+    output = (result.stdout + result.stderr).trim();
+    newBranch = /\[new branch\]/i.test(output);
+  } catch (err: any) {
+    const errOutput = (err?.stdout ?? '') + (err?.stderr ?? '');
+    // --set-upstream hint: retry with --set-upstream automatically
+    if (!setUpstream && /no upstream branch|set-upstream/i.test(errOutput)) {
+      const retryArgs = ['push', '--set-upstream', remote, resolvedBranch];
+      const retryResult = await runGit(repo, retryArgs, { cwd: repoRoot });
+      output = (retryResult.stdout + retryResult.stderr).trim();
+      newBranch = /\[new branch\]/i.test(output);
+    } else {
+      throw new GitCommandError('git_command_failed', errOutput || err?.message || 'git push failed');
+    }
+  }
+
+  return {
+    workspace: repo.workspace,
+    repoRoot,
+    isGitRepo: true,
+    remote,
+    branch: resolvedBranch,
+    output,
+    newBranch,
+    lastCheckedAt,
+  };
 }
 
 function formatOptionalGitLogRangeArg(flag: '--since' | '--until', value: string | undefined): string[] {

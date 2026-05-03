@@ -27,6 +27,7 @@ import { GIT_STATUS_TOOL, gitStatus } from './tools/git-status.js';
 import { GIT_LOG_TOOL, gitLog } from './tools/git-log.js';
 import { GIT_DIFF_TOOL, gitDiff } from './tools/git-diff.js';
 import { GIT_CHECKPOINT_TOOL, gitCheckpoint } from './tools/git-checkpoint.js';
+import { GIT_PUSH_TOOL, gitPush } from './tools/git-push.js';
 import { LAUNCH_SESSION_TOOL, launchSession } from './tools/launch-session.js';
 import { STOP_SESSION_TOOL, stopSession } from './tools/stop-session.js';
 import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
@@ -76,6 +77,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     GIT_LOG_TOOL,
     GIT_DIFF_TOOL,
     GIT_CHECKPOINT_TOOL,
+    GIT_PUSH_TOOL,
     ...(isLocal ? [SCREENSHOT_TOOL] : []),
   ];
 
@@ -136,6 +138,10 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
         }
         case 'git_checkpoint': {
           const text = await gitCheckpoint(transport, { workspace: a.workspace, message: a.message, include_untracked: a.include_untracked, daemon_id: a.daemon_id });
+          return { content: [{ type: 'text', text }] };
+        }
+        case 'git_push': {
+          const text = await gitPush(transport, { workspace: a.workspace, remote: a.remote, branch: a.branch, daemon_id: a.daemon_id });
           return { content: [{ type: 'text', text }] };
         }
         case 'launch_session': {

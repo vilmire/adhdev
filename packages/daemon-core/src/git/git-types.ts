@@ -151,4 +151,5 @@ export type GitCommandName =
   | 'git_stash_push'
   | 'git_stash_pop'
   | 'git_checkout_files'
-  | 'git_remote_url';
+  | 'git_remote_url'
+  | 'git_push';

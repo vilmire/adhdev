@@ -155,6 +155,19 @@ export class CloudTransport {
     return res.json();
   }
 
+  async gitPush(daemonId: string, opts: { workspace: string; remote?: string; branch?: string }): Promise<any> {
+    const res = await fetch(
+      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/git-push`,
+      {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(opts),
+      },
+    );
+    if (!res.ok) throw new Error(`Git push failed: ${res.status}`);
+    return res.json();
+  }
+
   async gitCheckpoint(daemonId: string, opts: { workspace: string; message: string; includeUntracked?: boolean }): Promise<any> {
     const res = await fetch(
       `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/git-checkpoint`,
