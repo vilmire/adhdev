@@ -1,6 +1,6 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import type { MouseEvent } from 'react'
-import { IconBell, IconSettings, IconChat, IconEyeOff } from '../Icons'
+import { IconBell, IconSettings, IconChat, IconEyeOff, IconX } from '../Icons'
 import InstallCommand from '../InstallCommand'
 import { formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
@@ -90,19 +90,77 @@ function MobileEmptyHero({ icon, title, subtitle, children }: {
     )
 }
 
+function HideConversationConfirmDialog({
+    conversation,
+    onCancel,
+    onConfirm,
+}: {
+    conversation: ActiveConversation
+    onCancel: () => void
+    onConfirm: () => void
+}) {
+    const title = getConversationTitle(conversation)
+    const metaText = getConversationMetaText(conversation)
+
+    return (
+        <div className="fixed inset-0 z-[1400] flex items-end justify-center overflow-y-auto px-2 pt-[calc(8px+env(safe-area-inset-top,0px))] pb-[calc(8px+env(safe-area-inset-bottom,0px))] sm:items-center sm:p-4">
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onCancel} />
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="mobile-hide-confirm-title"
+                className="card fade-in relative w-full max-w-[420px] overflow-hidden rounded-[24px] border border-border-subtle bg-bg-primary shadow-[0_20px_40px_rgba(0,0,0,0.4)]"
+            >
+                <div className="flex items-start justify-between gap-3 border-b border-border-subtle bg-[var(--surface-primary)] px-4 py-4">
+                    <div className="min-w-0">
+                        <h3 id="mobile-hide-confirm-title" className="m-0 text-base font-extrabold text-text-primary">
+                            Hide this chat from the inbox?
+                        </h3>
+                        <div className="mt-1 text-[13px] leading-relaxed text-text-muted">
+                            This only collapses the chat locally. You can restore it from Hidden tabs.
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border-subtle bg-bg-primary text-text-secondary transition-colors hover:bg-surface-primary hover:text-text-primary"
+                        onClick={onCancel}
+                        aria-label="Cancel hide chat"
+                    >
+                        <IconX size={16} />
+                    </button>
+                </div>
+                <div className="px-4 py-4">
+                    <div className="rounded-2xl border border-border-subtle bg-bg-secondary/60 px-3.5 py-3">
+                        <div className="truncate text-sm font-bold text-text-primary">{title}</div>
+                        <div className="mt-1 truncate text-xs text-text-muted">{metaText}</div>
+                    </div>
+                </div>
+                <div className="flex items-center justify-end gap-2 border-t border-border-subtle bg-bg-secondary px-4 py-[calc(12px+env(safe-area-inset-bottom,0px))]">
+                    <button type="button" className="btn btn-secondary min-h-[40px] px-4 text-sm" onClick={onCancel}>
+                        Cancel
+                    </button>
+                    <button type="button" className="btn btn-primary min-h-[40px] px-4 text-sm" onClick={onConfirm}>
+                        Hide tab
+                    </button>
+                </div>
+            </div>
+        </div>
+    )
+}
+
 function DashboardMobileChatItem({
     item,
     type,
     getAvatarText,
     onOpenConversation,
-    onHideConversation,
+    onRequestHideConversation,
     onCollectChatDebugBundle,
 }: {
     item: MobileConversationListItem
     type: 'needs_attention' | 'task_complete' | 'working' | 'earlier'
     getAvatarText: (primary: string) => string
     onOpenConversation: (c: ActiveConversation) => void
-    onHideConversation?: (conversation: ActiveConversation) => void
+    onRequestHideConversation?: () => void
     onCollectChatDebugBundle?: MobileInboxDebugBundleCollector
 }) {
     const isUnread = type === 'needs_attention' || type === 'task_complete'
@@ -148,22 +206,40 @@ function DashboardMobileChatItem({
             key={item.conversation.tabKey}
             className={`group relative overflow-hidden transition-colors active:scale-[0.995] ${rowClassName}`}
         >
-            <button
-                className={`flex items-start gap-3.5 px-4 py-3.5 w-full text-left relative ${onHideConversation ? 'pb-2' : ''}`}
-                onClick={() => onOpenConversation(item.conversation)}
-                onContextMenu={handleConversationContextMenu}
-                type="button"
-            >
+            <div className="relative flex w-full items-start gap-3.5 px-4 py-3.5 text-left">
                 {(isUnread || isWorking) ? (
                     <span className="pointer-events-none absolute left-0 top-3 bottom-3 w-[3px] rounded-r-full bg-accent-primary/80" />
                 ) : null}
-                <span
-                    className={`w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${avatarClassName}`}
-                    style={isUnread ? { color: 'var(--accent-on-primary)' } : undefined}
+                <div className="mobile-inbox-leading-rail flex w-11 shrink-0 flex-col items-center gap-1.5">
+                    <span
+                        className={`w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${avatarClassName}`}
+                        style={isUnread ? { color: 'var(--accent-on-primary)' } : undefined}
+                    >
+                        {getAvatarText(title)}
+                    </span>
+                    {onRequestHideConversation && (
+                        <button
+                            type="button"
+                            className="mobile-inbox-hide-button inline-flex min-h-7 items-center justify-center gap-1 rounded-full border border-border-subtle bg-bg-primary/70 px-2 text-[10px] font-semibold text-text-muted transition-colors hover:border-border-default hover:text-text-primary"
+                            onClick={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                onRequestHideConversation()
+                            }}
+                            aria-label={`Hide ${title}`}
+                            title="Hide conversation"
+                        >
+                            <IconEyeOff size={11} />
+                            <span>Hide</span>
+                        </button>
+                    )}
+                </div>
+                <button
+                    className="relative flex min-w-0 flex-1 flex-col gap-0.5 text-left"
+                    onClick={() => onOpenConversation(item.conversation)}
+                    onContextMenu={handleConversationContextMenu}
+                    type="button"
                 >
-                    {getAvatarText(title)}
-                </span>
-                <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                     <div className="flex items-center justify-between gap-2">
                         <span className={`text-[15px] font-bold truncate tracking-tight ${titleClassName}`}>{title}</span>
                         {shouldShowTimestamp && <span className={`text-[11px] font-medium shrink-0 ${timestampClassName}`}>{formatRelativeTime(item.timestamp)}</span>}
@@ -191,7 +267,7 @@ function DashboardMobileChatItem({
                     <div className={`mt-0.5 truncate text-[13px] ${previewClassName}`}>
                         {item.preview}
                     </div>
-                </div>
+                </button>
                 {isUnread && !isTaskComplete && <span className="absolute top-5 right-4 w-2 h-2 rounded-full bg-accent-primary shadow-glow" />}
                 {isTaskComplete && (
                     <span className="absolute top-4 right-4 rounded-full border border-accent-primary/16 bg-accent-primary/10 px-2 py-0.5 text-[10px] font-bold text-accent-primary">
@@ -199,25 +275,7 @@ function DashboardMobileChatItem({
                     </span>
                 )}
                 {isWorking && <span className="absolute top-4 right-4 rounded-full bg-accent-primary/10 px-2 py-0.5 text-[10px] font-bold text-accent-primary">Live</span>}
-            </button>
-            {onHideConversation && (
-                <div className="flex justify-end px-4 pb-3 -mt-1">
-                    <button
-                        type="button"
-                        className="mobile-inbox-hide-button inline-flex items-center gap-1.5 rounded-full border border-border-subtle bg-bg-primary/70 px-2.5 py-1 text-[11px] font-semibold text-text-muted hover:border-border-default hover:text-text-primary"
-                        onClick={(event) => {
-                            event.preventDefault()
-                            event.stopPropagation()
-                            onHideConversation(item.conversation)
-                        }}
-                        aria-label={`Hide ${title}`}
-                        title="Hide conversation"
-                    >
-                        <IconEyeOff size={12} />
-                        <span>Hide</span>
-                    </button>
-                </div>
-            )}
+            </div>
         </div>
     )
 }
@@ -255,6 +313,7 @@ export default function DashboardMobileChatInbox({
     isStandalone = false,
     onCollectChatDebugBundle,
 }: DashboardMobileChatInboxProps) {
+    const [hideConfirmConversation, setHideConfirmConversation] = useState<ActiveConversation | null>(null)
     const isDisconnected = wsStatus === 'disconnected' || wsStatus === 'reconnecting' || wsStatus === 'offline' || wsStatus === 'auth_failed'
     const hasMachines = machineCards.length > 0
     const hasAnyConversation = attentionItems.length > 0 || unreadItems.length > 0 || workingItems.length > 0 || completedItems.length > 0
@@ -306,6 +365,11 @@ export default function DashboardMobileChatInbox({
         )
     }, [actionLogs, sendDaemonCommand])
     const effectiveCollectChatDebugBundle = onCollectChatDebugBundle || collectMobileInboxChatDebugBundle
+    const handleConfirmHideConversation = useCallback(() => {
+        if (!hideConfirmConversation) return
+        onHideConversation?.(hideConfirmConversation)
+        setHideConfirmConversation(null)
+    }, [hideConfirmConversation, onHideConversation])
 
     return (
         <div className="flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-primary">
@@ -420,7 +484,7 @@ export default function DashboardMobileChatInbox({
                                         type="needs_attention"
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
-                                        onHideConversation={onHideConversation}
+                                        onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                     />
                                 </div>
@@ -440,7 +504,7 @@ export default function DashboardMobileChatInbox({
                                         type="task_complete"
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
-                                        onHideConversation={onHideConversation}
+                                        onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                     />
                                 </div>
@@ -460,7 +524,7 @@ export default function DashboardMobileChatInbox({
                                         type="working"
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
-                                        onHideConversation={onHideConversation}
+                                        onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                     />
                                 </div>
@@ -483,7 +547,7 @@ export default function DashboardMobileChatInbox({
                                             type="earlier"
                                             getAvatarText={getAvatarText}
                                             onOpenConversation={onOpenConversation}
-                                            onHideConversation={onHideConversation}
+                                            onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
                                             onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                         />
                                     </div>
@@ -573,6 +637,14 @@ export default function DashboardMobileChatInbox({
                 >
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                 </button>
+            )}
+
+            {hideConfirmConversation && (
+                <HideConversationConfirmDialog
+                    conversation={hideConfirmConversation}
+                    onCancel={() => setHideConfirmConversation(null)}
+                    onConfirm={handleConfirmHideConversation}
+                />
             )}
 
             <DashboardMobileBottomNav section={section} onSectionChange={onSectionChange} />

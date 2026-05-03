@@ -60,14 +60,20 @@ describe('dashboard mobile/touch regressions', () => {
     expect(modeSource).toContain('sendDaemonCommand={sendDaemonCommand}')
   })
 
-  it('keeps mobile hidden chats collapsed and lets visible inbox rows hide themselves', () => {
+  it('keeps mobile hidden chats collapsed and makes row hide an explicit confirmed action under the left chat icon', () => {
     const inboxSource = readSource('components/dashboard/DashboardMobileChatInbox.tsx')
     const modeSource = readSource('components/dashboard/DashboardMobileChatMode.tsx')
     const mainViewSource = readSource('components/dashboard/DashboardMainView.tsx')
 
     expect(inboxSource).toContain('onHideConversation?: (conversation: ActiveConversation) => void')
+    expect(inboxSource).toContain('mobile-inbox-leading-rail')
     expect(inboxSource).toContain('mobile-inbox-hide-button')
-    expect(inboxSource).toContain('onHideConversation(item.conversation)')
+    expect(inboxSource).toContain('setHideConfirmConversation(item.conversation)')
+    expect(inboxSource).toContain('HideConversationConfirmDialog')
+    expect(inboxSource).toContain('Hide this chat from the inbox?')
+    expect(inboxSource).toContain('onHideConversation?.(hideConfirmConversation)')
+    expect(inboxSource).not.toContain('onHideConversation(item.conversation)')
+    expect(inboxSource).not.toContain('className="flex justify-end px-4 pb-3 -mt-1"')
     expect(inboxSource).toContain('Hidden tabs')
     expect(inboxSource).toContain('collapsed')
     expect(inboxSource).not.toContain('hiddenConversations.map((conversation')
