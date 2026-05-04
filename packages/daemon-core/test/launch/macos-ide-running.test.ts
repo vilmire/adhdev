@@ -42,7 +42,7 @@ vi.mock('../../src/providers/provider-loader.js', () => ({
     getMacAppIdentifiers() { return { antigravity: 'Antigravity' } }
     getIdePathCandidates() { return ['/Applications/Antigravity.app'] }
     getWinProcessNames() { return {} }
-    getCdpPortMap() { return { antigravity: [9335, 9336] } }
+    getCdpPortMap() { return { antigravity: [49335, 49336] } }
     getMeta() { return { launch: { prefer: { darwin: 'app' }, cdpStartupTimeoutMs: 1000 } } }
     getAvailableIdeTypes() { return [] }
   },
@@ -139,13 +139,13 @@ describe('macOS app bundle process fallback', () => {
     await expect(launchWithCdp({ ideId: 'antigravity' })).resolves.toMatchObject({
       success: false,
       ideId: 'antigravity',
-      port: 9335,
+      port: 49335,
       action: 'failed',
-      error: 'Antigravity launched but CDP did not become available on port 9335',
+      error: 'Antigravity launched but CDP did not become available on port 49335',
     })
     expect(mocks.spawn).toHaveBeenCalledWith(
       'open',
-      ['-a', 'Antigravity', '--args', '--remote-debugging-port=9335'],
+      ['-a', 'Antigravity', '--args', '--remote-debugging-port=49335'],
       { detached: true, stdio: 'ignore' },
     )
   })
