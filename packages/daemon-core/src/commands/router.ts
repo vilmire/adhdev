@@ -998,6 +998,84 @@ export class DaemonCommandRouter {
                 }
             }
 
+            // ─── Mesh Coordinator Launch ───
+            case 'launch_mesh_coordinator': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const cliType = typeof args?.cliType === 'string' ? args.cliType.trim() : 'claude-cli';
+                if (!meshId) return { success: false, error: 'meshId required' };
+
+                try {
+                    const { getMesh } = await import('../config/mesh-config.js');
+                    const { buildCoordinatorSystemPrompt } = await import('../mesh/coordinator-prompt.js');
+                    const mesh = getMesh(meshId);
+                    if (!mesh) return { success: false, error: 'Mesh not found' };
+                    if (mesh.nodes.length === 0) return { success: false, error: 'No nodes in mesh' };
+
+                    const workspace = mesh.nodes[0].workspace;
+
+                    // 1. Write .mcp.json to workspace so Claude CLI auto-discovers mesh tools
+                    const { existsSync, readFileSync, writeFileSync, copyFileSync } = await import('fs');
+                    const { join } = await import('path');
+                    const mcpConfigPath = join(workspace, '.mcp.json');
+
+                    // Backup existing .mcp.json if present
+                    const hadExistingMcpConfig = existsSync(mcpConfigPath);
+                    let existingMcpConfig: any = {};
+                    if (hadExistingMcpConfig) {
+                        try {
+                            existingMcpConfig = JSON.parse(readFileSync(mcpConfigPath, 'utf-8'));
+                            copyFileSync(mcpConfigPath, mcpConfigPath + '.backup');
+                        } catch { /* empty */ }
+                    }
+
+                    // Merge adhdev-mesh server into existing config
+                    const mcpConfig = {
+                        ...existingMcpConfig,
+                        mcpServers: {
+                            ...(existingMcpConfig.mcpServers || {}),
+                            'adhdev-mesh': {
+                                command: 'adhdev-mcp',
+                                args: ['--repo-mesh', meshId],
+                            },
+                        },
+                    };
+                    writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2), 'utf-8');
+                    LOG.info('MeshCoordinator', `Wrote .mcp.json to ${workspace} with adhdev-mesh server`);
+
+                    // 2. Build coordinator system prompt
+                    let systemPrompt = '';
+                    try {
+                        systemPrompt = buildCoordinatorSystemPrompt({ mesh });
+                    } catch {
+                        systemPrompt = `You are a Repo Mesh Coordinator for "${mesh.name}". Use the adhdev-mesh MCP tools (mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat, mesh_launch_session, etc.) to orchestrate work across ${mesh.nodes.length} node(s).`;
+                    }
+
+                    // 3. Launch CLI session via existing cliManager
+                    const launchResult: any = await this.deps.cliManager.handleCliCommand('launch_cli', {
+                        cliType,
+                        dir: workspace,
+                        initialPrompt: systemPrompt,
+                    });
+
+                    if (!launchResult?.success) {
+                        return { success: false, error: launchResult?.error || 'Failed to launch CLI session' };
+                    }
+
+                    LOG.info('MeshCoordinator', `Launched ${cliType} coordinator for mesh ${meshId} in ${workspace}`);
+                    return {
+                        success: true,
+                        meshId,
+                        cliType,
+                        workspace,
+                        sessionId: launchResult.sessionId || launchResult.id,
+                        mcpConfigWritten: true,
+                    };
+                } catch (e: any) {
+                    LOG.error('MeshCoordinator', `Failed: ${e.message}`);
+                    return { success: false, error: e.message };
+                }
+            }
+
             default:
                 break;
         }

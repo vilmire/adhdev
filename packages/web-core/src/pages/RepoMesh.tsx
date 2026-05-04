@@ -171,9 +171,9 @@ export default function RepoMesh() {
         setLaunching(true)
         setError(null)
         try {
-            const res: any = await sendCommand(daemonId, 'launch_cli', {
+            const res: any = await sendCommand(daemonId, 'launch_mesh_coordinator', {
+                meshId: selectedMesh.id,
                 cliType: selectedAgent,
-                dir: workspace,
             })
             if (res?.success) {
                 // Redirect to dashboard where the session is now running
