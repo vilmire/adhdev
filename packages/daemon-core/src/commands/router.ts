@@ -1006,11 +1006,18 @@ export class DaemonCommandRouter {
                 if (!meshId) return { success: false, error: 'meshId required' };
 
                 try {
-                    const { getMesh } = await import('../config/mesh-config.js');
                     const { buildCoordinatorSystemPrompt } = await import('../mesh/coordinator-prompt.js');
-                    const mesh = getMesh(meshId);
+
+                    // Support inline mesh data from cloud (bypasses local meshes.json lookup)
+                    let mesh: any;
+                    if (args?.inlineMesh && typeof args.inlineMesh === 'object') {
+                        mesh = args.inlineMesh;
+                    } else {
+                        const { getMesh } = await import('../config/mesh-config.js');
+                        mesh = getMesh(meshId);
+                    }
                     if (!mesh) return { success: false, error: 'Mesh not found' };
-                    if (mesh.nodes.length === 0) return { success: false, error: 'No nodes in mesh' };
+                    if (!Array.isArray(mesh.nodes) || mesh.nodes.length === 0) return { success: false, error: 'No nodes in mesh' };
 
                     const workspace = mesh.nodes[0].workspace;
                     const providerMeta = this.deps.providerLoader.resolve?.(cliType) || this.deps.providerLoader.getMeta(cliType);
