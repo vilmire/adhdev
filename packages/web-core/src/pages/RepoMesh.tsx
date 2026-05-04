@@ -16,7 +16,7 @@ import { Section } from '../components/ui/Section'
 import { EmptyState } from '../components/ui/EmptyState'
 import { AlertBanner } from '../components/ui/AlertBanner'
 import { FormField, Input } from '../components/ui/FormField'
-import { IconX, IconPlug, IconFolder, IconPlay } from '../components/Icons'
+import { IconX, IconMesh, IconFolder, IconPlay } from '../components/Icons'
 
 // ─── Types (matches daemon-core LocalMeshEntry shape) ───
 interface MeshNode {
@@ -191,7 +191,7 @@ export default function RepoMesh() {
     // ─── Render: no daemon ───
     if (!daemonId) {
         return (
-            <AppPage icon={<IconPlug />} title="Repo Mesh" subtitle="Multi-workspace orchestration">
+            <AppPage icon={<IconMesh />} title="Repo Mesh" subtitle="Multi-workspace orchestration">
                 <div className="text-sm text-text-muted p-4">Waiting for daemon connection...</div>
             </AppPage>
         )
@@ -201,7 +201,7 @@ export default function RepoMesh() {
     if (!selectedMesh) {
         return (
             <AppPage
-                icon={<IconPlug />}
+                icon={<IconMesh />}
                 title="Repo Mesh"
                 subtitle="Multi-workspace orchestration"
                 actions={
@@ -245,7 +245,7 @@ export default function RepoMesh() {
                 {loading ? (
                     <div className="text-sm text-text-muted p-4">Loading meshes...</div>
                 ) : meshes.length === 0 ? (
-                    <EmptyState icon={<IconPlug />} title="No meshes" description="Create a mesh to get started." />
+                    <EmptyState icon={<IconMesh />} title="No meshes" description="Create a mesh to get started." />
                 ) : (
                     <div className="flex flex-col gap-2">
                         {meshes.map(mesh => (
@@ -268,7 +268,7 @@ export default function RepoMesh() {
     // ─── Render: mesh detail ───
     return (
         <AppPage
-            icon={<IconPlug />}
+            icon={<IconMesh />}
             title={selectedMesh.name}
             subtitle={selectedMesh.repoIdentity || 'Repo Mesh'}
             actions={

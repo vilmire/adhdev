@@ -51,6 +51,7 @@ const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'staticConfigOptions',
   'spawnArgBuilder',
   'auth',
+  'meshCoordinator',
   'contractVersion',
   'capabilities',
   'providerVersion',
@@ -125,6 +126,7 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
 
   validateCapabilities(provider as unknown as ProviderModule, controls, errors)
   validateCanonicalHistory(provider.canonicalHistory, errors)
+  validateMeshCoordinator(provider.meshCoordinator, errors)
 
   for (const control of controls) {
     validateControl(control as ProviderControlDef, errors)
@@ -229,6 +231,69 @@ function validateCanonicalHistory(raw: unknown, errors: string[]): void {
     const value = scriptConfig[key]
     if (typeof value !== 'string' || !value.trim()) {
       errors.push(`canonicalHistory.scripts.${key} must be a non-empty string`)
+    }
+  }
+}
+
+function validateMeshCoordinator(raw: unknown, errors: string[]): void {
+  if (raw === undefined) return
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    errors.push('meshCoordinator must be an object')
+    return
+  }
+
+  const meshCoordinator = raw as Record<string, unknown>
+  if (typeof meshCoordinator.supported !== 'boolean') {
+    errors.push('meshCoordinator.supported must be boolean')
+  }
+  if (meshCoordinator.reason !== undefined && (typeof meshCoordinator.reason !== 'string' || !meshCoordinator.reason.trim())) {
+    errors.push('meshCoordinator.reason must be a non-empty string when provided')
+  }
+
+  const mcpConfig = meshCoordinator.mcpConfig
+  if (mcpConfig === undefined) return
+  if (!mcpConfig || typeof mcpConfig !== 'object' || Array.isArray(mcpConfig)) {
+    errors.push('meshCoordinator.mcpConfig must be an object')
+    return
+  }
+
+  const config = mcpConfig as Record<string, unknown>
+  const mode = config.mode
+  if (!['auto_import', 'manual', 'none'].includes(String(mode))) {
+    errors.push('meshCoordinator.mcpConfig.mode must be one of: auto_import, manual, none')
+  }
+
+  const format = config.format
+  if (format !== undefined && !['claude_mcp_json', 'hermes_config_yaml'].includes(String(format))) {
+    errors.push('meshCoordinator.mcpConfig.format must be one of: claude_mcp_json, hermes_config_yaml')
+  }
+
+  for (const key of ['path', 'serverName', 'configPathCommand', 'instructions', 'template']) {
+    const value = config[key]
+    if (value !== undefined && (typeof value !== 'string' || !value.trim())) {
+      errors.push(`meshCoordinator.mcpConfig.${key} must be a non-empty string when provided`)
+    }
+  }
+
+  if (config.requiresRestart !== undefined && typeof config.requiresRestart !== 'boolean') {
+    errors.push('meshCoordinator.mcpConfig.requiresRestart must be boolean when provided')
+  }
+
+  if (mode === 'auto_import') {
+    if (format === undefined) {
+      errors.push('meshCoordinator.mcpConfig.format is required for auto_import MCP setup')
+    }
+    if (typeof config.path !== 'string' || !config.path.trim()) {
+      errors.push('meshCoordinator.mcpConfig.path is required for auto_import MCP setup')
+    }
+  }
+
+  if (mode === 'manual') {
+    if (typeof config.instructions !== 'string' || !config.instructions.trim()) {
+      errors.push('meshCoordinator.mcpConfig.instructions is required for manual MCP setup')
+    }
+    if (typeof config.template !== 'string' || !config.template.trim()) {
+      errors.push('meshCoordinator.mcpConfig.template is required for manual MCP setup')
     }
   }
 }
