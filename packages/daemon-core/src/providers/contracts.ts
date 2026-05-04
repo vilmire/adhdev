@@ -345,6 +345,33 @@ export interface CdpTargetFilter {
 
 export type ProviderVersionCommand = string | Partial<Record<string, string>>;
 
+export type MeshCoordinatorMcpConfigMode = 'auto_import' | 'manual' | 'none';
+export type MeshCoordinatorMcpConfigFormat = 'claude_mcp_json' | 'hermes_config_yaml';
+
+export interface ProviderMeshCoordinatorConfig {
+  /** Whether ADHDev may select this provider for Repo Mesh coordinator sessions. */
+  supported: boolean;
+  /** Human-readable reason shown when unsupported or blocked. */
+  reason?: string;
+  /** How ADHDev mesh MCP tools become visible to the launched CLI. */
+  mcpConfig?: {
+    mode: MeshCoordinatorMcpConfigMode;
+    format?: MeshCoordinatorMcpConfigFormat;
+    /** Provider-relative/project-relative config path for auto-import modes, e.g. '.mcp.json'. */
+    path?: string;
+    /** MCP server name to materialize or display. Defaults to 'adhdev-mesh'. */
+    serverName?: string;
+    /** Manual setup target path/help command, e.g. 'hermes config path'. */
+    configPathCommand?: string;
+    /** Whether users need a fresh CLI session after config changes. */
+    requiresRestart?: boolean;
+    /** User-facing setup explanation for manual modes. */
+    instructions?: string;
+    /** Copyable setup template. Supports {{meshId}}, {{adhdevMcpCommand}}, {{workspace}}, {{serverName}}. */
+    template?: string;
+  };
+}
+
 export interface ProviderCompatibilityEntry {
   ideVersion: string;
   scriptDir: string;
@@ -554,6 +581,12 @@ export interface ProviderModule {
  // ─── ACP Authentication (auth method definitions) ───
  /** ACP agent auth methods (multiple supported — in priority order) */
   auth?: AcpAuthMethod[];
+
+  /**
+   * Repo Mesh coordinator capability and MCP ingestion behavior.
+   * Providers must declare this rather than relying on daemon hardcoded CLI quirks.
+   */
+  meshCoordinator?: ProviderMeshCoordinatorConfig;
 
  // ─── Contract version / capability declaration ───
   contractVersion?: number;

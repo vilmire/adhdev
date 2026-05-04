@@ -28,3 +28,20 @@ if (!fs.existsSync(sourceRoot)) {
 fs.rmSync(targetRoot, { recursive: true, force: true });
 copyRecursive(sourceRoot, targetRoot);
 console.log(`vendored session-host-daemon dist -> ${targetRoot}`);
+
+// ── MCP Server ──
+const mcpSourceRoot = path.resolve(packageDir, '..', 'mcp-server', 'dist');
+const mcpTargetRoot = path.join(packageDir, 'vendor', 'mcp-server');
+
+if (fs.existsSync(mcpSourceRoot)) {
+  fs.rmSync(mcpTargetRoot, { recursive: true, force: true });
+  copyRecursive(mcpSourceRoot, mcpTargetRoot);
+  // Copy package.json for metadata
+  const mcpPkgSrc = path.resolve(packageDir, '..', 'mcp-server', 'package.json');
+  if (fs.existsSync(mcpPkgSrc)) {
+    fs.copyFileSync(mcpPkgSrc, path.join(mcpTargetRoot, 'package.json'));
+  }
+  console.log(`vendored mcp-server dist -> ${mcpTargetRoot}`);
+} else {
+  console.warn(`⚠ mcp-server dist not found at ${mcpSourceRoot}, skipping`);
+}

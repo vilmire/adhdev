@@ -5,7 +5,8 @@
   "main": "dist/index.js",
   "bin": {
     "adhdev-standalone": "./dist/index.js",
-    "adhdev": "./dist/index.js"
+    "adhdev": "./dist/index.js",
+    "adhdev-mcp": "./vendor/mcp-server/index.js"
   },
   "scripts": {
     "preinstall": "node -e \"const major=Number.parseInt(process.versions.node.split('.')[0],10); if (process.platform === 'win32' && major >= 24) { console.error('\\n\u2717 ADHDev standalone does not currently support Node.js 24+ on Windows.\\n  Install Node.js 22.x on Windows, then retry.\\n'); process.exit(1); }\"",
@@ -16,7 +17,7 @@
     "start": "node dist/index.js",
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "prepublishOnly": "cd ../.. && npm run build -w packages/session-host-daemon && npm run build -w packages/daemon-core && npm run build -w packages/web-standalone && cd packages/daemon-standalone && npm run bundle:web && npm run bundle:vendor && npm run build"
+    "prepublishOnly": "cd ../.. && npm run build -w packages/session-host-daemon && npm run build -w packages/mcp-server && npm run build -w packages/daemon-core && npm run build -w packages/web-standalone && cd packages/daemon-standalone && npm run bundle:web && npm run bundle:vendor && npm run build"
   },
   "files": [
     "dist",

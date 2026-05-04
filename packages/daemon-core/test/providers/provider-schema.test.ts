@@ -214,6 +214,73 @@ describe('validateProviderDefinition', () => {
     expect(result.errors).toContain('canonicalHistory.scripts.listSessions must be a non-empty string')
   })
 
+  it('accepts mesh coordinator auto-import MCP metadata without unknown field warnings', () => {
+    const result = validateProviderDefinition({
+      type: 'claude-cli',
+      name: 'Claude CLI',
+      category: 'cli',
+      spawn: { command: 'claude' },
+      capabilities: baseCapabilities,
+      contractVersion: 2,
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'auto_import',
+          format: 'claude_mcp_json',
+          path: '.mcp.json',
+          serverName: 'adhdev-mesh',
+        },
+      },
+    })
+
+    expect(result.errors).toEqual([])
+    expect(result.warnings).not.toContain('Unknown provider field: meshCoordinator')
+  })
+
+  it('accepts mesh coordinator manual MCP metadata with actionable instructions', () => {
+    const result = validateProviderDefinition({
+      type: 'hermes-cli',
+      name: 'Hermes CLI',
+      category: 'cli',
+      spawn: { command: 'hermes' },
+      capabilities: baseCapabilities,
+      contractVersion: 2,
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'manual',
+          format: 'hermes_config_yaml',
+          instructions: 'Add this server to Hermes config under mcp_servers.',
+          template: 'mcp_servers:\n  adhdev-mesh:\n    command: {{adhdevMcpCommand}}\n',
+          requiresRestart: true,
+        },
+      },
+    })
+
+    expect(result.errors).toEqual([])
+    expect(result.warnings).not.toContain('Unknown provider field: meshCoordinator')
+  })
+
+  it('rejects malformed mesh coordinator metadata that could create false-success launches', () => {
+    const result = validateProviderDefinition({
+      type: 'broken-cli',
+      name: 'Broken CLI',
+      category: 'cli',
+      spawn: { command: 'broken' },
+      capabilities: baseCapabilities,
+      contractVersion: 2,
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'manual',
+          format: 'hermes_config_yaml',
+        },
+      },
+    })
+
+    expect(result.errors).toContain('meshCoordinator.mcpConfig.instructions is required for manual MCP setup')
+  })
+
   it('warns when focusEditor is declared without any openPanel script, because open_panel capability will stay disabled', () => {
     const result = validateProviderDefinition({
       type: 'foo-ide',
