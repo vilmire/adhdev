@@ -43,7 +43,7 @@ export type { ProviderErrorReason } from './providers/provider-instance.js';
 // Local import for use in Managed*Entry types below
 import type { ActiveChatData as _ActiveChatData, ProviderErrorReason as _ProviderErrorReason } from './providers/provider-instance.js';
 import type { WorkspaceEntry } from './config/workspaces.js';
-import type { ProviderResumeCapability } from './providers/contracts.js';
+import type { ProviderMeshCoordinatorConfig, ProviderResumeCapability } from './providers/contracts.js';
 import type {
     GitCompactSummary,
     GitDiffSummary,
@@ -447,6 +447,8 @@ export interface AvailableProviderInfo {
     lastDetection?: MachineProviderCheckResult;
     /** Last end-to-end ADHDev verification result, when available. */
     lastVerification?: MachineProviderCheckResult;
+    /** Provider-declared Repo Mesh coordinator/MCP behavior. */
+    meshCoordinator?: ProviderMeshCoordinatorConfig;
 }
 
 export interface MachineProviderCheckResult {

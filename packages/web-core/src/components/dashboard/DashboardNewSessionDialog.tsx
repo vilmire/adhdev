@@ -17,7 +17,9 @@ import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-
 import SavedHistoryLaunchSection from '../SavedHistoryLaunchSection'
 import LaunchSectionCard from '../LaunchSectionCard'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
-import type { MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
+import type { LaunchResult, MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
+import MeshCoordinatorManualSetupPanel from '../MeshCoordinatorManualSetupPanel'
+import { buildManualCoordinatorSetup, type MeshCoordinatorManualSetup } from '../../utils/mesh-coordinator-setup'
 
 type LaunchKind = 'ide' | 'cli' | 'acp'
 type WorkspaceLaunchMode = 'workspace' | 'mesh'
@@ -58,7 +60,7 @@ interface DashboardNewSessionDialogProps {
         },
     ) => Promise<{ ok: boolean; error?: string }>
     onListMeshes: (machineId: string) => Promise<MeshLaunchOption[]>
-    onLaunchMeshCoordinator: (machineId: string, meshId: string, cliType: string) => Promise<{ ok: boolean; error?: string }>
+    onLaunchMeshCoordinator: (machineId: string, meshId: string, cliType: string) => Promise<LaunchResult>
     onListSavedSessions: (machineId: string, providerType: string) => Promise<SavedSessionOption[]>
 }
 
@@ -129,6 +131,7 @@ export default function DashboardNewSessionDialog({
     const [resumingSavedSessionId, setResumingSavedSessionId] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState('')
+    const [meshManualSetup, setMeshManualSetup] = useState<MeshCoordinatorManualSetup | null>(null)
     const [browseDialogOpen, setBrowseDialogOpen] = useState(false)
     const [browseCurrentPath, setBrowseCurrentPath] = useState('')
     const [browseDirectories, setBrowseDirectories] = useState<Array<{ name: string; path: string }>>([])
@@ -191,6 +194,18 @@ export default function DashboardNewSessionDialog({
         () => meshOptions.find(mesh => mesh.id === selectedMeshId) || null,
         [meshOptions, selectedMeshId],
     )
+    const selectedCliProvider = useMemo(
+        () => cliProviders.find(provider => provider.type === selectedTarget) || null,
+        [cliProviders, selectedTarget],
+    )
+    const providerMeshManualSetup = useMemo(
+        () => buildManualCoordinatorSetup(selectedCliProvider?.meshCoordinator, {
+            meshId: selectedMesh?.id || '',
+            workspace: selectedMesh?.workspace || '',
+        }),
+        [selectedCliProvider, selectedMesh],
+    )
+    const visibleMeshManualSetup = meshManualSetup || providerMeshManualSetup
 
     const loadMeshes = useCallback(async (machineId: string) => {
         setMeshLoading(true)
@@ -232,6 +247,7 @@ export default function DashboardNewSessionDialog({
             setSavedSessionsError('')
             setResumeHistoryFilters(createSavedHistoryFilterState())
             setMessage('')
+            setMeshManualSetup(null)
             return
         }
 
@@ -267,6 +283,10 @@ export default function DashboardNewSessionDialog({
         if (providerTargets.some(target => target.id === selectedTarget)) return
         setSelectedTarget(providerTargets[0]?.id || '')
     }, [activeKind, providerTargets, selectedTarget])
+
+    useEffect(() => {
+        setMeshManualSetup(null)
+    }, [selectedMachine?.id, selectedMeshId, selectedTarget, workspaceMode])
 
     const loadSavedSessions = useCallback(async (machineId: string, providerType: string) => {
         const requestSeq = savedSessionsRequestSeqRef.current + 1
@@ -472,9 +492,15 @@ export default function DashboardNewSessionDialog({
             if (!selectedMeshId || !selectedTarget) return
             setBusy(true)
             setMessage('')
+            setMeshManualSetup(null)
             const result = await onLaunchMeshCoordinator(selectedMachine.id, selectedMeshId, selectedTarget)
             setBusy(false)
             if (!result.ok) {
+                if (result.code === 'mesh_coordinator_manual_mcp_setup_required' && result.manualSetup) {
+                    setMeshManualSetup(result.manualSetup)
+                    setMessage('Manual MCP setup required before this provider can act as mesh coordinator.')
+                    return
+                }
                 setMessage(result.error || 'Could not start mesh coordinator')
                 return
             }
@@ -796,6 +822,13 @@ export default function DashboardNewSessionDialog({
                             </div>
                         </div>
 
+                        {workspaceMode === 'mesh' && visibleMeshManualSetup && (
+                            <MeshCoordinatorManualSetupPanel
+                                setup={visibleMeshManualSetup}
+                                providerName={selectedCliProvider?.displayName || selectedCliProvider?.name || selectedTarget}
+                            />
+                        )}
+
                         {workspaceMode !== 'mesh' && activeKind !== 'ide' && (
                             <LaunchSectionCard title="Startup arguments">
                                 <input
@@ -850,7 +883,7 @@ export default function DashboardNewSessionDialog({
                         )}
 
                         {message && (
-                            <div className={`rounded-xl border px-4 py-3 text-sm ${message.includes('saved') || message.includes('requested') ? 'border-accent/25 bg-accent/10 text-text-primary' : 'border-status-error/25 bg-status-error/10 text-status-error'}`}>
+                            <div className={`rounded-xl border px-4 py-3 text-sm ${message.includes('saved') || message.includes('requested') || message.includes('Manual MCP setup') ? 'border-accent/25 bg-accent/10 text-text-primary' : 'border-status-error/25 bg-status-error/10 text-status-error'}`}>
                                 {message}
                             </div>
                         )}

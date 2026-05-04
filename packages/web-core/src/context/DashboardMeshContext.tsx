@@ -10,7 +10,7 @@
  * server-persisted meshes visible across all connected machines.
  */
 import { createContext, useContext, type ReactNode } from 'react'
-import type { MeshLaunchOption } from '../hooks/useDashboardCommandActions'
+import type { LaunchResult, MeshLaunchOption } from '../hooks/useDashboardCommandActions'
 
 export interface DashboardMeshOverrides {
     /**
@@ -29,7 +29,7 @@ export interface DashboardMeshOverrides {
         machineId: string,
         meshId: string,
         cliType: string,
-    ) => Promise<{ ok: boolean; error?: string }>
+    ) => Promise<LaunchResult>
 }
 
 const DashboardMeshContext = createContext<DashboardMeshOverrides | null>(null)

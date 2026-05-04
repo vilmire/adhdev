@@ -33,6 +33,7 @@ import type { CommandLogEntry } from '../logging/command-log.js';
 import { getRecentLogs, LOG_PATH } from '../logging/logger.js';
 import { createInteractionId, getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
 import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../session-host/runtime-surface.js';
+import { resolveMeshCoordinatorSetup } from './mesh-coordinator.js';
 import { buildSessionEntries } from '../status/builders.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
@@ -1012,13 +1013,52 @@ export class DaemonCommandRouter {
                     if (mesh.nodes.length === 0) return { success: false, error: 'No nodes in mesh' };
 
                     const workspace = mesh.nodes[0].workspace;
+                    const providerMeta = this.deps.providerLoader.resolve?.(cliType) || this.deps.providerLoader.getMeta(cliType);
+                    const coordinatorSetup = resolveMeshCoordinatorSetup({
+                        provider: providerMeta,
+                        meshId,
+                        workspace,
+                    });
 
-                    // 1. Write .mcp.json to workspace so Claude CLI auto-discovers mesh tools
+                    if (coordinatorSetup.kind === 'unsupported') {
+                        return {
+                            success: false,
+                            code: 'mesh_coordinator_unsupported',
+                            error: coordinatorSetup.reason,
+                            meshId,
+                            cliType,
+                            workspace,
+                        };
+                    }
+
+                    if (coordinatorSetup.kind === 'manual') {
+                        return {
+                            success: false,
+                            code: 'mesh_coordinator_manual_mcp_setup_required',
+                            error: coordinatorSetup.instructions,
+                            meshId,
+                            cliType,
+                            workspace,
+                            meshCoordinatorSetup: coordinatorSetup,
+                        };
+                    }
+
+                    if (coordinatorSetup.configFormat !== 'claude_mcp_json') {
+                        return {
+                            success: false,
+                            code: 'mesh_coordinator_unsupported',
+                            error: `Unsupported auto-import MCP config format: ${String(coordinatorSetup.configFormat)}`,
+                            meshId,
+                            cliType,
+                            workspace,
+                        };
+                    }
+
+                    // 1. Write provider-declared MCP config to workspace for CLIs that auto-import it.
                     const { existsSync, readFileSync, writeFileSync, copyFileSync } = await import('fs');
-                    const { join } = await import('path');
-                    const mcpConfigPath = join(workspace, '.mcp.json');
+                    const mcpConfigPath = coordinatorSetup.configPath;
 
-                    // Backup existing .mcp.json if present
+                    // Backup existing MCP config if present.
                     const hadExistingMcpConfig = existsSync(mcpConfigPath);
                     let existingMcpConfig: any = {};
                     if (hadExistingMcpConfig) {
@@ -1028,19 +1068,19 @@ export class DaemonCommandRouter {
                         } catch { /* empty */ }
                     }
 
-                    // Merge adhdev-mesh server into existing config
+                    // Merge ADHDev mesh server into existing config.
                     const mcpConfig = {
                         ...existingMcpConfig,
                         mcpServers: {
                             ...(existingMcpConfig.mcpServers || {}),
-                            'adhdev-mesh': {
+                            [coordinatorSetup.serverName]: {
                                 command: 'adhdev-mcp',
                                 args: ['--repo-mesh', meshId],
                             },
                         },
                     };
                     writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2), 'utf-8');
-                    LOG.info('MeshCoordinator', `Wrote .mcp.json to ${workspace} with adhdev-mesh server`);
+                    LOG.info('MeshCoordinator', `Wrote ${mcpConfigPath} with ${coordinatorSetup.serverName} server`);
 
                     // 2. Build coordinator system prompt
                     let systemPrompt = '';

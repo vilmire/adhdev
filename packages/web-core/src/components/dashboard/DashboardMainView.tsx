@@ -20,7 +20,7 @@ import { useDashboardMainViewUiState, type DashboardMainViewShortcutSectionId } 
 import type { LiveSessionInboxState } from './DashboardMobileChatShared'
 import { conversationMatchesTarget } from './conversation-identity'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
-import type { MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
+import type { LaunchResult, MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
 
 type ShortcutSectionId = DashboardMainViewShortcutSectionId
 
@@ -129,7 +129,7 @@ interface DashboardMainViewProps {
         },
     ) => Promise<{ ok: boolean; error?: string }>
     onListMachineMeshes: (machineId: string) => Promise<MeshLaunchOption[]>
-    onLaunchMeshCoordinator: (machineId: string, meshId: string, cliType: string) => Promise<{ ok: boolean; error?: string }>
+    onLaunchMeshCoordinator: (machineId: string, meshId: string, cliType: string) => Promise<LaunchResult>
     onListMachineSavedSessions: (machineId: string, providerType: string) => Promise<Array<{
         id: string
         providerSessionId: string

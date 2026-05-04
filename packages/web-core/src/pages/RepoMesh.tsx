@@ -17,6 +17,13 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { AlertBanner } from '../components/ui/AlertBanner'
 import { FormField, Input } from '../components/ui/FormField'
 import { IconX, IconMesh, IconFolder, IconPlay } from '../components/Icons'
+import MeshCoordinatorManualSetupPanel from '../components/MeshCoordinatorManualSetupPanel'
+import {
+    buildManualCoordinatorSetup,
+    normalizeManualCoordinatorSetup,
+    type MeshCoordinatorManualSetup,
+    type MeshCoordinatorMetadata,
+} from '../utils/mesh-coordinator-setup'
 
 // ─── Types (matches daemon-core LocalMeshEntry shape) ───
 interface MeshNode {
@@ -36,6 +43,12 @@ interface MeshEntry {
     updatedAt: string
 }
 
+interface AvailableCliAgent {
+    id: string
+    name: string
+    meshCoordinator?: MeshCoordinatorMetadata
+}
+
 export default function RepoMesh() {
     const { sendCommand } = useTransport()
     const { ides } = useBaseDaemons()
@@ -46,12 +59,16 @@ export default function RepoMesh() {
     const daemonId = daemon?.id || ''
 
     // Extract available CLI agents from daemon status
-    const availableCliAgents: { id: string; name: string }[] = []
+    const availableCliAgents: AvailableCliAgent[] = []
     if (daemon) {
         const providers = (daemon as any).availableProviders || []
         for (const p of providers) {
             if (p.category === 'cli') {
-                availableCliAgents.push({ id: p.type || p.id, name: p.displayName || p.name || p.type })
+                availableCliAgents.push({
+                    id: p.type || p.id,
+                    name: p.displayName || p.name || p.type,
+                    meshCoordinator: p.meshCoordinator,
+                })
             }
         }
     }
@@ -61,6 +78,7 @@ export default function RepoMesh() {
     const [selectedMeshId, setSelectedMeshId] = useState<string | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
+    const [manualSetup, setManualSetup] = useState<MeshCoordinatorManualSetup | null>(null)
 
     // Create form
     const [showCreate, setShowCreate] = useState(false)
@@ -76,6 +94,12 @@ export default function RepoMesh() {
     const [launching, setLaunching] = useState(false)
 
     const selectedMesh = meshes.find(m => m.id === selectedMeshId) || null
+    const selectedAgentInfo = availableCliAgents.find(agent => agent.id === selectedAgent) || null
+    const providerManualSetup = buildManualCoordinatorSetup(selectedAgentInfo?.meshCoordinator, {
+        meshId: selectedMesh?.id || '',
+        workspace: selectedMesh?.nodes[0]?.workspace || '',
+    })
+    const visibleManualSetup = manualSetup || providerManualSetup
 
     // ─── Data loading ───
     const loadMeshes = useCallback(async () => {
@@ -170,14 +194,18 @@ export default function RepoMesh() {
 
         setLaunching(true)
         setError(null)
+        setManualSetup(null)
         try {
             const res: any = await sendCommand(daemonId, 'launch_mesh_coordinator', {
                 meshId: selectedMesh.id,
                 cliType: selectedAgent,
             })
+            const serverManualSetup = normalizeManualCoordinatorSetup(res?.meshCoordinatorSetup || res?.manualSetup)
             if (res?.success) {
                 // Redirect to dashboard where the session is now running
                 navigate('/dashboard')
+            } else if (res?.code === 'mesh_coordinator_manual_mcp_setup_required' && serverManualSetup) {
+                setManualSetup(serverManualSetup)
             } else {
                 setError(res?.error || 'Failed to launch coordinator session')
             }
@@ -341,7 +369,10 @@ export default function RepoMesh() {
                         <select
                             className="bg-bg-primary border border-border-strong rounded-lg px-3 py-2 text-sm focus:border-accent focus:outline-none transition-colors min-w-[180px]"
                             value={selectedAgent}
-                            onChange={e => setSelectedAgent(e.target.value)}
+                            onChange={e => {
+                                setSelectedAgent(e.target.value)
+                                setManualSetup(null)
+                            }}
                         >
                             <option value="">Select CLI agent…</option>
                             {availableCliAgents.map(a => (
@@ -360,6 +391,13 @@ export default function RepoMesh() {
                             {launching ? 'Launching…' : 'Launch Coordinator'}
                         </button>
                     </div>
+                )}
+                {visibleManualSetup && (
+                    <MeshCoordinatorManualSetupPanel
+                        setup={visibleManualSetup}
+                        providerName={selectedAgentInfo?.name || selectedAgent}
+                        className="mt-3"
+                    />
                 )}
                 <div className="text-[11px] text-text-muted mt-3">
                     Launches a new CLI session on <strong>{selectedMesh.nodes[0]?.workspace.split('/').pop() || '…'}</strong> workspace. 

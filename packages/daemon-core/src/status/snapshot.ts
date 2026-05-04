@@ -144,6 +144,7 @@ function buildAvailableProviders(
         machineStatus?: 'disabled' | 'enabled_unchecked' | 'not_detected' | 'detected';
         lastDetection?: AvailableProviderInfo['lastDetection'];
         lastVerification?: AvailableProviderInfo['lastVerification'];
+        meshCoordinator?: AvailableProviderInfo['meshCoordinator'];
     }> = providerLoader.getAvailableProviderInfos?.() || providerLoader.getAll();
     return providers.map((provider) => ({
         type: provider.type,
@@ -157,6 +158,7 @@ function buildAvailableProviders(
         ...(provider.machineStatus !== undefined ? { machineStatus: provider.machineStatus } : {}),
         ...(provider.lastDetection !== undefined ? { lastDetection: provider.lastDetection } : {}),
         ...(provider.lastVerification !== undefined ? { lastVerification: provider.lastVerification } : {}),
+        ...(provider.meshCoordinator !== undefined ? { meshCoordinator: provider.meshCoordinator } : {}),
     }));
 }
 

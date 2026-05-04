@@ -8,6 +8,7 @@ import {
 import { browseMachineDirectories, type BrowseDirectoryResult } from '../components/machine/workspaceBrowse'
 import type { SavedSessionHistoryEntry } from '../components/dashboard/HistoryModal'
 import type { DaemonData } from '../types'
+import { normalizeManualCoordinatorSetup, type MeshCoordinatorManualSetup } from '../utils/mesh-coordinator-setup'
 import { isP2PLaunchTimeout } from './useDashboardPendingLaunch'
 
 interface DashboardLaunchTracker {
@@ -19,9 +20,11 @@ interface DashboardLaunchTracker {
   startedAt: number
 }
 
-interface LaunchResult {
+export interface LaunchResult {
   ok: boolean
   error?: string
+  code?: string
+  manualSetup?: MeshCoordinatorManualSetup | null
 }
 
 interface LaunchProviderOptions {
@@ -197,7 +200,14 @@ export function useDashboardCommandActions({
       })
       const result = raw?.result ?? raw
       if (result?.success === false || raw?.success === false) {
-        return { ok: false, error: result?.error || raw?.error || 'Could not launch mesh coordinator' }
+        const code = String(result?.code || raw?.code || '')
+        const manualSetup = normalizeManualCoordinatorSetup(result?.meshCoordinatorSetup || result?.manualSetup || raw?.meshCoordinatorSetup || raw?.manualSetup)
+        return {
+          ok: false,
+          error: result?.error || raw?.error || 'Could not launch mesh coordinator',
+          code: code || undefined,
+          manualSetup,
+        }
       }
       const launchedSessionId = result?.sessionId || result?.id
       if (launchedSessionId) {
