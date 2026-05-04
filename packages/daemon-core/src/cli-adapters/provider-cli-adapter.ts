@@ -2272,11 +2272,23 @@ export class ProviderCliAdapter implements CliAdapter {
         }
     }
 
+    private getParsedDebugState(): Record<string, any> | null {
+        if (this.startupParseGate || typeof this.cliScripts?.parseSession !== 'function') return null;
+        try {
+            const parsed = this.getScriptParsedStatus();
+            return parsed && typeof parsed === 'object' ? parsed as Record<string, any> : null;
+        } catch {
+            return null;
+        }
+    }
+
     getDebugState(): Record<string, any> {
         const screenText = sanitizeTerminalText(this.terminalScreen.getText());
         const startupModal = this.startupParseGate ? this.runParseApproval(this.recentOutputBuffer) : null;
         const effectiveStatus = this.projectEffectiveStatus(startupModal);
         const effectiveReady = this.ready || !!startupModal;
+        const parsedDebugState = this.getParsedDebugState();
+        const parsedMessages = Array.isArray(parsedDebugState?.messages) ? parsedDebugState.messages : [];
         return {
             type: this.cliType,
             name: this.cliName,
@@ -2289,8 +2301,18 @@ export class ProviderCliAdapter implements CliAdapter {
             startupParseGate: this.startupParseGate,
             spawnAt: this.spawnAt,
             workingDir: this.workingDir,
-            messages: [],
-            messageCount: 0,
+            messages: parsedMessages,
+            messageCount: parsedMessages.length,
+            parsedStatus: parsedDebugState ? {
+                id: parsedDebugState.id,
+                status: parsedDebugState.status,
+                title: parsedDebugState.title,
+                providerSessionId: parsedDebugState.providerSessionId,
+                transcriptAuthority: parsedDebugState.transcriptAuthority,
+                coverage: parsedDebugState.coverage,
+                activeModal: parsedDebugState.activeModal,
+                messageCount: parsedMessages.length,
+            } : null,
             screenText: screenText.slice(-4000),
             currentTurnScope: this.currentTurnScope,
             startupBuffer: this.startupBuffer.slice(-4000),

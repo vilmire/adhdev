@@ -112,6 +112,36 @@ describe('ProviderCliAdapter Hermes parser-authority status handling', () => {
     expect(status.messages).toEqual([])
   })
 
+  it('exposes parser-provided transcript rows in debug state without daemon-owned chat rows', () => {
+    const parserMessages = [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'done' },
+    ]
+    const adapter = buildAdapter('hermes-cli', () => ({
+      id: 'hermes-cli-debug',
+      status: 'idle',
+      parsedStatus: 'idle',
+      modal: null,
+      transcriptAuthority: 'provider',
+      coverage: 'full',
+      messages: parserMessages,
+    }))
+
+    const debugState = adapter.getDebugState()
+    const status = adapter.getStatus()
+
+    expect(debugState.messages).toEqual(parserMessages.map(message => expect.objectContaining(message)))
+    expect(debugState.messageCount).toBe(2)
+    expect(debugState.parsedStatus).toMatchObject({
+      id: 'hermes-cli-debug',
+      status: 'idle',
+      transcriptAuthority: 'provider',
+      coverage: 'full',
+      messageCount: 2,
+    })
+    expect(status.messages).toEqual([])
+  })
+
   it('promotes waiting_approval from parser modal without requiring parseApproval fallback', () => {
     const modal = {
       message: 'Dangerous command needs approval',
