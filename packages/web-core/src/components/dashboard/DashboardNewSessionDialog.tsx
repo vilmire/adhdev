@@ -17,8 +17,10 @@ import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-
 import SavedHistoryLaunchSection from '../SavedHistoryLaunchSection'
 import LaunchSectionCard from '../LaunchSectionCard'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
+import type { MeshLaunchOption } from '../../hooks/useDashboardCommandActions'
 
 type LaunchKind = 'ide' | 'cli' | 'acp'
+type WorkspaceLaunchMode = 'workspace' | 'mesh'
 
 interface SavedSessionOption {
     id: string
@@ -55,6 +57,8 @@ interface DashboardNewSessionDialogProps {
             initialModel?: string | null
         },
     ) => Promise<{ ok: boolean; error?: string }>
+    onListMeshes: (machineId: string) => Promise<MeshLaunchOption[]>
+    onLaunchMeshCoordinator: (machineId: string, meshId: string, cliType: string) => Promise<{ ok: boolean; error?: string }>
     onListSavedSessions: (machineId: string, providerType: string) => Promise<SavedSessionOption[]>
 }
 
@@ -84,6 +88,8 @@ export default function DashboardNewSessionDialog({
     onSaveWorkspace,
     onLaunchIde,
     onLaunchProvider,
+    onListMeshes,
+    onLaunchMeshCoordinator,
     onListSavedSessions,
 }: DashboardNewSessionDialogProps) {
     const loadDaemonMetadata = useDaemonMetadataLoader()
@@ -101,8 +107,14 @@ export default function DashboardNewSessionDialog({
         [selectedMachine],
     )
     const defaultWorkspaceId = selectedMachine?.defaultWorkspaceId || null
+    const [workspaceMode, setWorkspaceMode] = useState<WorkspaceLaunchMode>('workspace')
     const [workspaceChoice, setWorkspaceChoice] = useState<string>('')
     const [customWorkspacePath, setCustomWorkspacePath] = useState('')
+    const [meshOptions, setMeshOptions] = useState<MeshLaunchOption[]>([])
+    const [selectedMeshId, setSelectedMeshId] = useState('')
+    const [meshLoading, setMeshLoading] = useState(false)
+    const [meshLoadedMachineId, setMeshLoadedMachineId] = useState<string | null>(null)
+    const [meshError, setMeshError] = useState('')
     const [activeKind, setActiveKind] = useState<LaunchKind | null>(getDefaultLaunchKind(sortedMachines[0]))
     const [selectedTarget, setSelectedTarget] = useState('')
     const [launchArgs, setLaunchArgs] = useState('')
@@ -175,14 +187,42 @@ export default function DashboardNewSessionDialog({
         [acpProviders, activeKind, cliProviders, ideTargets],
     )
 
+    const selectedMesh = useMemo(
+        () => meshOptions.find(mesh => mesh.id === selectedMeshId) || null,
+        [meshOptions, selectedMeshId],
+    )
+
+    const loadMeshes = useCallback(async (machineId: string) => {
+        setMeshLoading(true)
+        setMeshError('')
+        try {
+            const meshes = await onListMeshes(machineId)
+            setMeshOptions(meshes)
+            setSelectedMeshId(prev => meshes.some(mesh => mesh.id === prev) ? prev : (meshes[0]?.id || ''))
+            setMeshLoadedMachineId(machineId)
+        } catch (error) {
+            setMeshOptions([])
+            setSelectedMeshId('')
+            setMeshLoadedMachineId(machineId)
+            setMeshError(error instanceof Error ? error.message : 'Could not load meshes')
+        } finally {
+            setMeshLoading(false)
+        }
+    }, [onListMeshes])
+
     useEffect(() => {
         if (!selectedMachine) return
 
         const machineChanged = initializedMachineIdRef.current !== selectedMachine.id
         if (machineChanged) {
             initializedMachineIdRef.current = selectedMachine.id
+            setWorkspaceMode('workspace')
             setWorkspaceChoice(defaultWorkspaceId || workspaceRows[0]?.id || '__home__')
             setCustomWorkspacePath('')
+            setMeshOptions([])
+            setSelectedMeshId('')
+            setMeshLoadedMachineId(null)
+            setMeshError('')
             setActiveKind(getDefaultLaunchKind(selectedMachine))
             setSelectedTarget('')
             setLaunchArgs('')
@@ -208,6 +248,19 @@ export default function DashboardNewSessionDialog({
             return getDefaultLaunchKind(selectedMachine)
         })
     }, [acpProviders.length, cliProviders.length, defaultWorkspaceId, ideTargets.length, selectedMachine, workspaceRows])
+
+    useEffect(() => {
+        if (!selectedMachine || workspaceMode !== 'mesh') return
+        if (meshLoadedMachineId === selectedMachine.id || meshLoading) return
+        void loadMeshes(selectedMachine.id)
+    }, [loadMeshes, meshLoadedMachineId, meshLoading, selectedMachine, workspaceMode])
+
+    useEffect(() => {
+        if (workspaceMode !== 'mesh') return
+        if (activeKind !== 'cli' && cliProviders.length > 0) {
+            setActiveKind('cli')
+        }
+    }, [activeKind, cliProviders.length, workspaceMode])
 
     useEffect(() => {
         if (!activeKind) return
@@ -414,7 +467,21 @@ export default function DashboardNewSessionDialog({
     }, [onSaveWorkspace, resolvedWorkspacePath, selectedMachine])
 
     const handleLaunch = useCallback(async () => {
-        if (!selectedMachine || !activeKind || !selectedTarget) return
+        if (!selectedMachine) return
+        if (workspaceMode === 'mesh') {
+            if (!selectedMeshId || !selectedTarget) return
+            setBusy(true)
+            setMessage('')
+            const result = await onLaunchMeshCoordinator(selectedMachine.id, selectedMeshId, selectedTarget)
+            setBusy(false)
+            if (!result.ok) {
+                setMessage(result.error || 'Could not start mesh coordinator')
+                return
+            }
+            onClose()
+            return
+        }
+        if (!activeKind || !selectedTarget) return
         setBusy(true)
         setMessage('')
         const parsedArgs = launchArgs.trim()
@@ -446,20 +513,27 @@ export default function DashboardNewSessionDialog({
         loadRecentArgs,
         onClose,
         onLaunchIde,
+        onLaunchMeshCoordinator,
         onLaunchProvider,
         resolvedWorkspacePath,
         selectedMachine,
+        selectedMeshId,
         selectedResumeSessionId,
         selectedTarget,
         workspaceChoice,
+        workspaceMode,
     ])
 
-    const primaryActionLabel = activeKind
-        ? getLaunchPrimaryActionLabel(activeKind, activeKind === 'cli' && !!selectedResumeSessionId)
-        : 'Start'
-    const primaryBusyLabel = activeKind
-        ? getLaunchPrimaryBusyLabel(activeKind, activeKind === 'cli' && !!selectedResumeSessionId)
-        : 'Starting…'
+    const primaryActionLabel = workspaceMode === 'mesh'
+        ? 'Start mesh coordinator'
+        : activeKind
+            ? getLaunchPrimaryActionLabel(activeKind, activeKind === 'cli' && !!selectedResumeSessionId)
+            : 'Start'
+    const primaryBusyLabel = workspaceMode === 'mesh'
+        ? 'Starting coordinator…'
+        : activeKind
+            ? getLaunchPrimaryBusyLabel(activeKind, activeKind === 'cli' && !!selectedResumeSessionId)
+            : 'Starting…'
     const useMachineDropdown = sortedMachines.length > 5
 
     if (!selectedMachine) {
@@ -537,8 +611,8 @@ export default function DashboardNewSessionDialog({
 
                         <LaunchSectionCard
                             title="Workspace"
-                            description="Saved workspace is preferred. Home and custom folders are still available."
-                            action={(
+                            description="Start from a normal workspace, or select a repo mesh and run a mesh coordinator."
+                            action={workspaceMode === 'workspace' ? (
                                 <button
                                     type="button"
                                     className="btn btn-secondary btn-sm"
@@ -547,54 +621,128 @@ export default function DashboardNewSessionDialog({
                                 >
                                     Browse…
                                 </button>
-                            )}
+                            ) : undefined}
                         >
-                            <select
-                                value={workspaceChoice}
-                                onChange={(event) => {
-                                    const next = event.target.value
-                                    setWorkspaceChoice(next)
-                                    if (next === '__custom__') {
-                                        openBrowseDialog()
-                                    } else {
-                                        setMessage('')
-                                    }
-                                }}
-                                className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
-                                disabled={busy}
-                            >
-                                <option value="__home__">Home directory</option>
-                                {workspaceRows.map(workspace => (
-                                    <option key={workspace.id} value={workspace.id}>
-                                        {workspace.id === defaultWorkspaceId ? '⭐ ' : ''}{getWorkspaceDisplayLabel(workspace.path, workspace.label) || workspace.path}
-                                    </option>
-                                ))}
-                                <option value="__custom__">Custom folder…</option>
-                            </select>
-                            <div className="mt-2 text-[11px] text-text-muted break-all">
-                                {workspaceChoice === '__home__'
-                                    ? 'Launch without a workspace.'
-                                    : resolvedWorkspacePath || 'Select a workspace folder.'}
-                            </div>
-                            {workspaceChoice === '__custom__' && resolvedWorkspacePath && (
-                                <div className="mt-3 flex flex-wrap gap-2">
+                            <div className="mb-3 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Launch target type">
+                                {([
+                                    { id: 'workspace', label: 'Workspace', desc: 'Normal session' },
+                                    { id: 'mesh', label: 'Mesh', desc: 'Coordinator session' },
+                                ] as const).map(option => (
                                     <button
+                                        key={option.id}
                                         type="button"
-                                        className="btn btn-secondary btn-sm"
-                                        onClick={openBrowseDialog}
+                                        role="radio"
+                                        aria-checked={workspaceMode === option.id}
+                                        className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${workspaceMode === option.id ? 'border-accent bg-accent/10 text-text-primary' : 'border-border-subtle bg-bg-secondary/40 text-text-secondary hover:bg-bg-secondary/70 hover:text-text-primary'}`}
+                                        onClick={() => {
+                                            setWorkspaceMode(option.id)
+                                            setMessage('')
+                                            if (option.id === 'mesh' && selectedMachine && meshLoadedMachineId !== selectedMachine.id && !meshLoading) {
+                                                void loadMeshes(selectedMachine.id)
+                                            }
+                                        }}
                                         disabled={busy}
                                     >
-                                        <IconFolder size={14} />
-                                        Select folder
+                                        <div className="text-sm font-semibold">{option.label}</div>
+                                        <div className="mt-0.5 text-[11px] opacity-80">{option.desc}</div>
                                     </button>
-                                    <button
-                                        type="button"
-                                        className="btn btn-secondary btn-sm"
-                                        onClick={handleSaveCurrentWorkspace}
-                                        disabled={busy || savingWorkspace}
+                                ))}
+                            </div>
+
+                            {workspaceMode === 'workspace' ? (
+                                <>
+                                    <select
+                                        value={workspaceChoice}
+                                        onChange={(event) => {
+                                            const next = event.target.value
+                                            setWorkspaceChoice(next)
+                                            if (next === '__custom__') {
+                                                openBrowseDialog()
+                                            } else {
+                                                setMessage('')
+                                            }
+                                        }}
+                                        className="w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2.5 text-sm"
+                                        disabled={busy}
                                     >
-                                        {savingWorkspace ? 'Saving…' : 'Save workspace'}
-                                    </button>
+                                        <option value="__home__">Home directory</option>
+                                        {workspaceRows.map(workspace => (
+                                            <option key={workspace.id} value={workspace.id}>
+                                                {workspace.id === defaultWorkspaceId ? '⭐ ' : ''}{getWorkspaceDisplayLabel(workspace.path, workspace.label) || workspace.path}
+                                            </option>
+                                        ))}
+                                        <option value="__custom__">Custom folder…</option>
+                                    </select>
+                                    <div className="mt-2 text-[11px] text-text-muted break-all">
+                                        {workspaceChoice === '__home__'
+                                            ? 'Launch without a workspace.'
+                                            : resolvedWorkspacePath || 'Select a workspace folder.'}
+                                    </div>
+                                    {workspaceChoice === '__custom__' && resolvedWorkspacePath && (
+                                        <div className="mt-3 flex flex-wrap gap-2">
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary btn-sm"
+                                                onClick={openBrowseDialog}
+                                                disabled={busy}
+                                            >
+                                                <IconFolder size={14} />
+                                                Select folder
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary btn-sm"
+                                                onClick={handleSaveCurrentWorkspace}
+                                                disabled={busy || savingWorkspace}
+                                            >
+                                                {savingWorkspace ? 'Saving…' : 'Save workspace'}
+                                            </button>
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                <div className="space-y-3">
+                                    {meshLoading && (
+                                        <div className="text-sm text-text-muted">Loading meshes…</div>
+                                    )}
+                                    {!meshLoading && meshError && (
+                                        <div className="rounded-lg border border-status-error/25 bg-status-error/10 px-3 py-2 text-sm text-status-error">
+                                            {meshError}
+                                        </div>
+                                    )}
+                                    {!meshLoading && !meshError && meshOptions.length === 0 && (
+                                        <div className="rounded-lg border border-border-subtle bg-bg-secondary/40 px-3 py-2 text-sm text-text-muted">
+                                            No repo meshes are configured on this machine. Create or sync a mesh first, then reopen this picker.
+                                        </div>
+                                    )}
+                                    {meshOptions.length > 0 && (
+                                        <div className="grid grid-cols-1 gap-2" role="radiogroup" aria-label="Mesh">
+                                            {meshOptions.map(mesh => (
+                                                <button
+                                                    key={mesh.id}
+                                                    type="button"
+                                                    role="radio"
+                                                    aria-checked={selectedMeshId === mesh.id}
+                                                    className={`w-full rounded-xl border px-3.5 py-3 text-left transition-colors ${selectedMeshId === mesh.id ? 'border-accent bg-accent/10' : 'border-border-subtle bg-bg-secondary/40 hover:bg-bg-secondary/70'}`}
+                                                    onClick={() => setSelectedMeshId(mesh.id)}
+                                                    disabled={busy}
+                                                >
+                                                    <div className="text-sm font-semibold text-text-primary">{mesh.name}</div>
+                                                    <div className="mt-1 text-xs text-text-secondary">
+                                                        {mesh.repoIdentity || 'Repo mesh'}{typeof mesh.nodesCount === 'number' ? ` · ${mesh.nodesCount} node${mesh.nodesCount === 1 ? '' : 's'}` : ''}
+                                                    </div>
+                                                    {mesh.workspace && (
+                                                        <div className="mt-1 text-[11px] text-text-muted break-all">Coordinator workspace: {mesh.workspace}</div>
+                                                    )}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                    {selectedMesh && (
+                                        <div className="text-[11px] text-text-muted">
+                                            Mesh coordinators use the selected CLI provider and the mesh's configured coordinator workspace.
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </LaunchSectionCard>
@@ -606,17 +754,20 @@ export default function DashboardNewSessionDialog({
                                     { id: 'cli', label: 'CLI', enabled: cliProviders.length > 0 },
                                     { id: 'ide', label: 'IDE', enabled: ideTargets.length > 0 },
                                     { id: 'acp', label: 'ACP', enabled: acpProviders.length > 0 },
-                                ] as const).map(kind => (
+                                ] as const).map(kind => {
+                                    const enabled = kind.enabled && (workspaceMode !== 'mesh' || kind.id === 'cli')
+                                    return (
                                     <button
                                         key={kind.id}
                                         type="button"
                                         className={`btn btn-sm ${activeKind === kind.id ? 'btn-primary' : 'btn-secondary'}`}
                                         onClick={() => setActiveKind(kind.id)}
-                                        disabled={!kind.enabled || busy}
+                                        disabled={!enabled || busy}
                                     >
                                         {kind.label}
                                     </button>
-                                ))}
+                                    )
+                                })}
                             </div>
                         </div>
 
@@ -645,7 +796,7 @@ export default function DashboardNewSessionDialog({
                             </div>
                         </div>
 
-                        {activeKind !== 'ide' && (
+                        {workspaceMode !== 'mesh' && activeKind !== 'ide' && (
                             <LaunchSectionCard title="Startup arguments">
                                 <input
                                     type="text"
@@ -674,7 +825,7 @@ export default function DashboardNewSessionDialog({
                             </LaunchSectionCard>
                         )}
 
-                        {activeKind === 'cli' && (
+                        {workspaceMode !== 'mesh' && activeKind === 'cli' && (
                             <SavedHistoryLaunchSection
                                 busy={busy}
                                 savedSessionsLoading={savedSessionsLoading}
@@ -718,7 +869,10 @@ export default function DashboardNewSessionDialog({
                             type="button"
                             className="btn btn-primary h-9 px-4 text-sm font-semibold inline-flex items-center gap-2"
                             onClick={handleLaunch}
-                            disabled={busy || !activeKind || !selectedTarget || (workspaceChoice === '__custom__' && !resolvedWorkspacePath)}
+                            disabled={busy
+                                || (workspaceMode === 'mesh'
+                                    ? (!selectedMeshId || !selectedTarget || activeKind !== 'cli' || meshLoading)
+                                    : (!activeKind || !selectedTarget || (workspaceChoice === '__custom__' && !resolvedWorkspacePath)))}
                         >
                             <IconPlay size={14} />
                             {busy ? primaryBusyLabel : primaryActionLabel}

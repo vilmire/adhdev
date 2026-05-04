@@ -19,14 +19,12 @@ interface RecentSendAttempt {
 export function shouldBlockConversationSend({
     hasMessage,
     blockedMessage,
-    sendInFlight,
 }: {
     hasMessage: boolean
     blockedMessage: string | null
     sendInFlight?: boolean
 }): boolean {
     if (!hasMessage) return true
-    if (sendInFlight) return true
     return !!blockedMessage
 }
 

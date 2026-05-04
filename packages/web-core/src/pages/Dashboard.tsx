@@ -328,6 +328,8 @@ export default function Dashboard() {
         handleSaveMachineWorkspace,
         handleLaunchMachineIde,
         handleLaunchMachineProvider,
+        handleListMachineMeshes,
+        handleLaunchMeshCoordinator,
         handleListMachineSavedSessions,
         setActiveCliViewMode,
     } = useDashboardCommandActions({
@@ -495,6 +497,8 @@ export default function Dashboard() {
                 onSaveMachineWorkspace={handleSaveMachineWorkspace}
                 onLaunchMachineIde={handleLaunchMachineIde}
                 onLaunchMachineProvider={handleLaunchMachineProvider}
+                onListMachineMeshes={handleListMachineMeshes}
+                onLaunchMeshCoordinator={handleLaunchMeshCoordinator}
                 onListMachineSavedSessions={handleListMachineSavedSessions}
                 notifications={notifications}
                 notificationUnreadCount={notificationUnreadCount}

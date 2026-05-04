@@ -31,6 +31,15 @@ interface LaunchProviderOptions {
   initialModel?: string | null
 }
 
+export interface MeshLaunchOption {
+  id: string
+  name: string
+  repoIdentity?: string | null
+  workspace?: string | null
+  nodesCount?: number
+  status?: string | null
+}
+
 interface UseDashboardCommandActionsOptions {
   sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
   trackPendingLaunch: (launch: DashboardLaunchTracker) => void
@@ -137,6 +146,74 @@ export function useDashboardCommandActions({
     }
   }, [onOpenSession, sendDaemonCommand, trackPendingLaunch])
 
+  const handleListMachineMeshes = useCallback(async (machineId: string): Promise<MeshLaunchOption[]> => {
+    if (!machineId) return []
+    try {
+      const raw: any = await sendDaemonCommand(machineId, 'list_meshes', {})
+      const result = raw?.result ?? raw
+      if (result?.success === false) throw new Error(result?.error || 'Could not load meshes')
+      const meshes = Array.isArray(result?.meshes)
+        ? result.meshes
+        : Array.isArray(result?.result?.meshes)
+          ? result.result.meshes
+          : []
+      return meshes.map((mesh: any) => ({
+        id: String(mesh?.id || ''),
+        name: String(mesh?.name || mesh?.id || 'Untitled mesh'),
+        repoIdentity: mesh?.repoIdentity || mesh?.repo_identity || null,
+        workspace: Array.isArray(mesh?.nodes) && mesh.nodes.length > 0 ? String(mesh.nodes[0]?.workspace || '') : null,
+        nodesCount: Array.isArray(mesh?.nodes) ? mesh.nodes.length : undefined,
+        status: mesh?.status || null,
+      })).filter((mesh: MeshLaunchOption) => mesh.id)
+    } catch (error) {
+      console.error('List meshes failed', error)
+      throw error
+    }
+  }, [sendDaemonCommand])
+
+  const handleLaunchMeshCoordinator = useCallback(async (
+    machineId: string,
+    meshId: string,
+    cliType: string,
+  ): Promise<LaunchResult> => {
+    if (!meshId.trim()) return { ok: false, error: 'Choose a mesh first.' }
+    const startedAt = Date.now()
+    try {
+      const raw: any = await sendDaemonCommand(machineId, 'launch_mesh_coordinator', {
+        meshId: meshId.trim(),
+        cliType: cliType.trim() || 'claude-cli',
+      })
+      const result = raw?.result ?? raw
+      if (result?.success === false || raw?.success === false) {
+        return { ok: false, error: result?.error || raw?.error || 'Could not launch mesh coordinator' }
+      }
+      const launchedSessionId = result?.sessionId || result?.id
+      if (launchedSessionId) {
+        onOpenSession(launchedSessionId)
+      } else {
+        trackPendingLaunch({
+          machineId,
+          kind: 'cli',
+          providerType: cliType,
+          workspacePath: result?.workspace || null,
+          startedAt,
+        })
+      }
+      return { ok: true }
+    } catch (error) {
+      if (isP2PLaunchTimeout(error)) {
+        trackPendingLaunch({
+          machineId,
+          kind: 'cli',
+          providerType: cliType,
+          startedAt,
+        })
+        return { ok: true }
+      }
+      return { ok: false, error: error instanceof Error ? error.message : 'Could not launch mesh coordinator' }
+    }
+  }, [onOpenSession, sendDaemonCommand, trackPendingLaunch])
+
   const handleListMachineSavedSessions = useCallback(async (
     machineId: string,
     providerType: string,
@@ -171,6 +248,8 @@ export function useDashboardCommandActions({
     handleSaveMachineWorkspace,
     handleLaunchMachineIde,
     handleLaunchMachineProvider,
+    handleListMachineMeshes,
+    handleLaunchMeshCoordinator,
     handleListMachineSavedSessions,
     setActiveCliViewMode,
   }

@@ -41,6 +41,8 @@ function renderDialog(machines: DaemonData[] = [createMachine()]) {
       onSaveWorkspace: async () => ({ ok: true }),
       onLaunchIde: async () => ({ ok: true }),
       onLaunchProvider: async () => ({ ok: true }),
+      onListMeshes: async () => [],
+      onLaunchMeshCoordinator: async () => ({ ok: true }),
       onListSavedSessions: async () => [],
     }),
   )
@@ -52,6 +54,16 @@ describe('DashboardNewSessionDialog', () => {
 
     expect(html).not.toContain('Recover hosted runtime')
     expect(html).not.toContain('Hosted runtimes')
+  })
+
+  it('offers workspace and mesh launch target choices in the workspace step', () => {
+    const html = renderDialog()
+
+    expect(html).toContain('role="radiogroup" aria-label="Launch target type"')
+    expect(html).toContain('Workspace')
+    expect(html).toContain('Mesh')
+    expect(html).toContain('Coordinator session')
+    expect(html).toContain('Start from a normal workspace, or select a repo mesh and run a mesh coordinator.')
   })
 
   it('shows machines as direct-click chips when there are five or fewer machines', () => {
