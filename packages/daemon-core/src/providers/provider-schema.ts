@@ -7,6 +7,8 @@ const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'type',
   'name',
   'category',
+  'transcriptAuthority',
+  'transcriptContext',
   'aliases',
   'cdpPorts',
   'targetFilter',

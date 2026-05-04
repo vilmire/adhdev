@@ -214,6 +214,23 @@ describe('validateProviderDefinition', () => {
     expect(result.errors).toContain('canonicalHistory.scripts.listSessions must be a non-empty string')
   })
 
+  it('accepts provider-owned transcript manifest fields without unknown field warnings', () => {
+    const result = validateProviderDefinition({
+      type: 'hermes-cli',
+      name: 'Hermes CLI',
+      category: 'cli',
+      spawn: { command: 'hermes' },
+      capabilities: baseCapabilities,
+      contractVersion: 2,
+      transcriptAuthority: 'provider',
+      transcriptContext: 'tail',
+    })
+
+    expect(result.errors).toEqual([])
+    expect(result.warnings).not.toContain('Unknown provider field: transcriptAuthority')
+    expect(result.warnings).not.toContain('Unknown provider field: transcriptContext')
+  })
+
   it('accepts mesh coordinator auto-import MCP metadata without unknown field warnings', () => {
     const result = validateProviderDefinition({
       type: 'claude-cli',

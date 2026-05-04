@@ -384,6 +384,10 @@ export interface ProviderModule {
   name: string;
  /** Category: determines execution method */
   category: ProviderCategory;
+ /** When provider-owned, daemon treats provider parser output as canonical transcript authority. */
+  transcriptAuthority?: 'provider' | 'daemon';
+ /** Full context lets provider-owned parsers canonicalize retained history instead of daemon prefix stitching. */
+  transcriptContext?: 'full' | 'tail';
  /** Alias list — allows users to invoke by alternate names (e.g. ['claude', 'claude-code']) */
   aliases?: string[];
 
