@@ -1019,7 +1019,25 @@ export class DaemonCommandRouter {
                     if (!mesh) return { success: false, error: 'Mesh not found' };
                     if (!Array.isArray(mesh.nodes) || mesh.nodes.length === 0) return { success: false, error: 'No nodes in mesh' };
 
-                    const workspace = mesh.nodes[0].workspace;
+                    const requestedCoordinatorNodeId = typeof args?.coordinatorNodeId === 'string'
+                        ? args.coordinatorNodeId.trim()
+                        : '';
+                    const preferredCoordinatorNodeId = requestedCoordinatorNodeId
+                        || (typeof mesh.coordinator?.preferredNodeId === 'string' ? mesh.coordinator.preferredNodeId.trim() : '');
+                    const coordinatorNode = preferredCoordinatorNodeId
+                        ? mesh.nodes.find((node: any) => node?.id === preferredCoordinatorNodeId || node?.nodeId === preferredCoordinatorNodeId)
+                        : mesh.nodes[0];
+                    if (!coordinatorNode) {
+                        return {
+                            success: false,
+                            code: 'mesh_coordinator_node_not_found',
+                            error: `Coordinator node ${preferredCoordinatorNodeId} was not found in mesh`,
+                            meshId,
+                            cliType,
+                        };
+                    }
+                    const workspace = typeof coordinatorNode.workspace === 'string' ? coordinatorNode.workspace.trim() : '';
+                    if (!workspace) return { success: false, error: 'Coordinator node workspace required', meshId, cliType };
                     const providerMeta = this.deps.providerLoader.resolve?.(cliType) || this.deps.providerLoader.getMeta(cliType);
                     const coordinatorSetup = resolveMeshCoordinatorSetup({
                         provider: providerMeta,
