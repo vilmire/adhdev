@@ -252,7 +252,7 @@ export async function meshLaunchSession(
 
     if (isLocalTransport(ctx.transport)) {
         const result = await ctx.transport.command('launch_cli', {
-            type: args.type,
+            cliType: args.type,
             dir: node.workspace,
         });
         return JSON.stringify(result, null, 2);
