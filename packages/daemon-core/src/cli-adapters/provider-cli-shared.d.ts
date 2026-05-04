@@ -20,7 +20,6 @@ export interface CliSessionStatus {
     errorReason?: string;
 }
 export interface CliScripts {
-    parseOutput?: (input: CliScriptInput) => any;
     detectStatus?: (input: CliStatusInput) => string | null;
     parseApproval?: (input: CliApprovalInput) => {
         message: string;

@@ -18,8 +18,7 @@ import { LOG, getRecentLogs } from '../logging/logger.js';
 import { getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
 import { buildChatMessageSignature } from '../chat/chat-signatures.js';
 import type { ChatMessage } from '../types.js';
-import type { ReadChatCursor, ReadChatSyncMode, SessionTransport } from '../shared-types.js';
-import { normalizeChatMessages } from '../providers/chat-message-normalization.js';
+import type { SessionTransport } from '../shared-types.js';
 
 const RECENT_SEND_WINDOW_MS = 1200;
 export const READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS = 25_000;
@@ -168,137 +167,16 @@ function getChatMessageSignature(message: ChatMessage | null | undefined): strin
     return buildChatMessageSignature(message);
 }
 
-function normalizeReadChatCursor(args: any): Required<ReadChatCursor> {
-    const knownMessageCount = Math.max(0, Number(args?.knownMessageCount || 0));
-    const lastMessageSignature = typeof args?.lastMessageSignature === 'string'
-        ? args.lastMessageSignature
-        : '';
-    const tailLimit = Math.max(0, Number(args?.tailLimit || 0));
-    return { knownMessageCount, lastMessageSignature, tailLimit };
+function normalizeReadChatTailLimit(args: any): number {
+    const value = Number(args?.tailLimit || 0);
+    return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
 function normalizeReadChatMessages(payload: Record<string, any>): ChatMessage[] {
     const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
-    return normalizeChatMessages(messages);
+    return messages;
 }
 
-interface ReadChatReplayCollapseInfo {
-    role: string;
-    kind: string;
-    senderName: string;
-    content: string;
-    signature: string;
-    collapsible: boolean;
-}
-
-function normalizeReadChatReplayTextContent(content: ChatMessage['content'] | undefined): string {
-    return flattenContent(content || '').replace(/\s+/g, ' ').trim();
-}
-
-function getReadChatReplayCollapseInfo(message: ChatMessage | null | undefined): ReadChatReplayCollapseInfo | null {
-    if (!message) return null;
-    const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
-    const kind = typeof message.kind === 'string' ? message.kind.trim().toLowerCase() : 'standard';
-    const senderName = typeof message.senderName === 'string' ? message.senderName.trim().toLowerCase() : '';
-    const collapsible = role === 'assistant' || role === 'system';
-    if (!collapsible) return { role, kind, senderName, content: '', signature: '', collapsible };
-    const content = normalizeReadChatReplayTextContent(message.content);
-    return {
-        role,
-        kind,
-        senderName,
-        content,
-        signature: `${role}:${kind}:${senderName}:${content}`,
-        collapsible,
-    };
-}
-
-function isStableReadChatAssistantAnswerInfo(info: ReadChatReplayCollapseInfo | null): boolean {
-    if (!info) return false;
-    if (info.role !== 'assistant') return false;
-    if (info.kind && info.kind !== 'standard') return false;
-    if (info.content.length < 160) return false;
-
-    // A provider may surface expanded command output as a standard assistant bubble
-    // (for example Claude Code's "Bash command ..." block). That is live work output,
-    // not a stable final answer. Treating it as a terminal answer would hide the
-    // real final response and violate read_chat fidelity.
-    if (/^(bash|shell|terminal) command\b/i.test(info.content)) return false;
-    return true;
-}
-
-function isReplayedAssistantAnswerAfterStableAnswerInfo(
-    info: ReadChatReplayCollapseInfo | null,
-    stableContent: string,
-): boolean {
-    if (!info || !stableContent) return false;
-    if (info.role !== 'assistant') return false;
-    if (info.kind && info.kind !== 'standard') return false;
-    const content = info.content;
-    if (content.length < 80 || stableContent.length < 80) return false;
-    return content === stableContent || content.startsWith(stableContent) || stableContent.startsWith(content);
-}
-
-export function collapseReplayDuplicatesFromReadChat(messages: ChatMessage[]): ChatMessage[] {
-    const collapsed: ChatMessage[] = [];
-    const replaySignaturesInCurrentTurn = new Set<string>();
-    let stableAssistantAnswerContentInCurrentTurn = '';
-    let stableAssistantAnswerCollapsedIndex = -1;
-    let stableAssistantAnswerHadInterveningActivity = false;
-    let previousReplaySignature = '';
-
-    for (const message of messages) {
-        const info = getReadChatReplayCollapseInfo(message);
-        if (info?.role === 'user') {
-            replaySignaturesInCurrentTurn.clear();
-            stableAssistantAnswerContentInCurrentTurn = '';
-            stableAssistantAnswerCollapsedIndex = -1;
-            stableAssistantAnswerHadInterveningActivity = false;
-            previousReplaySignature = '';
-        }
-
-        if (info?.collapsible && info.signature) {
-            if (previousReplaySignature === info.signature) continue;
-            if (replaySignaturesInCurrentTurn.has(info.signature)) continue;
-            if (isReplayedAssistantAnswerAfterStableAnswerInfo(info, stableAssistantAnswerContentInCurrentTurn)) {
-                const isAdjacentFullerAssistantAnswer =
-                    info.role === 'assistant'
-                    && (!info.kind || info.kind === 'standard')
-                    && stableAssistantAnswerCollapsedIndex >= 0
-                    && stableAssistantAnswerCollapsedIndex === collapsed.length - 1
-                    && !stableAssistantAnswerHadInterveningActivity
-                    && info.content.length > stableAssistantAnswerContentInCurrentTurn.length
-                    && info.content.startsWith(stableAssistantAnswerContentInCurrentTurn);
-                if (isAdjacentFullerAssistantAnswer) {
-                    collapsed[stableAssistantAnswerCollapsedIndex] = message;
-                    replaySignaturesInCurrentTurn.add(info.signature);
-                    stableAssistantAnswerContentInCurrentTurn = info.content;
-                    previousReplaySignature = info.signature;
-                }
-                continue;
-            }
-        }
-
-        collapsed.push(message);
-        previousReplaySignature = info?.collapsible ? info.signature : '';
-        if (info?.collapsible && info.signature) {
-            replaySignaturesInCurrentTurn.add(info.signature);
-        }
-        if (isStableReadChatAssistantAnswerInfo(info)) {
-            stableAssistantAnswerContentInCurrentTurn = info?.content || '';
-            stableAssistantAnswerCollapsedIndex = collapsed.length - 1;
-            stableAssistantAnswerHadInterveningActivity = false;
-        } else if (
-            stableAssistantAnswerContentInCurrentTurn
-            && info?.role === 'assistant'
-            && (!info.kind || info.kind !== 'standard')
-        ) {
-            stableAssistantAnswerHadInterveningActivity = true;
-        }
-    }
-
-    return collapsed;
-}
 
 function deriveHistoryDedupKey(message: ChatMessage & { _unitKey?: string; _turnKey?: string }): string | undefined {
     const unitKey = typeof message._unitKey === 'string' ? message._unitKey.trim() : '';
@@ -334,153 +212,15 @@ function toHistoryPersistedMessages(messages: ChatMessage[]): Array<{
     }));
 }
 
-function findLastMessageIndexBySignature(messages: ChatMessage[], signature: string): number {
-    if (!signature) return -1;
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-        if (getChatMessageSignature(messages[index]) === signature) {
-            return index;
-        }
-    }
-    return -1;
-}
-
-function isReadChatConversationAnchorMessage(message: ChatMessage | null | undefined): boolean {
-    if (!message) return false;
-    const role = String(message.role || '').trim().toLowerCase();
-    if (role !== 'user' && role !== 'assistant') return false;
-    const kind = String(message.kind || 'standard').trim().toLowerCase();
-    return !kind || kind === 'standard';
-}
-
-function buildVisibleReadChatTailMessages(messages: ChatMessage[], tailLimit: number): ChatMessage[] {
-    const totalMessages = messages.length;
-    if (tailLimit <= 0 || totalMessages <= tailLimit) return messages;
-
-    const tailMessages = messages.slice(-tailLimit);
-    if (tailMessages.some(isReadChatConversationAnchorMessage)) return tailMessages;
-
-    const hiddenMessages = messages.slice(0, totalMessages - tailLimit);
-    const anchors: ChatMessage[] = [];
-    const seenRoles = new Set<string>();
-    for (let index = hiddenMessages.length - 1; index >= 0 && anchors.length < 2; index -= 1) {
-        const message = hiddenMessages[index];
-        if (!isReadChatConversationAnchorMessage(message)) continue;
-        const role = String(message.role || '').trim().toLowerCase();
-        if (seenRoles.has(role)) continue;
-        seenRoles.add(role);
-        anchors.unshift(message);
-    }
-
-    return anchors.length > 0 ? [...anchors, ...tailMessages] : tailMessages;
-}
-
-function buildBoundedTailSync(messages: ChatMessage[], cursor: Required<ReadChatCursor>): {
-    syncMode: ReadChatSyncMode;
-    replaceFrom: number;
+function buildFullTail(messages: ChatMessage[], tailLimit: number): {
     messages: ChatMessage[];
     totalMessages: number;
-    lastMessageSignature: string;
 } {
     const totalMessages = messages.length;
-    const tailMessages = buildVisibleReadChatTailMessages(messages, cursor.tailLimit);
+    const tailMessages = tailLimit > 0 ? messages.slice(-tailLimit) : messages;
     return {
-        syncMode: 'full',
-        replaceFrom: 0,
         messages: tailMessages,
         totalMessages,
-        lastMessageSignature: getChatMessageSignature(messages[totalMessages - 1]),
-    };
-}
-
-function computeReadChatSync(messages: ChatMessage[], cursor: Required<ReadChatCursor>): {
-    syncMode: ReadChatSyncMode;
-    replaceFrom: number;
-    messages: ChatMessage[];
-    totalMessages: number;
-    lastMessageSignature: string;
-} {
-    const totalMessages = messages.length;
-    const lastMessageSignature = getChatMessageSignature(messages[totalMessages - 1]);
-    const { knownMessageCount, lastMessageSignature: knownSignature } = cursor;
-
-    if (!knownMessageCount || !knownSignature) {
-        return {
-            syncMode: 'full',
-            replaceFrom: 0,
-            messages,
-            totalMessages,
-            lastMessageSignature,
-        };
-    }
-
-    if (knownMessageCount > totalMessages) {
-        return {
-            syncMode: 'full',
-            replaceFrom: 0,
-            messages,
-            totalMessages,
-            lastMessageSignature,
-        };
-    }
-
-    if (knownMessageCount === totalMessages && knownSignature === lastMessageSignature) {
-        return {
-            syncMode: 'noop',
-            replaceFrom: totalMessages,
-            messages: [],
-            totalMessages,
-            lastMessageSignature,
-        };
-    }
-
-    if (cursor.tailLimit > 0 && knownSignature === lastMessageSignature) {
-        const requestedTailCount = Math.min(totalMessages, cursor.tailLimit);
-        if (knownMessageCount >= requestedTailCount) {
-            return {
-                syncMode: 'noop',
-                replaceFrom: totalMessages,
-                messages: [],
-                totalMessages,
-                lastMessageSignature,
-            };
-        }
-        return buildBoundedTailSync(messages, cursor);
-    }
-
-    if (knownMessageCount < totalMessages) {
-        const anchorSignature = getChatMessageSignature(messages[knownMessageCount - 1]);
-        if (anchorSignature === knownSignature) {
-            return {
-                syncMode: 'append',
-                replaceFrom: knownMessageCount,
-                messages: messages.slice(knownMessageCount),
-                totalMessages,
-                lastMessageSignature,
-            };
-        }
-
-        if (cursor.tailLimit > 0) {
-            const signatureIndex = findLastMessageIndexBySignature(messages, knownSignature);
-            if (signatureIndex >= 0) {
-                return {
-                    syncMode: 'append',
-                    replaceFrom: knownMessageCount,
-                    messages: messages.slice(signatureIndex + 1),
-                    totalMessages,
-                    lastMessageSignature,
-                };
-            }
-            return buildBoundedTailSync(messages, cursor);
-        }
-    }
-
-    const replaceFrom = Math.max(0, Math.min(knownMessageCount - 1, totalMessages));
-    return {
-        syncMode: replaceFrom === 0 ? 'full' : 'replace_tail',
-        replaceFrom,
-        messages: replaceFrom === 0 ? messages : messages.slice(replaceFrom),
-        totalMessages,
-        lastMessageSignature,
     };
 }
 
@@ -520,31 +260,13 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any): Co
     } catch (error: any) {
         return { success: false, error: error?.message || String(error) };
     }
-    const messages = collapseReplayDuplicatesFromReadChat(normalizeReadChatMessages(validatedPayload));
-    const cursor = normalizeReadChatCursor(args);
-    if (!cursor.knownMessageCount && !cursor.lastMessageSignature && cursor.tailLimit > 0 && messages.length > cursor.tailLimit) {
-        const tailMessages = buildVisibleReadChatTailMessages(messages, cursor.tailLimit);
-        const lastMessageSignature = getChatMessageSignature(messages[messages.length - 1]);
-        return {
-            success: true,
-            ...validatedPayload,
-            messages: tailMessages,
-            syncMode: 'full',
-            replaceFrom: 0,
-            totalMessages: messages.length,
-            lastMessageSignature,
-            ...(debugReadChat ? { debugReadChat } : {}),
-        };
-    }
-    const sync = computeReadChatSync(messages, cursor);
+    const messages = normalizeReadChatMessages(validatedPayload);
+    const sync = buildFullTail(messages, normalizeReadChatTailLimit(args));
     return {
         success: true,
         ...validatedPayload,
         messages: sync.messages,
-        syncMode: sync.syncMode,
-        replaceFrom: sync.replaceFrom,
         totalMessages: sync.totalMessages,
-        lastMessageSignature: sync.lastMessageSignature,
         ...(debugReadChat ? { debugReadChat } : {}),
     };
 }
@@ -804,10 +526,6 @@ export async function handleGetChatDebugBundle(h: CommandHelpers, args: any): Pr
                 status: readResult.status,
                 title: readResult.title,
                 totalMessages: readResult.totalMessages,
-                returnedMessages: Array.isArray(readResult.messages) ? readResult.messages.length : undefined,
-                syncMode: readResult.syncMode,
-                replaceFrom: readResult.replaceFrom,
-                lastMessageSignature: readResult.lastMessageSignature,
                 providerSessionId: readResult.providerSessionId,
                 transcriptAuthority: readResult.transcriptAuthority,
                 coverage: readResult.coverage,
@@ -931,25 +649,13 @@ function toNonNegativeNumber(value: any): number {
 }
 
 function getCliVisibleTranscriptCount(adapter: any): number {
-    const adapterStatus = adapter?.getStatus?.() || {};
-    const adapterMessages = Array.isArray(adapterStatus.messages) ? adapterStatus.messages : [];
-    let parsedRecord: Record<string, any> | null = null;
-    if (typeof adapter?.getScriptParsedStatus === 'function') {
-        try {
-            const parsed = parseMaybeJson(adapter.getScriptParsedStatus());
-            parsedRecord = parsed && typeof parsed === 'object' ? parsed as Record<string, any> : null;
-        } catch {
-            parsedRecord = null;
-        }
+    if (typeof adapter?.getScriptParsedStatus !== 'function') return 0;
+    try {
+        const parsed = parseMaybeJson(adapter.getScriptParsedStatus());
+        return Array.isArray(parsed?.messages) ? parsed.messages.length : 0;
+    } catch {
+        return 0;
     }
-    const parsedMessages = Array.isArray(parsedRecord?.messages) ? parsedRecord.messages : [];
-    if (!parsedRecord) return adapterMessages.length;
-    const parsedIsProviderAuthoritative = parsedRecord.transcriptAuthority === 'provider'
-        || parsedRecord.coverage === 'full';
-    const shouldPreferAdapterMessages = !parsedIsProviderAuthoritative
-        && adapterMessages.length > 0
-        && adapterMessages.length > parsedMessages.length;
-    return shouldPreferAdapterMessages ? adapterMessages.length : parsedMessages.length;
 }
 
 async function getStableExtensionBaseline(h: CommandHelpers): Promise<any | null> {
@@ -1022,74 +728,56 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (adapter) {
             _log(`${transport} adapter: ${adapter.cliType}`);
+            if (typeof adapter.getScriptParsedStatus !== 'function') {
+                return { success: false, error: `${transport} adapter parseSession unavailable` };
+            }
             let parsedStatus: any = null;
-            if (typeof adapter.getScriptParsedStatus === 'function') {
-                try {
-                    parsedStatus = parseMaybeJson(adapter.getScriptParsedStatus());
-                } catch (error: any) {
-                    return { success: false, error: error?.message || String(error) };
-                }
+            try {
+                parsedStatus = parseMaybeJson(adapter.getScriptParsedStatus());
+            } catch (error: any) {
+                return { success: false, error: error?.message || String(error) };
             }
             const parsedRecord = parsedStatus && typeof parsedStatus === 'object'
                 ? parsedStatus as Record<string, any>
                 : null;
-            const adapterStatus = adapter.getStatus();
-            const parsedIsProviderAuthoritative = parsedRecord?.transcriptAuthority === 'provider'
-                || parsedRecord?.coverage === 'full';
-            const shouldPreferAdapterMessages =
-                !parsedIsProviderAuthoritative
-                && Array.isArray(adapterStatus.messages)
-                && adapterStatus.messages.length > 0
-                && Array.isArray(parsedRecord?.messages)
-                && adapterStatus.messages.length > parsedRecord.messages.length;
-            const parsedShowsApproval = hasNonEmptyModalButtons(parsedRecord?.activeModal)
-                && parsedRecord?.status === 'waiting_approval';
-            const status = parsedRecord
-                ? {
-                    ...parsedRecord,
-                    messages: shouldPreferAdapterMessages ? adapterStatus.messages : parsedRecord.messages,
-                    status: parsedShowsApproval
-                        ? parsedRecord.status
-                        : (adapterStatus.status !== 'idle'
-                            ? adapterStatus.status
-                            : (parsedRecord.status || adapterStatus.status)),
-                    activeModal: parsedRecord.activeModal || adapterStatus.activeModal,
-                }
-                : adapterStatus;
-
-            const title = typeof parsedRecord?.title === 'string' ? parsedRecord.title : undefined;
-            const providerSessionId = typeof parsedRecord?.providerSessionId === 'string'
+            if (!parsedRecord || !Array.isArray(parsedRecord.messages)) {
+                return { success: false, error: `${transport} parser did not return messages` };
+            }
+            const adapterStatus = typeof adapter.getStatus === 'function'
+                ? adapter.getStatus()
+                : {};
+            const title = typeof parsedRecord.title === 'string' ? parsedRecord.title : undefined;
+            const providerSessionId = typeof parsedRecord.providerSessionId === 'string'
                 ? parsedRecord.providerSessionId
                 : undefined;
-            const transcriptAuthority = parsedRecord?.transcriptAuthority === 'provider' || parsedRecord?.transcriptAuthority === 'daemon'
+            const transcriptAuthority = parsedRecord.transcriptAuthority === 'provider' || parsedRecord.transcriptAuthority === 'daemon'
                 ? parsedRecord.transcriptAuthority
                 : undefined;
-            const coverage = parsedRecord?.coverage === 'full' || parsedRecord?.coverage === 'tail' || parsedRecord?.coverage === 'current-turn'
+            const coverage = parsedRecord.coverage === 'full' || parsedRecord.coverage === 'tail' || parsedRecord.coverage === 'current-turn'
                 ? parsedRecord.coverage
                 : undefined;
-            if (status) {
-                LOG.debug('Command', `[read_chat] cli-like resolved provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord?.status || '')} shouldPreferAdapterMessages=${String(shouldPreferAdapterMessages)} adapterMsgCount=${Array.isArray(adapterStatus.messages) ? adapterStatus.messages.length : 0} parsedMsgCount=${Array.isArray(parsedRecord?.messages) ? parsedRecord.messages.length : 0} returnedMsgCount=${Array.isArray((status as any).messages) ? (status as any).messages.length : 0}`);
-                return buildReadChatCommandResult({
-                    messages: (status as any).messages || [],
-                    status: status.status,
-                    activeModal: status.activeModal,
-                    debugReadChat: {
-                        provider: adapter.cliType,
-                        targetSessionId: String(args?.targetSessionId || ''),
-                        adapterStatus: String(adapterStatus.status || ''),
-                        parsedStatus: String(parsedRecord?.status || ''),
-                        returnedStatus: String(status.status || ''),
-                        shouldPreferAdapterMessages,
-                        adapterMsgCount: Array.isArray(adapterStatus.messages) ? adapterStatus.messages.length : 0,
-                        parsedMsgCount: Array.isArray(parsedRecord?.messages) ? parsedRecord.messages.length : 0,
-                        returnedMsgCount: Array.isArray((status as any).messages) ? (status as any).messages.length : 0,
-                    },
-                    ...(title ? { title } : {}),
-                    ...(providerSessionId ? { providerSessionId } : {}),
-                    ...(transcriptAuthority ? { transcriptAuthority } : {}),
-                    ...(coverage ? { coverage } : {}),
-                }, args);
-            }
+            const activeModal = parsedRecord.activeModal ?? parsedRecord.modal ?? null;
+            const returnedStatus = parsedRecord.status || 'idle';
+            LOG.debug('Command', `[read_chat] cli-like parsed provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord.status || '')} parsedMsgCount=${parsedRecord.messages.length}`);
+            return buildReadChatCommandResult({
+                messages: parsedRecord.messages,
+                status: returnedStatus,
+                activeModal,
+                debugReadChat: {
+                    provider: adapter.cliType,
+                    targetSessionId: String(args?.targetSessionId || ''),
+                    adapterStatus: String(adapterStatus.status || ''),
+                    parsedStatus: String(parsedRecord.status || ''),
+                    returnedStatus: String(returnedStatus || ''),
+                    shouldPreferAdapterMessages: false,
+                    parsedMsgCount: parsedRecord.messages.length,
+                    returnedMsgCount: parsedRecord.messages.length,
+                },
+                ...(title ? { title } : {}),
+                ...(providerSessionId ? { providerSessionId } : {}),
+                ...(transcriptAuthority ? { transcriptAuthority } : {}),
+                ...(coverage ? { coverage } : {}),
+            }, args);
         }
         return { success: false, error: `${transport} adapter not found` };
     }

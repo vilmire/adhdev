@@ -20,15 +20,17 @@ describe('dashboard main view ui-state boundary cleanup', () => {
     expect(mainViewSource).toContain('useDashboardMainViewUiState(')
   })
 
-  it('routes dashboard message surfaces through the shared conversation snapshot authority', () => {
+  it('keeps dashboard message surfaces on daemon conversation state without snapshot overlay aliases', () => {
     const dashboardSource = readSource('pages/Dashboard.tsx')
 
-    expect(dashboardSource).toContain('const messageSnapshotConversations = useMemo(')
-    expect(dashboardSource).toContain('const messageSnapshotVisibleConversations = useMemo(')
-    expect(dashboardSource).toContain('conversations: messageSnapshotConversations,')
-    expect(dashboardSource).toContain('visibleConversations: messageSnapshotVisibleConversations,')
-    expect(dashboardSource).toContain('visibleConversations={messageSnapshotVisibleConversations}')
+    expect(dashboardSource).not.toContain('messageSnapshotConversations')
+    expect(dashboardSource).not.toContain('messageSnapshotVisibleConversations')
+    expect(dashboardSource).toContain('conversations,')
+    expect(dashboardSource).toContain('visibleConversations,')
+    expect(dashboardSource).toContain('visibleConversations={visibleConversations}')
     expect(dashboardSource).toContain('mobileChatConversations={mobileChatConversations}')
+    expect(dashboardSource).not.toContain('applyConversationMessageSnapshots')
+    expect(dashboardSource).not.toContain('warmChatTailSnapshots')
     expect(dashboardSource).not.toContain('inboxPreviewConversations')
     expect(dashboardSource).not.toContain('inboxPreviewVisibleConversations')
   })

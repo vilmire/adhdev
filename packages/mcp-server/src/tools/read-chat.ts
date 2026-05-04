@@ -11,7 +11,7 @@ export const READ_CHAT_TOOL = {
     properties: {
       session_id: {
         type: 'string',
-        description: 'Target session ID (from list_sessions). Omit to use the active session.',
+        description: 'Target session ID (from list_sessions). Pass explicitly in local mode when more than one session exists; omitting requires an active target and may fail.',
       },
       limit: {
         type: 'number',
@@ -36,18 +36,18 @@ export async function readChat(
   if (isLocalTransport(transport)) {
     const result = await transport.command('read_chat', {
       ...(args.session_id ? { targetSessionId: args.session_id } : {}),
-      limit,
+      tailLimit: limit,
     });
-    return formatChatResult(result, args.session_id, args.format);
+    return formatChatResult(result, args.session_id, args.format, limit);
   }
 
   if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
   const targetId = args.session_id ? `${args.daemon_id}:session:${args.session_id}` : args.daemon_id;
   const result = await transport.readChat(targetId, { limit, sessionId: args.session_id });
-  return formatChatResult(result, args.session_id, args.format);
+  return formatChatResult(result, args.session_id, args.format, limit);
 }
 
-function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'json'): string {
+function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'json', limit = 50): string {
   if (!result?.success && result?.error) {
     if (format === 'json') return JSON.stringify({ error: result.error, messages: [] }, null, 2);
     return `Error: ${result.error}`;
@@ -58,7 +58,7 @@ function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'js
   if (format === 'json') {
     return JSON.stringify({
       session_id: sessionId ?? null,
-      messages: messages.slice(-50).map((m: any) => ({
+      messages: messages.slice(-limit).map((m: any) => ({
         role: m.role,
         kind: m.kind ?? null,
         content: typeof m.content === 'string'
@@ -72,7 +72,7 @@ function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'js
   }
 
   if (messages.length === 0) return 'No messages in chat.';
-  const lines = messages.slice(-50).map((m: any) => {
+  const lines = messages.slice(-limit).map((m: any) => {
     const role = m.role === 'user' ? 'User' : m.role === 'assistant' ? 'Agent' : m.role;
     const content = typeof m.content === 'string'
       ? m.content

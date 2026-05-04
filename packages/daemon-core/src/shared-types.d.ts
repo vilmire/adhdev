@@ -36,10 +36,7 @@ export interface AgentSessionStream {
         buttons: string[];
     } | null;
 }
-export type ReadChatSyncMode = 'full' | 'append' | 'replace_tail' | 'noop';
 export interface ReadChatCursor {
-    knownMessageCount?: number;
-    lastMessageSignature?: string;
     tailLimit?: number;
 }
 export interface ReadChatSyncResult {
@@ -50,10 +47,6 @@ export interface ReadChatSyncResult {
         message: string;
         buttons: string[];
     } | null;
-    syncMode: ReadChatSyncMode;
-    replaceFrom: number;
-    totalMessages: number;
-    lastMessageSignature: string;
 }
 export interface ProviderSummaryItem {
     id: string;

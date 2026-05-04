@@ -3,18 +3,24 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import type { ProviderResumeCapability } from '../providers/contracts.js';
 import type { ChatMessageKind } from '../providers/chat-message-normalization.js';
+import type { ChatBubbleState } from '../types.js';
 import { sanitizeSpawnEnv } from './spawn-env.js';
 
 export interface CliChatMessage {
-    role: 'user' | 'assistant';
-    content: string;
+    role: string;
+    content: any;
     timestamp?: number;
     receivedAt?: number;
     kind?: ChatMessageKind;
     id?: string;
     index?: number;
+    providerUnitKey?: string;
+    bubbleId?: string;
+    bubbleState?: ChatBubbleState;
+    _turnKey?: string;
     meta?: Record<string, unknown>;
     senderName?: string;
+    [key: string]: any;
 }
 
 export interface CliSessionStatus {
@@ -43,7 +49,6 @@ export interface ParsedSession {
 
 export interface CliScripts {
     parseSession?: (input: CliScriptInput & { tail?: string; tailScreen?: CliScreenSnapshot }) => ParsedSession | null;
-    parseOutput?: (input: CliScriptInput) => any;
     detectStatus?: (input: CliStatusInput) => string | null;
     parseApproval?: (input: CliApprovalInput) => { message: string; buttons: string[] } | null;
     resolveAction?: (data: any) => string;

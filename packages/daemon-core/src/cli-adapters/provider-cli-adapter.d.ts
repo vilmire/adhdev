@@ -6,7 +6,7 @@
  *
  * Required scripts in scripts/{version}/scripts.js:
  *   - detectStatus(input)  → AgentStatus string ('idle' | 'generating' | 'waiting_approval')
- *   - parseOutput(input)   → ReadChatResult { messages, status, activeModal, ... }
+ *   - parseSession(input)  → ReadChatResult { messages, status, activeModal, ... }
  *   - parseApproval(input) → ModalInfo | null
  *
  * provider.json contract:
@@ -15,13 +15,9 @@
  */
 import type { CliAdapter } from '../cli-adapter-types.js';
 import { type PtyRuntimeMetadata, type PtyTransportFactory } from './pty-transport.js';
-import { type CliChatMessage, type CliProviderModule, type CliScripts, type CliSessionStatus } from './provider-cli-shared.js';
+import { type CliProviderModule, type CliScripts, type CliSessionStatus } from './provider-cli-shared.js';
 import { type ProviderResolutionMeta } from './provider-cli-config.js';
 export { normalizeCliProviderForRuntime, type CliApprovalInput, type CliChatMessage, type CliProviderModule, type CliScreenLine, type CliScreenSnapshot, type CliScriptInput, type CliScripts, type CliSessionStatus, type CliStatusInput, type CliTraceEntry, } from './provider-cli-shared.js';
-type SeedCliChatMessage = Omit<Partial<CliChatMessage>, 'role'> & {
-    role?: string;
-    content?: string;
-};
 export declare class ProviderCliAdapter implements CliAdapter {
     private extraArgs;
     readonly cliType: string;
@@ -30,9 +26,6 @@ export declare class ProviderCliAdapter implements CliAdapter {
     private provider;
     private ptyProcess;
     private transportFactory;
-    private messages;
-    private committedMessages;
-    private structuredMessages;
     private currentStatus;
     private onStatusChange;
     private responseBuffer;
@@ -141,7 +134,6 @@ export declare class ProviderCliAdapter implements CliAdapter {
     private runDetectStatus;
     private runParseApproval;
     getStatus(): CliSessionStatus;
-    seedCommittedMessages(messages: SeedCliChatMessage[]): void;
     /**
      * Script-based full parse — returns ReadChatResult.
      * Called by command handler / dashboard for rich content rendering.

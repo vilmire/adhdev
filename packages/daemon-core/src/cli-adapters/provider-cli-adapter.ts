@@ -6,7 +6,7 @@
  *
  * Required scripts in scripts/{version}/scripts.js:
  *   - detectStatus(input)  → AgentStatus string ('idle' | 'generating' | 'waiting_approval')
- *   - parseOutput(input)   → ReadChatResult { messages, status, activeModal, ... }
+ *   - parseSession(input)  → ReadChatResult { messages, status, activeModal, ... }
  *   - parseApproval(input) → ModalInfo | null
  *
  * provider.json contract:
@@ -30,14 +30,11 @@ import {
     compactPromptText,
     estimatePromptDisplayLines,
     extractPromptRetrySnippet,
-    getLastUserPromptText,
     listCliScriptNames,
-    normalizeComparableMessageContent,
     normalizePromptText,
     normalizeScreenSnapshot,
     promptLikelyVisible,
     sanitizeTerminalText,
-    trimPromptEchoPrefix,
     type CliChatMessage,
     type CliProviderModule,
     type CliScriptInput,
@@ -46,12 +43,9 @@ import {
     type CliTraceEntry,
     type ParsedSession,
 } from './provider-cli-shared.js';
-import { buildChatMessage } from '../providers/chat-message-normalization.js';
-import { validateReadChatResultPayload } from '../providers/read-chat-contract.js';
 import {
     buildCliParseInput,
     buildCliTraceParseSnapshot,
-    hydrateCliParsedMessages,
     normalizeCliParsedMessages,
     summarizeCliTraceMessages,
     summarizeCliTraceText,
@@ -82,10 +76,6 @@ export {
     type CliTraceEntry,
 } from './provider-cli-shared.js';
 
-type SeedCliChatMessage = Omit<Partial<CliChatMessage>, 'role'> & {
-    role?: string;
-    content?: string;
-};
 
 interface IdleFinishCandidate {
     armedAt: number;
@@ -119,49 +109,6 @@ interface SendMessageCompletion {
     rejectOnce: (error: unknown) => void;
 }
 
-function normalizeComparableTranscriptText(value: unknown): string {
-    return sanitizeTerminalText(String(value || ''))
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-function hasVisibleInterruptPrompt(text: string): boolean {
-    const interruptCopyPattern = /\bEnter\s+to\s+interrupt\b(?:\s*,?\s*Ctrl\s*(?:\+|-)?\s*C\s+to\s+cancel)?/i;
-    return sanitizeTerminalText(text || '')
-        .split(/\r?\n/g)
-        .some((line) => {
-            const trimmed = line.trim();
-            if (!interruptCopyPattern.test(trimmed)) return false;
-            return /^(?:[^A-Za-z0-9\s]{1,8}\s+)?[❯›>]\s+/.test(trimmed);
-        });
-}
-
-function parsedTranscriptIsRicherThanCommitted(
-    parsedMessages: Array<{ role?: string; content?: unknown; id?: string; index?: number }> | null | undefined,
-    committedMessages: Array<{ role?: string; content?: unknown; id?: string; index?: number }> | null | undefined,
-): boolean {
-    if (!Array.isArray(parsedMessages) || !Array.isArray(committedMessages)) return false;
-    if (parsedMessages.length > committedMessages.length) return true;
-    if (parsedMessages.length !== committedMessages.length) return false;
-
-    for (let index = 0; index < parsedMessages.length; index += 1) {
-        const parsed = parsedMessages[index];
-        const committed = committedMessages[index];
-        if (!parsed || !committed) return false;
-        if ((parsed.role || '') !== (committed.role || '')) return false;
-        if (parsed.id && committed.id && String(parsed.id) !== String(committed.id)) return false;
-        if (typeof parsed.index === 'number' && typeof committed.index === 'number' && parsed.index !== committed.index) return false;
-
-        const parsedText = normalizeComparableTranscriptText(parsed.content);
-        const committedText = normalizeComparableTranscriptText(committed.content);
-        if (!parsedText || !committedText || parsedText === committedText) continue;
-        if (parsedText.length > committedText.length && parsedText.startsWith(committedText)) return true;
-        return false;
-    }
-
-    return false;
-}
-
 export function appendBoundedText(current: string, chunk: string, maxChars: number): string {
     if (!chunk) return current.length <= maxChars ? current : current.slice(-maxChars);
     if (maxChars <= 0) return '';
@@ -169,88 +116,6 @@ export function appendBoundedText(current: string, chunk: string, maxChars: numb
     const keepFromCurrent = maxChars - chunk.length;
     if (current.length <= keepFromCurrent) return current + chunk;
     return current.slice(-keepFromCurrent) + chunk;
-}
-
-const COMMITTED_ACTIVITY_PREFIX_BLOCK_RE = /^(?:📖|💻|🔎|📚|📋|✏️|📝|🔧|🛠️|⚙️)\s+(.+)$/;
-
-function isLikelyCommittedActivityPrefixContinuation(line: string): boolean {
-    const trimmed = String(line || '').trim();
-    if (!trimmed) return false;
-    if (COMMITTED_ACTIVITY_PREFIX_BLOCK_RE.test(trimmed)) return false;
-    if (/\s/.test(trimmed)) return false;
-    if (/[가-힣]/.test(trimmed)) return false;
-    if (trimmed.length > 96) return false;
-    return /^[A-Za-z0-9_./:@+%=-]+$/.test(trimmed);
-}
-
-function parseCommittedActivityPrefixBlock(lines: string[], index: number): { label: string; nextIndex: number } | null {
-    const first = String(lines[index] || '').trim();
-    if (!COMMITTED_ACTIVITY_PREFIX_BLOCK_RE.test(first)) return null;
-    const parts = [first];
-    let nextIndex = index + 1;
-    while (nextIndex < lines.length && isLikelyCommittedActivityPrefixContinuation(lines[nextIndex])) {
-        parts.push(String(lines[nextIndex] || '').trim());
-        nextIndex += 1;
-    }
-    return { label: parts.join(''), nextIndex };
-}
-
-export function sanitizeCliStandardMessageContent(content: unknown): string {
-    const source = String(content || '').trim();
-    if (!source) return '';
-    const lines = source.split(/\r?\n/);
-    if (lines.length < 4) return source;
-
-    const counts = new Map<string, number>();
-    for (let index = 0; index < lines.length; index += 1) {
-        const block = parseCommittedActivityPrefixBlock(lines, index);
-        if (!block) continue;
-        counts.set(block.label, (counts.get(block.label) || 0) + 1);
-        index = block.nextIndex - 1;
-    }
-
-    const repeatedLabels = new Set(
-        Array.from(counts.entries())
-            .filter(([, count]) => count >= 3)
-            .map(([label]) => label),
-    );
-    if (repeatedLabels.size === 0) return source;
-
-    const stripped: string[] = [];
-    let removed = 0;
-    for (let index = 0; index < lines.length; index += 1) {
-        const block = parseCommittedActivityPrefixBlock(lines, index);
-        if (block && repeatedLabels.has(block.label)) {
-            removed += 1;
-            index = block.nextIndex - 1;
-            continue;
-        }
-        stripped.push(lines[index]);
-    }
-
-    const next = stripped.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-    return removed >= 3 && next.length >= 80 ? next : source;
-}
-
-function sanitizeCommittedMessageForDisplay<T extends { role?: string; kind?: string; content?: unknown }>(message: T): T {
-    if (!message || message.role !== 'assistant' || (message.kind || 'standard') !== 'standard') return message;
-    const content = sanitizeCliStandardMessageContent(message.content);
-    if (content === message.content) return message;
-    return { ...message, content };
-}
-
-export function trimLastAssistantEchoForCliMessages(messages: CliChatMessage[], prompt: string | undefined): void {
-    if (!prompt) return;
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const message = messages[index];
-        if (!message || message.role !== 'assistant' || typeof message.content !== 'string') continue;
-        if ((message.kind || 'standard') !== 'standard') continue;
-        message.content = trimPromptEchoPrefix(message.content, prompt);
-        if (!message.content.trim()) {
-            messages.splice(index, 1);
-        }
-        return;
-    }
 }
 
 // ─── Adapter ────────────────────────────────────────
@@ -263,11 +128,6 @@ export class ProviderCliAdapter implements CliAdapter {
     private provider: CliProviderModule;
     private ptyProcess: PtyRuntimeTransport | null = null;
     private transportFactory: PtyTransportFactory;
-    private messages: CliChatMessage[] = [];
-    private committedMessages: CliChatMessage[] = [];
-    private structuredMessages: CliChatMessage[] = [];
-    private committedMessagesActivitySignature = '';
-    private committedMessagesChangedAt = 0;
     private currentStatus: CliSessionStatus['status'] = 'starting';
     private onStatusChange: (() => void) | null = null;
 
@@ -356,7 +216,6 @@ export class ProviderCliAdapter implements CliAdapter {
     private traceSeq = 0;
     private traceSessionId = '';
     private parsedStatusCache: {
-        committedMessagesRef: CliChatMessage[];
         responseBuffer: string;
         currentTurnScope: TurnParseScope | null;
         recentOutputBuffer: string;
@@ -367,11 +226,8 @@ export class ProviderCliAdapter implements CliAdapter {
         cliName: string;
         result: any;
     } | null = null;
-    private lastStatusHotPathParseAt = Number.NEGATIVE_INFINITY;
-    private static readonly STATUS_HOT_PATH_PARSE_MIN_INTERVAL_MS = 1000;
     private static readonly SCREEN_SNAPSHOT_MIN_INTERVAL_MS = 250;
     private static readonly MAX_TRACE_ENTRIES = 250;
-    private static readonly PARSE_MESSAGE_TAIL_LIMIT = 100;
 
     private readonly providerResolutionMeta: ProviderResolutionMeta;
     private static readonly FINISH_RETRY_DELAY_MS = 300;
@@ -398,37 +254,6 @@ export class ProviderCliAdapter implements CliAdapter {
         return Math.max(0, (previousLength + appendedLength) - nextLength);
     }
 
-    private buildCommittedMessagesActivitySignature(): string {
-        const last = this.committedMessages[this.committedMessages.length - 1];
-        return [
-            String(this.committedMessages.length),
-            String(last?.role || ''),
-            String(last?.kind || ''),
-            String(last?.senderName || ''),
-            String(last?.timestamp || ''),
-            String(last?.receivedAt || ''),
-            normalizeComparableMessageContent(last?.content || '').slice(-240),
-        ].join('|');
-    }
-
-    private syncMessageViews(): void {
-        const signature = this.buildCommittedMessagesActivitySignature();
-        if (signature !== this.committedMessagesActivitySignature) {
-            this.committedMessagesActivitySignature = signature;
-            this.committedMessagesChangedAt = Date.now();
-        }
-        this.messages = [...this.committedMessages];
-        this.structuredMessages = [...this.committedMessages];
-    }
-
-    getLastCommittedMessageActivityAt(): number {
-        const last = this.committedMessages[this.committedMessages.length - 1];
-        const messageTime = Math.max(
-            typeof last?.receivedAt === 'number' && Number.isFinite(last.receivedAt) ? last.receivedAt : 0,
-            typeof last?.timestamp === 'number' && Number.isFinite(last.timestamp) ? last.timestamp : 0,
-        );
-        return Math.max(messageTime, this.committedMessagesChangedAt || 0);
-    }
 
     private readTerminalScreenText(now = Date.now()): string {
         const screenText = this.terminalScreen.getText() || '';
@@ -454,7 +279,6 @@ export class ProviderCliAdapter implements CliAdapter {
         const cached = this.parsedStatusCache;
         if (
             cached
-            && cached.committedMessagesRef === this.committedMessages
             && cached.responseBuffer === this.responseBuffer
             && cached.currentTurnScope === this.currentTurnScope
             && cached.recentOutputBuffer === this.recentOutputBuffer
@@ -475,58 +299,6 @@ export class ProviderCliAdapter implements CliAdapter {
 
     private shouldUseFullProviderTranscriptContext(): boolean {
         return this.providerOwnsTranscript() && this.provider.transcriptContext === 'full';
-    }
-
-    private selectParseBaseMessages(baseMessages: CliChatMessage[]): CliChatMessage[] {
-        if (this.shouldUseFullProviderTranscriptContext()) return baseMessages;
-        if (baseMessages.length <= ProviderCliAdapter.PARSE_MESSAGE_TAIL_LIMIT) return baseMessages;
-        return baseMessages.slice(-ProviderCliAdapter.PARSE_MESSAGE_TAIL_LIMIT);
-    }
-
-    private messagesShareStableIdentity(left: any, right: any): boolean {
-        if (left === right) return true;
-        if (!left || !right) return false;
-        if ((left.role || '') !== (right.role || '')) return false;
-        if (left.id && right.id && String(left.id) === String(right.id)) return true;
-        if (typeof left.index === 'number' && typeof right.index === 'number' && left.index === right.index) return true;
-        return false;
-    }
-
-    private messagesComparable(left: any, right: any): boolean {
-        if (this.messagesShareStableIdentity(left, right)) return true;
-        if (!left || !right) return false;
-        if ((left.role || '') !== (right.role || '')) return false;
-        const leftText = normalizeComparableTranscriptText(left.content);
-        const rightText = normalizeComparableTranscriptText(right.content);
-        return !!leftText && leftText === rightText;
-    }
-
-    private stitchParsedMessagesWithCommittedBase(
-        parsedMessages: any[],
-        fullBaseMessages: CliChatMessage[],
-        parseBaseMessages: CliChatMessage[],
-    ): any[] {
-        if (!Array.isArray(parsedMessages) || parsedMessages.length === 0) return parsedMessages;
-        if (fullBaseMessages.length <= parseBaseMessages.length) return parsedMessages;
-
-        const parsedFirst = parsedMessages[0];
-        const fullFirst = fullBaseMessages[0];
-        if (parsedMessages.length >= fullBaseMessages.length && this.messagesComparable(parsedFirst, fullFirst)) {
-            return parsedMessages;
-        }
-
-        const tailFirst = parseBaseMessages[0];
-        if (tailFirst && this.messagesComparable(parsedFirst, tailFirst)) {
-            const prefixLength = fullBaseMessages.length - parseBaseMessages.length;
-            const prefix = fullBaseMessages.slice(0, prefixLength);
-            const shouldSanitizePrefix = !!this.currentTurnScope || this.currentStatus !== 'idle' || !!this.activeModal;
-            const nextPrefix = shouldSanitizePrefix
-                ? prefix.map((message) => sanitizeCommittedMessageForDisplay(message))
-                : prefix;
-            return [...nextPrefix, ...parsedMessages];
-        }
-
-        return [...fullBaseMessages, ...parsedMessages];
     }
 
     private getIdleFinishConfirmMs(): number {
@@ -1102,10 +874,6 @@ export class ProviderCliAdapter implements CliAdapter {
         );
     }
 
-    private trimLastAssistantEcho(messages: CliChatMessage[], prompt: string | undefined): void {
-        trimLastAssistantEchoForCliMessages(messages, prompt);
-    }
-
     private clearAllTimers(): void {
         if (this.responseTimeout) { clearTimeout(this.responseTimeout); this.responseTimeout = null; }
         if (this.idleTimeout) { clearTimeout(this.idleTimeout); this.idleTimeout = null; }
@@ -1193,10 +961,10 @@ export class ProviderCliAdapter implements CliAdapter {
         const session = this.runParseSession();
         if (!session) return;
 
-        const { status, messages, modal, parsedStatus } = session;
+        const { status, messages, parsedStatus } = session;
+        const modal = (session as any).activeModal ?? session.modal ?? null;
         const parsedMessages = normalizeCliParsedMessages(messages, {
-            committedMessages: this.committedMessages,
-            scope: this.currentTurnScope,
+            scope: null,
             lastOutputAt: this.lastOutputAt,
         });
 
@@ -1396,7 +1164,7 @@ export class ProviderCliAdapter implements CliAdapter {
         const looksIdleChrome = /(^|\n)\s*[❯›>]\s*(?:\n|$)/m.test(effectiveScreenText);
         const parsedShowsLiveAssistantProgress = parsedStatus === 'generating'
             && !!lastParsedAssistant
-            && parsedMessages.length > this.committedMessages.length;
+;
         if (prevStatus === 'idle' && !this.isWaitingForResponse && noActiveTurn && !modal && looksIdleChrome && !parsedShowsLiveAssistantProgress) {
             return;
         }
@@ -1573,10 +1341,7 @@ export class ProviderCliAdapter implements CliAdapter {
         const visibleAssistant = [...parsedMessages].reverse().find((m) => m.role === 'assistant' && m.content.trim());
         if (!visibleAssistant) return false;
 
-        this.committedMessages = parsedMessages;
-        this.trimLastAssistantEcho(this.committedMessages, this.currentTurnScope?.prompt || getLastUserPromptText(this.committedMessages));
         this.clearAllTimers();
-        this.syncMessageViews();
         this.responseBuffer = '';
         this.isWaitingForResponse = false;
         this.responseSettleIgnoreUntil = 0;
@@ -1588,7 +1353,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.setStatus('idle', 'script_idle_commit');
         this.onStatusChange?.();
         this.recordTrace('script_idle_commit', {
-            messageCount: this.committedMessages.length,
+            messageCount: parsedMessages.length,
             lastAssistant: summarizeCliTraceText(visibleAssistant.content, 320),
         });
         return true;
@@ -1596,30 +1361,27 @@ export class ProviderCliAdapter implements CliAdapter {
 
     private commitCurrentTranscript(): { hasAssistant: boolean; assistantContent: string } {
         const parsed = this.parseCurrentTranscript(
-            this.committedMessages,
+            [],
             this.responseBuffer,
             this.currentTurnScope,
         );
         if (parsed && Array.isArray(parsed.messages)) {
-            this.committedMessages = normalizeCliParsedMessages(parsed.messages, {
-                committedMessages: this.committedMessages,
-                scope: this.currentTurnScope,
+            const parsedMessages = normalizeCliParsedMessages(parsed.messages, {
+                    scope: null,
                 lastOutputAt: this.lastOutputAt,
             });
-            this.trimLastAssistantEcho(this.committedMessages, this.currentTurnScope?.prompt || getLastUserPromptText(this.committedMessages));
-            this.syncMessageViews();
-            const lastAssistant = [...this.committedMessages].reverse().find((message) => message.role === 'assistant');
+            const lastAssistant = [...parsedMessages].reverse().find((message) => message.role === 'assistant');
             if (this.currentTurnScope) {
                 LOG.info(
                     'CLI',
-                    `[${this.cliType}] commitCurrentTranscript committedMessages=${this.committedMessages.length} finalLastAssistant=${JSON.stringify(summarizeCliTraceText(lastAssistant?.content || '', 220)).slice(0, 260)}`
+                    `[${this.cliType}] commitCurrentTranscript parserMessages=${parsedMessages.length} finalLastAssistant=${JSON.stringify(summarizeCliTraceText(lastAssistant?.content || '', 220)).slice(0, 260)}`
                 );
             }
             this.recordTrace('commit_transcript', {
                 parsedStatus: parsed.status || null,
-                messageCount: this.committedMessages.length,
+                messageCount: parsedMessages.length,
                 lastAssistant: lastAssistant ? summarizeCliTraceText(lastAssistant.content, 320) : '',
-                messages: summarizeCliTraceMessages(this.committedMessages),
+                messages: summarizeCliTraceMessages(parsedMessages),
                 ...buildCliTraceParseSnapshot({
                     accumulatedBuffer: this.accumulatedBuffer,
                     accumulatedRawBuffer: this.accumulatedRawBuffer,
@@ -1656,71 +1418,31 @@ export class ProviderCliAdapter implements CliAdapter {
  // ─── Script Execution ──────────────────────────
 
     private runParseSession(): ParsedSession | null {
-        // Preferred: provider exposes a unified parseSession script
-        if (typeof this.cliScripts?.parseSession === 'function') {
-            try {
-                const screenText = this.terminalScreen.getText();
-                const tail = this.recentOutputBuffer.slice(-500);
-                const parseBaseMessages = this.selectParseBaseMessages(this.committedMessages);
-                const input = buildCliParseInput({
-                    accumulatedBuffer: this.accumulatedBuffer,
-                    accumulatedRawBuffer: this.accumulatedRawBuffer,
-                    recentOutputBuffer: this.recentOutputBuffer,
-                    terminalScreenText: screenText,
-                    baseMessages: parseBaseMessages,
-                    partialResponse: this.responseBuffer,
-                    isWaitingForResponse: this.isWaitingForResponse,
-                    scope: this.currentTurnScope,
-                    runtimeSettings: this.runtimeSettings,
-                });
-                const session = this.cliScripts.parseSession({ ...input, tail, tailScreen: buildCliScreenSnapshot(tail) });
-                if (session && typeof session === 'object' && Array.isArray(session.messages)) {
-                    session.messages = this.stitchParsedMessagesWithCommittedBase(
-                        session.messages,
-                        this.committedMessages,
-                        parseBaseMessages,
-                    );
-                }
-                this.parseErrorMessage = null;
-                return session && typeof session === 'object' ? session : null;
-            } catch (e: any) {
-                const message = e?.message || String(e);
-                this.parseErrorMessage = message;
-                LOG.warn('CLI', `[${this.cliType}] parseSession error: ${message}`);
-                return null;
-            }
+        if (typeof this.cliScripts?.parseSession !== 'function') {
+            this.parseErrorMessage = `${this.cliType} parseSession unavailable`;
+            return null;
         }
-        // Fallback: reconcile from the three individual scripts (for providers without parseSession)
-        if (!this.cliScripts?.detectStatus && !this.cliScripts?.parseOutput) return null;
         try {
-            const tail = this.settledBuffer;
-            const parsedTranscript = this.parseCurrentTranscript(
-                this.committedMessages,
-                this.responseBuffer,
-                this.currentTurnScope,
-            );
-            const parsedModal = parsedTranscript?.activeModal
-                && Array.isArray(parsedTranscript.activeModal.buttons)
-                && parsedTranscript.activeModal.buttons.some((b: any) => typeof b === 'string' && b.trim())
-                ? parsedTranscript.activeModal
-                : null;
-            const approval = this.runParseApproval(tail);
-            const modal = approval || parsedModal;
-            const rawStatus = this.runDetectStatus(tail);
-            const parsedStatus = typeof parsedTranscript?.status === 'string' ? parsedTranscript.status : null;
-            const effectiveStatus = (parsedStatus === 'waiting_approval' && modal)
-                ? 'waiting_approval'
-                : (rawStatus || parsedStatus || 'idle');
-            return {
-                status: effectiveStatus,
-                messages: Array.isArray(parsedTranscript?.messages) ? parsedTranscript.messages : [],
-                modal,
-                parsedStatus,
-            };
+            const screenText = this.terminalScreen.getText();
+            const tail = this.recentOutputBuffer.slice(-500);
+            const input = buildCliParseInput({
+                accumulatedBuffer: this.accumulatedBuffer,
+                accumulatedRawBuffer: this.accumulatedRawBuffer,
+                recentOutputBuffer: this.recentOutputBuffer,
+                terminalScreenText: screenText,
+                baseMessages: [],
+                partialResponse: this.responseBuffer,
+                isWaitingForResponse: this.isWaitingForResponse,
+                scope: this.currentTurnScope,
+                runtimeSettings: this.runtimeSettings,
+            });
+            const session = this.cliScripts.parseSession({ ...input, tail, tailScreen: buildCliScreenSnapshot(tail) });
+            this.parseErrorMessage = null;
+            return session && typeof session === 'object' ? session : null;
         } catch (e: any) {
             const message = e?.message || String(e);
             this.parseErrorMessage = message;
-            LOG.warn('CLI', `[${this.cliType}] parseSession fallback error: ${message}`);
+            LOG.warn('CLI', `[${this.cliType}] parseSession error: ${message}`);
             return null;
         }
     }
@@ -1775,41 +1497,6 @@ export class ProviderCliAdapter implements CliAdapter {
         return this.currentStatus;
     }
 
-    private suppressStaleParsedApproval(
-        parsed: any,
-        recentBuffer: string,
-        screenText: string,
-    ): any {
-        const actionableParsedModal = parsed?.activeModal && Array.isArray(parsed.activeModal.buttons)
-            && parsed.activeModal.buttons.some((button: any) => typeof button === 'string' && button.trim())
-            ? parsed.activeModal
-            : null;
-        if (!parsed || parsed?.status !== 'waiting_approval' || !actionableParsedModal) {
-            return parsed;
-        }
-
-        const inApprovalCooldown = this.lastApprovalResolvedAt > 0
-            && (Date.now() - this.lastApprovalResolvedAt) < this.timeouts.approvalCooldown;
-        if (!inApprovalCooldown) {
-            return parsed;
-        }
-
-        const visibleModal = this.runParseApproval(recentBuffer);
-        if (visibleModal) {
-            return parsed;
-        }
-
-        const detectedStatus = this.runDetectStatus(recentBuffer);
-        const resolvedStatus = detectedStatus && detectedStatus !== 'waiting_approval'
-            ? detectedStatus
-            : ((this.isWaitingForResponse || this.currentTurnScope) ? 'generating' : (this.currentStatus === 'waiting_approval' ? 'idle' : this.currentStatus));
-        return {
-            ...parsed,
-            status: resolvedStatus,
-            activeModal: null,
-        };
-    }
-
  // ─── Public API (CliAdapter) ───────────────────
 
     getStatus(options: { allowParse?: boolean } = {}): CliSessionStatus {
@@ -1817,19 +1504,8 @@ export class ProviderCliAdapter implements CliAdapter {
         const startupModal = allowParse && this.startupParseGate ? this.runParseApproval(this.recentOutputBuffer) : null;
         let effectiveStatus = this.projectEffectiveStatus(startupModal);
         let effectiveModal = startupModal || this.activeModal;
-        if (allowParse && !startupModal && !effectiveModal && typeof this.cliScripts?.parseOutput === 'function') {
-            let parsed = this.getFreshParsedStatusCache();
-            if (!parsed && effectiveStatus !== 'idle') {
-                const now = Date.now();
-                if ((now - this.lastStatusHotPathParseAt) >= ProviderCliAdapter.STATUS_HOT_PATH_PARSE_MIN_INTERVAL_MS) {
-                    this.lastStatusHotPathParseAt = now;
-                    try {
-                        parsed = this.getScriptParsedStatus();
-                    } catch {
-                        // Ignore parse errors here; getScriptParsedStatus surfaces them on richer callers.
-                    }
-                }
-            }
+        if (allowParse && !startupModal && !effectiveModal) {
+            const parsed = this.getFreshParsedStatusCache();
             const parsedModal = parsed?.activeModal && Array.isArray(parsed.activeModal.buttons)
                 && parsed.activeModal.buttons.some((button: any) => typeof button === 'string' && button.trim())
                 ? parsed.activeModal
@@ -1842,7 +1518,7 @@ export class ProviderCliAdapter implements CliAdapter {
         const bufferState = this.getBufferState();
         return {
             status: effectiveStatus,
-            messages: [...this.committedMessages],
+            messages: [],
             workingDir: this.workingDir,
             activeModal: effectiveModal,
             errorMessage: this.parseErrorMessage || undefined,
@@ -1851,119 +1527,6 @@ export class ProviderCliAdapter implements CliAdapter {
         };
     }
 
-    seedCommittedMessages(messages: SeedCliChatMessage[]): void {
-        const normalized = (Array.isArray(messages) ? messages : [])
-            .filter((message) => message && (message.role === 'user' || message.role === 'assistant'))
-            .map((message) => ({
-                role: message.role as 'user' | 'assistant',
-                content: typeof message.content === 'string' ? message.content : String(message.content || ''),
-                timestamp: typeof message.timestamp === 'number' && Number.isFinite(message.timestamp)
-                    ? message.timestamp
-                    : undefined,
-                receivedAt: typeof message.receivedAt === 'number' && Number.isFinite(message.receivedAt)
-                    ? message.receivedAt
-                    : undefined,
-                kind: typeof message.kind === 'string' ? message.kind : undefined,
-                id: typeof message.id === 'string' ? message.id : undefined,
-                index: typeof message.index === 'number' ? message.index : undefined,
-                providerUnitKey: typeof (message as any).providerUnitKey === 'string' ? (message as any).providerUnitKey : undefined,
-                bubbleId: typeof (message as any).bubbleId === 'string' ? (message as any).bubbleId : undefined,
-                bubbleState: typeof (message as any).bubbleState === 'string' ? (message as any).bubbleState : undefined,
-                _turnKey: typeof (message as any)._turnKey === 'string' ? (message as any)._turnKey : undefined,
-                meta: message.meta && typeof message.meta === 'object' ? { ...(message.meta as Record<string, any>) } : undefined,
-                senderName: typeof message.senderName === 'string' ? message.senderName : undefined,
-            }));
-        this.committedMessages = normalized;
-        this.syncMessageViews();
-    }
-
-    private getSharedCommittedPrefixLength(parsedMessages: any[]): number {
-        const committedMessages = this.committedMessages;
-        const max = Math.min(parsedMessages.length, committedMessages.length);
-        let index = 0;
-        while (index < max && this.messagesShareStableIdentity(parsedMessages[index], committedMessages[index])) {
-            index += 1;
-        }
-        return index;
-    }
-
-    private hydrateCommittedPrefixForParsedStatus(parsedMessages: any[]): any[] | null {
-        const sharedPrefixLength = this.getSharedCommittedPrefixLength(parsedMessages);
-        if (sharedPrefixLength !== this.committedMessages.length) return null;
-
-        const committedHydratedMessages = this.committedMessages.map((message, index) => {
-            const timestamp = typeof message.timestamp === 'number' && Number.isFinite(message.timestamp)
-                ? message.timestamp
-                : (this.lastOutputAt || this.currentTurnScope?.startedAt || Date.now());
-            const contentValue = message.content;
-            return {
-                role: message.role,
-                content: typeof contentValue === 'string' ? contentValue : String(contentValue || ''),
-                timestamp,
-                receivedAt: typeof message.receivedAt === 'number' && Number.isFinite(message.receivedAt)
-                    ? message.receivedAt
-                    : timestamp,
-                kind: message.kind,
-                id: message.id || `msg_${index}`,
-                index: typeof message.index === 'number' ? message.index : index,
-                providerUnitKey: (message as any).providerUnitKey,
-                bubbleId: (message as any).bubbleId,
-                bubbleState: (message as any).bubbleState,
-                _turnKey: (message as any)._turnKey,
-                meta: message.meta,
-                senderName: message.senderName,
-            };
-        });
-        const extraMessages = parsedMessages.slice(sharedPrefixLength);
-        if (extraMessages.length === 0) return committedHydratedMessages;
-
-        const extraHydratedMessages = hydrateCliParsedMessages(extraMessages, {
-            committedMessages: [],
-            scope: this.currentTurnScope,
-            lastOutputAt: this.lastOutputAt,
-        }).map((message, offset) => ({
-            ...message,
-            id: message.id || `msg_${sharedPrefixLength + offset}`,
-            index: typeof message.index === 'number' ? message.index : sharedPrefixLength + offset,
-        }));
-        return [...committedHydratedMessages, ...extraHydratedMessages];
-    }
-
-    private hydrateParsedMessagesForStatus(parsedMessages: any[]): any[] {
-        return this.hydrateCommittedPrefixForParsedStatus(parsedMessages)
-            || hydrateCliParsedMessages(parsedMessages, {
-                committedMessages: this.committedMessages,
-                scope: this.currentTurnScope,
-                lastOutputAt: this.lastOutputAt,
-            });
-    }
-
-    private buildCommittedChatMessages(): any[] {
-        return this.committedMessages.map((message, index) => {
-            const rawContentValue = message.content;
-            const rawContent = typeof rawContentValue === 'string' ? rawContentValue : String(rawContentValue || '');
-            const content = message.role === 'assistant' && (message.kind || 'standard') === 'standard'
-                ? sanitizeCliStandardMessageContent(rawContent)
-                : rawContent;
-            return buildChatMessage({
-                role: message.role,
-                content,
-                timestamp: message.timestamp,
-                kind: message.kind,
-                meta: message.meta,
-                senderName: message.senderName,
-                id: message.id || `msg_${index}`,
-                index: typeof message.index === 'number' ? message.index : index,
-                providerUnitKey: (message as any).providerUnitKey,
-                bubbleId: (message as any).bubbleId,
-                bubbleState: (message as any).bubbleState,
-                _turnKey: (message as any)._turnKey,
-                receivedAt: typeof message.receivedAt === 'number'
-                    ? message.receivedAt
-                    : message.timestamp,
-            });
-        });
-    }
 
     /**
      * Script-based full parse — returns ReadChatResult.
@@ -1974,7 +1537,6 @@ export class ProviderCliAdapter implements CliAdapter {
         const cached = this.parsedStatusCache;
         if (
             cached
-            && cached.committedMessagesRef === this.committedMessages
             && cached.responseBuffer === this.responseBuffer
             && cached.currentTurnScope === this.currentTurnScope
             && cached.recentOutputBuffer === this.recentOutputBuffer
@@ -1987,163 +1549,33 @@ export class ProviderCliAdapter implements CliAdapter {
             return cached.result;
         }
 
-        const parsed = this.parseCurrentTranscript(
-            this.committedMessages,
-            this.responseBuffer,
-            this.currentTurnScope,
-            screenText,
-        );
-        const parsedModal = parsed?.activeModal && Array.isArray(parsed.activeModal.buttons)
-            && parsed.activeModal.buttons.some((button: any) => typeof button === 'string' && button.trim())
-            ? parsed.activeModal
-            : null;
-        if (parsedModal && parsed?.status === 'waiting_approval') {
-            this.activeModal = parsedModal;
-            this.isWaitingForResponse = true;
-            if (this.currentStatus !== 'waiting_approval') {
-                this.setStatus('waiting_approval', 'parsed_waiting_approval');
-                this.onStatusChange?.();
-            }
-        }
-        if (parsed && Array.isArray(parsed.messages) && this.provider.allowInputDuringGeneration === true) {
-            const hydratedForCommit = normalizeCliParsedMessages(parsed.messages, {
-                committedMessages: this.committedMessages,
-                scope: this.currentTurnScope,
-                lastOutputAt: this.lastOutputAt,
-            });
-            const fakeSession: ParsedSession = {
-                status: parsed.status || 'idle',
-                messages: parsed.messages,
-                modal: parsedModal,
-                parsedStatus: parsed.status || null,
-            };
-            if (this.maybeCommitVisibleIdleTranscript(fakeSession, hydratedForCommit)) {
-                return this.getScriptParsedStatus();
-            }
-        }
-        const shouldPreferCommittedMessages =
-            !this.currentTurnScope
-            && !this.activeModal
-            && this.currentStatus === 'idle';
-        let result: any;
-        if (parsed && Array.isArray(parsed.messages)) {
-            const parsedHydratedMessages = this.hydrateParsedMessagesForStatus(parsed.messages);
-            const parsedLastAssistant = [...parsedHydratedMessages].reverse().find((message) => message.role === 'assistant' && typeof message.content === 'string' && message.content.trim());
-            const shouldAdoptParsedIdleReplay =
-                !this.currentTurnScope
-                && !this.activeModal
-                && !!parsedLastAssistant
-                && parsedTranscriptIsRicherThanCommitted(parsedHydratedMessages, this.committedMessages)
-                && (
-                    this.currentStatus === 'idle'
-                    || (
-                        this.currentStatus === 'generating'
-                        && this.isWaitingForResponse
-                        && parsed.status === 'idle'
-                        && this.runDetectStatus(this.recentOutputBuffer) === 'idle'
-                    )
-                );
-            if (shouldAdoptParsedIdleReplay) {
-                this.committedMessages = this.getSharedCommittedPrefixLength(parsed.messages) === this.committedMessages.length
-                    ? parsedHydratedMessages.map((message) => ({
-                        role: message.role,
-                        content: typeof message.content === 'string' ? message.content : String(message.content || ''),
-                        timestamp: message.timestamp,
-                        receivedAt: message.receivedAt,
-                        kind: message.kind,
-                        id: message.id,
-                        index: message.index,
-                        meta: message.meta,
-                        senderName: message.senderName,
-                    }))
-                    : normalizeCliParsedMessages(parsed.messages, {
-                        committedMessages: this.committedMessages,
-                        scope: this.currentTurnScope,
-                        lastOutputAt: this.lastOutputAt,
-                    });
-                this.syncMessageViews();
-                if (this.currentStatus !== 'idle' || this.isWaitingForResponse) {
-                    this.responseBuffer = '';
-                    this.isWaitingForResponse = false;
-                    this.responseSettleIgnoreUntil = 0;
-                    this.submitRetryUsed = false;
-                    this.submitRetryPromptSnippet = '';
-                    this.finishRetryCount = 0;
-                    this.currentTurnScope = null;
-                    this.activeModal = null;
-                    this.setStatus('idle', 'parsed_idle_replay_commit');
-                    this.onStatusChange?.();
-                }
-            }
-            const shouldPreferCommittedHistoryReplay =
-                !this.currentTurnScope
-                && !this.activeModal
-                && this.committedMessages.length > parsedHydratedMessages.length;
-            const shouldPreferCommittedIdleReplay =
-                shouldPreferCommittedMessages
-                && !shouldAdoptParsedIdleReplay;
-            const hydratedMessages = (shouldPreferCommittedIdleReplay || shouldPreferCommittedHistoryReplay)
-                ? this.buildCommittedChatMessages()
-                : parsedHydratedMessages;
-            result = {
-                id: parsed.id || 'cli_session',
-                status: parsed.status || this.currentStatus,
-                title: parsed.title || this.cliName,
-                messages: hydratedMessages,
-                activeModal: parsed.activeModal ?? this.activeModal,
-                providerSessionId: typeof parsed.providerSessionId === 'string' ? parsed.providerSessionId : undefined,
-                ...(this.getBufferState() ? { bufferState: this.getBufferState() } : {}),
-                ...(this.providerOwnsTranscript() ? { transcriptAuthority: 'provider', coverage: this.shouldUseFullProviderTranscriptContext() ? 'full' : 'tail' } : {}),
-            };
-        } else {
-            const messages = [...this.committedMessages];
-            const bufferState = this.getBufferState();
-            result = {
-                id: 'cli_session',
-                status: this.currentStatus,
-                title: this.cliName,
-                messages: messages.map((message, index) => buildChatMessage({
-                    ...message,
-                    id: message.id || `msg_${index}`,
-                    index: typeof message.index === 'number' ? message.index : index,
-                    receivedAt: typeof message.receivedAt === 'number'
-                        ? message.receivedAt
-                        : message.timestamp,
-                })),
-                activeModal: this.activeModal,
-                ...(bufferState ? { bufferState } : {}),
-            };
+        const parsed = this.runParseSession();
+        if (!parsed || !Array.isArray(parsed.messages)) {
+            throw new Error(this.parseErrorMessage || `${this.cliType} parseSession did not return messages`);
         }
 
-        const hasVisibleAssistantMessage = Array.isArray(result?.messages)
-            && result.messages.some((message: any) => message?.role === 'assistant' && typeof message?.content === 'string' && message.content.trim());
-        const shouldClampStaleGeneratingToIdle =
-            result?.status === 'generating'
-            && this.currentStatus === 'idle'
-            && !this.currentTurnScope
-            && !result?.activeModal
-            && hasVisibleAssistantMessage
-            && !hasVisibleInterruptPrompt(screenText);
-        if (shouldClampStaleGeneratingToIdle) {
-            result = {
-                ...result,
-                status: 'idle',
-                messages: Array.isArray(result.messages)
-                    ? result.messages.map((message: any) => {
-                        if (message?.role !== 'assistant' || !message?.meta?.streaming) return message;
-                        const nextMeta = { ...(message.meta || {}) };
-                        delete nextMeta.streaming;
-                        return {
-                            ...message,
-                            ...(Object.keys(nextMeta).length > 0 ? { meta: nextMeta } : { meta: undefined }),
-                        };
-                    })
-                    : result.messages,
-            };
-        }
+        const activeModal = (parsed as any).activeModal ?? parsed.modal ?? null;
+        const bufferState = this.getBufferState();
+        const result = {
+            id: (parsed as any).id || 'cli_session',
+            status: parsed.status || this.currentStatus,
+            title: (parsed as any).title || this.cliName,
+            messages: normalizeCliParsedMessages(parsed.messages, {
+                    scope: null,
+                lastOutputAt: this.lastOutputAt,
+            }),
+            activeModal,
+            providerSessionId: typeof (parsed as any).providerSessionId === 'string' ? (parsed as any).providerSessionId : undefined,
+            ...(bufferState ? { bufferState } : {}),
+            ...((parsed as any).transcriptAuthority === 'provider' || (parsed as any).transcriptAuthority === 'daemon'
+                ? { transcriptAuthority: (parsed as any).transcriptAuthority }
+                : this.providerOwnsTranscript() ? { transcriptAuthority: 'provider' } : {}),
+            ...((parsed as any).coverage === 'full' || (parsed as any).coverage === 'tail' || (parsed as any).coverage === 'current-turn'
+                ? { coverage: (parsed as any).coverage }
+                : this.providerOwnsTranscript() ? { coverage: this.shouldUseFullProviderTranscriptContext() ? 'full' : 'tail' } : {}),
+        };
 
         this.parsedStatusCache = {
-            committedMessagesRef: this.committedMessages,
             responseBuffer: this.responseBuffer,
             currentTurnScope: this.currentTurnScope,
             recentOutputBuffer: this.recentOutputBuffer,
@@ -2167,7 +1599,7 @@ export class ProviderCliAdapter implements CliAdapter {
             accumulatedRawBuffer: this.accumulatedRawBuffer,
             recentOutputBuffer: this.recentOutputBuffer,
             terminalScreenText: this.terminalScreen.getText(),
-            baseMessages: this.committedMessages,
+            baseMessages: [],
             partialResponse: this.responseBuffer,
             isWaitingForResponse: this.isWaitingForResponse,
             scope: this.currentTurnScope,
@@ -2179,46 +1611,8 @@ export class ProviderCliAdapter implements CliAdapter {
         }));
     }
 
-    private parseCurrentTranscript(baseMessages: CliChatMessage[], partialResponse: string, scope?: TurnParseScope | null, screenTextOverride?: string): any {
-        if (!this.cliScripts?.parseOutput) {
-            this.parseErrorMessage = null;
-            return null;
-        }
-        try {
-            const screenText = typeof screenTextOverride === 'string' ? screenTextOverride : this.terminalScreen.getText();
-            const parseBaseMessages = this.selectParseBaseMessages(baseMessages);
-            const input = buildCliParseInput({
-                accumulatedBuffer: this.accumulatedBuffer,
-                accumulatedRawBuffer: this.accumulatedRawBuffer,
-                recentOutputBuffer: this.recentOutputBuffer,
-                terminalScreenText: screenText,
-                baseMessages: parseBaseMessages,
-                partialResponse,
-                isWaitingForResponse: this.isWaitingForResponse,
-                scope,
-                runtimeSettings: this.runtimeSettings,
-            });
-            const parsed = this.cliScripts.parseOutput(input);
-            if (parsed && typeof parsed === 'object') {
-                Object.assign(parsed, validateReadChatResultPayload(parsed, `${this.cliType} parseOutput`));
-            }
-            const normalizedParsed = this.suppressStaleParsedApproval(parsed, input.recentBuffer, input.screenText);
-            if (normalizedParsed && Array.isArray(normalizedParsed.messages)) {
-                normalizedParsed.messages = this.stitchParsedMessagesWithCommittedBase(
-                    normalizedParsed.messages,
-                    baseMessages,
-                    parseBaseMessages,
-                );
-                this.trimLastAssistantEcho(normalizedParsed.messages, scope?.prompt || getLastUserPromptText(baseMessages));
-            }
-            this.parseErrorMessage = null;
-            return normalizedParsed;
-        } catch (e: any) {
-            const message = e?.message || String(e);
-            this.parseErrorMessage = message;
-            LOG.warn('CLI', `[${this.cliType}] parseOutput error: ${message}`);
-            throw e;
-        }
+    private parseCurrentTranscript(_baseMessages: CliChatMessage[], _partialResponse: string, _scope?: TurnParseScope | null, _screenTextOverride?: string): any {
+        return this.runParseSession();
     }
 
     /** Whether this adapter has CLI scripts loaded */
@@ -2277,8 +1671,6 @@ export class ProviderCliAdapter implements CliAdapter {
     private commitSendUserTurn(state: SendMessageState): void {
         if (state.didCommitUserTurn) return;
         state.didCommitUserTurn = true;
-        this.committedMessages.push({ role: 'user', content: state.text, timestamp: Date.now() });
-        this.syncMessageViews();
     }
 
     private armResponseTimeout(): void {
@@ -2499,16 +1891,6 @@ export class ProviderCliAdapter implements CliAdapter {
         const parsedSessionStatus = typeof parsedStatusBeforeSend?.status === 'string'
             ? String(parsedStatusBeforeSend.status)
             : '';
-        const parsedMessagesBeforeSend = Array.isArray(parsedStatusBeforeSend?.messages)
-            ? parsedStatusBeforeSend.messages.filter((message: any) => message && (message.role === 'user' || message.role === 'assistant'))
-            : [];
-        const shouldCommitParsedIdleBeforeSend = !allowInputDuringGeneration
-            && parsedSessionStatus === 'idle'
-            && parsedMessagesBeforeSend.length > this.committedMessages.length
-            && parsedMessagesBeforeSend.some((message: any) => message?.role === 'assistant' && typeof message?.content === 'string' && message.content.trim());
-        if (shouldCommitParsedIdleBeforeSend) {
-            this.commitCurrentTranscript();
-        }
         if (!allowInputDuringGeneration && (parsedSessionStatus === 'generating' || parsedSessionStatus === 'long_generating')) {
             throw new Error(`${this.cliName} is still processing the previous prompt`);
         }
@@ -2617,9 +1999,6 @@ export class ProviderCliAdapter implements CliAdapter {
             activeModal: this.activeModal,
             parseErrorMessage: this.parseErrorMessage,
             messageCounts: {
-                committed: this.committedMessages.length,
-                structured: this.structuredMessages.length,
-                visible: this.messages.length,
                 parsedCache: Array.isArray(parsedResult?.messages) ? parsedResult.messages.length : undefined,
             },
             buffers: {
@@ -2673,7 +2052,6 @@ export class ProviderCliAdapter implements CliAdapter {
                 responseEpoch: this.responseEpoch,
                 resizeSuppressUntil: this.resizeSuppressUntil,
                 lastApprovalResolvedAt: this.lastApprovalResolvedAt,
-                committedMessagesChangedAt: this.committedMessagesChangedAt,
             },
             finish: {
                 idleFinishCandidate: this.idleFinishCandidate,
@@ -2807,8 +2185,6 @@ export class ProviderCliAdapter implements CliAdapter {
 
     clearHistory(): void {
         this.clearIdleFinishCandidate('clear_history');
-        this.committedMessages = [];
-        this.syncMessageViews();
         this.accumulatedBuffer = '';
         this.accumulatedRawBuffer = '';
         this.currentTurnScope = null;
@@ -2839,7 +2215,7 @@ export class ProviderCliAdapter implements CliAdapter {
 
     resolveModal(buttonIndex: number): void {
         let modal = this.activeModal || this.runParseApproval(this.recentOutputBuffer);
-        if (!modal && typeof this.cliScripts?.parseOutput === 'function') {
+        if (!modal && typeof this.cliScripts?.parseSession === 'function') {
             try {
                 const parsed = this.getScriptParsedStatus();
                 const parsedModal = parsed?.activeModal && Array.isArray(parsed.activeModal.buttons)
@@ -2913,10 +2289,8 @@ export class ProviderCliAdapter implements CliAdapter {
             startupParseGate: this.startupParseGate,
             spawnAt: this.spawnAt,
             workingDir: this.workingDir,
-            messages: this.messages,
-            committedMessages: this.committedMessages,
-            structuredMessages: this.structuredMessages,
-            messageCount: this.committedMessages.length,
+            messages: [],
+            messageCount: 0,
             screenText: screenText.slice(-4000),
             currentTurnScope: this.currentTurnScope,
             startupBuffer: this.startupBuffer.slice(-4000),
@@ -2969,7 +2343,7 @@ export class ProviderCliAdapter implements CliAdapter {
             lifecycleStatus: this.isWaitingForResponse ? 'awaiting_response' : 'idle',
             activeModal: this.activeModal,
             currentTurnScope: this.currentTurnScope,
-            messages: summarizeCliTraceMessages(this.committedMessages, 5),
+            messages: [],
         };
     }
 

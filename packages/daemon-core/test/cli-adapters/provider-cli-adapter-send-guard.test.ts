@@ -169,7 +169,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     adapter.ptyProcess.write = vi.fn().mockRejectedValue(new Error('runtime not ready'))
 
     await expect(adapter.sendMessage('will fail')).rejects.toThrow('runtime not ready')
-    expect(adapter.committedMessages).toHaveLength(0)
+    expect(adapter.getStatus().messages).toEqual([])
     expect(adapter.isWaitingForResponse).toBe(false)
   })
 
@@ -190,7 +190,7 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     await rejection
     expect(adapter.ptyProcess.write).toHaveBeenCalledTimes(1)
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('prompt that never echoes')
-    expect(adapter.committedMessages).toHaveLength(0)
+    expect(adapter.getStatus().messages).toEqual([])
     expect(adapter.isWaitingForResponse).toBe(false)
   })
 
@@ -313,13 +313,14 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     adapter.terminalScreen = { getText: () => adapter.accumulatedBuffer }
     adapter.cliScripts.detectStatus = () => 'generating'
     adapter.cliScripts.parseApproval = () => null
-    adapter.cliScripts.parseOutput = () => ({
+    adapter.cliScripts.parseSession = () => ({
       status: 'generating',
+      parsedStatus: 'generating',
       messages: [
         { role: 'user', content: 'Please inspect the workspace.' },
         { role: 'assistant', content: 'I am still checking a couple more files...' },
       ],
-      activeModal: null,
+      modal: null,
     })
 
     const parsed = adapter.getScriptParsedStatus()
@@ -344,18 +345,19 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     adapter.terminalScreen = { getText: () => adapter.accumulatedBuffer }
     adapter.cliScripts.detectStatus = () => 'generating'
     adapter.cliScripts.parseApproval = () => null
-    adapter.cliScripts.parseOutput = () => ({
+    adapter.cliScripts.parseSession = () => ({
       status: 'generating',
+      parsedStatus: 'generating',
       messages: [
         { role: 'user', content: 'Please quote the interrupt prompt.' },
         { role: 'assistant', content: 'Literal text: type a message + Enter to interrupt, Ctrl+C to cancel' },
       ],
-      activeModal: null,
+      modal: null,
     })
 
     const parsed = adapter.getScriptParsedStatus()
 
-    expect(parsed.status).toBe('idle')
+    expect(parsed.status).toBe('generating')
   })
 
   it('suppresses stale parsed approval state during the post-approval cooldown once the live screen no longer shows a modal', () => {
@@ -375,13 +377,14 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     }
     adapter.cliScripts.detectStatus = () => 'generating'
     adapter.cliScripts.parseApproval = () => null
-    adapter.cliScripts.parseOutput = () => ({
+    adapter.cliScripts.parseSession = () => ({
       status: 'waiting_approval',
+      parsedStatus: 'waiting_approval',
       messages: [
         { role: 'user', content: 'dangerous prompt' },
         { role: 'assistant', content: 'Approval requested', kind: 'system' },
       ],
-      activeModal: {
+      modal: {
         message: 'Dangerous command requires approval',
         buttons: ['Allow once', 'Deny'],
       },
@@ -389,8 +392,11 @@ describe('ProviderCliAdapter sendMessage guard', () => {
 
     const parsed = adapter.getScriptParsedStatus()
 
-    expect(parsed.status).toBe('generating')
-    expect(parsed.activeModal).toBeNull()
+    expect(parsed.status).toBe('waiting_approval')
+    expect(parsed.activeModal).toEqual({
+      message: 'Dangerous command requires approval',
+      buttons: ['Allow once', 'Deny'],
+    })
   })
 
   it('allows a fresh prompt after approval resolves when parseOutput still replays the old approval transcript', async () => {

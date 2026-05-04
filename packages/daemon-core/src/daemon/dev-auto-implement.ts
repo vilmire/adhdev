@@ -1098,7 +1098,7 @@ export function buildCliAutoImplPrompt(ctx: DevServerContext,
   lines.push('');
 
   const funcToFile: Record<string, string> = {
-    parseOutput: 'parse_output.js',
+    parseSession: 'parse_session.js',
     detectStatus: 'detect_status.js',
     parseApproval: 'parse_approval.js',
   };
@@ -1200,7 +1200,7 @@ export function buildCliAutoImplPrompt(ctx: DevServerContext,
   lines.push('');
   lines.push('| Function | Input | Return |');
   lines.push('|---|---|---|');
-  lines.push('| `parseOutput` | `{ buffer, rawBuffer, recentBuffer, screenText, messages, partialResponse }` | `{ id, status, title, messages, activeModal }` |');
+  lines.push('| `parseSession` | `{ buffer, rawBuffer, recentBuffer, screenText, messages, partialResponse }` | `{ id, status, title, messages, activeModal }` |');
   lines.push('| `detectStatus` | `{ tail, screenText, rawBuffer }` | `idle`, `generating`, `waiting_approval`, or `error` |');
   lines.push('| `parseApproval` | `{ buffer, rawBuffer, tail }` | `{ message, buttons }` or `null` |');
   lines.push('');
@@ -1434,7 +1434,7 @@ export function buildCliAutoImplPrompt(ctx: DevServerContext,
 
   lines.push('## Required Validation');
   lines.push('1. Confirm `detectStatus` changes sensibly between startup, generating, approval, and idle.');
-  lines.push('2. Confirm `parseOutput` produces a stable transcript without duplicating past turns when the PTY redraws.');
+  lines.push('2. Confirm `parseSession` produces a stable transcript without duplicating past turns when the PTY redraws.');
   lines.push('3. Confirm the latest assistant message streams through `partialResponse` while generation is in progress.');
   lines.push('4. Confirm approval parsing returns meaningful button labels when the CLI requests permission.');
   lines.push('5. Confirm the Python file was actually created and executed, not just described in chat text.');

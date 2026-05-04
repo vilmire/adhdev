@@ -326,8 +326,6 @@ interface ChatTailSubscriptionState {
   request: SubscribeRequest & { topic: 'session.chat_tail'; params: SessionChatTailSubscriptionParams };
   seq: number;
   cursor: {
-    knownMessageCount: number;
-    lastMessageSignature: string;
     tailLimit: number;
   };
   lastDeliveredSignature: string;
@@ -1332,8 +1330,6 @@ class StandaloneServer {
         },
         seq: 0,
         cursor: {
-          knownMessageCount: Math.max(0, Number(params.knownMessageCount || 0)),
-          lastMessageSignature: typeof params.lastMessageSignature === 'string' ? params.lastMessageSignature : '',
           tailLimit: Math.max(0, Number(params.tailLimit || 0)),
         },
         lastDeliveredSignature: '',
@@ -1463,8 +1459,6 @@ class StandaloneServer {
     const result = await this.executeCommand('read_chat', {
       targetSessionId: request.targetSessionId,
       ...(request.historySessionId ? { historySessionId: request.historySessionId } : {}),
-      knownMessageCount: state.cursor.knownMessageCount,
-      lastMessageSignature: state.cursor.lastMessageSignature,
       ...(state.cursor.tailLimit > 0 ? { tailLimit: state.cursor.tailLimit } : {}),
     });
     const prepared = prepareSessionChatTailUpdate({

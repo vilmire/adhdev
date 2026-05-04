@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { buildChatMessageSignature } from '@adhdev/daemon-core/chat/chat-signatures'
-import type { ReadChatCursor, ReadChatSyncResult, SessionChatTailUpdate, SubscribeRequest } from '@adhdev/daemon-core'
+import type { SessionChatTailUpdate, SubscribeRequest } from '@adhdev/daemon-core'
 import type { ActiveConversation, DashboardMessage } from './types'
 import { useTransport } from '../../context/TransportContext'
 import { subscriptionManager, type SubscriptionHandle, type SubscriptionManager } from '../../managers/SubscriptionManager'
 import { getConversationHistorySessionId } from './conversation-identity'
 import { getConversationDaemonRouteId } from './conversation-selectors'
-import { getLiveMessageUpdateKeys, getMessageTimestamp, excludeMessagesPresentInLiveFeed } from './message-utils'
+
+
+export interface SessionChatTailCursor {
+  tailLimit: number
+}
 
 export interface SessionChatTailSnapshot {
   liveMessages: DashboardMessage[]
-  cursor: Required<ReadChatCursor>
+  cursor: SessionChatTailCursor
   historyMessages: DashboardMessage[]
   historyOffset: number
   hasMoreHistory: boolean
@@ -74,12 +78,8 @@ export function buildLastMessageSignature(message: DashboardMessage | null | und
   return buildChatMessageSignature(message)
 }
 
-export function buildReadChatCursor(messages: DashboardMessage[], tailLimit = DEFAULT_TAIL_LIMIT): Required<ReadChatCursor> {
-  return {
-    knownMessageCount: messages.length,
-    lastMessageSignature: buildLastMessageSignature(messages[messages.length - 1]),
-    tailLimit,
-  }
+export function buildReadChatCursor(_messages: DashboardMessage[], tailLimit = DEFAULT_TAIL_LIMIT): SessionChatTailCursor {
+  return { tailLimit }
 }
 
 function buildChatSnapshotSignature(messages: DashboardMessage[], status?: string): string {
@@ -101,86 +101,6 @@ function buildChatSnapshotSignature(messages: DashboardMessage[], status?: strin
     String(lastMessage.receivedAt ?? lastMessage.timestamp ?? ''),
     content,
   ].join('|')
-}
-
-function getLatestMessageTimestamp(messages: DashboardMessage[]): number {
-  let max = 0
-  for (const message of messages) {
-    const ts = getMessageTimestamp(message)
-    if (ts > max) max = ts
-  }
-  return max
-}
-
-function shouldHydrateLiveMessages(
-  currentMessages: DashboardMessage[],
-  incomingMessages: DashboardMessage[],
-): boolean {
-  if (incomingMessages.length === 0) return false
-  if (currentMessages.length === 0) return true
-
-  const currentAt = getLatestMessageTimestamp(currentMessages)
-  const incomingAt = getLatestMessageTimestamp(incomingMessages)
-  if (currentAt > 0 && incomingAt <= 0) return false
-  if (currentAt > 0 && incomingAt > 0 && incomingAt < currentAt) return false
-  if (currentAt > 0 && incomingAt === currentAt && incomingMessages.length < currentMessages.length) return false
-
-  return true
-}
-
-function appendOrReplaceLiveMessageUpdates(
-  previousMessages: DashboardMessage[],
-  incomingMessages: DashboardMessage[],
-): DashboardMessage[] {
-  if (incomingMessages.length === 0) return previousMessages
-  const nextMessages = [...previousMessages]
-  const indexByKey = new Map<string, number>()
-  const rememberKeys = (message: DashboardMessage, index: number) => {
-    for (const key of getLiveMessageUpdateKeys(message)) {
-      indexByKey.set(key, index)
-    }
-  }
-  nextMessages.forEach(rememberKeys)
-
-  for (const incoming of incomingMessages) {
-    const incomingKeys = getLiveMessageUpdateKeys(incoming)
-    const existingIndex = incomingKeys
-      .map((key) => indexByKey.get(key))
-      .find((index): index is number => index !== undefined)
-    if (existingIndex !== undefined) {
-      nextMessages[existingIndex] = incoming
-      rememberKeys(incoming, existingIndex)
-      continue
-    }
-    nextMessages.push(incoming)
-    rememberKeys(incoming, nextMessages.length - 1)
-  }
-  return nextMessages
-}
-
-function normalizeLiveMessageUpdates(messages: DashboardMessage[]): DashboardMessage[] {
-  return appendOrReplaceLiveMessageUpdates([], messages)
-}
-
-export function applyReadChatSync(
-  previousMessages: DashboardMessage[],
-  result: Partial<ReadChatSyncResult>,
-): DashboardMessage[] {
-  const incomingMessages = normalizeLiveMessageUpdates(Array.isArray(result.messages) ? result.messages as DashboardMessage[] : [])
-  switch (result.syncMode) {
-    case 'noop':
-      return previousMessages
-    case 'append':
-      return appendOrReplaceLiveMessageUpdates(previousMessages, incomingMessages)
-    case 'replace_tail': {
-      const replaceFrom = Math.max(0, Math.min(Number(result.replaceFrom ?? previousMessages.length), previousMessages.length))
-      return appendOrReplaceLiveMessageUpdates(previousMessages.slice(0, replaceFrom), incomingMessages)
-    }
-    case 'full':
-      return incomingMessages
-    default:
-      return incomingMessages
-  }
 }
 
 export class SessionChatTailController {
@@ -214,25 +134,9 @@ export class SessionChatTailController {
     if (options.tailLimit !== undefined) {
       const nextTailLimit = Math.max(0, options.tailLimit)
       if (nextTailLimit !== this.snapshot.cursor.tailLimit) {
-        // When tailLimit grows the existing cursor may represent a tail window
-        // (e.g. a warm subscription used a compact tail window, then another caller requests more).
-        // Keeping knownMessageCount+lastSig causes the daemon to return an empty
-        // append (nothing after the already-known last message), and the guard in
-        // handleUpdate advances knownCount to totalMessages — permanently hiding
-        // the earlier messages that were outside the smaller window.
-        // Reset to zero so the daemon delivers the full new tail on reconnect.
-        const growing = nextTailLimit > this.snapshot.cursor.tailLimit
-        const nextKnownMessageCount = growing
-          ? 0
-          : Math.min(this.snapshot.cursor.knownMessageCount, this.snapshot.liveMessages.length)
-        const nextLastMessageSignature = growing ? '' : this.snapshot.cursor.lastMessageSignature
         this.snapshot = {
           ...this.snapshot,
-          cursor: {
-            knownMessageCount: nextKnownMessageCount,
-            lastMessageSignature: nextLastMessageSignature,
-            tailLimit: nextTailLimit,
-          },
+          cursor: { tailLimit: nextTailLimit },
         }
         if (this.transportSubscription) {
           this.disconnect()
@@ -244,24 +148,6 @@ export class SessionChatTailController {
 
   getSnapshot(): SessionChatTailSnapshot {
     return this.snapshot
-  }
-
-  hydrateLiveMessages(messages: DashboardMessage[]): void {
-    const incoming = normalizeLiveMessageUpdates(Array.isArray(messages) ? messages : [])
-    if (!shouldHydrateLiveMessages(this.snapshot.liveMessages, incoming)) return
-    const nextMessages = incoming
-    const nextCursor = buildReadChatCursor(nextMessages, this.snapshot.cursor.tailLimit)
-    const unchanged = buildChatSnapshotSignature(this.snapshot.liveMessages)
-      === buildChatSnapshotSignature(nextMessages)
-      && this.snapshot.cursor.knownMessageCount === nextCursor.knownMessageCount
-      && this.snapshot.cursor.lastMessageSignature === nextCursor.lastMessageSignature
-    if (unchanged) return
-    this.snapshot = {
-      ...this.snapshot,
-      liveMessages: nextMessages,
-      cursor: nextCursor,
-    }
-    this.emit()
   }
 
   subscribe(listener: (snapshot: SessionChatTailSnapshot) => void): () => void {
@@ -308,10 +194,9 @@ export class SessionChatTailController {
           excludeRecentCount: this.snapshot.liveMessages.length,
         })
         const nextMessages = Array.isArray(result.messages) ? result.messages : []
-        const visibleHistoryMessages = excludeMessagesPresentInLiveFeed(nextMessages, this.snapshot.liveMessages)
         this.snapshot = {
           ...this.snapshot,
-          historyMessages: [...visibleHistoryMessages, ...this.snapshot.historyMessages],
+          historyMessages: [...nextMessages, ...this.snapshot.historyMessages],
           historyOffset: this.snapshot.historyOffset + nextMessages.length,
           hasMoreHistory: result.hasMore === true,
           historyError: null,
@@ -338,8 +223,6 @@ export class SessionChatTailController {
       params: {
         targetSessionId: this.sessionId,
         ...(this.historySessionId ? { historySessionId: this.historySessionId } : {}),
-        knownMessageCount: this.snapshot.cursor.knownMessageCount,
-        lastMessageSignature: this.snapshot.cursor.lastMessageSignature,
         ...(this.snapshot.cursor.tailLimit > 0 ? { tailLimit: this.snapshot.cursor.tailLimit } : {}),
       },
     }
@@ -381,74 +264,17 @@ export class SessionChatTailController {
   private handleUpdate(update: SessionChatTailUpdate): void {
     if (update.error) return
 
-    // If the daemon's last-message signature already matches our current tail,
-    // the cursor can still advance, but the payload is not necessarily redundant:
-    // a replace_tail/full-ish refresh may restore an earlier standard assistant
-    // answer that was missed while later tool/terminal rows already reached the
-    // browser. Apply non-empty payloads first; dedupe/update logic below prevents
-    // duplicate tail rows, while preserving those restored earlier messages.
-    const updateLastSig = typeof update.lastMessageSignature === 'string'
-      ? update.lastMessageSignature
-      : ''
-    const currentLastSig = buildLastMessageSignature(
-      this.snapshot.liveMessages[this.snapshot.liveMessages.length - 1],
-    )
-    const incomingMessages = Array.isArray(update.messages) ? update.messages as DashboardMessage[] : []
-    if (update.syncMode !== 'full' && updateLastSig && currentLastSig === updateLastSig && incomingMessages.length === 0) {
-      const advancedCount = Math.max(
-        this.snapshot.cursor.knownMessageCount,
-        Number(update.totalMessages || 0),
-      )
-      const advancedCursor: Required<ReadChatCursor> = {
-        knownMessageCount: advancedCount,
-        lastMessageSignature: updateLastSig,
-        tailLimit: this.snapshot.cursor.tailLimit,
-      }
-      const cursorUnchanged =
-        this.snapshot.cursor.knownMessageCount === advancedCursor.knownMessageCount
-        && this.snapshot.cursor.lastMessageSignature === advancedCursor.lastMessageSignature
-      if (!cursorUnchanged) {
-        this.snapshot = { ...this.snapshot, cursor: advancedCursor }
-        this.manager.updateParams('session.chat_tail', this.subscriptionKey, {
-          knownMessageCount: advancedCursor.knownMessageCount,
-          lastMessageSignature: advancedCursor.lastMessageSignature,
-        })
-      }
-      return
-    }
-
-    const nextMessages = applyReadChatSync(this.snapshot.liveMessages, update)
-    const nextLastMessageSignature = updateLastSig
-      || buildLastMessageSignature(nextMessages[nextMessages.length - 1])
-    const nextTailMatchesDaemon = !!updateLastSig
-      && buildLastMessageSignature(nextMessages[nextMessages.length - 1]) === updateLastSig
-    const shouldAdvanceToDaemonTotal = update.syncMode !== 'full'
-      && nextTailMatchesDaemon
-      && Number(update.totalMessages || 0) > nextMessages.length
-    const nextCursor: Required<ReadChatCursor> = {
-      knownMessageCount: shouldAdvanceToDaemonTotal
-        ? Math.max(nextMessages.length, Number(update.totalMessages || 0))
-        : nextMessages.length,
-      lastMessageSignature: nextLastMessageSignature,
-      tailLimit: this.snapshot.cursor.tailLimit,
-    }
+    const nextMessages = Array.isArray(update.messages) ? update.messages as DashboardMessage[] : []
+    const nextCursor: SessionChatTailCursor = { tailLimit: this.snapshot.cursor.tailLimit }
     const unchanged = buildChatSnapshotSignature(this.snapshot.liveMessages)
       === buildChatSnapshotSignature(nextMessages)
-      && this.snapshot.cursor.knownMessageCount === nextCursor.knownMessageCount
-      && this.snapshot.cursor.lastMessageSignature === nextCursor.lastMessageSignature
+      && this.snapshot.cursor.tailLimit === nextCursor.tailLimit
     if (unchanged) return
     this.snapshot = {
       ...this.snapshot,
       liveMessages: nextMessages,
       cursor: nextCursor,
     }
-    // Keep the subscription manager's stored request params up to date so that
-    // resubscribeAll / resubscribeForDaemon on reconnect sends the current cursor
-    // rather than the stale cursor from when the subscription was first opened.
-    this.manager.updateParams('session.chat_tail', this.subscriptionKey, {
-      knownMessageCount: nextCursor.knownMessageCount,
-      lastMessageSignature: nextCursor.lastMessageSignature,
-    })
     this.emit()
   }
 }
@@ -593,12 +419,6 @@ export function useSessionChatTailController(
     }
   }, [controller, tailLimit])
 
-  useEffect(() => {
-    if (!controller) return
-    controller.hydrateLiveMessages(activeConv.messages as DashboardMessage[])
-    setSnapshot(controller.getSnapshot())
-  }, [activeConv.messages, controller])
-
   const loadHistoryPage = useCallback(async () => {
     if (!controller || !daemonId || !sessionId) return
     await controller.loadHistoryPage(async ({ offset, excludeRecentCount }) => {
@@ -630,14 +450,13 @@ export function useSessionChatTailController(
 export function useWarmSessionChatTailControllers(
   conversations: ActiveConversation[],
   options?: { enabled?: boolean; tailLimit?: number; recentActivityMs?: number },
-): Map<string, SessionChatTailSnapshot> {
+): void {
   const { sendData } = useTransport()
   const enabled = options?.enabled !== false
   const tailLimit = Math.max(0, options?.tailLimit ?? DEFAULT_TAIL_LIMIT)
   const recentActivityMs = Math.max(0, Number(options?.recentActivityMs ?? DEFAULT_WARM_SESSION_CHAT_TAIL_RECENT_ACTIVITY_MS))
   const refreshMs = getWarmSessionChatTailDescriptorRefreshMs(recentActivityMs)
   const [refreshTick, setRefreshTick] = useState(0)
-  const [snapshots, setSnapshots] = useState<Map<string, SessionChatTailSnapshot>>(() => new Map())
 
   useEffect(() => {
     if (!enabled || conversations.length === 0) return
@@ -655,39 +474,17 @@ export function useWarmSessionChatTailControllers(
   )
 
   useEffect(() => {
-    if (!enabled || !sendData || descriptorState.descriptors.length === 0) {
-      setSnapshots((prev) => (prev.size === 0 ? prev : new Map()))
-      return
-    }
-    const controllers = descriptorState.descriptors.map((descriptor) => ({
-      key: getControllerKey(descriptor.daemonId, descriptor.sessionId),
-      controller: getOrCreateSessionChatTailController({
-        ...descriptor,
-        sendData,
-        tailLimit,
-      }),
+    if (!enabled || !sendData || descriptorState.descriptors.length === 0) return
+    const controllers = descriptorState.descriptors.map((descriptor) => getOrCreateSessionChatTailController({
+      ...descriptor,
+      sendData,
+      tailLimit,
     }))
-    const activeKeys = new Set(controllers.map(({ key }) => key))
-    const publishSnapshot = (key: string, snapshot: SessionChatTailSnapshot) => {
-      setSnapshots((prev) => {
-        const next = new Map(prev)
-        for (const existingKey of next.keys()) {
-          if (!activeKeys.has(existingKey)) next.delete(existingKey)
-        }
-        next.set(key, snapshot)
-        return next
-      })
-    }
-    const unsubscribes = controllers.map(({ key, controller }) => {
+    controllers.forEach((controller) => {
       controller.retain()
-      publishSnapshot(key, controller.getSnapshot())
-      return controller.subscribe((snapshot) => publishSnapshot(key, snapshot))
     })
     return () => {
-      unsubscribes.forEach((unsubscribe) => unsubscribe())
-      controllers.forEach(({ controller }) => controller.release())
+      controllers.forEach((controller) => controller.release())
     }
   }, [descriptorState.signature, enabled, sendData, tailLimit])
-
-  return snapshots
 }

@@ -85,9 +85,7 @@ describe('CliProviderInstance provider patch state', () => {
     expect(state.status).toBe('error')
     expect(state.errorReason).toBe('parse_error')
     expect(state.errorMessage).toContain('parse exploded')
-    expect(state.activeChat.messages).toEqual([
-      expect.objectContaining({ content: 'stale transcript' }),
-    ])
+    expect(state.activeChat.messages).toEqual([])
   })
 
   it('does not surface parsed idle chat status while the adapter still reports generating', () => {

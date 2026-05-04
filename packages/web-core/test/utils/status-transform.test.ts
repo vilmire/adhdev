@@ -284,7 +284,7 @@ describe('statusPayloadToEntries', () => {
         expect(entries[3].runtimeAttachedClients ?? []).toEqual([]);
     });
 
-    it('preserves existing active chat messages and approval buttons when live snapshots omit transcript bodies', () => {
+    it('preserves existing active chat messages but treats live activeModal as authoritative', () => {
         const entries = statusPayloadToEntries(createPayload({
             sessions: [createSession({
                 id: 'cli-keep-chat',
@@ -326,10 +326,7 @@ describe('statusPayloadToEntries', () => {
             { role: 'user', content: 'full prompt', kind: 'standard' },
             { role: 'assistant', content: 'full reply', kind: 'standard' },
         ])
-        expect(entries[1]?.activeChat?.activeModal).toEqual({
-            message: '⚠️ Dangerous Command',
-            buttons: ['Allow once', 'Deny'],
-        })
+        expect(entries[1]?.activeChat?.activeModal).toBeNull()
     })
 
     it('preserves an existing chat mode when a sparse live CLI snapshot omits mode', () => {

@@ -8,8 +8,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 describe('handleReadChat CLI hotpath logging', () => {
   it('does not emit always-on info logs for every CLI-like read_chat result', () => {
     const source = readFileSync(resolve(__dirname, '../../src/commands/chat-commands.ts'), 'utf8')
-    expect(source).not.toContain("LOG.info('Command', `[read_chat] cli-like resolved")
-    expect(source).toContain("LOG.debug('Command', `[read_chat] cli-like resolved")
+    expect(source).not.toContain("LOG.info('Command', `[read_chat] cli-like parsed")
+    expect(source).toContain("LOG.debug('Command', `[read_chat] cli-like parsed")
   })
 
   it('keeps successful read_chat start/end command logs out of the default info log stream', () => {

@@ -35,7 +35,6 @@ export type {
   SessionCapability,
   AgentSessionStream,
   ReadChatCursor,
-  ReadChatSyncMode,
   ReadChatSyncResult,
   TransportTopic,
   SessionChatTailSubscriptionParams,

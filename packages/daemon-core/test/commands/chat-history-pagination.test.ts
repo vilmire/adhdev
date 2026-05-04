@@ -11,7 +11,7 @@ describe('handleChatHistory', () => {
     readProviderChatHistoryMock.mockReset()
   })
 
-  it('excludes the live transcript tail when paging older CLI history', async () => {
+  it('does not infer CLI history exclusion from adapter status messages', async () => {
     const { handleChatHistory } = await import('../../src/commands/chat-commands.js')
 
     readProviderChatHistoryMock.mockReturnValue({
@@ -48,8 +48,9 @@ describe('handleChatHistory', () => {
       workspace: undefined,
       offset: 0,
       limit: 30,
-      excludeRecentCount: 50,
+      excludeRecentCount: 0,
       historyBehavior: undefined,
+      scripts: undefined,
     })
     expect(result).toMatchObject({
       success: true,
@@ -99,6 +100,7 @@ describe('handleChatHistory', () => {
       limit: 30,
       excludeRecentCount: 1000,
       historyBehavior: undefined,
+      scripts: undefined,
     })
     expect(result).toMatchObject({
       success: true,

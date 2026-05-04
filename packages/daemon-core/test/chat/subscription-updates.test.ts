@@ -5,22 +5,17 @@ import {
 } from '../../src/chat/subscription-updates'
 
 describe('chat subscription update helpers', () => {
-  it('normalizes chat-tail updates into a shared transport payload', () => {
+  it('normalizes chat-tail updates into a shared transport payload without legacy sync cursor fields', () => {
     const prepared = prepareSessionChatTailUpdate({
       key: 'sub-1',
       sessionId: 'session-1',
       historySessionId: 'provider-1',
       seq: 3,
       timestamp: 123,
-      cursor: {
-        knownMessageCount: 1,
-        lastMessageSignature: 'sig-old',
-        tailLimit: 40,
-      },
+      cursor: { tailLimit: 40 },
       lastDeliveredSignature: '',
       result: {
         success: true,
-        syncMode: 'unexpected-mode',
         messages: [{ id: 'msg-2', content: 'hello' }],
         status: 'generating',
         title: 'Repo Thread',
@@ -28,17 +23,10 @@ describe('chat subscription update helpers', () => {
           message: 'Approve?',
           buttons: ['Approve', 42, 'Reject'],
         },
-        replaceFrom: 0,
-        totalMessages: 2,
-        lastMessageSignature: 'sig-2',
       },
     })
 
-    expect(prepared.cursor).toEqual({
-      knownMessageCount: 2,
-      lastMessageSignature: 'sig-2',
-      tailLimit: 40,
-    })
+    expect(prepared.cursor).toEqual({ tailLimit: 40 })
     expect(prepared.seq).toBe(4)
     expect(prepared.lastDeliveredSignature).not.toBe('')
     expect(prepared.update).toMatchObject({
@@ -50,51 +38,42 @@ describe('chat subscription update helpers', () => {
       timestamp: 123,
       status: 'generating',
       title: 'Repo Thread',
-      syncMode: 'full',
-      replaceFrom: 0,
-      totalMessages: 2,
-      lastMessageSignature: 'sig-2',
       activeModal: {
         message: 'Approve?',
         buttons: ['Approve', 'Reject'],
       },
     })
+    expect(prepared.update).not.toHaveProperty('syncMode')
+    expect(prepared.update).not.toHaveProperty('replaceFrom')
+    expect(prepared.update).not.toHaveProperty('totalMessages')
+    expect(prepared.update).not.toHaveProperty('lastMessageSignature')
   })
 
-  it('suppresses noop chat-tail updates while still refreshing the cursor', () => {
+  it('does not interpret legacy noop sync payloads as a local cursor state machine', () => {
     const prepared = prepareSessionChatTailUpdate({
       key: 'sub-1',
       sessionId: 'session-1',
       seq: 2,
       timestamp: 456,
-      cursor: {
-        knownMessageCount: 1,
-        lastMessageSignature: 'sig-old',
-        tailLimit: 25,
-      },
+      cursor: { tailLimit: 25 },
       lastDeliveredSignature: 'same-signature',
       result: {
         success: true,
         syncMode: 'noop',
-        totalMessages: 5,
-        lastMessageSignature: 'sig-5',
-      },
+        messages: [{ id: 'msg-5', content: 'parser tail' }],
+      } as any,
     })
 
-    expect(prepared.update).toBeNull()
-    expect(prepared.seq).toBe(2)
-    expect(prepared.lastDeliveredSignature).toBe('same-signature')
-    expect(prepared.cursor).toEqual({
-      knownMessageCount: 5,
-      lastMessageSignature: 'sig-5',
-      tailLimit: 25,
+    expect(prepared.update).toMatchObject({
+      topic: 'session.chat_tail',
+      messages: [{ id: 'msg-5', content: 'parser tail' }],
     })
+    expect(prepared.seq).toBe(3)
+    expect(prepared.cursor).toEqual({ tailLimit: 25 })
   })
 
   it('suppresses failed read_chat results without advancing cursor or publishing empty-success chat-tail', () => {
     const cursor = {
-      knownMessageCount: 4,
-      lastMessageSignature: 'sig-current',
       tailLimit: 25,
     }
     const prepared = prepareSessionChatTailUpdate({
@@ -107,11 +86,8 @@ describe('chat subscription update helpers', () => {
       result: {
         success: false,
         error: 'provider parser exploded',
-        syncMode: 'full',
         messages: [],
         status: 'idle',
-        totalMessages: 0,
-        lastMessageSignature: '',
       } as any,
     })
 

@@ -12,7 +12,6 @@ import {
     reconcileCliViewModeOverrides,
 } from '../components/dashboard/cliViewModeOverrides'
 import { useWarmSessionChatTailControllers } from '../components/dashboard/session-chat-tail-controller'
-import { applyConversationMessageSnapshots } from '../components/dashboard/conversation-message-snapshot'
 import { useHiddenTabs, isConversationHidden } from '../hooks/useHiddenTabs'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
@@ -162,15 +161,7 @@ export default function Dashboard() {
         () => new Map(conversations.map(conversation => [conversation.tabKey, conversation])),
         [conversations],
     )
-    const warmChatTailSnapshots = useWarmSessionChatTailControllers(visibleConversations, warmChatTailOptions)
-    const messageSnapshotConversations = useMemo(
-        () => applyConversationMessageSnapshots(conversations, warmChatTailSnapshots),
-        [conversations, warmChatTailSnapshots],
-    )
-    const messageSnapshotVisibleConversations = useMemo(
-        () => applyConversationMessageSnapshots(visibleConversations, warmChatTailSnapshots),
-        [visibleConversations, warmChatTailSnapshots],
-    )
+    useWarmSessionChatTailControllers(visibleConversations, warmChatTailOptions)
     useEffect(() => {
         if (Object.keys(cliViewModeOverrides).length === 0) return
         setCliViewModeOverrides((prev) => reconcileCliViewModeOverrides(prev, ides))
@@ -183,7 +174,7 @@ export default function Dashboard() {
         notifications,
         unreadCount: notificationUnreadCount,
     } = useDashboardNotifications({
-        conversations: messageSnapshotConversations,
+        conversations: conversations,
         liveSessionInboxState,
     })
     const {
@@ -214,7 +205,7 @@ export default function Dashboard() {
         groupSizes,
         updateGroupSizes,
         isMobile,
-        visibleConversations: messageSnapshotVisibleConversations,
+        visibleConversations: visibleConversations,
         visibleTabKeys,
     })
 
@@ -226,8 +217,8 @@ export default function Dashboard() {
         setDesktopActiveTab,
     } = useDashboardDesktopWorkspaceState({
         isMobile,
-        conversations: messageSnapshotConversations,
-        visibleConversations: messageSnapshotVisibleConversations,
+        conversations: conversations,
+        visibleConversations: visibleConversations,
         groupActiveTabIds,
         focusedGroup,
         groupedConvs,
@@ -309,13 +300,13 @@ export default function Dashboard() {
     })
 
     const mobileChatConversations = useMemo(
-        () => messageSnapshotVisibleConversations,
-        [messageSnapshotVisibleConversations],
+        () => visibleConversations,
+        [visibleConversations],
     )
     const showMobileChatMode = isMobile && mobileViewMode === 'chat'
     const hiddenConversations = useMemo(
-        () => messageSnapshotConversations.filter(conversation => isConversationHidden(hiddenTabs, conversation)),
-        [messageSnapshotConversations, hiddenTabs],
+        () => conversations.filter(conversation => isConversationHidden(hiddenTabs, conversation)),
+        [conversations, hiddenTabs],
     )
 
     const handleRequestOpenSession = useCallback((sessionId: string) => {
@@ -488,7 +479,7 @@ export default function Dashboard() {
                 groupTabOrders={groupTabOrders}
                 setGroupTabOrder={setGroupTabOrder}
                 toggleHiddenTab={(tabKey) => toggleHiddenConversation(conversationByTabKey.get(tabKey) || { tabKey })}
-                visibleConversations={messageSnapshotVisibleConversations}
+                visibleConversations={visibleConversations}
                 hiddenConversations={hiddenConversations}
                 requestedDesktopTabKey={requestedDesktopTabKey}
                 onRequestedDesktopTabConsumed={consumeRequestedActiveTab}

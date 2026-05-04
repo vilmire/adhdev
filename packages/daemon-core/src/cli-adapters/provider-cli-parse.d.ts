@@ -5,14 +5,7 @@ export interface TurnParseScope {
     bufferStart: number;
     rawBufferStart: number;
 }
-export declare function hydrateCliParsedMessages(parsedMessages: any[], options: {
-    committedMessages: CliChatMessage[];
-    scope?: TurnParseScope | null;
-    lastOutputAt: number;
-    now?: number;
-}): any[];
 export declare function normalizeCliParsedMessages(parsedMessages: any[], options: {
-    committedMessages: CliChatMessage[];
     scope?: TurnParseScope | null;
     lastOutputAt: number;
     now?: number;

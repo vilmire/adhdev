@@ -378,9 +378,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.maybeAppendRuntimeRecoveryMessage(runtime);
         let parsedMessages = Array.isArray(parsedStatus?.messages)
             ? parsedStatus.messages
-            : (parseErrorMessage
-                ? normalizeChatMessages(Array.isArray(adapterStatus.messages) ? adapterStatus.messages as any : [])
-                : []);
+            : [];
         const historyMessageCount = Number.isFinite(parsedStatus?.historyMessageCount)
             ? Math.max(0, Number(parsedStatus.historyMessageCount))
             : null;
@@ -388,25 +386,6 @@ export class CliProviderInstance implements ProviderInstance {
             parsedMessages = historyMessageCount > 0
                 ? parsedMessages.slice(-historyMessageCount)
                 : [];
-        }
-        // committedMessages (adapterStatus.messages) is the adapter's accumulated
-        // conversation history — use it as a floor to prevent history from disappearing.
-        //
-        // waiting_approval: always override — the approval dialog fills the terminal,
-        // pushing prior conversation out of view; parsedMessages will be partial or empty
-        // regardless of historyMessageCount.
-        //
-        // Other active states (generating, long_generating, error): apply floor only
-        // when the script has not explicitly windowed via historyMessageCount, so
-        // intentional windowing is preserved. Excludes idle — scripts may legitimately
-        // return messages:[] when the CLI exits or a new session begins.
-        const committedMessages = Array.isArray(adapterStatus.messages) ? adapterStatus.messages : [];
-        const isActiveNonIdle = adapterStatus.status !== 'idle';
-        const shouldApplyCommittedFloor = parsedMessages.length < committedMessages.length
-            && (adapterStatus.status === 'waiting_approval'
-                || (isActiveNonIdle && historyMessageCount === null));
-        if (shouldApplyCommittedFloor) {
-            parsedMessages = normalizeChatMessages(committedMessages as any);
         }
         const mergedMessages = this.mergeConversationMessages(parsedMessages);
         const canonicalBackedHistory = this.syncCanonicalSavedHistoryIfNeeded();
@@ -516,13 +495,9 @@ export class CliProviderInstance implements ProviderInstance {
         const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
         const visibleStatus = autoApproveActive ? 'generating' : adapterStatus.status;
         const runtime = this.adapter.getRuntimeMetadata();
-        const lastCommittedMessageActivityAt = typeof this.adapter.getLastCommittedMessageActivityAt === 'function'
-            ? this.adapter.getLastCommittedMessageActivityAt()
-            : 0;
         return {
             id: this.instanceId,
             status: visibleStatus,
-            lastMessageAt: lastCommittedMessageActivityAt || undefined,
             runtimeLifecycle: runtime?.lifecycle ?? null,
             runtimeSurfaceKind: runtime?.surfaceKind,
             runtimeRestoredFromStorage: runtime?.restoredFromStorage === true,
@@ -643,7 +618,7 @@ export class CliProviderInstance implements ProviderInstance {
         const chatTitle = `${this.provider.name} · ${dirName}`;
         const partial = this.adapter.getPartialResponse();
         const progressFingerprint = newStatus === 'generating'
-            ? `${partial || ''}::${adapterStatus.messages.at(-1)?.content || ''}`.slice(-2000)
+            ? `${partial || ''}`.slice(-2000)
             : undefined;
 
         const previousStatus = this.lastStatus;
@@ -1136,18 +1111,6 @@ export class CliProviderInstance implements ProviderInstance {
             receivedAt: message.receivedAt,
         }));
         this.suppressIdleHistoryReplay = restoredHistory.messages.length > 0;
-        if (restoredHistory.messages.length > 0) {
-            this.adapter.seedCommittedMessages(
-                restoredHistory.messages.map((message) => ({
-                    role: message.role,
-                    content: message.content,
-                    timestamp: message.receivedAt,
-                    receivedAt: message.receivedAt,
-                    kind: message.kind,
-                    senderName: message.senderName,
-                })),
-            );
-        }
     }
 
 

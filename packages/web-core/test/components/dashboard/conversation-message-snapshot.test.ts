@@ -1,12 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-    applyConversationMessageSnapshots,
     buildVisibleConversationMessages,
     getConversationLiveMessages,
-    getConversationMessageAuthorityKey,
 } from '../../../src/components/dashboard/conversation-message-snapshot'
-import { getConversationNotificationPreview } from '../../../src/components/dashboard/conversation-selectors'
-import { getConversationPreviewText } from '../../../src/components/dashboard/conversation-presenters'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
 import type { SessionChatTailSnapshot } from '../../../src/components/dashboard/session-chat-tail-controller'
 
@@ -44,90 +40,6 @@ function createSnapshot(messages: ActiveConversation['messages']): SessionChatTa
 }
 
 describe('conversation message authority snapshot', () => {
-    it('feeds mobile and notification previews from the same live chat-tail message snapshot', () => {
-        const conversation = createConversation({
-            messages: [{ role: 'assistant', content: 'old row message', id: 'old-1', receivedAt: 1000 }],
-            lastMessagePreview: 'stale compact preview',
-            lastMessageAt: 3000,
-        })
-        const snapshots = new Map([
-            [getConversationMessageAuthorityKey(conversation), createSnapshot([
-                { role: 'assistant', content: 'actual last message in chat', id: 'new-1', receivedAt: 2000 },
-            ])],
-        ])
-
-        const [authoritative] = applyConversationMessageSnapshots([conversation], snapshots)
-
-        expect(authoritative?.messages).toEqual([
-            { role: 'assistant', content: 'actual last message in chat', id: 'new-1', receivedAt: 2000 },
-        ])
-        expect(authoritative?.lastMessagePreview).toBe('actual last message in chat')
-        expect(authoritative?.lastMessageAt).toBe(2000)
-        expect(getConversationPreviewText(authoritative!)).toBe('actual last message in chat')
-        expect(getConversationNotificationPreview(authoritative!)).toBe('actual last message in chat')
-    })
-
-    it('does not let an older warm snapshot replace a newer conversation transcript', () => {
-        const conversation = createConversation({
-            messages: [{ role: 'assistant', content: 'newer conversation message', id: 'new-1', receivedAt: 3000 }],
-            lastMessagePreview: 'newer conversation message',
-            lastMessageAt: 3000,
-        })
-        const snapshots = new Map([
-            [getConversationMessageAuthorityKey(conversation), createSnapshot([
-                { role: 'assistant', content: 'older warm message', id: 'old-1', receivedAt: 1000 },
-            ])],
-        ])
-
-        const result = applyConversationMessageSnapshots([conversation], snapshots)
-
-        expect(result).toBeInstanceOf(Array)
-        expect(result[0]).toBe(conversation)
-        expect(getConversationPreviewText(result[0]!)).toBe('newer conversation message')
-    })
-
-    it('keeps the rich conversation transcript when a warm snapshot has the same timestamp', () => {
-        const conversation = createConversation({
-            messages: [{ role: 'assistant', content: 'rich transcript body', id: 'rich-1', receivedAt: 3000 }],
-            lastMessagePreview: 'rich transcript body',
-            lastMessageAt: 3000,
-        })
-        const snapshots = new Map([
-            [getConversationMessageAuthorityKey(conversation), createSnapshot([
-                { role: 'assistant', content: 'same-time warm snapshot body', id: 'warm-1', receivedAt: 3000 },
-            ])],
-        ])
-
-        const result = applyConversationMessageSnapshots([conversation], snapshots)
-
-        expect(result[0]).toBe(conversation)
-        expect(result[0]?.messages).toEqual([
-            { role: 'assistant', content: 'rich transcript body', id: 'rich-1', receivedAt: 3000 },
-        ])
-        expect(getConversationPreviewText(result[0]!)).toBe('rich transcript body')
-        expect(getConversationNotificationPreview(result[0]!)).toBe('rich transcript body')
-    })
-
-    it('keeps the rich conversation transcript when a warm snapshot has no provably newer timestamp', () => {
-        const conversation = createConversation({
-            messages: [{ role: 'assistant', content: 'rich transcript without timestamp', id: 'rich-1' }],
-            lastMessagePreview: 'rich transcript without timestamp',
-        })
-        const snapshots = new Map([
-            [getConversationMessageAuthorityKey(conversation), createSnapshot([
-                { role: 'assistant', content: 'untimed warm snapshot body', id: 'warm-1' },
-            ])],
-        ])
-
-        const result = applyConversationMessageSnapshots([conversation], snapshots)
-
-        expect(result[0]).toBe(conversation)
-        expect(result[0]?.messages).toEqual([
-            { role: 'assistant', content: 'rich transcript without timestamp', id: 'rich-1' },
-        ])
-        expect(getConversationPreviewText(result[0]!)).toBe('rich transcript without timestamp')
-    })
-
     it('builds the chat pane visible feed from the same snapshot-selected live messages', () => {
         const conversation = createConversation({
             messages: [
@@ -169,65 +81,7 @@ describe('conversation message authority snapshot', () => {
         ])
     })
 
-    it('prefers a shorter chat-tail snapshot over a duplicate streaming fallback with the same latest bubble identity', () => {
-        const duplicateUnitKey = 'hermes-cli:turn_1:assistant:standard:0'
-        const conversation = createConversation({
-            messages: [
-                { role: 'user', content: 'hello', id: 'msg-1', receivedAt: 1000 },
-                { role: 'assistant', content: 'partial', id: 'hermes_1m3osyj', bubbleId: 'hermes_1m3osyj', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', receivedAt: 3000 },
-                { role: 'assistant', content: 'partial longer', id: 'hermes_1m3osyj', bubbleId: 'hermes_1m3osyj', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', receivedAt: 3000 },
-                { role: 'assistant', content: 'partial longer final', id: 'hermes_1m3osyj', bubbleId: 'hermes_1m3osyj', providerUnitKey: duplicateUnitKey, bubbleState: 'final', receivedAt: 3000 },
-            ],
-        })
-        const snapshot = createSnapshot([
-            { role: 'user', content: 'hello', id: 'msg-1', receivedAt: 1000 },
-            { role: 'assistant', content: 'partial longer final', id: 'hermes_1m3osyj', bubbleId: 'hermes_1m3osyj', providerUnitKey: duplicateUnitKey, bubbleState: 'final', receivedAt: 3000 },
-        ])
-
-        const liveMessages = getConversationLiveMessages(conversation, snapshot)
-        const [authoritative] = applyConversationMessageSnapshots([conversation], new Map([
-            [getConversationMessageAuthorityKey(conversation), snapshot],
-        ]))
-
-        expect(liveMessages.map(message => message.content)).toEqual(['hello', 'partial longer final'])
-        expect(authoritative?.messages.map(message => message.content)).toEqual(['hello', 'partial longer final'])
-    })
-
-    it('prefers a same-length clean chat-tail snapshot over a duplicate streaming conversation fallback', () => {
-        const duplicateUnitKey = 'hermes-cli:turn_1_4ms0i2:assistant:standard:0'
-        const conversation = createConversation({
-            messages: [
-                { role: 'user', content: 'first prompt', id: 'user-0', receivedAt: 1000 },
-                { role: 'assistant', content: 'prior answer', id: 'prior-1', receivedAt: 2000 },
-                { role: 'user', content: '확실히 이제 제한에 대한 버그는 잡은거지?', id: 'user-1', receivedAt: 3000 },
-                { role: 'assistant', content: '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨. 확인된 것:', id: 'hermes_olooqs', bubbleId: 'hermes_olooqs', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', receivedAt: 4000 },
-                { role: 'assistant', content: '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨. 확인된 것:', id: 'hermes_olooqs', bubbleId: 'hermes_olooqs', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', receivedAt: 4000 },
-            ],
-        })
-        const snapshot = createSnapshot([
-            { role: 'user', content: 'older prompt restored by read_chat', id: 'user-restored', receivedAt: 500 },
-            { role: 'user', content: 'first prompt', id: 'user-0', receivedAt: 1000 },
-            { role: 'assistant', content: 'prior answer', id: 'prior-1', receivedAt: 2000 },
-            { role: 'user', content: '확실히 이제 제한에 대한 버그는 잡은거지?', id: 'user-1', receivedAt: 3000 },
-            { role: 'assistant', content: '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨. 확인된 것:', id: 'hermes_olooqs', bubbleId: 'hermes_olooqs', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', receivedAt: 4000 },
-        ])
-
-        const liveMessages = getConversationLiveMessages(conversation, snapshot)
-        const [authoritative] = applyConversationMessageSnapshots([conversation], new Map([
-            [getConversationMessageAuthorityKey(conversation), snapshot],
-        ]))
-
-        expect(liveMessages.map(message => message.content)).toEqual([
-            'older prompt restored by read_chat',
-            'first prompt',
-            'prior answer',
-            '확실히 이제 제한에 대한 버그는 잡은거지?',
-            '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨. 확인된 것:',
-        ])
-        expect(authoritative?.messages).toBe(snapshot.liveMessages)
-    })
-
-    it('does not let a stale chat-tail controller snapshot mask a newer conversation transcript in ChatPane', () => {
+    it('uses an explicit chat-tail snapshot as ChatPane live authority when one exists', () => {
         const conversation = createConversation({
             messages: [
                 { role: 'assistant', content: 'new transcript last message', id: 'new-1', receivedAt: 4000 },
@@ -241,7 +95,7 @@ describe('conversation message authority snapshot', () => {
 
         const liveMessages = getConversationLiveMessages(conversation, snapshot)
 
-        expect(liveMessages.map(message => message.content)).toEqual(['new transcript last message'])
+        expect(liveMessages.map(message => message.content)).toEqual(['middle stale message'])
     })
 
     it('keeps the latest conversational bubbles visible when a CLI activity flood fills the live tail window', () => {

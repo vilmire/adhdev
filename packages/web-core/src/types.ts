@@ -28,7 +28,6 @@ export type {
     TerminalBackendStatus,
     AgentSessionStream,
     ReadChatCursor,
-    ReadChatSyncMode,
     ReadChatSyncResult,
     AcpConfigOption,
     AcpMode,

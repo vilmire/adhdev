@@ -415,9 +415,6 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     expect(String(seededHistory?.[0]?.content || '')).toBe('canonical message 1')
     expect(String(seededHistory?.[332]?.content || '')).toBe('canonical message 333')
 
-    const seededCommitted = vi.mocked(instance.adapter.seedCommittedMessages).mock.calls[0]?.[0]
-    expect(Array.isArray(seededCommitted)).toBe(true)
-    expect(seededCommitted).toHaveLength(333)
-    expect(String(seededCommitted?.[332]?.content || '')).toBe('canonical message 333')
+    expect(instance.adapter.seedCommittedMessages).not.toHaveBeenCalled()
   })
 })

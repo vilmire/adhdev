@@ -55,7 +55,7 @@ describe('session entry merge helpers', () => {
     })
   })
 
-  it('preserves existing active chat transcript and approval modal when incoming sparse update omits transcript bodies', () => {
+  it('keeps existing active chat transcript only when incoming sparse update omits transcript bodies', () => {
     const merged = mergeSessionEntrySummary(createSession({
       status: 'waiting_approval',
       activeChat: {
@@ -84,10 +84,7 @@ describe('session entry merge helpers', () => {
       { role: 'user', content: 'hello' },
       { role: 'assistant', content: 'world' },
     ])
-    expect(merged.activeChat?.activeModal).toEqual({
-      message: 'Approve?',
-      buttons: ['Allow once', 'Deny'],
-    })
+    expect(merged.activeChat?.activeModal).toBeNull()
   })
 
   it('preserves completion markers across sparse session merges', () => {
@@ -184,7 +181,7 @@ describe('session entry merge helpers', () => {
     expect(merged?.messages).toEqual([])
   })
 
-  it('keeps the existing transcript when an approval-state snapshot reports an empty modal-only transcript', () => {
+  it('uses an explicit empty approval transcript as parser authority instead of preserving old messages', () => {
     const merged = mergeActiveChatData(
       {
         id: 'chat-1',
@@ -208,10 +205,7 @@ describe('session entry merge helpers', () => {
       } as any,
     )
 
-    expect(merged?.messages).toEqual([
-      { role: 'user', content: 'run tests', id: 'msg-user-1', receivedAt: 1000 },
-      { role: 'assistant', content: 'I need approval', id: 'msg-assistant-1', receivedAt: 2000 },
-    ])
+    expect(merged?.messages).toEqual([])
     expect(merged?.activeModal).toEqual({
       message: 'Allow command?',
       buttons: ['Allow once', 'Deny'],

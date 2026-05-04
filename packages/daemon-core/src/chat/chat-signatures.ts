@@ -14,10 +14,6 @@ export interface ChatTailDeliverySignatureInput {
   status: string
   title?: string
   activeModal?: { message: string; buttons: string[] } | null
-  syncMode: string
-  replaceFrom: number
-  totalMessages: number
-  lastMessageSignature: string
 }
 
 export interface SessionModalDeliverySignatureInput {
@@ -75,10 +71,6 @@ export function buildChatTailDeliverySignature(payload: ChatTailDeliverySignatur
     payload.historySessionId || '',
     payload.status,
     payload.title || '',
-    payload.syncMode,
-    String(payload.replaceFrom),
-    String(payload.totalMessages),
-    payload.lastMessageSignature,
     payload.activeModal ? `${payload.activeModal.message}|${payload.activeModal.buttons.join('\u001f')}` : '',
     stringifySignatureMessages(payload.messages),
   ])

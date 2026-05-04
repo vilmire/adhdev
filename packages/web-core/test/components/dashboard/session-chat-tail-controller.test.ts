@@ -8,7 +8,6 @@ import {
   getWarmSessionChatTailDescriptorRefreshMs,
   resetSessionChatTailControllersForTest,
 } from '../../../src/components/dashboard/session-chat-tail-controller'
-import { applyConversationMessageSnapshots } from '../../../src/components/dashboard/conversation-message-snapshot'
 
 function createConversation(overrides: Record<string, any> = {}) {
   return {
@@ -120,54 +119,6 @@ describe('SessionChatTailController registry', () => {
     ])
   })
 
-  it('overlays newer warm chat-tail messages onto conversations used by mobile inbox previews', () => {
-    const conversations = [createConversation({
-      messages: [{ role: 'assistant', content: 'old inbox preview', id: 'old-1', receivedAt: 1000 }],
-    })]
-    const snapshots = new Map([
-      ['daemon-1::session-1', {
-        liveMessages: [{ role: 'assistant', content: 'actual last message in chat', id: 'new-1', receivedAt: 2000 }],
-        cursor: { knownMessageCount: 1, lastMessageSignature: 'sig-new', tailLimit: 60 },
-        historyMessages: [],
-        historyOffset: 0,
-        hasMoreHistory: true,
-        historyError: null,
-      }],
-    ])
-
-    const merged = applyConversationMessageSnapshots(conversations as any, snapshots as any)
-
-    expect(merged).not.toBe(conversations)
-    expect(merged[0]?.messages).toEqual([
-      { role: 'assistant', content: 'actual last message in chat', id: 'new-1', receivedAt: 2000 },
-    ])
-    expect(merged[0]?.lastMessagePreview).toBe('actual last message in chat')
-    expect(merged[0]?.lastMessageAt).toBe(2000)
-  })
-
-  it('keeps conversation messages when the warm chat-tail snapshot is older', () => {
-    const conversations = [createConversation({
-      messages: [{ role: 'assistant', content: 'current conversation message', id: 'new-1', receivedAt: 2000 }],
-    })]
-    const snapshots = new Map([
-      ['daemon-1::session-1', {
-        liveMessages: [{ role: 'assistant', content: 'older cached message', id: 'old-1', receivedAt: 1000 }],
-        cursor: { knownMessageCount: 1, lastMessageSignature: 'sig-old', tailLimit: 60 },
-        historyMessages: [],
-        historyOffset: 0,
-        hasMoreHistory: true,
-        historyError: null,
-      }],
-    ])
-
-    const merged = applyConversationMessageSnapshots(conversations as any, snapshots as any)
-
-    expect(merged).toBe(conversations)
-    expect(merged[0]?.messages).toEqual([
-      { role: 'assistant', content: 'current conversation message', id: 'new-1', receivedAt: 2000 },
-    ])
-  })
-
   it('can disable recent-idle warming while still keeping generating and modal sessions warm', () => {
     const now = 2_000_000
     const state = buildWarmSessionChatTailDescriptorState([
@@ -204,7 +155,7 @@ describe('SessionChatTailController registry', () => {
     ])
   })
 
-  it('subscribes with a tail request when no prior live cursor exists', () => {
+  it('subscribes with only the requested tail window, not a client transcript cursor', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
     const sendData = vi.fn().mockReturnValue(true)
@@ -221,21 +172,22 @@ describe('SessionChatTailController registry', () => {
     controller.retain()
 
     expect(sendData).toHaveBeenCalledOnce()
-    expect(sendData.mock.calls[0]?.[1]).toMatchObject({
+    const request = sendData.mock.calls[0]?.[1]
+    expect(request).toMatchObject({
       type: 'subscribe',
       topic: 'session.chat_tail',
       key: 'daemon:daemon-1:session:session-1',
       params: {
         targetSessionId: 'session-1',
         historySessionId: 'history-1',
-        knownMessageCount: 0,
-        lastMessageSignature: '',
         tailLimit: 60,
       },
     })
+    expect(request.params).not.toHaveProperty('knownMessageCount')
+    expect(request.params).not.toHaveProperty('lastMessageSignature')
   })
 
-  it('does not advance the live cursor beyond the messages actually hydrated from a truncated tail snapshot', () => {
+  it('keeps the live cursor limited to the requested tail window', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
     const controller = getOrCreateSessionChatTailController({
@@ -262,9 +214,7 @@ describe('SessionChatTailController registry', () => {
       replaceFrom: 0,
     }))
 
-    expect(controller.getSnapshot().cursor).toMatchObject({
-      knownMessageCount: 60,
-      lastMessageSignature: 'sig-tail-60',
+    expect(controller.getSnapshot().cursor).toEqual({
       tailLimit: 60,
     })
   })
@@ -309,21 +259,18 @@ describe('SessionChatTailController registry', () => {
 
     expect(reacquired).toBe(controller)
     const subscribeCalls = sendData.mock.calls.filter((call) => call[1]?.type === 'subscribe')
-    // When tailLimit grows the cursor must be reset to zero so the daemon can
-    // deliver the full new window. Keeping the stale (knownMessageCount=60,
-    // lastSig) cursor causes an empty-append response that permanently hides
-    // earlier messages that were outside the smaller tail window.
-    expect(subscribeCalls.at(-1)?.[1]).toMatchObject({
+    const request = subscribeCalls.at(-1)?.[1]
+    expect(request).toMatchObject({
       topic: 'session.chat_tail',
       key: 'daemon:daemon-1:session:session-1',
       params: {
         targetSessionId: 'session-1',
         historySessionId: 'history-1',
-        knownMessageCount: 0,
-        lastMessageSignature: '',
         tailLimit: 200,
       },
     })
+    expect(request.params).not.toHaveProperty('knownMessageCount')
+    expect(request.params).not.toHaveProperty('lastMessageSignature')
   })
 
   it('does not re-subscribe when a render-cycle release is immediately followed by retain for the same controller', () => {
@@ -429,16 +376,12 @@ describe('SessionChatTailController registry', () => {
     expect(listener).toHaveBeenCalledWith(
       expect.objectContaining({
         liveMessages: [expect.objectContaining({ content: 'hello from cache' })],
-        cursor: {
-          knownMessageCount: 1,
-          lastMessageSignature: 'sig-1',
-          tailLimit: 60,
-        },
+        cursor: { tailLimit: 60 },
       }),
     )
   })
 
-  it('does not let a stale conversation hydrate overwrite a newer chat-tail update', () => {
+  it('does not expose a conversation hydrate API that can overwrite chat-tail topic authority', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
     const controller = getOrCreateSessionChatTailController({
@@ -450,28 +393,8 @@ describe('SessionChatTailController registry', () => {
       subscriptionKey: 'daemon:daemon-1:session:session-1',
       tailLimit: 60,
     })
-    const staleMessages = [
-      { role: 'user', content: 'question', id: 'msg-1', timestamp: 1 } as any,
-    ]
-    const freshMessages = [
-      ...staleMessages,
-      { role: 'assistant', content: 'final answer', id: 'msg-2', timestamp: 2 } as any,
-    ]
 
-    controller.hydrateLiveMessages(staleMessages)
-    controller.retain()
-    manager.publish(createUpdate({
-      messages: freshMessages,
-      syncMode: 'full',
-      totalMessages: 2,
-      lastMessageSignature: buildLastMessageSignature(freshMessages[1]),
-    }))
-    controller.hydrateLiveMessages(staleMessages)
-
-    expect(controller.getSnapshot().liveMessages.map(message => (message as any).content)).toEqual([
-      'question',
-      'final answer',
-    ])
+    expect((controller as any).hydrateLiveMessages).toBeUndefined()
   })
 
   it('replaces the live transcript with the daemon-provided full tail refresh as-is', () => {
@@ -487,12 +410,6 @@ describe('SessionChatTailController registry', () => {
       tailLimit: 60,
     })
 
-    controller.hydrateLiveMessages([
-      { role: 'user', content: 'old-1', id: 'old-1', timestamp: 1 } as any,
-      { role: 'assistant', content: 'old-2', id: 'old-2', timestamp: 2 } as any,
-      { role: 'user', content: 'new-1', id: 'new-1', timestamp: 3 } as any,
-      { role: 'assistant', content: 'new-2', id: 'new-2', timestamp: 4 } as any,
-    ])
     controller.retain()
 
     manager.publish(createUpdate({
@@ -512,7 +429,7 @@ describe('SessionChatTailController registry', () => {
     ])
   })
 
-  it('does not append a duplicate tail row when the daemon cursor already matches the live transcript', () => {
+  it('treats legacy append payloads as complete parser tails instead of appending locally', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
     const controller = getOrCreateSessionChatTailController({
@@ -526,11 +443,16 @@ describe('SessionChatTailController registry', () => {
     })
     const currentTail = { role: 'assistant', content: 'already hydrated', id: 'msg-2', timestamp: 2 } as any
 
-    controller.hydrateLiveMessages([
-      { role: 'user', content: 'hello', id: 'msg-1', timestamp: 1 } as any,
-      currentTail,
-    ])
     controller.retain()
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'hello', id: 'msg-1', timestamp: 1 } as any,
+        currentTail,
+      ],
+      syncMode: 'full',
+      totalMessages: 2,
+      lastMessageSignature: buildLastMessageSignature(currentTail),
+    }))
 
     manager.publish(createUpdate({
       messages: [currentTail],
@@ -541,14 +463,9 @@ describe('SessionChatTailController registry', () => {
 
     const snapshot = controller.getSnapshot()
     expect(snapshot.liveMessages.map(message => (message as any).content)).toEqual([
-      'hello',
       'already hydrated',
     ])
-    expect(snapshot.cursor).toMatchObject({
-      knownMessageCount: 3,
-      lastMessageSignature: buildLastMessageSignature(currentTail),
-      tailLimit: 60,
-    })
+    expect(snapshot.cursor).toEqual({ tailLimit: 60 })
   })
 
   it('applies a tail refresh with the same last signature when it restores an earlier missing assistant answer', () => {
@@ -567,11 +484,16 @@ describe('SessionChatTailController registry', () => {
     const nextUser = { role: 'user', content: '이어서', id: 'msg-user-next', timestamp: 2 } as any
     const activityTail = { role: 'assistant', kind: 'terminal', content: '$ grep sendJsonMessage', id: 'msg-activity-tail', timestamp: 3 } as any
 
-    controller.hydrateLiveMessages([
-      nextUser,
-      activityTail,
-    ])
     controller.retain()
+    manager.publish(createUpdate({
+      messages: [
+        nextUser,
+        activityTail,
+      ],
+      syncMode: 'full',
+      totalMessages: 2,
+      lastMessageSignature: buildLastMessageSignature(activityTail),
+    }))
 
     manager.publish(createUpdate({
       messages: [
@@ -591,14 +513,10 @@ describe('SessionChatTailController registry', () => {
       '이어서',
       '$ grep sendJsonMessage',
     ])
-    expect(snapshot.cursor).toMatchObject({
-      knownMessageCount: 3,
-      lastMessageSignature: buildLastMessageSignature(activityTail),
-      tailLimit: 60,
-    })
+    expect(snapshot.cursor).toEqual({ tailLimit: 60 })
   })
 
-  it('updates a streaming bubble in place when append updates reuse the same provider unit key', () => {
+  it('replaces streaming bubble full-tail updates exactly as the daemon sends them', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
     const controller = getOrCreateSessionChatTailController({
@@ -635,39 +553,54 @@ describe('SessionChatTailController registry', () => {
       timestamp: 12,
     } as any
 
-    controller.hydrateLiveMessages([
-      { role: 'user', content: 'hello', id: 'msg-1', timestamp: 1 } as any,
-      firstChunk,
-    ])
     controller.retain()
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'hello', id: 'msg-1', timestamp: 1 } as any,
+        firstChunk,
+      ],
+      syncMode: 'full',
+      totalMessages: 2,
+      lastMessageSignature: buildLastMessageSignature(firstChunk),
+    }))
 
     manager.publish(createUpdate({
-      messages: [secondChunk],
-      syncMode: 'append',
+      messages: [
+        { role: 'user', content: 'hello', id: 'msg-1', timestamp: 1 } as any,
+        secondChunk,
+      ],
+      syncMode: 'full',
       totalMessages: 2,
       lastMessageSignature: buildLastMessageSignature(secondChunk),
     }))
     manager.publish(createUpdate({
-      messages: [finalChunk],
-      syncMode: 'append',
-      totalMessages: 2,
+      messages: [
+        { role: 'user', content: 'hello', id: 'msg-1', timestamp: 1 } as any,
+        firstChunk,
+        secondChunk,
+        finalChunk,
+      ],
+      syncMode: 'full',
+      totalMessages: 4,
       lastMessageSignature: buildLastMessageSignature(finalChunk),
     }))
 
     const snapshot = controller.getSnapshot()
     expect(snapshot.liveMessages.map(message => (message as any).content)).toEqual([
       'hello',
+      'partial answer',
+      'partial answer with more text',
       'partial answer with more text done',
     ])
-    expect(snapshot.liveMessages.filter(message => (message as any).providerUnitKey === duplicateUnitKey)).toHaveLength(1)
-    expect(snapshot.liveMessages[1]).toMatchObject({
+    expect(snapshot.liveMessages.filter(message => (message as any).providerUnitKey === duplicateUnitKey)).toHaveLength(2)
+    expect(snapshot.liveMessages[3]).toMatchObject({
       id: 'hermes_1m3osyj',
       bubbleState: 'final',
       timestamp: 12,
     })
   })
 
-  it('normalizes duplicate hydrated streaming rows with the same provider unit key', () => {
+  it('has no hydrate path that normalizes duplicate streaming rows', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
     const controller = getOrCreateSessionChatTailController({
@@ -679,23 +612,11 @@ describe('SessionChatTailController registry', () => {
       subscriptionKey: 'daemon:daemon-1:session:session-1',
       tailLimit: 60,
     })
-    const duplicateUnitKey = 'hermes-cli:turn_1_4ms0i2:assistant:standard:0'
 
-    controller.hydrateLiveMessages([
-      { role: 'user', content: '확실히 이제 제한에 대한 버그는 잡은거지?', id: 'user-1', timestamp: 1 } as any,
-      { role: 'assistant', content: '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨.', id: 'hermes_olooqs', bubbleId: 'hermes_olooqs', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', timestamp: 2 } as any,
-      { role: 'assistant', content: '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨. 확인된 것:', id: 'hermes_olooqs', bubbleId: 'hermes_olooqs', providerUnitKey: duplicateUnitKey, bubbleState: 'streaming', timestamp: 2 } as any,
-    ])
-
-    const snapshot = controller.getSnapshot()
-    expect(snapshot.liveMessages.map(message => (message as any).content)).toEqual([
-      '확실히 이제 제한에 대한 버그는 잡은거지?',
-      '응, “이번에 말한 제한 버그” 범위에서는 잡혔다고 봐도 됨. 확인된 것:',
-    ])
-    expect(snapshot.cursor.knownMessageCount).toBe(2)
+    expect((controller as any).hydrateLiveMessages).toBeUndefined()
   })
 
-  it('normalizes duplicate rows inside a full daemon tail refresh', () => {
+  it('preserves duplicate rows inside a full daemon tail refresh', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
     const controller = getOrCreateSessionChatTailController({
@@ -724,9 +645,10 @@ describe('SessionChatTailController registry', () => {
     const snapshot = controller.getSnapshot()
     expect(snapshot.liveMessages.map(message => (message as any).content)).toEqual([
       'question',
+      'partial',
       'partial plus',
     ])
-    expect(snapshot.liveMessages.filter(message => (message as any).providerUnitKey === duplicateUnitKey)).toHaveLength(1)
+    expect(snapshot.liveMessages.filter(message => (message as any).providerUnitKey === duplicateUnitKey)).toHaveLength(2)
   })
 
   it('passes the currently hydrated live tail length when loading older history', async () => {
@@ -749,7 +671,13 @@ describe('SessionChatTailController registry', () => {
     })) as any
     const loadHistory = vi.fn().mockResolvedValue({ messages: [], hasMore: true })
 
-    controller.hydrateLiveMessages(hydratedTail)
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: hydratedTail,
+      syncMode: 'full',
+      totalMessages: hydratedTail.length,
+      lastMessageSignature: buildLastMessageSignature(hydratedTail[hydratedTail.length - 1]),
+    }))
     await controller.loadHistoryPage(loadHistory)
 
     expect(loadHistory).toHaveBeenCalledWith({
@@ -758,7 +686,7 @@ describe('SessionChatTailController registry', () => {
     })
   })
 
-  it('dedupes a history page against live messages that arrive while the page is loading', async () => {
+  it('preserves history page rows even when they overlap with live messages that arrive while loading', async () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
     const controller = getOrCreateSessionChatTailController({
@@ -780,8 +708,13 @@ describe('SessionChatTailController registry', () => {
       resolveHistory = resolve
     }))
 
-    controller.hydrateLiveMessages(initialLive)
     controller.retain()
+    manager.publish(createUpdate({
+      messages: initialLive,
+      syncMode: 'full',
+      totalMessages: initialLive.length,
+      lastMessageSignature: buildLastMessageSignature(initialLive[initialLive.length - 1]),
+    }))
     const pendingLoad = controller.loadHistoryPage(loadHistory)
     manager.publish(createUpdate({
       messages: [...initialLive, liveArrivedDuringLoad],
@@ -799,7 +732,7 @@ describe('SessionChatTailController registry', () => {
     await pendingLoad
 
     const snapshot = controller.getSnapshot()
-    expect(snapshot.historyMessages.map(message => (message as any).content)).toEqual(['older history'])
+    expect(snapshot.historyMessages.map(message => (message as any).content)).toEqual(['older history', 'live 3'])
     expect(snapshot.historyOffset).toBe(2)
   })
 
@@ -839,7 +772,7 @@ describe('SessionChatTailController registry', () => {
     })
   })
 
-  it('accepts a hydrate update whose last message has an older timestamp than an earlier message in the same batch', () => {
+  it('accepts a daemon full update whose last message has an older timestamp than an earlier message in the same batch', () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
     const controller = getOrCreateSessionChatTailController({
@@ -867,14 +800,19 @@ describe('SessionChatTailController registry', () => {
 
     expect(controller.getSnapshot().liveMessages).toHaveLength(2)
 
-    // New update: a plan tool message with an older semantic timestamp (500) appears
-    // after the terminal message in stream order. Its timestamp is older than msg-2 (1000),
-    // but it is a genuinely new message that must not be dropped.
-    controller.hydrateLiveMessages([
-      { role: 'user', content: 'prompt', id: 'msg-1', timestamp: 900 } as any,
-      { role: 'assistant', content: 'terminal output', id: 'msg-2', timestamp: 1000 } as any,
-      { role: 'assistant', content: 'plan update 1 task(s)', id: 'msg-3', kind: 'tool', timestamp: 500 } as any,
-    ])
+    // New daemon update: a plan tool message with an older semantic timestamp (500) appears
+    // after the terminal message in stream order. The controller keeps daemon order as-is.
+    manager.publish(createUpdate({
+      messages: [
+        { role: 'user', content: 'prompt', id: 'msg-1', timestamp: 900 } as any,
+        { role: 'assistant', content: 'terminal output', id: 'msg-2', timestamp: 1000 } as any,
+        { role: 'assistant', content: 'plan update 1 task(s)', id: 'msg-3', kind: 'tool', timestamp: 500 } as any,
+      ],
+      syncMode: 'full',
+      replaceFrom: 0,
+      totalMessages: 3,
+      lastMessageSignature: 'sig-3',
+    }))
 
     expect(controller.getSnapshot().liveMessages).toHaveLength(3)
     expect(controller.getSnapshot().liveMessages[2]).toMatchObject({ id: 'msg-3', content: 'plan update 1 task(s)' })

@@ -1,17 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { mergeLiveChatMessages } from '../../../src/components/dashboard/message-utils'
+import { getConversationLiveMessages } from '../../../src/components/dashboard/conversation-message-snapshot'
 
-describe('mergeLiveChatMessages', () => {
-  it('allows a fuller active conversation message to replace a stale truncated cached live message', () => {
-    const cached = [
-      { role: 'assistant', id: 'msg_1', content: `Intro\n${'x'.repeat(5000)}` },
-    ]
-    const active = [
-      { role: 'assistant', id: 'msg_1', content: `Intro\n${'x'.repeat(5200)}\nTAIL_MARKER_VISIBLE` },
-    ]
+describe('chat pane live cache authority', () => {
+  it('uses chat-tail snapshot rows as the live view without merging active conversation fallbacks', () => {
+    const activeConversation = {
+      messages: [{ role: 'assistant', id: 'fallback-1', content: 'fallback row' }],
+    } as any
+    const snapshot = {
+      liveMessages: [{ role: 'assistant', id: 'snapshot-1', content: 'snapshot row' }],
+      cursor: { knownMessageCount: 1, lastMessageSignature: 'sig', tailLimit: 60 },
+      historyMessages: [],
+      historyOffset: 0,
+      hasMoreHistory: true,
+      historyError: null,
+    }
 
-    const merged = mergeLiveChatMessages(cached, active)
-    expect(merged).toHaveLength(1)
-    expect(String(merged[0]?.content || '')).toContain('TAIL_MARKER_VISIBLE')
+    expect(getConversationLiveMessages(activeConversation, snapshot)).toBe(snapshot.liveMessages)
   })
 })

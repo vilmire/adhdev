@@ -1,6 +1,4 @@
 import type {
-  ReadChatCursor,
-  ReadChatSyncMode,
   ReadChatSyncResult,
   SessionChatTailUpdate,
   SessionModalUpdate,
@@ -12,8 +10,6 @@ import {
 import { normalizeManagedStatus } from '../status/normalize.js'
 
 export interface ChatTailSubscriptionCursor {
-  knownMessageCount: number
-  lastMessageSignature: string
   tailLimit: number
 }
 
@@ -59,15 +55,6 @@ export interface PreparedSessionModalUpdate {
   update: SessionModalUpdate | null
 }
 
-function normalizeSyncMode(syncMode: string | undefined): ReadChatSyncMode {
-  return syncMode === 'append'
-    || syncMode === 'replace_tail'
-    || syncMode === 'noop'
-    || syncMode === 'full'
-    ? syncMode
-    : 'full'
-}
-
 function normalizeModalButtons(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((button): button is string => typeof button === 'string')
@@ -101,58 +88,36 @@ export function normalizeSessionModalFields(activeModal: unknown): { modalMessag
   }
 }
 
-function buildNextChatCursor(
-  cursor: ChatTailSubscriptionCursor,
-  result: SessionChatTailCommandResult,
-): ChatTailSubscriptionCursor {
-  return {
-    knownMessageCount: Math.max(0, Number(result.totalMessages || cursor.knownMessageCount)),
-    lastMessageSignature: typeof result.lastMessageSignature === 'string'
-      ? result.lastMessageSignature
-      : cursor.lastMessageSignature,
-    tailLimit: cursor.tailLimit,
-  }
-}
-
 export function prepareSessionChatTailUpdate(
   input: PrepareSessionChatTailUpdateInput,
 ): PreparedSessionChatTailUpdate {
   const result = input.result
-  if (!result?.success || result.syncMode === 'noop') {
+  if (!result?.success) {
     return {
-      cursor: result?.success ? buildNextChatCursor(input.cursor, result) : input.cursor,
+      cursor: input.cursor,
       seq: input.seq,
       lastDeliveredSignature: input.lastDeliveredSignature,
       update: null,
     }
   }
 
-  const syncMode = normalizeSyncMode(result.syncMode)
-  const cursor = {
-    knownMessageCount: Math.max(0, Number(result.totalMessages || 0)),
-    lastMessageSignature: typeof result.lastMessageSignature === 'string' ? result.lastMessageSignature : '',
-    tailLimit: input.cursor.tailLimit,
-  }
+  const messages = Array.isArray(result.messages) ? result.messages : []
   const title = typeof result.title === 'string' ? result.title : undefined
   const activeModal = normalizeChatTailActiveModal(result.activeModal)
   const status = typeof result.status === 'string' ? result.status : 'idle'
   const deliverySignature = buildChatTailDeliverySignature({
     sessionId: input.sessionId,
     ...(input.historySessionId ? { historySessionId: input.historySessionId } : {}),
-    messages: Array.isArray(result.messages) ? result.messages : [],
+    messages,
     status,
     ...(title ? { title } : {}),
     ...(activeModal ? { activeModal } : {}),
-    syncMode,
-    replaceFrom: Number(result.replaceFrom || 0),
-    totalMessages: Number(result.totalMessages || 0),
-    lastMessageSignature: typeof result.lastMessageSignature === 'string' ? result.lastMessageSignature : '',
   })
   const seq = input.seq + 1
 
   if (deliverySignature === input.lastDeliveredSignature) {
     return {
-      cursor,
+      cursor: input.cursor,
       seq,
       lastDeliveredSignature: input.lastDeliveredSignature,
       update: null,
@@ -160,7 +125,7 @@ export function prepareSessionChatTailUpdate(
   }
 
   return {
-    cursor,
+    cursor: input.cursor,
     seq,
     lastDeliveredSignature: deliverySignature,
     update: {
@@ -171,14 +136,10 @@ export function prepareSessionChatTailUpdate(
       ...(input.interactionId ? { interactionId: input.interactionId } : {}),
       seq,
       timestamp: input.timestamp,
-      messages: Array.isArray(result.messages) ? result.messages : [],
+      messages,
       status,
       ...(title ? { title } : {}),
       ...(activeModal ? { activeModal } : {}),
-      syncMode,
-      replaceFrom: Number(result.replaceFrom || 0),
-      totalMessages: Number(result.totalMessages || 0),
-      lastMessageSignature: typeof result.lastMessageSignature === 'string' ? result.lastMessageSignature : '',
     },
   }
 }
