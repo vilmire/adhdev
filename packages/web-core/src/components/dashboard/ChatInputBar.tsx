@@ -38,6 +38,7 @@ const ChatInputBar = memo(function ChatInputBar({
 }: ChatInputBarProps) {
     const chatInputRef = useRef<HTMLInputElement>(null);
     const [draftInput, setDraftInput] = useState('');
+    const submitLockRef = useRef(false);
     const { isVisible: areControlsVisible, toggleVisibility: toggleControlsVisibility } = useControlsBarVisibility();
 
     useEffect(() => {
@@ -52,9 +53,15 @@ const ChatInputBar = memo(function ChatInputBar({
     const submitDraft = async () => {
         const message = draftInput.trim();
         if (!message || isBusy) return;
-        const accepted = await onSend(message);
-        if (accepted !== false) {
-            setDraftInput('');
+        if (submitLockRef.current) return;
+        submitLockRef.current = true;
+        try {
+            const accepted = await onSend(message);
+            if (accepted !== false) {
+                setDraftInput('');
+            }
+        } finally {
+            submitLockRef.current = false;
         }
     };
 

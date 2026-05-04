@@ -19,12 +19,14 @@ interface RecentSendAttempt {
 export function shouldBlockConversationSend({
     hasMessage,
     blockedMessage,
+    sendInFlight,
 }: {
     hasMessage: boolean
     blockedMessage: string | null
     sendInFlight?: boolean
 }): boolean {
     if (!hasMessage) return true
+    if (sendInFlight) return true
     return !!blockedMessage
 }
 
@@ -96,6 +98,7 @@ export function useDashboardConversationCommands({
 
     const handleSendChat = useCallback(async (rawMessage: string): Promise<boolean> => {
         if (!activeConv) return false
+        if (sendInFlightRef.current) return false
 
         const message = rawMessage.trim()
         const blockedMessage = getConversationSendBlockMessage(activeConv)
