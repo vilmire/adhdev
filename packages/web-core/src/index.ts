@@ -187,6 +187,11 @@ export { default as NotificationsPage } from './pages/Notifications'
 export { default as RepoMesh } from './pages/RepoMesh'
 export { default as OnboardingModal } from './components/OnboardingModal'
 
+// ── Dashboard Mesh ──
+export { DashboardMeshProvider } from './context/DashboardMeshContext'
+export type { DashboardMeshOverrides } from './context/DashboardMeshContext'
+export type { MeshLaunchOption } from './hooks/useDashboardCommandActions'
+
 // ── Git ──
 export { default as GitStatusPill, getGitStatusPillLabel, getGitStatusPillTone } from './components/git/GitStatusPill'
 export type { GitStatusPillProps } from './components/git/GitStatusPill'

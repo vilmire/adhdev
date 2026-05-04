@@ -1,4 +1,5 @@
 import { useCallback, type Dispatch, type SetStateAction } from 'react'
+import { useDashboardMeshOverrides } from '../context/DashboardMeshContext'
 
 import type { ActiveConversation } from '../components/dashboard/types'
 import {
@@ -57,6 +58,7 @@ export function useDashboardCommandActions({
   ides,
   setCliViewModeOverrides,
 }: UseDashboardCommandActionsOptions) {
+  const meshOverrides = useDashboardMeshOverrides()
   const handleBrowseMachineDirectory = useCallback(async (machineId: string, path: string): Promise<BrowseDirectoryResult> => (
     browseMachineDirectories(sendDaemonCommand, machineId, path)
   ), [sendDaemonCommand])
@@ -146,7 +148,12 @@ export function useDashboardCommandActions({
     }
   }, [onOpenSession, sendDaemonCommand, trackPendingLaunch])
 
+  // Cloud override: use cloud REST API for meshes; standalone: local daemon list_meshes
   const handleListMachineMeshes = useCallback(async (machineId: string): Promise<MeshLaunchOption[]> => {
+    if (meshOverrides?.listMeshes) {
+      return meshOverrides.listMeshes(machineId)
+    }
+    // Standalone/local-only: query daemon's ~/.adhdev/meshes.json
     if (!machineId) return []
     try {
       const raw: any = await sendDaemonCommand(machineId, 'list_meshes', {})
@@ -169,7 +176,7 @@ export function useDashboardCommandActions({
       console.error('List meshes failed', error)
       throw error
     }
-  }, [sendDaemonCommand])
+  }, [meshOverrides, sendDaemonCommand])
 
   const handleLaunchMeshCoordinator = useCallback(async (
     machineId: string,
@@ -177,6 +184,11 @@ export function useDashboardCommandActions({
     cliType: string,
   ): Promise<LaunchResult> => {
     if (!meshId.trim()) return { ok: false, error: 'Choose a mesh first.' }
+    // Cloud override
+    if (meshOverrides?.launchMeshCoordinator) {
+      return meshOverrides.launchMeshCoordinator(machineId, meshId, cliType)
+    }
+    // Standalone/local-only
     const startedAt = Date.now()
     try {
       const raw: any = await sendDaemonCommand(machineId, 'launch_mesh_coordinator', {
@@ -212,7 +224,7 @@ export function useDashboardCommandActions({
       }
       return { ok: false, error: error instanceof Error ? error.message : 'Could not launch mesh coordinator' }
     }
-  }, [onOpenSession, sendDaemonCommand, trackPendingLaunch])
+  }, [meshOverrides, onOpenSession, sendDaemonCommand, trackPendingLaunch])
 
   const handleListMachineSavedSessions = useCallback(async (
     machineId: string,
