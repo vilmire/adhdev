@@ -101,6 +101,9 @@ function getHistorySessionId(h: CommandHelpers, args: any): string | undefined {
     const explicit = typeof args?.historySessionId === 'string' ? args.historySessionId.trim() : '';
     if (explicit) return explicit;
 
+    const explicitProviderSessionId = typeof args?.providerSessionId === 'string' ? args.providerSessionId.trim() : '';
+    if (explicitProviderSessionId) return explicitProviderSessionId;
+
     const targetSessionId = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     if (!targetSessionId) return undefined;
 
@@ -779,7 +782,40 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ...(coverage ? { coverage } : {}),
             }, args);
         }
-        return { success: false, error: `${transport} adapter not found` };
+        const historyLimit = normalizeReadChatTailLimit(args);
+        try {
+            const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h);
+            const workspace = typeof args?.workspace === 'string'
+                ? args.workspace
+                : typeof (h.currentSession as any)?.workspace === 'string'
+                    ? (h.currentSession as any).workspace
+                    : undefined;
+            const history = readProviderChatHistory(agentStr, {
+                canonicalHistory: provider?.canonicalHistory,
+                historySessionId,
+                workspace,
+                offset: 0,
+                limit: historyLimit,
+                excludeRecentCount: 0,
+                historyBehavior: provider?.historyBehavior,
+                scripts: provider?.scripts as any,
+            });
+            const historyProviderSessionId = typeof (history as any)?.providerSessionId === 'string'
+                ? (history as any).providerSessionId
+                : historySessionId;
+            return buildReadChatCommandResult({
+                messages: Array.isArray((history as any)?.messages) ? (history as any).messages : [],
+                status: 'idle',
+                ...(typeof (history as any)?.title === 'string' ? { title: (history as any).title } : {}),
+                ...(historyProviderSessionId ? { providerSessionId: historyProviderSessionId } : {}),
+                ...(((provider?.historyBehavior as any)?.transcriptAuthority === 'provider' || (provider?.historyBehavior as any)?.transcriptAuthority === 'daemon')
+                    ? { transcriptAuthority: (provider?.historyBehavior as any).transcriptAuthority }
+                    : {}),
+                coverage: 'tail',
+            }, args);
+        } catch (error: any) {
+            return { success: false, error: error?.message || `${transport} adapter not found` };
+        }
     }
 
     // Extension transport: evaluateInSession
