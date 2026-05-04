@@ -175,7 +175,8 @@ git push origin main --tags
 
 echo ""
 echo "✅ OSS v$NEW_VERSION released!"
-echo "   → CI will publish daemon-core + daemon-standalone to npm"
+echo "   → CI will publish session-host-core, mcp-server, daemon-core, and daemon-standalone to npm"
+echo "   → ghostty-vt-node is published too when its release paths changed"
 echo ""
 echo "Next: update cloud repo"
 echo "  cd .. && ./scripts/version-bump.sh $NEW_VERSION"
