@@ -43,9 +43,13 @@ export function useIdeCommands({
     const [isSendingChat, setIsSendingChat] = useState(false)
     const historyRefreshedRef = useRef(false)
 
+    const sendInFlightRef = useRef(false)
+
     const handleSendAgent = useCallback(async (rawMessage: string) => {
         const message = rawMessage.trim()
         if (!message || !routeId || isSendingChat || !activeConv) return
+        if (sendInFlightRef.current) return
+        sendInFlightRef.current = true
 
         setIsSendingChat(true)
         try {
@@ -57,6 +61,7 @@ export function useIdeCommands({
         } catch (e) {
             console.error('[IDE] Send failed:', e)
         } finally {
+            sendInFlightRef.current = false
             setIsSendingChat(false)
         }
     }, [routeId, isSendingChat, sendDaemonCommand, activeConv])

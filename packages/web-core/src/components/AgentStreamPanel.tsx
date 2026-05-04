@@ -6,7 +6,7 @@
  * ActiveConversation and rendered through ChatPane.
  */
 
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import ChatPane from './dashboard/ChatPane';
 import ApprovalBanner from './dashboard/ApprovalBanner';
 import type { ActiveConversation } from './dashboard/types';
@@ -80,9 +80,13 @@ export default function AgentStreamPanel({ routeId, agentStreams, sendCommand }:
         };
     }, [activeStream, routeId, derivedStatus]);
 
+    const sendInFlightRef = useRef(false);
+
     const handleSendChat = useCallback(async (rawMessage: string): Promise<boolean> => {
         const message = rawMessage.trim();
         if (!message || !activeAgent || isSending) return false;
+        if (sendInFlightRef.current) return false;
+        sendInFlightRef.current = true;
         setIsSending(true);
         const targetSessionId = activeStream?.sessionId;
         try {
@@ -96,6 +100,7 @@ export default function AgentStreamPanel({ routeId, agentStreams, sendCommand }:
             console.error('Failed to send agent message', e);
             return false;
         } finally {
+            sendInFlightRef.current = false;
             setIsSending(false);
         }
     }, [activeAgent, activeStream, isSending, sendCommand]);
