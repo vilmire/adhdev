@@ -434,13 +434,16 @@ function shouldDropMissingAuthoritativeTransportEntry(
     return false
 }
 
-function shouldSkipAgeCleanupForDaemonOnlyUpdate(
+function shouldSkipAgeCleanupForLiveTransportEntry(
     entry: DaemonData,
     daemonId: string,
     incomingDaemonIds: Set<string>,
     daemonIdsWithSessionEntries: Set<string>,
+    resultMap: Map<string, DaemonData>,
 ): boolean {
-    return !!(incomingDaemonIds.has(daemonId) && entry.transport && !daemonIdsWithSessionEntries.has(daemonId))
+    if (!entry.transport) return false
+    if (incomingDaemonIds.has(daemonId) && !daemonIdsWithSessionEntries.has(daemonId)) return true
+    return resultMap.has(daemonId)
 }
 
 /**
@@ -540,7 +543,7 @@ export function reconcileIdes(
 
     for (const [key, ide] of resultMap) {
         const entryDaemonId = ide.daemonId || key.split(':')[0]
-        if (shouldSkipAgeCleanupForDaemonOnlyUpdate(ide, entryDaemonId, incomingDaemonIds, daemonIdsWithSessionEntries)) {
+        if (shouldSkipAgeCleanupForLiveTransportEntry(ide, entryDaemonId, incomingDaemonIds, daemonIdsWithSessionEntries, resultMap)) {
             continue
         }
         const age = now - (ide._lastUpdate || ide.timestamp || 0)

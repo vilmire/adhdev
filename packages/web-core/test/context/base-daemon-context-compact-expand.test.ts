@@ -950,4 +950,86 @@ describe('expandCompactDaemons', () => {
       { id: 'msg-1', role: 'assistant', content: 'after', timestamp: 11 },
     ])
   })
+
+  it('keeps an idle transport session when its parent daemon still exists during unrelated reconciles', () => {
+    const now = Date.now()
+    const previous = expandCompactDaemons([
+      {
+        id: 'machine-keep',
+        type: 'adhdev-daemon',
+        timestamp: now - 1_000,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Hermes Agent',
+            workspace: '/repo-a',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Hermes Agent',
+              status: 'idle',
+              messages: [{ role: 'assistant', content: 'still alive' }],
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries.map((entry) => (
+      entry.id === 'machine-keep'
+        ? { ...entry, _lastUpdate: now - 1_000 }
+        : { ...entry, _lastUpdate: now - 301_000 }
+    ))
+
+    const incoming = expandCompactDaemons([
+      {
+        id: 'machine-other',
+        type: 'adhdev-daemon',
+        timestamp: now,
+      },
+    ] as CompactDaemonCompat[]).entries
+
+    const reconciled = reconcileIdes(incoming, previous)
+    expect(reconciled.find((entry) => entry.id === 'machine-keep:cli:cli-1')).toBeTruthy()
+  })
+
+  it('still prunes an old idle transport session when its parent daemon is gone', () => {
+    const now = Date.now()
+    const previous = expandCompactDaemons([
+      {
+        id: 'machine-gone',
+        type: 'adhdev-daemon',
+        timestamp: now - 301_000,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Hermes Agent',
+            workspace: '/repo-a',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Hermes Agent',
+              status: 'idle',
+              messages: [{ role: 'assistant', content: 'stale' }],
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+      .filter((entry) => entry.id !== 'machine-gone')
+      .map((entry) => ({ ...entry, _lastUpdate: now - 301_000 }))
+
+    const reconciled = reconcileIdes([], previous)
+    expect(reconciled.find((entry) => entry.id === 'machine-gone:cli:cli-1')).toBeFalsy()
+  })
 })
