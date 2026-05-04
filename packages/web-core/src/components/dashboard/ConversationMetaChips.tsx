@@ -16,6 +16,8 @@ interface ConversationMetaChipsProps {
     onOpenNativeConversation?: () => void
     onOpenMachine?: () => void
     interactive?: boolean
+    /** When true, only render mesh-specific chips (Coordinator / Mesh Node) */
+    meshOnly?: boolean
 }
 
 export default function ConversationMetaChips({
@@ -24,13 +26,14 @@ export default function ConversationMetaChips({
     onOpenNativeConversation,
     onOpenMachine,
     interactive = true,
+    meshOnly = false,
 }: ConversationMetaChipsProps) {
     const navigate = useNavigate()
     const machineId = getConversationMachineId(conversation)
-    const machineLabel = getConversationMachineLabel(conversation)
-    const showIdeChip = conversation.transport === 'cdp-page' || conversation.transport === 'cdp-webview'
-    const showExtensionChip = conversation.streamSource === 'agent-stream' && !!conversation.agentName
-    const showProviderChip = !showExtensionChip && (conversation.transport === 'pty' || conversation.transport === 'acp')
+    const machineLabel = meshOnly ? null : getConversationMachineLabel(conversation)
+    const showIdeChip = !meshOnly && (conversation.transport === 'cdp-page' || conversation.transport === 'cdp-webview')
+    const showExtensionChip = !meshOnly && conversation.streamSource === 'agent-stream' && !!conversation.agentName
+    const showProviderChip = !meshOnly && !showExtensionChip && (conversation.transport === 'pty' || conversation.transport === 'acp')
     const providerChipLabel = getConversationProviderLabel(conversation)
     const ideChipLabel = getConversationIdeChipLabel(conversation)
     const isMeshNode = conversation.settings?.meshNodeFor;

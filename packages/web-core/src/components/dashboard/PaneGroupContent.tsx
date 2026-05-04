@@ -73,7 +73,7 @@ const PaneGroupContent = memo(function PaneGroupContent({
         <>
             <ApprovalBanner activeConv={effectiveConv} onModalButton={handleModalButton} />
 
-            <ConversationMetaChips conversation={effectiveConv} className="chat-pane-meta-row mx-3 mt-1" />
+            <ConversationMetaChips conversation={effectiveConv} className="chat-pane-meta-row mx-3 mt-1" meshOnly />
 
             {(effectiveConv.transport !== 'pty' && effectiveConv.transport !== 'acp' && effectiveConv.cdpConnected === false) ? (
                 <div className="desktop-only px-3 pt-1 pb-2">

@@ -314,6 +314,15 @@ export default function ChatPane({
             );
         }
         if (activeConv.status === 'idle' && !isLoadingMore) {
+            // Chat tail connected and confirmed no more history — session is genuinely empty
+            if (!hasMoreHistory && historyMessages.length === 0) {
+                return (
+                    <div className="text-center mt-16 flex flex-col items-center gap-3">
+                        <div className="text-2xl opacity-40">💬</div>
+                        <div className="text-[13px] opacity-40">No messages yet</div>
+                    </div>
+                );
+            }
             return (
                 <div className="text-center mt-16 flex flex-col items-center gap-3">
                     <div className="text-2xl opacity-40 animate-pulse">💬</div>
@@ -322,7 +331,7 @@ export default function ChatPane({
             );
         }
         return undefined;
-    }, [activeConv.connectionState, activeConv.status, canOpenPanel, handleFocusAgent, isFocusingAgent, isLoadingMore, liveMessages.length, panelLabel, viewStates.isGenerating]);
+    }, [activeConv.connectionState, activeConv.status, canOpenPanel, handleFocusAgent, hasMoreHistory, historyMessages.length, isFocusingAgent, isLoadingMore, liveMessages.length, panelLabel, viewStates.isGenerating]);
 
     return (
         <div className="flex-1 min-h-0 w-full flex flex-col">
