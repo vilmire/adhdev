@@ -433,12 +433,19 @@ export async function launchWithCdp(options: LaunchOptions = {}): Promise<Launch
             }
         }
 
+        if (!cdpReady) {
+            return {
+                success: false, ideId: targetIde.id, ideName: targetIde.displayName,
+                port, action: 'failed',
+                message: '',
+                error: `${targetIde.displayName} launched but CDP did not become available on port ${port}`,
+            };
+        }
+
         return {
             success: true, ideId: targetIde.id, ideName: targetIde.displayName,
             port, action: alreadyRunning ? 'restarted' : 'started',
-            message: cdpReady
-                ? `${targetIde.displayName} launched with CDP on port ${port}`
-                : `${targetIde.displayName} launched (CDP may take a moment to initialize)`,
+            message: `${targetIde.displayName} launched with CDP on port ${port}`,
         };
     } catch (e: any) {
         return {
