@@ -31,6 +31,11 @@ import { GIT_PUSH_TOOL, gitPush } from './tools/git-push.js';
 import { LAUNCH_SESSION_TOOL, launchSession } from './tools/launch-session.js';
 import { STOP_SESSION_TOOL, stopSession } from './tools/stop-session.js';
 import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
+import {
+  ALL_MESH_TOOLS, meshStatus, meshListNodes, meshSendTask, meshReadChat,
+  meshLaunchSession, meshGitStatus, meshCheckpoint, meshApprove,
+  type MeshContext,
+} from './tools/mesh-tools.js';
 
 export interface AdhdevMcpServerOptions {
   mode: 'local' | 'cloud';
@@ -40,6 +45,8 @@ export interface AdhdevMcpServerOptions {
   // cloud options
   apiKey?: string;
   baseUrl?: string;
+  // mesh mode (optional — restricts tools to mesh-scoped set)
+  meshId?: string;
 }
 
 export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void> {
@@ -60,6 +67,141 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
   }
 
   const isLocal = opts.mode === 'local';
+
+  // ── Mesh Mode ─────────────────────────────────
+  if (opts.meshId) {
+    let mesh: any;
+
+    // Cloud mode: try fetching mesh config from server API first
+    if (opts.mode === 'cloud' && opts.apiKey) {
+      try {
+        const base = opts.baseUrl || 'https://api.adhf.dev';
+        const res = await fetch(`${base}/api/v1/repo-meshes/${opts.meshId}`, {
+          headers: { 'Authorization': `Bearer ${opts.apiKey}`, 'Content-Type': 'application/json' },
+        });
+        if (res.ok) {
+          const data = await res.json() as any;
+          const rm = data.mesh;
+          const nodes = data.nodes || [];
+          // Convert cloud D1 record → LocalMeshEntry shape for mesh tools
+          let policy: any = {};
+          try { policy = JSON.parse(rm.policy_json || rm.policy || '{}'); } catch { /* */ }
+          let coordinator: any = {};
+          try { coordinator = JSON.parse(rm.coordinator_json || rm.coordinator_config || '{}'); } catch { /* */ }
+          mesh = {
+            id: rm.id,
+            name: rm.name,
+            repoIdentity: rm.repo_identity,
+            repoRemoteUrl: rm.repo_remote_url,
+            defaultBranch: rm.default_branch,
+            policy: {
+              requirePreTaskCheckpoint: false,
+              requirePostTaskCheckpoint: true,
+              requireApprovalForPush: true,
+              requireApprovalForDestructiveGit: true,
+              dirtyWorkspaceBehavior: 'warn',
+              maxParallelTasks: 2,
+              ...policy,
+            },
+            coordinator,
+            nodes: nodes.map((n: any) => ({
+              id: n.id,
+              workspace: n.workspace,
+              repoRoot: n.repo_root,
+              userOverrides: {},
+              policy: {},
+              isLocalWorktree: false,
+            })),
+            createdAt: rm.created_at,
+            updatedAt: rm.updated_at,
+          };
+          process.stderr.write(`[adhdev-mcp] Loaded mesh config from cloud API\n`);
+        }
+      } catch (e: any) {
+        process.stderr.write(`[adhdev-mcp] Cloud mesh fetch failed, falling back to local: ${e.message}\n`);
+      }
+    }
+
+    // Fallback: load from local ~/.adhdev/meshes.json
+    if (!mesh) {
+      try {
+        const { getMesh } = await import('@adhdev/daemon-core');
+        mesh = getMesh(opts.meshId);
+      } catch (e: any) {
+        process.stderr.write(`[adhdev-mcp] Failed to load mesh config: ${e.message}\n`);
+        process.exit(1);
+      }
+    }
+
+    if (!mesh) {
+      process.stderr.write(`[adhdev-mcp] Mesh '${opts.meshId}' not found in ${opts.mode === 'cloud' ? 'cloud or local' : 'local'} config. Use 'adhdev mesh list' to see available meshes.\n`);
+      process.exit(1);
+    }
+
+    const meshCtx: MeshContext = { mesh, transport };
+
+    // Build coordinator system prompt
+    let coordinatorPrompt = '';
+    try {
+      const { buildCoordinatorSystemPrompt } = await import('@adhdev/daemon-core');
+      coordinatorPrompt = buildCoordinatorSystemPrompt({ mesh });
+    } catch {
+      coordinatorPrompt = `You are a Repo Mesh Coordinator for "${mesh.name}" (${mesh.repoIdentity}). Use mesh_* tools to orchestrate work.`;
+    }
+
+    const server = new Server(
+      { name: 'adhdev-mcp-server', version: '0.9.66' },
+      { capabilities: { tools: {}, resources: {} } },
+    );
+
+    // Expose coordinator prompt as MCP resource
+    const { ListResourcesRequestSchema, ReadResourceRequestSchema } = await import('@modelcontextprotocol/sdk/types.js');
+    server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+      resources: [{
+        uri: 'coordinator://system-prompt',
+        name: 'Coordinator System Prompt',
+        description: `System prompt for mesh "${mesh.name}" coordinator`,
+        mimeType: 'text/plain',
+      }],
+    }));
+    server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
+      if (req.params.uri === 'coordinator://system-prompt') {
+        return { contents: [{ uri: req.params.uri, mimeType: 'text/plain', text: coordinatorPrompt }] };
+      }
+      throw new Error(`Unknown resource: ${req.params.uri}`);
+    });
+
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: ALL_MESH_TOOLS }));
+
+    server.setRequestHandler(CallToolRequestSchema, async (req) => {
+      const { name, arguments: args } = req.params;
+      const a = (args ?? {}) as Record<string, any>;
+      try {
+        let text: string;
+        switch (name) {
+          case 'mesh_status': text = await meshStatus(meshCtx); break;
+          case 'mesh_list_nodes': text = await meshListNodes(meshCtx); break;
+          case 'mesh_send_task': text = await meshSendTask(meshCtx, a as any); break;
+          case 'mesh_read_chat': text = await meshReadChat(meshCtx, a as any); break;
+          case 'mesh_launch_session': text = await meshLaunchSession(meshCtx, a as any); break;
+          case 'mesh_git_status': text = await meshGitStatus(meshCtx, a as any); break;
+          case 'mesh_checkpoint': text = await meshCheckpoint(meshCtx, a as any); break;
+          case 'mesh_approve': text = await meshApprove(meshCtx, a as any); break;
+          default: return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
+        }
+        return { content: [{ type: 'text', text }] };
+      } catch (err: any) {
+        return { content: [{ type: 'text', text: `Error: ${err?.message ?? String(err)}` }], isError: true };
+      }
+    });
+
+    const stdioTransport = new StdioServerTransport();
+    await server.connect(stdioTransport);
+    process.stderr.write(`[adhdev-mcp] Server running in ${opts.mode} mesh mode — mesh: ${mesh.name} (${mesh.repoIdentity})\n`);
+    return;
+  }
+
+  // ── Standard Mode ──────────────────────────────
 
   // Tool availability by mode:
   //   both:  list_sessions, launch_session, read_chat, send_chat, approve, git_status

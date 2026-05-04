@@ -81,6 +81,26 @@ export type {
   ExtensionProviderState,
 } from './shared-types.js';
 
+// ── Repo Mesh Types (cross-package) ──
+export type {
+  RepoMesh,
+  RepoMeshNode,
+  RepoMeshNodeHealth,
+  RepoMeshPolicy,
+  RepoMeshNodePolicy,
+  RepoMeshNodeCapabilities,
+  DetectedCommand,
+  ProjectContextSnapshot,
+  ProjectContextSource,
+  RepoMeshCoordinatorConfig,
+  LocalMeshConfig,
+  LocalMeshEntry,
+  LocalMeshNodeEntry,
+  RepoMeshStatus,
+  RepoMeshNodeStatus,
+} from './repo-mesh-types.js';
+export { DEFAULT_MESH_POLICY } from './repo-mesh-types.js';
+
 // ── Git Surface ──
 export * from './git/index.js';
 
@@ -110,6 +130,19 @@ export { appendRecentActivity, getRecentActivity } from './config/recent-activit
 export type { RecentActivityEntry } from './config/recent-activity.js';
 export { getSavedProviderSessions, upsertSavedProviderSession } from './config/saved-sessions.js';
 export type { SavedProviderSessionEntry } from './config/saved-sessions.js';
+
+// ── Mesh Config ──
+export {
+  listMeshes, getMesh, getMeshByRepo, createMesh, updateMesh, deleteMesh,
+  addNode, removeNode, updateNode, normalizeRepoIdentity,
+} from './config/mesh-config.js';
+export type { CreateMeshOptions, UpdateMeshOptions, AddNodeOptions } from './config/mesh-config.js';
+
+// ── Mesh Coordinator ──
+export { buildCoordinatorSystemPrompt } from './mesh/coordinator-prompt.js';
+export type { CoordinatorPromptContext } from './mesh/coordinator-prompt.js';
+export { syncMeshes } from './mesh/mesh-sync.js';
+export type { MeshSyncTransport, MeshSyncResult, RemoteMeshRecord } from './mesh/mesh-sync.js';
 
 // ── State Store ──
 export { loadState, saveState, resetState } from './config/state-store.js';
