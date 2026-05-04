@@ -1,5 +1,12 @@
-import { join } from 'path'
+import { existsSync, realpathSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, join, resolve } from 'node:path'
 import type { ProviderModule, MeshCoordinatorMcpConfigFormat } from '../providers/contracts.js'
+
+export interface MeshCoordinatorMcpServerLaunch {
+  command: string
+  args: string[]
+}
 
 export type MeshCoordinatorSetup =
   | {
@@ -7,6 +14,7 @@ export type MeshCoordinatorSetup =
       serverName: string
       configPath: string
       configFormat?: MeshCoordinatorMcpConfigFormat
+      mcpServer: MeshCoordinatorMcpServerLaunch
     }
   | {
       kind: 'manual'
@@ -27,6 +35,8 @@ export interface ResolveMeshCoordinatorSetupOptions {
   meshId: string
   workspace: string
   adhdevMcpCommand?: string
+  adhdevMcpEntryPath?: string
+  nodeExecutable?: string
 }
 
 const DEFAULT_SERVER_NAME = 'adhdev-mesh'
@@ -56,11 +66,23 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
     if (!path) {
       return { kind: 'unsupported', reason: 'Provider auto-import MCP config is missing a config path' }
     }
+    const mcpServer = resolveAdhdevMcpServerLaunch({
+      meshId,
+      nodeExecutable: options.nodeExecutable,
+      adhdevMcpEntryPath: options.adhdevMcpEntryPath,
+    })
+    if (!mcpServer) {
+      return {
+        kind: 'unsupported',
+        reason: 'Could not resolve the ADHDev MCP server entrypoint without relying on a PATH bin shim',
+      }
+    }
     return {
       kind: 'auto_import',
       serverName,
       configPath: join(workspace, path),
       configFormat: mcpConfig.format,
+      mcpServer,
     }
   }
 
@@ -94,4 +116,63 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
 
 function renderMeshCoordinatorTemplate(template: string, values: Record<string, string>): string {
   return template.replace(/\{\{\s*(meshId|workspace|serverName|adhdevMcpCommand)\s*\}\}/g, (_, key: string) => values[key] || '')
+}
+
+function resolveAdhdevMcpServerLaunch(options: {
+  meshId: string
+  nodeExecutable?: string
+  adhdevMcpEntryPath?: string
+}): MeshCoordinatorMcpServerLaunch | null {
+  const entryPath = resolveAdhdevMcpEntryPath(options.adhdevMcpEntryPath)
+  if (!entryPath) return null
+  return {
+    command: options.nodeExecutable?.trim() || process.execPath,
+    args: [entryPath, '--repo-mesh', options.meshId],
+  }
+}
+
+function resolveAdhdevMcpEntryPath(explicitPath?: string): string | null {
+  const explicit = explicitPath?.trim()
+  if (explicit) return normalizeExistingPath(explicit) || explicit
+
+  const envPath = process.env.ADHDEV_MCP_SERVER_PATH?.trim()
+  if (envPath) return normalizeExistingPath(envPath) || envPath
+
+  const candidates: string[] = []
+  const addCandidate = (candidate: string) => {
+    if (!candidates.includes(candidate)) candidates.push(candidate)
+  }
+  const addPackagedCandidates = (baseFile?: string) => {
+    if (!baseFile) return
+    const realBase = normalizeExistingPath(baseFile) || baseFile
+    const dir = dirname(realBase)
+    addCandidate(resolve(dir, '../vendor/mcp-server/index.js'))
+    addCandidate(resolve(dir, '../../vendor/mcp-server/index.js'))
+    addCandidate(resolve(dir, '../../../vendor/mcp-server/index.js'))
+  }
+
+  addPackagedCandidates(process.argv[1])
+
+  for (const candidate of candidates) {
+    const normalized = normalizeExistingPath(candidate)
+    if (normalized) return normalized
+  }
+
+  try {
+    const requireBase = process.argv[1] ? (normalizeExistingPath(process.argv[1]) || process.argv[1]) : join(process.cwd(), 'adhdev-daemon.js')
+    const req = createRequire(requireBase)
+    const resolvedModule = req.resolve('@adhdev/mcp-server')
+    return normalizeExistingPath(resolvedModule) || resolvedModule
+  } catch {
+    return null
+  }
+}
+
+function normalizeExistingPath(filePath: string): string | null {
+  try {
+    if (!existsSync(filePath)) return null
+    return realpathSync.native(filePath)
+  } catch {
+    return null
+  }
 }

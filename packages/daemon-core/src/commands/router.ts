@@ -1081,8 +1081,8 @@ export class DaemonCommandRouter {
                         mcpServers: {
                             ...(existingMcpConfig.mcpServers || {}),
                             [coordinatorSetup.serverName]: {
-                                command: 'adhdev-mcp',
-                                args: ['--repo-mesh', meshId],
+                                command: coordinatorSetup.mcpServer.command,
+                                args: coordinatorSetup.mcpServer.args,
                             },
                         },
                     };
