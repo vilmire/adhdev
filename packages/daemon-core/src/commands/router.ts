@@ -193,6 +193,8 @@ function summarizeSessionHostPruneResult(result: unknown): Record<string, unknow
 
 export class DaemonCommandRouter {
     private deps: CommandRouterDeps;
+    private meshCoordinatorProcess: import('child_process').ChildProcess | null = null;
+    private meshCoordinatorMeshId: string | null = null;
 
     constructor(deps: CommandRouterDeps) {
         this.deps = deps;
@@ -918,6 +920,81 @@ export class DaemonCommandRouter {
                 const nickname = args?.nickname;
                 updateConfig({ machineNickname: nickname || null });
                 return { success: true };
+            }
+
+            // ─── Mesh Coordinator ───
+            case 'start_mesh_coordinator': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+
+                // Check if already running
+                if (this.meshCoordinatorProcess && !this.meshCoordinatorProcess.killed) {
+                    return { success: false, error: 'Mesh coordinator already running', meshId: this.meshCoordinatorMeshId };
+                }
+
+                try {
+                    const { spawn: spawnChild } = await import('child_process');
+                    const childArgs = ['mcp', '--repo-mesh', meshId];
+                    if (workspace) childArgs.push('--workspace', workspace);
+
+                    const child = spawnChild('adhdev', childArgs, {
+                        stdio: ['pipe', 'pipe', 'pipe'],
+                        detached: false,
+                        env: { ...process.env },
+                    });
+
+                    this.meshCoordinatorProcess = child;
+                    this.meshCoordinatorMeshId = meshId;
+
+                    child.stderr?.on('data', (data: Buffer) => {
+                        LOG.info('MeshCoordinator', data.toString().trim());
+                    });
+
+                    child.on('exit', (code) => {
+                        LOG.info('MeshCoordinator', `Process exited with code ${code}`);
+                        this.meshCoordinatorProcess = null;
+                        this.meshCoordinatorMeshId = null;
+                        this.deps.onStatusChange?.();
+                    });
+
+                    child.on('error', (err) => {
+                        LOG.error('MeshCoordinator', `Spawn error: ${err.message}`);
+                        this.meshCoordinatorProcess = null;
+                        this.meshCoordinatorMeshId = null;
+                    });
+
+                    LOG.info('MeshCoordinator', `Started coordinator for mesh ${meshId} (PID ${child.pid})`);
+                    this.deps.onStatusChange?.();
+                    return { success: true, meshId, pid: child.pid };
+                } catch (e: any) {
+                    LOG.error('MeshCoordinator', `Failed to start: ${e.message}`);
+                    return { success: false, error: e.message };
+                }
+            }
+
+            case 'stop_mesh_coordinator': {
+                if (!this.meshCoordinatorProcess || this.meshCoordinatorProcess.killed) {
+                    return { success: false, error: 'No mesh coordinator running' };
+                }
+                const pid = this.meshCoordinatorProcess.pid;
+                const meshId = this.meshCoordinatorMeshId;
+                this.meshCoordinatorProcess.kill('SIGTERM');
+                this.meshCoordinatorProcess = null;
+                this.meshCoordinatorMeshId = null;
+                this.deps.onStatusChange?.();
+                LOG.info('MeshCoordinator', `Stopped coordinator (PID ${pid})`);
+                return { success: true, meshId, stoppedPid: pid };
+            }
+
+            case 'get_mesh_coordinator_status': {
+                const running = !!(this.meshCoordinatorProcess && !this.meshCoordinatorProcess.killed);
+                return {
+                    success: true,
+                    running,
+                    meshId: running ? this.meshCoordinatorMeshId : null,
+                    pid: running ? this.meshCoordinatorProcess?.pid : null,
+                };
             }
 
             default:
