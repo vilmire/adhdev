@@ -184,6 +184,7 @@ export { default as Dashboard } from './pages/Dashboard'
 export { default as MachineDetail } from './pages/MachineDetail'
 export { default as MachinesPage } from './pages/Machines'
 export { default as NotificationsPage } from './pages/Notifications'
+export { default as RepoMesh } from './pages/RepoMesh'
 export { default as OnboardingModal } from './components/OnboardingModal'
 
 // ── Git ──

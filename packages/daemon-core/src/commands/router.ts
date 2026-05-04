@@ -193,8 +193,6 @@ function summarizeSessionHostPruneResult(result: unknown): Record<string, unknow
 
 export class DaemonCommandRouter {
     private deps: CommandRouterDeps;
-    private meshCoordinatorProcess: import('child_process').ChildProcess | null = null;
-    private meshCoordinatorMeshId: string | null = null;
 
     constructor(deps: CommandRouterDeps) {
         this.deps = deps;
@@ -922,79 +920,82 @@ export class DaemonCommandRouter {
                 return { success: true };
             }
 
-            // ─── Mesh Coordinator ───
-            case 'start_mesh_coordinator': {
-                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-                const workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';
-                if (!meshId) return { success: false, error: 'meshId required' };
-
-                // Check if already running
-                if (this.meshCoordinatorProcess && !this.meshCoordinatorProcess.killed) {
-                    return { success: false, error: 'Mesh coordinator already running', meshId: this.meshCoordinatorMeshId };
-                }
-
+            // ─── Mesh CRUD (local meshes.json) ───
+            case 'list_meshes': {
                 try {
-                    const { spawn: spawnChild } = await import('child_process');
-                    const childArgs = ['mcp', '--repo-mesh', meshId];
-                    if (workspace) childArgs.push('--workspace', workspace);
-
-                    const child = spawnChild('adhdev', childArgs, {
-                        stdio: ['pipe', 'pipe', 'pipe'],
-                        detached: false,
-                        env: { ...process.env },
-                    });
-
-                    this.meshCoordinatorProcess = child;
-                    this.meshCoordinatorMeshId = meshId;
-
-                    child.stderr?.on('data', (data: Buffer) => {
-                        LOG.info('MeshCoordinator', data.toString().trim());
-                    });
-
-                    child.on('exit', (code) => {
-                        LOG.info('MeshCoordinator', `Process exited with code ${code}`);
-                        this.meshCoordinatorProcess = null;
-                        this.meshCoordinatorMeshId = null;
-                        this.deps.onStatusChange?.();
-                    });
-
-                    child.on('error', (err) => {
-                        LOG.error('MeshCoordinator', `Spawn error: ${err.message}`);
-                        this.meshCoordinatorProcess = null;
-                        this.meshCoordinatorMeshId = null;
-                    });
-
-                    LOG.info('MeshCoordinator', `Started coordinator for mesh ${meshId} (PID ${child.pid})`);
-                    this.deps.onStatusChange?.();
-                    return { success: true, meshId, pid: child.pid };
+                    const { listMeshes } = await import('../config/mesh-config.js');
+                    return { success: true, meshes: listMeshes() };
                 } catch (e: any) {
-                    LOG.error('MeshCoordinator', `Failed to start: ${e.message}`);
                     return { success: false, error: e.message };
                 }
             }
 
-            case 'stop_mesh_coordinator': {
-                if (!this.meshCoordinatorProcess || this.meshCoordinatorProcess.killed) {
-                    return { success: false, error: 'No mesh coordinator running' };
+            case 'get_mesh': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                try {
+                    const { getMesh } = await import('../config/mesh-config.js');
+                    const mesh = getMesh(meshId);
+                    if (!mesh) return { success: false, error: 'Mesh not found' };
+                    return { success: true, mesh };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
                 }
-                const pid = this.meshCoordinatorProcess.pid;
-                const meshId = this.meshCoordinatorMeshId;
-                this.meshCoordinatorProcess.kill('SIGTERM');
-                this.meshCoordinatorProcess = null;
-                this.meshCoordinatorMeshId = null;
-                this.deps.onStatusChange?.();
-                LOG.info('MeshCoordinator', `Stopped coordinator (PID ${pid})`);
-                return { success: true, meshId, stoppedPid: pid };
             }
 
-            case 'get_mesh_coordinator_status': {
-                const running = !!(this.meshCoordinatorProcess && !this.meshCoordinatorProcess.killed);
-                return {
-                    success: true,
-                    running,
-                    meshId: running ? this.meshCoordinatorMeshId : null,
-                    pid: running ? this.meshCoordinatorProcess?.pid : null,
-                };
+            case 'create_mesh': {
+                const name = typeof args?.name === 'string' ? args.name.trim() : '';
+                const repoIdentity = typeof args?.repoIdentity === 'string' ? args.repoIdentity.trim() : '';
+                const repoRemoteUrl = typeof args?.repoRemoteUrl === 'string' ? args.repoRemoteUrl.trim() : undefined;
+                const defaultBranch = typeof args?.defaultBranch === 'string' ? args.defaultBranch.trim() : undefined;
+                if (!name) return { success: false, error: 'name required' };
+                try {
+                    const { createMesh } = await import('../config/mesh-config.js');
+                    const mesh = createMesh({ name, repoIdentity, repoRemoteUrl, defaultBranch });
+                    return { success: true, mesh };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
+            case 'delete_mesh': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                try {
+                    const { deleteMesh } = await import('../config/mesh-config.js');
+                    const deleted = deleteMesh(meshId);
+                    return { success: true, deleted };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
+            case 'add_mesh_node': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                if (!workspace) return { success: false, error: 'workspace required' };
+                try {
+                    const { addNode } = await import('../config/mesh-config.js');
+                    const node = addNode(meshId, { workspace });
+                    if (!node) return { success: false, error: 'Mesh not found' };
+                    return { success: true, node };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
+            case 'remove_mesh_node': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
+                if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+                try {
+                    const { removeNode } = await import('../config/mesh-config.js');
+                    const removed = removeNode(meshId, nodeId);
+                    return { success: true, removed };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
             }
 
             default:
