@@ -187,6 +187,7 @@ function buildIdeWorkspaceSession(
         errorMessage: state.errorMessage,
         errorReason: state.errorReason,
         lastUpdated: state.lastUpdated,
+        settings: state.settings,
     };
 }
 
@@ -227,6 +228,7 @@ function buildExtensionAgentSession(
         errorMessage: ext.errorMessage,
         errorReason: ext.errorReason,
         lastUpdated: ext.lastUpdated,
+        settings: ext.settings,
     };
 }
 
@@ -306,6 +308,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         errorMessage: state.errorMessage,
         errorReason: state.errorReason,
         lastUpdated: state.lastUpdated,
+        settings: state.settings,
     };
 }
 
@@ -341,6 +344,7 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
         errorMessage: state.errorMessage,
         errorReason: state.errorReason,
         lastUpdated: state.lastUpdated,
+        settings: state.settings,
     };
 }
 

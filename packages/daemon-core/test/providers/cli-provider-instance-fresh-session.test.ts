@@ -231,6 +231,58 @@ describe('CliProviderInstance lightweight hot chat state', () => {
     expect(getScriptParsedStatus).not.toHaveBeenCalled()
   })
 
+  it('auto-approves modals discovered only by parsed getStatus snapshots', () => {
+    vi.useFakeTimers()
+    try {
+      const instance = new CliProviderInstance({
+        type: 'hermes-cli',
+        name: 'Hermes Agent',
+        category: 'cli',
+        spawn: { command: 'hermes', args: [] },
+        settings: {
+          autoApprove: {
+            type: 'boolean',
+            default: true,
+            public: true,
+            label: 'Auto Approve',
+          },
+        },
+      } as any, '/tmp/project') as any
+      const resolveModal = vi.fn()
+      instance.adapter = {
+        getStatus: vi.fn(() => ({
+          status: 'waiting_approval',
+          activeModal: {
+            title: 'Approve command?',
+            buttons: ['Allow once', 'Reject'],
+          },
+          messages: [],
+        })),
+        getScriptParsedStatus: () => ({
+          status: 'waiting_approval',
+          title: 'Hermes Agent',
+          messages: [],
+          activeModal: {
+            title: 'Approve command?',
+            buttons: ['Allow once', 'Reject'],
+          },
+        }),
+        resolveModal,
+        getRuntimeMetadata: () => null,
+      }
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+
+      const state = instance.getState()
+      vi.runOnlyPendingTimers()
+
+      expect(state.status).toBe('generating')
+      expect(state.activeModal ?? null).toBeNull()
+      expect(resolveModal).toHaveBeenCalledWith(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('drops a pending completion when generation resumes before the debounce callback observes it', () => {
     vi.useFakeTimers()
     try {

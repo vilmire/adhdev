@@ -229,6 +229,32 @@ Provider roots use a category-based layout:
 - `~/.adhdev/providers/.upstream/<category>/<type>/` for downloaded upstream providers
 - bundled providers ship with the same `category/type` layout inside the installed packages
 
+## Repo Mesh With Hermes Agent
+
+Hermes Agent can use self-hosted Repo Mesh tools through ADHDev's MCP server, but Hermes does not auto-import repo-local `.mcp.json`. For Hermes, add a YAML entry to the Hermes config under `mcp_servers`, then start a fresh Hermes session.
+
+Find the Hermes config path:
+
+```bash
+hermes config path
+```
+
+Add the selected mesh id from the standalone Repo Mesh page:
+
+```yaml
+mcp_servers:
+  adhdev-mesh:
+    command: adhdev-mcp
+    args:
+      - --repo-mesh
+      - mesh_abc123
+    enabled: true
+```
+
+After saving the config, exit and relaunch Hermes. MCP servers are discovered at Hermes session startup, so an already-running session may not see the new `adhdev-mesh` tools.
+
+In the standalone dashboard, the Repo Mesh detail page shows this Hermes-specific YAML only when the Hermes provider declares manual MCP setup. It does not show Claude-style `.mcp.json` config there because Claude-style clients can use their own auto-import/config flow.
+
 ## Related Pages
 
 - [Self-hosted Setup](setup.md)

@@ -55,6 +55,7 @@ function buildExistingSessionMap(entries: DaemonData[] | undefined, daemonId: st
             lastMessageHash: entry.lastMessageHash,
             completionMarker: entry.completionMarker,
             seenCompletionMarker: entry.seenCompletionMarker,
+            settings: entry.settings,
         })
 
         for (const child of entry.childSessions || []) {
@@ -186,6 +187,7 @@ export function statusPayloadToEntries(
             ...(mergedSession.controlValues !== undefined && { controlValues: mergedSession.controlValues }),
             ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
             ...(mergedSession.summaryMetadata !== undefined && { summaryMetadata: mergedSession.summaryMetadata }),
+            ...(mergedSession.settings !== undefined && { settings: mergedSession.settings }),
             timestamp: ts,
         } as DaemonData)
     }
@@ -231,6 +233,7 @@ export function statusPayloadToEntries(
             ...(mergedSession.controlValues !== undefined && { controlValues: mergedSession.controlValues }),
             ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
             ...(mergedSession.summaryMetadata !== undefined && { summaryMetadata: mergedSession.summaryMetadata }),
+            ...(mergedSession.settings !== undefined && { settings: mergedSession.settings }),
             timestamp: ts,
             _isCli: true,
         } as DaemonData)
@@ -276,6 +279,7 @@ export function statusPayloadToEntries(
             ...(mergedSession.controlValues !== undefined && { controlValues: mergedSession.controlValues }),
             ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
             ...(mergedSession.summaryMetadata !== undefined && { summaryMetadata: mergedSession.summaryMetadata }),
+            ...(mergedSession.settings !== undefined && { settings: mergedSession.settings }),
             timestamp: ts,
             _isAcp: true,
         } as DaemonData)

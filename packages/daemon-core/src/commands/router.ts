@@ -1097,13 +1097,24 @@ export class DaemonCommandRouter {
                         systemPrompt = `You are a Repo Mesh Coordinator for "${mesh.name}". Use the adhdev-mesh MCP tools (mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat, mesh_launch_session, etc.) to orchestrate work across ${mesh.nodes.length} node(s).`;
                     }
 
+                    const cliArgs: string[] = [];
+                    if (systemPrompt) {
+                        cliArgs.push('--append-system-prompt', systemPrompt);
+                    }
+                    if (cliType === 'claude-cli') {
+                        cliArgs.push('--mcp-config', coordinatorSetup.configPath);
+                    }
+
                     // 3. Launch CLI session via existing cliManager
                     // Pass coordinator system prompt via --append-system-prompt so the
                     // CLI inherits its default behavior AND knows it is a mesh coordinator.
                     const launchResult: any = await this.deps.cliManager.handleCliCommand('launch_cli', {
                         cliType,
                         dir: workspace,
-                        cliArgs: systemPrompt ? ['--append-system-prompt', systemPrompt] : undefined,
+                        cliArgs: cliArgs.length > 0 ? cliArgs : undefined,
+                        settings: {
+                            meshCoordinatorFor: meshId
+                        }
                     });
 
                     if (!launchResult?.success) {

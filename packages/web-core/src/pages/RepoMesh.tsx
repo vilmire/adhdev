@@ -8,7 +8,7 @@
  * just like clicking "+" on the dashboard.
  */
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+
 import { useTransport } from '../context/TransportContext'
 import { useBaseDaemons } from '../context/BaseDaemonContext'
 import AppPage from '../components/ui/AppPage'
@@ -16,12 +16,10 @@ import { Section } from '../components/ui/Section'
 import { EmptyState } from '../components/ui/EmptyState'
 import { AlertBanner } from '../components/ui/AlertBanner'
 import { FormField, Input } from '../components/ui/FormField'
-import { IconX, IconMesh, IconFolder, IconPlay } from '../components/Icons'
+import { IconX, IconMesh, IconFolder } from '../components/Icons'
 import MeshCoordinatorManualSetupPanel from '../components/MeshCoordinatorManualSetupPanel'
 import {
     buildManualCoordinatorSetup,
-    normalizeManualCoordinatorSetup,
-    type MeshCoordinatorManualSetup,
     type MeshCoordinatorMetadata,
 } from '../utils/mesh-coordinator-setup'
 
@@ -49,10 +47,39 @@ interface AvailableCliAgent {
     meshCoordinator?: MeshCoordinatorMetadata
 }
 
+export function RepoMeshHermesMcpConfig({
+    meshId,
+    availableCliAgents,
+}: {
+    meshId: string
+    availableCliAgents: AvailableCliAgent[]
+}) {
+    const hermesAgent = availableCliAgents.find(agent => {
+        const id = agent.id.toLowerCase()
+        const name = agent.name.toLowerCase()
+        return id === 'hermes-cli' || id.includes('hermes') || name.includes('hermes')
+    })
+    const manualSetup = buildManualCoordinatorSetup(hermesAgent?.meshCoordinator, { meshId })
+
+    if (!manualSetup) return null
+
+    return (
+        <Section
+            title="Hermes MCP Config"
+            description="Hermes does not auto-import repo-local .mcp.json. Add this YAML under mcp_servers in Hermes config, then start a fresh Hermes session."
+        >
+            <MeshCoordinatorManualSetupPanel
+                setup={manualSetup}
+                providerName={hermesAgent?.name || 'Hermes CLI'}
+            />
+        </Section>
+    )
+}
+
 export default function RepoMesh() {
     const { sendCommand } = useTransport()
     const { ides } = useBaseDaemons()
-    const navigate = useNavigate()
+
 
     // Find the daemon ID (standalone = single daemon)
     const daemon = (ides as any[]).find((d: any) => d.daemonMode || d.type === 'adhdev-daemon')
@@ -78,7 +105,6 @@ export default function RepoMesh() {
     const [selectedMeshId, setSelectedMeshId] = useState<string | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
-    const [manualSetup, setManualSetup] = useState<MeshCoordinatorManualSetup | null>(null)
 
     // Create form
     const [showCreate, setShowCreate] = useState(false)
@@ -89,17 +115,7 @@ export default function RepoMesh() {
     const [showAddNode, setShowAddNode] = useState(false)
     const [nodeWorkspace, setNodeWorkspace] = useState('')
 
-    // Coordinator launch
-    const [selectedAgent, setSelectedAgent] = useState('')
-    const [launching, setLaunching] = useState(false)
-
     const selectedMesh = meshes.find(m => m.id === selectedMeshId) || null
-    const selectedAgentInfo = availableCliAgents.find(agent => agent.id === selectedAgent) || null
-    const providerManualSetup = buildManualCoordinatorSetup(selectedAgentInfo?.meshCoordinator, {
-        meshId: selectedMesh?.id || '',
-        workspace: selectedMesh?.nodes[0]?.workspace || '',
-    })
-    const visibleManualSetup = manualSetup || providerManualSetup
 
     // ─── Data loading ───
     const loadMeshes = useCallback(async () => {
@@ -181,38 +197,6 @@ export default function RepoMesh() {
             await loadMeshes()
         } catch (e: any) {
             setError(e?.message || 'Remove node failed')
-        }
-    }
-
-    async function handleLaunchCoordinator() {
-        if (!daemonId || !selectedMesh || !selectedAgent) return
-        const workspace = selectedMesh.nodes[0]?.workspace || ''
-        if (!workspace) {
-            setError('Add at least one node (workspace) before launching a coordinator.')
-            return
-        }
-
-        setLaunching(true)
-        setError(null)
-        setManualSetup(null)
-        try {
-            const res: any = await sendCommand(daemonId, 'launch_mesh_coordinator', {
-                meshId: selectedMesh.id,
-                cliType: selectedAgent,
-            })
-            const serverManualSetup = normalizeManualCoordinatorSetup(res?.meshCoordinatorSetup || res?.manualSetup)
-            if (res?.success) {
-                // Redirect to dashboard where the session is now running
-                navigate('/dashboard')
-            } else if (res?.code === 'mesh_coordinator_manual_mcp_setup_required' && serverManualSetup) {
-                setManualSetup(serverManualSetup)
-            } else {
-                setError(res?.error || 'Failed to launch coordinator session')
-            }
-        } catch (e: any) {
-            setError(e?.message || 'Failed to launch coordinator session')
-        } finally {
-            setLaunching(false)
         }
     }
 
@@ -360,64 +344,11 @@ export default function RepoMesh() {
                 )}
             </Section>
 
-            {/* Launch Coordinator Session */}
-            <Section title="Coordinator" description="Launch a CLI agent session with mesh context — just like the + button on the dashboard.">
-                {selectedMesh.nodes.length === 0 ? (
-                    <div className="text-[11px] text-text-muted">Add at least one node before launching a coordinator.</div>
-                ) : (
-                    <div className="flex items-center gap-3 flex-wrap">
-                        <select
-                            className="bg-bg-primary border border-border-strong rounded-lg px-3 py-2 text-sm focus:border-accent focus:outline-none transition-colors min-w-[180px]"
-                            value={selectedAgent}
-                            onChange={e => {
-                                setSelectedAgent(e.target.value)
-                                setManualSetup(null)
-                            }}
-                        >
-                            <option value="">Select CLI agent…</option>
-                            {availableCliAgents.map(a => (
-                                <option key={a.id} value={a.id}>{a.name}</option>
-                            ))}
-                            {availableCliAgents.length === 0 && (
-                                <option value="" disabled>No CLI agents detected</option>
-                            )}
-                        </select>
-                        <button
-                            className="btn btn-primary btn-sm inline-flex items-center gap-1.5"
-                            disabled={!selectedAgent || launching}
-                            onClick={handleLaunchCoordinator}
-                        >
-                            <IconPlay size={14} />
-                            {launching ? 'Launching…' : 'Launch Coordinator'}
-                        </button>
-                    </div>
-                )}
-                {visibleManualSetup && (
-                    <MeshCoordinatorManualSetupPanel
-                        setup={visibleManualSetup}
-                        providerName={selectedAgentInfo?.name || selectedAgent}
-                        className="mt-3"
-                    />
-                )}
-                <div className="text-[11px] text-text-muted mt-3">
-                    Launches a new CLI session on <strong>{selectedMesh.nodes[0]?.workspace.split('/').pop() || '…'}</strong> workspace. 
-                    The session opens in the dashboard like any other agent session.
-                </div>
-            </Section>
-
-            {/* MCP config for external agents */}
-            <Section title="External MCP Config" description="For connecting external AI agents (Claude Desktop, etc.) to this mesh.">
-                <pre className="text-xs bg-bg-secondary rounded-lg p-3 overflow-x-auto border border-border-subtle font-mono select-all">
-{`{
-  "mcpServers": {
-    "adhdev-mesh": {
-      "command": "adhdev-mcp",
-      "args": ["--repo-mesh", "${selectedMesh.id}"]
-    }
-  }
-}`}
-                </pre>
-            </Section>
+            {/* Hermes MCP config for external coordinator sessions */}
+            <RepoMeshHermesMcpConfig
+                meshId={selectedMesh.id}
+                availableCliAgents={availableCliAgents}
+            />
         </AppPage>
     )
 }

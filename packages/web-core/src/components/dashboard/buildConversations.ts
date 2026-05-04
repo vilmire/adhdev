@@ -116,6 +116,7 @@ export function buildIdeConversations(
         completionMarker?: string;
         surfaceHidden?: boolean;
         git?: GitCompactSummary;
+        settings?: Record<string, any>;
     }[] = Array.isArray(ide.childSessions)
         ? ide.childSessions.map(child => ({
             sessionId: child.id,
@@ -140,6 +141,7 @@ export function buildIdeConversations(
             completionMarker: child.completionMarker,
             surfaceHidden: child.surfaceHidden,
             git: child.git,
+            settings: child.settings,
         }))
         : [];
     const useConversationFirst = isConversationFirstIde(ide);
@@ -147,7 +149,10 @@ export function buildIdeConversations(
     // 1) IDE native chat tab
     if (useConversationFirst) {
         const nativeSessionId = ide.sessionId || ide.instanceId;
-        const agentName = providerLabel;
+        const isMeshCoordinator = ide.settings?.meshCoordinatorFor;
+        const isMeshNode = ide.settings?.meshNodeFor;
+        const roleSuffix = isMeshCoordinator ? ' (Coordinator)' : isMeshNode ? ' (Mesh Node)' : '';
+        const agentName = providerLabel + roleSuffix;
         const modal = ide.activeChat?.activeModal;
         const hasRealModal = modal && Array.isArray(modal.buttons) && modal.buttons.length > 0;
         const agentStatus = normalizeManagedStatus(ide.activeChat?.status, { activeModal: ide.activeChat?.activeModal })
@@ -191,9 +196,9 @@ export function buildIdeConversations(
             displayPrimary: effectiveNativeTitle
                 || workspaceName
                 || (isCliConv(ide)
-                    ? ((ide.mode === 'chat') ? agentName : 'Terminal')
+                    ? ((ide.mode === 'chat') ? agentName : `Terminal${roleSuffix}`)
                     : agentName),
-            displaySecondary: ideLabel,
+            displaySecondary: isCliConv(ide) && workspaceName ? agentName : ideLabel,
             cdpConnected: ide.cdpConnected,
             lastMessagePreview: ide.lastMessagePreview,
             lastMessageRole: ide.lastMessageRole,
@@ -208,6 +213,7 @@ export function buildIdeConversations(
             tabKey: getConversationTabKey(nativeSessionId, ide.id),
             machineName,
             connectionState,
+            settings: ide.settings,
         });
     }
 
@@ -266,6 +272,7 @@ export function buildIdeConversations(
             tabKey: getConversationTabKey(stream.sessionId || stream.instanceId, streamTabKey),
             machineName,
             connectionState,
+            settings: stream.settings,
         });
     }
 
@@ -296,6 +303,7 @@ export function buildIdeConversations(
             streamSource: 'native',
             tabKey: getConversationTabKey(ide.sessionId || ide.instanceId, ide.id),
             connectionState,
+            settings: ide.settings,
         });
     }
 

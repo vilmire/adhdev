@@ -384,6 +384,7 @@ export interface SessionEntry {
     completionMarker?: string;
     seenCompletionMarker?: string;
     surfaceHidden?: boolean;
+    settings?: Record<string, any>;
 }
 
 /**
@@ -422,6 +423,7 @@ export interface CompactSessionEntry {
     controlValues?: Record<string, string | number | boolean>;
     providerControls?: ProviderControlSchema[];
     summaryMetadata?: ProviderSummaryMetadata;
+    settings?: Record<string, any>;
 }
 
 export type VersionUpdateReason =

@@ -254,6 +254,10 @@ export async function meshLaunchSession(
         const result = await ctx.transport.command('launch_cli', {
             cliType: args.type,
             dir: node.workspace,
+            settings: {
+                meshNodeFor: ctx.mesh.id,
+                launchedByCoordinator: true
+            }
         });
         return JSON.stringify(result, null, 2);
     } else {

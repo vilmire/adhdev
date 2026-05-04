@@ -363,7 +363,7 @@ export class CliProviderInstance implements ProviderInstance {
             this.errorMessage = undefined;
             this.errorReason = undefined;
         }
-        const autoApproveActive = adapterStatus.status === 'waiting_approval' && this.shouldAutoApprove();
+        const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, Date.now());
         const visibleStatus = parseErrorMessage
             ? 'error'
             : (autoApproveActive ? 'generating' : adapterStatus.status);
@@ -587,6 +587,28 @@ export class CliProviderInstance implements ProviderInstance {
         this.applyProviderResponse(parsed.payload, { phase: 'immediate' });
     }
 
+    private maybeAutoApproveStatus(adapterStatus: any, now = Date.now()): boolean {
+        const autoApproveActive = adapterStatus?.status === 'waiting_approval' && this.shouldAutoApprove();
+        // Guard re-entry: onStatusChange/getState can observe the same modal multiple
+        // times while the PTY absorbs the approval key. Without this flag, repeated
+        // snapshots would write stray keys into the input once the modal dismisses.
+        if (autoApproveActive && !this.autoApproveBusy) {
+            this.autoApproveBusy = true;
+            if (this.autoApproveBusyTimer) clearTimeout(this.autoApproveBusyTimer);
+            this.autoApproveBusyTimer = setTimeout(() => {
+                this.autoApproveBusy = false;
+                this.autoApproveBusyTimer = null;
+            }, 2000);
+            const modal = adapterStatus.activeModal;
+            const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(modal?.buttons, this.provider);
+            this.recordAutoApproval(modal?.message, buttonLabel, now);
+            setTimeout(() => {
+                this.adapter.resolveModal(buttonIndex);
+            }, 0);
+        }
+        return autoApproveActive;
+    }
+
     private detectStatusTransition(): void {
         const now = Date.now();
         // Status-change handling is a hot path: PTY output can fire it many times
@@ -595,24 +617,7 @@ export class CliProviderInstance implements ProviderInstance {
         const adapterStatus = this.adapter.getStatus({ allowParse: false });
         const parsedStatus = null;
         const rawStatus = adapterStatus.status;
-        const autoApproveActive = rawStatus === 'waiting_approval' && this.shouldAutoApprove();
-        // Guard re-entry: onStatusChange can fire multiple times while the modal
-        // is still on screen (before the PTY absorbs the approval key). Without this
-        // flag, we'd write the approval key repeatedly — stray keys then leak into
-        // the text input once Claude Code dismisses the modal.
-        if (autoApproveActive && !this.autoApproveBusy) {
-            this.autoApproveBusy = true;
-            if (this.autoApproveBusyTimer) clearTimeout(this.autoApproveBusyTimer);
-            this.autoApproveBusyTimer = setTimeout(() => {
-                this.autoApproveBusy = false;
-                this.autoApproveBusyTimer = null;
-            }, 2000);
-            const { index: buttonIndex, label: buttonLabel } = pickApprovalButton(adapterStatus.activeModal?.buttons, this.provider);
-            this.recordAutoApproval(adapterStatus.activeModal?.message, buttonLabel, now);
-            setTimeout(() => {
-                this.adapter.resolveModal(buttonIndex);
-            }, 0);
-        }
+        const autoApproveActive = this.maybeAutoApproveStatus(adapterStatus, now);
         const newStatus = autoApproveActive ? 'generating' : rawStatus;
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
         const chatTitle = `${this.provider.name} · ${dirName}`;

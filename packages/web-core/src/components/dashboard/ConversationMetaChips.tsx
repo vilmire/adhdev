@@ -33,6 +33,12 @@ export default function ConversationMetaChips({
     const showProviderChip = !showExtensionChip && (conversation.transport === 'pty' || conversation.transport === 'acp')
     const providerChipLabel = getConversationProviderLabel(conversation)
     const ideChipLabel = getConversationIdeChipLabel(conversation)
+    const isMeshNode = conversation.settings?.meshNodeFor;
+    const isMeshCoordinator = conversation.settings?.meshCoordinatorFor;
+
+    if (!showIdeChip && !showExtensionChip && !showProviderChip && !machineLabel && !isMeshNode && !isMeshCoordinator) {
+        return null;
+    }
 
     const handleOpenMachine = useCallback(() => {
         if (onOpenMachine) {
@@ -102,6 +108,18 @@ export default function ConversationMetaChips({
                         <span>{machineLabel}</span>
                     </span>
                 )
+            )}
+            {isMeshCoordinator && (
+                <span className="conversation-meta-chip" title="Mesh Coordinator">
+                    <IconServer size={12} />
+                    <span>Coordinator</span>
+                </span>
+            )}
+            {isMeshNode && (
+                <span className="conversation-meta-chip" title="Managed by Coordinator">
+                    <IconServer size={12} />
+                    <span>Mesh Node</span>
+                </span>
             )}
         </div>
     )

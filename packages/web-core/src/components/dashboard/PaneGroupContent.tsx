@@ -8,6 +8,7 @@ import CliTerminalPane from './CliTerminalPane'
 import ChatPane from './ChatPane'
 import { IconWarning } from '../Icons'
 import { useSessionModalSubscription } from '../../hooks/useSessionModalSubscription'
+import ConversationMetaChips from './ConversationMetaChips'
 
 interface PaneGroupContentProps {
     activeConv: ActiveConversation
@@ -71,6 +72,8 @@ const PaneGroupContent = memo(function PaneGroupContent({
     return (
         <>
             <ApprovalBanner activeConv={effectiveConv} onModalButton={handleModalButton} />
+
+            <ConversationMetaChips conversation={effectiveConv} className="chat-pane-meta-row mx-3 mt-1" />
 
             {(effectiveConv.transport !== 'pty' && effectiveConv.transport !== 'acp' && effectiveConv.cdpConnected === false) ? (
                 <div className="desktop-only px-3 pt-1 pb-2">

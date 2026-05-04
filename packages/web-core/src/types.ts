@@ -200,6 +200,7 @@ export interface BaseDaemonData {
     _isAcp?: boolean;
     /** @internal Status payload included an explicit sessions list, even if empty. */
     _sessionListAuthoritative?: boolean;
+    settings?: Record<string, any>;
 }
 
 // Backward compatibility alias for web-core components

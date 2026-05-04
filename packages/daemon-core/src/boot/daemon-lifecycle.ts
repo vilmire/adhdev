@@ -36,6 +36,7 @@ import { loadConfig } from '../config/config.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { IdeProviderInstance } from '../providers/ide-provider-instance.js';
 import { createDefaultGitCommandServices } from '../git/git-commands.js';
+import { setupMeshEventForwarding } from '../mesh/mesh-events.js';
 
 // ─── Init Config ───
 
@@ -317,7 +318,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
     // 10. Start instance ticking
     instanceManager.startTicking(config.tickIntervalMs ?? 5_000);
 
-    return {
+    const components = {
         providerLoader,
         instanceManager,
         cliManager,
@@ -331,6 +332,11 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         detectedIdes: detectedIdesRef,
         refreshProviderAvailability,
     };
+
+    // 11. Setup Mesh Event Forwarding
+    setupMeshEventForwarding(components);
+
+    return components;
 }
 
 /**

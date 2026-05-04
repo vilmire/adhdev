@@ -15,6 +15,7 @@ export type ExistingSessionLike = Partial<SessionEntryWithInboxMarkers> & {
   activeChat?: SessionEntry['activeChat']
   completionMarker?: string
   seenCompletionMarker?: string
+  settings?: Record<string, any>
 }
 
 function hasExplicitProviderName(value: string | null | undefined, providerType: string | null | undefined): value is string {
@@ -102,6 +103,7 @@ export function mergeSessionEntrySummary(
     runtimeKey: session.runtimeKey ?? existingEntry?.runtimeKey,
     runtimeDisplayName: session.runtimeDisplayName ?? existingEntry?.runtimeDisplayName,
     runtimeWorkspaceLabel: session.runtimeWorkspaceLabel ?? existingEntry?.runtimeWorkspaceLabel,
+    settings: session.settings ?? existingEntry?.settings,
   }
 }
 

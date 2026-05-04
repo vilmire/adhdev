@@ -48,6 +48,7 @@ export interface ActiveConversation {
     /** Parent daemon's connection status (injected by platform) */
     connectionState?: string;
     sessionCapabilities?: string[];
+    settings?: Record<string, any>;
 }
 
 /** CLI detection: PTY transport */

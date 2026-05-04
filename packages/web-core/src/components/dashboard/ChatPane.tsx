@@ -12,7 +12,6 @@ import { useTransport } from '../../context/TransportContext';
 import { unwrapCommandResult } from '../../hooks/useDashboardConversationCommands';
 import { buildChatDebugBundleClipboardText, buildChatDebugBundleToastMessage, buildChatFrontendDebugSnapshot, copyChatDebugBundleTextToClipboard, recordControlsToggleDebugGesture, type ControlsToggleDebugGestureState } from './chat-debug-bundle';
 import { eventManager } from '../../managers/EventManager';
-import ConversationMetaChips from './ConversationMetaChips';
 import { getConversationViewStates } from './DashboardMobileChatShared';
 import type { ActiveConversation } from './types';
 import type { DaemonData } from '../../types';
@@ -60,7 +59,6 @@ export default function ChatPane({
     isSendingChat = false,
     sendFeedbackMessage = null,
     handleFocusAgent, isFocusingAgent, actionLogs, userName,
-    showMetaChips = false,
     scrollToBottomRequestNonce,
     isInputActive = true,
     isVisible = true,
@@ -328,10 +326,6 @@ export default function ChatPane({
 
     return (
         <div className="flex-1 min-h-0 w-full flex flex-col">
-            {showMetaChips && (
-                <ConversationMetaChips conversation={activeConv} className="chat-pane-meta-row" />
-            )}
-
             {/* Message Stream */}
                 <ChatMessageList
                 messages={allMessages}

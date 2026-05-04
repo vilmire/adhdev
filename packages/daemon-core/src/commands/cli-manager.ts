@@ -480,7 +480,7 @@ export class DaemonCliManager {
         workingDir: string,
         cliArgs?: string[],
         initialModel?: string,
-        options?: { resumeSessionId?: string },
+        options?: { resumeSessionId?: string, settingsOverride?: Record<string, any> },
     ): Promise<{ runtimeSessionId: string; providerSessionId?: string }> {
         const trimmed = (workingDir || '').trim();
         if (!trimmed) throw new Error('working directory required');
@@ -624,7 +624,7 @@ export class DaemonCliManager {
                 resolvedDir,
                 resolvedCliArgs,
                 resolvedProvider,
-                this.providerLoader.getSettings(normalizedType),
+                { ...this.providerLoader.getSettings(normalizedType), ...(options?.settingsOverride || {}) },
                 false,
                 {
                     providerSessionId: sessionBinding.providerSessionId,
@@ -904,7 +904,7 @@ export class DaemonCliManager {
                     dir,
                     args?.cliArgs,
                     args?.initialModel,
-                    { resumeSessionId: args?.resumeSessionId },
+                    { resumeSessionId: args?.resumeSessionId, settingsOverride: args?.settings },
                 );
 
                 return {

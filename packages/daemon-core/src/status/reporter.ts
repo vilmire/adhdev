@@ -310,6 +310,7 @@ export class DaemonStatusReporter {
                 title: session.title,
                 cdpConnected: session.cdpConnected,
                 summaryMetadata: session.summaryMetadata,
+                settings: session.settings,
             })),
             p2p: payload.p2p,
             timestamp: now,
