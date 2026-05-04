@@ -1098,10 +1098,12 @@ export class DaemonCommandRouter {
                     }
 
                     // 3. Launch CLI session via existing cliManager
+                    // Pass coordinator system prompt via --append-system-prompt so the
+                    // CLI inherits its default behavior AND knows it is a mesh coordinator.
                     const launchResult: any = await this.deps.cliManager.handleCliCommand('launch_cli', {
                         cliType,
                         dir: workspace,
-                        initialPrompt: systemPrompt,
+                        cliArgs: systemPrompt ? ['--append-system-prompt', systemPrompt] : undefined,
                     });
 
                     if (!launchResult?.success) {
