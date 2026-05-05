@@ -21,12 +21,12 @@ import type {
 export type { CliTerminalHandle };
 
 type CliTerminalProps = Omit<GhosttyTerminalViewProps, 'onResize'>;
-type TerminalViewComponent = ForwardRefExoticComponent<GhosttyTerminalViewProps & RefAttributes<CliTerminalHandle>>;
+type TerminalViewComponent = ForwardRefExoticComponent<GhosttyTerminalViewProps & RefAttributes<CliTerminalHandle | null>>;
 let rendererLoadLogged = false;
 
-export const CliTerminal = forwardRef<CliTerminalHandle, CliTerminalProps>(
+export const CliTerminal = forwardRef<CliTerminalHandle | null, CliTerminalProps>(
     ({ onInput, onViewportMetrics, onScrollMetrics, fontSize = 13, readOnly = false, sizingMode = 'measured' }, ref) => {
-        const innerRef = useRef<CliTerminalHandle>(null);
+        const innerRef = useRef<CliTerminalHandle | null>(null);
         const [LoadedTerminal, setLoadedTerminal] = useState<TerminalViewComponent | null>(null);
         const pendingWritesRef = useRef<Array<{ data: string; onProcessed?: () => void }>>([]);
         const pendingClearRef = useRef(false);
