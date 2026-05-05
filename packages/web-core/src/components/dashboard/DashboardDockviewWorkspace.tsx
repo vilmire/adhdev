@@ -135,7 +135,17 @@ interface DashboardDockviewRemotePanelParams {
     routeId: string
 }
 
+type DashboardDockviewPanelActivityApi = Pick<IDockviewPanelProps<DashboardDockviewPanelParams>['api'], 'isActive' | 'isVisible'>
+
 type DockviewPaneDirection = 'left' | 'right' | 'above' | 'below'
+
+export function getDockviewPanelInputActive(api: Pick<DashboardDockviewPanelActivityApi, 'isActive'>): boolean {
+    return api.isActive
+}
+
+export function getDockviewPanelContentVisible(api: Pick<DashboardDockviewPanelActivityApi, 'isVisible'>): boolean {
+    return api.isVisible
+}
 
 const DashboardDockviewContext = createContext<DashboardDockviewContextValue | null>(null)
 
@@ -347,7 +357,8 @@ function syncRemotePanels(
 function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDockviewPanelParams>) {
     const ctx = useDashboardDockviewContext()
     const terminalRef = useRef<CliTerminalHandle>(null)
-    const [isPanelActive, setIsPanelActive] = useState(api.isActive)
+    const [isPanelInputActive, setIsPanelInputActive] = useState(() => getDockviewPanelInputActive(api))
+    const [isPanelVisible, setIsPanelVisible] = useState(() => getDockviewPanelContentVisible(api))
     const activeConv = ctx.conversationsByTabKey.get(params.tabKey)
     const cmds = useDashboardConversationCommands({
         sendDaemonCommand: ctx.sendDaemonCommand,
@@ -357,16 +368,18 @@ function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDo
     })
 
     useEffect(() => {
-        setIsPanelActive(api.isActive)
+        setIsPanelInputActive(getDockviewPanelInputActive(api))
+        setIsPanelVisible(getDockviewPanelContentVisible(api))
         const disposables = [
-            api.onDidActiveChange(event => setIsPanelActive(event.isActive)),
+            api.onDidActiveChange(event => setIsPanelInputActive(event.isActive)),
             api.onDidActiveGroupChange(event => {
-                if (!api.isActive && !event.isActive) {
-                    setIsPanelActive(false)
+                if (!getDockviewPanelInputActive(api) && !event.isActive) {
+                    setIsPanelInputActive(false)
                     return
                 }
-                setIsPanelActive(api.isActive)
+                setIsPanelInputActive(getDockviewPanelInputActive(api))
             }),
+            api.onDidVisibilityChange(event => setIsPanelVisible(event.isVisible)),
         ]
         return () => {
             for (const disposable of disposables) disposable.dispose()
@@ -417,8 +430,8 @@ function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<DashboardDo
                 actionLogs={activeActionLogs}
                 userName={ctx.userName}
                 scrollToBottomRequestNonce={ctx.scrollToBottomRequest?.tabKey === activeConv.tabKey ? ctx.scrollToBottomRequest.nonce : undefined}
-                isInputActive={isPanelActive}
-                isVisible={isPanelActive}
+                isInputActive={isPanelInputActive}
+                isVisible={isPanelVisible}
             />
         </div>
     )

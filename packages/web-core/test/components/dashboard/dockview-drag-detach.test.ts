@@ -33,4 +33,18 @@ describe('DashboardDockviewWorkspace Dockview idle drag floating behavior', () =
     expect(css).not.toContain('is-showing-dockview-overlay')
     expect(css).not.toContain('data-adhdev-force-hidden')
   })
+
+  it('keeps split-pane chat content visibility separate from focused input activity', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/components/dashboard/DashboardDockviewWorkspace.tsx'),
+      'utf8',
+    )
+
+    expect(source).toContain('getDockviewPanelInputActive')
+    expect(source).toContain('getDockviewPanelContentVisible')
+    expect(source).toContain('api.onDidVisibilityChange')
+    expect(source).toContain('isInputActive={isPanelInputActive}')
+    expect(source).toContain('isVisible={isPanelVisible}')
+    expect(source).not.toContain('isVisible={isPanelActive}')
+  })
 })
