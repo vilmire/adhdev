@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import DashboardNewSessionDialog from '../../../src/components/dashboard/DashboardNewSessionDialog'
+import DashboardNewSessionDialog, { LaunchCategorySelector } from '../../../src/components/dashboard/DashboardNewSessionDialog'
 import type { DaemonData } from '../../../src/types'
 
 function createMachine(index = 1): DaemonData {
@@ -81,5 +81,40 @@ describe('DashboardNewSessionDialog', () => {
     expect(html).toContain('<select aria-label="Machine"')
     expect(html).not.toContain('aria-label="Select machine Machine 1"')
     expect(html).toContain('<option value="machine-6">Machine 6</option>')
+  })
+
+  it('omits the separate category chips when mesh coordinator mode already selected CLI implicitly', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(LaunchCategorySelector, {
+        workspaceMode: 'mesh',
+        activeKind: 'cli',
+        cliEnabled: true,
+        ideEnabled: true,
+        acpEnabled: true,
+        busy: false,
+        onSelect: () => {},
+      }),
+    )
+
+    expect(html).toBe('')
+  })
+
+  it('shows category chips for normal workspace launches', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(LaunchCategorySelector, {
+        workspaceMode: 'workspace',
+        activeKind: 'cli',
+        cliEnabled: true,
+        ideEnabled: true,
+        acpEnabled: true,
+        busy: false,
+        onSelect: () => {},
+      }),
+    )
+
+    expect(html).toContain('Category')
+    expect(html).toContain('CLI')
+    expect(html).toContain('IDE')
+    expect(html).toContain('ACP')
   })
 })

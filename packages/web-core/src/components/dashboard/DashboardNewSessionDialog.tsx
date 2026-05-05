@@ -64,6 +64,51 @@ interface DashboardNewSessionDialogProps {
     onListSavedSessions: (machineId: string, providerType: string) => Promise<SavedSessionOption[]>
 }
 
+interface LaunchCategorySelectorProps {
+    workspaceMode: WorkspaceLaunchMode
+    activeKind: LaunchKind | null
+    cliEnabled: boolean
+    ideEnabled: boolean
+    acpEnabled: boolean
+    busy: boolean
+    onSelect: (kind: LaunchKind) => void
+}
+
+export function LaunchCategorySelector({
+    workspaceMode,
+    activeKind,
+    cliEnabled,
+    ideEnabled,
+    acpEnabled,
+    busy,
+    onSelect,
+}: LaunchCategorySelectorProps) {
+    if (workspaceMode === 'mesh') return null
+
+    return (
+        <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
+            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-2">Category</div>
+            <div className="flex flex-wrap gap-2">
+                {([
+                    { id: 'cli', label: 'CLI', enabled: cliEnabled },
+                    { id: 'ide', label: 'IDE', enabled: ideEnabled },
+                    { id: 'acp', label: 'ACP', enabled: acpEnabled },
+                ] as const).map(kind => (
+                    <button
+                        key={kind.id}
+                        type="button"
+                        className={`btn btn-sm ${activeKind === kind.id ? 'btn-primary' : 'btn-secondary'}`}
+                        onClick={() => onSelect(kind.id)}
+                        disabled={!kind.enabled || busy}
+                    >
+                        {kind.label}
+                    </button>
+                ))}
+            </div>
+        </div>
+    )
+}
+
 function getDefaultLaunchKind(machine: DaemonData | undefined) {
     if (!machine) return null
     const providers = machine.availableProviders || []
@@ -773,29 +818,15 @@ export default function DashboardNewSessionDialog({
                             )}
                         </LaunchSectionCard>
 
-                        <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
-                            <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-2">Category</div>
-                            <div className="flex flex-wrap gap-2">
-                                {([
-                                    { id: 'cli', label: 'CLI', enabled: cliProviders.length > 0 },
-                                    { id: 'ide', label: 'IDE', enabled: ideTargets.length > 0 },
-                                    { id: 'acp', label: 'ACP', enabled: acpProviders.length > 0 },
-                                ] as const).map(kind => {
-                                    const enabled = kind.enabled && (workspaceMode !== 'mesh' || kind.id === 'cli')
-                                    return (
-                                    <button
-                                        key={kind.id}
-                                        type="button"
-                                        className={`btn btn-sm ${activeKind === kind.id ? 'btn-primary' : 'btn-secondary'}`}
-                                        onClick={() => setActiveKind(kind.id)}
-                                        disabled={!enabled || busy}
-                                    >
-                                        {kind.label}
-                                    </button>
-                                    )
-                                })}
-                            </div>
-                        </div>
+                        <LaunchCategorySelector
+                            workspaceMode={workspaceMode}
+                            activeKind={activeKind}
+                            cliEnabled={cliProviders.length > 0}
+                            ideEnabled={ideTargets.length > 0}
+                            acpEnabled={acpProviders.length > 0}
+                            busy={busy}
+                            onSelect={setActiveKind}
+                        />
 
                         <div className="rounded-xl border border-border-subtle bg-bg-primary px-4 py-3">
                             <div className="text-[10px] uppercase tracking-[0.08em] text-text-muted mb-2">
