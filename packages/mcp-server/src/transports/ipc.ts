@@ -75,7 +75,10 @@ export class IpcTransport {
         finish(() => reject(new Error(`Daemon IPC command '${type}' timed out after 15s`)));
       }, 15_000);
 
+      let commandSent = false;
       const send = () => {
+        if (commandSent) return;
+        commandSent = true;
         ws.send(JSON.stringify({
           type: 'ext:command',
           payload: { command: type, args, requestId },
