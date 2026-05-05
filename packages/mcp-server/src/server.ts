@@ -163,7 +163,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     }
 
     const server = new Server(
-      { name: 'adhdev-mcp-server', version: '0.9.73' },
+      { name: 'adhdev-mcp-server', version: '0.9.74' },
       { capabilities: { tools: {}, resources: {} } },
     );
 
