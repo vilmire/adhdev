@@ -625,6 +625,66 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     expect(result.status).toBe('idle')
   })
 
+  it('does not append a stale approval screen snapshot after Claude returns to idle', () => {
+    const parseSession = vi.fn((input: any) => ({
+      id: 'cli_session',
+      status: String(input.screenText || '').includes('Enter to confirm · Esc to cancel') ? 'generating' : 'idle',
+      title: 'Claude Code',
+      messages: [],
+      activeModal: null,
+    }))
+    const adapter = new ProviderCliAdapter({
+      type: 'claude-cli',
+      name: 'Claude Code',
+      category: 'cli',
+      binary: 'claude',
+      spawn: {
+        command: 'claude',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+        parseSession,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => [
+        ' ▐▛███▜▌   Claude Code v2.1.128',
+        '▝▜█████▛▘  Sonnet 4.6 with medium effort · Claude Pro',
+        '  ▘▘ ▝▝    /tmp/project',
+        '',
+        '────────────────────────────────────────────────────────────────────────────────',
+        '❯ Try "fix typecheck errors"',
+        '────────────────────────────────────────────────────────────────────────────────',
+        '  ⏵⏵ accept edits on (shift+tab to cycle)',
+      ].join('\n')),
+    }
+    adapter.lastScreenSnapshot = [
+      '────────────────────────────────────────────────────────────────────────────────',
+      'New MCP server found in .mcp.json: adhdev-mesh',
+      'MCP servers may execute code or access system resources.',
+      'All tool calls require approval.',
+      '❯ 1. Use this and all future MCP servers in this project',
+      '2. Use this MCP server',
+      '3. Continue without using this MCP server',
+      'Enter to confirm · Esc to cancel',
+    ].join(' ')
+    adapter.currentStatus = 'idle'
+    adapter.activeModal = null
+
+    const result = adapter.getScriptParsedStatus()
+
+    expect(parseSession).toHaveBeenCalledTimes(1)
+    expect(parseSession.mock.calls[0][0].screenText).not.toContain('New MCP server found')
+    expect(parseSession.mock.calls[0][0].screenText).not.toContain('Enter to confirm · Esc to cancel')
+    expect(result.status).toBe('idle')
+  })
+
   it('reuses cached parsed status when transcript inputs have not changed', () => {
     const parseSession = vi.fn(() => ({
       id: 'cli_session',

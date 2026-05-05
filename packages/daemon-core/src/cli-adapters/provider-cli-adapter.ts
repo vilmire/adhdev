@@ -266,9 +266,10 @@ export class ProviderCliAdapter implements CliAdapter {
         const currentSnapshot = normalizeScreenSnapshot(screenText);
         const lastSnapshot = this.lastScreenSnapshot;
         if (!lastSnapshot || lastSnapshot === currentSnapshot) return screenText;
-        const staleSnapshotLooksActive = /\besc to (?:interrupt|stop)\b|Enter to interrupt, Ctrl\+C to cancel/i.test(lastSnapshot);
-        const currentScreenLooksIdle = /(?:^|\n|\r)\s*[❯›>]\s*(?:\n|\r|$)/.test(screenText)
-            && !/\besc to (?:interrupt|stop)\b|Enter to interrupt, Ctrl\+C to cancel/i.test(screenText);
+        const activeScreenPattern = /\besc to (?:interrupt|stop)\b|Enter to interrupt, Ctrl\+C to cancel|Enter to confirm\s*[·•-]\s*Esc to cancel|\b(?:MCP servers?|tool calls?)\b[^\n\r]{0,160}\brequire approval\b/i;
+        const staleSnapshotLooksActive = activeScreenPattern.test(lastSnapshot);
+        const currentScreenLooksIdle = /(?:^|\n|\r)\s*[❯›>]\s*(?:Try\s+["“][^\n\r"”]+["”])?\s*(?:\n|\r|$)/.test(screenText)
+            && !activeScreenPattern.test(screenText);
         if (staleSnapshotLooksActive && currentScreenLooksIdle) return screenText;
         if (currentSnapshot.length >= lastSnapshot.length) return screenText;
         // Terminal screen reads can miss a just-rendered completed Hermes box while
