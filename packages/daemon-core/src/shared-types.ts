@@ -432,6 +432,17 @@ export type VersionUpdateReason =
     | 'patch_mismatch'
     | 'daemon_ahead';
 
+export type ReleaseChannel = 'stable' | 'preview';
+export type NpmUpdateTag = 'latest' | 'next';
+
+export interface VersionUpdatePolicy {
+    channel: ReleaseChannel;
+    npmTag: NpmUpdateTag;
+    targetVersion: string;
+    minVersion?: string;
+    updateCommand: string;
+}
+
 /** Available provider information */
 export interface AvailableProviderInfo {
     type: string;
@@ -577,6 +588,10 @@ export interface CompactDaemonEntry {
     versionMismatch?: boolean;
     versionUpdateRequired?: boolean;
     versionUpdateReason?: VersionUpdateReason;
+    releaseChannel?: ReleaseChannel;
+    updateChannel?: ReleaseChannel;
+    updatePolicy?: VersionUpdatePolicy;
+    updateCommand?: string;
     terminalBackend?: TerminalBackendStatus;
     detectedIdes?: DetectedIdeInfo[];
     availableProviders?: AvailableProviderInfo[];
@@ -599,11 +614,15 @@ export interface CloudDaemonSummaryEntry {
     versionMismatch?: boolean;
     versionUpdateRequired?: boolean;
     versionUpdateReason?: VersionUpdateReason;
+    releaseChannel?: ReleaseChannel;
+    updateChannel?: ReleaseChannel;
+    updatePolicy?: VersionUpdatePolicy;
+    updateCommand?: string;
     terminalBackend?: TerminalBackendStatus;
 }
 
 /** Minimal daemon bootstrap payload used by dashboard WS to initiate P2P. */
-export interface DashboardBootstrapDaemonEntry {
+export interface DashboardBootstrapDaemonEntry extends Partial<CloudDaemonSummaryEntry> {
     id: string;
     p2p?: StatusReportPayload['p2p'];
     timestamp?: number;

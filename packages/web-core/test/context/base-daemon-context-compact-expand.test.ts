@@ -39,6 +39,111 @@ describe('expandCompactDaemons', () => {
     ])
   })
 
+  it('preserves preview update policy fields from cloud compact daemon payloads', () => {
+    const result = expandCompactDaemons([
+      {
+        id: 'machine-preview',
+        type: 'adhdev-daemon',
+        version: '0.9.75',
+        serverVersion: '0.9.76-rc.4',
+        versionMismatch: true,
+        versionUpdateRequired: false,
+        versionUpdateReason: 'patch_mismatch',
+        releaseChannel: 'preview',
+        updateChannel: 'preview',
+        updatePolicy: {
+          channel: 'preview',
+          npmTag: 'next',
+          targetVersion: '0.9.76-rc.4',
+          updateCommand: 'adhdev update --channel preview',
+        },
+        updateCommand: 'adhdev update --channel preview',
+        timestamp: 123,
+      },
+    ] as CompactDaemonCompat[])
+
+    expect(result.entries[0]).toMatchObject({
+      id: 'machine-preview',
+      type: 'adhdev-daemon',
+      version: '0.9.75',
+      serverVersion: '0.9.76-rc.4',
+      versionMismatch: true,
+      versionUpdateReason: 'patch_mismatch',
+      releaseChannel: 'preview',
+      updateChannel: 'preview',
+      updatePolicy: {
+        channel: 'preview',
+        npmTag: 'next',
+        targetVersion: '0.9.76-rc.4',
+        updateCommand: 'adhdev update --channel preview',
+      },
+      updateCommand: 'adhdev update --channel preview',
+    })
+  })
+
+  it('keeps preview update policy when daemon-only WS metadata refreshes a richer P2P entry', () => {
+    const previous = expandCompactDaemons([
+      {
+        id: 'machine-preview',
+        type: 'adhdev-daemon',
+        version: '0.9.75',
+        serverVersion: '0.9.76-rc.4',
+        versionMismatch: true,
+        releaseChannel: 'preview',
+        updateChannel: 'preview',
+        updatePolicy: {
+          channel: 'preview',
+          npmTag: 'next',
+          targetVersion: '0.9.76-rc.4',
+          updateCommand: 'adhdev update --channel preview',
+        },
+        timestamp: 123,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'running',
+            title: 'Hermes Agent',
+            workspace: '/repo',
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[]).entries
+    const incoming = expandCompactDaemons([
+      {
+        id: 'machine-preview',
+        type: 'adhdev-daemon',
+        version: '0.9.75',
+        serverVersion: '0.9.76-rc.4',
+        versionMismatch: true,
+        releaseChannel: 'preview',
+        updateChannel: 'preview',
+        updatePolicy: {
+          channel: 'preview',
+          npmTag: 'next',
+          targetVersion: '0.9.76-rc.4',
+          updateCommand: 'adhdev update --channel preview',
+        },
+        timestamp: 124,
+      },
+    ] as CompactDaemonCompat[], { daemonOnlyId: () => true }).entries
+
+    const reconciled = reconcileIdes(incoming, previous)
+    expect(reconciled.find(entry => entry.id === 'machine-preview')).toMatchObject({
+      updateChannel: 'preview',
+      updatePolicy: {
+        channel: 'preview',
+        npmTag: 'next',
+        targetVersion: '0.9.76-rc.4',
+      },
+      versionMismatch: true,
+    })
+    expect(reconciled.find(entry => entry.id === 'machine-preview:cli:cli-1')).toBeTruthy()
+  })
   it('preserves top-level cli and acp control metadata for standalone conversations', () => {
     const providerControls = [{ id: 'provider', type: 'select', label: 'Provider', placement: 'bar' }]
     const controlValues = { provider: 'auto' }

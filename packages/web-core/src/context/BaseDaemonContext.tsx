@@ -363,6 +363,12 @@ function buildWeakMetadataUpdate(
         'runtimeAttachedClients',
         'version',
         'serverVersion',
+        'versionUpdateReason',
+        'versionUpdateRequired',
+        'updateCommand',
+        'updatePolicy',
+        'updateChannel',
+        'releaseChannel',
     ] as const) {
         copyDefinedField(safeUpdate, incoming, key)
     }
@@ -619,6 +625,10 @@ export interface CompactDaemon {
     versionMismatch?: boolean
     versionUpdateRequired?: boolean
     versionUpdateReason?: WebVersionUpdateReason
+    releaseChannel?: DaemonData['releaseChannel']
+    updateChannel?: DaemonData['updateChannel']
+    updatePolicy?: DaemonData['updatePolicy']
+    updateCommand?: string
     terminalBackend?: DaemonData['terminalBackend']
     detectedIdes?: DaemonData['detectedIdes']
     availableProviders?: DaemonData['availableProviders']
@@ -689,14 +699,15 @@ export function expandCompactDaemons(
             p2p: d.p2p,
             cdpConnected: cdp,
             timestamp: ts,
-            // Version mismatch (server-driven flag)
-            ...(d.versionMismatch && {
-                versionMismatch: true,
-                version: d.version,
-                serverVersion: d.serverVersion,
-                ...(d.versionUpdateRequired && { versionUpdateRequired: true }),
-                ...(d.versionUpdateReason && { versionUpdateReason: d.versionUpdateReason }),
-            }),
+            ...(d.version && { version: d.version }),
+            ...(d.serverVersion && { serverVersion: d.serverVersion }),
+            ...(d.releaseChannel && { releaseChannel: d.releaseChannel }),
+            ...(d.updateChannel && { updateChannel: d.updateChannel }),
+            ...(d.updatePolicy && { updatePolicy: d.updatePolicy }),
+            ...(d.updateCommand && { updateCommand: d.updateCommand }),
+            ...(d.versionMismatch && { versionMismatch: true }),
+            ...(d.versionUpdateRequired && { versionUpdateRequired: true }),
+            ...(d.versionUpdateReason && { versionUpdateReason: d.versionUpdateReason }),
             ...(d.detectedIdes && { detectedIdes: d.detectedIdes }),
             ...(d.availableProviders && { availableProviders: d.availableProviders }),
         })
