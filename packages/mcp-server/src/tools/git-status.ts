@@ -1,5 +1,4 @@
-import type { LocalTransport } from '../transports/local.js';
-import type { CloudTransport } from '../transports/cloud.js';
+import type { McpTransport } from '../transports/mode.js';
 import { isLocalTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
@@ -28,7 +27,7 @@ export const GIT_STATUS_TOOL = {
 };
 
 export async function gitStatus(
-  transport: LocalTransport | CloudTransport,
+  transport: McpTransport,
   args: { workspace: string; include_diff?: boolean; daemon_id?: string; format?: 'text' | 'json' },
 ): Promise<string> {
   let status: any;

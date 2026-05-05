@@ -1136,6 +1136,7 @@ export class DaemonCommandRouter {
                     if (args?.inlineMesh) {
                         mcpServerEntry.env = {
                             ADHDEV_INLINE_MESH: JSON.stringify(mesh),
+                            ADHDEV_MCP_TRANSPORT: 'ipc',
                         };
                     }
                     const mcpConfig = {

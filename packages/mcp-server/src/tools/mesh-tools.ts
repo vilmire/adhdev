@@ -9,14 +9,15 @@
  *          mesh_launch_session, mesh_git_status, mesh_checkpoint, mesh_approve
  */
 
-import type { LocalTransport } from '../transports/local.js';
 import { CloudTransport } from '../transports/cloud.js';
+import { IpcTransport } from '../transports/ipc.js';
 import { isLocalTransport } from '../transports/mode.js';
+import type { McpTransport } from '../transports/mode.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshPolicy } from '@adhdev/daemon-core';
 
 export interface MeshContext {
     mesh: LocalMeshEntry;
-    transport: LocalTransport | CloudTransport;
+    transport: McpTransport;
     /** Daemon ID for this local machine (local mode) */
     localDaemonId?: string;
 }
@@ -33,6 +34,21 @@ function findNodeByWorkspace(mesh: LocalMeshEntry, workspace: string): LocalMesh
     const node = mesh.nodes.find(n => n.workspace === workspace);
     if (!node) throw new Error(`Workspace '${workspace}' is not a member of mesh '${mesh.name}'`);
     return node;
+}
+
+async function commandForNode(
+    ctx: MeshContext,
+    node: LocalMeshNodeEntry,
+    command: string,
+    args: Record<string, unknown> = {},
+): Promise<any> {
+    if (ctx.transport instanceof IpcTransport && node.daemonId) {
+        return ctx.transport.meshCommand(node.daemonId, command, args);
+    }
+    if (isLocalTransport(ctx.transport)) {
+        return ctx.transport.command(command, args);
+    }
+    throw new Error(`Command '${command}' requires daemon IPC/local transport for node '${node.id}'`);
 }
 
 // ─── Tool Definitions ───────────────────────────
@@ -167,7 +183,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
                 entry.isDirty = status?.isDirty;
                 entry.uncommittedChanges = status?.uncommittedChanges ?? 0;
             } else if (isLocalTransport(transport)) {
-                const statusResult = await transport.command('git_status', { workspace: node.workspace });
+                const statusResult = await commandForNode(ctx, node, 'git_status', { workspace: node.workspace });
                 const status = statusResult?.status ?? statusResult;
                 entry.health = status?.isGitRepo ? (status?.isDirty ? 'dirty' : 'online') : 'degraded';
                 entry.branch = status?.branch;
@@ -223,9 +239,10 @@ export async function meshSendTask(
     }
 
     if (isLocalTransport(ctx.transport)) {
-        await ctx.transport.command('send_chat', {
+        await commandForNode(ctx, node, 'send_chat', {
             message: args.message,
             sessionId: args.session_id,
+            targetSessionId: args.session_id,
         });
         return JSON.stringify({ success: true, nodeId: args.node_id, sessionId: args.session_id });
     } else {
@@ -237,11 +254,12 @@ export async function meshReadChat(
     ctx: MeshContext,
     args: { node_id: string; session_id: string; tail?: number },
 ): Promise<string> {
-    findNode(ctx.mesh, args.node_id); // membership check
+    const node = findNode(ctx.mesh, args.node_id); // membership check
 
     if (isLocalTransport(ctx.transport)) {
-        const result = await ctx.transport.command('read_chat', {
+        const result = await commandForNode(ctx, node, 'read_chat', {
             sessionId: args.session_id,
+            targetSessionId: args.session_id,
             tailLimit: args.tail ?? 10,
         });
         return JSON.stringify(result, null, 2);
@@ -257,7 +275,7 @@ export async function meshLaunchSession(
     const node = findNode(ctx.mesh, args.node_id);
 
     if (isLocalTransport(ctx.transport)) {
-        const result = await ctx.transport.command('launch_cli', {
+        const result = await commandForNode(ctx, node, 'launch_cli', {
             cliType: args.type,
             dir: node.workspace,
             settings: {
@@ -286,10 +304,10 @@ export async function meshGitStatus(
             diff: result?.diff ?? null,
         }, null, 2);
     } else if (isLocalTransport(ctx.transport)) {
-        const statusResult = await ctx.transport.command('git_status', {
+        const statusResult = await commandForNode(ctx, node, 'git_status', {
             workspace: node.workspace,
         });
-        const diffResult = await ctx.transport.command('git_diff_summary', {
+        const diffResult = await commandForNode(ctx, node, 'git_diff_summary', {
             workspace: node.workspace,
         });
         return JSON.stringify({
@@ -315,7 +333,7 @@ export async function meshCheckpoint(
     }
 
     if (isLocalTransport(ctx.transport)) {
-        const result = await ctx.transport.command('git_checkpoint', {
+        const result = await commandForNode(ctx, node, 'git_checkpoint', {
             workspace: node.workspace,
             message: args.message,
         });
@@ -329,11 +347,12 @@ export async function meshApprove(
     ctx: MeshContext,
     args: { node_id: string; session_id: string; action: string },
 ): Promise<string> {
-    findNode(ctx.mesh, args.node_id); // membership check
+    const node = findNode(ctx.mesh, args.node_id); // membership check
 
     if (isLocalTransport(ctx.transport)) {
-        const result = await ctx.transport.command('resolve_action', {
+        const result = await commandForNode(ctx, node, 'resolve_action', {
             sessionId: args.session_id,
+            targetSessionId: args.session_id,
             action: args.action === 'reject' ? 'reject' : 'approve',
         });
         return JSON.stringify(result, null, 2);

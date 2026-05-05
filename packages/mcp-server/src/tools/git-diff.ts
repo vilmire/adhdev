@@ -1,5 +1,4 @@
-import type { LocalTransport } from '../transports/local.js';
-import type { CloudTransport } from '../transports/cloud.js';
+import type { CommandTransport, McpTransport } from '../transports/mode.js';
 import { isLocalTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
@@ -49,7 +48,7 @@ interface FileDiffResult {
 }
 
 export async function gitDiff(
-  transport: LocalTransport | CloudTransport,
+  transport: McpTransport,
   args: {
     workspace: string;
     file?: string;
@@ -82,7 +81,7 @@ export async function gitDiff(
 }
 
 async function localGitDiff(
-  transport: LocalTransport,
+  transport: CommandTransport,
   workspace: string,
   file: string | undefined,
   maxLines: number,

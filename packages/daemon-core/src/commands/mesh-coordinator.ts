@@ -127,7 +127,7 @@ function resolveAdhdevMcpServerLaunch(options: {
   if (!entryPath) return null
   return {
     command: options.nodeExecutable?.trim() || process.execPath,
-    args: [entryPath, '--repo-mesh', options.meshId],
+    args: [entryPath, '--mode', 'ipc', '--repo-mesh', options.meshId],
   }
 }
 

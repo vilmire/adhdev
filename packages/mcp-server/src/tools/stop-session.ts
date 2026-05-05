@@ -1,4 +1,4 @@
-import type { LocalTransport } from '../transports/local.js';
+import type { McpTransport } from '../transports/mode.js';
 import type { CloudTransport } from '../transports/cloud.js';
 import { isLocalTransport } from '../transports/mode.js';
 
@@ -29,7 +29,7 @@ export const STOP_SESSION_TOOL = {
 };
 
 export async function stopSession(
-  transport: LocalTransport | CloudTransport,
+  transport: McpTransport,
   args: { session_id: string; daemon_id?: string; type?: string },
 ): Promise<string> {
   if (isLocalTransport(transport)) {

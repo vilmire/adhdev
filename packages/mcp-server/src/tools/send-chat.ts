@@ -1,4 +1,4 @@
-import type { LocalTransport } from '../transports/local.js';
+import type { McpTransport } from '../transports/mode.js';
 import type { CloudTransport } from '../transports/cloud.js';
 import { isLocalTransport } from '../transports/mode.js';
 
@@ -26,7 +26,7 @@ export const SEND_CHAT_TOOL = {
 };
 
 export async function sendChat(
-  transport: LocalTransport | CloudTransport,
+  transport: McpTransport,
   args: { message: string; session_id?: string; daemon_id?: string },
 ): Promise<string> {
   if (!args.message?.trim()) throw new Error('message is required');

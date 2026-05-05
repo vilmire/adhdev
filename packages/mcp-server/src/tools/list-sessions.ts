@@ -1,4 +1,4 @@
-import type { LocalTransport } from '../transports/local.js';
+import type { McpTransport } from '../transports/mode.js';
 import type { CloudTransport } from '../transports/cloud.js';
 import { isLocalTransport } from '../transports/mode.js';
 
@@ -30,7 +30,7 @@ export const LIST_SESSIONS_TOOL = {
 };
 
 export async function listSessions(
-  transport: LocalTransport | CloudTransport,
+  transport: McpTransport,
   args: { daemon_id?: string; format?: 'text' | 'json' } = {},
 ): Promise<string> {
   const asJson = args.format === 'json';

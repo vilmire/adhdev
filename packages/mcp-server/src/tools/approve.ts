@@ -1,4 +1,4 @@
-import type { LocalTransport } from '../transports/local.js';
+import type { McpTransport } from '../transports/mode.js';
 import type { CloudTransport } from '../transports/cloud.js';
 import { isLocalTransport } from '../transports/mode.js';
 
@@ -27,7 +27,7 @@ export const APPROVE_TOOL = {
 };
 
 export async function approve(
-  transport: LocalTransport | CloudTransport,
+  transport: McpTransport,
   args: { action: 'approve' | 'reject'; session_id?: string; daemon_id?: string },
 ): Promise<string> {
   const action = args.action === 'reject' ? 'reject' : 'approve';

@@ -1,4 +1,4 @@
-import type { LocalTransport } from '../transports/local.js';
+import type { McpTransport } from '../transports/mode.js';
 import type { CloudTransport } from '../transports/cloud.js';
 import { isLocalTransport } from '../transports/mode.js';
 
@@ -20,7 +20,7 @@ export const SCREENSHOT_TOOL = {
 };
 
 export async function screenshot(
-  transport: LocalTransport | CloudTransport,
+  transport: McpTransport,
   args: { session_id?: string },
 ): Promise<{ type: 'image'; data: string; mimeType: string } | { type: 'text'; text: string }> {
   let result: any;

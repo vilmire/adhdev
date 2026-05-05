@@ -1,5 +1,4 @@
-import type { LocalTransport } from '../transports/local.js';
-import type { CloudTransport } from '../transports/cloud.js';
+import type { McpTransport } from '../transports/mode.js';
 import { isLocalTransport } from '../transports/mode.js';
 
 export const GIT_CHECKPOINT_TOOL = {
@@ -33,7 +32,7 @@ export const GIT_CHECKPOINT_TOOL = {
 };
 
 export async function gitCheckpoint(
-  transport: LocalTransport | CloudTransport,
+  transport: McpTransport,
   args: {
     workspace: string;
     message: string;

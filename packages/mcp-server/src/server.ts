@@ -2,9 +2,10 @@
  * ADHDev MCP Server
  *
  * Exposes IDE agent sessions as MCP tools via stdio transport.
- * Two modes:
+ * Three modes:
  *   local  — talks to standalone daemon at localhost:3847
  *   cloud  — talks to ADHDev cloud API with an API key
+ *   ipc    — talks to cloud daemon local IPC at localhost:19222
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -16,6 +17,8 @@ import {
 
 import { LocalTransport } from './transports/local.js';
 import { CloudTransport } from './transports/cloud.js';
+import { IpcTransport } from './transports/ipc.js';
+import type { McpTransport } from './transports/mode.js';
 
 import { LIST_SESSIONS_TOOL, listSessions } from './tools/list-sessions.js';
 import { LIST_DAEMONS_TOOL, listDaemons } from './tools/list-daemons.js';
@@ -38,7 +41,7 @@ import {
 } from './tools/mesh-tools.js';
 
 export interface AdhdevMcpServerOptions {
-  mode: 'local' | 'cloud';
+  mode: 'local' | 'cloud' | 'ipc';
   // local options
   port?: number;
   password?: string;
@@ -50,10 +53,12 @@ export interface AdhdevMcpServerOptions {
 }
 
 export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void> {
-  const transport =
+  const transport: McpTransport =
     opts.mode === 'cloud'
       ? new CloudTransport({ apiKey: opts.apiKey!, baseUrl: opts.baseUrl })
-      : new LocalTransport({ port: opts.port, password: opts.password });
+      : opts.mode === 'ipc'
+        ? new IpcTransport({ port: opts.port })
+        : new LocalTransport({ port: opts.port, password: opts.password });
 
   // Verify connectivity before registering tools
   const alive = await transport.ping();
@@ -61,7 +66,9 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     const hint =
       opts.mode === 'local'
         ? `Make sure the standalone daemon is running (adhdev standalone or npx @adhdev/daemon-standalone).`
-        : `Check your API key and network connectivity.`;
+        : opts.mode === 'ipc'
+          ? `Make sure the cloud daemon is running with local IPC enabled (adhdev daemon).`
+          : `Check your API key and network connectivity.`;
     process.stderr.write(`[adhdev-mcp] Cannot reach ${opts.mode} daemon. ${hint}\n`);
     process.exit(1);
   }
@@ -145,7 +152,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
 
     // Fallback: query the running daemon (supports cloud-originating meshes
     // launched via inlineMesh that don't exist in local meshes.json)
-    if (!mesh && transport instanceof LocalTransport) {
+    if (!mesh && (transport instanceof LocalTransport || transport instanceof IpcTransport)) {
       try {
         const result = await transport.command('get_mesh', { meshId: opts.meshId });
         if (result?.success && result.mesh) {

@@ -1,5 +1,4 @@
-import type { LocalTransport } from '../transports/local.js';
-import type { CloudTransport } from '../transports/cloud.js';
+import type { McpTransport } from '../transports/mode.js';
 import { isLocalTransport } from '../transports/mode.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
@@ -28,7 +27,7 @@ export const READ_CHAT_TOOL = {
 };
 
 export async function readChat(
-  transport: LocalTransport | CloudTransport,
+  transport: McpTransport,
   args: { session_id?: string; limit?: number; daemon_id?: string; format?: 'text' | 'json' },
 ): Promise<string> {
   const limit = args.limit ?? 50;

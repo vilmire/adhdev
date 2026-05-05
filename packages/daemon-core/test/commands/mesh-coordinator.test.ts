@@ -45,7 +45,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       configFormat: 'claude_mcp_json',
       mcpServer: {
         command: '/usr/local/bin/node',
-        args: ['/opt/adhdev/vendor/mcp-server/index.js', '--repo-mesh', 'mesh_123'],
+        args: ['/opt/adhdev/vendor/mcp-server/index.js', '--mode', 'ipc', '--repo-mesh', 'mesh_123'],
       },
     })
   })
@@ -89,7 +89,7 @@ describe('resolveMeshCoordinatorSetup', () => {
         configFormat: 'claude_mcp_json',
         mcpServer: {
           command: '/usr/local/bin/node',
-          args: [realpathSync(mcpEntry), '--repo-mesh', 'mesh_dev_checkout'],
+          args: [realpathSync(mcpEntry), '--mode', 'ipc', '--repo-mesh', 'mesh_dev_checkout'],
         },
       })
     } finally {
@@ -200,9 +200,10 @@ describe('resolveMeshCoordinatorSetup', () => {
       const mcpConfig = JSON.parse(readFileSync(join(workspace, '.mcp.json'), 'utf-8'))
       expect(mcpConfig.mcpServers['adhdev-mesh']).toEqual({
         command: process.execPath,
-        args: [realpathSync(mcpEntry), '--repo-mesh', 'mesh_123'],
+        args: [realpathSync(mcpEntry), '--mode', 'ipc', '--repo-mesh', 'mesh_123'],
         env: {
           ADHDEV_INLINE_MESH: JSON.stringify(inlineMesh),
+          ADHDEV_MCP_TRANSPORT: 'ipc',
         },
       })
       expect(mcpConfig.mcpServers['adhdev-mesh'].command).not.toBe('adhdev-mcp')

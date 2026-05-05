@@ -1,4 +1,4 @@
-import type { LocalTransport } from '../transports/local.js';
+import type { McpTransport } from '../transports/mode.js';
 import type { CloudTransport } from '../transports/cloud.js';
 import { isLocalTransport } from '../transports/mode.js';
 
@@ -32,7 +32,7 @@ export const LAUNCH_SESSION_TOOL = {
 };
 
 export async function launchSession(
-  transport: LocalTransport | CloudTransport,
+  transport: McpTransport,
   args: { type: string; workspace?: string; model?: string; daemon_id?: string },
 ): Promise<string> {
   if (isLocalTransport(transport)) {
