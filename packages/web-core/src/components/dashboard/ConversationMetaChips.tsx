@@ -16,7 +16,7 @@ interface ConversationMetaChipsProps {
     onOpenNativeConversation?: () => void
     onOpenMachine?: () => void
     interactive?: boolean
-    /** When true, only render mesh-specific chips (Coordinator / Mesh Node) */
+    /** When true, only render mesh-node context chips for the tab-adjacent meta row. */
     meshOnly?: boolean
 }
 
@@ -37,9 +37,8 @@ export default function ConversationMetaChips({
     const providerChipLabel = getConversationProviderLabel(conversation)
     const ideChipLabel = getConversationIdeChipLabel(conversation)
     const isMeshNode = conversation.settings?.meshNodeFor;
-    const isMeshCoordinator = conversation.settings?.meshCoordinatorFor;
 
-    if (!showIdeChip && !showExtensionChip && !showProviderChip && !machineLabel && !isMeshNode && !isMeshCoordinator) {
+    if (!showIdeChip && !showExtensionChip && !showProviderChip && !machineLabel && !isMeshNode) {
         return null;
     }
 
@@ -112,14 +111,8 @@ export default function ConversationMetaChips({
                     </span>
                 )
             )}
-            {isMeshCoordinator && (
-                <span className="conversation-meta-chip" title="Mesh Coordinator">
-                    <IconServer size={12} />
-                    <span>Coordinator</span>
-                </span>
-            )}
             {isMeshNode && (
-                <span className="conversation-meta-chip" title="Managed by Coordinator">
+                <span className="conversation-meta-chip" title="Mesh node">
                     <IconServer size={12} />
                     <span>Mesh Node</span>
                 </span>
