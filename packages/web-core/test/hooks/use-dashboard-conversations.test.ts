@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildConversationSourceSignature, buildConversationTargetMap } from '../../src/hooks/useDashboardConversations'
+import { buildScopedIdeConversations } from '../../src/components/dashboard/buildConversations'
 import type { ActiveConversation } from '../../src/components/dashboard/types'
 import type { DaemonData } from '../../src/types'
 
@@ -244,6 +245,56 @@ describe('buildConversationSourceSignature', () => {
 
         const after = buildConversationSourceSignature(entry)
         expect(after).not.toBe(before)
+    })
+})
+
+describe('buildScopedIdeConversations', () => {
+    it('uses the top-level CLI status when compact live metadata has no activeChat transcript', () => {
+        const entry = createCliEntry({
+            status: 'generating',
+            activeChat: null,
+        })
+
+        const conversations = buildScopedIdeConversations(entry)
+
+        expect(conversations).toHaveLength(1)
+        expect(conversations[0]?.status).toBe('generating')
+    })
+
+    it('keeps active top-level CLI status ahead of a stale idle activeChat status', () => {
+        const entry = createCliEntry({
+            status: 'generating',
+            activeChat: {
+                id: 'chat-1',
+                title: 'Hermes Agent',
+                status: 'idle',
+                messages: [],
+                activeModal: null,
+            },
+        })
+
+        const conversations = buildScopedIdeConversations(entry)
+
+        expect(conversations).toHaveLength(1)
+        expect(conversations[0]?.status).toBe('generating')
+    })
+
+    it('keeps activeChat status ahead of stale top-level CLI status', () => {
+        const entry = createCliEntry({
+            status: 'idle',
+            activeChat: {
+                id: 'chat-1',
+                title: 'Hermes Agent',
+                status: 'waiting_approval',
+                messages: [],
+                activeModal: { message: 'approve?', buttons: ['Yes'] },
+            },
+        })
+
+        const conversations = buildScopedIdeConversations(entry)
+
+        expect(conversations).toHaveLength(1)
+        expect(conversations[0]?.status).toBe('waiting_approval')
     })
 })
 

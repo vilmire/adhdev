@@ -6,8 +6,7 @@
  */
 import type { DaemonData } from '../../types';
 import type { GitCompactSummary, RecentSessionBucket } from '@adhdev/daemon-core';
-import { deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, getMachineDisplayName, isGenericAgentTitle } from '../../utils/daemon-utils';
-import { normalizeManagedStatus } from '@adhdev/daemon-core/status/normalize';
+import { deriveNativeConversationStatus, deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, getMachineDisplayName, isGenericAgentTitle } from '../../utils/daemon-utils';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation, DashboardMessage } from './types';
 
@@ -155,9 +154,11 @@ export function buildIdeConversations(
         const agentName = providerLabel + roleSuffix;
         const modal = ide.activeChat?.activeModal;
         const hasRealModal = modal && Array.isArray(modal.buttons) && modal.buttons.length > 0;
-        const agentStatus = normalizeManagedStatus(ide.activeChat?.status, { activeModal: ide.activeChat?.activeModal })
-            || normalizeManagedStatus(ide.agents?.[0]?.status)
-            || 'idle';
+        const agentStatus = deriveNativeConversationStatus(
+            ide.activeChat,
+            [{ status: ide.status, activeModal: ide.activeChat?.activeModal }],
+            ide.agents || [],
+        );
         const chat = ide.activeChat || { title: '', messages: [] };
         let title = (chat.title && String(chat.title).trim()) ? String(chat.title).trim() : '';
         const activeId = ide.activeChat?.id;

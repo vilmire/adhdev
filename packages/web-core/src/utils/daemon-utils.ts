@@ -261,7 +261,15 @@ export function deriveNativeConversationStatus(
         return normalizeManagedStatus(activeAgent.status, { activeModal: activeAgent.activeModal })
     }
 
-    return chatStatus || normalizeManagedStatus(agents[0]?.status) || 'idle'
+    if (chatStatus && chatStatus !== 'idle') return chatStatus
+
+    const streamStatus = normalizeManagedStatus(streams[0]?.status, { activeModal: streams[0]?.activeModal })
+    if (streamStatus !== 'idle') return streamStatus
+
+    const agentStatus = normalizeManagedStatus(agents[0]?.status, { activeModal: agents[0]?.activeModal })
+    if (agentStatus !== 'idle') return agentStatus
+
+    return 'idle'
 }
 
 export function deriveStreamConversationStatus(

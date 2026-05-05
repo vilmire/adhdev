@@ -43,6 +43,19 @@ function getActiveChatOptions(profile: SessionEntryProfile): NormalizeActiveChat
     return LIVE_STATUS_ACTIVE_CHAT_OPTIONS;
 }
 
+function resolveSessionStatus(
+    activeChat: { status?: string | null; activeModal?: { buttons?: unknown[] | null } | null } | null | undefined,
+    providerStatus?: string | null,
+) {
+    const chatStatus = normalizeManagedStatus(activeChat?.status, { activeModal: activeChat?.activeModal || null });
+    const topLevelStatus = normalizeManagedStatus(providerStatus, { activeModal: activeChat?.activeModal || null });
+
+    if (chatStatus === 'waiting_approval' || topLevelStatus === 'waiting_approval') return 'waiting_approval';
+    if (chatStatus === 'generating' || topLevelStatus === 'generating') return 'generating';
+    if (topLevelStatus !== 'idle') return topLevelStatus;
+    return chatStatus;
+}
+
 function shouldIncludeSessionControls(profile: SessionEntryProfile): boolean {
     return profile !== 'live';
 }
@@ -170,9 +183,7 @@ function buildIdeWorkspaceSession(
         providerName: state.name,
         kind: 'workspace',
         transport: 'cdp-page',
-        status: normalizeManagedStatus(activeChat?.status || state.status, {
-            activeModal: activeChat?.activeModal || null,
-        }),
+        status: resolveSessionStatus(activeChat, state.status),
         title,
         workspace,
         ...(git && { git }),
@@ -212,9 +223,7 @@ function buildExtensionAgentSession(
         providerSessionId: ext.providerSessionId,
         kind: 'agent',
         transport: 'cdp-webview',
-        status: normalizeManagedStatus(activeChat?.status || ext.status, {
-            activeModal: activeChat?.activeModal || null,
-        }),
+        status: resolveSessionStatus(activeChat, ext.status),
         title: activeChat?.title || ext.name,
         workspace,
         ...(git && { git }),
@@ -277,9 +286,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         providerSessionId: state.providerSessionId,
         kind: 'agent',
         transport: 'pty',
-        status: normalizeManagedStatus(activeChat?.status || state.status, {
-            activeModal: activeChat?.activeModal || null,
-        }),
+        status: resolveSessionStatus(activeChat, state.status),
         title: activeChat?.title || state.name,
         workspace,
         ...(git && { git }),
@@ -328,9 +335,7 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
         providerName: state.name,
         kind: 'agent',
         transport: 'acp',
-        status: normalizeManagedStatus(activeChat?.status || state.status, {
-            activeModal: activeChat?.activeModal || null,
-        }),
+        status: resolveSessionStatus(activeChat, state.status),
         title: activeChat?.title || state.name,
         workspace,
         ...(git && { git }),
