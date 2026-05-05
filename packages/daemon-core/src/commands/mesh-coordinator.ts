@@ -149,6 +149,11 @@ function resolveAdhdevMcpEntryPath(explicitPath?: string): string | null {
     addCandidate(resolve(dir, '../vendor/mcp-server/index.js'))
     addCandidate(resolve(dir, '../../vendor/mcp-server/index.js'))
     addCandidate(resolve(dir, '../../../vendor/mcp-server/index.js'))
+    // Source checkout/dev mode does not vendor the MCP server into daemon-standalone.
+    // Resolve the sibling workspace build directly so Repo Mesh auto-import still
+    // writes an absolute Node entrypoint instead of falling back to a PATH bin shim.
+    addCandidate(resolve(dir, '../../mcp-server/dist/index.js'))
+    addCandidate(resolve(dir, '../../../mcp-server/dist/index.js'))
   }
 
   addPackagedCandidates(process.argv[1])

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -48,6 +48,54 @@ describe('resolveMeshCoordinatorSetup', () => {
         args: ['/opt/adhdev/vendor/mcp-server/index.js', '--repo-mesh', 'mesh_123'],
       },
     })
+  })
+
+  it('resolves the sibling mcp-server workspace dist when standalone runs from a source checkout', () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'adhdev-mcp-workspace-'))
+    const standaloneSrc = join(repoRoot, 'packages', 'daemon-standalone', 'src')
+    const mcpDist = join(repoRoot, 'packages', 'mcp-server', 'dist')
+    mkdirSync(standaloneSrc, { recursive: true })
+    mkdirSync(mcpDist, { recursive: true })
+    const standaloneEntry = join(standaloneSrc, 'index.ts')
+    const mcpEntry = join(mcpDist, 'index.js')
+    writeFileSync(standaloneEntry, '// standalone dev entry\n', 'utf-8')
+    writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
+    const previousArgv1 = process.argv[1]
+    process.argv[1] = standaloneEntry
+
+    const provider: ProviderModule = {
+      ...baseProvider,
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'auto_import',
+          format: 'claude_mcp_json',
+          path: '.mcp.json',
+          serverName: 'adhdev-mesh',
+        },
+      },
+    }
+
+    try {
+      expect(resolveMeshCoordinatorSetup({
+        provider,
+        meshId: 'mesh_dev_checkout',
+        workspace: '/repo',
+        nodeExecutable: '/usr/local/bin/node',
+      })).toEqual({
+        kind: 'auto_import',
+        serverName: 'adhdev-mesh',
+        configPath: '/repo/.mcp.json',
+        configFormat: 'claude_mcp_json',
+        mcpServer: {
+          command: '/usr/local/bin/node',
+          args: [realpathSync(mcpEntry), '--repo-mesh', 'mesh_dev_checkout'],
+        },
+      })
+    } finally {
+      process.argv[1] = previousArgv1
+      rmSync(repoRoot, { recursive: true, force: true })
+    }
   })
 
   it('materializes Hermes manual setup templates without pretending launch succeeded', () => {
@@ -132,18 +180,20 @@ describe('resolveMeshCoordinatorSetup', () => {
       statusVersion: '0.9.71',
     })
 
+    const inlineMesh = {
+      id: 'mesh_123',
+      name: 'Test Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [{ id: 'node-1', workspace, policy: {} }],
+      policy: {},
+      coordinator: {},
+    }
+
     try {
       const result = await router.execute('launch_mesh_coordinator', {
         meshId: 'mesh_123',
         cliType: 'claude-cli',
-        inlineMesh: {
-          id: 'mesh_123',
-          name: 'Test Mesh',
-          repoIdentity: 'example/repo',
-          nodes: [{ id: 'node-1', workspace, policy: {} }],
-          policy: {},
-          coordinator: {},
-        },
+        inlineMesh,
       })
 
       expect(result).toMatchObject({ success: true, sessionId: 'session-1' })
@@ -151,6 +201,9 @@ describe('resolveMeshCoordinatorSetup', () => {
       expect(mcpConfig.mcpServers['adhdev-mesh']).toEqual({
         command: process.execPath,
         args: [realpathSync(mcpEntry), '--repo-mesh', 'mesh_123'],
+        env: {
+          ADHDEV_INLINE_MESH: JSON.stringify(inlineMesh),
+        },
       })
       expect(mcpConfig.mcpServers['adhdev-mesh'].command).not.toBe('adhdev-mcp')
       expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.objectContaining({
