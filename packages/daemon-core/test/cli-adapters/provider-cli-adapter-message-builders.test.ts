@@ -567,6 +567,64 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     expect(getText).toHaveBeenCalledTimes(1)
   })
 
+  it('does not append a shorter stale active screen snapshot to a newer idle screen for parsed status', () => {
+    const parseSession = vi.fn((input: any) => ({
+      id: 'cli_session',
+      status: String(input.screenText || '').includes('esc to interrupt') ? 'generating' : 'idle',
+      title: 'Test CLI',
+      messages: [
+        { role: 'assistant', content: 'parsed assistant', id: 'assistant-1', index: 1, receivedAt: 2 },
+      ],
+    }))
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        detectStatus: () => 'idle',
+        parseApproval: () => null,
+        parseSession,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => [
+        '❯ user prompt',
+        '⏺ completed answer',
+        '✻ Cooked for 1m 39s',
+        '────────────────────────────────────────────────────────────────────────────────',
+        '❯ ',
+        '────────────────────────────────────────────────────────────────────────────────',
+        '  ⏵⏵ accept edits on (shift+tab to cycle)',
+        'idle filler that makes the current screen supersede the stale snapshot',
+      ].join('\n')),
+    }
+    adapter.lastScreenSnapshot = [
+      '❯ user prompt',
+      '⏺ partial answer',
+      '────────────────────────────────────────────────────────────────────────────────',
+      '❯ ',
+      '────────────────────────────────────────────────────────────────────────────────',
+      '  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt',
+    ].join(' ')
+    adapter.currentStatus = 'idle'
+    adapter.activeModal = null
+
+    const result = adapter.getScriptParsedStatus()
+
+    expect(parseSession).toHaveBeenCalledTimes(1)
+    expect(parseSession.mock.calls[0][0].screenText).not.toContain('esc to interrupt')
+    expect(result.status).toBe('idle')
+  })
+
   it('reuses cached parsed status when transcript inputs have not changed', () => {
     const parseSession = vi.fn(() => ({
       id: 'cli_session',

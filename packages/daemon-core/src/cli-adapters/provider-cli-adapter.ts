@@ -266,10 +266,16 @@ export class ProviderCliAdapter implements CliAdapter {
         const currentSnapshot = normalizeScreenSnapshot(screenText);
         const lastSnapshot = this.lastScreenSnapshot;
         if (!lastSnapshot || lastSnapshot === currentSnapshot) return screenText;
+        const staleSnapshotLooksActive = /\besc to (?:interrupt|stop)\b|Enter to interrupt, Ctrl\+C to cancel/i.test(lastSnapshot);
+        const currentScreenLooksIdle = /(?:^|\n|\r)\s*[❯›>]\s*(?:\n|\r|$)/.test(screenText)
+            && !/\besc to (?:interrupt|stop)\b|Enter to interrupt, Ctrl\+C to cancel/i.test(screenText);
+        if (staleSnapshotLooksActive && currentScreenLooksIdle) return screenText;
+        if (currentSnapshot.length >= lastSnapshot.length) return screenText;
         // Terminal screen reads can miss a just-rendered completed Hermes box while
         // the normalized snapshot captured during output still has it. Feed both
         // views to provider parsers so flattened snapshot-only final bubbles do
-        // not disappear from read_chat/chat_tail.
+        // not disappear from read_chat/chat_tail, but only when the older snapshot
+        // carries extra content instead of stale status chrome.
         return `${screenText}\n${lastSnapshot}`;
     }
 
