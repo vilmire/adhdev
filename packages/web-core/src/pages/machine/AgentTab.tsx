@@ -46,7 +46,7 @@ import SavedHistoryLaunchSection from '../../components/SavedHistoryLaunchSectio
 import { browseMachineDirectories, collectBrowsePathCandidates, getDefaultBrowseStartPath, type BrowseDirectoryEntry } from '../../components/machine/workspaceBrowse'
 import { buildLaunchWorkspaceOptions } from '../../components/machine/launchWorkspaceOptions'
 import type { LaunchWorkspaceOption } from './types'
-import { getRecentLaunchArgs, pushRecentLaunchArgs } from '../../utils/recentLaunchArgs'
+import { getRecentLaunchArgs, pushRecentLaunchArgs, removeRecentLaunchArgs } from '../../utils/recentLaunchArgs'
 import { shouldRefreshSavedHistoryOnModalOpen } from '../../utils/saved-history-load-state'
 import { isLaunchableMachineProvider, type LaunchableProviderCategory } from '../../utils/provider-activation'
 import AgentWorkspaceSelector from './AgentWorkspaceSelector'
@@ -331,6 +331,12 @@ export default function AgentTab({
             setRecentArgsOptions([])
             return
         }
+        setRecentArgsOptions(getRecentLaunchArgs(machineId, providerType))
+    }, [category, machineId])
+
+    const removeRecentArgsOption = useCallback((providerType: string, argsOption: string) => {
+        if (category === 'ide' || !providerType) return
+        removeRecentLaunchArgs(machineId, providerType, argsOption)
         setRecentArgsOptions(getRecentLaunchArgs(machineId, providerType))
     }, [category, machineId])
 
@@ -775,15 +781,28 @@ export default function AgentTab({
                                         {recentArgsOptions.length > 0 && (
                                             <div className="flex flex-wrap gap-1.5 mt-1.5">
                                                 {recentArgsOptions.map(argsOption => (
-                                                    <button
+                                                    <div
                                                         key={argsOption}
-                                                        type="button"
-                                                        className="btn btn-secondary btn-sm"
-                                                        onClick={() => setLaunchArgs(argsOption)}
+                                                        className="inline-flex max-w-full items-stretch overflow-hidden rounded-md border border-[#ffffff1a] bg-bg-tertiary text-xs text-text-secondary transition-colors hover:border-accent-primary/40 hover:text-text-primary"
                                                         title={argsOption}
                                                     >
-                                                        {argsOption}
-                                                    </button>
+                                                        <button
+                                                            type="button"
+                                                            className="min-w-0 max-w-[220px] truncate px-2.5 py-1.5 text-left"
+                                                            onClick={() => setLaunchArgs(argsOption)}
+                                                        >
+                                                            {argsOption}
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            className="flex items-center justify-center border-l border-[#ffffff1a] px-1.5 text-text-muted transition-colors hover:bg-status-error/10 hover:text-status-error focus:outline-none focus:ring-1 focus:ring-status-error/50"
+                                                            onClick={() => removeRecentArgsOption(selectedType, argsOption)}
+                                                            aria-label={`Remove startup arguments: ${argsOption}`}
+                                                            title="Remove startup arguments"
+                                                        >
+                                                            <IconX size={12} />
+                                                        </button>
+                                                    </div>
                                                 ))}
                                             </div>
                                         )}

@@ -38,6 +38,25 @@ import { buildSessionEntries } from '../status/builders.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
+
+type ReleaseChannel = 'stable' | 'preview';
+const CHANNEL_NPM_TAG: Record<ReleaseChannel, 'latest' | 'next'> = { stable: 'latest', preview: 'next' };
+
+function normalizeReleaseChannel(value: unknown): ReleaseChannel | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'stable' || normalized === 'latest') return 'stable';
+    if (normalized === 'preview' || normalized === 'next') return 'preview';
+    return null;
+}
+
+function resolveUpgradeChannel(args: any): ReleaseChannel {
+    return normalizeReleaseChannel(args?.channel)
+        || normalizeReleaseChannel(args?.updatePolicy?.channel)
+        || normalizeReleaseChannel(args?.npmTag)
+        || normalizeReleaseChannel(loadConfig().updateChannel)
+        || 'stable';
+}
 import * as fs from 'fs';
 
 // ─── Types ───
@@ -867,10 +886,12 @@ export class DaemonCommandRouter {
                         || process.argv[1]?.includes('daemon-standalone');
                     const pkgName = isStandalone ? '@adhdev/daemon-standalone' : 'adhdev';
                     const npmSurface = resolveCurrentGlobalInstallSurface({ packageName: pkgName });
+                    const channel = resolveUpgradeChannel(args);
+                    const npmTag = CHANNEL_NPM_TAG[channel];
 
-                    // Check latest version
-                    const latest = String(execNpmCommandSync(['view', pkgName, 'version'], { encoding: 'utf-8', timeout: 10000 }, npmSurface)).trim();
-                    LOG.info('Upgrade', `Latest ${pkgName}: v${latest}`);
+                    // Check channel-pinned dist-tag and resolve it to a concrete install version.
+                    const latest = String(execNpmCommandSync(['view', `${pkgName}@${npmTag}`, 'version'], { encoding: 'utf-8', timeout: 10000 }, npmSurface)).trim();
+                    LOG.info('Upgrade', `Latest ${pkgName}@${npmTag}: v${latest}`);
                     let currentInstalled: string | null = null;
                     try {
                         const currentJson = String(execNpmCommandSync(['ls', '-g', pkgName, '--depth=0', '--json'], {
@@ -888,8 +909,8 @@ export class DaemonCommandRouter {
                         ? this.deps.statusVersion.trim().replace(/^v/, '')
                         : null;
                     if (currentInstalled === latest && runningVersion === latest) {
-                        LOG.info('Upgrade', `Already on latest version v${latest}; skipping install`);
-                        return { success: true, upgraded: false, alreadyLatest: true, version: latest };
+                        LOG.info('Upgrade', `Already on ${channel} channel version v${latest}; skipping install`);
+                        return { success: true, upgraded: false, alreadyLatest: true, version: latest, channel, npmTag };
                     }
                     if (currentInstalled === latest && runningVersion && runningVersion !== latest) {
                         LOG.info('Upgrade', `Installed package is v${latest}, but running daemon is v${runningVersion}; scheduling restart`);
@@ -903,7 +924,7 @@ export class DaemonCommandRouter {
                         cwd: process.cwd(),
                         sessionHostAppName: process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev',
                     });
-                    LOG.info('Upgrade', `Scheduled detached upgrade to v${latest}`);
+                    LOG.info('Upgrade', `Scheduled detached ${channel} upgrade to v${latest}`);
 
                     // Exit after the command response has been sent so the helper can replace the package cleanly.
                     setTimeout(() => {
@@ -911,7 +932,7 @@ export class DaemonCommandRouter {
                         process.exit(0);
                     }, 3000);
 
-                    return { success: true, upgraded: true, version: latest, restarting: true };
+                    return { success: true, upgraded: true, version: latest, restarting: true, channel, npmTag };
                 } catch (e: any) {
                     LOG.error('Upgrade', `Failed: ${e.message}`);
                     return { success: false, error: e.message };

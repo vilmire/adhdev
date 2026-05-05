@@ -15,6 +15,7 @@ export type { SavedProviderSessionEntry } from './saved-sessions.js';
 export type { DaemonState } from './state-store.js';
 
 export type ProviderSourceMode = 'normal' | 'no-upstream';
+export type ReleaseChannel = 'stable' | 'preview';
 
 export function resolveProviderSourceMode(
     providerSourceMode: unknown,
@@ -122,6 +123,9 @@ export interface ADHDevConfig {
  // Optional explicit provider override root (for example a local adhdev-providers checkout)
     providerDir?: string;
 
+    /** Preferred daemon update channel. Defaults to stable/latest. */
+    updateChannel?: ReleaseChannel;
+
     /**
      * Browser terminal sizing behavior for dashboard CLI panes.
      * Default `measured` keeps terminal size daemon-authoritative.
@@ -151,6 +155,7 @@ const DEFAULT_CONFIG: ADHDevConfig = {
     machineProviders: {},
     ideSettings: {},
     providerSourceMode: 'normal',
+    updateChannel: 'stable',
     terminalSizingMode: 'measured',
 };
 
@@ -228,6 +233,7 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
         ideSettings: isPlainObject(parsed.ideSettings) ? parsed.ideSettings : {},
         providerSourceMode: resolveProviderSourceMode(parsed.providerSourceMode, parsed.disableUpstream),
         providerDir: asOptionalString(parsed.providerDir),
+        updateChannel: parsed.updateChannel === 'preview' ? 'preview' : 'stable',
         terminalSizingMode: parsed.terminalSizingMode === 'fit' ? 'fit' : 'measured',
     };
 }

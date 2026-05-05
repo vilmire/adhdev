@@ -262,6 +262,17 @@ export class ProviderCliAdapter implements CliAdapter {
         return screenText;
     }
 
+    private getParseScreenText(screenText: string): string {
+        const currentSnapshot = normalizeScreenSnapshot(screenText);
+        const lastSnapshot = this.lastScreenSnapshot;
+        if (!lastSnapshot || lastSnapshot === currentSnapshot) return screenText;
+        // Terminal screen reads can miss a just-rendered completed Hermes box while
+        // the normalized snapshot captured during output still has it. Feed both
+        // views to provider parsers so flattened snapshot-only final bubbles do
+        // not disappear from read_chat/chat_tail.
+        return `${screenText}\n${lastSnapshot}`;
+    }
+
     private shouldReadTerminalScreenSnapshot(now: number): boolean {
         if (!this.lastScreenText) return true;
         return (now - this.lastScreenSnapshotReadAt) >= ProviderCliAdapter.SCREEN_SNAPSHOT_MIN_INTERVAL_MS;
@@ -1424,12 +1435,13 @@ export class ProviderCliAdapter implements CliAdapter {
         }
         try {
             const screenText = this.terminalScreen.getText();
+            const parseScreenText = this.getParseScreenText(screenText);
             const tail = this.recentOutputBuffer.slice(-500);
             const input = buildCliParseInput({
                 accumulatedBuffer: this.accumulatedBuffer,
                 accumulatedRawBuffer: this.accumulatedRawBuffer,
                 recentOutputBuffer: this.recentOutputBuffer,
-                terminalScreenText: screenText,
+                terminalScreenText: parseScreenText,
                 baseMessages: [],
                 partialResponse: this.responseBuffer,
                 isWaitingForResponse: this.isWaitingForResponse,
@@ -1534,6 +1546,7 @@ export class ProviderCliAdapter implements CliAdapter {
      */
     getScriptParsedStatus(): any {
         const screenText = this.readTerminalScreenText();
+        const parseScreenText = this.getParseScreenText(screenText);
         const cached = this.parsedStatusCache;
         if (
             cached
@@ -1541,7 +1554,7 @@ export class ProviderCliAdapter implements CliAdapter {
             && cached.currentTurnScope === this.currentTurnScope
             && cached.recentOutputBuffer === this.recentOutputBuffer
             && cached.accumulatedBuffer === this.accumulatedBuffer
-            && cached.screenText === screenText
+            && cached.screenText === parseScreenText
             && cached.currentStatus === this.currentStatus
             && cached.activeModal === this.activeModal
             && cached.cliName === this.cliName
@@ -1580,7 +1593,7 @@ export class ProviderCliAdapter implements CliAdapter {
             currentTurnScope: this.currentTurnScope,
             recentOutputBuffer: this.recentOutputBuffer,
             accumulatedBuffer: this.accumulatedBuffer,
-            screenText,
+            screenText: parseScreenText,
             currentStatus: this.currentStatus,
             activeModal: this.activeModal,
             cliName: this.cliName,
@@ -1598,7 +1611,7 @@ export class ProviderCliAdapter implements CliAdapter {
             accumulatedBuffer: this.accumulatedBuffer,
             accumulatedRawBuffer: this.accumulatedRawBuffer,
             recentOutputBuffer: this.recentOutputBuffer,
-            terminalScreenText: this.terminalScreen.getText(),
+            terminalScreenText: this.getParseScreenText(this.terminalScreen.getText()),
             baseMessages: [],
             partialResponse: this.responseBuffer,
             isWaitingForResponse: this.isWaitingForResponse,

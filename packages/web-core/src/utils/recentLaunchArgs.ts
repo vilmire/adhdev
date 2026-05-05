@@ -57,3 +57,21 @@ export function pushRecentLaunchArgs(machineId: string, providerType: string, ar
     store.byKey[key] = { items: next }
     writeStore(store)
 }
+
+export function removeRecentLaunchArgs(machineId: string, providerType: string, argsText: string) {
+    const normalizedMachineId = String(machineId || '').trim()
+    const normalizedProviderType = String(providerType || '').trim()
+    const normalizedArgs = normalizeArgs(argsText)
+    if (!normalizedMachineId || !normalizedProviderType || !normalizedArgs) return
+
+    const store = readStore()
+    const key = makeStoreKey(normalizedMachineId, normalizedProviderType)
+    const prev = store.byKey[key]?.items || []
+    const next = prev.filter(item => item !== normalizedArgs)
+    if (next.length > 0) {
+        store.byKey[key] = { items: next }
+    } else {
+        delete store.byKey[key]
+    }
+    writeStore(store)
+}

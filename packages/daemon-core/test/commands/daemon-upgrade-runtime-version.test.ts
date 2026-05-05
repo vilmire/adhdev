@@ -48,7 +48,8 @@ describe('daemon_upgrade runtime version handling', () => {
       throw new Error(`direct execSync should not be used for daemon_upgrade npm calls: ${cmd}`)
     })
     mocks.execNpmCommandSync.mockImplementation((args: string[]) => {
-      if (args.join(' ') === 'view adhdev version') return '0.9.13\n'
+      if (args.join(' ') === 'view adhdev@latest version') return '0.9.13\n'
+      if (args.join(' ') === 'view adhdev@next version') return '0.9.14\n'
       if (args.join(' ') === 'ls -g adhdev --depth=0 --json') {
         return JSON.stringify({ dependencies: { adhdev: { version: '0.9.13' } } })
       }
@@ -64,11 +65,11 @@ describe('daemon_upgrade runtime version handling', () => {
   it('schedules a restart when the globally installed package is latest but the running daemon is stale', async () => {
     const router = createRouter('0.9.12')
 
-    const result = await router.execute('daemon_upgrade', {})
+    const result = await router.execute('daemon_upgrade', { channel: 'stable' })
 
-    expect(result).toMatchObject({ success: true, upgraded: true, version: '0.9.13', restarting: true })
+    expect(result).toMatchObject({ success: true, upgraded: true, version: '0.9.13', restarting: true, channel: 'stable', npmTag: 'latest' })
     expect(mocks.execNpmCommandSync).toHaveBeenCalledWith(
-      ['view', 'adhdev', 'version'],
+      ['view', 'adhdev@latest', 'version'],
       expect.objectContaining({ encoding: 'utf-8', timeout: 10000 }),
       expect.objectContaining({ npmExecutable: 'npm' }),
     )
@@ -81,6 +82,23 @@ describe('daemon_upgrade runtime version handling', () => {
     expect(mocks.spawnDetachedDaemonUpgradeHelper).toHaveBeenCalledWith(expect.objectContaining({
       packageName: 'adhdev',
       targetVersion: '0.9.13',
+    }))
+  })
+
+  it('uses the preview npm dist-tag when requested', async () => {
+    const router = createRouter('0.9.13')
+
+    const result = await router.execute('daemon_upgrade', { channel: 'preview' })
+
+    expect(result).toMatchObject({ success: true, upgraded: true, version: '0.9.14', restarting: true, channel: 'preview', npmTag: 'next' })
+    expect(mocks.execNpmCommandSync).toHaveBeenCalledWith(
+      ['view', 'adhdev@next', 'version'],
+      expect.objectContaining({ encoding: 'utf-8', timeout: 10000 }),
+      expect.objectContaining({ npmExecutable: 'npm' }),
+    )
+    expect(mocks.spawnDetachedDaemonUpgradeHelper).toHaveBeenCalledWith(expect.objectContaining({
+      packageName: 'adhdev',
+      targetVersion: '0.9.14',
     }))
   })
 })
