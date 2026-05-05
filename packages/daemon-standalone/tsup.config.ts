@@ -9,8 +9,11 @@ export default defineConfig({
   target: 'node18',
   splitting: false,
   sourcemap: true,
-  external: ['ws', 'chalk', 'conf', 'node-pty'],
-  noExternal: [/^@adhdev\//],
+  // Bundle daemon-core and ESM-only runtime deps into the published CJS CLI.
+  // Leaving chalk external makes the standalone bin crash with require(esm)
+  // before even `adhdev-standalone --help` can render from a fresh install.
+  external: ['ws', 'node-pty', 'open'],
+  noExternal: [/^@adhdev\//, 'chalk', 'conf'],
   banner: {
     js: '#!/usr/bin/env node',
   },
