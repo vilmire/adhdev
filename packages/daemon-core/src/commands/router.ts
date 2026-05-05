@@ -1101,14 +1101,22 @@ export class DaemonCommandRouter {
                     }
 
                     // Merge ADHDev mesh server into existing config.
+                    // Pass full mesh data as env var so the MCP server can bootstrap
+                    // without depending on meshes.json or a running daemon.
+                    const mcpServerEntry: Record<string, any> = {
+                        command: coordinatorSetup.mcpServer.command,
+                        args: coordinatorSetup.mcpServer.args,
+                    };
+                    if (args?.inlineMesh) {
+                        mcpServerEntry.env = {
+                            ADHDEV_INLINE_MESH: JSON.stringify(mesh),
+                        };
+                    }
                     const mcpConfig = {
                         ...existingMcpConfig,
                         mcpServers: {
                             ...(existingMcpConfig.mcpServers || {}),
-                            [coordinatorSetup.serverName]: {
-                                command: coordinatorSetup.mcpServer.command,
-                                args: coordinatorSetup.mcpServer.args,
-                            },
+                            [coordinatorSetup.serverName]: mcpServerEntry,
                         },
                     };
                     writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2), 'utf-8');

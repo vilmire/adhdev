@@ -72,8 +72,18 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
   if (opts.meshId) {
     let mesh: any;
 
-    // Cloud mode: try fetching mesh config from server API first
-    if (opts.mode === 'cloud' && opts.apiKey) {
+    // Priority 1: ADHDEV_INLINE_MESH env var (set by daemon in .mcp.json for cloud meshes)
+    if (!mesh && process.env.ADHDEV_INLINE_MESH) {
+      try {
+        mesh = JSON.parse(process.env.ADHDEV_INLINE_MESH);
+        process.stderr.write(`[adhdev-mcp] Loaded mesh config from ADHDEV_INLINE_MESH env\n`);
+      } catch (e: any) {
+        process.stderr.write(`[adhdev-mcp] Failed to parse ADHDEV_INLINE_MESH: ${e.message}\n`);
+      }
+    }
+
+    // Priority 2: Cloud API (when running with --api-key)
+    if (!mesh && opts.mode === 'cloud' && opts.apiKey) {
       try {
         const base = opts.baseUrl || 'https://api.adhf.dev';
         const res = await fetch(`${base}/api/v1/repo-meshes/${opts.meshId}`, {
@@ -122,7 +132,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       }
     }
 
-    // Fallback: load from local ~/.adhdev/meshes.json
+    // Priority 3: Local ~/.adhdev/meshes.json
     if (!mesh) {
       try {
         const { getMesh } = await import('@adhdev/daemon-core');
