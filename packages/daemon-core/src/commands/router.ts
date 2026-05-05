@@ -194,6 +194,10 @@ function summarizeSessionHostPruneResult(result: unknown): Record<string, unknow
 
 export class DaemonCommandRouter {
     private deps: CommandRouterDeps;
+    /** In-memory cache for cloud-originating meshes passed via inlineMesh.
+     *  Allows the MCP server to query mesh data via get_mesh even when
+     *  the mesh doesn't exist in the local meshes.json file. */
+    private inlineMeshCache = new Map<string, any>();
 
     constructor(deps: CommandRouterDeps) {
         this.deps = deps;
@@ -937,11 +941,12 @@ export class DaemonCommandRouter {
                 try {
                     const { getMesh } = await import('../config/mesh-config.js');
                     const mesh = getMesh(meshId);
-                    if (!mesh) return { success: false, error: 'Mesh not found' };
-                    return { success: true, mesh };
-                } catch (e: any) {
-                    return { success: false, error: e.message };
-                }
+                    if (mesh) return { success: true, mesh };
+                } catch { /* fall through to inline cache */ }
+                // Fallback: check in-memory cache for cloud-originating meshes
+                const cached = this.inlineMeshCache.get(meshId);
+                if (cached) return { success: true, mesh: cached };
+                return { success: false, error: 'Mesh not found' };
             }
 
             case 'create_mesh': {
@@ -1012,6 +1017,8 @@ export class DaemonCommandRouter {
                     let mesh: any;
                     if (args?.inlineMesh && typeof args.inlineMesh === 'object') {
                         mesh = args.inlineMesh;
+                        // Cache cloud mesh so the MCP server can retrieve it via get_mesh
+                        this.inlineMeshCache.set(meshId, mesh);
                     } else {
                         const { getMesh } = await import('../config/mesh-config.js');
                         mesh = getMesh(meshId);

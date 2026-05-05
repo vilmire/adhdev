@@ -128,8 +128,21 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
         const { getMesh } = await import('@adhdev/daemon-core');
         mesh = getMesh(opts.meshId);
       } catch (e: any) {
-        process.stderr.write(`[adhdev-mcp] Failed to load mesh config: ${e.message}\n`);
-        process.exit(1);
+        process.stderr.write(`[adhdev-mcp] Local meshes.json lookup failed: ${e.message}\n`);
+      }
+    }
+
+    // Fallback: query the running daemon (supports cloud-originating meshes
+    // launched via inlineMesh that don't exist in local meshes.json)
+    if (!mesh && transport instanceof LocalTransport) {
+      try {
+        const result = await transport.command('get_mesh', { meshId: opts.meshId });
+        if (result?.success && result.mesh) {
+          mesh = result.mesh;
+          process.stderr.write(`[adhdev-mcp] Loaded mesh config from daemon\n`);
+        }
+      } catch (e: any) {
+        process.stderr.write(`[adhdev-mcp] Daemon mesh query failed: ${e.message}\n`);
       }
     }
 
