@@ -309,6 +309,12 @@ export default function DashboardHeader({
                         <span className="header-title-mobile">
                             {activeConv ? getConversationTitle(activeConv) : 'Dashboard'}
                         </span>
+                        <span
+                            title={connectionState.title}
+                            aria-label={connectionState.title}
+                            className="header-title-status-dot"
+                            style={{ background: dotColor, boxShadow: dotGlow }}
+                        />
                         <span className="header-count-mobile text-[10px] font-semibold opacity-60 ml-2 tracking-wide">
                             <span
                                 className="inline-block w-[6px] h-[6px] rounded-full align-middle"
@@ -317,11 +323,6 @@ export default function DashboardHeader({
                         </span>
                         </h1>
                         <div className="header-subtitle flex items-center">
-                            <span
-                                title={connectionState.title}
-                                className="header-subtitle-dot inline-block w-1.5 h-1.5 rounded-full shrink-0"
-                                style={{ background: dotColor, boxShadow: dotGlow }}
-                            />
                             {statusText && (
                                 <span className="header-subtitle-status mr-2">
                                     · {statusText}

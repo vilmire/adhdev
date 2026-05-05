@@ -169,6 +169,15 @@ describe('DashboardHeader inbox notifications', () => {
     }).subtitle).toBeNull()
   })
 
+  it('renders the connection dot in the title row so it aligns with the Dashboard text baseline', () => {
+    const html = renderHeader()
+
+    expect(html).toContain('header-title-status-dot')
+    expect(html).not.toContain('header-subtitle-dot')
+    expect(html.indexOf('header-title-status-dot')).toBeGreaterThan(html.indexOf('header-title-desktop'))
+    expect(html.indexOf('header-title-status-dot')).toBeLessThan(html.indexOf('header-subtitle'))
+  })
+
   it('renders unread and read notification sections with read/unread/delete actions', () => {
     const html = renderHeader()
 

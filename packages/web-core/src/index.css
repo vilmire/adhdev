@@ -1690,6 +1690,15 @@
         display: none;
     }
 
+    .header-title-status-dot {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        flex: 0 0 auto;
+        align-self: center;
+    }
+
     /* Desktop: show "Dashboard" title; Mobile: show tab title */
     .header-title-desktop {
         display: inline;
@@ -2637,6 +2646,10 @@
         .header-count-mobile {
             display: inline-flex !important;
             flex: 0 0 auto;
+        }
+
+        .header-title-status-dot {
+            display: none;
         }
 
         /* Mobile: show tab title, hide generic "Dashboard" */
