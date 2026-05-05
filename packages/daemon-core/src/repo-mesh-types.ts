@@ -184,6 +184,7 @@ export interface LocalMeshNodeEntry {
     id: string;
     workspace: string;
     repoRoot?: string;
+    daemonId?: string;
     userOverrides: Partial<RepoMeshNodeCapabilities>;
     policy: RepoMeshNodePolicy;
     /** For single-machine mesh: same daemon, different worktree */

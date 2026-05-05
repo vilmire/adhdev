@@ -10,7 +10,7 @@
  */
 
 import type { LocalTransport } from '../transports/local.js';
-import type { CloudTransport } from '../transports/cloud.js';
+import { CloudTransport } from '../transports/cloud.js';
 import { isLocalTransport } from '../transports/mode.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshPolicy } from '@adhdev/daemon-core';
 
@@ -159,7 +159,14 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         };
 
         try {
-            if (isLocalTransport(transport)) {
+            if (!isLocalTransport(transport) && node.daemonId) {
+                const result = await (transport as CloudTransport).gitStatus(node.daemonId, node.workspace, false);
+                const status = result?.status ?? result;
+                entry.health = status?.isGitRepo ? (status?.isDirty ? 'dirty' : 'online') : 'degraded';
+                entry.branch = status?.branch;
+                entry.isDirty = status?.isDirty;
+                entry.uncommittedChanges = status?.uncommittedChanges ?? 0;
+            } else if (isLocalTransport(transport)) {
                 const statusResult = await transport.command('git_status', { workspace: node.workspace });
                 const status = statusResult?.status ?? statusResult;
                 entry.health = status?.isGitRepo ? (status?.isDirty ? 'dirty' : 'online') : 'degraded';
@@ -167,9 +174,8 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
                 entry.isDirty = status?.isDirty;
                 entry.uncommittedChanges = status?.uncommittedChanges ?? 0;
             } else {
-                // Cloud mode: needs daemon_id — not available for local mesh
                 entry.health = 'unknown';
-                entry.note = 'Cloud status probe not yet implemented for mesh nodes';
+                entry.note = 'No daemonId available for cloud status probe';
             }
         } catch (e: any) {
             entry.health = 'degraded';
@@ -212,7 +218,7 @@ export async function meshSendTask(
     const node = findNode(ctx.mesh, args.node_id);
 
     // Policy check: read-only node cannot receive tasks
-    if (node.policy.readOnly) {
+    if (node.policy?.readOnly) {
         return JSON.stringify({ error: `Node '${args.node_id}' is read-only` });
     }
 
@@ -271,7 +277,15 @@ export async function meshGitStatus(
 ): Promise<string> {
     const node = findNode(ctx.mesh, args.node_id);
 
-    if (isLocalTransport(ctx.transport)) {
+    if (!isLocalTransport(ctx.transport) && node.daemonId) {
+        const result = await (ctx.transport as CloudTransport).gitStatus(node.daemonId, node.workspace, true);
+        return JSON.stringify({
+            nodeId: args.node_id,
+            workspace: node.workspace,
+            status: result?.status ?? result,
+            diff: result?.diff ?? null,
+        }, null, 2);
+    } else if (isLocalTransport(ctx.transport)) {
         const statusResult = await ctx.transport.command('git_status', {
             workspace: node.workspace,
         });
@@ -285,7 +299,7 @@ export async function meshGitStatus(
             diff: diffResult?.diffSummary ?? diffResult,
         }, null, 2);
     } else {
-        return JSON.stringify({ error: 'Cloud mesh git_status not yet implemented' });
+        return JSON.stringify({ error: 'No daemonId available for cloud git_status probe' });
     }
 }
 
@@ -296,7 +310,7 @@ export async function meshCheckpoint(
     const node = findNode(ctx.mesh, args.node_id);
 
     // Policy checks
-    if (node.policy.readOnly) {
+    if (node.policy?.readOnly) {
         return JSON.stringify({ error: `Node '${args.node_id}' is read-only — cannot checkpoint` });
     }
 

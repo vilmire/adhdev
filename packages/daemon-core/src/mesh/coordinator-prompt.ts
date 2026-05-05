@@ -92,7 +92,7 @@ function buildNodeConfigSection(mesh: LocalMeshEntry): string {
     for (const n of mesh.nodes) {
         const labels: string[] = [];
         if (n.isLocalWorktree) labels.push('worktree');
-        if (n.policy.readOnly) labels.push('read-only');
+        if (n.policy?.readOnly) labels.push('read-only');
         const suffix = labels.length ? ` [${labels.join(', ')}]` : '';
         lines.push(`- **${n.workspace}** (${n.id})${suffix}`);
     }
@@ -139,7 +139,7 @@ const WORKFLOW_SECTION = `## Orchestration Workflow
 3. **Delegate** — For each task:
    a. Pick the best node (consider: health, dirty state, current workload).
    b. If no session exists, call \`mesh_launch_session\` to start one.
-   c. Call \`mesh_send_task\` with a clear, self-contained natural-language instruction.
+   c. Call \`mesh_send_task\` with a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.
 4. **Monitor** — Periodically call \`mesh_read_chat\` to check progress. Handle approvals via \`mesh_approve\`.
 5. **Verify** — When a task reports completion, call \`mesh_git_status\` to verify changes were made.
 6. **Checkpoint** — Call \`mesh_checkpoint\` to save the work.
@@ -147,10 +147,12 @@ const WORKFLOW_SECTION = `## Orchestration Workflow
 
 const RULES_SECTION = `## Rules
 
-- **Be conversational.** Delegate work the way a tech lead would — clear, specific instructions in natural language.
-- **Don't inspect code.** Trust the agent's output. Verify via git diff/status, not by reading source files.
+- **Minimize coordinator context.** The coordinator's job is routing, not implementing. Do not read source files, run commands, or analyze code directly — delegate all of that to node agents. Your context should stay lean.
+- **Delegate analysis too.** If you need to understand a bug or explore the codebase, send that investigation as a task to a node. Do not do it yourself.
+- **Front-load the task message.** When calling \`mesh_send_task\`, include everything the agent needs: what files to touch, what the problem is, what the fix should look like. The agent won't ask follow-up questions.
+- **Don't inspect code.** Trust the agent's output. Verify via \`mesh_git_status\`, not by reading source files.
 - **Don't over-parallelize.** Start with 1-2 concurrent tasks. Scale up if they succeed.
 - **Handle failures gracefully.** If a task fails, read the chat to understand why, then retry or reassign.
-- **Keep the user informed.** Report progress after each delegation round.
+- **Keep the user informed.** Report progress after each delegation round — one or two sentences, not a narration.
 - **Respect node capabilities.** Don't send build tasks to read-only nodes. Don't push from nodes that aren't allowed to.
 - **Never fabricate tool results.** Always call the actual tool; never pretend you did.`;

@@ -118,6 +118,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
               id: n.id,
               workspace: n.workspace,
               repoRoot: n.repo_root,
+              daemonId: n.daemon_id,
               userOverrides: {},
               policy: {},
               isLocalWorktree: false,
