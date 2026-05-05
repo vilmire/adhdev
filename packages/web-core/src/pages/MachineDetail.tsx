@@ -55,6 +55,7 @@ import {
     getRecentHistoryResumeConfirmTitle,
 } from '../utils/dashboard-launch-copy'
 import { DEFAULT_MACHINE_RUNTIME_REFRESH_MS } from '../utils/daemon-timing'
+import { buildDaemonUpgradePayload } from '../utils/daemon-update-policy'
 
 // ─── Component ───────────────────────────────────────
 interface MachineDetailProps {
@@ -545,7 +546,9 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                     recentLaunches={recentLaunches}
                                     currentConversations={currentConversations}
                                     onUpgradeDaemon={async () => {
-                                        try { await sendDaemonCommand(machineId!, 'daemon_upgrade', {}) } catch {}
+                                        try {
+                                            await sendDaemonCommand(machineId!, 'daemon_upgrade', buildDaemonUpgradePayload(machineEntry!))
+                                        } catch {}
                                     }}
                                     onOpenRecent={handleOpenRecent}
                                     onOpenConversation={handleOpenConversation}

@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import type { DaemonData } from '../types'
+import { buildDaemonUpgradePayload, getDaemonUpdateTargetVersion } from '../utils/daemon-update-policy'
 import { isVersionMismatch, isVersionUpdateRequired } from '../utils/version-update'
 
 declare const __APP_VERSION__: string
@@ -18,22 +19,30 @@ export function useDashboardVersionBanner({
         () => ides
             .filter((daemon: any) => {
             if (daemon.type !== 'adhdev-daemon') return false
-            return isVersionMismatch(daemon, appVersion)
+            return isVersionMismatch(daemon, getDaemonUpdateTargetVersion(daemon, appVersion))
         })
-            .sort((a, b) => Number(isVersionUpdateRequired(b, appVersion)) - Number(isVersionUpdateRequired(a, appVersion))),
+            .sort((a, b) => Number(isVersionUpdateRequired(b, getDaemonUpdateTargetVersion(b, appVersion))) - Number(isVersionUpdateRequired(a, getDaemonUpdateTargetVersion(a, appVersion)))),
         [appVersion, ides],
     )
     const hasRequiredVersionDaemons = useMemo(
-        () => versionMismatchDaemons.some((daemon) => isVersionUpdateRequired(daemon, appVersion)),
+        () => versionMismatchDaemons.some((daemon) => isVersionUpdateRequired(daemon, getDaemonUpdateTargetVersion(daemon, appVersion))),
+        [appVersion, versionMismatchDaemons],
+    )
+    const targetVersion = useMemo(
+        () => versionMismatchDaemons
+            .map((daemon) => getDaemonUpdateTargetVersion(daemon, appVersion))
+            .find((version): version is string => typeof version === 'string' && version.trim().length > 0) || appVersion,
         [appVersion, versionMismatchDaemons],
     )
     const [versionBannerDismissed, setVersionBannerDismissed] = useState(false)
     const [upgradingDaemons, setUpgradingDaemons] = useState<Record<string, 'upgrading' | 'done' | 'error'>>({})
 
     const handleBannerUpgrade = useCallback(async (daemonId: string) => {
+        const daemon = ides.find((entry) => entry.id === daemonId)
+        if (!daemon) return
         setUpgradingDaemons(prev => ({ ...prev, [daemonId]: 'upgrading' }))
         try {
-            const result = await sendDaemonCommand(daemonId, 'daemon_upgrade', {})
+            const result = await sendDaemonCommand(daemonId, 'daemon_upgrade', buildDaemonUpgradePayload(daemon))
             if (result?.result?.upgraded || result?.result?.success) {
                 setUpgradingDaemons(prev => ({ ...prev, [daemonId]: 'done' }))
             } else {
@@ -42,12 +51,12 @@ export function useDashboardVersionBanner({
         } catch {
             setUpgradingDaemons(prev => ({ ...prev, [daemonId]: 'error' }))
         }
-    }, [sendDaemonCommand])
+    }, [ides, sendDaemonCommand])
 
     return {
         versionMismatchDaemons,
         hasRequiredVersionDaemons,
-        appVersion,
+        targetVersion,
         versionBannerDismissed,
         setVersionBannerDismissed,
         upgradingDaemons,

@@ -5,6 +5,9 @@ const mocks = vi.hoisted(() => ({
   execNpmCommandSync: vi.fn<(args: string[], options?: Record<string, unknown>, surface?: Record<string, unknown>) => string>(),
   resolveCurrentGlobalInstallSurface: vi.fn(() => ({ npmExecutable: 'npm', npmArgsPrefix: [], packageRoot: null, installPrefix: null, execOptions: { shell: false } })),
   spawnDetachedDaemonUpgradeHelper: vi.fn(),
+  loadConfig: vi.fn(() => ({ updateChannel: 'stable', serverUrl: 'https://api.adhf.dev' })),
+  saveConfig: vi.fn(),
+  updateConfig: vi.fn(),
 }))
 
 vi.mock('child_process', () => ({
@@ -16,6 +19,16 @@ vi.mock('../../src/commands/upgrade-helper.js', () => ({
   resolveCurrentGlobalInstallSurface: mocks.resolveCurrentGlobalInstallSurface,
   spawnDetachedDaemonUpgradeHelper: mocks.spawnDetachedDaemonUpgradeHelper,
 }))
+
+vi.mock('../../src/config/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/config/config.js')>()
+  return {
+    ...actual,
+    loadConfig: mocks.loadConfig,
+    saveConfig: mocks.saveConfig,
+    updateConfig: mocks.updateConfig,
+  }
+})
 
 import { DaemonCommandRouter } from '../../src/commands/router'
 
@@ -44,6 +57,10 @@ describe('daemon_upgrade runtime version handling', () => {
     mocks.execNpmCommandSync.mockReset()
     mocks.resolveCurrentGlobalInstallSurface.mockClear()
     mocks.spawnDetachedDaemonUpgradeHelper.mockReset()
+    mocks.loadConfig.mockReset()
+    mocks.loadConfig.mockReturnValue({ updateChannel: 'stable', serverUrl: 'https://api.adhf.dev' })
+    mocks.saveConfig.mockReset()
+    mocks.updateConfig.mockReset()
     mocks.execSync.mockImplementation((cmd: string) => {
       throw new Error(`direct execSync should not be used for daemon_upgrade npm calls: ${cmd}`)
     })
@@ -100,5 +117,37 @@ describe('daemon_upgrade runtime version handling', () => {
       packageName: 'adhdev',
       targetVersion: '0.9.14',
     }))
+    expect(mocks.updateConfig).toHaveBeenCalledWith({
+      updateChannel: 'preview',
+      serverUrl: 'https://api-preview.adhf.dev',
+    })
+  })
+
+  it('uses updatePolicy.channel from dashboard one-click upgrade payload', async () => {
+    const router = createRouter('0.9.13')
+
+    const result = await router.execute('daemon_upgrade', {
+      updatePolicy: {
+        channel: 'preview',
+        npmTag: 'next',
+        targetVersion: '0.9.14',
+        updateCommand: 'adhdev update --channel preview',
+      },
+    })
+
+    expect(result).toMatchObject({ success: true, upgraded: true, version: '0.9.14', restarting: true, channel: 'preview', npmTag: 'next' })
+    expect(mocks.execNpmCommandSync).toHaveBeenCalledWith(
+      ['view', 'adhdev@next', 'version'],
+      expect.objectContaining({ encoding: 'utf-8', timeout: 10000 }),
+      expect.objectContaining({ npmExecutable: 'npm' }),
+    )
+    expect(mocks.spawnDetachedDaemonUpgradeHelper).toHaveBeenCalledWith(expect.objectContaining({
+      packageName: 'adhdev',
+      targetVersion: '0.9.14',
+    }))
+    expect(mocks.updateConfig).toHaveBeenCalledWith({
+      updateChannel: 'preview',
+      serverUrl: 'https://api-preview.adhf.dev',
+    })
   })
 })

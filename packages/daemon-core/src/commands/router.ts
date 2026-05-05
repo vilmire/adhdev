@@ -41,6 +41,10 @@ import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDa
 
 type ReleaseChannel = 'stable' | 'preview';
 const CHANNEL_NPM_TAG: Record<ReleaseChannel, 'latest' | 'next'> = { stable: 'latest', preview: 'next' };
+const CHANNEL_SERVER_URL: Record<ReleaseChannel, string> = {
+    stable: 'https://api.adhf.dev',
+    preview: 'https://api-preview.adhf.dev',
+};
 
 function normalizeReleaseChannel(value: unknown): ReleaseChannel | null {
     if (typeof value !== 'string') return null;
@@ -892,6 +896,7 @@ export class DaemonCommandRouter {
                     // Check channel-pinned dist-tag and resolve it to a concrete install version.
                     const latest = String(execNpmCommandSync(['view', `${pkgName}@${npmTag}`, 'version'], { encoding: 'utf-8', timeout: 10000 }, npmSurface)).trim();
                     LOG.info('Upgrade', `Latest ${pkgName}@${npmTag}: v${latest}`);
+                    updateConfig({ updateChannel: channel, serverUrl: CHANNEL_SERVER_URL[channel] } as any);
                     let currentInstalled: string | null = null;
                     try {
                         const currentJson = String(execNpmCommandSync(['ls', '-g', pkgName, '--depth=0', '--json'], {

@@ -392,7 +392,7 @@ export default function Dashboard() {
     const {
         versionMismatchDaemons,
         hasRequiredVersionDaemons,
-        appVersion,
+        targetVersion,
         versionBannerDismissed,
         setVersionBannerDismissed,
         upgradingDaemons,
@@ -424,7 +424,7 @@ export default function Dashboard() {
             {(!versionBannerDismissed || hasRequiredVersionDaemons) && (
                 <DashboardVersionBanner
                     daemons={versionMismatchDaemons}
-                    targetVersion={appVersion}
+                    targetVersion={targetVersion}
                     required={hasRequiredVersionDaemons}
                     upgradingDaemons={upgradingDaemons}
                     onUpgrade={handleBannerUpgrade}

@@ -91,6 +91,17 @@ export type WebVersionUpdateReason =
     | 'patch_mismatch'
     | 'daemon_ahead';
 
+export type WebReleaseChannel = 'stable' | 'preview';
+export type WebNpmTag = 'latest' | 'next';
+
+export interface WebVersionUpdatePolicy {
+    channel: WebReleaseChannel;
+    npmTag: WebNpmTag;
+    targetVersion: string;
+    minVersion?: string;
+    updateCommand: string;
+}
+
 export interface BaseDaemonData {
     id: string;
     sessionId?: string;
@@ -107,6 +118,10 @@ export interface BaseDaemonData {
     versionMismatch?: boolean;
     versionUpdateRequired?: boolean;
     versionUpdateReason?: WebVersionUpdateReason;
+    releaseChannel?: WebReleaseChannel;
+    updateChannel?: WebReleaseChannel;
+    updatePolicy?: WebVersionUpdatePolicy;
+    updateCommand?: string;
     platform?: string;
     hostname?: string;
     nickname?: string;
