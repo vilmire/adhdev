@@ -151,6 +151,33 @@ export const MESH_APPROVE_TOOL = {
     },
 };
 
+export const MESH_CLONE_NODE_TOOL = {
+    name: 'mesh_clone_node',
+    description: 'Create a new worktree-based node from an existing node for isolated parallel work. '
+        + 'Creates a git worktree on a new branch so multiple tasks can run on separate branches simultaneously.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            source_node_id: { type: 'string', description: 'Node ID to clone from (from mesh_list_nodes).' },
+            branch: { type: 'string', description: 'Branch name for the new worktree (e.g. "feat/auth-refactor").' },
+            base_branch: { type: 'string', description: 'Starting point for the branch (default: current HEAD).' },
+        },
+        required: ['source_node_id', 'branch'],
+    },
+};
+
+export const MESH_REMOVE_NODE_TOOL = {
+    name: 'mesh_remove_node',
+    description: 'Remove a node from the mesh. If the node is a worktree, also cleans up the git worktree and directory.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Node ID to remove.' },
+        },
+        required: ['node_id'],
+    },
+};
+
 export const ALL_MESH_TOOLS = [
     MESH_STATUS_TOOL,
     MESH_LIST_NODES_TOOL,
@@ -160,6 +187,8 @@ export const ALL_MESH_TOOLS = [
     MESH_GIT_STATUS_TOOL,
     MESH_CHECKPOINT_TOOL,
     MESH_APPROVE_TOOL,
+    MESH_CLONE_NODE_TOOL,
+    MESH_REMOVE_NODE_TOOL,
 ];
 
 // ─── Tool Implementations ───────────────────────
@@ -358,5 +387,41 @@ export async function meshApprove(
         return JSON.stringify(result, null, 2);
     } else {
         return JSON.stringify({ error: 'Cloud mesh approve not yet implemented' });
+    }
+}
+
+export async function meshCloneNode(
+    ctx: MeshContext,
+    args: { source_node_id: string; branch: string; base_branch?: string },
+): Promise<string> {
+    const sourceNode = findNode(ctx.mesh, args.source_node_id);
+
+    if (isLocalTransport(ctx.transport)) {
+        const result = await ctx.transport.command('clone_mesh_node', {
+            meshId: ctx.mesh.id,
+            sourceNodeId: args.source_node_id,
+            branch: args.branch,
+            baseBranch: args.base_branch,
+        });
+        return JSON.stringify(result, null, 2);
+    } else {
+        return JSON.stringify({ error: 'Cloud mesh clone_node not yet implemented' });
+    }
+}
+
+export async function meshRemoveNode(
+    ctx: MeshContext,
+    args: { node_id: string },
+): Promise<string> {
+    const node = findNode(ctx.mesh, args.node_id);
+
+    if (isLocalTransport(ctx.transport)) {
+        const result = await ctx.transport.command('remove_mesh_node', {
+            meshId: ctx.mesh.id,
+            nodeId: args.node_id,
+        });
+        return JSON.stringify(result, null, 2);
+    } else {
+        return JSON.stringify({ error: 'Cloud mesh remove_node not yet implemented' });
     }
 }

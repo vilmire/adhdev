@@ -163,6 +163,8 @@ export interface AddNodeOptions {
     userOverrides?: Partial<RepoMeshNodeCapabilities>;
     policy?: RepoMeshNodePolicy;
     isLocalWorktree?: boolean;
+    worktreeBranch?: string;
+    clonedFromNodeId?: string;
 }
 
 export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntry | undefined {
@@ -186,6 +188,8 @@ export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntr
         userOverrides: opts.userOverrides || {},
         policy: opts.policy || {},
         isLocalWorktree: opts.isLocalWorktree,
+        worktreeBranch: opts.worktreeBranch,
+        clonedFromNodeId: opts.clonedFromNodeId,
     };
 
     mesh.nodes.push(node);

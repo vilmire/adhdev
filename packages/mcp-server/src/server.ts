@@ -37,6 +37,7 @@ import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
 import {
   ALL_MESH_TOOLS, meshStatus, meshListNodes, meshSendTask, meshReadChat,
   meshLaunchSession, meshGitStatus, meshCheckpoint, meshApprove,
+  meshCloneNode, meshRemoveNode,
   type MeshContext,
 } from './tools/mesh-tools.js';
 
@@ -218,6 +219,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_git_status': text = await meshGitStatus(meshCtx, a as any); break;
           case 'mesh_checkpoint': text = await meshCheckpoint(meshCtx, a as any); break;
           case 'mesh_approve': text = await meshApprove(meshCtx, a as any); break;
+          case 'mesh_clone_node': text = await meshCloneNode(meshCtx, a as any); break;
+          case 'mesh_remove_node': text = await meshRemoveNode(meshCtx, a as any); break;
           default: return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
         }
         return { content: [{ type: 'text', text }] };

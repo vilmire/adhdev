@@ -73,3 +73,17 @@ export type {
 
 export { TurnSnapshotTracker } from './turn-snapshot-tracker.js';
 export type { TurnCompletedCallback } from './turn-snapshot-tracker.js';
+
+export {
+  createWorktree,
+  listWorktrees,
+  parseWorktreeListOutput,
+  removeWorktree,
+  resolveWorktreePath,
+} from './git-worktree.js';
+export type {
+  WorktreeCreateOptions,
+  WorktreeCreateResult,
+  WorktreeEntry,
+  WorktreeRemoveResult,
+} from './git-worktree.js';

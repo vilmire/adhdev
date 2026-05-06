@@ -189,6 +189,10 @@ export interface LocalMeshNodeEntry {
     policy: RepoMeshNodePolicy;
     /** For single-machine mesh: same daemon, different worktree */
     isLocalWorktree?: boolean;
+    /** Branch this worktree tracks (set when created via clone_mesh_node) */
+    worktreeBranch?: string;
+    /** Node ID this worktree was cloned from */
+    clonedFromNodeId?: string;
 }
 
 // ─── Mesh Status (runtime, not persisted) ───────

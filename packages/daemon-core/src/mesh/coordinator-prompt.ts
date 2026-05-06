@@ -132,7 +132,9 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_read_chat\` | Read an agent's recent messages to check progress |
 | \`mesh_git_status\` | Check git status on a specific node |
 | \`mesh_checkpoint\` | Create a git checkpoint on a node |
-| \`mesh_approve\` | Approve/reject a pending agent action |`;
+| \`mesh_approve\` | Approve/reject a pending agent action |
+| \`mesh_clone_node\` | Create a worktree node for isolated parallel branch work |
+| \`mesh_remove_node\` | Remove a node (cleans up worktree if applicable) |`;
 
 const WORKFLOW_SECTION = `## Orchestration Workflow
 
@@ -140,12 +142,14 @@ const WORKFLOW_SECTION = `## Orchestration Workflow
 2. **Plan** — Decompose the user's request into independent tasks for parallel execution, or sequential tasks when dependencies exist.
 3. **Delegate** — For each task:
    a. Pick the best node (consider: health, dirty state, current workload).
-   b. If no session exists, call \`mesh_launch_session\` to start one.
-   c. Call \`mesh_send_task\` with a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.
+   b. If you need branch isolation for parallel work, call \`mesh_clone_node\` to create a worktree node first.
+   c. If no session exists, call \`mesh_launch_session\` to start one.
+   d. Call \`mesh_send_task\` with a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.
 4. **Monitor** — Periodically call \`mesh_read_chat\` to check progress. Handle approvals via \`mesh_approve\`.
 5. **Verify** — When a task reports completion, call \`mesh_git_status\` to verify changes were made.
 6. **Checkpoint** — Call \`mesh_checkpoint\` to save the work.
-7. **Report** — Summarize what was done, what changed, and any issues.`;
+7. **Clean up** — Remove worktree nodes via \`mesh_remove_node\` after their work is merged or no longer needed.
+8. **Report** — Summarize what was done, what changed, and any issues.`;
 
 function buildRulesSection(coordinatorCliType?: string): string {
     const coordinatorNote = coordinatorCliType
@@ -163,5 +167,7 @@ function buildRulesSection(coordinatorCliType?: string): string {
 - **Handle failures gracefully.** If a task fails, read the chat to understand why, then retry or reassign.
 - **Keep the user informed.** Report progress after each delegation round — one or two sentences, not a narration.
 - **Respect node capabilities.** Don't send build tasks to read-only nodes. Don't push from nodes that aren't allowed to.
-- **Never fabricate tool results.** Always call the actual tool; never pretend you did.${coordinatorNote}`;
+- **Never fabricate tool results.** Always call the actual tool; never pretend you did.
+- **Clean up worktree nodes.** After a worktree task completes and its changes are merged or checkpointed, call \`mesh_remove_node\` to free resources.
+- **Name worktree branches meaningfully.** Use descriptive names like \`feat/auth-refactor\` or \`fix/build-123\`.${coordinatorNote}`;
 }

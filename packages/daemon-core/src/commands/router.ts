@@ -1022,9 +1022,76 @@ export class DaemonCommandRouter {
                 const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
                 if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
                 try {
-                    const { removeNode } = await import('../config/mesh-config.js');
+                    const { getMesh, removeNode } = await import('../config/mesh-config.js');
+                    const mesh = getMesh(meshId);
+                    const node = mesh?.nodes.find(n => n.id === nodeId);
+
+                    // If this is a worktree node, clean up the git worktree first
+                    if (node?.isLocalWorktree && node.workspace) {
+                        try {
+                            const sourceNode = node.clonedFromNodeId
+                                ? mesh?.nodes.find(n => n.id === node.clonedFromNodeId)
+                                : mesh?.nodes.find(n => !n.isLocalWorktree);
+                            const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
+                            if (repoRoot) {
+                                const { removeWorktree } = await import('../git/git-worktree.js');
+                                await removeWorktree(repoRoot, node.workspace);
+                            }
+                        } catch (e: any) {
+                            LOG.warn('MeshNode', `Worktree cleanup failed for ${nodeId}: ${e.message}`);
+                            // Continue with node removal even if worktree cleanup fails
+                        }
+                    }
+
                     const removed = removeNode(meshId, nodeId);
                     return { success: true, removed };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
+            case 'clone_mesh_node': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const sourceNodeId = typeof args?.sourceNodeId === 'string' ? args.sourceNodeId.trim() : '';
+                const branch = typeof args?.branch === 'string' ? args.branch.trim() : '';
+                const baseBranch = typeof args?.baseBranch === 'string' ? args.baseBranch.trim() : undefined;
+                if (!meshId) return { success: false, error: 'meshId required' };
+                if (!sourceNodeId) return { success: false, error: 'sourceNodeId required' };
+                if (!branch) return { success: false, error: 'branch required' };
+
+                try {
+                    const { getMesh, addNode } = await import('../config/mesh-config.js');
+                    const mesh = getMesh(meshId);
+                    if (!mesh) return { success: false, error: 'Mesh not found' };
+
+                    const sourceNode = mesh.nodes.find(n => n.id === sourceNodeId);
+                    if (!sourceNode) return { success: false, error: `Source node '${sourceNodeId}' not found in mesh` };
+
+                    const repoRoot = sourceNode.repoRoot || sourceNode.workspace;
+                    const { createWorktree } = await import('../git/git-worktree.js');
+                    const result = await createWorktree({
+                        repoRoot,
+                        branch,
+                        baseBranch,
+                        meshName: mesh.name,
+                    });
+
+                    const node = addNode(meshId, {
+                        workspace: result.worktreePath,
+                        repoRoot: result.worktreePath,
+                        isLocalWorktree: true,
+                        worktreeBranch: result.branch,
+                        clonedFromNodeId: sourceNodeId,
+                        policy: { ...sourceNode.policy },
+                    });
+                    if (!node) return { success: false, error: 'Failed to register worktree node' };
+
+                    return {
+                        success: true,
+                        node,
+                        worktreePath: result.worktreePath,
+                        branch: result.branch,
+                    };
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }
