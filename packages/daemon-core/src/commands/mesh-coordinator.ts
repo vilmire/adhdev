@@ -34,6 +34,7 @@ export type MeshCoordinatorSetup =
 
 export interface ResolveMeshCoordinatorSetupOptions {
   provider?: ProviderModule | null
+  cliType?: string
   meshId: string
   workspace: string
   adhdevMcpCommand?: string
@@ -43,6 +44,58 @@ export interface ResolveMeshCoordinatorSetupOptions {
 
 const DEFAULT_SERVER_NAME = 'adhdev-mesh'
 const DEFAULT_ADHDEV_MCP_COMMAND = 'adhdev-mcp'
+const HERMES_CLI_TYPE = 'hermes-cli'
+const HERMES_MCP_CONFIG_PATH = '~/.hermes/config.yaml'
+
+function isHermesProvider(provider: ProviderModule | null | undefined, cliType?: string): boolean {
+  const type = cliType?.trim() || provider?.type?.trim() || ''
+  return type === HERMES_CLI_TYPE
+}
+
+function resolveHermesMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetupOptions): MeshCoordinatorSetup {
+  const mcpServer = resolveAdhdevMcpServerLaunch({
+    meshId: options.meshId,
+    nodeExecutable: options.nodeExecutable,
+    adhdevMcpEntryPath: options.adhdevMcpEntryPath,
+  })
+  if (!mcpServer) {
+    return {
+      kind: 'unsupported',
+      reason: 'Could not resolve the ADHDev MCP server entrypoint and a Node runtime with WebSocket support for daemon IPC mode',
+    }
+  }
+  const configPath = resolveMcpConfigPath(HERMES_MCP_CONFIG_PATH, options.workspace)
+  if (!configPath.trim()) {
+    return createHermesManualMeshCoordinatorSetup(options.meshId, options.workspace)
+  }
+  return {
+    kind: 'auto_import',
+    serverName: DEFAULT_SERVER_NAME,
+    configPath,
+    configFormat: 'hermes_config_yaml',
+    mcpServer,
+  }
+}
+
+export function createHermesManualMeshCoordinatorSetup(meshId: string, workspace: string): MeshCoordinatorSetup {
+  return {
+    kind: 'manual',
+    serverName: DEFAULT_SERVER_NAME,
+    configFormat: 'hermes_config_yaml',
+    configPathCommand: HERMES_MCP_CONFIG_PATH,
+    requiresRestart: true,
+    instructions: 'Hermes CLI does not auto-import repo-local .mcp.json. Add this MCP server to Hermes config under mcp_servers, then start a fresh Hermes session.',
+    template: renderMeshCoordinatorTemplate(
+      'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - --repo-mesh\n      - {{meshId}}\n    enabled: true\n',
+      {
+        meshId,
+        workspace,
+        serverName: DEFAULT_SERVER_NAME,
+        adhdevMcpCommand: DEFAULT_ADHDEV_MCP_COMMAND,
+      },
+    ),
+  }
+}
 
 export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetupOptions): MeshCoordinatorSetup {
   const { provider, meshId, workspace } = options
@@ -52,6 +105,10 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
       kind: 'unsupported',
       reason: config?.reason || 'Provider does not declare Repo Mesh coordinator support',
     }
+  }
+
+  if (isHermesProvider(provider, options.cliType)) {
+    return resolveHermesMeshCoordinatorSetup(options)
   }
 
   const mcpConfig = config.mcpConfig

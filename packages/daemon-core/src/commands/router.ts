@@ -34,7 +34,7 @@ import * as yaml from 'js-yaml';
 import { getRecentLogs, LOG_PATH } from '../logging/logger.js';
 import { createInteractionId, getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
 import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../session-host/runtime-surface.js';
-import { resolveMeshCoordinatorSetup } from './mesh-coordinator.js';
+import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } from './mesh-coordinator.js';
 import { buildSessionEntries } from '../status/builders.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
@@ -1227,6 +1227,7 @@ export class DaemonCommandRouter {
                     const providerMeta = this.deps.providerLoader.resolve?.(cliType) || this.deps.providerLoader.getMeta(cliType);
                     const coordinatorSetup = resolveMeshCoordinatorSetup({
                         provider: providerMeta,
+                        cliType,
                         meshId,
                         workspace,
                     });
@@ -1289,7 +1290,41 @@ export class DaemonCommandRouter {
                     const { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync } = await import('fs');
                     const { dirname } = await import('path');
                     const mcpConfigPath = coordinatorSetup.configPath;
-                    mkdirSync(dirname(mcpConfigPath), { recursive: true });
+                    const hermesManualFallback = cliType === 'hermes-cli' && configFormat === 'hermes_config_yaml'
+                        ? createHermesManualMeshCoordinatorSetup(meshId, workspace)
+                        : null;
+                    const returnManualFallback = (message: string) => ({
+                        success: false,
+                        code: 'mesh_coordinator_manual_mcp_setup_required',
+                        error: message,
+                        meshId,
+                        cliType,
+                        workspace,
+                        meshCoordinatorSetup: hermesManualFallback,
+                    });
+
+                    // Merge ADHDev mesh server into existing config.
+                    // Pass full mesh data as env var so the MCP server can bootstrap
+                    // without depending on meshes.json or a running daemon.
+                    const mcpServerEntry: Record<string, any> = {
+                        command: coordinatorSetup.mcpServer.command,
+                        args: coordinatorSetup.mcpServer.args,
+                    };
+                    if (args?.inlineMesh) {
+                        mcpServerEntry.env = {
+                            ADHDEV_INLINE_MESH: JSON.stringify(mesh),
+                            ADHDEV_MCP_TRANSPORT: 'ipc',
+                        };
+                    }
+
+                    try {
+                        mkdirSync(dirname(mcpConfigPath), { recursive: true });
+                    } catch (error: any) {
+                        const message = `Could not prepare MCP config path for automatic setup: ${error?.message || error}`;
+                        LOG.error('MeshCoordinator', message);
+                        if (hermesManualFallback) return returnManualFallback(message);
+                        return { success: false, code: 'mesh_coordinator_config_write_failed', error: message, meshId, cliType, workspace };
+                    }
 
                     // Backup existing MCP config if present.
                     const hadExistingMcpConfig = existsSync(mcpConfigPath);
@@ -1308,19 +1343,6 @@ export class DaemonCommandRouter {
                         }
                     }
 
-                    // Merge ADHDev mesh server into existing config.
-                    // Pass full mesh data as env var so the MCP server can bootstrap
-                    // without depending on meshes.json or a running daemon.
-                    const mcpServerEntry: Record<string, any> = {
-                        command: coordinatorSetup.mcpServer.command,
-                        args: coordinatorSetup.mcpServer.args,
-                    };
-                    if (args?.inlineMesh) {
-                        mcpServerEntry.env = {
-                            ADHDEV_INLINE_MESH: JSON.stringify(mesh),
-                            ADHDEV_MCP_TRANSPORT: 'ipc',
-                        };
-                    }
                     const mcpServersKey = getMcpServersKey(configFormat);
                     const existingServers = existingMcpConfig[mcpServersKey];
                     const mcpConfig = {
@@ -1330,7 +1352,14 @@ export class DaemonCommandRouter {
                             [coordinatorSetup.serverName]: mcpServerEntry,
                         },
                     };
-                    writeFileSync(mcpConfigPath, serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat), 'utf-8');
+                    try {
+                        writeFileSync(mcpConfigPath, serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat), 'utf-8');
+                    } catch (error: any) {
+                        const message = `Could not write MCP config for automatic setup: ${error?.message || error}`;
+                        LOG.error('MeshCoordinator', message);
+                        if (hermesManualFallback) return returnManualFallback(message);
+                        return { success: false, code: 'mesh_coordinator_config_write_failed', error: message, meshId, cliType, workspace };
+                    }
                     LOG.info('MeshCoordinator', `Wrote ${mcpConfigPath} with ${coordinatorSetup.serverName} server`);
 
                     const cliArgs: string[] = [];

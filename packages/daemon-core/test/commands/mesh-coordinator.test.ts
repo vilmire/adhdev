@@ -355,14 +355,66 @@ describe('resolveMeshCoordinatorSetup', () => {
     }
   })
 
-  it('writes Hermes MCP YAML config and launches Hermes with an ephemeral coordinator prompt', async () => {
+  it('fails closed for non-Hermes manual MCP coordinator setup instead of launching', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-manual-coordinator-'))
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'other-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'manual',
+          format: 'hermes_config_yaml',
+          serverName: 'adhdev-mesh',
+          requiresRestart: true,
+          instructions: 'Manual setup required.',
+          template: 'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n',
+        },
+      },
+    }
+    const cliManager = {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'session-should-not-launch' })),
+    }
+    const router = createAutoImportRouter(provider, cliManager)
+    const inlineMesh = {
+      id: 'mesh_manual_non_hermes',
+      name: 'Manual Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [{ id: 'node-1', workspace, policy: {} }],
+      policy: {},
+      coordinator: {},
+    }
+
+    try {
+      const result = await router.execute('launch_mesh_coordinator', {
+        meshId: 'mesh_manual_non_hermes',
+        cliType: 'other-cli',
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({
+        success: false,
+        code: 'mesh_coordinator_manual_mcp_setup_required',
+        cliType: 'other-cli',
+      })
+      expect(cliManager.handleCliCommand).not.toHaveBeenCalled()
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('writes Hermes MCP YAML config and launches Hermes even when provider metadata still says manual setup', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-hermes-coordinator-'))
-    const configPath = join(workspace, 'hermes-config.yaml')
+    const configDir = join(workspace, '.hermes')
+    const configPath = join(configDir, 'config.yaml')
     const mcpEntry = join(workspace, 'mcp-server.js')
+    mkdirSync(configDir, { recursive: true })
     writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
     writeFileSync(configPath, 'model:\n  provider: openrouter\nmcp_servers:\n  existing:\n    command: existing-server\n', 'utf-8')
     const previousMcpEntry = process.env.ADHDEV_MCP_SERVER_PATH
+    const previousHome = process.env.HOME
     process.env.ADHDEV_MCP_SERVER_PATH = mcpEntry
+    process.env.HOME = workspace
 
     const provider: ProviderModule = {
       ...baseProvider,
@@ -370,10 +422,13 @@ describe('resolveMeshCoordinatorSetup', () => {
       meshCoordinator: {
         supported: true,
         mcpConfig: {
-          mode: 'auto_import',
+          mode: 'manual',
           format: 'hermes_config_yaml',
-          path: configPath,
           serverName: 'adhdev-mesh',
+          configPathCommand: 'hermes config path',
+          requiresRestart: true,
+          instructions: 'Hermes CLI does not auto-import repo-local .mcp.json. Add this MCP server to Hermes config under mcp_servers, then start a fresh Hermes session.',
+          template: 'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - --repo-mesh\n      - {{meshId}}\n    enabled: true\n',
         },
       },
     }
@@ -418,6 +473,8 @@ describe('resolveMeshCoordinatorSetup', () => {
     } finally {
       if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
       else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
       rmSync(workspace, { recursive: true, force: true })
     }
   })
