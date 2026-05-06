@@ -16,21 +16,36 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   transport.meshCommand = async (daemonId, command, args = {}) => {
     calls.push({ daemonId, command, args });
     if (command === 'clone_mesh_node') {
+      // Real cloud/daemon relay responses are nested several times:
+      // daemon-cloud wraps relayResult, the Durable Object wraps payload,
+      // and daemon-core wraps command_result. meshCloneNode must still
+      // discover and upsert the returned node into this MCP process context.
       return {
         success: true,
-        node: {
-          id: 'node-worktree',
-          workspace: '/repo-parent/.adhdev-worktrees/mesh/feat-x',
-          repoRoot: '/repo-parent/.adhdev-worktrees/mesh/feat-x',
-          daemonId,
-          userOverrides: {},
-          policy: { canPush: true },
-          isLocalWorktree: true,
-          worktreeBranch: 'feat/x',
-          clonedFromNodeId: 'node-source',
+        result: {
+          success: true,
+          messageId: 'msg-relay-clone',
+          result: {
+            requestId: 'req-relay-clone',
+            success: true,
+            result: {
+              success: true,
+              node: {
+                id: 'node-worktree',
+                workspace: '/repo-parent/.adhdev-worktrees/mesh/feat-x',
+                repoRoot: '/repo-parent/.adhdev-worktrees/mesh/feat-x',
+                daemonId,
+                userOverrides: {},
+                policy: { canPush: true },
+                isLocalWorktree: true,
+                worktreeBranch: 'feat/x',
+                clonedFromNodeId: 'node-source',
+              },
+              worktreePath: '/repo-parent/.adhdev-worktrees/mesh/feat-x',
+              branch: 'feat/x',
+            },
+          },
         },
-        worktreePath: '/repo-parent/.adhdev-worktrees/mesh/feat-x',
-        branch: 'feat/x',
       };
     }
     if (command === 'launch_cli') {

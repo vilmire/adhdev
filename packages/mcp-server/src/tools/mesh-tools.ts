@@ -65,6 +65,20 @@ function unwrapCommandPayload(value: any): any {
     return value?.result?.result ?? value?.result ?? value;
 }
 
+function findNestedPayload(value: any, predicate: (payload: any) => boolean): any {
+    let cursor = value;
+    for (let depth = 0; depth < 8; depth += 1) {
+        if (predicate(cursor)) return cursor;
+        if (!cursor || typeof cursor !== 'object' || !('result' in cursor)) break;
+        cursor = cursor.result;
+    }
+    return value;
+}
+
+function extractCloneNodePayload(value: any): any {
+    return findNestedPayload(value, payload => Boolean(payload?.node?.id));
+}
+
 function extractGitStatus(value: any): any {
     const payload = unwrapCommandPayload(value);
     return payload?.status ?? value?.status ?? payload;
@@ -469,10 +483,11 @@ export async function meshCloneNode(
             baseBranch: args.base_branch,
             inlineMesh: ctx.mesh,
         });
-        if (result?.success && result.node?.id) {
-            const existingIndex = ctx.mesh.nodes.findIndex(n => n.id === result.node.id);
-            if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = result.node;
-            else ctx.mesh.nodes.push(result.node);
+        const clonePayload = extractCloneNodePayload(result);
+        if (clonePayload?.success && clonePayload.node?.id) {
+            const existingIndex = ctx.mesh.nodes.findIndex(n => n.id === clonePayload.node.id);
+            if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = clonePayload.node;
+            else ctx.mesh.nodes.push(clonePayload.node);
             ctx.mesh.updatedAt = new Date().toISOString();
         }
         return JSON.stringify(result, null, 2);
