@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshCloneNode, meshLaunchSession, meshRemoveNode, meshStatus, meshListNodes, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { meshCloneNode, meshLaunchSession, meshRemoveNode, meshStatus, meshListNodes, meshGitStatus, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 
 test('mesh worktree tools route clone/remove to the source node daemon and refresh MCP mesh context', async () => {
   const transport = new IpcTransport() as IpcTransport & {
@@ -97,6 +97,100 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   assert.ok(!ctx.mesh.nodes.some(node => node.id === 'node-worktree'));
   assert.equal(calls[2].daemonId, 'daemon-source');
   assert.equal(calls[2].command, 'remove_mesh_node');
+});
+
+test('mesh_clone_node upserts clone returned through payload-wrapped live relay shape before immediate resolver use', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  const staleSourceNode = { id: 'node-source', workspace: '/repo', repoRoot: '/repo', daemonId: 'daemon-source', userOverrides: {}, policy: {} };
+  const cloneNode = {
+    id: 'node-live-worktree',
+    workspace: '/repo-parent/.adhdev-worktrees/mesh/smoke-live-shape',
+    repoRoot: '/repo-parent/.adhdev-worktrees/mesh/smoke-live-shape',
+    daemonId: 'daemon-source',
+    userOverrides: {},
+    policy: {},
+    isLocalWorktree: true,
+    worktreeBranch: 'smoke/live-shape',
+    clonedFromNodeId: 'node-source',
+  };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') {
+      return {
+        success: true,
+        mesh: {
+          id: 'mesh-live-payload-relay',
+          name: 'Live Payload Relay',
+          nodes: [staleSourceNode],
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command === 'clone_mesh_node') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          messageId: 'msg-live-clone',
+          // Fresh cloud relay command_result payloads can expose the daemon
+          // command payload under payload instead of another result key.
+          payload: {
+            requestId: 'req-live-clone',
+            success: true,
+            source: 'mesh',
+            payload: {
+              success: true,
+              node: cloneNode,
+              worktreePath: cloneNode.workspace,
+              branch: 'smoke/live-shape',
+            },
+          },
+        },
+      };
+    }
+    if (command === 'git_status') return {
+      success: true,
+      result: { success: true, result: { status: { isGitRepo: true, branch: 'smoke/live-shape', modified: 0 } } },
+    };
+    if (command === 'git_diff_summary') return {
+      success: true,
+      result: { success: true, result: { diffSummary: { files: [], totalInsertions: 0, totalDeletions: 0 } } },
+    };
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const mesh = {
+    id: 'mesh-live-payload-relay',
+    name: 'Live Payload Relay',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [staleSourceNode],
+  };
+  const ctx = { mesh, transport };
+
+  const cloneText = await meshCloneNode(ctx as any, { source_node_id: 'node-source', branch: 'smoke/live-shape' });
+  assert.equal(JSON.parse(cloneText).success, true);
+  assert.ok(ctx.mesh.nodes.some(node => node.id === 'node-live-worktree'), 'clone response node should be live-upserted into ctx.mesh');
+
+  const statusText = await meshGitStatus(ctx as any, { node_id: 'node-live-worktree' });
+  const status = JSON.parse(statusText);
+  assert.equal(status.nodeId, 'node-live-worktree', 'immediate mesh_git_status should resolve returned clone node without relying on stale get_mesh');
+  assert.equal(status.status.branch, 'smoke/live-shape');
+  assert.deepEqual(status.diff.files, []);
+  assert.equal(calls[0].command, 'clone_mesh_node');
+  assert.equal(calls[1].command, 'git_status');
+  assert.equal(calls[2].command, 'git_diff_summary');
 });
 
 test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache when node was added by clone in another MCP process', async () => {

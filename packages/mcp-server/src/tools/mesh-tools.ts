@@ -66,12 +66,23 @@ function unwrapCommandPayload(value: any): any {
 }
 
 function findNestedPayload(value: any, predicate: (payload: any) => boolean): any {
-    let cursor = value;
-    for (let depth = 0; depth < 8; depth += 1) {
-        if (predicate(cursor)) return cursor;
-        if (!cursor || typeof cursor !== 'object' || !('result' in cursor)) break;
-        cursor = cursor.result;
+    const seen = new Set<any>();
+    const stack: Array<{ payload: any; depth: number }> = [{ payload: value, depth: 0 }];
+
+    while (stack.length) {
+        const { payload, depth } = stack.pop()!;
+        if (predicate(payload)) return payload;
+        if (!payload || typeof payload !== 'object' || seen.has(payload) || depth >= 8) continue;
+        seen.add(payload);
+
+        // Cloud/daemon relay layers have used both `result` and `payload` for
+        // command_result bodies. Follow only those envelope keys so clone node
+        // discovery stays tied to returned command payloads, not arbitrary data.
+        for (const key of ['payload', 'result']) {
+            if (key in payload) stack.push({ payload: payload[key], depth: depth + 1 });
+        }
     }
+
     return value;
 }
 
