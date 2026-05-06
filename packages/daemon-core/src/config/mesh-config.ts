@@ -160,6 +160,7 @@ export function deleteMesh(meshId: string): boolean {
 export interface AddNodeOptions {
     workspace: string;
     repoRoot?: string;
+    daemonId?: string;
     userOverrides?: Partial<RepoMeshNodeCapabilities>;
     policy?: RepoMeshNodePolicy;
     isLocalWorktree?: boolean;
@@ -185,6 +186,7 @@ export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntr
         id: `node_${randomUUID().replace(/-/g, '')}`,
         workspace: opts.workspace.trim(),
         repoRoot: opts.repoRoot,
+        daemonId: opts.daemonId,
         userOverrides: opts.userOverrides || {},
         policy: opts.policy || {},
         isLocalWorktree: opts.isLocalWorktree,

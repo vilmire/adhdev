@@ -53,6 +53,15 @@ export interface AdhdevMcpServerOptions {
   meshId?: string;
 }
 
+export async function buildMeshModeCoordinatorPrompt(mesh: any): Promise<string> {
+  try {
+    const { buildCoordinatorSystemPrompt } = await import('@adhdev/daemon-core');
+    return buildCoordinatorSystemPrompt({ mesh });
+  } catch (e: any) {
+    throw new Error(`Failed to build Repo Mesh coordinator prompt: ${e?.message ?? String(e)}`);
+  }
+}
+
 export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void> {
   const transport: McpTransport =
     opts.mode === 'cloud'
@@ -172,14 +181,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
 
     const meshCtx: MeshContext = { mesh, transport };
 
-    // Build coordinator system prompt
-    let coordinatorPrompt = '';
-    try {
-      const { buildCoordinatorSystemPrompt } = await import('@adhdev/daemon-core');
-      coordinatorPrompt = buildCoordinatorSystemPrompt({ mesh });
-    } catch {
-      coordinatorPrompt = `You are a Repo Mesh Coordinator for "${mesh.name}" (${mesh.repoIdentity}). Use mesh_* tools to orchestrate work.`;
-    }
+    const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
 
     const server = new Server(
       { name: 'adhdev-mcp-server', version: '0.9.75' },

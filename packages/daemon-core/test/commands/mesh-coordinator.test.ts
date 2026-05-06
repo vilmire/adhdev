@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -158,6 +159,93 @@ describe('resolveMeshCoordinatorSetup', () => {
       statusVersion: '0.9.71',
     })
   }
+
+  function initGitRepo(repo: string) {
+    mkdirSync(repo, { recursive: true })
+    execFileSync('git', ['init', '-q'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repo })
+    writeFileSync(join(repo, 'README.md'), 'init\n', 'utf-8')
+    execFileSync('git', ['add', 'README.md'], { cwd: repo })
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: repo })
+  }
+
+  it('clones and removes worktree nodes from cached inline meshes without local meshes.json', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-inline-mesh-worktree-'))
+    const repo = join(root, 'repo')
+    initGitRepo(repo)
+    const mcpEntry = join(root, 'mcp-server.js')
+    writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
+    const previousMcpEntry = process.env.ADHDEV_MCP_SERVER_PATH
+    process.env.ADHDEV_MCP_SERVER_PATH = mcpEntry
+
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'claude-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'auto_import',
+          format: 'claude_mcp_json',
+          path: '.mcp.json',
+          serverName: 'adhdev-mesh',
+        },
+      },
+    }
+    const cliManager = {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'coordinator-session' })),
+    }
+    const router = createAutoImportRouter(provider, cliManager)
+    const inlineMesh = {
+      id: 'mesh_inline_worktree',
+      name: 'Inline Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [{ id: 'node-source', workspace: repo, repoRoot: repo, daemonId: 'daemon-source', policy: { canPush: true } }],
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+
+    try {
+      await expect(router.execute('launch_mesh_coordinator', {
+        meshId: inlineMesh.id,
+        cliType: 'claude-cli',
+        inlineMesh,
+      })).resolves.toMatchObject({ success: true })
+
+      const cloned: any = await router.execute('clone_mesh_node', {
+        meshId: inlineMesh.id,
+        sourceNodeId: 'node-source',
+        branch: 'mesh/worktree-smoke',
+      })
+
+      expect(cloned).toMatchObject({ success: true, branch: 'mesh/worktree-smoke' })
+      expect(cloned.node).toMatchObject({
+        isLocalWorktree: true,
+        worktreeBranch: 'mesh/worktree-smoke',
+        clonedFromNodeId: 'node-source',
+        daemonId: 'daemon-source',
+        policy: { canPush: true },
+      })
+
+      const cachedAfterClone: any = await router.execute('get_mesh', { meshId: inlineMesh.id })
+      expect(cachedAfterClone.success).toBe(true)
+      expect(cachedAfterClone.mesh.nodes.some((node: any) => node.id === cloned.node.id)).toBe(true)
+
+      const removed: any = await router.execute('remove_mesh_node', {
+        meshId: inlineMesh.id,
+        nodeId: cloned.node.id,
+      })
+      expect(removed).toMatchObject({ success: true, removed: true })
+      const cachedAfterRemove: any = await router.execute('get_mesh', { meshId: inlineMesh.id })
+      expect(cachedAfterRemove.mesh.nodes.some((node: any) => node.id === cloned.node.id)).toBe(false)
+    } finally {
+      if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
+      else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 
   it('writes Claude MCP config with a Node-launched absolute MCP server entrypoint instead of adhdev-mcp on PATH', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-coordinator-'))

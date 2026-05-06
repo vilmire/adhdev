@@ -95,7 +95,7 @@ Environment variables:
   ADHDEV_MCP_TRANSPORT Transport: local, cloud, or ipc
 
 Standard tools:   list_daemons, list_sessions, launch_session, stop_session, check_pending, read_chat, send_chat, approve, git_status, git_log, git_diff, git_checkpoint, git_push, screenshot
-Mesh tools:       mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat, mesh_launch_session, mesh_git_status, mesh_checkpoint, mesh_approve
+Mesh tools:       mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat, mesh_launch_session, mesh_git_status, mesh_checkpoint, mesh_approve, mesh_clone_node, mesh_remove_node
 `.trim());
 }
 

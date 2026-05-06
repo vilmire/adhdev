@@ -5,8 +5,9 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 8 tools: mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat,
- *          mesh_launch_session, mesh_git_status, mesh_checkpoint, mesh_approve
+ * 10 tools: mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat,
+ *           mesh_launch_session, mesh_git_status, mesh_checkpoint, mesh_approve,
+ *           mesh_clone_node, mesh_remove_node
  */
 
 import { CloudTransport } from '../transports/cloud.js';
@@ -397,12 +398,19 @@ export async function meshCloneNode(
     const sourceNode = findNode(ctx.mesh, args.source_node_id);
 
     if (isLocalTransport(ctx.transport)) {
-        const result = await ctx.transport.command('clone_mesh_node', {
+        const result = await commandForNode(ctx, sourceNode, 'clone_mesh_node', {
             meshId: ctx.mesh.id,
             sourceNodeId: args.source_node_id,
             branch: args.branch,
             baseBranch: args.base_branch,
+            inlineMesh: ctx.mesh,
         });
+        if (result?.success && result.node?.id) {
+            const existingIndex = ctx.mesh.nodes.findIndex(n => n.id === result.node.id);
+            if (existingIndex >= 0) ctx.mesh.nodes[existingIndex] = result.node;
+            else ctx.mesh.nodes.push(result.node);
+            ctx.mesh.updatedAt = new Date().toISOString();
+        }
         return JSON.stringify(result, null, 2);
     } else {
         return JSON.stringify({ error: 'Cloud mesh clone_node not yet implemented' });
@@ -416,10 +424,18 @@ export async function meshRemoveNode(
     const node = findNode(ctx.mesh, args.node_id);
 
     if (isLocalTransport(ctx.transport)) {
-        const result = await ctx.transport.command('remove_mesh_node', {
+        const result = await commandForNode(ctx, node, 'remove_mesh_node', {
             meshId: ctx.mesh.id,
             nodeId: args.node_id,
+            inlineMesh: ctx.mesh,
         });
+        if (result?.success && result.removed !== false) {
+            const idx = ctx.mesh.nodes.findIndex(n => n.id === args.node_id);
+            if (idx >= 0) {
+                ctx.mesh.nodes.splice(idx, 1);
+                ctx.mesh.updatedAt = new Date().toISOString();
+            }
+        }
         return JSON.stringify(result, null, 2);
     } else {
         return JSON.stringify({ error: 'Cloud mesh remove_node not yet implemented' });

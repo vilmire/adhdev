@@ -226,6 +226,43 @@ export class DaemonCommandRouter {
         this.deps = deps;
     }
 
+    private getCachedInlineMesh(meshId: string, inlineMesh?: unknown): any | undefined {
+        if (inlineMesh && typeof inlineMesh === 'object') {
+            this.inlineMeshCache.set(meshId, inlineMesh as any);
+            return inlineMesh as any;
+        }
+        return this.inlineMeshCache.get(meshId);
+    }
+
+    private async getMeshForCommand(meshId: string, inlineMesh?: unknown): Promise<{ mesh: any; inline: boolean } | null> {
+        try {
+            const { getMesh } = await import('../config/mesh-config.js');
+            const mesh = getMesh(meshId);
+            if (mesh) return { mesh, inline: false };
+        } catch { /* fall through to inline cache */ }
+        const cached = this.getCachedInlineMesh(meshId, inlineMesh);
+        return cached ? { mesh: cached, inline: true } : null;
+    }
+
+    private updateInlineMeshNode(meshId: string, mesh: any, node: any): void {
+        if (!mesh || !Array.isArray(mesh.nodes) || !node?.id) return;
+        const idx = mesh.nodes.findIndex((entry: any) => entry?.id === node.id || entry?.nodeId === node.id);
+        if (idx >= 0) mesh.nodes[idx] = node;
+        else mesh.nodes.push(node);
+        mesh.updatedAt = new Date().toISOString();
+        this.inlineMeshCache.set(meshId, mesh);
+    }
+
+    private removeInlineMeshNode(meshId: string, mesh: any, nodeId: string): boolean {
+        if (!mesh || !Array.isArray(mesh.nodes)) return false;
+        const idx = mesh.nodes.findIndex((entry: any) => entry?.id === nodeId || entry?.nodeId === nodeId);
+        if (idx === -1) return false;
+        mesh.nodes.splice(idx, 1);
+        mesh.updatedAt = new Date().toISOString();
+        this.inlineMeshCache.set(meshId, mesh);
+        return true;
+    }
+
     private async traceSessionHostAction<T>(
         action: string,
         args: any,
@@ -1022,16 +1059,16 @@ export class DaemonCommandRouter {
                 const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
                 if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
                 try {
-                    const { getMesh, removeNode } = await import('../config/mesh-config.js');
-                    const mesh = getMesh(meshId);
-                    const node = mesh?.nodes.find(n => n.id === nodeId);
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                    const mesh = meshRecord?.mesh;
+                    const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
 
                     // If this is a worktree node, clean up the git worktree first
                     if (node?.isLocalWorktree && node.workspace) {
                         try {
                             const sourceNode = node.clonedFromNodeId
-                                ? mesh?.nodes.find(n => n.id === node.clonedFromNodeId)
-                                : mesh?.nodes.find(n => !n.isLocalWorktree);
+                                ? mesh?.nodes.find((n: any) => n.id === node.clonedFromNodeId || n.nodeId === node.clonedFromNodeId)
+                                : mesh?.nodes.find((n: any) => !n.isLocalWorktree);
                             const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
                             if (repoRoot) {
                                 const { removeWorktree } = await import('../git/git-worktree.js');
@@ -1043,7 +1080,13 @@ export class DaemonCommandRouter {
                         }
                     }
 
-                    const removed = removeNode(meshId, nodeId);
+                    let removed = false;
+                    if (meshRecord?.inline) {
+                        removed = this.removeInlineMeshNode(meshId, mesh, nodeId);
+                    } else {
+                        const { removeNode } = await import('../config/mesh-config.js');
+                        removed = removeNode(meshId, nodeId);
+                    }
                     return { success: true, removed };
                 } catch (e: any) {
                     return { success: false, error: e.message };
@@ -1060,11 +1103,11 @@ export class DaemonCommandRouter {
                 if (!branch) return { success: false, error: 'branch required' };
 
                 try {
-                    const { getMesh, addNode } = await import('../config/mesh-config.js');
-                    const mesh = getMesh(meshId);
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                    const mesh = meshRecord?.mesh;
                     if (!mesh) return { success: false, error: 'Mesh not found' };
 
-                    const sourceNode = mesh.nodes.find(n => n.id === sourceNodeId);
+                    const sourceNode = mesh.nodes?.find((n: any) => n.id === sourceNodeId || n.nodeId === sourceNodeId);
                     if (!sourceNode) return { success: false, error: `Source node '${sourceNodeId}' not found in mesh` };
 
                     const repoRoot = sourceNode.repoRoot || sourceNode.workspace;
@@ -1076,15 +1119,35 @@ export class DaemonCommandRouter {
                         meshName: mesh.name,
                     });
 
-                    const node = addNode(meshId, {
-                        workspace: result.worktreePath,
-                        repoRoot: result.worktreePath,
-                        isLocalWorktree: true,
-                        worktreeBranch: result.branch,
-                        clonedFromNodeId: sourceNodeId,
-                        policy: { ...sourceNode.policy },
-                    });
-                    if (!node) return { success: false, error: 'Failed to register worktree node' };
+                    let node: any;
+                    if (meshRecord.inline) {
+                        const { randomUUID } = await import('crypto');
+                        node = {
+                            id: `node_${randomUUID().replace(/-/g, '')}`,
+                            workspace: result.worktreePath,
+                            repoRoot: result.worktreePath,
+                            daemonId: sourceNode.daemonId,
+                            userOverrides: { ...(sourceNode.userOverrides || {}) },
+                            policy: { ...(sourceNode.policy || {}) },
+                            isLocalWorktree: true,
+                            worktreeBranch: result.branch,
+                            clonedFromNodeId: sourceNodeId,
+                        };
+                        this.updateInlineMeshNode(meshId, mesh, node);
+                    } else {
+                        const { addNode } = await import('../config/mesh-config.js');
+                        node = addNode(meshId, {
+                            workspace: result.worktreePath,
+                            repoRoot: result.worktreePath,
+                            daemonId: sourceNode.daemonId,
+                            userOverrides: { ...(sourceNode.userOverrides || {}) },
+                            isLocalWorktree: true,
+                            worktreeBranch: result.branch,
+                            clonedFromNodeId: sourceNodeId,
+                            policy: { ...(sourceNode.policy || {}) },
+                        });
+                        if (!node) return { success: false, error: 'Failed to register worktree node' };
+                    }
 
                     return {
                         success: true,
