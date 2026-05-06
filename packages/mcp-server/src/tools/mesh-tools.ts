@@ -61,6 +61,34 @@ async function findNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<Lo
     return refreshed;
 }
 
+function unwrapCommandPayload(value: any): any {
+    return value?.result?.result ?? value?.result ?? value;
+}
+
+function extractGitStatus(value: any): any {
+    const payload = unwrapCommandPayload(value);
+    return payload?.status ?? value?.status ?? payload;
+}
+
+function extractGitDiff(value: any): any {
+    const payload = unwrapCommandPayload(value);
+    return payload?.diffSummary ?? payload?.diff ?? value?.diffSummary ?? value?.diff ?? payload;
+}
+
+function countUncommittedChanges(status: any): number {
+    if (typeof status?.uncommittedChanges === 'number') return status.uncommittedChanges;
+    const keys = ['staged', 'modified', 'untracked', 'deleted', 'renamed'];
+    const counted = keys.reduce((sum, key) => sum + (Number.isFinite(Number(status?.[key])) ? Number(status[key]) : 0), 0);
+    const conflicts = Array.isArray(status?.conflictFiles) ? status.conflictFiles.length : (status?.hasConflicts ? 1 : 0);
+    return counted + conflicts;
+}
+
+function isGitStatusDirty(status: any): boolean {
+    if (typeof status?.isDirty === 'boolean') return status.isDirty;
+    if (typeof status?.dirty === 'boolean') return status.dirty;
+    return countUncommittedChanges(status) > 0;
+}
+
 function findNodeByWorkspace(mesh: LocalMeshEntry, workspace: string): LocalMeshNodeEntry {
     const node = mesh.nodes.find(n => n.workspace === workspace);
     if (!node) throw new Error(`Workspace '${workspace}' is not a member of mesh '${mesh.name}'`);
@@ -238,18 +266,22 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         try {
             if (!isLocalTransport(transport) && node.daemonId) {
                 const result = await (transport as CloudTransport).gitStatus(node.daemonId, node.workspace, false);
-                const status = result?.status ?? result;
-                entry.health = status?.isGitRepo ? (status?.isDirty ? 'dirty' : 'online') : 'degraded';
+                const status = extractGitStatus(result);
+                const uncommittedChanges = countUncommittedChanges(status);
+                const dirty = isGitStatusDirty(status);
+                entry.health = status?.isGitRepo ? (dirty ? 'dirty' : 'online') : 'degraded';
                 entry.branch = status?.branch;
-                entry.isDirty = status?.isDirty;
-                entry.uncommittedChanges = status?.uncommittedChanges ?? 0;
+                entry.isDirty = dirty;
+                entry.uncommittedChanges = uncommittedChanges;
             } else if (isLocalTransport(transport)) {
                 const statusResult = await commandForNode(ctx, node, 'git_status', { workspace: node.workspace });
-                const status = statusResult?.status ?? statusResult;
-                entry.health = status?.isGitRepo ? (status?.isDirty ? 'dirty' : 'online') : 'degraded';
+                const status = extractGitStatus(statusResult);
+                const uncommittedChanges = countUncommittedChanges(status);
+                const dirty = isGitStatusDirty(status);
+                entry.health = status?.isGitRepo ? (dirty ? 'dirty' : 'online') : 'degraded';
                 entry.branch = status?.branch;
-                entry.isDirty = status?.isDirty;
-                entry.uncommittedChanges = status?.uncommittedChanges ?? 0;
+                entry.isDirty = dirty;
+                entry.uncommittedChanges = uncommittedChanges;
             } else {
                 entry.health = 'unknown';
                 entry.note = 'No daemonId available for cloud status probe';
@@ -362,8 +394,8 @@ export async function meshGitStatus(
         return JSON.stringify({
             nodeId: args.node_id,
             workspace: node.workspace,
-            status: result?.status ?? result,
-            diff: result?.diff ?? null,
+            status: extractGitStatus(result),
+            diff: extractGitDiff(result),
         }, null, 2);
     } else if (isLocalTransport(ctx.transport)) {
         const statusResult = await commandForNode(ctx, node, 'git_status', {
@@ -375,8 +407,8 @@ export async function meshGitStatus(
         return JSON.stringify({
             nodeId: args.node_id,
             workspace: node.workspace,
-            status: statusResult?.status ?? statusResult,
-            diff: diffResult?.diffSummary ?? diffResult,
+            status: extractGitStatus(statusResult),
+            diff: extractGitDiff(diffResult),
         }, null, 2);
     } else {
         return JSON.stringify({ error: 'No daemonId available for cloud git_status probe' });

@@ -125,8 +125,36 @@ test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache wh
   };
   transport.meshCommand = async (daemonId, command) => {
     meshCommands.push(command);
-    if (command === 'git_status') return { status: 'clean' };
-    if (command === 'git_diff_summary') return { diffSummary: '' };
+    if (command === 'git_status') return {
+      success: true,
+      result: {
+        success: true,
+        result: {
+          status: {
+            workspace: '/repo/.adhdev-worktrees/mesh/test-branch',
+            repoRoot: '/repo/.adhdev-worktrees/mesh/test-branch',
+            isGitRepo: true,
+            branch: 'test/branch',
+            staged: 0,
+            modified: 1,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+            conflictFiles: [],
+          },
+        },
+      },
+    };
+    if (command === 'git_diff_summary') return {
+      success: true,
+      result: {
+        success: true,
+        result: {
+          diffSummary: { files: [{ path: 'changed.ts', status: 'modified' }], totalInsertions: 2, totalDeletions: 0 },
+        },
+      },
+    };
     if (command === 'remove_mesh_node') return { success: true, removed: true };
     throw new Error(`unexpected mesh command: ${command}`);
   };
@@ -150,7 +178,12 @@ test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache wh
   // these surfaces to see/select a clone created by a previous MCP process.
   const statusText = await meshStatus(ctx as any);
   const status = JSON.parse(statusText);
-  assert.ok(status.nodes.some((n: any) => n.nodeId === 'node-worktree-new'), 'mesh_status should include refreshed worktree node');
+  const statusNode = status.nodes.find((n: any) => n.nodeId === 'node-worktree-new');
+  assert.ok(statusNode, 'mesh_status should include refreshed worktree node');
+  assert.equal(statusNode.health, 'dirty', 'mesh_status should unwrap relayed git_status payload before deriving health');
+  assert.equal(statusNode.branch, 'test/branch');
+  assert.equal(statusNode.isDirty, true);
+  assert.equal(statusNode.uncommittedChanges, 1);
   assert.ok(ctx.mesh.nodes.some(n => n.id === 'node-worktree-new'), 'ctx.mesh refreshed by mesh_status');
 
   const listText = await meshListNodes(ctx as any);
@@ -162,6 +195,9 @@ test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache wh
   const gitStatusText = await meshGitStatus(ctx, { node_id: 'node-worktree-new' });
   const gitStatus = JSON.parse(gitStatusText);
   assert.equal(gitStatus.nodeId, 'node-worktree-new', 'git_status should succeed after mesh refresh');
+  assert.equal(gitStatus.status.branch, 'test/branch', 'git_status should unwrap nested relayed status payload');
+  assert.equal(gitStatus.status.modified, 1);
+  assert.deepEqual(gitStatus.diff.files, [{ path: 'changed.ts', status: 'modified' }]);
   // ctx.mesh should now include the new node
   assert.ok(ctx.mesh.nodes.some(n => n.id === 'node-worktree-new'), 'ctx.mesh refreshed with new node');
 
