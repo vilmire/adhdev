@@ -101,12 +101,12 @@ export const MESH_READ_CHAT_TOOL = {
 
 export const MESH_LAUNCH_SESSION_TOOL = {
     name: 'mesh_launch_session',
-    description: 'Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls.',
+    description: 'Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Hermes = hermes-cli, Claude Code/Claude = claude-cli, Codex = codex-cli, Gemini = gemini-cli. Do not default to claude-cli unless the user requested Claude Code or no provider was specified.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             node_id: { type: 'string', description: 'Target node ID.' },
-            type: { type: 'string', description: 'Provider type (e.g. "claude-cli", "gemini-cli", "cursor").' },
+            type: { type: 'string', description: 'Provider type to launch. Use hermes-cli for Hermes, claude-cli for Claude Code, codex-cli for Codex, gemini-cli for Gemini.' },
         },
         required: ['node_id', 'type'],
     },

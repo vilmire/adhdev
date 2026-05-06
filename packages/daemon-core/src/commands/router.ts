@@ -1152,9 +1152,10 @@ export class DaemonCommandRouter {
                     // 2. Build coordinator system prompt
                     let systemPrompt = '';
                     try {
-                        systemPrompt = buildCoordinatorSystemPrompt({ mesh });
-                    } catch {
-                        systemPrompt = `You are a Repo Mesh Coordinator for "${mesh.name}". Use the adhdev-mesh MCP tools (mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat, mesh_launch_session, etc.) to orchestrate work across ${mesh.nodes.length} node(s).`;
+                        systemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType });
+                    } catch (error: any) {
+                        LOG.warn('MeshCoordinator', `Falling back to compact coordinator prompt: ${error?.message || error}`);
+                        systemPrompt = `You are a Repo Mesh Coordinator for "${mesh.name}". Use the adhdev-mesh MCP tools (mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat, mesh_launch_session, etc.) to orchestrate work across ${mesh.nodes.length} node(s). If the user names a provider, pass the matching type to mesh_launch_session: Hermes=hermes-cli, Claude Code=claude-cli, Codex=codex-cli, Gemini=gemini-cli.`;
                     }
 
                     const cliArgs: string[] = [];

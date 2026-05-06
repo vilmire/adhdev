@@ -16,6 +16,7 @@ import type {
     RepoMeshStatus,
     RepoMeshNodeStatus,
 } from '../repo-mesh-types.js';
+import { DEFAULT_MESH_POLICY } from '../repo-mesh-types.js';
 
 // ─── Prompt Builder ─────────────────────────────
 
@@ -23,10 +24,11 @@ export interface CoordinatorPromptContext {
     mesh: LocalMeshEntry;
     status?: RepoMeshStatus;
     userInstruction?: string;
+    coordinatorCliType?: string;
 }
 
 export function buildCoordinatorSystemPrompt(ctx: CoordinatorPromptContext): string {
-    const { mesh, status, userInstruction } = ctx;
+    const { mesh, status, userInstruction, coordinatorCliType } = ctx;
     const sections: string[] = [];
 
     // ── Identity ──
@@ -45,7 +47,7 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
     }
 
     // ── Policy ──
-    sections.push(buildPolicySection(mesh.policy));
+    sections.push(buildPolicySection({ ...DEFAULT_MESH_POLICY, ...(mesh.policy || {}) }));
 
     // ── Tools ──
     sections.push(TOOLS_SECTION);
@@ -54,14 +56,14 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
     sections.push(WORKFLOW_SECTION);
 
     // ── Rules ──
-    sections.push(RULES_SECTION);
+    sections.push(buildRulesSection(coordinatorCliType));
 
     // ── User instruction ──
     if (userInstruction) {
         sections.push(`## Additional Context\n${userInstruction}`);
     }
 
-    if (mesh.coordinator.systemPromptSuffix) {
+    if (mesh.coordinator?.systemPromptSuffix) {
         sections.push(mesh.coordinator.systemPromptSuffix);
     }
 
@@ -145,14 +147,21 @@ const WORKFLOW_SECTION = `## Orchestration Workflow
 6. **Checkpoint** — Call \`mesh_checkpoint\` to save the work.
 7. **Report** — Summarize what was done, what changed, and any issues.`;
 
-const RULES_SECTION = `## Rules
+function buildRulesSection(coordinatorCliType?: string): string {
+    const coordinatorNote = coordinatorCliType
+        ? `\n- **Coordinator runtime is not a delegation default.** This coordinator is running as \`${coordinatorCliType}\`, but delegated node sessions must follow the user's requested provider, not the coordinator's own runtime.`
+        : '';
+
+    return `## Rules
 
 - **Minimize coordinator context.** The coordinator's job is routing, not implementing. Do not read source files, run commands, or analyze code directly — delegate all of that to node agents. Your context should stay lean.
 - **Delegate analysis too.** If you need to understand a bug or explore the codebase, send that investigation as a task to a node. Do not do it yourself.
+- **Respect explicit provider requests.** If the user names an agent/provider, pass the matching provider type to \`mesh_launch_session\`: Hermes → \`hermes-cli\`, Claude Code/Claude → \`claude-cli\`, Codex → \`codex-cli\`, Gemini → \`gemini-cli\`. Never substitute \`claude-cli\` just because the coordinator itself is Claude Code.
 - **Front-load the task message.** When calling \`mesh_send_task\`, include everything the agent needs: what files to touch, what the problem is, what the fix should look like. The agent won't ask follow-up questions.
 - **Don't inspect code.** Trust the agent's output. Verify via \`mesh_git_status\`, not by reading source files.
 - **Don't over-parallelize.** Start with 1-2 concurrent tasks. Scale up if they succeed.
 - **Handle failures gracefully.** If a task fails, read the chat to understand why, then retry or reassign.
 - **Keep the user informed.** Report progress after each delegation round — one or two sentences, not a narration.
 - **Respect node capabilities.** Don't send build tasks to read-only nodes. Don't push from nodes that aren't allowed to.
-- **Never fabricate tool results.** Always call the actual tool; never pretend you did.`;
+- **Never fabricate tool results.** Always call the actual tool; never pretend you did.${coordinatorNote}`;
+}
