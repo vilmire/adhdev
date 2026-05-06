@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshCloneNode, meshLaunchSession, meshRemoveNode, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { meshCloneNode, meshLaunchSession, meshRemoveNode, meshStatus, meshListNodes, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 
 test('mesh worktree tools route clone/remove to the source node daemon and refresh MCP mesh context', async () => {
   const transport = new IpcTransport() as IpcTransport & {
@@ -145,6 +145,17 @@ test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache wh
     ],
   };
   const ctx = { mesh, transport };
+
+  // mesh_status and mesh_list_nodes should refresh too; coordinators rely on
+  // these surfaces to see/select a clone created by a previous MCP process.
+  const statusText = await meshStatus(ctx as any);
+  const status = JSON.parse(statusText);
+  assert.ok(status.nodes.some((n: any) => n.nodeId === 'node-worktree-new'), 'mesh_status should include refreshed worktree node');
+  assert.ok(ctx.mesh.nodes.some(n => n.id === 'node-worktree-new'), 'ctx.mesh refreshed by mesh_status');
+
+  const listText = await meshListNodes(ctx as any);
+  const listed = JSON.parse(listText);
+  assert.ok(listed.nodes.some((n: any) => n.nodeId === 'node-worktree-new'), 'mesh_list_nodes should include refreshed worktree node');
 
   // mesh_git_status on the new node should refresh and succeed
   const { meshGitStatus, meshRemoveNode } = await import('../src/tools/mesh-tools.js');

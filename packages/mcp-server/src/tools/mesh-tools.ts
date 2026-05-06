@@ -32,30 +32,29 @@ function findNode(mesh: LocalMeshEntry, nodeId: string): LocalMeshNodeEntry {
 }
 
 /**
- * Like findNode, but if the node is missing from ctx.mesh, fetches a fresh
- * mesh snapshot from the daemon (via get_mesh / inlineMeshCache) and retries.
- * This handles the case where clone_mesh_node added a node to the daemon's
- * in-memory cache after this MCP process loaded its initial mesh snapshot.
+ * Refresh the MCP process's mesh snapshot from the daemon inline mesh cache.
+ * This is required for status/list tools when a previous MCP process already
+ * created or removed worktree nodes through clone_mesh_node/remove_mesh_node.
  */
+async function refreshMeshFromDaemon(ctx: MeshContext): Promise<void> {
+    if (!(ctx.transport instanceof IpcTransport)) return;
+    try {
+        const result = await (ctx.transport as IpcTransport).command('get_mesh', { meshId: ctx.mesh.id }) as any;
+        if (!result?.success || !Array.isArray(result.mesh?.nodes)) return;
+        const refreshedNodes = result.mesh.nodes
+            .filter((n: any) => n?.id)
+            .map((n: any) => n as LocalMeshNodeEntry);
+        if (!refreshedNodes.length) return;
+        (ctx.mesh.nodes as LocalMeshNodeEntry[]).splice(0, ctx.mesh.nodes.length, ...refreshedNodes);
+        ctx.mesh.updatedAt = result.mesh.updatedAt ?? ctx.mesh.updatedAt;
+    } catch { /* refresh is best-effort; callers still report their original status/errors */ }
+}
+
 async function findNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry> {
     const hit = ctx.mesh.nodes.find(n => n.id === nodeId);
     if (hit) return hit;
 
-    // Attempt to refresh from daemon cache
-    if (ctx.transport instanceof IpcTransport) {
-        try {
-            const result = await (ctx.transport as IpcTransport).command('get_mesh', { meshId: ctx.mesh.id }) as any;
-            if (result?.success && Array.isArray(result.mesh?.nodes)) {
-                // Merge any nodes present in the daemon's current snapshot but missing here
-                for (const n of result.mesh.nodes) {
-                    if (n?.id && !ctx.mesh.nodes.find((existing: LocalMeshNodeEntry) => existing.id === n.id)) {
-                        (ctx.mesh.nodes as LocalMeshNodeEntry[]).push(n as LocalMeshNodeEntry);
-                    }
-                }
-                ctx.mesh.updatedAt = result.mesh.updatedAt ?? ctx.mesh.updatedAt;
-            }
-        } catch { /* refresh is best-effort; fall through to original error */ }
-    }
+    await refreshMeshFromDaemon(ctx);
 
     const refreshed = ctx.mesh.nodes.find(n => n.id === nodeId);
     if (!refreshed) throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
@@ -226,6 +225,7 @@ export const ALL_MESH_TOOLS = [
 // ─── Tool Implementations ───────────────────────
 
 export async function meshStatus(ctx: MeshContext): Promise<string> {
+    await refreshMeshFromDaemon(ctx);
     const { mesh, transport } = ctx;
     const results: any[] = [];
 
@@ -273,6 +273,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
 }
 
 export async function meshListNodes(ctx: MeshContext): Promise<string> {
+    await refreshMeshFromDaemon(ctx);
     const { mesh } = ctx;
     return JSON.stringify({
         meshId: mesh.id,

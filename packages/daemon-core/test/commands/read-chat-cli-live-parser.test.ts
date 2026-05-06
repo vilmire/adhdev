@@ -390,6 +390,104 @@ describe('handleReadChat for CLI adapters', () => {
     expect(result.error).toContain('waiting_approval status requires activeModal with buttons')
   })
 
+  it('finalizes stale generating CLI parser status when the adapter is already idle', async () => {
+    const adapter = {
+      cliType: 'hermes-cli',
+      cliName: 'Hermes Agent',
+      workingDir: '/tmp/project',
+      spawn: async () => {},
+      sendMessage: async () => {},
+      getStatus: () => ({ status: 'idle', messages: [], activeModal: null }),
+      getScriptParsedStatus: () => ({
+        status: 'generating',
+        messages: [
+          { role: 'user', content: 'say ok', bubbleState: 'final' },
+          { role: 'assistant', content: 'REMOTE-MESH-OK', bubbleState: 'streaming', meta: { streaming: true } },
+        ],
+        activeModal: null,
+        title: 'Hermes Agent',
+      }),
+      getPartialResponse: () => '',
+      shutdown: () => {},
+      cancel: () => {},
+      isProcessing: () => false,
+      isReady: () => true,
+      setOnStatusChange: () => {},
+    }
+
+    const result = await handleReadChat({
+      getCdp: () => null,
+      getProvider: () => ({ type: 'hermes-cli', category: 'cli' }),
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      getCliAdapter: () => adapter as any,
+      currentManagerKey: undefined,
+      currentIdeType: undefined,
+      currentProviderType: undefined,
+      currentSession: undefined,
+      agentStream: null,
+      ctx: {},
+      historyWriter: { appendNewMessages: () => {} },
+    } as any, { agentType: 'hermes-cli' })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('idle')
+    expect((result as any).debugReadChat?.parsedStatus).toBe('generating')
+    expect((result as any).debugReadChat?.returnedStatus).toBe('idle')
+    expect(result.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'say ok', bubbleState: 'final' }),
+      expect.objectContaining({ role: 'assistant', content: 'REMOTE-MESH-OK', bubbleState: 'final', meta: { streaming: false } }),
+    ])
+  })
+
+  it('uses parsed waiting_approval status when the parsed transcript has approval buttons even if adapter status is already idle', async () => {
+    const adapter = {
+      cliType: 'hermes-cli',
+      cliName: 'Hermes Agent',
+      workingDir: '/tmp/project',
+      spawn: async () => {},
+      sendMessage: async () => {},
+      getStatus: () => ({ status: 'idle', messages: [{ role: 'user', content: 'delete it' }], activeModal: null }),
+      getScriptParsedStatus: () => ({
+        status: 'waiting_approval',
+        messages: [
+          { role: 'user', content: 'delete it' },
+          { role: 'assistant', content: 'I need approval.' },
+        ],
+        activeModal: {
+          message: 'Approve?',
+          buttons: ['Approve', 'Reject'],
+        },
+        title: 'Hermes Agent',
+      }),
+      getPartialResponse: () => '',
+      shutdown: () => {},
+      cancel: () => {},
+      isProcessing: () => false,
+      isReady: () => true,
+      setOnStatusChange: () => {},
+    }
+
+    const result = await handleReadChat({
+      getCdp: () => null,
+      getProvider: () => ({ type: 'hermes-cli', category: 'cli' }),
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      getCliAdapter: () => adapter as any,
+      currentManagerKey: undefined,
+      currentIdeType: undefined,
+      currentProviderType: undefined,
+      currentSession: undefined,
+      agentStream: null,
+      ctx: {},
+      historyWriter: { appendNewMessages: () => {} },
+    } as any, { agentType: 'hermes-cli' })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('waiting_approval')
+    expect(result.activeModal).toEqual({ message: 'Approve?', buttons: ['Approve', 'Reject'] })
+  })
+
   it('uses parsed waiting_approval status when the parsed transcript has approval buttons even if adapter status is still generating', async () => {
     const adapter = {
       cliType: 'hermes-cli',

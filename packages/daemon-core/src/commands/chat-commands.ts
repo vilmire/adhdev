@@ -254,6 +254,40 @@ function normalizeReadChatCommandStatus(status: unknown, activeModal: unknown): 
     }
 }
 
+function isGeneratingLikeStatus(status: unknown): boolean {
+    return status === 'generating' || status === 'streaming' || status === 'long_generating' || status === 'starting';
+}
+
+function shouldTrustCliAdapterTerminalStatus(parsedStatus: unknown, activeModal: unknown, adapter: CliAdapter, adapterStatus: any): boolean {
+    if (!isGeneratingLikeStatus(parsedStatus)) return false;
+    if (hasNonEmptyModalButtons(activeModal)) return false;
+    const adapterRawStatus = typeof adapterStatus?.status === 'string' ? adapterStatus.status.trim() : '';
+    if (adapterRawStatus !== 'idle') return false;
+    if (typeof adapter.isProcessing === 'function' && adapter.isProcessing()) return false;
+    return true;
+}
+
+function normalizeCliReadChatStatus(parsedStatus: unknown, activeModal: unknown, adapter: CliAdapter, adapterStatus: any): string {
+    if (shouldTrustCliAdapterTerminalStatus(parsedStatus, activeModal, adapter, adapterStatus)) return 'idle';
+    return typeof parsedStatus === 'string' && parsedStatus.trim() ? parsedStatus : 'idle';
+}
+
+function finalizeStreamingMessagesWhenIdle(messages: ChatMessage[], status: string): ChatMessage[] {
+    if (status !== 'idle') return messages;
+    return messages.map((message) => {
+        const meta = message.meta && typeof message.meta === 'object'
+            ? message.meta as Record<string, unknown>
+            : undefined;
+        const hasStreamingMeta = meta?.streaming === true;
+        if (message.bubbleState !== 'streaming' && !hasStreamingMeta) return message;
+        return {
+            ...message,
+            ...(message.bubbleState === 'streaming' ? { bubbleState: 'final' as const } : {}),
+            ...(hasStreamingMeta ? { meta: { ...meta, streaming: false } } : {}),
+        };
+    });
+}
+
 function buildReadChatCommandResult(payload: Record<string, any>, args: any): CommandResult {
     let validatedPayload: Record<string, any>;
     const debugReadChat = payload?.debugReadChat && typeof payload.debugReadChat === 'object'
@@ -764,13 +798,14 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 ? parsedRecord.coverage
                 : undefined;
             const activeModal = parsedRecord.activeModal ?? parsedRecord.modal ?? null;
-            const returnedStatus = parsedRecord.status || 'idle';
+            const returnedStatus = normalizeCliReadChatStatus(parsedRecord.status, activeModal, adapter, adapterStatus);
             const runtimeMessageMerger = getTargetInstance(h, args) as RuntimeChatMessageMerger | null;
+            const parsedMessages = finalizeStreamingMessagesWhenIdle(parsedRecord.messages as ChatMessage[], returnedStatus);
             const returnedMessages = runtimeMessageMerger?.category === 'cli'
                 && runtimeMessageMerger.type === adapter.cliType
                 && typeof runtimeMessageMerger.mergeRuntimeChatMessages === 'function'
-                ? runtimeMessageMerger.mergeRuntimeChatMessages(parsedRecord.messages as ChatMessage[])
-                : parsedRecord.messages;
+                ? runtimeMessageMerger.mergeRuntimeChatMessages(parsedMessages)
+                : parsedMessages;
             LOG.debug('Command', `[read_chat] cli-like parsed provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord.status || '')} parsedMsgCount=${parsedRecord.messages.length} returnedMsgCount=${returnedMessages.length}`);
             return buildReadChatCommandResult({
                 messages: returnedMessages,
