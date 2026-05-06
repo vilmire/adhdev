@@ -56,9 +56,6 @@
     "node-pty": "^1.2.0-beta.12",
     "ws": "^8.19.0"
   },
-  "bundleDependencies": [
-    "@adhdev/session-host-core"
-  ],
   "optionalDependencies": {
     "@adhdev/ghostty-vt-node": "*"
   },
