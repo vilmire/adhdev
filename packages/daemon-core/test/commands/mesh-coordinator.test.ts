@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, chmodSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -12,6 +12,33 @@ const baseProvider: ProviderModule = {
   name: 'Test CLI',
   category: 'cli',
   spawn: { command: 'test' },
+}
+
+function nodeSupportsWebSocket(command: string): boolean {
+  try {
+    execFileSync(command, ['-e', 'process.exit(typeof WebSocket === "function" ? 0 : 1)'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function findWebSocketNode(): string {
+  const candidates = [
+    process.env.ADHDEV_MCP_NODE_EXECUTABLE,
+    process.env.ADHDEV_NODE_EXECUTABLE,
+    process.env.npm_node_execpath,
+    ...String(process.env.PATH || '').split(':').filter(Boolean).map((entry) => join(entry, 'node')),
+    '/Users/vilmire/.nvm/versions/node/v22.17.0/bin/node',
+    '/opt/homebrew/bin/node',
+    '/usr/local/bin/node',
+    process.execPath,
+  ].filter((candidate): candidate is string => Boolean(candidate?.trim()))
+
+  for (const candidate of candidates) {
+    if (nodeSupportsWebSocket(candidate)) return candidate
+  }
+  throw new Error('No WebSocket-capable Node runtime available for Repo Mesh MCP test')
 }
 
 describe('resolveMeshCoordinatorSetup', () => {
@@ -57,7 +84,7 @@ describe('resolveMeshCoordinatorSetup', () => {
     mkdirSync(goodBin, { recursive: true })
     const goodNode = join(goodBin, 'node')
     const mcpEntry = join(root, 'mcp-server.js')
-    writeFileSync(goodNode, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`, 'utf-8')
+    symlinkSync(findWebSocketNode(), goodNode)
     writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
     chmodSync(goodNode, 0o755)
     const previousNodeOverride = process.env.ADHDEV_MCP_NODE_EXECUTABLE
@@ -336,7 +363,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       expect(result).toMatchObject({ success: true, sessionId: 'session-1' })
       const mcpConfig = JSON.parse(readFileSync(join(workspace, '.mcp.json'), 'utf-8'))
       expect(mcpConfig.mcpServers['adhdev-mesh']).toEqual({
-        command: process.execPath,
+        command: expect.any(String),
         args: [realpathSync(mcpEntry), '--mode', 'ipc', '--repo-mesh', 'mesh_123'],
         env: {
           ADHDEV_INLINE_MESH: JSON.stringify(inlineMesh),
@@ -344,6 +371,8 @@ describe('resolveMeshCoordinatorSetup', () => {
         },
       })
       expect(mcpConfig.mcpServers['adhdev-mesh'].command).not.toBe('adhdev-mcp')
+      expect(mcpConfig.mcpServers['adhdev-mesh'].command).toMatch(/^\//)
+      expect(nodeSupportsWebSocket(mcpConfig.mcpServers['adhdev-mesh'].command)).toBe(true)
       expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.objectContaining({
         cliType: 'claude-cli',
         dir: workspace,

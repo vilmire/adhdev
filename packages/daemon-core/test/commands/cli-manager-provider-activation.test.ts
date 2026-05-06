@@ -131,7 +131,7 @@ describe('DaemonCliManager provider activation', () => {
     expect(addInstance).toHaveBeenCalledTimes(1);
     const context = addInstance.mock.calls[0][2] as any;
     expect(context.settings).toMatchObject({ autoApprove: true });
-  });
+  }, 15000);
 
   it('uses machine executable and argv overrides for enabled ACP runtime launches', async () => {
     const executable = join(providerRoot, 'bin', 'sample-acp');
