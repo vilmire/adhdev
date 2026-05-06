@@ -8,7 +8,7 @@
 import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { execFileSync } from 'child_process';
 import chalk from 'chalk';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
@@ -137,6 +137,56 @@ type CliStartOptions = {
     settingsOverride?: Record<string, any>;
     extraEnv?: Record<string, string>;
 };
+
+const COORDINATOR_DELEGATED_ENV_UNSETS: Record<string, string> = {
+    ADHDEV_INLINE_MESH: '',
+    ADHDEV_MCP_TRANSPORT: '',
+    ADHDEV_MESH_ID: '',
+    HERMES_EPHEMERAL_SYSTEM_PROMPT: '',
+};
+
+export interface CoordinatorDelegatedCliLaunchOptionsInput {
+    cliType: string;
+    workspace: string;
+    cliArgs?: string[];
+    env?: Record<string, string>;
+}
+
+export interface CoordinatorDelegatedCliLaunchOptions {
+    cliArgs: string[];
+    env: Record<string, string>;
+}
+
+function hasCliArg(args: string[], flag: string): boolean {
+    return args.some((arg) => arg === flag || arg.startsWith(`${flag}=`));
+}
+
+function ensureEmptyDelegatedMcpConfig(workspace: string): string {
+    const baseDir = path.join(os.tmpdir(), 'adhdev-delegated-agent-empty-mcp');
+    mkdirSync(baseDir, { recursive: true });
+    const workspaceHash = crypto.createHash('sha256').update(path.resolve(workspace || os.tmpdir())).digest('hex').slice(0, 16);
+    const filePath = path.join(baseDir, `${workspaceHash}.json`);
+    writeFileSync(filePath, JSON.stringify({ mcpServers: {} }, null, 2), 'utf-8');
+    return filePath;
+}
+
+export function buildCoordinatorDelegatedCliLaunchOptions(
+    input: CoordinatorDelegatedCliLaunchOptionsInput,
+): CoordinatorDelegatedCliLaunchOptions {
+    const cliType = String(input.cliType || '').trim();
+    const cliArgs = Array.isArray(input.cliArgs) ? [...input.cliArgs] : [];
+    const env: Record<string, string> = { ...(input.env || {}), ...COORDINATOR_DELEGATED_ENV_UNSETS };
+
+    if (cliType === 'hermes-cli' && !hasCliArg(cliArgs, '--ignore-user-config')) {
+        cliArgs.unshift('--ignore-user-config');
+    }
+
+    if (cliType === 'claude-cli' && !hasCliArg(cliArgs, '--mcp-config')) {
+        cliArgs.unshift('--mcp-config', ensureEmptyDelegatedMcpConfig(input.workspace));
+    }
+
+    return { cliArgs, env };
+}
 
 function isUuid(value: string): boolean {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
@@ -909,12 +959,25 @@ export class DaemonCliManager {
                 const launchSource = resolved.source;
                 if (!cliType) throw new Error('cliType required');
 
+                const settingsOverride = args?.settings && typeof args.settings === 'object' ? args.settings : undefined;
+                const delegatedLaunch = settingsOverride?.launchedByCoordinator === true
+                    ? buildCoordinatorDelegatedCliLaunchOptions({
+                        cliType,
+                        workspace: dir,
+                        cliArgs: args?.cliArgs,
+                        env: args?.env,
+                    })
+                    : null;
                 const started = await this.startSession(
                     cliType,
                     dir,
-                    args?.cliArgs,
+                    delegatedLaunch ? delegatedLaunch.cliArgs : args?.cliArgs,
                     args?.initialModel,
-                    { resumeSessionId: args?.resumeSessionId, settingsOverride: args?.settings, extraEnv: args?.env },
+                    {
+                        resumeSessionId: args?.resumeSessionId,
+                        settingsOverride,
+                        extraEnv: delegatedLaunch ? delegatedLaunch.env : args?.env,
+                    },
                 );
 
                 return {

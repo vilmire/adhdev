@@ -91,6 +91,10 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   assert.equal(JSON.parse(launchText).sessionId, 'session-worktree');
   assert.equal(calls[1].daemonId, 'daemon-source');
   assert.equal(calls[1].command, 'launch_cli');
+  assert.deepEqual(calls[1].args.settings, {
+    meshNodeFor: 'mesh-worktree-flow',
+    launchedByCoordinator: true,
+  });
 
   const removeText = await meshRemoveNode(ctx, { node_id: 'node-worktree' });
   assert.equal(JSON.parse(removeText).success, true);
