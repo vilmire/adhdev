@@ -28,6 +28,10 @@ interface ApprovalSelectableInstance extends ProviderInstance {
     recordApprovalSelection?(buttonText: string): void;
 }
 
+interface RuntimeChatMessageMerger extends ProviderInstance {
+    mergeRuntimeChatMessages?(messages: ChatMessage[]): ChatMessage[];
+}
+
 type LegacyStringScript = (params?: Record<string, unknown> | string) => string;
 
 function getCurrentProviderType(h: CommandHelpers, fallback = ''): string {
@@ -761,9 +765,15 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                 : undefined;
             const activeModal = parsedRecord.activeModal ?? parsedRecord.modal ?? null;
             const returnedStatus = parsedRecord.status || 'idle';
-            LOG.debug('Command', `[read_chat] cli-like parsed provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord.status || '')} parsedMsgCount=${parsedRecord.messages.length}`);
+            const runtimeMessageMerger = getTargetInstance(h, args) as RuntimeChatMessageMerger | null;
+            const returnedMessages = runtimeMessageMerger?.category === 'cli'
+                && runtimeMessageMerger.type === adapter.cliType
+                && typeof runtimeMessageMerger.mergeRuntimeChatMessages === 'function'
+                ? runtimeMessageMerger.mergeRuntimeChatMessages(parsedRecord.messages as ChatMessage[])
+                : parsedRecord.messages;
+            LOG.debug('Command', `[read_chat] cli-like parsed provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(adapterStatus.status || '')} parsedStatus=${String(parsedRecord.status || '')} parsedMsgCount=${parsedRecord.messages.length} returnedMsgCount=${returnedMessages.length}`);
             return buildReadChatCommandResult({
-                messages: parsedRecord.messages,
+                messages: returnedMessages,
                 status: returnedStatus,
                 activeModal,
                 debugReadChat: {
@@ -774,7 +784,7 @@ export async function handleReadChat(h: CommandHelpers, args: any): Promise<Comm
                     returnedStatus: String(returnedStatus || ''),
                     shouldPreferAdapterMessages: false,
                     parsedMsgCount: parsedRecord.messages.length,
-                    returnedMsgCount: parsedRecord.messages.length,
+                    returnedMsgCount: returnedMessages.length,
                 },
                 ...(title ? { title } : {}),
                 ...(providerSessionId ? { providerSessionId } : {}),

@@ -98,6 +98,80 @@ describe('handleReadChat for CLI adapters', () => {
     ])
   })
 
+  it('includes CLI provider runtime system messages in read_chat results', async () => {
+    const getScriptParsedStatus = vi.fn(() => ({
+      status: 'idle',
+      messages: [
+        { role: 'user', content: 'run tests' },
+        { role: 'assistant', content: 'Done' },
+      ],
+      activeModal: null,
+      title: 'Claude Code',
+    }))
+    const adapter = {
+      cliType: 'claude-cli',
+      cliName: 'Claude Code',
+      workingDir: '/tmp/project',
+      spawn: async () => {},
+      sendMessage: async () => {},
+      getStatus: () => ({ status: 'idle', messages: [], activeModal: null }),
+      getScriptParsedStatus,
+      getPartialResponse: () => '',
+      shutdown: () => {},
+      cancel: () => {},
+      isProcessing: () => false,
+      isReady: () => true,
+      setOnStatusChange: () => {},
+    }
+    const mergeRuntimeChatMessages = vi.fn((messages: any[]) => [
+      ...messages,
+      {
+        role: 'system',
+        kind: 'system',
+        senderName: 'System',
+        content: 'Auto-approved: Yes',
+        receivedAt: 1_778_042_463_224,
+        timestamp: 1_778_042_463_224,
+      },
+    ])
+    const instance = {
+      type: 'claude-cli',
+      category: 'cli',
+      mergeRuntimeChatMessages,
+    }
+
+    const result = await handleReadChat({
+      getCdp: () => null,
+      getProvider: () => ({ type: 'claude-cli', category: 'cli' }),
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      getCliAdapter: () => adapter as any,
+      currentManagerKey: undefined,
+      currentIdeType: undefined,
+      currentProviderType: undefined,
+      currentSession: undefined,
+      agentStream: null,
+      ctx: {
+        sessionRegistry: { get: () => ({ adapterKey: 'sess-1', instanceKey: 'sess-1' }) },
+        instanceManager: { getInstance: () => instance },
+      },
+      historyWriter: { appendNewMessages: () => {} },
+    } as any, { targetSessionId: 'sess-1', agentType: 'claude-cli' })
+
+    expect(result.success).toBe(true)
+    expect(mergeRuntimeChatMessages).toHaveBeenCalledWith([
+      { role: 'user', content: 'run tests' },
+      { role: 'assistant', content: 'Done' },
+    ])
+    expect(result.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'run tests' }),
+      expect.objectContaining({ role: 'assistant', content: 'Done' }),
+      expect.objectContaining({ role: 'system', kind: 'system', senderName: 'System', content: 'Auto-approved: Yes' }),
+    ])
+    expect((result as any).debugReadChat?.parsedMsgCount).toBe(2)
+    expect((result as any).debugReadChat?.returnedMsgCount).toBe(3)
+  })
+
   it('does not replace a provider-authoritative parsed transcript with longer adapter history', async () => {
     const getScriptParsedStatus = vi.fn(() => ({
       status: 'generating',

@@ -978,6 +978,10 @@ export class CliProviderInstance implements ProviderInstance {
         }
     }
 
+    mergeRuntimeChatMessages(parsedMessages: ChatMessage[]): ChatMessage[] {
+        return this.mergeConversationMessages(parsedMessages);
+    }
+
     private mergeConversationMessages(parsedMessages: any[]): ChatMessage[] {
         if (this.runtimeMessages.length === 0) return normalizeChatMessages(parsedMessages);
 

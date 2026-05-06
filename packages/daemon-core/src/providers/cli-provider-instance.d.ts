@@ -6,6 +6,7 @@
  */
 import type { ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, InstanceContext } from './provider-instance.js';
+import type { ChatMessage } from '../types.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 export declare class CliProviderInstance implements ProviderInstance {
@@ -77,6 +78,7 @@ export declare class CliProviderInstance implements ProviderInstance {
     private formatMarkerTimestamp;
     private maybeAppendRuntimeRecoveryMessage;
     private appendRuntimeSystemMessage;
+    mergeRuntimeChatMessages(parsedMessages: ChatMessage[]): ChatMessage[];
     private mergeConversationMessages;
     private formatApprovalRequestMessage;
     private promoteProviderSessionId;
