@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -49,6 +49,51 @@ describe('resolveMeshCoordinatorSetup', () => {
         args: ['/opt/adhdev/vendor/mcp-server/index.js', '--mode', 'ipc', '--repo-mesh', 'mesh_123'],
       },
     })
+  })
+
+  it('honors an explicit MCP Node override after verifying it can run WebSocket IPC', () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-mcp-node-runtime-'))
+    const goodBin = join(root, 'good-bin')
+    mkdirSync(goodBin, { recursive: true })
+    const goodNode = join(goodBin, 'node')
+    const mcpEntry = join(root, 'mcp-server.js')
+    writeFileSync(goodNode, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`, 'utf-8')
+    writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
+    chmodSync(goodNode, 0o755)
+    const previousNodeOverride = process.env.ADHDEV_MCP_NODE_EXECUTABLE
+    process.env.ADHDEV_MCP_NODE_EXECUTABLE = goodNode
+
+    const provider: ProviderModule = {
+      ...baseProvider,
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'auto_import',
+          format: 'hermes_config_yaml',
+          path: '~/hermes-config.yaml',
+          serverName: 'adhdev-mesh',
+        },
+      },
+    }
+
+    try {
+      expect(resolveMeshCoordinatorSetup({
+        provider,
+        meshId: 'mesh_node_runtime',
+        workspace: '/repo',
+        adhdevMcpEntryPath: mcpEntry,
+      })).toMatchObject({
+        kind: 'auto_import',
+        mcpServer: {
+          command: realpathSync(goodNode),
+          args: [realpathSync(mcpEntry), '--mode', 'ipc', '--repo-mesh', 'mesh_node_runtime'],
+        },
+      })
+    } finally {
+      if (previousNodeOverride === undefined) delete process.env.ADHDEV_MCP_NODE_EXECUTABLE
+      else process.env.ADHDEV_MCP_NODE_EXECUTABLE = previousNodeOverride
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it('resolves the sibling mcp-server workspace dist when standalone runs from a source checkout', () => {

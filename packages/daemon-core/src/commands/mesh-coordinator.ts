@@ -1,4 +1,5 @@
-import { existsSync, realpathSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, readdirSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import * as os from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -75,7 +76,7 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
     if (!mcpServer) {
       return {
         kind: 'unsupported',
-        reason: 'Could not resolve the ADHDev MCP server entrypoint without relying on a PATH bin shim',
+        reason: 'Could not resolve the ADHDev MCP server entrypoint and a Node runtime with WebSocket support for daemon IPC mode',
       }
     }
     return {
@@ -134,9 +135,85 @@ function resolveAdhdevMcpServerLaunch(options: {
 }): MeshCoordinatorMcpServerLaunch | null {
   const entryPath = resolveAdhdevMcpEntryPath(options.adhdevMcpEntryPath)
   if (!entryPath) return null
+  const nodeExecutable = resolveMcpNodeExecutable(options.nodeExecutable)
+  if (!nodeExecutable) return null
   return {
-    command: options.nodeExecutable?.trim() || process.execPath,
+    command: nodeExecutable,
     args: [entryPath, '--mode', 'ipc', '--repo-mesh', options.meshId],
+  }
+}
+
+function resolveMcpNodeExecutable(explicitExecutable?: string): string | null {
+  const explicit = explicitExecutable?.trim()
+  if (explicit) return explicit
+
+  const candidates: string[] = []
+  const addCandidate = (candidate?: string | null) => {
+    const trimmed = candidate?.trim()
+    if (!trimmed) return
+    const normalized = normalizeExistingPath(trimmed) || trimmed
+    if (!candidates.includes(normalized)) candidates.push(normalized)
+  }
+
+  addCandidate(process.env.ADHDEV_MCP_NODE_EXECUTABLE)
+  addCandidate(process.env.ADHDEV_NODE_EXECUTABLE)
+  addCandidate(process.env.npm_node_execpath)
+  addNodeCandidatesFromPath(process.env.PATH, addCandidate)
+  addNodeCandidatesFromNvm(os.homedir(), addCandidate)
+  addCandidate('/opt/homebrew/bin/node')
+  addCandidate('/usr/local/bin/node')
+  addCandidate('/usr/bin/node')
+  addCandidate(process.execPath)
+
+  for (const candidate of candidates) {
+    if (nodeRuntimeSupportsWebSocket(candidate)) return candidate
+  }
+  return null
+}
+
+function addNodeCandidatesFromPath(pathValue: string | undefined, addCandidate: (candidate?: string | null) => void) {
+  for (const entry of (pathValue || '').split(':')) {
+    const dir = entry.trim()
+    if (!dir) continue
+    addCandidate(join(dir, 'node'))
+  }
+}
+
+function addNodeCandidatesFromNvm(homeDir: string, addCandidate: (candidate?: string | null) => void) {
+  const versionsDir = join(homeDir, '.nvm', 'versions', 'node')
+  try {
+    const versionDirs = readdirSync(versionsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort(compareNodeVersionNamesDescending)
+    for (const versionDir of versionDirs) {
+      addCandidate(join(versionsDir, versionDir, 'bin', 'node'))
+    }
+  } catch {
+    // nvm is optional; PATH and process.execPath candidates still cover normal installs.
+  }
+}
+
+function compareNodeVersionNamesDescending(a: string, b: string): number {
+  const parse = (value: string) => value.replace(/^v/, '').split('.').map((part) => Number.parseInt(part, 10) || 0)
+  const left = parse(a)
+  const right = parse(b)
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const diff = (right[i] || 0) - (left[i] || 0)
+    if (diff !== 0) return diff
+  }
+  return b.localeCompare(a)
+}
+
+function nodeRuntimeSupportsWebSocket(nodeExecutable: string): boolean {
+  try {
+    execFileSync(nodeExecutable, ['-e', "process.exit(typeof WebSocket === 'function' ? 0 : 42)"], {
+      stdio: 'ignore',
+      timeout: 3000,
+    })
+    return true
+  } catch {
+    return false
   }
 }
 
