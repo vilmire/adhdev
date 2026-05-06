@@ -1069,7 +1069,15 @@ export class DaemonCommandRouter {
                 if (!workspace) return { success: false, error: 'workspace required' };
                 try {
                     const { addNode } = await import('../config/mesh-config.js');
-                    const node = addNode(meshId, { workspace });
+                    const providerPriority = Array.isArray(args?.providerPriority)
+                        ? args.providerPriority.map((type: any) => typeof type === 'string' ? type.trim() : '').filter(Boolean)
+                        : [];
+                    const readOnly = args?.readOnly === true;
+                    const policy = {
+                        ...(readOnly ? { readOnly: true } : {}),
+                        ...(providerPriority.length ? { providerPriority } : {}),
+                    };
+                    const node = addNode(meshId, { workspace, ...(policy ? { policy } : {}) });
                     if (!node) return { success: false, error: 'Mesh not found' };
                     return { success: true, node };
                 } catch (e: any) {

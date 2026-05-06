@@ -69,6 +69,7 @@ export interface RepoMeshNodePolicy {
     readOnly?: boolean;
     canPush?: boolean;
     maxConcurrentSessions?: number;
+    providerPriority?: string[];
 }
 
 export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {

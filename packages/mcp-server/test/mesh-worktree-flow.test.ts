@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshCheckpoint, meshCloneNode, meshLaunchSession, meshRemoveNode, meshStatus, meshListNodes, meshGitStatus, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshRemoveNode, meshStatus, meshListNodes, meshGitStatus, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 
 test('mesh worktree tools route clone/remove to the source node daemon and refresh MCP mesh context', async () => {
   const transport = new IpcTransport() as IpcTransport & {
@@ -164,6 +164,166 @@ test('mesh_checkpoint routes untracked checkpoint requests with the exact multiw
     message: 'checkpoint: rc21 fresh global repo mesh e2e smoke',
     includeUntracked: true,
   });
+});
+
+test('mesh_launch_session explicit type overrides node providerPriority', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command === 'launch_cli') {
+      return { success: true, sessionId: 'runtime-explicit', providerSessionId: 'provider-explicit' };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const ctx = {
+    mesh: {
+      id: 'mesh-provider-explicit',
+      name: 'Provider Explicit',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-provider',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-source',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+      }],
+    },
+    transport,
+  };
+
+  const launchText = await meshLaunchSession(ctx as any, { node_id: 'node-provider', type: 'codex-cli' });
+  const launch = JSON.parse(launchText);
+  assert.equal(launch.sessionId, 'runtime-explicit');
+  assert.equal(launch.resolvedProviderType, 'codex-cli');
+  assert.equal(launch.providerSessionId, 'provider-explicit');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, 'launch_cli');
+  assert.equal(calls[0].args.cliType, 'codex-cli');
+});
+
+test('mesh_launch_session omitted type uses providerPriority detection and fails closed when none usable', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command === 'detect_provider') {
+      return { success: true, detected: args.providerType === 'hermes-cli', providerType: args.providerType };
+    }
+    if (command === 'launch_cli') {
+      return { success: true, sessionId: 'runtime-auto', providerSessionId: 'provider-auto' };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const node = {
+    id: 'node-provider',
+    workspace: '/repo',
+    repoRoot: '/repo',
+    daemonId: 'daemon-source',
+    userOverrides: {},
+    policy: { providerPriority: ['codex-cli', 'hermes-cli'] },
+  };
+  const ctx = {
+    mesh: {
+      id: 'mesh-provider-auto',
+      name: 'Provider Auto',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [node],
+    },
+    transport,
+  };
+
+  const launchText = await meshLaunchSession(ctx as any, { node_id: 'node-provider' });
+  const launch = JSON.parse(launchText);
+  assert.equal(launch.sessionId, 'runtime-auto');
+  assert.equal(launch.resolvedProviderType, 'hermes-cli');
+  assert.deepEqual(calls.map(call => call.command), ['detect_provider', 'detect_provider', 'launch_cli']);
+  assert.equal(calls[0].args.providerType, 'codex-cli');
+  assert.equal(calls[1].args.providerType, 'hermes-cli');
+  assert.equal(calls[2].args.cliType, 'hermes-cli');
+
+  calls.length = 0;
+  node.policy.providerPriority = ['codex-cli'];
+  const failedText = await meshLaunchSession(ctx as any, { node_id: 'node-provider' });
+  const failed = JSON.parse(failedText);
+  assert.match(failed.error, /No usable provider detected/);
+  assert.deepEqual(calls.map(call => call.command), ['detect_provider']);
+});
+
+test('mesh_read_chat forwards cached provider metadata after launch', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command === 'launch_cli') {
+      return { success: true, id: 'runtime-cached', providerSessionId: 'provider-cached' };
+    }
+    if (command === 'read_chat') {
+      return { success: true, messages: [], providerSessionId: args.providerSessionId };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const ctx = {
+    mesh: {
+      id: 'mesh-provider-cache',
+      name: 'Provider Cache',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-provider',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-source',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+  };
+
+  await meshLaunchSession(ctx as any, { node_id: 'node-provider', type: 'hermes-cli' });
+  await meshReadChat(ctx as any, { node_id: 'node-provider', session_id: 'runtime-cached', tail: 5 });
+  assert.equal(calls[1].command, 'read_chat');
+  assert.equal(calls[1].args.agentType, 'hermes-cli');
+  assert.equal(calls[1].args.providerType, 'hermes-cli');
+  assert.equal(calls[1].args.providerSessionId, 'provider-cached');
+  assert.equal(calls[1].args.tailLimit, 5);
+
+  await meshReadChat(ctx as any, { node_id: 'node-provider', session_id: 'runtime-cached', provider_session_id: 'provider-explicit-read' });
+  assert.equal(calls[2].args.providerSessionId, 'provider-explicit-read');
 });
 
 test('mesh_clone_node upserts clone returned through payload-wrapped live relay shape before immediate resolver use', async () => {

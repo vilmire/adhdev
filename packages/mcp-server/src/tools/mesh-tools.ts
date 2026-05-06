@@ -23,6 +23,13 @@ export interface MeshContext {
     localDaemonId?: string;
 }
 
+type MeshSessionProviderMetadata = {
+    providerType: string;
+    providerSessionId?: string;
+};
+
+const meshSessionProviderMetadata = new Map<string, MeshSessionProviderMetadata>();
+
 // ─── Helpers ────────────────────────────────────
 
 function findNode(mesh: LocalMeshEntry, nodeId: string): LocalMeshNodeEntry {
@@ -100,6 +107,14 @@ function extractGitDiff(value: any): any {
     return payload?.diffSummary ?? payload?.diff ?? value?.diffSummary ?? value?.diff ?? payload;
 }
 
+function extractLaunchPayload(value: any): any {
+    return findNestedPayload(value, payload => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
+}
+
+function meshSessionCacheKey(nodeId: string, runtimeSessionId: string): string {
+    return `${nodeId}:${runtimeSessionId}`;
+}
+
 function countUncommittedChanges(status: any): number {
     if (typeof status?.uncommittedChanges === 'number') return status.uncommittedChanges;
     const keys = ['staged', 'modified', 'untracked', 'deleted', 'renamed'];
@@ -171,12 +186,13 @@ export const MESH_SEND_TASK_TOOL = {
 
 export const MESH_READ_CHAT_TOOL = {
     name: 'mesh_read_chat',
-    description: 'Read recent chat messages from a delegated agent session on a mesh node. Use this to check progress.',
+    description: 'Read recent chat messages from a delegated agent session on a mesh node. Use this to check progress. If the runtime session has completed, provider_session_id can explicitly target provider transcript history.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             node_id: { type: 'string', description: 'Target node ID.' },
             session_id: { type: 'string', description: 'Agent session ID to read from.' },
+            provider_session_id: { type: 'string', description: 'Optional provider transcript/session ID for completed sessions.' },
             tail: { type: 'number', description: 'Number of recent messages to return (default: 10).' },
         },
         required: ['node_id', 'session_id'],
@@ -185,14 +201,14 @@ export const MESH_READ_CHAT_TOOL = {
 
 export const MESH_LAUNCH_SESSION_TOOL = {
     name: 'mesh_launch_session',
-    description: 'Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Hermes = hermes-cli, Claude Code/Claude = claude-cli, Codex = codex-cli, Gemini = gemini-cli. Do not default to claude-cli unless the user requested Claude Code or no provider was specified.',
+    description: 'Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Hermes = hermes-cli, Claude Code/Claude = claude-cli, Codex = codex-cli, Gemini = gemini-cli. If type is omitted, resolve strictly from the node policy providerPriority and provider detection; fail closed when no configured provider is usable. Do not default to claude-cli.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             node_id: { type: 'string', description: 'Target node ID.' },
-            type: { type: 'string', description: 'Provider type to launch. Use hermes-cli for Hermes, claude-cli for Claude Code, codex-cli for Codex, gemini-cli for Gemini.' },
+            type: { type: 'string', description: 'Optional provider type to launch. Use hermes-cli for Hermes, claude-cli for Claude Code, codex-cli for Codex, gemini-cli for Gemini. When omitted, node.policy.providerPriority is probed in order.' },
         },
-        required: ['node_id', 'type'],
+        required: ['node_id'],
     },
 };
 
@@ -371,14 +387,20 @@ export async function meshSendTask(
 
 export async function meshReadChat(
     ctx: MeshContext,
-    args: { node_id: string; session_id: string; tail?: number },
+    args: { node_id: string; session_id: string; provider_session_id?: string; tail?: number },
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id); // membership check
 
     if (isLocalTransport(ctx.transport)) {
+        const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
+        const providerSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
+            ? args.provider_session_id.trim()
+            : cached?.providerSessionId;
         const result = await commandForNode(ctx, node, 'read_chat', {
             sessionId: args.session_id,
             targetSessionId: args.session_id,
+            ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
+            ...(providerSessionId ? { providerSessionId } : {}),
             tailLimit: args.tail ?? 10,
         });
         return JSON.stringify(result, null, 2);
@@ -389,20 +411,66 @@ export async function meshReadChat(
 
 export async function meshLaunchSession(
     ctx: MeshContext,
-    args: { node_id: string; type: string },
+    args: { node_id: string; type?: string },
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
     if (isLocalTransport(ctx.transport)) {
+        let resolvedProviderType = typeof args.type === 'string' && args.type.trim() ? args.type : '';
+        if (!resolvedProviderType) {
+            const rawProviderPriority = (node.policy as any)?.providerPriority;
+            const providerPriority = Array.isArray(rawProviderPriority)
+                ? rawProviderPriority.map((type: unknown) => typeof type === 'string' ? type.trim() : '').filter(Boolean)
+                : [];
+            if (!providerPriority.length) {
+                return JSON.stringify({ error: `Node '${args.node_id}' has no providerPriority policy; pass type explicitly or configure node.policy.providerPriority` });
+            }
+
+            const failed: string[] = [];
+            for (const providerType of providerPriority) {
+                const detectedResult = await commandForNode(ctx, node, 'detect_provider', { providerType });
+                const detectedPayload = unwrapCommandPayload(detectedResult);
+                if (detectedPayload?.success && detectedPayload?.detected) {
+                    resolvedProviderType = providerType;
+                    break;
+                }
+                failed.push(`${providerType}: ${detectedPayload?.error || 'not detected'}`);
+            }
+            if (!resolvedProviderType) {
+                return JSON.stringify({ error: `No usable provider detected for node '${args.node_id}' from providerPriority: ${failed.join('; ')}` });
+            }
+        }
+
         const result = await commandForNode(ctx, node, 'launch_cli', {
-            cliType: args.type,
+            cliType: resolvedProviderType,
             dir: node.workspace,
             settings: {
                 meshNodeFor: ctx.mesh.id,
                 launchedByCoordinator: true
             }
         });
-        return JSON.stringify(result, null, 2);
+        const launchPayload = extractLaunchPayload(result);
+        const runtimeSessionId = typeof launchPayload?.sessionId === 'string'
+            ? launchPayload.sessionId
+            : typeof launchPayload?.id === 'string'
+                ? launchPayload.id
+                : typeof launchPayload?.runtimeSessionId === 'string'
+                    ? launchPayload.runtimeSessionId
+                    : '';
+        const providerSessionId = typeof launchPayload?.providerSessionId === 'string' && launchPayload.providerSessionId.trim()
+            ? launchPayload.providerSessionId.trim()
+            : undefined;
+        if (runtimeSessionId) {
+            meshSessionProviderMetadata.set(meshSessionCacheKey(args.node_id, runtimeSessionId), {
+                providerType: resolvedProviderType,
+                ...(providerSessionId ? { providerSessionId } : {}),
+            });
+        }
+        return JSON.stringify({
+            ...launchPayload,
+            resolvedProviderType,
+            ...(providerSessionId ? { providerSessionId } : {}),
+        }, null, 2);
     } else {
         return JSON.stringify({ error: 'Cloud mesh launch_session not yet implemented' });
     }

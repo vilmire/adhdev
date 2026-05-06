@@ -758,7 +758,7 @@ export async function handleChatHistory(h: CommandHelpers, args: any): Promise<C
 }
 
 export async function handleReadChat(h: CommandHelpers, args: any): Promise<CommandResult> {
-    const provider = h.getProvider(args?.agentType);
+    const provider = h.getProvider(args?.agentType || args?.providerType);
     const transport = getTargetTransport(h, provider);
     const historySessionId = getHistorySessionId(h, args);
 
