@@ -455,6 +455,7 @@ export async function meshCheckpoint(
         const result = await commandForNode(ctx, node, 'git_checkpoint', {
             workspace: node.workspace,
             message: args.message,
+            includeUntracked: true,
         });
         return JSON.stringify(result, null, 2);
     } else {

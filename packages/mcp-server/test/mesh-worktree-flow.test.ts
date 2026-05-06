@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshCloneNode, meshLaunchSession, meshRemoveNode, meshStatus, meshListNodes, meshGitStatus, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { meshCheckpoint, meshCloneNode, meshLaunchSession, meshRemoveNode, meshStatus, meshListNodes, meshGitStatus, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 
 test('mesh worktree tools route clone/remove to the source node daemon and refresh MCP mesh context', async () => {
   const transport = new IpcTransport() as IpcTransport & {
@@ -97,6 +97,69 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   assert.ok(!ctx.mesh.nodes.some(node => node.id === 'node-worktree'));
   assert.equal(calls[2].daemonId, 'daemon-source');
   assert.equal(calls[2].command, 'remove_mesh_node');
+});
+
+test('mesh_checkpoint routes untracked checkpoint requests with the exact multiword message', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command === 'git_checkpoint') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          checkpoint: {
+            commit: 'abc123def456',
+            message: 'adhdev: checkpoint checkpoint: rc21 fresh global repo mesh e2e smoke',
+          },
+        },
+      };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const ctx = {
+    mesh: {
+      id: 'mesh-checkpoint',
+      name: 'Checkpoint Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-worktree',
+        workspace: '/repo-parent/.adhdev-worktrees/mesh/checkpoint',
+        repoRoot: '/repo-parent/.adhdev-worktrees/mesh/checkpoint',
+        daemonId: 'daemon-source',
+        userOverrides: {},
+        policy: { canPush: true },
+      }],
+    },
+    transport,
+  };
+
+  const checkpointText = await meshCheckpoint(ctx as any, {
+    node_id: 'node-worktree',
+    message: 'checkpoint: rc21 fresh global repo mesh e2e smoke',
+  });
+
+  assert.equal(JSON.parse(checkpointText).success, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].daemonId, 'daemon-source');
+  assert.equal(calls[0].command, 'git_checkpoint');
+  assert.deepEqual(calls[0].args, {
+    workspace: '/repo-parent/.adhdev-worktrees/mesh/checkpoint',
+    message: 'checkpoint: rc21 fresh global repo mesh e2e smoke',
+    includeUntracked: true,
+  });
 });
 
 test('mesh_clone_node upserts clone returned through payload-wrapped live relay shape before immediate resolver use', async () => {

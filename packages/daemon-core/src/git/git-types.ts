@@ -14,6 +14,7 @@ export type GitFailureReason =
   | 'dirty_index_required'
   | 'conflict'
   | 'invalid_args'
+  | 'nothing_to_commit'
   | 'git_command_failed';
 
 export interface GitRepoIdentity {

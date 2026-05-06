@@ -152,6 +152,7 @@ const FAILURE_REASONS = new Set<GitFailureReason>([
   'dirty_index_required',
   'conflict',
   'invalid_args',
+  'nothing_to_commit',
   'git_command_failed',
 ]);
 
@@ -454,7 +455,10 @@ async function gitCheckpoint(
   } catch (err: any) {
     const output = (err?.stdout || '') + (err?.stderr || '');
     if (/nothing to commit/i.test(output)) {
-      throw new GitCommandError('git_command_failed', 'Nothing to commit');
+      throw new GitCommandError('nothing_to_commit', 'Nothing to commit — working tree is clean.', {
+        stdout: err?.stdout,
+        stderr: err?.stderr,
+      });
     }
     throw err;
   }
