@@ -30,6 +30,7 @@ import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 import { logCommand } from '../logging/command-log.js';
 import type { CommandLogEntry } from '../logging/command-log.js';
+import * as yaml from 'js-yaml';
 import { getRecentLogs, LOG_PATH } from '../logging/logger.js';
 import { createInteractionId, getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
 import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../session-host/runtime-surface.js';
@@ -62,6 +63,28 @@ function resolveUpgradeChannel(args: any): ReleaseChannel {
         || 'stable';
 }
 import * as fs from 'fs';
+
+type MeshCoordinatorConfigFormat = 'claude_mcp_json' | 'hermes_config_yaml';
+
+function loadYamlModule(): { load: (input: string) => any; dump: (input: any, options?: Record<string, any>) => string } {
+    return yaml as { load: (input: string) => any; dump: (input: any, options?: Record<string, any>) => string };
+}
+
+function getMcpServersKey(format: MeshCoordinatorConfigFormat): 'mcpServers' | 'mcp_servers' {
+    return format === 'hermes_config_yaml' ? 'mcp_servers' : 'mcpServers';
+}
+
+function parseMeshCoordinatorMcpConfig(text: string, format: MeshCoordinatorConfigFormat): Record<string, any> {
+    if (!text.trim()) return {};
+    if (format === 'claude_mcp_json') return JSON.parse(text);
+    const parsed = loadYamlModule().load(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+}
+
+function serializeMeshCoordinatorMcpConfig(config: Record<string, any>, format: MeshCoordinatorConfigFormat): string {
+    if (format === 'claude_mcp_json') return JSON.stringify(config, null, 2);
+    return loadYamlModule().dump(config, { noRefs: true, lineWidth: 120 });
+}
 
 // ─── Types ───
 
@@ -1231,7 +1254,8 @@ export class DaemonCommandRouter {
                         };
                     }
 
-                    if (coordinatorSetup.configFormat !== 'claude_mcp_json') {
+                    const configFormat = coordinatorSetup.configFormat as MeshCoordinatorConfigFormat;
+                    if (configFormat !== 'claude_mcp_json' && configFormat !== 'hermes_config_yaml') {
                         return {
                             success: false,
                             code: 'mesh_coordinator_unsupported',
@@ -1261,18 +1285,27 @@ export class DaemonCommandRouter {
                         };
                     }
 
-                    // 1. Write provider-declared MCP config to workspace for CLIs that auto-import it.
-                    const { existsSync, readFileSync, writeFileSync, copyFileSync } = await import('fs');
+                    // 1. Write provider-declared MCP config for CLIs that auto-import it.
+                    const { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync } = await import('fs');
+                    const { dirname } = await import('path');
                     const mcpConfigPath = coordinatorSetup.configPath;
+                    mkdirSync(dirname(mcpConfigPath), { recursive: true });
 
                     // Backup existing MCP config if present.
                     const hadExistingMcpConfig = existsSync(mcpConfigPath);
-                    let existingMcpConfig: any = {};
+                    let existingMcpConfig: Record<string, any> = {};
                     if (hadExistingMcpConfig) {
                         try {
-                            existingMcpConfig = JSON.parse(readFileSync(mcpConfigPath, 'utf-8'));
+                            existingMcpConfig = parseMeshCoordinatorMcpConfig(readFileSync(mcpConfigPath, 'utf-8'), configFormat);
                             copyFileSync(mcpConfigPath, mcpConfigPath + '.backup');
-                        } catch { /* empty */ }
+                        } catch (error: any) {
+                            LOG.error('MeshCoordinator', `Failed to parse existing MCP config ${mcpConfigPath}: ${error?.message || error}`);
+                            return {
+                                success: false,
+                                code: 'mesh_coordinator_config_parse_failed',
+                                error: `Failed to parse existing MCP config at ${mcpConfigPath}`,
+                            };
+                        }
                     }
 
                     // Merge ADHDev mesh server into existing config.
@@ -1288,31 +1321,39 @@ export class DaemonCommandRouter {
                             ADHDEV_MCP_TRANSPORT: 'ipc',
                         };
                     }
+                    const mcpServersKey = getMcpServersKey(configFormat);
+                    const existingServers = existingMcpConfig[mcpServersKey];
                     const mcpConfig = {
                         ...existingMcpConfig,
-                        mcpServers: {
-                            ...(existingMcpConfig.mcpServers || {}),
+                        [mcpServersKey]: {
+                            ...(existingServers && typeof existingServers === 'object' && !Array.isArray(existingServers) ? existingServers : {}),
                             [coordinatorSetup.serverName]: mcpServerEntry,
                         },
                     };
-                    writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2), 'utf-8');
+                    writeFileSync(mcpConfigPath, serializeMeshCoordinatorMcpConfig(mcpConfig, configFormat), 'utf-8');
                     LOG.info('MeshCoordinator', `Wrote ${mcpConfigPath} with ${coordinatorSetup.serverName} server`);
 
                     const cliArgs: string[] = [];
+                    const launchEnv: Record<string, string> = {};
                     if (systemPrompt) {
-                        cliArgs.push('--append-system-prompt', systemPrompt);
+                        if (configFormat === 'hermes_config_yaml') {
+                            launchEnv.HERMES_EPHEMERAL_SYSTEM_PROMPT = systemPrompt;
+                        } else {
+                            cliArgs.push('--append-system-prompt', systemPrompt);
+                        }
                     }
                     if (cliType === 'claude-cli') {
                         cliArgs.push('--mcp-config', coordinatorSetup.configPath);
                     }
 
-                    // 3. Launch CLI session via existing cliManager
-                    // Pass coordinator system prompt via --append-system-prompt so the
-                    // CLI inherits its default behavior AND knows it is a mesh coordinator.
+                    // 3. Launch CLI session via existing cliManager.
+                    // Provider-specific prompt injection remains fail-closed: Claude gets
+                    // explicit CLI args, while Hermes reads HERMES_EPHEMERAL_SYSTEM_PROMPT.
                     const launchResult: any = await this.deps.cliManager.handleCliCommand('launch_cli', {
                         cliType,
                         dir: workspace,
                         cliArgs: cliArgs.length > 0 ? cliArgs : undefined,
+                        env: Object.keys(launchEnv).length > 0 ? launchEnv : undefined,
                         settings: {
                             meshCoordinatorFor: meshId
                         }

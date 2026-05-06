@@ -1,6 +1,7 @@
 import { existsSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join, resolve } from 'node:path'
+import * as os from 'node:os'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { ProviderModule, MeshCoordinatorMcpConfigFormat } from '../providers/contracts.js'
 
 export interface MeshCoordinatorMcpServerLaunch {
@@ -80,7 +81,7 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
     return {
       kind: 'auto_import',
       serverName,
-      configPath: join(workspace, path),
+      configPath: resolveMcpConfigPath(path, workspace),
       configFormat: mcpConfig.format,
       mcpServer,
     }
@@ -116,6 +117,14 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
 
 function renderMeshCoordinatorTemplate(template: string, values: Record<string, string>): string {
   return template.replace(/\{\{\s*(meshId|workspace|serverName|adhdevMcpCommand)\s*\}\}/g, (_, key: string) => values[key] || '')
+}
+
+function resolveMcpConfigPath(configPath: string, workspace: string): string {
+  const trimmed = configPath.trim()
+  if (trimmed === '~') return os.homedir()
+  if (trimmed.startsWith('~/')) return join(os.homedir(), trimmed.slice(2))
+  if (isAbsolute(trimmed)) return trimmed
+  return join(workspace, trimmed)
 }
 
 function resolveAdhdevMcpServerLaunch(options: {

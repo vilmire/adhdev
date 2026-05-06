@@ -132,6 +132,12 @@ type CliAdapterWithExtraArgs = CliAdapter & {
     extraArgs?: string[];
 };
 
+type CliStartOptions = {
+    resumeSessionId?: string;
+    settingsOverride?: Record<string, any>;
+    extraEnv?: Record<string, string>;
+};
+
 function isUuid(value: string): boolean {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
@@ -365,6 +371,7 @@ export class DaemonCliManager {
         runtimeId: string,
         providerSessionId?: string,
         attachExisting = false,
+        extraEnv?: Record<string, string>,
     ): CliAdapter {
  // cliType normalize (Resolve alias)
         const normalizedType = this.providerLoader.resolveAlias(cliType);
@@ -382,7 +389,7 @@ export class DaemonCliManager {
                 providerSessionId,
                 attachExisting,
             );
-            return new ProviderCliAdapter(resolvedProvider as CliProviderModule, workingDir, cliArgs, transportFactory);
+            return new ProviderCliAdapter(resolvedProvider as CliProviderModule, workingDir, cliArgs, extraEnv || {}, transportFactory);
         }
 
         throw new Error(`No CLI provider found for '${cliType}'. Create a provider.js in providers/cli/${cliType}/`);
@@ -425,6 +432,7 @@ export class DaemonCliManager {
         options?: {
             providerSessionId?: string;
             launchMode?: CliLaunchMode;
+            extraEnv?: Record<string, string>;
             onProviderSessionResolved?: (info: {
                 instanceId: string;
                 providerType: string;
@@ -480,7 +488,7 @@ export class DaemonCliManager {
         workingDir: string,
         cliArgs?: string[],
         initialModel?: string,
-        options?: { resumeSessionId?: string, settingsOverride?: Record<string, any> },
+        options?: CliStartOptions,
     ): Promise<{ runtimeSessionId: string; providerSessionId?: string }> {
         const trimmed = (workingDir || '').trim();
         if (!trimmed) throw new Error('working directory required');
@@ -629,6 +637,7 @@ export class DaemonCliManager {
                 {
                     providerSessionId: sessionBinding.providerSessionId,
                     launchMode: sessionBinding.launchMode,
+                    extraEnv: options?.extraEnv,
                     onProviderSessionResolved: ({ providerSessionId, providerName, providerType, workspace }) => {
                         this.persistRecentActivity({
                             kind: 'cli',
@@ -651,6 +660,7 @@ export class DaemonCliManager {
                 key,
                 sessionBinding.providerSessionId,
                 false,
+                options?.extraEnv,
             );
             try {
                 await adapter.spawn();
@@ -904,7 +914,7 @@ export class DaemonCliManager {
                     dir,
                     args?.cliArgs,
                     args?.initialModel,
-                    { resumeSessionId: args?.resumeSessionId, settingsOverride: args?.settings },
+                    { resumeSessionId: args?.resumeSessionId, settingsOverride: args?.settings, extraEnv: args?.env },
                 );
 
                 return {

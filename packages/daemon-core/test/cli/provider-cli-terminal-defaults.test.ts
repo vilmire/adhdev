@@ -46,6 +46,27 @@ describe('CLI PTY default terminal sizing', () => {
     expect(plan.ptyOptions.env?.TERMINAL_CWD).toBe(workingDir)
   })
 
+  it('merges launch-specific environment without mutating provider-wide spawn env', () => {
+    const plan = resolveCliSpawnPlan({
+      provider: {
+        spawn: {
+          command: '/bin/echo',
+          args: [],
+          env: { PROVIDER_LEVEL: 'kept', OVERRIDE_ME: 'provider' },
+        },
+      } as any,
+      runtimeSettings: {},
+      workingDir: '/tmp/adhdev-cli-env',
+      extraArgs: [],
+      extraEnv: { HERMES_EPHEMERAL_SYSTEM_PROMPT: 'repo mesh prompt', OVERRIDE_ME: 'launch' },
+    })
+
+    expect(plan.ptyOptions.env?.PROVIDER_LEVEL).toBe('kept')
+    expect(plan.ptyOptions.env?.OVERRIDE_ME).toBe('launch')
+    expect(plan.ptyOptions.env?.HERMES_EPHEMERAL_SYSTEM_PROMPT).toBe('repo mesh prompt')
+    expect(plan.ptyOptions.env?.TERMINAL_CWD).toBe('/tmp/adhdev-cli-env')
+  })
+
   it('normalizes invalid or fractional session-host dimensions back to safe shared defaults', () => {
     expect(resolveSessionHostCols(undefined)).toBe(DEFAULT_SESSION_HOST_COLS)
     expect(resolveSessionHostCols(0)).toBe(DEFAULT_SESSION_HOST_COLS)

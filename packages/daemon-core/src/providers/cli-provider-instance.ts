@@ -214,6 +214,7 @@ export class CliProviderInstance implements ProviderInstance {
         options?: {
             providerSessionId?: string;
             launchMode?: 'new' | 'resume' | 'manual';
+            extraEnv?: Record<string, string>;
             onProviderSessionResolved?: (info: {
                 instanceId: string;
                 providerType: string;
@@ -230,7 +231,7 @@ export class CliProviderInstance implements ProviderInstance {
         this.providerSessionId = options?.providerSessionId;
         this.launchMode = options?.launchMode || 'new';
         this.onProviderSessionResolved = options?.onProviderSessionResolved;
-        this.adapter = new ProviderCliAdapter(provider as CliProviderModule, workingDir, cliArgs, transportFactory);
+        this.adapter = new ProviderCliAdapter(provider as CliProviderModule, workingDir, cliArgs, options?.extraEnv || {}, transportFactory);
         this.monitor = new StatusMonitor();
         this.historyWriter = new ChatHistoryWriter();
     }

@@ -310,6 +310,73 @@ describe('resolveMeshCoordinatorSetup', () => {
     }
   })
 
+  it('writes Hermes MCP YAML config and launches Hermes with an ephemeral coordinator prompt', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-hermes-coordinator-'))
+    const configPath = join(workspace, 'hermes-config.yaml')
+    const mcpEntry = join(workspace, 'mcp-server.js')
+    writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
+    writeFileSync(configPath, 'model:\n  provider: openrouter\nmcp_servers:\n  existing:\n    command: existing-server\n', 'utf-8')
+    const previousMcpEntry = process.env.ADHDEV_MCP_SERVER_PATH
+    process.env.ADHDEV_MCP_SERVER_PATH = mcpEntry
+
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'hermes-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'auto_import',
+          format: 'hermes_config_yaml',
+          path: configPath,
+          serverName: 'adhdev-mesh',
+        },
+      },
+    }
+    const cliManager = {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'hermes-session-1' })),
+    }
+    const router = createAutoImportRouter(provider, cliManager)
+    const inlineMesh = {
+      id: 'mesh_hermes',
+      name: 'Hermes Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [{ id: 'node-1', workspace, policy: {} }],
+      policy: {},
+      coordinator: {},
+    }
+
+    try {
+      const result = await router.execute('launch_mesh_coordinator', {
+        meshId: 'mesh_hermes',
+        cliType: 'hermes-cli',
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({ success: true, sessionId: 'hermes-session-1', mcpConfigWritten: true })
+      const configText = readFileSync(configPath, 'utf-8')
+      expect(configText).toContain('mcp_servers:')
+      expect(configText).toContain('existing:')
+      expect(configText).toContain('adhdev-mesh:')
+      expect(configText).toContain('ADHDEV_MCP_TRANSPORT: ipc')
+      expect(configText).toContain('ADHDEV_INLINE_MESH:')
+      expect(configText).toContain('mesh_hermes')
+      expect(configText).not.toContain('mcpServers')
+
+      expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.objectContaining({
+        cliType: 'hermes-cli',
+        dir: workspace,
+        cliArgs: undefined,
+        env: expect.objectContaining({
+          HERMES_EPHEMERAL_SYSTEM_PROMPT: expect.stringContaining('Repo Mesh'),
+        }),
+      }))
+    } finally {
+      if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
+      else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
   it('fails closed instead of launching with a fallback prompt when coordinator prompt generation fails', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-coordinator-fail-closed-'))
     const mcpEntry = join(workspace, 'mcp-server.js')

@@ -422,6 +422,7 @@ export class ProviderCliAdapter implements CliAdapter {
         provider: CliProviderModule,
         workingDir: string,
         private extraArgs: string[] = [],
+        private extraEnv: Record<string, string> = {},
         transportFactory: PtyTransportFactory = new NodePtyTransportFactory(),
     ) {
         this.provider = provider;
@@ -523,6 +524,7 @@ export class ProviderCliAdapter implements CliAdapter {
             runtimeSettings: this.runtimeSettings,
             workingDir: this.workingDir,
             extraArgs: this.extraArgs,
+            extraEnv: this.extraEnv,
         });
 
         LOG.info('CLI', `[${this.cliType}] Spawning in ${this.workingDir}`);
