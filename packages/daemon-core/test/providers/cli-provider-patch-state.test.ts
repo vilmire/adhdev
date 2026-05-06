@@ -142,6 +142,40 @@ describe('CliProviderInstance provider patch state', () => {
     expect(state.activeChat.messages[59]).toEqual(expect.objectContaining({ content: 'runtime-60' }))
   })
 
+  it('does not place timed auto-approval overlays after an untimed parsed transcript', () => {
+    const instance = new CliProviderInstance({
+      type: 'claude-cli',
+      name: 'Claude CLI',
+      category: 'cli',
+      spawn: { command: 'claude', args: [] },
+    } as any, '/tmp/project') as any
+
+    instance.adapter = {
+      getStatus: () => ({ status: 'generating', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        title: 'project',
+        status: 'generating',
+        messages: [
+          { role: 'user', content: 'ship the release' },
+          { role: 'assistant', kind: 'terminal', content: '$ npm test\nPASS' },
+          { role: 'assistant', content: 'Release validation is still running.' },
+        ],
+      }),
+      getRuntimeMetadata: () => null,
+    }
+    instance.historyWriter = { appendNewMessages: () => {} }
+
+    instance.appendRuntimeSystemMessage('Auto-approved: Yes\nnpm test', 'auto_approval:1000:yes', 1000)
+    instance.appendRuntimeSystemMessage('Auto-approved: Yes\nnpm publish', 'auto_approval:2000:yes', 2000)
+
+    const state = instance.getState() as any
+    expect(state.activeChat.messages).toHaveLength(5)
+    expect(state.activeChat.messages.slice(-2)).toEqual([
+      expect.objectContaining({ role: 'assistant', kind: 'terminal', content: '$ npm test\nPASS' }),
+      expect.objectContaining({ role: 'assistant', kind: 'standard', content: 'Release validation is still running.' }),
+    ])
+  })
+
   it('keeps all pending events until flush instead of silently slicing to 50', () => {
     const instance = new CliProviderInstance({
       type: 'claude-cli',

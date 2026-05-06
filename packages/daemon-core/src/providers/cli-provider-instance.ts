@@ -985,12 +985,33 @@ export class CliProviderInstance implements ProviderInstance {
     private mergeConversationMessages(parsedMessages: any[]): ChatMessage[] {
         if (this.runtimeMessages.length === 0) return normalizeChatMessages(parsedMessages);
 
-        return normalizeChatMessages([...parsedMessages, ...this.runtimeMessages.map((entry) => entry.message)]
-            .map((message, index) => ({ message, index }))
+        type MergeEntry = { message: ChatMessage; index: number; source: 'parsed' | 'runtime' };
+        const parsedEntries: MergeEntry[] = parsedMessages.map((message, index) => ({
+            message,
+            index,
+            source: 'parsed',
+        }));
+        const runtimeEntries: MergeEntry[] = this.runtimeMessages.map((entry, index) => ({
+            message: entry.message,
+            index: parsedMessages.length + index,
+            source: 'runtime',
+        }));
+        const getTime = (message: ChatMessage): number => {
+            const value = typeof message.receivedAt === 'number'
+                ? message.receivedAt
+                : typeof message.timestamp === 'number'
+                    ? message.timestamp
+                    : 0;
+            return Number.isFinite(value) && value > 0 ? value : 0;
+        };
+
+        return normalizeChatMessages([...parsedEntries, ...runtimeEntries]
             .sort((a, b) => {
-                const aTime = a.message.receivedAt || a.message.timestamp || 0;
-                const bTime = b.message.receivedAt || b.message.timestamp || 0;
-                if (aTime !== bTime) return aTime - bTime;
+                const aTime = getTime(a.message);
+                const bTime = getTime(b.message);
+                if (aTime && bTime && aTime !== bTime) return aTime - bTime;
+                if (aTime && !bTime && a.source === 'runtime' && b.source === 'parsed') return -1;
+                if (!aTime && bTime && a.source === 'parsed' && b.source === 'runtime') return 1;
                 return a.index - b.index;
             })
             .map((entry) => entry.message));
