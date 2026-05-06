@@ -69,7 +69,17 @@ async function findNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<Lo
 }
 
 function unwrapCommandPayload(value: any): any {
-    return value?.result?.result ?? value?.result ?? value;
+    let current = value;
+    const seen = new Set<any>();
+    for (let depth = 0; depth < 8; depth += 1) {
+        if (!current || typeof current !== 'object' || seen.has(current)) break;
+        seen.add(current);
+
+        const nested = current.result ?? current.payload;
+        if (!nested || typeof nested !== 'object') break;
+        current = nested;
+    }
+    return current;
 }
 
 function findNestedPayload(value: any, predicate: (payload: any) => boolean): any {
@@ -374,11 +384,20 @@ export async function meshSendTask(
     }
 
     if (isLocalTransport(ctx.transport)) {
-        await commandForNode(ctx, node, 'send_chat', {
+        const result = await commandForNode(ctx, node, 'send_chat', {
             message: args.message,
             sessionId: args.session_id,
             targetSessionId: args.session_id,
         });
+        const payload = unwrapCommandPayload(result);
+        if (payload?.success === false) {
+            return JSON.stringify({
+                success: false,
+                nodeId: args.node_id,
+                sessionId: args.session_id,
+                error: payload.error || 'send_chat failed',
+            });
+        }
         return JSON.stringify({ success: true, nodeId: args.node_id, sessionId: args.session_id });
     } else {
         return JSON.stringify({ error: 'Cloud mesh send_task not yet implemented' });
@@ -399,11 +418,13 @@ export async function meshReadChat(
         const result = await commandForNode(ctx, node, 'read_chat', {
             sessionId: args.session_id,
             targetSessionId: args.session_id,
+            workspace: node.workspace,
             ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
             ...(providerSessionId ? { providerSessionId } : {}),
             tailLimit: args.tail ?? 10,
         });
-        return JSON.stringify(result, null, 2);
+        const payload = unwrapCommandPayload(result);
+        return JSON.stringify(payload, null, 2);
     } else {
         return JSON.stringify({ error: 'Cloud mesh read_chat not yet implemented' });
     }

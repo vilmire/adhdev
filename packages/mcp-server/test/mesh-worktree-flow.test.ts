@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshRemoveNode, meshStatus, meshListNodes, meshGitStatus, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 
 test('mesh worktree tools route clone/remove to the source node daemon and refresh MCP mesh context', async () => {
   const transport = new IpcTransport() as IpcTransport & {
@@ -273,6 +273,68 @@ test('mesh_launch_session omitted type uses providerPriority detection and fails
   assert.deepEqual(calls.map(call => call.command), ['detect_provider']);
 });
 
+test('mesh_send_task surfaces relay-wrapped send_chat failures instead of reporting success', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command === 'send_chat') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          result: {
+            requestId: 'msg-send-chat',
+            success: false,
+            source: 'mesh',
+            error: 'CLI adapter not found: runtime-missing',
+          },
+        },
+      };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const ctx = {
+    mesh: {
+      id: 'mesh-send-failure',
+      name: 'Send Failure',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-provider',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-source',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+  };
+
+  const text = await meshSendTask(ctx as any, {
+    node_id: 'node-provider',
+    session_id: 'runtime-missing',
+    message: 'hello',
+  });
+  const payload = JSON.parse(text);
+
+  assert.equal(calls[0].command, 'send_chat');
+  assert.equal(calls[0].args.targetSessionId, 'runtime-missing');
+  assert.equal(payload.success, false);
+  assert.equal(payload.error, 'CLI adapter not found: runtime-missing');
+});
+
 test('mesh_read_chat forwards cached provider metadata after launch', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -288,7 +350,20 @@ test('mesh_read_chat forwards cached provider metadata after launch', async () =
       return { success: true, id: 'runtime-cached', providerSessionId: 'provider-cached' };
     }
     if (command === 'read_chat') {
-      return { success: true, messages: [], providerSessionId: args.providerSessionId };
+      return {
+        success: true,
+        result: {
+          success: true,
+          result: {
+            requestId: 'msg-read-chat',
+            success: true,
+            source: 'mesh',
+            status: 'idle',
+            messages: [{ role: 'assistant', content: 'delegated result' }],
+            providerSessionId: args.providerSessionId,
+          },
+        },
+      };
     }
     throw new Error(`unexpected mesh command: ${command}`);
   };
@@ -315,12 +390,18 @@ test('mesh_read_chat forwards cached provider metadata after launch', async () =
   };
 
   await meshLaunchSession(ctx as any, { node_id: 'node-provider', type: 'hermes-cli' });
-  await meshReadChat(ctx as any, { node_id: 'node-provider', session_id: 'runtime-cached', tail: 5 });
+  const readText = await meshReadChat(ctx as any, { node_id: 'node-provider', session_id: 'runtime-cached', tail: 5 });
+  const readPayload = JSON.parse(readText);
   assert.equal(calls[1].command, 'read_chat');
   assert.equal(calls[1].args.agentType, 'hermes-cli');
   assert.equal(calls[1].args.providerType, 'hermes-cli');
   assert.equal(calls[1].args.providerSessionId, 'provider-cached');
+  assert.equal(calls[1].args.workspace, '/repo');
   assert.equal(calls[1].args.tailLimit, 5);
+  assert.equal(readPayload.success, true);
+  assert.equal(readPayload.status, 'idle');
+  assert.deepEqual(readPayload.messages, [{ role: 'assistant', content: 'delegated result' }]);
+  assert.equal(readPayload.providerSessionId, 'provider-cached');
 
   await meshReadChat(ctx as any, { node_id: 'node-provider', session_id: 'runtime-cached', provider_session_id: 'provider-explicit-read' });
   assert.equal(calls[2].args.providerSessionId, 'provider-explicit-read');
