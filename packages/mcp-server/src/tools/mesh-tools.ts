@@ -31,6 +31,37 @@ function findNode(mesh: LocalMeshEntry, nodeId: string): LocalMeshNodeEntry {
     return node;
 }
 
+/**
+ * Like findNode, but if the node is missing from ctx.mesh, fetches a fresh
+ * mesh snapshot from the daemon (via get_mesh / inlineMeshCache) and retries.
+ * This handles the case where clone_mesh_node added a node to the daemon's
+ * in-memory cache after this MCP process loaded its initial mesh snapshot.
+ */
+async function findNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry> {
+    const hit = ctx.mesh.nodes.find(n => n.id === nodeId);
+    if (hit) return hit;
+
+    // Attempt to refresh from daemon cache
+    if (ctx.transport instanceof IpcTransport) {
+        try {
+            const result = await (ctx.transport as IpcTransport).command('get_mesh', { meshId: ctx.mesh.id }) as any;
+            if (result?.success && Array.isArray(result.mesh?.nodes)) {
+                // Merge any nodes present in the daemon's current snapshot but missing here
+                for (const n of result.mesh.nodes) {
+                    if (n?.id && !ctx.mesh.nodes.find((existing: LocalMeshNodeEntry) => existing.id === n.id)) {
+                        (ctx.mesh.nodes as LocalMeshNodeEntry[]).push(n as LocalMeshNodeEntry);
+                    }
+                }
+                ctx.mesh.updatedAt = result.mesh.updatedAt ?? ctx.mesh.updatedAt;
+            }
+        } catch { /* refresh is best-effort; fall through to original error */ }
+    }
+
+    const refreshed = ctx.mesh.nodes.find(n => n.id === nodeId);
+    if (!refreshed) throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
+    return refreshed;
+}
+
 function findNodeByWorkspace(mesh: LocalMeshEntry, workspace: string): LocalMeshNodeEntry {
     const node = mesh.nodes.find(n => n.workspace === workspace);
     if (!node) throw new Error(`Workspace '${workspace}' is not a member of mesh '${mesh.name}'`);
@@ -261,7 +292,7 @@ export async function meshSendTask(
     ctx: MeshContext,
     args: { node_id: string; session_id: string; message: string },
 ): Promise<string> {
-    const node = findNode(ctx.mesh, args.node_id);
+    const node = await findNodeWithRefresh(ctx, args.node_id);
 
     // Policy check: read-only node cannot receive tasks
     if (node.policy?.readOnly) {
@@ -284,7 +315,7 @@ export async function meshReadChat(
     ctx: MeshContext,
     args: { node_id: string; session_id: string; tail?: number },
 ): Promise<string> {
-    const node = findNode(ctx.mesh, args.node_id); // membership check
+    const node = await findNodeWithRefresh(ctx, args.node_id); // membership check
 
     if (isLocalTransport(ctx.transport)) {
         const result = await commandForNode(ctx, node, 'read_chat', {
@@ -302,7 +333,7 @@ export async function meshLaunchSession(
     ctx: MeshContext,
     args: { node_id: string; type: string },
 ): Promise<string> {
-    const node = findNode(ctx.mesh, args.node_id);
+    const node = await findNodeWithRefresh(ctx, args.node_id);
 
     if (isLocalTransport(ctx.transport)) {
         const result = await commandForNode(ctx, node, 'launch_cli', {
@@ -323,7 +354,7 @@ export async function meshGitStatus(
     ctx: MeshContext,
     args: { node_id: string },
 ): Promise<string> {
-    const node = findNode(ctx.mesh, args.node_id);
+    const node = await findNodeWithRefresh(ctx, args.node_id);
 
     if (!isLocalTransport(ctx.transport) && node.daemonId) {
         const result = await (ctx.transport as CloudTransport).gitStatus(node.daemonId, node.workspace, true);
@@ -355,7 +386,7 @@ export async function meshCheckpoint(
     ctx: MeshContext,
     args: { node_id: string; message: string },
 ): Promise<string> {
-    const node = findNode(ctx.mesh, args.node_id);
+    const node = await findNodeWithRefresh(ctx, args.node_id);
 
     // Policy checks
     if (node.policy?.readOnly) {
@@ -377,7 +408,7 @@ export async function meshApprove(
     ctx: MeshContext,
     args: { node_id: string; session_id: string; action: string },
 ): Promise<string> {
-    const node = findNode(ctx.mesh, args.node_id); // membership check
+    const node = await findNodeWithRefresh(ctx, args.node_id); // membership check
 
     if (isLocalTransport(ctx.transport)) {
         const result = await commandForNode(ctx, node, 'resolve_action', {
@@ -395,7 +426,7 @@ export async function meshCloneNode(
     ctx: MeshContext,
     args: { source_node_id: string; branch: string; base_branch?: string },
 ): Promise<string> {
-    const sourceNode = findNode(ctx.mesh, args.source_node_id);
+    const sourceNode = await findNodeWithRefresh(ctx, args.source_node_id);
 
     if (isLocalTransport(ctx.transport)) {
         const result = await commandForNode(ctx, sourceNode, 'clone_mesh_node', {
@@ -421,7 +452,7 @@ export async function meshRemoveNode(
     ctx: MeshContext,
     args: { node_id: string },
 ): Promise<string> {
-    const node = findNode(ctx.mesh, args.node_id);
+    const node = await findNodeWithRefresh(ctx, args.node_id);
 
     if (isLocalTransport(ctx.transport)) {
         const result = await commandForNode(ctx, node, 'remove_mesh_node', {

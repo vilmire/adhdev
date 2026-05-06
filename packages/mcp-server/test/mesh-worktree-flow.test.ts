@@ -84,6 +84,83 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   assert.equal(calls[2].command, 'remove_mesh_node');
 });
 
+test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache when node was added by clone in another MCP process', async () => {
+  // Simulates the live bug: clone_mesh_node ran in a different MCP server process,
+  // so the new node exists in the daemon's inlineMeshCache but not in this process's ctx.mesh.
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+
+  const newNode = {
+    id: 'node-worktree-new',
+    workspace: '/repo/.adhdev-worktrees/mesh/test-branch',
+    repoRoot: '/repo/.adhdev-worktrees/mesh/test-branch',
+    daemonId: 'daemon-source',
+    userOverrides: {},
+    policy: {},
+    isLocalWorktree: true,
+    worktreeBranch: 'test/branch',
+    clonedFromNodeId: 'node-source',
+  };
+
+  const meshCommands: string[] = [];
+  // Daemon has the new node in its cache (get_mesh returns it)
+  transport.command = async (cmd, args = {}) => {
+    if (cmd === 'get_mesh') {
+      return {
+        success: true,
+        mesh: {
+          id: 'mesh-stale',
+          name: 'Stale Mesh',
+          nodes: [
+            { id: 'node-source', workspace: '/repo', repoRoot: '/repo', daemonId: 'daemon-source', userOverrides: {}, policy: {} },
+            newNode,
+          ],
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    }
+    throw new Error(`unexpected direct command: ${cmd}`);
+  };
+  transport.meshCommand = async (daemonId, command) => {
+    meshCommands.push(command);
+    if (command === 'git_status') return { status: 'clean' };
+    if (command === 'git_diff_summary') return { diffSummary: '' };
+    if (command === 'remove_mesh_node') return { success: true, removed: true };
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  // ctx.mesh does NOT have node-worktree-new (stale snapshot from process start)
+  const mesh = {
+    id: 'mesh-stale',
+    name: 'Stale Mesh',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [
+      { id: 'node-source', workspace: '/repo', repoRoot: '/repo', daemonId: 'daemon-source', userOverrides: {}, policy: {} },
+    ],
+  };
+  const ctx = { mesh, transport };
+
+  // mesh_git_status on the new node should refresh and succeed
+  const { meshGitStatus, meshRemoveNode } = await import('../src/tools/mesh-tools.js');
+  const gitStatusText = await meshGitStatus(ctx, { node_id: 'node-worktree-new' });
+  const gitStatus = JSON.parse(gitStatusText);
+  assert.equal(gitStatus.nodeId, 'node-worktree-new', 'git_status should succeed after mesh refresh');
+  // ctx.mesh should now include the new node
+  assert.ok(ctx.mesh.nodes.some(n => n.id === 'node-worktree-new'), 'ctx.mesh refreshed with new node');
+
+  // mesh_remove_node on the new node should also succeed
+  const removeText = await meshRemoveNode(ctx, { node_id: 'node-worktree-new' });
+  assert.equal(JSON.parse(removeText).success, true, 'remove_node should succeed after mesh refresh');
+  assert.ok(!ctx.mesh.nodes.some(n => n.id === 'node-worktree-new'), 'node removed from ctx.mesh after remove');
+  assert.ok(meshCommands.includes('remove_mesh_node'), 'remove_mesh_node relayed to daemon');
+});
+
 test('mesh tool registry documents the 10 exposed mesh tools including worktree clone/remove', () => {
   assert.equal(ALL_MESH_TOOLS.length, 10);
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_clone_node'));
