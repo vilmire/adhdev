@@ -1112,6 +1112,25 @@ export class DaemonCommandRouter {
                         };
                     }
 
+                    // Build the coordinator prompt before mutating workspace config or launching.
+                    // Prompt generation failures are configuration/data-shape errors; fail closed so
+                    // broken mesh state is visible instead of silently launching with weaker rules.
+                    let systemPrompt = '';
+                    try {
+                        systemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType });
+                    } catch (error: any) {
+                        const message = error?.message || String(error);
+                        LOG.error('MeshCoordinator', `Failed to build coordinator prompt: ${message}`);
+                        return {
+                            success: false,
+                            code: 'mesh_coordinator_prompt_failed',
+                            error: `Failed to build Repo Mesh coordinator prompt: ${message}`,
+                            meshId,
+                            cliType,
+                            workspace,
+                        };
+                    }
+
                     // 1. Write provider-declared MCP config to workspace for CLIs that auto-import it.
                     const { existsSync, readFileSync, writeFileSync, copyFileSync } = await import('fs');
                     const mcpConfigPath = coordinatorSetup.configPath;
@@ -1148,15 +1167,6 @@ export class DaemonCommandRouter {
                     };
                     writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2), 'utf-8');
                     LOG.info('MeshCoordinator', `Wrote ${mcpConfigPath} with ${coordinatorSetup.serverName} server`);
-
-                    // 2. Build coordinator system prompt
-                    let systemPrompt = '';
-                    try {
-                        systemPrompt = buildCoordinatorSystemPrompt({ mesh, coordinatorCliType: cliType });
-                    } catch (error: any) {
-                        LOG.warn('MeshCoordinator', `Falling back to compact coordinator prompt: ${error?.message || error}`);
-                        systemPrompt = `You are a Repo Mesh Coordinator for "${mesh.name}". Use the adhdev-mesh MCP tools (mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat, mesh_launch_session, etc.) to orchestrate work across ${mesh.nodes.length} node(s). If the user names a provider, pass the matching type to mesh_launch_session: Hermes=hermes-cli, Claude Code=claude-cli, Codex=codex-cli, Gemini=gemini-cli.`;
-                    }
 
                     const cliArgs: string[] = [];
                     if (systemPrompt) {
