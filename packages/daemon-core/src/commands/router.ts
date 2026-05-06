@@ -62,6 +62,54 @@ function resolveUpgradeChannel(args: any): ReleaseChannel {
         || normalizeReleaseChannel(loadConfig().updateChannel)
         || 'stable';
 }
+
+function readProviderPriorityFromPolicy(policy: unknown): string[] {
+    const record = policy && typeof policy === 'object' && !Array.isArray(policy)
+        ? policy as Record<string, unknown>
+        : {};
+    const raw = record.providerPriority;
+    if (!Array.isArray(raw)) return [];
+    const seen = new Set<string>();
+    return raw
+        .map(type => typeof type === 'string' ? type.trim() : '')
+        .filter(Boolean)
+        .filter(type => {
+            if (seen.has(type)) return false;
+            seen.add(type);
+            return true;
+        });
+}
+
+async function resolveProviderTypeFromPriority(args: {
+    nodeId: string;
+    providerPriority: string[];
+    providerLoader: ProviderLoader;
+    onStatusChange?: () => void;
+}): Promise<{ providerType?: string; error?: string }> {
+    if (!args.providerPriority.length) {
+        return { error: `Node '${args.nodeId}' has no providerPriority policy; pass cliType explicitly or configure node.policy.providerPriority` };
+    }
+
+    const failed: string[] = [];
+    for (const requestedType of args.providerPriority) {
+        const normalizedType = args.providerLoader.resolveAlias(requestedType);
+        if (!args.providerLoader.isMachineProviderEnabled(normalizedType)) {
+            failed.push(`${requestedType}: disabled`);
+            continue;
+        }
+        const detected = await detectCLI(normalizedType, args.providerLoader, { includeVersion: false });
+        args.providerLoader.setCliDetectionResults([{
+            id: normalizedType,
+            installed: !!detected,
+            path: detected?.path,
+        }], false);
+        args.onStatusChange?.();
+        if (detected) return { providerType: normalizedType };
+        failed.push(`${requestedType}: not detected`);
+    }
+
+    return { error: `No usable provider detected for node '${args.nodeId}' from providerPriority: ${failed.join('; ')}` };
+}
 import * as fs from 'fs';
 
 type MeshCoordinatorConfigFormat = 'claude_mcp_json' | 'hermes_config_yaml';
@@ -1194,7 +1242,7 @@ export class DaemonCommandRouter {
             // ─── Mesh Coordinator Launch ───
             case 'launch_mesh_coordinator': {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
-                const cliType = typeof args?.cliType === 'string' ? args.cliType.trim() : 'claude-cli';
+                let cliType = typeof args?.cliType === 'string' ? args.cliType.trim() : '';
                 if (!meshId) return { success: false, error: 'meshId required' };
 
                 try {
@@ -1232,6 +1280,25 @@ export class DaemonCommandRouter {
                     }
                     const workspace = typeof coordinatorNode.workspace === 'string' ? coordinatorNode.workspace.trim() : '';
                     if (!workspace) return { success: false, error: 'Coordinator node workspace required', meshId, cliType };
+                    if (!cliType) {
+                        const resolved = await resolveProviderTypeFromPriority({
+                            nodeId: String(coordinatorNode.id || coordinatorNode.nodeId || preferredCoordinatorNodeId || 'coordinator'),
+                            providerPriority: readProviderPriorityFromPolicy(coordinatorNode.policy),
+                            providerLoader: this.deps.providerLoader,
+                            onStatusChange: this.deps.onStatusChange,
+                        });
+                        if (!resolved.providerType) {
+                            return {
+                                success: false,
+                                code: 'mesh_coordinator_provider_priority_unusable',
+                                error: resolved.error || 'No usable provider found from node providerPriority',
+                                meshId,
+                                cliType,
+                                workspace,
+                            };
+                        }
+                        cliType = resolved.providerType;
+                    }
                     const providerMeta = this.deps.providerLoader.resolve?.(cliType) || this.deps.providerLoader.getMeta(cliType);
                     const coordinatorSetup = resolveMeshCoordinatorSetup({
                         provider: providerMeta,

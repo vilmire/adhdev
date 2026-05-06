@@ -57,6 +57,7 @@ function createReporter(overrides: {
   p2pConnected?: boolean
 } = {}) {
   const sendStatus = vi.fn()
+  const sendStatusEvent = vi.fn()
   const sendMessage = vi.fn()
 
   const reporter = new DaemonStatusReporter({
@@ -73,7 +74,7 @@ function createReporter(overrides: {
       connectedPeerCount: 1,
       screenshotActive: false,
       sendStatus,
-      sendStatusEvent: vi.fn(),
+      sendStatusEvent,
     },
     providerLoader: {
       resolve: () => null,
@@ -89,7 +90,7 @@ function createReporter(overrides: {
     getScreenshotUsage: () => null,
   })
 
-  return { reporter, sendStatus, sendMessage }
+  return { reporter, sendStatus, sendStatusEvent, sendMessage }
 }
 
 describe('DaemonStatusReporter P2P publish behavior', () => {
@@ -140,5 +141,34 @@ describe('DaemonStatusReporter P2P publish behavior', () => {
       providerType: 'hermes-cli',
       status: 'idle',
     })
+  })
+
+  it('preserves provider transcript metadata on canonical status events for completion refreshes', () => {
+    const { reporter, sendStatusEvent, sendMessage } = createReporter({
+      serverConnected: true,
+      p2pConnected: true,
+    })
+
+    reporter.emitStatusEvent({
+      event: 'agent:generating_completed',
+      timestamp: 456,
+      providerType: 'hermes-cli',
+      targetSessionId: 'runtime-session-1',
+      providerSessionId: 'provider-session-1',
+      workspaceName: '/repo',
+      duration: 9,
+    })
+
+    const expectedPayload = expect.objectContaining({
+      event: 'agent:generating_completed',
+      timestamp: 456,
+      providerType: 'hermes-cli',
+      targetSessionId: 'runtime-session-1',
+      providerSessionId: 'provider-session-1',
+      workspaceName: '/repo',
+      duration: 9,
+    })
+    expect(sendStatusEvent).toHaveBeenCalledWith(expectedPayload)
+    expect(sendMessage).toHaveBeenCalledWith('status_event', expectedPayload)
   })
 })

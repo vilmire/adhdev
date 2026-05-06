@@ -174,6 +174,8 @@ export interface InstanceContext {
     onPtyData?: (data: string) => void;
  /** Provider configvalue (resolved) */
     settings: Record<string, any>;
+ /** Immediate provider-originated status/event emission. Used to avoid waiting for status polling. */
+    emitProviderEvent?: (event: ProviderEvent) => void;
 }
 
 export interface ProviderInstance {

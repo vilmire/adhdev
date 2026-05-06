@@ -641,6 +641,8 @@ export interface DaemonStatusEventPayload {
     timestamp: number;
     targetSessionId?: string;
     providerType?: string;
+    providerSessionId?: string;
+    workspaceName?: string;
     duration?: number;
     elapsedSec?: number;
     modalMessage?: string;
@@ -662,6 +664,8 @@ export interface DashboardStatusEventPayload {
     daemonId?: string;
     providerType?: string;
     targetSessionId?: string;
+    providerSessionId?: string;
+    workspaceName?: string;
     duration?: number;
     elapsedSec?: number;
     modalMessage?: string;

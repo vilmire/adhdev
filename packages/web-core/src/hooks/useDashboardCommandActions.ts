@@ -14,7 +14,7 @@ import { isP2PLaunchTimeout } from './useDashboardPendingLaunch'
 interface DashboardLaunchTracker {
   machineId: string
   kind: 'ide' | 'cli' | 'acp'
-  providerType: string
+  providerType?: string
   workspacePath?: string | null
   resumeSessionId?: string | null
   startedAt: number
@@ -194,10 +194,9 @@ export function useDashboardCommandActions({
     // Standalone/local-only
     const startedAt = Date.now()
     try {
-      const raw: any = await sendDaemonCommand(machineId, 'launch_mesh_coordinator', {
-        meshId: meshId.trim(),
-        cliType: cliType.trim() || 'claude-cli',
-      })
+      const launchPayload: Record<string, unknown> = { meshId: meshId.trim() }
+      if (cliType.trim()) launchPayload.cliType = cliType.trim()
+      const raw: any = await sendDaemonCommand(machineId, 'launch_mesh_coordinator', launchPayload)
       const result = raw?.result ?? raw
       if (result?.success === false || raw?.success === false) {
         const code = String(result?.code || raw?.code || '')
@@ -216,7 +215,7 @@ export function useDashboardCommandActions({
         trackPendingLaunch({
           machineId,
           kind: 'cli',
-          providerType: cliType,
+          providerType: result?.cliType || cliType.trim() || undefined,
           workspacePath: result?.workspace || null,
           startedAt,
         })
@@ -227,7 +226,7 @@ export function useDashboardCommandActions({
         trackPendingLaunch({
           machineId,
           kind: 'cli',
-          providerType: cliType,
+          providerType: cliType.trim() || undefined,
           startedAt,
         })
         return { ok: true }

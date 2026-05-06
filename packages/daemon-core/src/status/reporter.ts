@@ -151,6 +151,12 @@ export class DaemonStatusReporter {
         if (providerType) {
             payload.providerType = providerType;
         }
+        if (typeof event.providerSessionId === 'string' && event.providerSessionId.trim()) {
+            payload.providerSessionId = event.providerSessionId.trim();
+        }
+        if (typeof event.workspaceName === 'string' && event.workspaceName.trim()) {
+            payload.workspaceName = event.workspaceName.trim();
+        }
         if (typeof event.duration === 'number' && Number.isFinite(event.duration)) {
             payload.duration = event.duration;
         }

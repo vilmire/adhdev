@@ -28,6 +28,11 @@ interface MeshNode {
     id: string
     workspace: string
     repoRoot?: string
+    providerPriority?: string[]
+    policy?: {
+        providerPriority?: string[]
+        readOnly?: boolean
+    }
 }
 
 interface MeshEntry {
@@ -45,6 +50,44 @@ interface AvailableCliAgent {
     id: string
     name: string
     meshCoordinator?: MeshCoordinatorMetadata
+}
+
+const DEFAULT_REPO_MESH_PROVIDER_PRIORITY = 'hermes-cli, claude-cli, codex-cli, gemini-cli'
+const SUPPORTED_REPO_MESH_PROVIDER_TYPES = new Set([
+    'hermes-cli',
+    'claude-cli',
+    'codex-cli',
+    'gemini-cli',
+])
+
+function parseProviderPriorityInput(value: string): string[] {
+    const seen = new Set<string>()
+    return value
+        .split(',')
+        .map(type => type.trim())
+        .filter(type => type && SUPPORTED_REPO_MESH_PROVIDER_TYPES.has(type))
+        .filter(type => {
+            if (seen.has(type)) return false
+            seen.add(type)
+            return true
+        })
+}
+
+function readNodeProviderPriority(node: MeshNode): string[] {
+    const raw = Array.isArray(node.providerPriority)
+        ? node.providerPriority
+        : Array.isArray(node.policy?.providerPriority)
+            ? node.policy.providerPriority
+            : []
+    const seen = new Set<string>()
+    return raw
+        .map(type => typeof type === 'string' ? type.trim() : '')
+        .filter(type => type && SUPPORTED_REPO_MESH_PROVIDER_TYPES.has(type))
+        .filter(type => {
+            if (seen.has(type)) return false
+            seen.add(type)
+            return true
+        })
 }
 
 export function RepoMeshHermesMcpConfig({
@@ -114,6 +157,7 @@ export default function RepoMesh() {
     // Add node form
     const [showAddNode, setShowAddNode] = useState(false)
     const [nodeWorkspace, setNodeWorkspace] = useState('')
+    const [nodeProviderPriority, setNodeProviderPriority] = useState(DEFAULT_REPO_MESH_PROVIDER_PRIORITY)
 
     const selectedMesh = meshes.find(m => m.id === selectedMeshId) || null
 
@@ -177,10 +221,12 @@ export default function RepoMesh() {
             const res: any = await sendCommand(daemonId, 'add_mesh_node', {
                 meshId: selectedMeshId,
                 workspace: nodeWorkspace.trim(),
+                providerPriority: parseProviderPriorityInput(nodeProviderPriority),
             })
             if (res?.success) {
                 setShowAddNode(false)
                 setNodeWorkspace('')
+                setNodeProviderPriority(DEFAULT_REPO_MESH_PROVIDER_PRIORITY)
                 await loadMeshes()
             } else {
                 setError(res?.error || 'Add node failed')
@@ -311,8 +357,18 @@ export default function RepoMesh() {
                                 value={nodeWorkspace}
                                 onChange={e => setNodeWorkspace(e.target.value)}
                                 placeholder="/Users/dev/projects/myapp"
-                                onKeyDown={e => { if (e.key === 'Enter') handleAddNode() }}
                                 autoFocus
+                            />
+                        </FormField>
+                        <FormField
+                            label="Provider Priority"
+                            hint="Order used when launching without an explicit provider. Empty means fail closed unless a provider is selected explicitly."
+                        >
+                            <Input
+                                value={nodeProviderPriority}
+                                onChange={e => setNodeProviderPriority(e.target.value)}
+                                placeholder="hermes-cli, claude-cli, codex-cli, gemini-cli"
+                                onKeyDown={e => { if (e.key === 'Enter') handleAddNode() }}
                             />
                         </FormField>
                         <div className="flex gap-2 mt-3">
@@ -326,11 +382,16 @@ export default function RepoMesh() {
                     <EmptyState icon={<IconFolder />} title="No nodes" description="Add a workspace to this mesh." />
                 ) : (
                     <div className="flex flex-col gap-2">
-                        {selectedMesh.nodes.map(node => (
+                        {selectedMesh.nodes.map(node => {
+                            const providerPriority = readNodeProviderPriority(node)
+                            return (
                             <div key={node.id} className="flex items-center justify-between p-3 rounded-lg border border-border-subtle bg-bg-primary">
                                 <div>
                                     <div className="text-sm font-medium">{node.workspace.split('/').pop()}</div>
                                     <div className="text-[10px] text-text-muted font-mono">{node.workspace}</div>
+                                    <div className="text-[10px] text-text-muted mt-1 font-mono">
+                                        providerPriority: {providerPriority.length ? providerPriority.join(' → ') : 'not configured'}
+                                    </div>
                                 </div>
                                 <button
                                     className="text-text-muted hover:text-red-400 transition-colors bg-transparent border-none cursor-pointer"
@@ -339,7 +400,8 @@ export default function RepoMesh() {
                                     <IconX size={14} />
                                 </button>
                             </div>
-                        ))}
+                            )
+                        })}
                     </div>
                 )}
             </Section>

@@ -738,7 +738,29 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     private pushEvent(event: ProviderEvent): void {
-        this.events.push(event);
+        const enrichedEvent: ProviderEvent = {
+            ...event,
+            instanceId: typeof event.instanceId === 'string' && event.instanceId.trim()
+                ? event.instanceId
+                : this.instanceId,
+            targetSessionId: typeof event.targetSessionId === 'string' && event.targetSessionId.trim()
+                ? event.targetSessionId
+                : this.instanceId,
+            providerType: typeof event.providerType === 'string' && event.providerType.trim()
+                ? event.providerType
+                : this.type,
+            workspaceName: typeof event.workspaceName === 'string' && event.workspaceName.trim()
+                ? event.workspaceName
+                : this.workingDir,
+            providerSessionId: typeof event.providerSessionId === 'string' && event.providerSessionId.trim()
+                ? event.providerSessionId
+                : this.providerSessionId,
+        };
+        if (this.context?.emitProviderEvent) {
+            this.context.emitProviderEvent(enrichedEvent);
+            return;
+        }
+        this.events.push(enrichedEvent);
     }
 
     private flushEvents(): ProviderEvent[] {

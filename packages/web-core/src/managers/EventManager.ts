@@ -22,7 +22,10 @@ import {
 
 // ─── Types ────────────────────────────────────────
 
-export type StatusEventPayload = DashboardStatusEventPayload
+export type StatusEventPayload = DashboardStatusEventPayload & {
+    providerSessionId?: string
+    workspaceName?: string
+}
 
 export interface ToastAction {
     label: string
@@ -41,6 +44,7 @@ export interface ToastConfig {
 }
 
 export type ToastCallback = (toast: ToastConfig) => void
+export type StatusEventCallback = (payload: StatusEventPayload) => void
 export type DesktopNotificationCallback = (title: string, body: string, tag: string) => void
 export type ResolveActionFn = (routeId: string, action: string, payload: Record<string, any>) => void
 export type ViewRequestRespondFn = (orgId: string, requestId: string, action: 'approve' | 'reject') => Promise<any>
@@ -58,6 +62,7 @@ class EventManager {
 
     // Registered callbacks
     private toastCallbacks: ToastCallback[] = []
+    private statusEventCallbacks: StatusEventCallback[] = []
     private resolveActionFn: ResolveActionFn | null = null
     private viewRequestRespondFn: ViewRequestRespondFn | null = null
 
@@ -71,6 +76,14 @@ class EventManager {
         this.toastCallbacks.push(callback)
         return () => {
             this.toastCallbacks = this.toastCallbacks.filter(cb => cb !== callback)
+        }
+    }
+
+    /** Register a canonical status event callback. Returns unsubscribe function. */
+    onStatusEvent(callback: StatusEventCallback): () => void {
+        this.statusEventCallbacks.push(callback)
+        return () => {
+            this.statusEventCallbacks = this.statusEventCallbacks.filter(cb => cb !== callback)
         }
     }
 
@@ -194,6 +207,10 @@ class EventManager {
         const dedupDetail = payload.requestId || payload.targetName || payload.requesterName || payload.modalMessage || String(eventTimestamp)
         const dedupKey = `${dedupTarget}:${payload.event}:${dedupDetail}`
         if (this.isDuplicate(dedupKey)) return
+
+        for (const callback of this.statusEventCallbacks) {
+            callback(payload)
+        }
 
         const owningEntry = payload.targetSessionId
             ? this.findOwningSession(payload.targetSessionId)

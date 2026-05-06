@@ -47,7 +47,10 @@ export class ProviderInstanceManager {
             this.instances.get(id)!.dispose();
         }
         this.instances.set(id, instance);
-        await instance.init(context);
+        await instance.init({
+            ...context,
+            emitProviderEvent: (event) => this.emitProviderEvent(instance.type, id, event),
+        });
     }
 
  /**
@@ -235,6 +238,22 @@ export class ProviderInstanceManager {
  */
     onEvent(listener: (event: ProviderEvent & { providerType: string }) => void): void {
         this.eventListeners.push(listener);
+    }
+
+    emitProviderEvent(providerType: string, instanceId: string, event: ProviderEvent): void {
+        const payload = {
+            ...event,
+            providerType,
+            instanceId: typeof event.instanceId === 'string' && event.instanceId.trim()
+                ? event.instanceId
+                : instanceId,
+            targetSessionId: typeof event.targetSessionId === 'string' && event.targetSessionId.trim()
+                ? event.targetSessionId
+                : instanceId,
+        } as ProviderEvent & { providerType: string };
+        for (const listener of this.eventListeners) {
+            listener(payload);
+        }
     }
 
     private emitPendingEvents(

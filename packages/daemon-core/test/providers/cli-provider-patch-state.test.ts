@@ -202,4 +202,35 @@ describe('CliProviderInstance provider patch state', () => {
     const second = instance.getState() as any
     expect(second.pendingEvents).toEqual([])
   })
+
+  it('emits CLI lifecycle events through the instance callback immediately without waiting for state collection', () => {
+    const emitted = vi.fn()
+    const instance = new CliProviderInstance({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      spawn: { command: 'hermes', args: [] },
+    } as any, '/tmp/project') as any
+
+    instance.context = {
+      settings: {},
+      emitProviderEvent: emitted,
+    }
+    instance.providerSessionId = 'provider-session-1'
+
+    instance.pushEvent({ event: 'agent:generating_completed', timestamp: 123, duration: 7 })
+
+    expect(emitted).toHaveBeenCalledOnce()
+    expect(emitted).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'agent:generating_completed',
+      timestamp: 123,
+      duration: 7,
+      instanceId: expect.any(String),
+      targetSessionId: expect.any(String),
+      providerType: 'hermes-cli',
+      workspaceName: '/tmp/project',
+      providerSessionId: 'provider-session-1',
+    }))
+    expect((instance.getState() as any).pendingEvents).toEqual([])
+  })
 })
