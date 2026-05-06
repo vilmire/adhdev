@@ -269,6 +269,7 @@ test('mesh_launch_session omitted type uses providerPriority detection and fails
   node.policy.providerPriority = ['codex-cli'];
   const failedText = await meshLaunchSession(ctx as any, { node_id: 'node-provider' });
   const failed = JSON.parse(failedText);
+  assert.equal(failed.success, false);
   assert.match(failed.error, /No usable provider detected/);
   assert.deepEqual(calls.map(call => call.command), ['detect_provider']);
 });

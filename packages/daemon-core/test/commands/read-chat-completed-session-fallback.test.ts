@@ -5,10 +5,14 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../src/config/chat-history.js', () => ({
+  ChatHistoryWriter: class {
+    appendNewMessages() {}
+  },
   readProviderChatHistory: mocks.readProviderChatHistory,
 }))
 
 import { handleReadChat } from '../../src/commands/chat-commands.js'
+import { DaemonCommandHandler } from '../../src/commands/handler.js'
 
 function createHelpers() {
   return {
@@ -56,6 +60,51 @@ describe('read_chat completed runtime provider fallback', () => {
     expect(result.providerSessionId).toBe('provider-history-1')
     expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('hermes-cli', expect.objectContaining({
       historySessionId: 'provider-history-1',
+      limit: 20,
+    }))
+  })
+
+  it('keeps explicit agentType/providerSessionId available when target runtime session is already gone', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({
+      messages: [
+        { role: 'assistant', content: 'saved completed transcript', receivedAt: 1 },
+      ],
+      hasMore: false,
+      providerSessionId: 'provider-session-42',
+    })
+
+    const handler = new DaemonCommandHandler({
+      cdpManagers: new Map(),
+      ideType: '',
+      adapters: new Map(),
+      providerLoader: {
+        resolve: vi.fn((type: string) => type === 'hermes-cli'
+          ? { type: 'hermes-cli', category: 'cli', historyBehavior: { transcriptAuthority: 'provider' } }
+          : undefined),
+      } as any,
+      instanceManager: {
+        getInstance: () => null,
+        listInstanceIds: () => [],
+      } as any,
+      sessionRegistry: {
+        get: () => undefined,
+      } as any,
+    })
+
+    const result = await handler.handle('read_chat', {
+      targetSessionId: 'runtime-session-gone',
+      agentType: 'hermes-cli',
+      providerSessionId: 'provider-session-42',
+      tailLimit: 20,
+    })
+
+    expect(result).toMatchObject({
+      success: true,
+      providerSessionId: 'provider-session-42',
+      totalMessages: 1,
+    })
+    expect(mocks.readProviderChatHistory).toHaveBeenCalledWith('hermes-cli', expect.objectContaining({
+      historySessionId: 'provider-session-42',
       limit: 20,
     }))
   })

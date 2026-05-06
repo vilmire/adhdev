@@ -13,5 +13,5 @@ test('mesh_launch_session schema maps providers, keeps type optional, and has no
 });
 
 test('mesh_read_chat schema exposes provider_session_id for completed session history', () => {
-  assert.ok(MESH_READ_CHAT_TOOL.inputSchema.properties.provider_session_id);
+  assert.equal(MESH_READ_CHAT_TOOL.inputSchema.properties.provider_session_id.type, 'string');
 });

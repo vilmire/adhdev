@@ -303,14 +303,15 @@ export class DaemonCommandHandler implements CommandHelpers {
         const sessionLookupFailed = !!targetSessionId && !session;
 
         const managerKey = this.extractIdeType(args, sessionLookupFailed);
-        let providerType: string | undefined;
+        let providerType: string | undefined = args?.agentType || args?.providerType;
 
         if (!sessionLookupFailed) {
             providerType =
                 session?.providerType
-                || args?.agentType
-                || args?.providerType
+                || providerType
                 || this.inferProviderType(managerKey);
+        } else if (!providerType) {
+            providerType = this.inferProviderType(managerKey);
         }
 
         return { session, managerKey, providerType, sessionLookupFailed };
@@ -407,7 +408,15 @@ export class DaemonCommandHandler implements CommandHelpers {
             'invoke_provider_script',
         ]);
 
-        if (this._currentRoute.sessionLookupFailed && sessionScopedCommands.has(cmd)) {
+        const allowsInactiveReadChatFallback =
+            cmd === 'read_chat'
+            && !!this._currentRoute.providerType
+            && (
+                (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim().length > 0)
+                || (typeof args?.historySessionId === 'string' && args.historySessionId.trim().length > 0)
+            );
+
+        if (this._currentRoute.sessionLookupFailed && sessionScopedCommands.has(cmd) && !allowsInactiveReadChatFallback) {
             const result = {
                 success: false,
                 error: `Live session not found for targetSessionId: ${String(args?.targetSessionId || '').trim() || 'unknown'}`,

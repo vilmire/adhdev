@@ -444,7 +444,7 @@ export async function meshLaunchSession(
                 ? rawProviderPriority.map((type: unknown) => typeof type === 'string' ? type.trim() : '').filter(Boolean)
                 : [];
             if (!providerPriority.length) {
-                return JSON.stringify({ error: `Node '${args.node_id}' has no providerPriority policy; pass type explicitly or configure node.policy.providerPriority` });
+                return JSON.stringify({ success: false, error: `Node '${args.node_id}' has no providerPriority policy; pass type explicitly or configure node.policy.providerPriority` });
             }
 
             const failed: string[] = [];
@@ -458,7 +458,7 @@ export async function meshLaunchSession(
                 failed.push(`${providerType}: ${detectedPayload?.error || 'not detected'}`);
             }
             if (!resolvedProviderType) {
-                return JSON.stringify({ error: `No usable provider detected for node '${args.node_id}' from providerPriority: ${failed.join('; ')}` });
+                return JSON.stringify({ success: false, error: `No usable provider detected for node '${args.node_id}' from providerPriority: ${failed.join('; ')}` });
             }
         }
 

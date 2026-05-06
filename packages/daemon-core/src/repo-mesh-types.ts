@@ -69,6 +69,7 @@ export interface RepoMeshNodePolicy {
     readOnly?: boolean;
     canPush?: boolean;
     maxConcurrentSessions?: number;
+    /** Ordered provider preference used when mesh_launch_session omits an explicit type. */
     providerPriority?: string[];
 }
 
