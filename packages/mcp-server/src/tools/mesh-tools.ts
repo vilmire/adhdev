@@ -494,6 +494,7 @@ export async function meshLaunchSession(
             dir: node.workspace,
             settings: {
                 meshNodeFor: ctx.mesh.id,
+                meshNodeId: args.node_id,
                 launchedByCoordinator: true
             }
         });

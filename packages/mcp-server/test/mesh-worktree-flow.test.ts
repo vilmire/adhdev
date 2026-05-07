@@ -93,6 +93,7 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   assert.equal(calls[1].command, 'launch_cli');
   assert.deepEqual(calls[1].args.settings, {
     meshNodeFor: 'mesh-worktree-flow',
+    meshNodeId: 'node-worktree',
     launchedByCoordinator: true,
   });
 
