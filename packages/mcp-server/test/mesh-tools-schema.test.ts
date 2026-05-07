@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL } from '../src/tools/mesh-tools.js';
+import { ALL_MESH_TOOLS, MESH_CLEANUP_SESSIONS_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_REMOVE_NODE_TOOL } from '../src/tools/mesh-tools.js';
 
 test('mesh_launch_session schema maps providers, keeps type optional, and has no claude default', () => {
   const description = `${MESH_LAUNCH_SESSION_TOOL.description} ${MESH_LAUNCH_SESSION_TOOL.inputSchema.properties.type.description}`;
@@ -16,8 +16,13 @@ test('mesh_read_chat schema exposes provider_session_id for completed session hi
   assert.equal(MESH_READ_CHAT_TOOL.inputSchema.properties.provider_session_id.type, 'string');
 });
 
-test('mesh_read_debug schema exposes browser-free daemon debug collection controls', () => {
-  assert.equal(MESH_READ_DEBUG_TOOL.inputSchema.properties.provider_session_id.type, 'string');
-  assert.equal(MESH_READ_DEBUG_TOOL.inputSchema.properties.delivery.enum.includes('daemon_file'), true);
-  assert.match(MESH_READ_DEBUG_TOOL.description, /without opening the browser UI/);
+test('mesh session cleanup tools expose explicit manual cleanup and remove-node policy override', () => {
+  assert.equal(MESH_CLEANUP_SESSIONS_TOOL.name, 'mesh_cleanup_sessions');
+  assert.equal(MESH_CLEANUP_SESSIONS_TOOL.inputSchema.properties.mode.enum.includes('delete_stopped'), true);
+  assert.equal(MESH_CLEANUP_SESSIONS_TOOL.inputSchema.properties.mode.enum.includes('stop_and_delete'), true);
+  assert.equal(MESH_CLEANUP_SESSIONS_TOOL.inputSchema.properties.dry_run.type, 'boolean');
+  assert.equal(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_cleanup_sessions'), true);
+
+  assert.equal(MESH_REMOVE_NODE_TOOL.inputSchema.properties.session_cleanup_mode.enum.includes('preserve'), true);
+  assert.match(MESH_REMOVE_NODE_TOOL.description, /sessionCleanupOnNodeRemove/);
 });

@@ -41,6 +41,7 @@ interface MeshEntry {
     repoIdentity: string
     repoRemoteUrl?: string
     defaultBranch?: string
+    policy?: Record<string, any>
     nodes: MeshNode[]
     createdAt: string
     updatedAt: string
@@ -53,19 +54,45 @@ interface AvailableCliAgent {
 }
 
 const DEFAULT_REPO_MESH_PROVIDER_PRIORITY = 'hermes-cli, claude-cli, codex-cli, gemini-cli'
-const SUPPORTED_REPO_MESH_PROVIDER_TYPES = new Set([
+type RepoMeshSessionCleanupMode = 'preserve' | 'stop' | 'delete_stopped' | 'stop_and_delete'
+
+const SESSION_CLEANUP_MODE_OPTIONS: Array<{ value: RepoMeshSessionCleanupMode; label: string; description: string }> = [
+    { value: 'preserve', label: 'Preserve history and runtimes', description: 'Keep completed chat history and leave live runtimes alone.' },
+    { value: 'stop', label: 'Stop live runtimes only', description: 'Release running session processes, but keep chat records/transcripts.' },
+    { value: 'delete_stopped', label: 'Delete stopped sessions only', description: 'Clean completed/stopped chat clutter without killing live runtimes.' },
+    { value: 'stop_and_delete', label: 'Stop and delete sessions', description: 'Stop matching runtimes, then remove their session records/transcripts.' },
+]
+
+const DEFAULT_MESH_POLICY: Record<string, any> = {
+    requirePreTaskCheckpoint: false,
+    requirePostTaskCheckpoint: true,
+    requireApprovalForPush: true,
+    requireApprovalForDestructiveGit: true,
+    dirtyWorkspaceBehavior: 'warn',
+    maxParallelTasks: 2,
+    sessionCleanupOnNodeRemove: 'preserve',
+}
+
+const CANONICAL_REPO_MESH_PROVIDER_TYPES = new Set([
     'hermes-cli',
     'claude-cli',
     'codex-cli',
     'gemini-cli',
 ])
 
+function normalizeProviderPriorityToken(type: string): string | undefined {
+    const trimmed = type.trim()
+    if (!trimmed) return undefined
+    const lower = trimmed.toLowerCase()
+    return CANONICAL_REPO_MESH_PROVIDER_TYPES.has(lower) ? lower : trimmed
+}
+
 function parseProviderPriorityInput(value: string): string[] {
     const seen = new Set<string>()
     return value
-        .split(',')
-        .map(type => type.trim())
-        .filter(type => type && SUPPORTED_REPO_MESH_PROVIDER_TYPES.has(type))
+        .split(/[\s,]+/)
+        .map(normalizeProviderPriorityToken)
+        .filter((type): type is string => !!type)
         .filter(type => {
             if (seen.has(type)) return false
             seen.add(type)
@@ -82,12 +109,16 @@ function readNodeProviderPriority(node: MeshNode): string[] {
     const seen = new Set<string>()
     return raw
         .map(type => typeof type === 'string' ? type.trim() : '')
-        .filter(type => type && SUPPORTED_REPO_MESH_PROVIDER_TYPES.has(type))
+        .filter(Boolean)
         .filter(type => {
             if (seen.has(type)) return false
             seen.add(type)
             return true
         })
+}
+
+function readMeshPolicy(mesh: MeshEntry | null): Record<string, any> {
+    return { ...DEFAULT_MESH_POLICY, ...(mesh?.policy || {}) }
 }
 
 export function RepoMeshHermesMcpConfig({
@@ -148,6 +179,9 @@ export default function RepoMesh() {
     const [selectedMeshId, setSelectedMeshId] = useState<string | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
+    const [savingPolicy, setSavingPolicy] = useState(false)
+    const [savingNodePolicyId, setSavingNodePolicyId] = useState<string | null>(null)
+    const [nodeProviderPriorityDrafts, setNodeProviderPriorityDrafts] = useState<Record<string, string>>({})
 
     // Create form
     const [showCreate, setShowCreate] = useState(false)
@@ -160,6 +194,12 @@ export default function RepoMesh() {
     const [nodeProviderPriority, setNodeProviderPriority] = useState(DEFAULT_REPO_MESH_PROVIDER_PRIORITY)
 
     const selectedMesh = meshes.find(m => m.id === selectedMeshId) || null
+
+    useEffect(() => {
+        setNodeProviderPriorityDrafts(Object.fromEntries(
+            (selectedMesh?.nodes || []).map(node => [node.id, readNodeProviderPriority(node).join(', ')]),
+        ))
+    }, [selectedMesh])
 
     // ─── Data loading ───
     const loadMeshes = useCallback(async () => {
@@ -238,11 +278,66 @@ export default function RepoMesh() {
 
     async function handleRemoveNode(nodeId: string) {
         if (!daemonId || !selectedMeshId) return
+        const policy = readMeshPolicy(selectedMesh)
+        const cleanupLabel = SESSION_CLEANUP_MODE_OPTIONS.find(option => option.value === policy.sessionCleanupOnNodeRemove)?.label || 'Preserve history and runtimes'
+        if (!confirm(`Remove this node?\n\nNode removal cleanup policy: ${cleanupLabel}`)) return
         try {
             await sendCommand(daemonId, 'remove_mesh_node', { meshId: selectedMeshId, nodeId })
             await loadMeshes()
         } catch (e: any) {
             setError(e?.message || 'Remove node failed')
+        }
+    }
+
+    async function handleUpdatePolicy(patch: Record<string, unknown>) {
+        if (!daemonId || !selectedMeshId) return
+        const nextPolicy = { ...readMeshPolicy(selectedMesh), ...patch }
+        try {
+            setSavingPolicy(true)
+            setError(null)
+            const res: any = await sendCommand(daemonId, 'update_mesh', {
+                meshId: selectedMeshId,
+                policy: nextPolicy,
+            })
+            if (res?.success === false) {
+                setError(res.error || 'Policy update failed')
+                return
+            }
+            await loadMeshes()
+        } catch (e: any) {
+            setError(e?.message || 'Policy update failed')
+        } finally {
+            setSavingPolicy(false)
+        }
+    }
+
+    async function handleUpdateNodeProviderPriority(node: MeshNode) {
+        if (!daemonId || !selectedMeshId) return
+        const providerPriority = parseProviderPriorityInput(nodeProviderPriorityDrafts[node.id] || '')
+        const nextPolicy = { ...(node.policy || {}) }
+        delete (nextPolicy as any).provider_priority
+        if (providerPriority.length) {
+            nextPolicy.providerPriority = providerPriority
+        } else {
+            delete nextPolicy.providerPriority
+        }
+        try {
+            setSavingNodePolicyId(node.id)
+            setError(null)
+            const res: any = await sendCommand(daemonId, 'update_mesh_node', {
+                meshId: selectedMeshId,
+                nodeId: node.id,
+                policy: nextPolicy,
+            })
+            if (res?.success === false) {
+                setError(res.error || 'Node policy update failed')
+                return
+            }
+            await loadMeshes()
+        } catch (e: any) {
+            setError(e?.message || 'Node policy update failed')
+        } finally {
+            setSavingNodePolicyId(null)
         }
     }
 
@@ -324,6 +419,7 @@ export default function RepoMesh() {
     }
 
     // ─── Render: mesh detail ───
+    const policy = readMeshPolicy(selectedMesh)
     return (
         <AppPage
             icon={<IconMesh />}
@@ -337,6 +433,101 @@ export default function RepoMesh() {
             }
         >
             {error && <AlertBanner variant="error" className="mb-4">{error}</AlertBanner>}
+
+            <Section
+                title="Policy"
+                description="Coordinator safety defaults and node-removal session cleanup behavior for this local mesh."
+            >
+                <div className="grid gap-4 sm:grid-cols-2">
+                    <FormField label="Checkpoint before task">
+                        <select
+                            className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                            value={policy.requirePreTaskCheckpoint ? 'yes' : 'no'}
+                            onChange={e => handleUpdatePolicy({ requirePreTaskCheckpoint: e.target.value === 'yes' })}
+                            disabled={savingPolicy}
+                        >
+                            <option value="no">No</option>
+                            <option value="yes">Yes</option>
+                        </select>
+                    </FormField>
+                    <FormField label="Checkpoint after task">
+                        <select
+                            className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                            value={policy.requirePostTaskCheckpoint ? 'yes' : 'no'}
+                            onChange={e => handleUpdatePolicy({ requirePostTaskCheckpoint: e.target.value === 'yes' })}
+                            disabled={savingPolicy}
+                        >
+                            <option value="yes">Yes</option>
+                            <option value="no">No</option>
+                        </select>
+                    </FormField>
+                    <FormField label="Push approval">
+                        <select
+                            className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                            value={policy.requireApprovalForPush ? 'required' : 'not_required'}
+                            onChange={e => handleUpdatePolicy({ requireApprovalForPush: e.target.value === 'required' })}
+                            disabled={savingPolicy}
+                        >
+                            <option value="required">Require approval before push</option>
+                            <option value="not_required">Do not require approval</option>
+                        </select>
+                    </FormField>
+                    <FormField label="Destructive git approval">
+                        <select
+                            className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                            value={policy.requireApprovalForDestructiveGit ? 'required' : 'not_required'}
+                            onChange={e => handleUpdatePolicy({ requireApprovalForDestructiveGit: e.target.value === 'required' })}
+                            disabled={savingPolicy}
+                        >
+                            <option value="required">Require approval</option>
+                            <option value="not_required">Do not require approval</option>
+                        </select>
+                    </FormField>
+                    <FormField label="Dirty workspace behavior">
+                        <select
+                            className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                            value={policy.dirtyWorkspaceBehavior || 'warn'}
+                            onChange={e => handleUpdatePolicy({ dirtyWorkspaceBehavior: e.target.value })}
+                            disabled={savingPolicy}
+                        >
+                            <option value="warn">Warn and continue</option>
+                            <option value="block">Block task</option>
+                            <option value="checkpoint_then_continue">Checkpoint then continue</option>
+                        </select>
+                    </FormField>
+                    <FormField label="Max parallel tasks">
+                        <select
+                            className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                            value={String(policy.maxParallelTasks ?? 2)}
+                            onChange={e => handleUpdatePolicy({ maxParallelTasks: Number(e.target.value) })}
+                            disabled={savingPolicy}
+                        >
+                            {[1, 2, 3, 4, 5, 6, 7, 8].map(value => <option key={value} value={value}>{value}</option>)}
+                        </select>
+                    </FormField>
+                </div>
+                <div className="mt-4 rounded-xl border border-amber-500/25 bg-amber-500/10 p-4">
+                    <FormField
+                        label="Node removal session cleanup"
+                        hint="Separate transcript cleanup from runtime/process cleanup. Preserve is safest when completed work may need review."
+                    >
+                        <select
+                            className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary"
+                            value={policy.sessionCleanupOnNodeRemove || 'preserve'}
+                            onChange={e => handleUpdatePolicy({ sessionCleanupOnNodeRemove: e.target.value })}
+                            disabled={savingPolicy}
+                        >
+                            {SESSION_CLEANUP_MODE_OPTIONS.map(option => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                        </select>
+                    </FormField>
+                    <div className="mt-2 text-[12px] text-text-muted">
+                        {SESSION_CLEANUP_MODE_OPTIONS.find(option => option.value === policy.sessionCleanupOnNodeRemove)?.description || SESSION_CLEANUP_MODE_OPTIONS[0].description}
+                    </div>
+                </div>
+                {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">Saving policy...</div>}
+            </Section>
 
             {/* Nodes */}
             <Section
@@ -389,8 +580,28 @@ export default function RepoMesh() {
                                 <div>
                                     <div className="text-sm font-medium">{node.workspace.split('/').pop()}</div>
                                     <div className="text-[10px] text-text-muted font-mono">{node.workspace}</div>
-                                    <div className="text-[10px] text-text-muted mt-1 font-mono">
-                                        providerPriority: {providerPriority.length ? providerPriority.join(' → ') : 'not configured'}
+                                    <div className="mt-3 max-w-2xl">
+                                        <FormField
+                                            label="Provider priority"
+                                            hint="Used when launches omit an explicit provider. Empty keeps fail-closed behavior until a provider is selected manually."
+                                        >
+                                            <div className="flex flex-col gap-2 sm:flex-row">
+                                                <Input
+                                                    value={nodeProviderPriorityDrafts[node.id] ?? providerPriority.join(', ')}
+                                                    onChange={e => setNodeProviderPriorityDrafts(prev => ({ ...prev, [node.id]: e.target.value }))}
+                                                    placeholder="hermes-cli, claude-cli, codex-cli, gemini-cli"
+                                                    onKeyDown={e => { if (e.key === 'Enter') void handleUpdateNodeProviderPriority(node) }}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-secondary btn-sm shrink-0"
+                                                    onClick={() => void handleUpdateNodeProviderPriority(node)}
+                                                    disabled={savingNodePolicyId === node.id}
+                                                >
+                                                    {savingNodePolicyId === node.id ? 'Saving...' : 'Save policy'}
+                                                </button>
+                                            </div>
+                                        </FormField>
                                     </div>
                                 </div>
                                 <button

@@ -55,6 +55,8 @@ export type RepoMeshNodeHealth =
 
 // ─── Policy Types ───────────────────────────────
 
+export type RepoMeshSessionCleanupMode = 'preserve' | 'stop' | 'delete_stopped' | 'stop_and_delete';
+
 export interface RepoMeshPolicy {
     requirePreTaskCheckpoint: boolean;
     requirePostTaskCheckpoint: boolean;
@@ -63,6 +65,12 @@ export interface RepoMeshPolicy {
     dirtyWorkspaceBehavior: 'block' | 'warn' | 'checkpoint_then_continue';
     maxParallelTasks: number;
     allowedProviders?: string[];
+    /**
+     * What to do with delegated session-host records for a node when it is removed.
+     * Defaults to 'preserve' so completed work can be reviewed later and live
+     * runtimes are never stopped/deleted unless the mesh owner opts in.
+     */
+    sessionCleanupOnNodeRemove?: RepoMeshSessionCleanupMode;
 }
 
 export interface RepoMeshNodePolicy {
@@ -80,6 +88,7 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     requireApprovalForDestructiveGit: true,
     dirtyWorkspaceBehavior: 'warn',
     maxParallelTasks: 2,
+    sessionCleanupOnNodeRemove: 'preserve',
 };
 
 // ─── Capabilities ───────────────────────────────

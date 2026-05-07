@@ -5,10 +5,10 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 11 tools: mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat,
+ * 12 tools: mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat,
  *           mesh_read_debug,
  *           mesh_launch_session, mesh_git_status, mesh_checkpoint, mesh_approve,
- *           mesh_clone_node, mesh_remove_node
+ *           mesh_clone_node, mesh_remove_node, mesh_cleanup_sessions
  */
 
 import { CloudTransport } from '../transports/cloud.js';
@@ -337,13 +337,41 @@ export const MESH_CLONE_NODE_TOOL = {
 
 export const MESH_REMOVE_NODE_TOOL = {
     name: 'mesh_remove_node',
-    description: 'Remove a node from the mesh. If the node is a worktree, also cleans up the git worktree and directory.',
+    description: 'Remove a node from the mesh. If the node is a worktree, also cleans up the git worktree and directory. Session cleanup is controlled by mesh policy sessionCleanupOnNodeRemove unless session_cleanup_mode overrides it for this call.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             node_id: { type: 'string', description: 'Node ID to remove.' },
+            session_cleanup_mode: {
+                type: 'string',
+                enum: ['preserve', 'stop', 'delete_stopped', 'stop_and_delete'],
+                description: 'Optional override for cleanup of delegated sessions attached to this node. preserve keeps history/processes; stop stops live runtimes only; delete_stopped removes completed transcripts only; stop_and_delete stops live runtimes and deletes records.',
+            },
         },
         required: ['node_id'],
+    },
+};
+
+export const MESH_CLEANUP_SESSIONS_TOOL = {
+    name: 'mesh_cleanup_sessions',
+    description: 'Manually clean up delegated session records for a mesh node without removing the node. Defaults should preserve reviewable history unless the caller chooses a mode explicitly.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Node ID whose delegated sessions should be considered for cleanup.' },
+            mode: {
+                type: 'string',
+                enum: ['preserve', 'stop', 'delete_stopped', 'stop_and_delete'],
+                description: 'preserve = no-op; stop = release process occupancy by stopping live runtimes; delete_stopped = remove completed/stopped records while leaving live runtimes alone; stop_and_delete = stop live runtimes and delete records.',
+            },
+            session_ids: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional explicit session IDs to limit cleanup to. When omitted, sessions are matched by node/workspace metadata.',
+            },
+            dry_run: { type: 'boolean', description: 'Preview matched/stopped/deleted/skipped session IDs without mutating session-host state.' },
+        },
+        required: ['node_id', 'mode'],
     },
 };
 
@@ -359,6 +387,7 @@ export const ALL_MESH_TOOLS = [
     MESH_APPROVE_TOOL,
     MESH_CLONE_NODE_TOOL,
     MESH_REMOVE_NODE_TOOL,
+    MESH_CLEANUP_SESSIONS_TOOL,
 ];
 
 // ─── Tool Implementations ───────────────────────
@@ -688,9 +717,30 @@ export async function meshCloneNode(
     }
 }
 
+export async function meshCleanupSessions(
+    ctx: MeshContext,
+    args: { node_id: string; mode: string; session_ids?: string[]; dry_run?: boolean },
+): Promise<string> {
+    const node = await findNodeWithRefresh(ctx, args.node_id);
+
+    if (isLocalTransport(ctx.transport)) {
+        const result = await commandForNode(ctx, node, 'cleanup_mesh_sessions', {
+            meshId: ctx.mesh.id,
+            nodeId: args.node_id,
+            mode: args.mode,
+            sessionIds: args.session_ids,
+            dryRun: args.dry_run === true,
+            inlineMesh: ctx.mesh,
+        });
+        return JSON.stringify(result, null, 2);
+    } else {
+        return JSON.stringify({ error: 'Cloud mesh cleanup_sessions not yet implemented' });
+    }
+}
+
 export async function meshRemoveNode(
     ctx: MeshContext,
-    args: { node_id: string },
+    args: { node_id: string; session_cleanup_mode?: string },
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
@@ -698,6 +748,7 @@ export async function meshRemoveNode(
         const result = await commandForNode(ctx, node, 'remove_mesh_node', {
             meshId: ctx.mesh.id,
             nodeId: args.node_id,
+            ...(args.session_cleanup_mode ? { sessionCleanupMode: args.session_cleanup_mode } : {}),
             inlineMesh: ctx.mesh,
         });
         if (result?.success && result.removed !== false) {

@@ -21,6 +21,7 @@ export interface SessionHostControlPlane {
     }): Promise<any>;
     listSessions(): Promise<any[]>;
     stopSession(sessionId: string): Promise<any>;
+    deleteSession(sessionId: string, opts?: { force?: boolean }): Promise<any>;
     resumeSession(sessionId: string): Promise<any>;
     restartSession(sessionId: string): Promise<any>;
     sendSignal(sessionId: string, signal: string): Promise<any>;

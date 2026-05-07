@@ -40,6 +40,7 @@ import { handleMeshForwardEvent } from '../mesh/mesh-events.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
+import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
 
 type ReleaseChannel = 'stable' | 'preview';
 const CHANNEL_NPM_TAG: Record<ReleaseChannel, 'latest' | 'next'> = { stable: 'latest', preview: 'next' };
@@ -141,6 +142,7 @@ export interface SessionHostControlPlane {
     getDiagnostics(payload?: { includeSessions?: boolean; limit?: number }): Promise<any>;
     listSessions(): Promise<any[]>;
     stopSession(sessionId: string): Promise<any>;
+    deleteSession(sessionId: string, opts?: { force?: boolean }): Promise<any>;
     resumeSession(sessionId: string): Promise<any>;
     restartSession(sessionId: string): Promise<any>;
     sendSignal(sessionId: string, signal: string): Promise<any>;
@@ -333,6 +335,98 @@ export class DaemonCommandRouter {
         mesh.updatedAt = new Date().toISOString();
         this.inlineMeshCache.set(meshId, mesh);
         return true;
+    }
+
+    private normalizeMeshSessionCleanupMode(value: unknown): RepoMeshSessionCleanupMode {
+        return value === 'stop'
+            || value === 'delete_stopped'
+            || value === 'stop_and_delete'
+            || value === 'preserve'
+            ? value
+            : 'preserve';
+    }
+
+    private sessionMatchesMeshNode(record: any, node: any, nodeId: string, sessionIds?: Set<string>): boolean {
+        const sessionId = typeof record?.sessionId === 'string' ? record.sessionId : '';
+        if (!sessionId) return false;
+        if (sessionIds?.size) return sessionIds.has(sessionId);
+        const workspace = typeof node?.workspace === 'string' ? node.workspace : '';
+        if (workspace && record?.workspace === workspace) return true;
+        if (record?.meta?.meshNodeId === nodeId) return true;
+        return false;
+    }
+
+    private isCompletedHostedSession(record: any): boolean {
+        return record?.lifecycle === 'stopped' || record?.lifecycle === 'failed' || record?.lifecycle === 'interrupted';
+    }
+
+    private async cleanupMeshSessions(args: {
+        meshId: string;
+        nodeId: string;
+        node: any;
+        mode: RepoMeshSessionCleanupMode;
+        sessionIds?: string[];
+        dryRun?: boolean;
+    }): Promise<{ success: boolean; [key: string]: unknown }> {
+        if (args.mode === 'preserve') {
+            return { success: true, mode: 'preserve', matchedCount: 0, stoppedSessionIds: [], deletedSessionIds: [], skippedSessionIds: [] };
+        }
+        if (!this.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
+
+        const requestedSessionIds = Array.isArray(args.sessionIds)
+            ? new Set(args.sessionIds.map(id => typeof id === 'string' ? id.trim() : '').filter(Boolean))
+            : undefined;
+        const sessions = await this.deps.sessionHostControl.listSessions();
+        const matched = sessions.filter(record => this.sessionMatchesMeshNode(record, args.node, args.nodeId, requestedSessionIds));
+        const stoppedSessionIds: string[] = [];
+        const deletedSessionIds: string[] = [];
+        const skippedSessionIds: string[] = [];
+        const errors: Array<{ sessionId: string; error: string }> = [];
+
+        for (const record of matched) {
+            const sessionId = String(record.sessionId);
+            const completed = this.isCompletedHostedSession(record);
+            try {
+                if (args.mode === 'stop') {
+                    if (!completed) {
+                        if (!args.dryRun) await this.deps.sessionHostControl.stopSession(sessionId);
+                        stoppedSessionIds.push(sessionId);
+                    } else {
+                        skippedSessionIds.push(sessionId);
+                    }
+                    continue;
+                }
+
+                if (args.mode === 'delete_stopped') {
+                    if (completed) {
+                        if (!args.dryRun) await this.deps.sessionHostControl.deleteSession(sessionId, { force: false });
+                        deletedSessionIds.push(sessionId);
+                    } else {
+                        skippedSessionIds.push(sessionId);
+                    }
+                    continue;
+                }
+
+                if (args.mode === 'stop_and_delete') {
+                    if (!args.dryRun) await this.deps.sessionHostControl.deleteSession(sessionId, { force: true });
+                    deletedSessionIds.push(sessionId);
+                    continue;
+                }
+            } catch (e: any) {
+                errors.push({ sessionId, error: e?.message || String(e) });
+            }
+        }
+
+        return {
+            success: errors.length === 0,
+            mode: args.mode,
+            dryRun: args.dryRun === true,
+            matchedCount: matched.length,
+            stoppedSessionIds,
+            deletedSessionIds,
+            skippedSessionIds,
+            ...(errors.length ? { errors } : {}),
+        };
     }
 
     private async traceSessionHostAction<T>(
@@ -1096,7 +1190,27 @@ export class DaemonCommandRouter {
                 if (!name) return { success: false, error: 'name required' };
                 try {
                     const { createMesh } = await import('../config/mesh-config.js');
-                    const mesh = createMesh({ name, repoIdentity, repoRemoteUrl, defaultBranch });
+                    const mesh = createMesh({ name, repoIdentity, repoRemoteUrl, defaultBranch, policy: args?.policy });
+                    return { success: true, mesh };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
+            case 'update_mesh': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                try {
+                    const { updateMesh } = await import('../config/mesh-config.js');
+                    const patch: Record<string, unknown> = {};
+                    if (typeof args?.name === 'string') patch.name = args.name;
+                    if (typeof args?.defaultBranch === 'string') patch.defaultBranch = args.defaultBranch;
+                    if (args?.policy && typeof args.policy === 'object' && !Array.isArray(args.policy)) patch.policy = args.policy;
+                    if (args?.coordinator && typeof args.coordinator === 'object' && !Array.isArray(args.coordinator)) patch.coordinator = args.coordinator;
+                    if (!Object.keys(patch).length) return { success: false, error: 'No updates provided' };
+                    const mesh = updateMesh(meshId, patch as any);
+                    if (!mesh) return { success: false, error: 'Mesh not found' };
+                    this.inlineMeshCache.set(meshId, mesh);
                     return { success: true, mesh };
                 } catch (e: any) {
                     return { success: false, error: e.message };
@@ -1138,6 +1252,62 @@ export class DaemonCommandRouter {
                 }
             }
 
+            case 'update_mesh_node': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
+                if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+                try {
+                    const { updateNode } = await import('../config/mesh-config.js');
+                    const policy = args?.policy && typeof args.policy === 'object' && !Array.isArray(args.policy)
+                        ? { ...(args.policy as Record<string, unknown>) }
+                        : {};
+                    if (Array.isArray(args?.providerPriority)) {
+                        const providerPriority = args.providerPriority
+                            .map((type: any) => typeof type === 'string' ? type.trim() : '')
+                            .filter(Boolean);
+                        delete (policy as any).provider_priority;
+                        if (providerPriority.length) {
+                            (policy as any).providerPriority = providerPriority;
+                        } else {
+                            delete (policy as any).providerPriority;
+                        }
+                    }
+                    const node = updateNode(meshId, nodeId, { policy: policy as any });
+                    if (!node) return { success: false, error: 'Mesh node not found' };
+                    return { success: true, node };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
+            case 'cleanup_mesh_sessions': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
+                if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+                try {
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                    const mesh = meshRecord?.mesh;
+                    if (!mesh) return { success: false, error: 'Mesh not found' };
+                    const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+                    if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
+                    const mode = this.normalizeMeshSessionCleanupMode(args?.mode ?? mesh?.policy?.sessionCleanupOnNodeRemove);
+                    const sessionIds = Array.isArray(args?.sessionIds)
+                        ? args.sessionIds.map((id: any) => typeof id === 'string' ? id.trim() : '').filter(Boolean)
+                        : undefined;
+                    const result = await this.cleanupMeshSessions({
+                        meshId,
+                        nodeId,
+                        node,
+                        mode,
+                        sessionIds,
+                        dryRun: args?.dryRun === true,
+                    });
+                    return result;
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
             case 'remove_mesh_node': {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
@@ -1146,6 +1316,15 @@ export class DaemonCommandRouter {
                     const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
                     const mesh = meshRecord?.mesh;
                     const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+
+                    const sessionCleanupMode = this.normalizeMeshSessionCleanupMode(
+                        args?.sessionCleanupMode ?? args?.session_cleanup_mode ?? mesh?.policy?.sessionCleanupOnNodeRemove,
+                    );
+                    let sessionCleanup: Record<string, unknown> | undefined;
+                    if (node && sessionCleanupMode !== 'preserve') {
+                        sessionCleanup = await this.cleanupMeshSessions({ meshId, nodeId, node, mode: sessionCleanupMode });
+                        if (sessionCleanup.success === false) return { success: false, removed: false, sessionCleanup };
+                    }
 
                     // If this is a worktree node, clean up the git worktree first
                     if (node?.isLocalWorktree && node.workspace) {
@@ -1171,7 +1350,7 @@ export class DaemonCommandRouter {
                         const { removeNode } = await import('../config/mesh-config.js');
                         removed = removeNode(meshId, nodeId);
                     }
-                    return { success: true, removed };
+                    return { success: true, removed, ...(sessionCleanup ? { sessionCleanup } : {}) };
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }

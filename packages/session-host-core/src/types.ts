@@ -108,6 +108,12 @@ export interface StopSessionPayload {
   sessionId: string;
 }
 
+export interface DeleteSessionPayload {
+  sessionId: string;
+  /** Stop a live runtime before deleting the persisted record. */
+  force?: boolean;
+}
+
 export interface ResumeSessionPayload {
   sessionId: string;
 }
@@ -229,6 +235,7 @@ export type SessionHostRequest =
   | { type: 'send_input'; payload: SendInputPayload }
   | { type: 'resize_session'; payload: ResizeSessionPayload }
   | { type: 'stop_session'; payload: StopSessionPayload }
+  | { type: 'delete_session'; payload: DeleteSessionPayload }
   | { type: 'resume_session'; payload: ResumeSessionPayload }
   | { type: 'acquire_write'; payload: AcquireWritePayload }
   | { type: 'release_write'; payload: ReleaseWritePayload }
@@ -256,6 +263,7 @@ export type SessionHostEvent =
   | { type: 'session_cleared'; sessionId: string }
   | { type: 'session_exit'; sessionId: string; exitCode: number | null }
   | { type: 'session_stopped'; sessionId: string }
+  | { type: 'session_deleted'; sessionId: string }
   | { type: 'session_resized'; sessionId: string; cols: number; rows: number }
   | { type: 'write_owner_changed'; sessionId: string; owner: SessionWriteOwner | null }
   | { type: 'client_attached'; sessionId: string; client: SessionAttachedClient }

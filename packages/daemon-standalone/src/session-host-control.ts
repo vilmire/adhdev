@@ -4,6 +4,7 @@ interface SessionHostControlPlane {
   getDiagnostics(payload?: { includeSessions?: boolean; limit?: number }): Promise<any>;
   listSessions(): Promise<any[]>;
   stopSession(sessionId: string): Promise<any>;
+  deleteSession(sessionId: string, opts?: { force?: boolean }): Promise<any>;
   resumeSession(sessionId: string): Promise<any>;
   restartSession(sessionId: string): Promise<any>;
   sendSignal(sessionId: string, signal: string): Promise<any>;
@@ -28,6 +29,10 @@ export class StandaloneSessionHostControlPlane implements SessionHostControlPlan
 
   async stopSession(sessionId: string): Promise<any> {
     return this.request('stop_session', { sessionId });
+  }
+
+  async deleteSession(sessionId: string, opts: { force?: boolean } = {}): Promise<any> {
+    return this.request('delete_session', { sessionId, force: opts.force === true });
   }
 
   async resumeSession(sessionId: string): Promise<any> {

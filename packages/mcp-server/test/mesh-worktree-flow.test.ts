@@ -715,9 +715,10 @@ test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache wh
   assert.ok(meshCommands.includes('remove_mesh_node'), 'remove_mesh_node relayed to daemon');
 });
 
-test('mesh tool registry documents the 11 exposed mesh tools including read-debug and worktree clone/remove', () => {
-  assert.equal(ALL_MESH_TOOLS.length, 11);
+test('mesh tool registry documents the 12 exposed mesh tools including read-debug, worktree clone/remove, and session cleanup', () => {
+  assert.equal(ALL_MESH_TOOLS.length, 12);
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_read_debug'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_clone_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_remove_node'));
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_cleanup_sessions'));
 });

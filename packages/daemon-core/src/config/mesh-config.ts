@@ -74,6 +74,21 @@ export function normalizeRepoIdentity(remoteUrl: string): string {
 
 // ─── CRUD Operations ────────────────────────────
 
+const SESSION_CLEANUP_MODES = new Set(['preserve', 'stop', 'delete_stopped', 'stop_and_delete']);
+
+function mergeMeshPolicy(base: RepoMeshPolicy | undefined, patch: Partial<RepoMeshPolicy> | undefined): RepoMeshPolicy {
+    const policy: RepoMeshPolicy = { ...DEFAULT_MESH_POLICY, ...(base || {}), ...(patch || {}) };
+    if (!['block', 'warn', 'checkpoint_then_continue'].includes(policy.dirtyWorkspaceBehavior)) {
+        policy.dirtyWorkspaceBehavior = 'warn';
+    }
+    const maxParallelTasks = Number(policy.maxParallelTasks);
+    policy.maxParallelTasks = Number.isFinite(maxParallelTasks) ? Math.max(1, Math.min(8, Math.floor(maxParallelTasks))) : 2;
+    if (!SESSION_CLEANUP_MODES.has(String(policy.sessionCleanupOnNodeRemove))) {
+        policy.sessionCleanupOnNodeRemove = 'preserve';
+    }
+    return policy;
+}
+
 export function listMeshes(): LocalMeshEntry[] {
     return loadMeshConfig().meshes;
 }
@@ -112,7 +127,7 @@ export function createMesh(opts: CreateMeshOptions): LocalMeshEntry {
         repoIdentity,
         repoRemoteUrl: opts.repoRemoteUrl,
         defaultBranch: opts.defaultBranch,
-        policy: { ...DEFAULT_MESH_POLICY, ...opts.policy },
+        policy: mergeMeshPolicy(undefined, opts.policy),
         coordinator: opts.coordinator || {},
         nodes: [],
         createdAt: now,
@@ -138,7 +153,7 @@ export function updateMesh(meshId: string, opts: UpdateMeshOptions): LocalMeshEn
 
     if (opts.name !== undefined) mesh.name = opts.name.trim().slice(0, 100);
     if (opts.defaultBranch !== undefined) mesh.defaultBranch = opts.defaultBranch;
-    if (opts.policy) mesh.policy = { ...mesh.policy, ...opts.policy };
+    if (opts.policy) mesh.policy = mergeMeshPolicy(mesh.policy, opts.policy);
     if (opts.coordinator) mesh.coordinator = opts.coordinator;
     mesh.updatedAt = new Date().toISOString();
 

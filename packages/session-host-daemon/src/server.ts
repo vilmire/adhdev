@@ -267,6 +267,26 @@ export class SessionHostServer extends EventEmitter {
           this.recordRuntimeTransition(request.payload.sessionId, 'stop_session', 'stopping', undefined, true);
           return { success: true, result: this.registry.getSession(request.payload.sessionId) };
         }
+        case 'delete_session': {
+          const record = this.registry.getSession(request.payload.sessionId);
+          if (!record) return { success: false, error: `Unknown session: ${request.payload.sessionId}` };
+          if (this.runtimes.has(record.sessionId)) {
+            if (!request.payload.force) {
+              return { success: false, error: `Session ${record.sessionId} is still running; pass force to stop and delete it` };
+            }
+            this.registry.setLifecycle(record.sessionId, 'stopping');
+            this.persistNow(record.sessionId);
+            this.requireRuntime(record.sessionId).stop();
+            await this.waitForRuntimeExit(record.sessionId).catch((error: any) => {
+              this.recordRuntimeTransition(record.sessionId, 'delete_session_timeout', 'stopping', undefined, false, error?.message || String(error));
+            });
+          }
+          this.registry.deleteSession(record.sessionId);
+          this.storage.remove(record.sessionId);
+          this.emitEvent({ type: 'session_deleted', sessionId: record.sessionId });
+          this.recordRuntimeTransition(record.sessionId, 'delete_session', record.lifecycle, undefined, true);
+          return { success: true, result: { sessionId: record.sessionId, deleted: true } };
+        }
         case 'resume_session': {
           const existing = this.registry.getSession(request.payload.sessionId);
           if (!existing) {
