@@ -497,6 +497,72 @@ test('mesh_read_chat forwards cached provider metadata after launch', async () =
   assert.equal(calls[2].args.providerSessionId, 'provider-explicit-read');
 });
 
+test('mesh_read_chat compact mode filters tool/internal chatter and returns the final assistant summary', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (_daemonId, command) => {
+    if (command === 'read_chat') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          status: 'idle',
+          messages: [
+            { role: 'user', content: 'do the task' },
+            { role: 'assistant', kind: 'tool', content: 'terminal output bubble' },
+            { role: 'tool', content: 'raw tool result' },
+            { role: 'assistant', kind: 'debug', content: 'internal status trace' },
+            { role: 'assistant', content: 'Final summary: implemented V1 and tests pass' },
+          ],
+        },
+      };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const ctx = {
+    mesh: {
+      id: 'mesh-compact-read',
+      name: 'Compact Read',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-compact',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-source',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+  };
+
+  const readText = await meshReadChat(ctx as any, {
+    node_id: 'node-compact',
+    session_id: 'runtime-compact',
+    compact: true,
+  } as any);
+  const payload = JSON.parse(readText);
+
+  assert.equal(payload.compact, true);
+  assert.equal(payload.totalMessages, 5);
+  assert.equal(payload.messages.length, 2);
+  assert.deepEqual(payload.messages.map((m: any) => m.content), [
+    'do the task',
+    'Final summary: implemented V1 and tests pass',
+  ]);
+  assert.equal(payload.summary, 'Final summary: implemented V1 and tests pass');
+});
+
 test('mesh_clone_node upserts clone returned through payload-wrapped live relay shape before immediate resolver use', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;

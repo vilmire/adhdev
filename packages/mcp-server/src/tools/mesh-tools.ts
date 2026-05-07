@@ -122,6 +122,55 @@ function extractLaunchPayload(value: any): any {
     return findNestedPayload(value, payload => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
 }
 
+function messageContent(message: any): string {
+    const content = message?.content;
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+        return content.map((part: any) => (typeof part === 'string' ? part : part?.text ?? '')).join('');
+    }
+    return '';
+}
+
+function isCoordinatorVisibleMessage(message: any): boolean {
+    if (!message || typeof message !== 'object') return false;
+    const role = String(message.role ?? '').toLowerCase();
+    if (role === 'tool' || role === 'system' || role === 'debug') return false;
+    const kind = String(message.kind ?? message.type ?? message.messageKind ?? '').toLowerCase();
+    if (['tool', 'tool_call', 'tool_result', 'terminal', 'internal', 'control', 'debug', 'status'].includes(kind)) return false;
+    const meta = message.meta ?? message.metadata;
+    if (meta?.internal === true || meta?.debug === true || meta?.control === true || meta?.userVisible === false || meta?.user_visible === false) return false;
+    return role === 'user' || role === 'assistant' || role === 'agent';
+}
+
+function compactReadChatPayload(payload: any, args: { node_id: string; session_id: string; tail?: number }): any {
+    const rawMessages = Array.isArray(payload?.messages) ? payload.messages : [];
+    const visibleMessages = rawMessages.filter(isCoordinatorVisibleMessage);
+    const limit = Math.max(1, Math.min(args.tail ?? 10, 10));
+    const messages = visibleMessages.slice(-limit);
+    const finalAssistant = [...visibleMessages].reverse().find((message: any) => {
+        const role = String(message?.role ?? '').toLowerCase();
+        return (role === 'assistant' || role === 'agent') && messageContent(message).trim();
+    });
+    const summary = typeof payload?.summary === 'string' && payload.summary.trim()
+        ? payload.summary.trim()
+        : messageContent(finalAssistant).trim();
+
+    return {
+        success: payload?.success !== false,
+        compact: true,
+        nodeId: args.node_id,
+        sessionId: args.session_id,
+        status: payload?.status ?? null,
+        providerSessionId: payload?.providerSessionId ?? null,
+        totalMessages: rawMessages.length,
+        visibleMessages: visibleMessages.length,
+        summary,
+        ...(payload?.changedFiles !== undefined ? { changedFiles: payload.changedFiles } : {}),
+        ...(payload?.testsRun !== undefined ? { testsRun: payload.testsRun } : {}),
+        messages,
+    };
+}
+
 function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | undefined {
     const preferredNodeId = typeof ctx.mesh.coordinator?.preferredNodeId === 'string'
         ? ctx.mesh.coordinator.preferredNodeId.trim()
@@ -239,7 +288,7 @@ export const MESH_SEND_TASK_TOOL = {
 
 export const MESH_READ_CHAT_TOOL = {
     name: 'mesh_read_chat',
-    description: 'Read recent chat messages from a delegated agent session on a mesh node. Use this to check progress. If the runtime session has completed, provider_session_id can explicitly target provider transcript history.',
+    description: 'Read recent chat messages from a delegated agent session on a mesh node. Use compact=true for coordinator context-efficient review: it filters tool/internal/debug chatter and returns the final user-visible summary plus recent key messages. If the runtime session has completed, provider_session_id can explicitly target provider transcript history.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -247,6 +296,7 @@ export const MESH_READ_CHAT_TOOL = {
             session_id: { type: 'string', description: 'Agent session ID to read from.' },
             provider_session_id: { type: 'string', description: 'Optional provider transcript/session ID for completed sessions.' },
             tail: { type: 'number', description: 'Number of recent messages to return (default: 10).' },
+            compact: { type: 'boolean', description: 'When true, return a compact coordinator summary instead of the full transcript: tool/internal/control/debug messages are excluded and only recent user-visible key messages plus the final assistant summary are included.' },
         },
         required: ['node_id', 'session_id'],
     },
@@ -497,7 +547,7 @@ export async function meshSendTask(
 
 export async function meshReadChat(
     ctx: MeshContext,
-    args: { node_id: string; session_id: string; provider_session_id?: string; tail?: number },
+    args: { node_id: string; session_id: string; provider_session_id?: string; tail?: number; compact?: boolean },
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id); // membership check
 
@@ -515,6 +565,9 @@ export async function meshReadChat(
             tailLimit: args.tail ?? 10,
         });
         const payload = unwrapCommandPayload(result);
+        if (args.compact) {
+            return JSON.stringify(compactReadChatPayload(payload, args), null, 2);
+        }
         return JSON.stringify(payload, null, 2);
     } else {
         return JSON.stringify({ error: 'Cloud mesh read_chat not yet implemented' });

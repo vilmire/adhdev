@@ -12,8 +12,10 @@ test('mesh_launch_session schema maps providers, keeps type optional, and has no
   assert.doesNotMatch(description, /default to claude-cli unless/i);
 });
 
-test('mesh_read_chat schema exposes provider_session_id for completed session history', () => {
+test('mesh_read_chat schema exposes provider_session_id and compact mode for completed session history', () => {
   assert.equal(MESH_READ_CHAT_TOOL.inputSchema.properties.provider_session_id.type, 'string');
+  assert.equal(MESH_READ_CHAT_TOOL.inputSchema.properties.compact.type, 'boolean');
+  assert.match(MESH_READ_CHAT_TOOL.description, /compact=true/);
 });
 
 test('mesh session cleanup tools expose explicit manual cleanup and remove-node policy override', () => {
