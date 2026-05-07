@@ -145,6 +145,34 @@ function findNodeByWorkspace(mesh: LocalMeshEntry, workspace: string): LocalMesh
     return node;
 }
 
+function readProviderPriority(policy: unknown): string[] {
+    const raw = (policy as any)?.providerPriority;
+    return Array.isArray(raw)
+        ? raw.map((type: unknown) => typeof type === 'string' ? type.trim() : '').filter(Boolean)
+        : [];
+}
+
+function missingProviderPriorityMessage(nodeId: string): string {
+    return `Node '${nodeId}' has no providerPriority policy; pass type explicitly or configure node.policy.providerPriority`;
+}
+
+function getNodeLaunchReadiness(node: LocalMeshNodeEntry): Record<string, unknown> {
+    const providerPriority = readProviderPriority(node.policy);
+    if (providerPriority.length) {
+        return {
+            providerPriority,
+            launchReady: true,
+        };
+    }
+
+    return {
+        providerPriority,
+        launchReady: false,
+        launchBlockedReason: 'missing_provider_priority',
+        launchBlockedMessage: missingProviderPriorityMessage(node.id),
+    };
+}
+
 async function commandForNode(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
@@ -312,6 +340,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         const entry: any = {
             nodeId: node.id,
             workspace: node.workspace,
+            ...getNodeLaunchReadiness(node),
         };
 
         try {
@@ -367,6 +396,7 @@ export async function meshListNodes(ctx: MeshContext): Promise<string> {
             repoRoot: n.repoRoot,
             isLocalWorktree: n.isLocalWorktree,
             policy: n.policy,
+            ...getNodeLaunchReadiness(n),
             userOverrides: n.userOverrides,
         })),
     }, null, 2);
@@ -439,12 +469,9 @@ export async function meshLaunchSession(
     if (isLocalTransport(ctx.transport)) {
         let resolvedProviderType = typeof args.type === 'string' && args.type.trim() ? args.type : '';
         if (!resolvedProviderType) {
-            const rawProviderPriority = (node.policy as any)?.providerPriority;
-            const providerPriority = Array.isArray(rawProviderPriority)
-                ? rawProviderPriority.map((type: unknown) => typeof type === 'string' ? type.trim() : '').filter(Boolean)
-                : [];
+            const providerPriority = readProviderPriority(node.policy);
             if (!providerPriority.length) {
-                return JSON.stringify({ success: false, error: `Node '${args.node_id}' has no providerPriority policy; pass type explicitly or configure node.policy.providerPriority` });
+                return JSON.stringify({ success: false, error: missingProviderPriorityMessage(args.node_id) });
             }
 
             const failed: string[] = [];

@@ -274,6 +274,63 @@ test('mesh_launch_session omitted type uses providerPriority detection and fails
   assert.deepEqual(calls.map(call => call.command), ['detect_provider']);
 });
 
+test('mesh_status and mesh_list_nodes surface launch readiness when providerPriority is missing', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command === 'git_status') {
+      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'main', modified: 0 } } } };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const ctx = {
+    mesh: {
+      id: 'mesh-readiness',
+      name: 'Readiness Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [
+        { id: 'node-missing-policy', workspace: '/repo/missing', repoRoot: '/repo/missing', daemonId: 'daemon-missing', userOverrides: {}, policy: {} },
+        { id: 'node-ready-policy', workspace: '/repo/ready', repoRoot: '/repo/ready', daemonId: 'daemon-ready', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] } },
+      ],
+    },
+    transport,
+  };
+
+  const statusText = await meshStatus(ctx as any);
+  const status = JSON.parse(statusText);
+  const missingStatus = status.nodes.find((node: any) => node.nodeId === 'node-missing-policy');
+  const readyStatus = status.nodes.find((node: any) => node.nodeId === 'node-ready-policy');
+  assert.equal(missingStatus.launchReady, false);
+  assert.equal(missingStatus.launchBlockedReason, 'missing_provider_priority');
+  assert.match(missingStatus.launchBlockedMessage, /pass type explicitly or configure node\.policy\.providerPriority/);
+  assert.deepEqual(missingStatus.providerPriority, []);
+  assert.equal(readyStatus.launchReady, true);
+  assert.deepEqual(readyStatus.providerPriority, ['hermes-cli']);
+
+  const listText = await meshListNodes(ctx as any);
+  const listed = JSON.parse(listText);
+  const missingList = listed.nodes.find((node: any) => node.nodeId === 'node-missing-policy');
+  const readyList = listed.nodes.find((node: any) => node.nodeId === 'node-ready-policy');
+  assert.equal(missingList.launchReady, false);
+  assert.equal(missingList.launchBlockedReason, 'missing_provider_priority');
+  assert.match(missingList.launchBlockedMessage, /pass type explicitly or configure node\.policy\.providerPriority/);
+  assert.deepEqual(missingList.providerPriority, []);
+  assert.equal(readyList.launchReady, true);
+  assert.deepEqual(readyList.providerPriority, ['hermes-cli']);
+});
+
 test('mesh_send_task surfaces relay-wrapped send_chat failures instead of reporting success', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
