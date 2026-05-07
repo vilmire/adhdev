@@ -31,7 +31,8 @@ function createConversation(overrides: Partial<ActiveConversation> = {}): Active
 function createSnapshot(messages: ActiveConversation['messages']): SessionChatTailSnapshot {
     return {
         liveMessages: messages,
-        cursor: { knownMessageCount: messages.length, lastMessageSignature: 'sig', tailLimit: 60 },
+        hasLiveSnapshot: true,
+        cursor: { tailLimit: 60 },
         historyMessages: [],
         historyOffset: 0,
         hasMoreHistory: true,
@@ -40,6 +41,48 @@ function createSnapshot(messages: ActiveConversation['messages']): SessionChatTa
 }
 
 describe('conversation message authority snapshot', () => {
+    it('uses conversation fallback before any authoritative chat-tail snapshot hydrates', () => {
+        const conversation = createConversation({
+            messages: [
+                { role: 'assistant', content: 'pre-hydration fallback', id: 'fallback-1', receivedAt: 1000 },
+            ],
+        })
+
+        const liveMessages = getConversationLiveMessages(conversation, null)
+
+        expect(liveMessages.map(message => message.content)).toEqual(['pre-hydration fallback'])
+    })
+
+    it('keeps authoritative chat-tail authority even when the live tail is shorter than stale cached conversation rows', () => {
+        const conversation = createConversation({
+            messages: [
+                { role: 'user', content: 'stale cached prompt', id: 'fallback-1', receivedAt: 1000 },
+                { role: 'assistant', content: 'stale cached answer', id: 'fallback-2', receivedAt: 2000 },
+                { role: 'assistant', content: 'stale cached tool spam', id: 'fallback-3', receivedAt: 3000 },
+            ],
+        })
+        const snapshot = createSnapshot([
+            { role: 'assistant', content: 'authoritative recent live tail', id: 'live-1', receivedAt: 4000 },
+        ])
+
+        const liveMessages = getConversationLiveMessages(conversation, snapshot)
+
+        expect(liveMessages.map(message => message.content)).toEqual(['authoritative recent live tail'])
+    })
+
+    it('respects an authoritative empty chat-tail snapshot instead of resurrecting stale fallback rows', () => {
+        const conversation = createConversation({
+            messages: [
+                { role: 'assistant', content: 'stale fallback should stay hidden', id: 'fallback-1', receivedAt: 1000 },
+            ],
+        })
+        const snapshot = createSnapshot([])
+
+        const liveMessages = getConversationLiveMessages(conversation, snapshot)
+
+        expect(liveMessages).toEqual([])
+    })
+
     it('builds the chat pane visible feed from the same snapshot-selected live messages', () => {
         const conversation = createConversation({
             messages: [

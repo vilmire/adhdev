@@ -207,6 +207,8 @@ export default function ChatPane({
             controlValues: controlsContext.targetEntry?.controlValues,
             visibleBarControlCount: visibleBarControls.length,
             chatTailState: {
+                liveMessages: chatTailState.liveMessages,
+                hasLiveSnapshot: chatTailState.hasLiveSnapshot,
                 hasMoreHistory,
                 historyError: loadError,
                 historyMessages,
@@ -240,6 +242,8 @@ export default function ChatPane({
         actionLogs,
         allMessages,
         areControlsVisible,
+        chatTailState.hasLiveSnapshot,
+        chatTailState.liveMessages,
         controlsContext.providerType,
         controlsContext.targetEntry?.controlValues,
         controlsContext.targetEntry?.providerControls,

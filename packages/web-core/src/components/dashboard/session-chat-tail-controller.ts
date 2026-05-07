@@ -14,6 +14,7 @@ export interface SessionChatTailCursor {
 
 export interface SessionChatTailSnapshot {
   liveMessages: DashboardMessage[]
+  hasLiveSnapshot: boolean
   cursor: SessionChatTailCursor
   historyMessages: DashboardMessage[]
   historyOffset: number
@@ -34,6 +35,7 @@ export interface SessionChatTailControllerOptions {
   historySessionId?: string
   subscriptionKey: string
   tailLimit?: number
+  fallbackRecentCount?: number
 }
 
 export interface SessionChatTailControllerHandle extends SessionChatTailSnapshot {
@@ -66,6 +68,7 @@ function getControllerKey(daemonId: string, sessionId: string): string {
 function buildEmptySnapshot(tailLimit = DEFAULT_TAIL_LIMIT): SessionChatTailSnapshot {
   return {
     liveMessages: [],
+    hasLiveSnapshot: false,
     cursor: buildReadChatCursor([], tailLimit),
     historyMessages: [],
     historyOffset: 0,
@@ -110,6 +113,7 @@ export class SessionChatTailController {
   private sessionId: string
   private historySessionId?: string
   private subscriptionKey: string
+  private fallbackRecentCount: number
   private snapshot: SessionChatTailSnapshot
   private transportSubscription: SubscriptionHandle | null = null
   private listeners = new Set<(snapshot: SessionChatTailSnapshot) => void>()
@@ -124,6 +128,7 @@ export class SessionChatTailController {
     this.sessionId = options.sessionId
     this.historySessionId = options.historySessionId
     this.subscriptionKey = options.subscriptionKey
+    this.fallbackRecentCount = Math.max(0, options.fallbackRecentCount ?? 0)
     this.snapshot = buildEmptySnapshot(Math.max(0, options.tailLimit ?? DEFAULT_TAIL_LIMIT))
   }
 
@@ -131,6 +136,9 @@ export class SessionChatTailController {
     if (options.manager) this.manager = options.manager
     if (options.sendData) this.sendData = options.sendData
     if (options.historySessionId) this.historySessionId = options.historySessionId
+    if (options.fallbackRecentCount !== undefined) {
+      this.fallbackRecentCount = Math.max(0, options.fallbackRecentCount)
+    }
     if (options.tailLimit !== undefined) {
       const nextTailLimit = Math.max(0, options.tailLimit)
       if (nextTailLimit !== this.snapshot.cursor.tailLimit) {
@@ -189,16 +197,24 @@ export class SessionChatTailController {
     this.emit()
     const run = (async () => {
       try {
+        const hadLiveSnapshot = this.snapshot.hasLiveSnapshot
+        const excludeRecentCount = hadLiveSnapshot
+          ? this.snapshot.liveMessages.length
+          : Math.max(this.snapshot.liveMessages.length, this.fallbackRecentCount)
         const result = await loader({
           offset: this.snapshot.historyOffset,
-          excludeRecentCount: this.snapshot.liveMessages.length,
+          excludeRecentCount,
         })
         const nextMessages = Array.isArray(result.messages) ? result.messages : []
+        const shouldKeepHistoryOpen = !hadLiveSnapshot
+          && nextMessages.length === 0
+          && result.hasMore !== true
+          && this.fallbackRecentCount > 0
         this.snapshot = {
           ...this.snapshot,
           historyMessages: [...nextMessages, ...this.snapshot.historyMessages],
           historyOffset: this.snapshot.historyOffset + nextMessages.length,
-          hasMoreHistory: result.hasMore === true,
+          hasMoreHistory: shouldKeepHistoryOpen ? true : result.hasMore === true,
           historyError: null,
         }
       } catch (error) {
@@ -273,6 +289,7 @@ export class SessionChatTailController {
     this.snapshot = {
       ...this.snapshot,
       liveMessages: nextMessages,
+      hasLiveSnapshot: true,
       cursor: nextCursor,
     }
     this.emit()
@@ -396,8 +413,9 @@ export function useSessionChatTailController(
       subscriptionKey,
       sendData,
       tailLimit,
+      fallbackRecentCount: activeConv.messages.length,
     })
-  }, [daemonId, enabled, historySessionId, sendData, sessionId, subscriptionKey, tailLimit])
+  }, [activeConv.messages.length, daemonId, enabled, historySessionId, sendData, sessionId, subscriptionKey, tailLimit])
 
   const [snapshot, setSnapshot] = useState<SessionChatTailSnapshot>(() => (
     controller?.getSnapshot() || buildEmptySnapshot(tailLimit)

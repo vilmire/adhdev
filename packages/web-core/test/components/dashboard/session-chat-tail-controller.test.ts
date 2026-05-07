@@ -686,6 +686,60 @@ describe('SessionChatTailController registry', () => {
     })
   })
 
+  it('uses the active conversation fallback count for history paging before chat-tail hydrates', async () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 50,
+      fallbackRecentCount: 50,
+    })
+    const loadHistory = vi.fn().mockResolvedValue({
+      messages: [{ role: 'assistant', content: 'older row', id: 'history-older', timestamp: 1 }],
+      hasMore: true,
+    })
+
+    controller.retain()
+    await controller.loadHistoryPage(loadHistory)
+
+    expect(loadHistory).toHaveBeenCalledWith({
+      offset: 0,
+      excludeRecentCount: 50,
+    })
+  })
+
+  it('does not mark long-session history exhausted from an empty page before chat-tail hydrates', async () => {
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 50,
+      fallbackRecentCount: 50,
+    })
+
+    controller.retain()
+    await controller.loadHistoryPage(async () => ({ messages: [], hasMore: false }))
+
+    expect(controller.getSnapshot()).toMatchObject({
+      liveMessages: [],
+      hasLiveSnapshot: false,
+      historyMessages: [],
+      historyOffset: 0,
+      hasMoreHistory: true,
+      historyError: null,
+    })
+  })
+
   it('preserves history page rows even when they overlap with live messages that arrive while loading', async () => {
     resetSessionChatTailControllersForTest()
     const manager = new SubscriptionManager()
@@ -816,5 +870,90 @@ describe('SessionChatTailController registry', () => {
 
     expect(controller.getSnapshot().liveMessages).toHaveLength(3)
     expect(controller.getSnapshot().liveMessages[2]).toMatchObject({ id: 'msg-3', content: 'plan update 1 task(s)' })
+  })
+
+  it('exposes historyOffset=0 after a truncated live tail update before any history page is loaded', () => {
+    // Regression guard for long Hermes/CLI chat invisibility: when a session has 100
+    // total messages and the subscription fires with a 20-msg tail window, the snapshot
+    // must have hasLiveSnapshot=true and historyOffset=0. getConversationLiveMessages
+    // uses historyOffset=0 to detect the unloaded state and keep fallback visible.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 20,
+      fallbackRecentCount: 50,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: Array.from({ length: 20 }, (_, index) => ({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `tail-${index + 81}`,
+        id: `tail-${index + 81}`,
+        timestamp: index + 81,
+      })) as any,
+      totalMessages: 100,
+      syncMode: 'full',
+      replaceFrom: 80,
+      lastMessageSignature: 'sig-tail-20',
+    }))
+
+    const snapshot = controller.getSnapshot()
+    expect(snapshot.hasLiveSnapshot).toBe(true)
+    expect(snapshot.historyOffset).toBe(0)
+    expect(snapshot.liveMessages).toHaveLength(20)
+    // hasMoreHistory stays true — controller knows there is older history
+    expect(snapshot.hasMoreHistory).toBe(true)
+  })
+
+  it('exposes historyOffset > 0 after a history page is loaded, signalling live tail is authoritative', async () => {
+    // After the user scrolls up and history loads, historyOffset is incremented.
+    // getConversationLiveMessages uses this to switch from fallback to live tail authority.
+    resetSessionChatTailControllersForTest()
+    const manager = new SubscriptionManager()
+    const controller = getOrCreateSessionChatTailController({
+      manager,
+      sendData: vi.fn().mockReturnValue(true),
+      daemonId: 'daemon-1',
+      sessionId: 'session-1',
+      historySessionId: 'history-1',
+      subscriptionKey: 'daemon:daemon-1:session:session-1',
+      tailLimit: 20,
+      fallbackRecentCount: 50,
+    })
+
+    controller.retain()
+    manager.publish(createUpdate({
+      messages: Array.from({ length: 20 }, (_, index) => ({
+        role: 'assistant',
+        content: `tail-${index + 81}`,
+        id: `tail-${index + 81}`,
+        timestamp: index + 81,
+      })) as any,
+      totalMessages: 100,
+      syncMode: 'full',
+      replaceFrom: 80,
+      lastMessageSignature: 'sig-tail-20',
+    }))
+
+    await controller.loadHistoryPage(async () => ({
+      messages: Array.from({ length: 30 }, (_, index) => ({
+        role: 'assistant',
+        content: `history-${index + 50}`,
+        id: `history-${index + 50}`,
+        timestamp: index + 50,
+      })),
+      hasMore: true,
+    }))
+
+    const snapshot = controller.getSnapshot()
+    expect(snapshot.historyOffset).toBe(30)
+    expect(snapshot.hasLiveSnapshot).toBe(true)
   })
 })

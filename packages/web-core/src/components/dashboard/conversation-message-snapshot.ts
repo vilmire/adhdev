@@ -10,9 +10,16 @@ export function getConversationMessageAuthorityKey(conversation: ActiveConversat
 
 export function getConversationLiveMessages(
     conversation: ActiveConversation,
-    snapshot?: Pick<SessionChatTailSnapshot, 'liveMessages'> | null,
+    snapshot?: Pick<SessionChatTailSnapshot, 'liveMessages' | 'hasLiveSnapshot'> | null,
 ): DashboardMessage[] {
-    if (snapshot) return snapshot.liveMessages || []
+    if (snapshot?.hasLiveSnapshot) {
+        // Once the session.chat_tail subscription has produced any snapshot, it is the
+        // transcript authority for the pane. Do not fall back to conversation.messages
+        // based on length: long CLI sessions intentionally send a bounded recent tail,
+        // and the fallback can be stale/empty relative to the daemon parser. Older rows
+        // are recovered through explicit history paging instead.
+        return snapshot.liveMessages || []
+    }
     return Array.isArray(conversation.messages) ? conversation.messages : []
 }
 

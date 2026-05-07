@@ -35,6 +35,8 @@ describe('chat frontend debug bundle helpers', () => {
       controlValues: { model: 'sonnet' },
       visibleBarControlCount: 1,
       chatTailState: {
+        liveMessages: [{ role: 'assistant', content: 'tail live' }],
+        hasLiveSnapshot: true,
         hasMoreHistory: true,
         historyError: 'older page failed',
         historyMessages: [{ role: 'user', content: 'old' }],
@@ -56,7 +58,10 @@ describe('chat frontend debug bundle helpers', () => {
       transport: 'pty',
       status: 'generating',
     })
-    expect(snapshot.messageCounts).toEqual({ live: 8, visible: 8, history: 1, hiddenLive: 3 })
+    expect(snapshot.messageCounts).toEqual({ live: 1, activeConversation: 8, visible: 8, history: 1, hiddenLive: 3 })
+    expect(snapshot.chatTail).toMatchObject({ hasLiveSnapshot: true, hasMoreHistory: true })
+    expect(snapshot.liveMessagesTail).toEqual([{ role: 'assistant', content: 'tail live' }])
+    expect(snapshot.activeConversationMessagesTail).toHaveLength(8)
     expect(snapshot.visibleMessagesTail).toHaveLength(5)
     expect(JSON.stringify(snapshot)).not.toContain('secret-token-1234567890')
     expect(snapshot.actionLogsTail).toHaveLength(1)

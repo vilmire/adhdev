@@ -73,6 +73,8 @@ export interface BuildChatFrontendDebugSnapshotOptions {
     controlValues?: Record<string, unknown>
     visibleBarControlCount: number
     chatTailState: {
+        liveMessages?: readonly unknown[]
+        hasLiveSnapshot?: boolean
         hasMoreHistory?: boolean
         historyError?: string | null
         historyMessages?: readonly unknown[]
@@ -113,12 +115,14 @@ export function buildChatFrontendDebugSnapshot(options: BuildChatFrontendDebugSn
             lastMessageHash: activeConv.lastMessageHash,
         },
         messageCounts: {
-            live: activeConv.messages.length,
+            live: options.chatTailState.liveMessages?.length ?? activeConv.messages.length,
+            activeConversation: activeConv.messages.length,
             visible: options.visibleMessages.length,
             history: options.chatTailState.historyMessages?.length || 0,
             hiddenLive: options.ui.hiddenLiveCount,
         },
-        liveMessagesTail: tail(activeConv.messages, 10),
+        liveMessagesTail: tail(options.chatTailState.liveMessages ?? activeConv.messages, 10),
+        activeConversationMessagesTail: tail(activeConv.messages, 10),
         visibleMessagesTail: tail(options.visibleMessages, 5),
         historyMessagesTail: tail(options.chatTailState.historyMessages, 5),
         actionLogsTail: tail(options.actionLogs.filter((entry) => entry.routeId === activeConv.tabKey), 20),
@@ -129,6 +133,7 @@ export function buildChatFrontendDebugSnapshot(options: BuildChatFrontendDebugSn
             visible: options.ui.controlsVisible,
         },
         chatTail: {
+            hasLiveSnapshot: !!options.chatTailState.hasLiveSnapshot,
             hasMoreHistory: !!options.chatTailState.hasMoreHistory,
             historyError: options.chatTailState.historyError || null,
         },
