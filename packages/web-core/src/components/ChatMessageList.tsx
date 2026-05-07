@@ -457,7 +457,10 @@ const ChatMessageRow = memo(function ChatMessageRow({
     if (kind === 'tool') {
         return (
             <div className="self-start chat-msg-tool">
-                <span className="tool-icon">⏺</span>
+                <div className="chat-msg-tool-meta" aria-label="Tool message">
+                    <span className="tool-icon">⏺</span>
+                    <span className="tool-label">Tool</span>
+                </div>
                 {hasStructuredRenderer && structuredParts ? (
                     <div className="tool-text w-full">
                         <MessagePartsRenderer parts={structuredParts} renderAsPreformatted={false} />
@@ -511,9 +514,13 @@ const ChatMessageRow = memo(function ChatMessageRow({
     const visibleContent = displayContent;
     const renderAsPreformatted = contentLooksPreformatted;
     const renderAsMarkdown = !renderAsPreformatted && likelyNeedsMarkdownRender(visibleContent);
+    const rowClassName = [
+        'chat-message-row',
+        isUser ? 'chat-message-row-user self-end' : 'chat-message-row-assistant self-start',
+    ].join(' ');
 
     return (
-        <div className={`max-w-[88%] min-w-0 flex flex-col gap-1 ${isUser ? 'self-end' : 'self-start'}`}>
+        <div className={rowClassName}>
             {(displayContent || hasStructuredRenderer || isUser) && (
                 <div className={`chat-bubble ${isUser ? 'chat-bubble-user' : 'chat-bubble-assistant'}`}>
                     <div className={`chat-bubble-header ${(displayContent || hasStructuredRenderer) ? 'mb-1.5' : 'mb-0'}`}>
