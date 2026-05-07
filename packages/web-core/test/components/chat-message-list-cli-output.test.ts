@@ -17,6 +17,43 @@ function renderMessages(messages: ChatMessage[]): string {
 }
 
 describe('ChatMessageList CLI assistant rendering', () => {
+  it('hides internal coordinator tool and terminal activity from the visible chat transcript', () => {
+    const html = renderMessages([
+      {
+        role: 'assistant',
+        kind: 'tool',
+        content: '⚡ mcp_adhdev_mesh_mesh_git_status (0.0s)',
+      } as ChatMessage,
+      {
+        role: 'assistant',
+        kind: 'terminal',
+        content: 'mcp_adhdev_mesh_mesh_git_status output',
+        meta: { label: 'Ran command' },
+      } as ChatMessage,
+      {
+        role: 'assistant',
+        content: '최종 cleanup 요약입니다.',
+      } as ChatMessage,
+    ])
+
+    expect(html).not.toContain('mcp_adhdev_mesh_mesh_git_status')
+    expect(html).not.toContain('Ran command')
+    expect(html).toContain('최종 cleanup 요약입니다.')
+  })
+
+  it('allows explicit chat-visible tool messages for provider-authored UI content', () => {
+    const html = renderMessages([
+      {
+        role: 'assistant',
+        kind: 'tool',
+        content: 'Visible tool summary',
+        meta: { visibility: 'chat' },
+      } as ChatMessage,
+    ])
+
+    expect(html).toContain('Visible tool summary')
+  })
+
   it('does not truncate standard assistant bubbles just because they are long', () => {
     const longMessage = `Intro\n${'x'.repeat(5200)}\nTAIL_MARKER_VISIBLE`
 

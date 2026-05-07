@@ -230,6 +230,20 @@ function getRenderableTimestamp(message: ChatMessage, index: number, receivedAtM
     ) || 0;
 }
 
+export function shouldRenderChatMessageInVisibleTranscript(message: ChatMessage): boolean {
+    const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
+    const kind = typeof message.kind === 'string'
+        ? message.kind.trim().toLowerCase()
+        : (role === 'tool' ? 'tool' : 'standard');
+    const meta = message.meta as (MessageMeta & { visibility?: unknown }) | undefined;
+    const visibility = typeof meta?.visibility === 'string' ? meta.visibility.trim().toLowerCase() : '';
+
+    if (visibility === 'chat' || visibility === 'visible') return true;
+    if (role === 'tool') return false;
+    if ((role === 'assistant' || !role) && (kind === 'tool' || kind === 'terminal')) return false;
+    return true;
+}
+
 function likelyNeedsMarkdownRender(content: string): boolean {
     return /[`*_#[\]()>-]|https?:\/\/|\n\s*[-*]\s|\n\s*\d+\.\s|\|/.test(content);
 }
@@ -626,8 +640,17 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         );
     }, []);
 
+    // Visible chat transcript hides internal provider/coordinator activity rows.
+    // The daemon/read_chat transcript still preserves these messages for debug/export paths.
+    const visibleMessages = useMemo(
+        () => messages.filter(shouldRenderChatMessageInVisibleTranscript),
+        [messages],
+    );
+
+    const visibleLastMessageHash = visibleMessages.length === messages.length ? lastMessageHash : undefined;
+
     // Last message signature — prefer daemon-owned hash so idle status renders don't re-hash large content.
-    const lastMsgFingerprint = buildChatScrollFingerprint(messages, lastMessageHash);
+    const lastMsgFingerprint = buildChatScrollFingerprint(visibleMessages, visibleLastMessageHash);
 
     const saveScrollSnapshot = useCallback(() => {
         const el = containerRef.current;
@@ -690,7 +713,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                     scheduleScrollToBottom('auto');
                 }
             }
-            prevCountRef.current = messages.length;
+            prevCountRef.current = visibleMessages.length;
             prevFingerprintRef.current = lastMsgFingerprint;
             return;
         }
@@ -698,7 +721,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         // When chat content changes, keep following the bottom unless the user explicitly scrolled up.
         // This covers both appended messages and same-message streaming growth, where checking
         // near-bottom after DOM growth can already be too late.
-        const isNewMessage = messages.length > prevCountRef.current;
+        const isNewMessage = visibleMessages.length > prevCountRef.current;
         const hasChatContentChanged = lastMsgFingerprint !== prevFingerprintRef.current;
         if (shouldAutoScrollAfterChatContentChange({
             hasSelection: hasSelectionRef.current,
@@ -708,9 +731,9 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         })) {
             scheduleScrollToBottom('auto');
         }
-        prevCountRef.current = messages.length;
+        prevCountRef.current = visibleMessages.length;
         prevFingerprintRef.current = lastMsgFingerprint;
-    }, [lastMsgFingerprint, contextKey, messages.length, scheduleScrollToBottom, updateJumpButtonState]);
+    }, [lastMsgFingerprint, contextKey, visibleMessages.length, scheduleScrollToBottom, updateJumpButtonState]);
 
     useEffect(() => {
         if (!scrollToBottomRequestNonce) return;
@@ -845,7 +868,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         saveScrollSnapshot();
         prevScrollHeight.current = 0;
         isHistoryLoading.current = false;
-    }, [messages.length, saveScrollSnapshot, updateJumpButtonState]);
+    }, [visibleMessages.length, saveScrollSnapshot, updateJumpButtonState]);
 
     useEffect(() => {
         if (restoredInitialScrollRef.current) return;
@@ -862,7 +885,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         userScrolledUp.current = isChatScrollSnapshotScrolledUp(snapshot);
         updateJumpButtonState();
         restoredInitialScrollRef.current = true;
-    }, [contextKey, lastMsgFingerprint, messages.length, scrollToBottom, updateJumpButtonState]);
+    }, [contextKey, lastMsgFingerprint, visibleMessages.length, scrollToBottom, updateJumpButtonState]);
 
     // Track when load starts so we can restore scroll after
     const handleLoadMoreClick = () => {
@@ -890,7 +913,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     type MergedItem = MsgItem | LogItem;
 
     const items: MergedItem[] = useMemo(() => {
-        const msgItems: MsgItem[] = messages.map((m, i) => ({
+        const msgItems: MsgItem[] = visibleMessages.map((m, i) => ({
             type: 'message' as const,
             data: m,
             index: i,
@@ -913,7 +936,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         }
         while (logIdx < logItems.length) merged.push(logItems[logIdx++]);
         return merged;
-    }, [messages, actionLogs, receivedAtMap]);
+    }, [visibleMessages, actionLogs, receivedAtMap]);
     const hasMoreVisibleContent = hiddenLiveCount > 0 || !!hasMoreHistory;
     const loadMoreLabel = hiddenLiveCount > 0
         ? `↑ Show ${Math.min(hiddenLiveCount, 80)} earlier messages${hiddenLiveCount > 80 ? ` (${hiddenLiveCount} hidden)` : ''}`
