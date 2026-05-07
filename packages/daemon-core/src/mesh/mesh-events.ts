@@ -15,6 +15,75 @@ function formatCompletionMetadata(event: Record<string, unknown>): string {
     return parts.length > 0 ? ` (${parts.join('; ')})` : '';
 }
 
+function buildMeshSystemMessage(args: {
+    event: string;
+    nodeLabel: string;
+    metadataEvent: Record<string, unknown>;
+}): string {
+    const metadata = formatCompletionMetadata(args.metadataEvent);
+    if (args.event === 'agent:generating_completed') {
+        return `[System] ${args.nodeLabel} has completed its task and is now idle${metadata}. You may use mesh_read_chat to review its progress.`;
+    }
+    if (args.event === 'agent:waiting_approval') {
+        return `[System] ${args.nodeLabel} is waiting for approval to proceed${metadata}. You may use mesh_read_chat and mesh_approve to handle it.`;
+    }
+    return '';
+}
+
+function injectMeshSystemMessage(components: DaemonComponents, args: {
+    meshId: string;
+    sourceInstanceId?: string;
+    nodeLabel: string;
+    event: string;
+    metadataEvent: Record<string, unknown>;
+}) {
+    const coordinatorInstances = components.instanceManager.getByCategory('cli').filter((inst) => {
+        const instState = inst.getState();
+        if (instState.settings?.meshCoordinatorFor !== args.meshId) return false;
+        if (args.sourceInstanceId && instState.instanceId === args.sourceInstanceId) return false;
+        return true;
+    });
+
+    if (coordinatorInstances.length === 0) return { success: true, forwarded: 0 };
+
+    const messageText = buildMeshSystemMessage({
+        event: args.event,
+        nodeLabel: args.nodeLabel,
+        metadataEvent: args.metadataEvent,
+    });
+    if (!messageText) return { success: false, error: 'unsupported mesh event' };
+
+    for (const coord of coordinatorInstances) {
+        const coordState = coord.getState();
+        LOG.info('MeshEvents', `Forwarding mesh event to coordinator ${coordState.instanceId}`);
+        coord.onEvent('send_message', { input: { text: messageText, textFallback: messageText } });
+    }
+    return { success: true, forwarded: coordinatorInstances.length };
+}
+
+export function handleMeshForwardEvent(components: DaemonComponents, payload: Record<string, unknown>) {
+    const eventName = readNonEmptyString(payload.event);
+    if (eventName !== 'agent:generating_completed' && eventName !== 'agent:waiting_approval') {
+        return { success: false, error: 'unsupported mesh event' };
+    }
+    const meshId = readNonEmptyString(payload.meshId);
+    if (!meshId) return { success: false, error: 'meshId required' };
+
+    const nodeId = readNonEmptyString(payload.nodeId);
+    const workspace = readNonEmptyString(payload.workspace);
+    const nodeLabel = nodeId ? `Node '${nodeId}'` : workspace ? `Agent at ${workspace}` : 'Remote agent';
+    return injectMeshSystemMessage(components, {
+        meshId,
+        nodeLabel,
+        event: eventName,
+        metadataEvent: {
+            targetSessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId),
+            providerType: readNonEmptyString(payload.providerType),
+            providerSessionId: readNonEmptyString(payload.providerSessionId),
+        },
+    });
+}
+
 export function setupMeshEventForwarding(components: DaemonComponents) {
     components.instanceManager.onEvent((event) => {
         // We only care about agent sub-session completion or waiting approval
@@ -38,22 +107,6 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
         const meshId = meshIdFromRuntime || readNonEmptyString(mesh?.id);
         if (!meshId) return;
 
-        // Find the coordinator session(s)
-        const allInstances = components.instanceManager.getByCategory('cli');
-        const coordinatorInstances = allInstances.filter((inst) => {
-            const instState = inst.getState();
-
-            // The coordinator session was launched with meshCoordinatorFor setting
-            if (instState.settings?.meshCoordinatorFor !== meshId) return false;
-
-            // Exclude the source instance itself (just in case)
-            if (instState.instanceId === instanceId) return false;
-
-            return true;
-        });
-
-        if (coordinatorInstances.length === 0) return;
-
         // Determine node label. Inline/cloud meshes may be unavailable here, so preserve runtime node id.
         const targetNode = mesh?.nodes?.find((n: any) => n.workspace === workspace);
         const runtimeNodeId = readNonEmptyString(settings.meshNodeId);
@@ -62,23 +115,13 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
             : runtimeNodeId
                 ? `Node '${runtimeNodeId}'`
                 : `Agent at ${workspace}`;
-        const metadata = formatCompletionMetadata(event);
 
-        // Construct a system message in English
-        let messageText = '';
-        if (event.event === 'agent:generating_completed') {
-            messageText = `[System] ${nodeLabel} has completed its task and is now idle${metadata}. You may use mesh_read_chat to review its progress.`;
-        } else if (event.event === 'agent:waiting_approval') {
-            messageText = `[System] ${nodeLabel} is waiting for approval to proceed${metadata}. You may use mesh_read_chat and mesh_approve to handle it.`;
-        }
-
-        if (!messageText) return;
-
-        // Inject the message into the coordinator sessions
-        for (const coord of coordinatorInstances) {
-            const coordState = coord.getState();
-            LOG.info('MeshEvents', `Forwarding event from ${workspace} to coordinator ${coordState.instanceId}`);
-            coord.onEvent('send_message', { input: { text: messageText, textFallback: messageText } });
-        }
+        injectMeshSystemMessage(components, {
+            meshId,
+            sourceInstanceId: instanceId,
+            nodeLabel,
+            event: event.event,
+            metadataEvent: event,
+        });
     });
 }

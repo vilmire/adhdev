@@ -121,6 +121,20 @@ function extractLaunchPayload(value: any): any {
     return findNestedPayload(value, payload => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
 }
 
+function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | undefined {
+    const preferredNodeId = typeof ctx.mesh.coordinator?.preferredNodeId === 'string'
+        ? ctx.mesh.coordinator.preferredNodeId.trim()
+        : '';
+    if (preferredNodeId) {
+        const preferred = ctx.mesh.nodes.find(n => n.id === preferredNodeId && typeof n.daemonId === 'string' && n.daemonId.trim());
+        if (preferred) return preferred;
+    }
+    if (ctx.localDaemonId) {
+        return ctx.mesh.nodes.find(n => n.daemonId === ctx.localDaemonId);
+    }
+    return undefined;
+}
+
 function meshSessionCacheKey(nodeId: string, runtimeSessionId: string): string {
     return `${nodeId}:${runtimeSessionId}`;
 }
@@ -489,12 +503,15 @@ export async function meshLaunchSession(
             }
         }
 
+        const coordinatorNode = resolveCoordinatorNode(ctx);
         const result = await commandForNode(ctx, node, 'launch_cli', {
             cliType: resolvedProviderType,
             dir: node.workspace,
             settings: {
                 meshNodeFor: ctx.mesh.id,
                 meshNodeId: args.node_id,
+                ...(coordinatorNode?.daemonId ? { meshCoordinatorDaemonId: coordinatorNode.daemonId } : {}),
+                ...(coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {}),
                 launchedByCoordinator: true
             }
         });
