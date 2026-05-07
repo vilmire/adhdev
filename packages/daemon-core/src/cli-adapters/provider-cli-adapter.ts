@@ -1857,9 +1857,13 @@ export class ProviderCliAdapter implements CliAdapter {
             };
             this.recordTrace('submit_echo_missing', diagnostic);
             if (this.requirePromptEchoBeforeSubmit) {
-                const message = `${this.cliName} prompt echo was not observed on the PTY screen before submit`;
-                LOG.warn('CLI', `[${this.cliType}] ${message} elapsed=${elapsed}ms maxEchoWaitMs=${state.maxEchoWaitMs} screen=${JSON.stringify(diagnostic.screenText).slice(0, 240)}`);
-                completion.rejectOnce(new Error(message));
+                // At this point the prompt text write already completed. Rejecting without
+                // a submit key can leave the delegated CLI with an unsent prompt sitting at
+                // the input line, which makes later coordinator sends appear stuck. Prefer a
+                // guarded submit after the full echo wait; the existing stuck-submit retry
+                // will send a delayed follow-up Enter if the prompt remains visible.
+                LOG.warn('CLI', `[${this.cliType}] prompt echo was not observed before submit; sending guarded submit key anyway elapsed=${elapsed}ms maxEchoWaitMs=${state.maxEchoWaitMs} screen=${JSON.stringify(diagnostic.screenText).slice(0, 240)}`);
+                this.submitSendKey(state, completion);
                 return;
             }
             LOG.warn('CLI', `[${this.cliType}] prompt echo was not observed before submit; sending submit key anyway elapsed=${elapsed}ms maxEchoWaitMs=${state.maxEchoWaitMs}`);
