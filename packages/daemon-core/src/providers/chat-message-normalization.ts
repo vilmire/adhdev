@@ -171,3 +171,57 @@ export function normalizeChatMessage<T extends ChatMessage>(message: T): T {
 export function normalizeChatMessages<T extends ChatMessage>(messages: T[] | null | undefined): T[] {
   return (Array.isArray(messages) ? messages : []).map((message) => normalizeChatMessage(message));
 }
+
+function readMessageMeta(message: ChatMessage): Record<string, unknown> | null {
+  const meta = message?.meta;
+  return meta && typeof meta === 'object' && !Array.isArray(meta)
+    ? meta as Record<string, unknown>
+    : null;
+}
+
+function isExplicitlyHiddenFromTranscript(meta: Record<string, unknown> | null): boolean {
+  if (!meta) return false;
+  const visibility = typeof meta.transcriptVisibility === 'string'
+    ? meta.transcriptVisibility.trim().toLowerCase()
+    : '';
+  return visibility === 'hidden'
+    || visibility === 'debug'
+    || meta.internal === true
+    || meta.debug === true
+    || meta.statusOnly === true
+    || meta.controlOnly === true;
+}
+
+function isExplicitlyVisibleInTranscript(meta: Record<string, unknown> | null): boolean {
+  if (!meta) return false;
+  const visibility = typeof meta.transcriptVisibility === 'string'
+    ? meta.transcriptVisibility.trim().toLowerCase()
+    : '';
+  return visibility === 'visible' || meta.userFacing === true;
+}
+
+/**
+ * Product chat transcript visibility contract.
+ *
+ * read_chat/debug paths may preserve every normalized message, including tool,
+ * terminal, thought, status, and control rows. The default user-facing chat UX
+ * should only render meaningful conversation turns unless a producer explicitly
+ * marks a non-standard row as user-facing. This keeps internal tool/status/control
+ * plumbing out of the ordinary transcript without matching provider-specific text.
+ */
+export function isUserFacingChatMessage(message: ChatMessage | null | undefined): boolean {
+  if (!message) return false;
+  const meta = readMessageMeta(message);
+  if (isExplicitlyHiddenFromTranscript(meta)) return false;
+  if (isExplicitlyVisibleInTranscript(meta)) return true;
+
+  const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
+  const kind = resolveChatMessageKind(message);
+  if (role === 'user' || role === 'human') return kind === 'standard' || kind === '';
+  if (role === 'assistant') return kind === 'standard' || kind === '';
+  return false;
+}
+
+export function filterUserFacingChatMessages<T extends ChatMessage>(messages: T[] | null | undefined): T[] {
+  return (Array.isArray(messages) ? messages : []).filter((message) => isUserFacingChatMessage(message));
+}

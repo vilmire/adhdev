@@ -9,7 +9,9 @@ import {
   buildThoughtChatMessage,
   buildToolChatMessage,
   buildUserChatMessage,
+  filterUserFacingChatMessages,
   isBuiltinChatMessageKind,
+  isUserFacingChatMessage,
   normalizeChatMessage,
   normalizeChatMessageKind,
   normalizeChatMessages,
@@ -99,5 +101,41 @@ describe('chat message normalization', () => {
     ] as any);
 
     expect(normalized.map((message) => message.kind)).toEqual(['standard', 'system', 'tool']);
+  });
+
+  it('filters user-facing transcript messages without discarding debug rows from normalization', () => {
+    const messages = normalizeChatMessages([
+      { role: 'user', content: 'prompt' },
+      { role: 'assistant', content: 'answer' },
+      { role: 'assistant', content: '⚡ mcp_adhdev_mesh_mesh_git_status (0.0s)', kind: 'tool' },
+      { role: 'assistant', content: '$ git status --short', kind: 'terminal' },
+      { role: 'assistant', content: 'intentional tool summary', kind: 'tool', meta: { transcriptVisibility: 'visible' } },
+      { role: 'assistant', content: 'internal standard status', meta: { internal: true } },
+      { role: 'system', content: 'runtime notice' },
+    ] as any);
+
+    expect(messages.map((message) => message.kind)).toEqual([
+      'standard',
+      'standard',
+      'tool',
+      'terminal',
+      'tool',
+      'standard',
+      'system',
+    ]);
+    expect(messages.map((message) => isUserFacingChatMessage(message))).toEqual([
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+    ]);
+    expect(filterUserFacingChatMessages(messages).map((message) => message.content)).toEqual([
+      'prompt',
+      'answer',
+      'intentional tool summary',
+    ]);
   });
 });
