@@ -1,7 +1,71 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { readChat } from '../src/tools/read-chat.js';
+import { READ_CHAT_TOOL, readChat } from '../src/tools/read-chat.js';
+
+test('readChat schema exposes opt-in compact mode', () => {
+  assert.equal((READ_CHAT_TOOL.inputSchema.properties as any).compact.type, 'boolean');
+  assert.match((READ_CHAT_TOOL.inputSchema.properties as any).compact.description, /compact/i);
+});
+
+test('readChat compact json filters tool terminal and internal messages', async () => {
+  const localTransport = {
+    async command() {
+      return {
+        success: true,
+        status: 'idle',
+        messages: [
+          { role: 'user', content: 'please summarize' },
+          { role: 'assistant', kind: 'tool', content: 'tool bubble' },
+          { role: 'assistant', kind: 'terminal', content: 'terminal bubble' },
+          { role: 'assistant', meta: { internal: true }, content: 'internal bubble' },
+          { role: 'system', content: 'system notification' },
+          { role: 'assistant', content: 'Final summary only' },
+        ],
+      };
+    },
+  } as any;
+
+  const output = await readChat(localTransport, {
+    session_id: 'session-compact',
+    limit: 10,
+    format: 'json',
+    compact: true,
+  } as any);
+  const parsed = JSON.parse(output);
+
+  assert.equal(parsed.compact, true);
+  assert.equal(parsed.visibleMessages, 2);
+  assert.equal(parsed.omittedMessages, 4);
+  assert.equal(parsed.summary, 'Final summary only');
+  assert.deepEqual(
+    parsed.messages.map((message: { content: string }) => message.content),
+    ['please summarize', 'Final summary only'],
+  );
+});
+
+test('readChat compact text filters tool terminal and internal messages', async () => {
+  const localTransport = {
+    async command() {
+      return {
+        success: true,
+        messages: [
+          { role: 'user', content: 'visible user' },
+          { role: 'assistant', kind: 'tool', content: 'hidden tool' },
+          { role: 'assistant', content: 'visible assistant' },
+        ],
+      };
+    },
+  } as any;
+
+  const output = await readChat(localTransport, {
+    compact: true,
+  } as any);
+
+  assert.match(output, /visible user/);
+  assert.match(output, /visible assistant/);
+  assert.doesNotMatch(output, /hidden tool/);
+});
 
 test('readChat local mode sends tailLimit and caps formatted output to requested limit', async () => {
   const commands: Array<{ type: string; args: Record<string, unknown> }> = [];

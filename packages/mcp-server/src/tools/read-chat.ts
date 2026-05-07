@@ -1,5 +1,6 @@
 import type { McpTransport } from '../transports/mode.js';
 import { isLocalTransport } from '../transports/mode.js';
+import { compactChatPayload, messageContent } from './chat-compact.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
 export const READ_CHAT_TOOL = {
@@ -20,6 +21,10 @@ export const READ_CHAT_TOOL = {
         type: 'string',
         description: 'Daemon ID (cloud mode only). Omit for local mode.',
       },
+      compact: {
+        type: 'boolean',
+        description: 'Opt-in compact mode: filters tool/terminal/system/internal/control/debug/status chatter and returns user-visible messages plus lightweight summary metadata.',
+      },
       ...FORMAT_PROP,
     },
     required: [],
@@ -28,7 +33,7 @@ export const READ_CHAT_TOOL = {
 
 export async function readChat(
   transport: McpTransport,
-  args: { session_id?: string; limit?: number; daemon_id?: string; format?: 'text' | 'json' },
+  args: { session_id?: string; limit?: number; daemon_id?: string; format?: 'text' | 'json'; compact?: boolean },
 ): Promise<string> {
   const limit = args.limit ?? 50;
 
@@ -37,47 +42,54 @@ export async function readChat(
       ...(args.session_id ? { targetSessionId: args.session_id } : {}),
       tailLimit: limit,
     });
-    return formatChatResult(result, args.session_id, args.format, limit);
+    return formatChatResult(result, args.session_id, args.format, limit, args.compact);
   }
 
   if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
   const targetId = args.session_id ? `${args.daemon_id}:session:${args.session_id}` : args.daemon_id;
   const result = await transport.readChat(targetId, { limit, sessionId: args.session_id });
-  return formatChatResult(result, args.session_id, args.format, limit);
+  return formatChatResult(result, args.session_id, args.format, limit, args.compact);
 }
 
-function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'json', limit = 50): string {
+function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'json', limit = 50, compact = false): string {
   if (!result?.success && result?.error) {
     if (format === 'json') return JSON.stringify({ error: result.error, messages: [] }, null, 2);
     return `Error: ${result.error}`;
   }
 
   const messages: any[] = result?.messages ?? result?.data?.messages ?? [];
+  const source = { ...result, messages };
+  const compactPayload = compact ? compactChatPayload(source, { sessionId: sessionId ?? null, limit }) : null;
+  const outputMessages = compact ? compactPayload.messages : messages;
 
   if (format === 'json') {
+    if (compact && compactPayload) {
+      return JSON.stringify({
+        session_id: sessionId ?? null,
+        ...compactPayload,
+        messages: compactPayload.messages.map((m: any) => ({
+          role: m.role,
+          kind: m.kind ?? null,
+          content: messageContent(m),
+          timestamp: m.timestamp ?? null,
+        })),
+      }, null, 2);
+    }
     return JSON.stringify({
       session_id: sessionId ?? null,
-      messages: messages.slice(-limit).map((m: any) => ({
+      messages: outputMessages.slice(-limit).map((m: any) => ({
         role: m.role,
         kind: m.kind ?? null,
-        content: typeof m.content === 'string'
-          ? m.content
-          : Array.isArray(m.content)
-            ? m.content.map((p: any) => (typeof p === 'string' ? p : p?.text ?? '')).join('')
-            : '',
+        content: messageContent(m),
         timestamp: m.timestamp ?? null,
       })),
     }, null, 2);
   }
 
-  if (messages.length === 0) return 'No messages in chat.';
-  const lines = messages.slice(-limit).map((m: any) => {
+  if (outputMessages.length === 0) return 'No messages in chat.';
+  const lines = outputMessages.slice(-limit).map((m: any) => {
     const role = m.role === 'user' ? 'User' : m.role === 'assistant' ? 'Agent' : m.role;
-    const content = typeof m.content === 'string'
-      ? m.content
-      : Array.isArray(m.content)
-        ? m.content.map((p: any) => (typeof p === 'string' ? p : p?.text ?? '')).join('')
-        : '';
+    const content = messageContent(m);
     const truncated = content.length > 500 ? `${content.slice(0, 500)}…` : content;
     return `[${role}] ${truncated}`;
   });

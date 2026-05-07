@@ -15,6 +15,7 @@ import { CloudTransport } from '../transports/cloud.js';
 import { IpcTransport } from '../transports/ipc.js';
 import { isLocalTransport } from '../transports/mode.js';
 import type { McpTransport } from '../transports/mode.js';
+import { compactChatPayload } from './chat-compact.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshPolicy } from '@adhdev/daemon-core';
 
 export interface MeshContext {
@@ -120,55 +121,6 @@ function extractGitDiff(value: any): any {
 
 function extractLaunchPayload(value: any): any {
     return findNestedPayload(value, payload => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
-}
-
-function messageContent(message: any): string {
-    const content = message?.content;
-    if (typeof content === 'string') return content;
-    if (Array.isArray(content)) {
-        return content.map((part: any) => (typeof part === 'string' ? part : part?.text ?? '')).join('');
-    }
-    return '';
-}
-
-function isCoordinatorVisibleMessage(message: any): boolean {
-    if (!message || typeof message !== 'object') return false;
-    const role = String(message.role ?? '').toLowerCase();
-    if (role === 'tool' || role === 'system' || role === 'debug') return false;
-    const kind = String(message.kind ?? message.type ?? message.messageKind ?? '').toLowerCase();
-    if (['tool', 'tool_call', 'tool_result', 'terminal', 'internal', 'control', 'debug', 'status'].includes(kind)) return false;
-    const meta = message.meta ?? message.metadata;
-    if (meta?.internal === true || meta?.debug === true || meta?.control === true || meta?.userVisible === false || meta?.user_visible === false) return false;
-    return role === 'user' || role === 'assistant' || role === 'agent';
-}
-
-function compactReadChatPayload(payload: any, args: { node_id: string; session_id: string; tail?: number }): any {
-    const rawMessages = Array.isArray(payload?.messages) ? payload.messages : [];
-    const visibleMessages = rawMessages.filter(isCoordinatorVisibleMessage);
-    const limit = Math.max(1, Math.min(args.tail ?? 10, 10));
-    const messages = visibleMessages.slice(-limit);
-    const finalAssistant = [...visibleMessages].reverse().find((message: any) => {
-        const role = String(message?.role ?? '').toLowerCase();
-        return (role === 'assistant' || role === 'agent') && messageContent(message).trim();
-    });
-    const summary = typeof payload?.summary === 'string' && payload.summary.trim()
-        ? payload.summary.trim()
-        : messageContent(finalAssistant).trim();
-
-    return {
-        success: payload?.success !== false,
-        compact: true,
-        nodeId: args.node_id,
-        sessionId: args.session_id,
-        status: payload?.status ?? null,
-        providerSessionId: payload?.providerSessionId ?? null,
-        totalMessages: rawMessages.length,
-        visibleMessages: visibleMessages.length,
-        summary,
-        ...(payload?.changedFiles !== undefined ? { changedFiles: payload.changedFiles } : {}),
-        ...(payload?.testsRun !== undefined ? { testsRun: payload.testsRun } : {}),
-        messages,
-    };
 }
 
 function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | undefined {
@@ -566,7 +518,11 @@ export async function meshReadChat(
         });
         const payload = unwrapCommandPayload(result);
         if (args.compact) {
-            return JSON.stringify(compactReadChatPayload(payload, args), null, 2);
+            return JSON.stringify(compactChatPayload(payload, {
+                nodeId: args.node_id,
+                sessionId: args.session_id,
+                limit: args.tail ?? 10,
+            }), null, 2);
         }
         return JSON.stringify(payload, null, 2);
     } else {
