@@ -688,9 +688,14 @@ export async function meshApprove(
     const node = await findNodeWithRefresh(ctx, args.node_id); // membership check
 
     if (isLocalTransport(ctx.transport)) {
+        const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
+        const providerSessionId = cached?.providerSessionId;
         const result = await commandForNode(ctx, node, 'resolve_action', {
             sessionId: args.session_id,
             targetSessionId: args.session_id,
+            workspace: node.workspace,
+            ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
+            ...(providerSessionId ? { providerSessionId } : {}),
             action: args.action === 'reject' ? 'reject' : 'approve',
         });
         return JSON.stringify(result, null, 2);

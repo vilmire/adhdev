@@ -61,10 +61,16 @@ describe('ProviderCliAdapter sendMessage guard', () => {
     expect(adapter.ptyProcess.write).toHaveBeenCalledWith('next prompt\r')
   })
 
-  it('rejects a second prompt when parsed status still says generating even if adapter status already looks idle', async () => {
+  it('rejects a second prompt when parsed status still says generating during an active turn', async () => {
     const adapter = buildAdapter()
     adapter.currentStatus = 'idle'
-    adapter.isWaitingForResponse = false
+    adapter.isWaitingForResponse = true
+    adapter.currentTurnScope = {
+      prompt: 'Reply with exactly TURN-ONE and nothing else.',
+      startedAt: Date.now(),
+      bufferStart: 0,
+      rawBufferStart: 0,
+    }
     adapter.terminalScreen = { getText: () => '❯\n' }
     adapter.getScriptParsedStatus = vi.fn(() => ({
       status: 'generating',
@@ -76,6 +82,28 @@ describe('ProviderCliAdapter sendMessage guard', () => {
 
     await expect(adapter.sendMessage('Reply with exactly TURN-TWO and nothing else.')).rejects.toThrow('still processing')
     expect(adapter.ptyProcess.write).not.toHaveBeenCalled()
+  })
+
+  it('allows a fresh prompt when parsed generating is stale but the terminal state is idle and modal-free', async () => {
+    const adapter = buildAdapter()
+    adapter.currentStatus = 'idle'
+    adapter.isWaitingForResponse = false
+    adapter.currentTurnScope = null
+    adapter.activeModal = null
+    adapter.terminalScreen = { getText: () => '❯\n' }
+    adapter.recentOutputBuffer = '❯\n'
+    adapter.runDetectStatus = vi.fn(() => 'idle')
+    adapter.getScriptParsedStatus = vi.fn(() => ({
+      status: 'generating',
+      messages: [
+        { role: 'user', content: 'Reply with exactly TURN-ONE and nothing else.' },
+        { role: 'assistant', content: 'TURN-ONE' },
+      ],
+      activeModal: null,
+    }))
+
+    await expect(adapter.sendMessage('Reply with exactly TURN-TWO and nothing else.')).resolves.toBeUndefined()
+    expect(adapter.ptyProcess.write).toHaveBeenCalledWith('Reply with exactly TURN-TWO and nothing else.\r')
   })
 
   it('retries submit when the response buffer only contains the echoed long prompt', async () => {

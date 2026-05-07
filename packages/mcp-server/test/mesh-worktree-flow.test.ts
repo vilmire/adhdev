@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { meshApprove, meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 
 test('mesh worktree tools route clone/remove to the source node daemon and refresh MCP mesh context', async () => {
   const transport = new IpcTransport() as IpcTransport & {
@@ -195,6 +195,9 @@ test('mesh_launch_session explicit type overrides node providerPriority', async 
         },
       };
     }
+    if (command === 'resolve_action') {
+      return { success: true, buttonIndex: 0, button: 'Allow once' };
+    }
     throw new Error(`unexpected mesh command: ${command}`);
   };
 
@@ -243,6 +246,21 @@ test('mesh_launch_session explicit type overrides node providerPriority', async 
     providerSessionId: 'provider-explicit',
     tailLimit: 12,
     delivery: 'daemon_file',
+  });
+
+  const approveText = await meshApprove(ctx as any, { node_id: 'node-provider', session_id: 'runtime-explicit', action: 'approve' });
+  const approve = JSON.parse(approveText);
+  assert.equal(approve.success, true);
+  assert.equal(calls[2].daemonId, 'daemon-source');
+  assert.equal(calls[2].command, 'resolve_action');
+  assert.deepEqual(calls[2].args, {
+    sessionId: 'runtime-explicit',
+    targetSessionId: 'runtime-explicit',
+    workspace: '/repo',
+    agentType: 'codex-cli',
+    providerType: 'codex-cli',
+    providerSessionId: 'provider-explicit',
+    action: 'approve',
   });
 });
 

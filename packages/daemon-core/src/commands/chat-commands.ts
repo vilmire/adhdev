@@ -1642,11 +1642,26 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
             && status.activeModal.buttons.some((candidate) => typeof candidate === 'string' && candidate.trim())
             ? status.activeModal
             : null;
-        const effectiveModal = statusModal || surfacedModal;
-        const effectiveStatus = status?.status === 'waiting_approval' || targetState?.activeChat?.status === 'waiting_approval'
+        const parsedStatus = !statusModal && !surfacedModal && typeof adapter.getScriptParsedStatus === 'function'
+            ? (() => {
+                try {
+                    return parseMaybeJson(adapter.getScriptParsedStatus());
+                } catch {
+                    return null;
+                }
+            })()
+            : null;
+        const parsedModal = parsedStatus?.status === 'waiting_approval'
+            && parsedStatus?.activeModal
+            && Array.isArray(parsedStatus.activeModal.buttons)
+            && parsedStatus.activeModal.buttons.some((candidate: unknown) => typeof candidate === 'string' && candidate.trim())
+            ? parsedStatus.activeModal
+            : null;
+        const effectiveModal = statusModal || surfacedModal || parsedModal;
+        const effectiveStatus = status?.status === 'waiting_approval' || targetState?.activeChat?.status === 'waiting_approval' || parsedStatus?.status === 'waiting_approval'
             ? 'waiting_approval'
             : status?.status;
-        LOG.info('Command', `[resolveAction] CLI PTY gate target=${String(args?.targetSessionId || '')} rawStatus=${String(status?.status || '')} effectiveStatus=${String(effectiveStatus || '')} statusModal=${statusModal ? 'yes' : 'no'} surfacedModal=${surfacedModal ? 'yes' : 'no'} instance=${targetInstance ? 'yes' : 'no'}`);
+        LOG.info('Command', `[resolveAction] CLI PTY gate target=${String(args?.targetSessionId || '')} rawStatus=${String(status?.status || '')} effectiveStatus=${String(effectiveStatus || '')} statusModal=${statusModal ? 'yes' : 'no'} surfacedModal=${surfacedModal ? 'yes' : 'no'} parsedModal=${parsedModal ? 'yes' : 'no'} instance=${targetInstance ? 'yes' : 'no'}`);
         if (!effectiveModal) {
             return { success: false, error: 'Not in approval state' };
         }

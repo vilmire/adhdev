@@ -1918,7 +1918,21 @@ export class ProviderCliAdapter implements CliAdapter {
             ? String(parsedStatusBeforeSend.status)
             : '';
         if (!allowInputDuringGeneration && (parsedSessionStatus === 'generating' || parsedSessionStatus === 'long_generating')) {
-            throw new Error(`${this.cliName} is still processing the previous prompt`);
+            const parsedModal = parsedStatusBeforeSend?.activeModal ?? parsedStatusBeforeSend?.modal ?? null;
+            const parsedHasActionableModal = Boolean(
+                parsedModal
+                && Array.isArray(parsedModal.buttons)
+                && parsedModal.buttons.some((candidate: unknown) => typeof candidate === 'string' && candidate.trim()),
+            );
+            const terminalLooksIdle = this.currentStatus === 'idle'
+                && this.runDetectStatus(this.recentOutputBuffer) === 'idle'
+                && !this.isWaitingForResponse
+                && !this.currentTurnScope
+                && !this.hasActionableApproval()
+                && !parsedHasActionableModal;
+            if (!terminalLooksIdle) {
+                throw new Error(`${this.cliName} is still processing the previous prompt`);
+            }
         }
         if (this.isWaitingForResponse && !allowInputDuringGeneration) {
             if (!this.clearStaleIdleResponseGuard('send_message_guard')) {
