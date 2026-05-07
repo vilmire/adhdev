@@ -16,12 +16,13 @@ function renderMessages(messages: ChatMessage[]): string {
 }
 
 describe('ChatMessageList command output rendering', () => {
-  it('does not collapse tool messages to the first 80 characters of the first line', () => {
+  it('does not collapse explicit chat-visible tool messages to the first 80 characters of the first line', () => {
     const html = renderMessages([
       {
         role: 'assistant',
         kind: 'tool',
         content: ['tool first line', 'command second line', 'TAIL_COMMAND_MARKER_VISIBLE'].join('\n'),
+        meta: { visibility: 'chat' },
       } as ChatMessage,
     ])
 
