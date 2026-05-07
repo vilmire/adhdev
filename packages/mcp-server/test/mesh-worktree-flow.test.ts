@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 
 test('mesh worktree tools route clone/remove to the source node daemon and refresh MCP mesh context', async () => {
   const transport = new IpcTransport() as IpcTransport & {
@@ -181,6 +181,20 @@ test('mesh_launch_session explicit type overrides node providerPriority', async 
     if (command === 'launch_cli') {
       return { success: true, sessionId: 'runtime-explicit', providerSessionId: 'provider-explicit' };
     }
+    if (command === 'get_chat_debug_bundle') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          payload: {
+            success: true,
+            delivery: 'daemon_file',
+            savedPath: '/tmp/adhdev-chat-debug-runtime-explicit.json',
+            summary: { readChatTotalMessages: 88 },
+          },
+        },
+      };
+    }
     throw new Error(`unexpected mesh command: ${command}`);
   };
 
@@ -213,6 +227,23 @@ test('mesh_launch_session explicit type overrides node providerPriority', async 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].command, 'launch_cli');
   assert.equal(calls[0].args.cliType, 'codex-cli');
+
+  const debugText = await meshReadDebug(ctx as any, { node_id: 'node-provider', session_id: 'runtime-explicit', tail: 12 });
+  const debug = JSON.parse(debugText);
+  assert.equal(debug.delivery, 'daemon_file');
+  assert.equal(debug.savedPath, '/tmp/adhdev-chat-debug-runtime-explicit.json');
+  assert.equal(calls[1].daemonId, 'daemon-source');
+  assert.equal(calls[1].command, 'get_chat_debug_bundle');
+  assert.deepEqual(calls[1].args, {
+    sessionId: 'runtime-explicit',
+    targetSessionId: 'runtime-explicit',
+    workspace: '/repo',
+    agentType: 'codex-cli',
+    providerType: 'codex-cli',
+    providerSessionId: 'provider-explicit',
+    tailLimit: 12,
+    delivery: 'daemon_file',
+  });
 });
 
 test('mesh_launch_session omitted type uses providerPriority detection and fails closed when none usable', async () => {
@@ -684,8 +715,9 @@ test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache wh
   assert.ok(meshCommands.includes('remove_mesh_node'), 'remove_mesh_node relayed to daemon');
 });
 
-test('mesh tool registry documents the 10 exposed mesh tools including worktree clone/remove', () => {
-  assert.equal(ALL_MESH_TOOLS.length, 10);
+test('mesh tool registry documents the 11 exposed mesh tools including read-debug and worktree clone/remove', () => {
+  assert.equal(ALL_MESH_TOOLS.length, 11);
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_read_debug'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_clone_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_remove_node'));
 });

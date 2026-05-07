@@ -365,6 +365,7 @@ interface GitSubscriptionState {
 const SESSION_TARGET_COMMANDS = new Set([
   'send_chat',
   'read_chat',
+  'get_chat_debug_bundle',
   'chat_history',
   'resolve_action',
   'set_cli_view_mode',

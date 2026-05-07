@@ -156,6 +156,9 @@ describe('chat debug bundle', () => {
         targetSessionId: 'session_1',
         providerType: 'hermes',
         transport: 'pty',
+        cliParsedStatus: 'idle',
+        cliParsedMessageCount: undefined,
+        cliPartialResponseChars: 'partial daemon evidence'.length,
       })
     } finally {
       if (previousDir === undefined) delete process.env.ADHDEV_DEBUG_BUNDLE_DIR

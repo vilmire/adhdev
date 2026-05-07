@@ -502,6 +502,18 @@ function buildChatDebugBundleSummary(bundle: Record<string, unknown>): Record<st
     const readChat = bundle.readChat && typeof bundle.readChat === 'object' ? bundle.readChat as Record<string, unknown> : {};
     const cli = bundle.cli && typeof bundle.cli === 'object' ? bundle.cli as Record<string, unknown> : null;
     const frontend = bundle.frontend && typeof bundle.frontend === 'object' ? bundle.frontend as Record<string, unknown> : null;
+    const debugReadChat = readChat.debugReadChat && typeof readChat.debugReadChat === 'object'
+        ? readChat.debugReadChat as Record<string, unknown>
+        : {};
+    const parsedStatus = cli?.parsedStatus && typeof cli.parsedStatus === 'object'
+        ? cli.parsedStatus as Record<string, unknown>
+        : null;
+    const cliParsedMessageCount = Array.isArray(parsedStatus?.messages) ? parsedStatus.messages.length : undefined;
+    const readChatReturnedMessages = Array.isArray(readChat.messagesTail) ? readChat.messagesTail.length : undefined;
+    const cliPartialResponse = typeof cli?.partialResponse === 'string' ? cli.partialResponse : '';
+    const readChatStatus = typeof readChat.status === 'string' ? readChat.status : '';
+    const cliStatus = typeof cli?.status === 'string' ? cli.status : '';
+    const cliParsedStatus = typeof parsedStatus?.status === 'string' ? parsedStatus.status : '';
     return {
         createdAt: bundle.createdAt,
         targetSessionId: target.targetSessionId,
@@ -510,8 +522,22 @@ function buildChatDebugBundleSummary(bundle: Record<string, unknown>): Record<st
         readChatSuccess: readChat.success,
         readChatStatus: readChat.status,
         readChatTotalMessages: readChat.totalMessages,
+        readChatReturnedMessages,
         cliStatus: cli?.status,
+        cliParsedStatus: cliParsedStatus || undefined,
         cliMessageCount: cli?.messageCount,
+        cliParsedMessageCount,
+        cliPartialResponseChars: cliPartialResponse.length,
+        parserAdapterStatusMismatch: Boolean(cliStatus && cliParsedStatus && cliStatus !== cliParsedStatus),
+        parserReadChatStatusMismatch: Boolean(readChatStatus && cliParsedStatus && readChatStatus !== cliParsedStatus),
+        readChatDebug: Object.keys(debugReadChat).length ? {
+            adapterStatus: debugReadChat.adapterStatus,
+            parsedStatus: debugReadChat.parsedStatus,
+            returnedStatus: debugReadChat.returnedStatus,
+            parsedMsgCount: debugReadChat.parsedMsgCount,
+            returnedMsgCount: debugReadChat.returnedMsgCount,
+            shouldPreferAdapterMessages: debugReadChat.shouldPreferAdapterMessages,
+        } : undefined,
         hasFrontendSnapshot: !!frontend,
     };
 }

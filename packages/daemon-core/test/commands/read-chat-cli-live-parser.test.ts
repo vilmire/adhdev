@@ -440,6 +440,83 @@ describe('handleReadChat for CLI adapters', () => {
     ])
   })
 
+  it('keeps long provider parser transcript authoritative when adapter has stale streaming partial tail', async () => {
+    const finalAnswer = '최종 답변: token-cap 이후에도 chat tail은 terminal partial이 아니라 parser final을 따라야 함'
+    const parserMessages = [
+      ...Array.from({ length: 96 }, (_, index) => ({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `long-history-${index + 1}`,
+        id: `history-${index + 1}`,
+        timestamp: index + 1,
+      })),
+      { role: 'user', content: '긴 대화 이후 최종 답변 줘', id: 'prompt-final', timestamp: 97 },
+      { role: 'assistant', content: finalAnswer, id: 'answer-final', timestamp: 98, bubbleState: 'final', meta: { streaming: false } },
+    ]
+    const stalePartial = `${finalAnswer.slice(0, 18)}… [terminal partial still streaming]`
+    const adapter = {
+      cliType: 'hermes-cli',
+      cliName: 'Hermes Agent',
+      workingDir: '/tmp/project',
+      spawn: async () => {},
+      sendMessage: async () => {},
+      getStatus: () => ({
+        status: 'generating',
+        messages: [
+          ...parserMessages.slice(0, -1),
+          { role: 'assistant', content: stalePartial, id: 'answer-final', bubbleState: 'streaming', meta: { streaming: true } },
+        ],
+        activeModal: null,
+      }),
+      getScriptParsedStatus: () => ({
+        status: 'idle',
+        messages: parserMessages,
+        activeModal: null,
+        title: 'Hermes Agent',
+        transcriptAuthority: 'provider',
+        coverage: 'full',
+      }),
+      getPartialResponse: () => stalePartial,
+      shutdown: () => {},
+      cancel: () => {},
+      isProcessing: () => false,
+      isReady: () => true,
+      setOnStatusChange: () => {},
+    }
+
+    const result = await handleReadChat({
+      getCdp: () => null,
+      getProvider: () => ({ type: 'hermes-cli', category: 'cli', historyBehavior: { transcriptAuthority: 'provider' } }),
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      getCliAdapter: () => adapter as any,
+      currentManagerKey: undefined,
+      currentIdeType: undefined,
+      currentProviderType: undefined,
+      currentSession: undefined,
+      agentStream: null,
+      ctx: {},
+      historyWriter: { appendNewMessages: () => {} },
+    } as any, { agentType: 'hermes-cli', tailLimit: 5 })
+
+    expect(result.success).toBe(true)
+    expect(result.status).toBe('idle')
+    expect(result.totalMessages).toBe(parserMessages.length)
+    expect((result as any).transcriptAuthority).toBe('provider')
+    expect((result.messages as any[]).map(message => message.content)).toEqual(
+      parserMessages.slice(-5).map(message => message.content),
+    )
+    const returnedMessages = result.messages as any[]
+    expect(returnedMessages[returnedMessages.length - 1]).toEqual(expect.objectContaining({
+      id: 'answer-final',
+      content: finalAnswer,
+      bubbleState: 'final',
+      meta: { streaming: false },
+    }))
+    expect((result.messages as any[]).map(message => message.content)).not.toContain(stalePartial)
+    expect((result as any).debugReadChat?.parsedMsgCount).toBe(parserMessages.length)
+    expect((result as any).debugReadChat?.returnedStatus).toBe('idle')
+  })
+
   it('uses parsed waiting_approval status when the parsed transcript has approval buttons even if adapter status is already idle', async () => {
     const adapter = {
       cliType: 'hermes-cli',

@@ -66,6 +66,27 @@ export class CloudTransport {
     return res.json();
   }
 
+  async getChatDebugBundle(
+    targetId: string,
+    opts: { sessionId?: string; agentType?: string; tailLimit?: number; delivery?: 'daemon_file' | 'inline' } = {},
+  ): Promise<any> {
+    const res = await fetch(
+      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(targetId)}/chat/debug`,
+      {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({
+          ...(opts.agentType ? { agentType: opts.agentType } : {}),
+          ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+          ...(opts.tailLimit ? { tailLimit: opts.tailLimit } : {}),
+          ...(opts.delivery ? { delivery: opts.delivery } : {}),
+        }),
+      },
+    );
+    if (!res.ok) throw new Error(`Chat debug bundle failed: ${res.status}`);
+    return res.json();
+  }
+
   async sendChat(targetId: string, message: string, opts: { sessionId?: string; ideType?: string } = {}): Promise<any> {
     const res = await fetch(
       `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(targetId)}/chat`,

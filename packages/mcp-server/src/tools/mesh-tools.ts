@@ -5,7 +5,8 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 10 tools: mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat,
+ * 11 tools: mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat,
+ *           mesh_read_debug,
  *           mesh_launch_session, mesh_git_status, mesh_checkpoint, mesh_approve,
  *           mesh_clone_node, mesh_remove_node
  */
@@ -251,6 +252,22 @@ export const MESH_READ_CHAT_TOOL = {
     },
 };
 
+export const MESH_READ_DEBUG_TOOL = {
+    name: 'mesh_read_debug',
+    description: 'Collect a daemon-side chat/parser debug bundle for a delegated agent session on a mesh node without opening the browser UI. Defaults to daemon_file delivery and returns a saved bundle locator.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Target node ID.' },
+            session_id: { type: 'string', description: 'Agent session ID to debug.' },
+            provider_session_id: { type: 'string', description: 'Optional provider transcript/session ID for completed session history.' },
+            tail: { type: 'number', description: 'Number of recent read_chat messages to embed (default: 40).' },
+            delivery: { type: 'string', enum: ['daemon_file', 'inline'], description: 'daemon_file saves the full sanitized bundle on the daemon; inline returns it directly. Default: daemon_file.' },
+        },
+        required: ['node_id', 'session_id'],
+    },
+};
+
 export const MESH_LAUNCH_SESSION_TOOL = {
     name: 'mesh_launch_session',
     description: 'Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Hermes = hermes-cli, Claude Code/Claude = claude-cli, Codex = codex-cli, Gemini = gemini-cli. If type is omitted, resolve strictly from the node policy providerPriority and provider detection; fail closed when no configured provider is usable. Do not default to claude-cli.',
@@ -335,6 +352,7 @@ export const ALL_MESH_TOOLS = [
     MESH_LIST_NODES_TOOL,
     MESH_SEND_TASK_TOOL,
     MESH_READ_CHAT_TOOL,
+    MESH_READ_DEBUG_TOOL,
     MESH_LAUNCH_SESSION_TOOL,
     MESH_GIT_STATUS_TOOL,
     MESH_CHECKPOINT_TOOL,
@@ -472,6 +490,34 @@ export async function meshReadChat(
     } else {
         return JSON.stringify({ error: 'Cloud mesh read_chat not yet implemented' });
     }
+}
+
+export async function meshReadDebug(
+    ctx: MeshContext,
+    args: { node_id: string; session_id: string; provider_session_id?: string; tail?: number; delivery?: 'daemon_file' | 'inline' },
+): Promise<string> {
+    const node = await findNodeWithRefresh(ctx, args.node_id);
+
+    if (isLocalTransport(ctx.transport)) {
+        const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
+        const providerSessionId = typeof args.provider_session_id === 'string' && args.provider_session_id.trim()
+            ? args.provider_session_id.trim()
+            : cached?.providerSessionId;
+        const delivery = args.delivery === 'inline' ? undefined : 'daemon_file';
+        const result = await commandForNode(ctx, node, 'get_chat_debug_bundle', {
+            sessionId: args.session_id,
+            targetSessionId: args.session_id,
+            workspace: node.workspace,
+            ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
+            ...(providerSessionId ? { providerSessionId } : {}),
+            tailLimit: args.tail ?? 40,
+            ...(delivery ? { delivery } : {}),
+        });
+        const payload = unwrapCommandPayload(result);
+        return JSON.stringify(payload, null, 2);
+    }
+
+    return JSON.stringify({ error: 'Cloud mesh read_debug not yet implemented' });
 }
 
 export async function meshLaunchSession(

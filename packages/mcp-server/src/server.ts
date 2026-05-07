@@ -23,6 +23,7 @@ import type { McpTransport } from './transports/mode.js';
 import { LIST_SESSIONS_TOOL, listSessions } from './tools/list-sessions.js';
 import { LIST_DAEMONS_TOOL, listDaemons } from './tools/list-daemons.js';
 import { READ_CHAT_TOOL, readChat } from './tools/read-chat.js';
+import { READ_CHAT_DEBUG_TOOL, readChatDebug } from './tools/read-chat-debug.js';
 import { SEND_CHAT_TOOL, sendChat } from './tools/send-chat.js';
 import { APPROVE_TOOL, approve } from './tools/approve.js';
 import { SCREENSHOT_TOOL, screenshot } from './tools/screenshot.js';
@@ -36,6 +37,7 @@ import { STOP_SESSION_TOOL, stopSession } from './tools/stop-session.js';
 import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
 import {
   ALL_MESH_TOOLS, meshStatus, meshListNodes, meshSendTask, meshReadChat,
+  meshReadDebug,
   meshLaunchSession, meshGitStatus, meshCheckpoint, meshApprove,
   meshCloneNode, meshRemoveNode,
   type MeshContext,
@@ -226,6 +228,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_list_nodes': text = await meshListNodes(meshCtx); break;
           case 'mesh_send_task': text = await meshSendTask(meshCtx, a as any); break;
           case 'mesh_read_chat': text = await meshReadChat(meshCtx, a as any); break;
+          case 'mesh_read_debug': text = await meshReadDebug(meshCtx, a as any); break;
           case 'mesh_launch_session': text = await meshLaunchSession(meshCtx, a as any); break;
           case 'mesh_git_status': text = await meshGitStatus(meshCtx, a as any); break;
           case 'mesh_checkpoint': text = await meshCheckpoint(meshCtx, a as any); break;
@@ -258,6 +261,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     STOP_SESSION_TOOL,
     CHECK_PENDING_TOOL,
     READ_CHAT_TOOL,
+    READ_CHAT_DEBUG_TOOL,
     SEND_CHAT_TOOL,
     APPROVE_TOOL,
     GIT_STATUS_TOOL,
@@ -291,6 +295,10 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
         }
         case 'read_chat': {
           const text = await readChat(transport, a);
+          return { content: [{ type: 'text', text }] };
+        }
+        case 'read_chat_debug': {
+          const text = await readChatDebug(transport, a as any);
           return { content: [{ type: 'text', text }] };
         }
         case 'send_chat': {
