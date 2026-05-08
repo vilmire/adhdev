@@ -25757,7 +25757,7 @@ function buildRulesSection(coordinatorCliType) {
 - **Respect explicit provider requests.** If the user names an agent/provider, pass the matching provider type to \`mesh_launch_session\`: Hermes \u2192 \`hermes-cli\`, Claude Code/Claude \u2192 \`claude-cli\`, Codex \u2192 \`codex-cli\`, Gemini \u2192 \`gemini-cli\`. Never substitute \`claude-cli\` just because the coordinator itself is Claude Code.
 - **Front-load the task message.** When calling \`mesh_send_task\`, include everything the agent needs: what files to touch, what the problem is, what the fix should look like. The agent won't ask follow-up questions.
 - **Don't inspect code.** Trust the agent's output. Verify via \`mesh_git_status\`, not by reading source files.
-- **Don't over-parallelize.** Start with 1-2 concurrent tasks. Scale up if they succeed.
+- **Don't over-parallelize.** Start with 1-2 concurrent tasks. Scale up if they succeed. Never launch a duplicate session or second worker solely because \`mesh_read_chat\` has no final assistant message while the delegated session is still showing tool/terminal activity.
 - **Handle failures gracefully.** If a task fails, read the chat to understand why, then retry or reassign.
 - **Keep the user informed.** Report progress after each delegation round \u2014 one or two sentences, not a narration.
 - **Respect node capabilities.** Don't send build tasks to read-only nodes. Don't push from nodes that aren't allowed to.
@@ -28800,21 +28800,31 @@ function readMessageMeta(message) {
   const meta3 = message?.meta;
   return meta3 && typeof meta3 === "object" && !Array.isArray(meta3) ? meta3 : null;
 }
-function isExplicitlyHiddenFromTranscript(meta3) {
-  if (!meta3) return false;
-  const visibility = typeof meta3.transcriptVisibility === "string" ? meta3.transcriptVisibility.trim().toLowerCase() : "";
-  return visibility === "hidden" || visibility === "debug" || meta3.internal === true || meta3.debug === true || meta3.statusOnly === true || meta3.controlOnly === true;
+function readStringField(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
-function isExplicitlyVisibleInTranscript(meta3) {
-  if (!meta3) return false;
-  const visibility = typeof meta3.transcriptVisibility === "string" ? meta3.transcriptVisibility.trim().toLowerCase() : "";
-  return visibility === "visible" || meta3.userFacing === true;
+function readVisibilityField(message, meta3) {
+  const record2 = message;
+  return readStringField(record2.visibility ?? record2.transcriptVisibility ?? meta3?.visibility ?? meta3?.transcriptVisibility);
+}
+function isExplicitlyHiddenFromTranscript(message, meta3) {
+  const record2 = message;
+  const visibility = readVisibilityField(message, meta3);
+  const audience = readStringField(record2.audience ?? meta3?.audience);
+  const source = readStringField(record2.source ?? meta3?.source);
+  return visibility === "hidden" || visibility === "debug" || visibility === "internal" || audience === "debug" || audience === "trace" || audience === "internal" || source === "runtime_status" || source === "runtime_activity" || source === "provider_chrome" || source === "control" || record2.internal === true || record2.isInternal === true || record2.debug === true || meta3?.internal === true || meta3?.isInternal === true || meta3?.debug === true || meta3?.statusOnly === true || meta3?.controlOnly === true;
+}
+function isExplicitlyVisibleInTranscript(message, meta3) {
+  const record2 = message;
+  const visibility = readVisibilityField(message, meta3);
+  const audience = readStringField(record2.audience ?? meta3?.audience);
+  return visibility === "visible" || visibility === "user" || visibility === "chat" || audience === "chat" || record2.userFacing === true || meta3?.userFacing === true;
 }
 function isUserFacingChatMessage(message) {
   if (!message) return false;
   const meta3 = readMessageMeta(message);
-  if (isExplicitlyHiddenFromTranscript(meta3)) return false;
-  if (isExplicitlyVisibleInTranscript(meta3)) return true;
+  if (isExplicitlyHiddenFromTranscript(message, meta3)) return false;
+  if (isExplicitlyVisibleInTranscript(message, meta3)) return true;
   const role = typeof message.role === "string" ? message.role.trim().toLowerCase() : "";
   const kind = resolveChatMessageKind(message);
   if (role === "user" || role === "human") return kind === "standard" || kind === "";
@@ -30003,6 +30013,14 @@ function validateMessage(message, source, index) {
   if (typeof message.senderName === "string") normalized.senderName = message.senderName;
   if (typeof message._type === "string") normalized._type = message._type;
   if (typeof message._sub === "string") normalized._sub = message._sub;
+  if (typeof message.visibility === "string") normalized.visibility = message.visibility;
+  if (typeof message.transcriptVisibility === "string") normalized.transcriptVisibility = message.transcriptVisibility;
+  if (typeof message.audience === "string") normalized.audience = message.audience;
+  if (typeof message.source === "string") normalized.source = message.source;
+  if (typeof message.userFacing === "boolean") normalized.userFacing = message.userFacing;
+  if (typeof message.internal === "boolean") normalized.internal = message.internal;
+  if (typeof message.isInternal === "boolean") normalized.isInternal = message.isInternal;
+  if (typeof message.debug === "boolean") normalized.debug = message.debug;
   return normalized;
 }
 function validateModal(activeModal, status, source) {
@@ -30992,19 +31010,19 @@ function buildReadChatCommandResult(payload, args) {
   const visibleMessages = filterUserFacingChatMessages(messages);
   const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
   const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
-  const nextDebugReadChat = {
-    ...debugReadChat || {},
-    fullMsgCount: messages.length,
+  const returnedDebugReadChat = debugReadChat ? {
+    ...debugReadChat,
+    fullMsgCount: typeof debugReadChat.fullMsgCount === "number" ? debugReadChat.fullMsgCount : messages.length,
     visibleMsgCount: visibleMessages.length,
     hiddenMsgCount,
     returnedMsgCount: sync.messages.length
-  };
+  } : void 0;
   return {
     success: true,
     ...validatedPayload,
     messages: sync.messages,
     totalMessages: sync.totalMessages,
-    debugReadChat: nextDebugReadChat
+    ...returnedDebugReadChat ? { debugReadChat: returnedDebugReadChat } : {}
   };
 }
 function truncateDebugString(value, maxLength) {
@@ -40164,8 +40182,8 @@ var init_dist2 = __esm({
    b. If you need branch isolation for parallel work, call \`mesh_clone_node\` to create a worktree node first.
    c. If no session exists, call \`mesh_launch_session\` to start one.
    d. Call \`mesh_send_task\` with a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.
-4. **Monitor** \u2014 Periodically call \`mesh_read_chat\` to check progress. Handle approvals via \`mesh_approve\`.
-5. **Verify** \u2014 When a task reports completion, call \`mesh_git_status\` to verify changes were made.
+4. **Monitor** \u2014 Prefer event-driven completion/status notifications. Do **not** poll \`mesh_read_chat\` repeatedly just because the delegated session has not produced a final assistant message yet; tool/terminal activity means work may still be in progress. Use at most one compact \`mesh_read_chat\` check after a completion/approval signal, an explicit user status request, or a real timeout/stall. Handle approvals via \`mesh_approve\`.
+5. **Verify** \u2014 When a task reports completion or git work is visible, call \`mesh_git_status\` to verify changes were made.
 6. **Checkpoint** \u2014 Call \`mesh_checkpoint\` to save the work.
 7. **Clean up** \u2014 Remove worktree nodes via \`mesh_remove_node\` after their work is merged or no longer needed.
 8. **Report** \u2014 Summarize what was done, what changed, and any issues.`;
@@ -47248,12 +47266,11 @@ ${effect.notification.body || ""}`.trim();
           return Number.isFinite(value) && value > 0 ? value : 0;
         };
         const getRole = (message) => typeof message.role === "string" ? message.role.trim().toLowerCase() : "";
-        const isAutoApprovalRuntimeOverlay = (entry) => {
+        const isRuntimeOverlay = (entry) => {
           if (entry.source !== "runtime") return false;
           const key = typeof entry.runtimeKey === "string" ? entry.runtimeKey.trim().toLowerCase() : "";
           if (key.startsWith("auto_approval:")) return true;
-          const content = typeof entry.message.content === "string" ? entry.message.content.trim().toLowerCase() : flattenContent(entry.message.content).trim().toLowerCase();
-          return content.startsWith("auto-approved:");
+          return !isUserFacingChatMessage(entry.message);
         };
         const shouldKeepParsedBeforeUntimedRuntime = (message) => {
           const role = getRole(message);
@@ -47272,7 +47289,7 @@ ${effect.notification.body || ""}`.trim();
           if (a.source !== b.source && aTime !== bTime) {
             const parsedEntry = a.source === "parsed" ? a : b.source === "parsed" ? b : null;
             const runtimeEntry = a.source === "runtime" ? a : b.source === "runtime" ? b : null;
-            if (parsedEntry && runtimeEntry && isAutoApprovalRuntimeOverlay(runtimeEntry) && getTime(parsedEntry.message) === 0 && getTime(runtimeEntry.message) > 0) {
+            if (parsedEntry && runtimeEntry && isRuntimeOverlay(runtimeEntry) && getTime(parsedEntry.message) === 0 && getTime(runtimeEntry.message) > 0) {
               if (shouldKeepParsedBeforeUntimedRuntime(parsedEntry.message)) {
                 return a.source === "parsed" ? -1 : 1;
               }
