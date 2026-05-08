@@ -15,6 +15,24 @@ interface ProviderPriorityEditorProps {
   saveButton?: ReactNode
 }
 
+function IconChevron({ direction }: { direction: 'up' | 'down' }) {
+  return (
+    <svg
+      aria-hidden="true"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {direction === 'up' ? <polyline points="18 15 12 9 6 15" /> : <polyline points="6 9 12 15 18 9" />}
+    </svg>
+  )
+}
+
 export default function ProviderPriorityEditor({
   value,
   availableProviders,
@@ -56,11 +74,27 @@ export default function ProviderPriorityEditor({
                   {provider ? `${provider.label} · ${provider.statusLabel}` : type}
                 </div>
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                <button type="button" className="btn btn-secondary btn-sm" disabled={disabled || index === 0} onClick={() => onChange(moveProviderPriorityItem(visibleValue, type, 'top'))}>Top</button>
-                <button type="button" className="btn btn-secondary btn-sm" disabled={disabled || index === 0} onClick={() => onChange(moveProviderPriorityItem(visibleValue, type, 'up'))}>Up</button>
-                <button type="button" className="btn btn-secondary btn-sm" disabled={disabled || index === visibleValue.length - 1} onClick={() => onChange(moveProviderPriorityItem(visibleValue, type, 'down'))}>Down</button>
-                <button type="button" className="btn btn-secondary btn-sm" disabled={disabled || index === visibleValue.length - 1} onClick={() => onChange(moveProviderPriorityItem(visibleValue, type, 'bottom'))}>Bottom</button>
+              <div className="flex flex-wrap items-center gap-1">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm inline-flex h-8 w-8 items-center justify-center p-0"
+                  aria-label="Move up"
+                  disabled={disabled || index === 0}
+                  title="Move up"
+                  onClick={() => onChange(moveProviderPriorityItem(visibleValue, type, 'up'))}
+                >
+                  <IconChevron direction="up" />
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm inline-flex h-8 w-8 items-center justify-center p-0"
+                  aria-label="Move down"
+                  disabled={disabled || index === visibleValue.length - 1}
+                  title="Move down"
+                  onClick={() => onChange(moveProviderPriorityItem(visibleValue, type, 'down'))}
+                >
+                  <IconChevron direction="down" />
+                </button>
                 <button type="button" className="btn btn-secondary btn-sm text-red-400" disabled={disabled} onClick={() => onChange(removeProviderPriorityItem(visibleValue, type))}>Remove</button>
               </div>
             </div>
