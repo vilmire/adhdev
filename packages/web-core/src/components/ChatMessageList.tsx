@@ -240,6 +240,7 @@ export function shouldRenderChatMessageInVisibleTranscript(message: ChatMessage)
         transcriptVisibility?: unknown
         audience?: unknown
         source?: unknown
+        userFacing?: unknown
         isInternal?: unknown
         internal?: unknown
         debug?: unknown
