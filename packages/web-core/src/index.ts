@@ -93,6 +93,18 @@ export {
 export type { IdeSessionSummary, CliSessionSummary, AcpSessionSummary } from './utils/daemon-utils'
 export { statusPayloadToEntries } from './utils/status-transform'
 export type { StatusTransformOptions } from './utils/status-transform'
+export {
+    addProviderPriorityItem,
+    defaultProviderPriorityFromInventory,
+    isAvailableCliProvider,
+    moveProviderPriorityItem,
+    normalizeAvailableCliProviders,
+    normalizeProviderPriority,
+    normalizeProviderPriorityForInventory,
+    removeProviderPriorityItem,
+} from './utils/provider-priority'
+export type { AvailableCliProviderOption, ProviderPrioritySnapshot } from './utils/provider-priority'
+export { default as ProviderPriorityEditor } from './components/provider-priority/ProviderPriorityEditor'
 export { parseDaemonRouteId, applyRouteTarget, extractDaemonId, collectDaemonIds } from './utils/route-id'
 export {
     BUILTIN_IDES,

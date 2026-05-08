@@ -17,7 +17,14 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { AlertBanner } from '../components/ui/AlertBanner'
 import { FormField, Input } from '../components/ui/FormField'
 import { IconX, IconMesh, IconFolder } from '../components/Icons'
+import ProviderPriorityEditor from '../components/provider-priority/ProviderPriorityEditor'
 import MeshCoordinatorManualSetupPanel from '../components/MeshCoordinatorManualSetupPanel'
+import {
+    defaultProviderPriorityFromInventory,
+    normalizeAvailableCliProviders,
+    normalizeProviderPriorityForInventory,
+    type AvailableCliProviderOption,
+} from '../utils/provider-priority'
 import {
     buildManualCoordinatorSetup,
     type MeshCoordinatorMetadata,
@@ -53,7 +60,8 @@ interface AvailableCliAgent {
     meshCoordinator?: MeshCoordinatorMetadata
 }
 
-const DEFAULT_REPO_MESH_PROVIDER_PRIORITY = 'hermes-cli, claude-cli, codex-cli, gemini-cli'
+type ProviderPriorityDrafts = Record<string, string[]>
+
 type RepoMeshSessionCleanupMode = 'preserve' | 'stop' | 'delete_stopped' | 'stop_and_delete'
 
 const SESSION_CLEANUP_MODE_OPTIONS: Array<{ value: RepoMeshSessionCleanupMode; label: string; description: string }> = [
@@ -71,33 +79,6 @@ const DEFAULT_MESH_POLICY: Record<string, any> = {
     dirtyWorkspaceBehavior: 'warn',
     maxParallelTasks: 2,
     sessionCleanupOnNodeRemove: 'preserve',
-}
-
-const CANONICAL_REPO_MESH_PROVIDER_TYPES = new Set([
-    'hermes-cli',
-    'claude-cli',
-    'codex-cli',
-    'gemini-cli',
-])
-
-function normalizeProviderPriorityToken(type: string): string | undefined {
-    const trimmed = type.trim()
-    if (!trimmed) return undefined
-    const lower = trimmed.toLowerCase()
-    return CANONICAL_REPO_MESH_PROVIDER_TYPES.has(lower) ? lower : trimmed
-}
-
-function parseProviderPriorityInput(value: string): string[] {
-    const seen = new Set<string>()
-    return value
-        .split(/[\s,]+/)
-        .map(normalizeProviderPriorityToken)
-        .filter((type): type is string => !!type)
-        .filter(type => {
-            if (seen.has(type)) return false
-            seen.add(type)
-            return true
-        })
 }
 
 function readNodeProviderPriority(node: MeshNode): string[] {
@@ -173,8 +154,10 @@ export default function RepoMesh() {
 
     // Extract available CLI agents from daemon status
     const availableCliAgents: AvailableCliAgent[] = []
+    let availableCliProviders: AvailableCliProviderOption[] = []
     if (daemon) {
         const providers = (daemon as any).availableProviders || []
+        availableCliProviders = normalizeAvailableCliProviders(providers)
         for (const p of providers) {
             if (p.category === 'cli') {
                 availableCliAgents.push({
@@ -193,7 +176,7 @@ export default function RepoMesh() {
     const [error, setError] = useState<string | null>(null)
     const [savingPolicy, setSavingPolicy] = useState(false)
     const [savingNodePolicyId, setSavingNodePolicyId] = useState<string | null>(null)
-    const [nodeProviderPriorityDrafts, setNodeProviderPriorityDrafts] = useState<Record<string, string>>({})
+    const [nodeProviderPriorityDrafts, setNodeProviderPriorityDrafts] = useState<ProviderPriorityDrafts>({})
 
     // Create form
     const [showCreate, setShowCreate] = useState(false)
@@ -203,15 +186,22 @@ export default function RepoMesh() {
     // Add node form
     const [showAddNode, setShowAddNode] = useState(false)
     const [nodeWorkspace, setNodeWorkspace] = useState('')
-    const [nodeProviderPriority, setNodeProviderPriority] = useState(DEFAULT_REPO_MESH_PROVIDER_PRIORITY)
+    const [nodeProviderPriority, setNodeProviderPriority] = useState<string[]>([])
 
     const selectedMesh = meshes.find(m => m.id === selectedMeshId) || null
 
     useEffect(() => {
         setNodeProviderPriorityDrafts(Object.fromEntries(
-            (selectedMesh?.nodes || []).map(node => [node.id, readNodeProviderPriority(node).join(', ')]),
+            (selectedMesh?.nodes || []).map(node => [node.id, readNodeProviderPriority(node)]),
         ))
     }, [selectedMesh])
+
+    useEffect(() => {
+        const defaultPriority = defaultProviderPriorityFromInventory(availableCliProviders)
+        if (showAddNode && nodeProviderPriority.length === 0 && defaultPriority.length > 0) {
+            setNodeProviderPriority(defaultPriority)
+        }
+    }, [showAddNode, availableCliProviders, nodeProviderPriority.length])
 
     // ─── Data loading ───
     const loadMeshes = useCallback(async () => {
@@ -273,12 +263,12 @@ export default function RepoMesh() {
             const res: any = await sendCommand(daemonId, 'add_mesh_node', {
                 meshId: selectedMeshId,
                 workspace: nodeWorkspace.trim(),
-                providerPriority: parseProviderPriorityInput(nodeProviderPriority),
+                providerPriority: normalizeProviderPriorityForInventory(nodeProviderPriority, availableCliProviders),
             })
             if (res?.success) {
                 setShowAddNode(false)
                 setNodeWorkspace('')
-                setNodeProviderPriority(DEFAULT_REPO_MESH_PROVIDER_PRIORITY)
+                setNodeProviderPriority([])
                 await loadMeshes()
             } else {
                 setError(res?.error || 'Add node failed')
@@ -325,7 +315,10 @@ export default function RepoMesh() {
 
     async function handleUpdateNodeProviderPriority(node: MeshNode) {
         if (!daemonId || !selectedMeshId) return
-        const providerPriority = parseProviderPriorityInput(nodeProviderPriorityDrafts[node.id] || '')
+        const providerPriority = normalizeProviderPriorityForInventory(
+            nodeProviderPriorityDrafts[node.id] || readNodeProviderPriority(node),
+            availableCliProviders,
+        )
         const nextPolicy = { ...(node.policy || {}) }
         delete (nextPolicy as any).provider_priority
         if (providerPriority.length) {
@@ -567,11 +560,10 @@ export default function RepoMesh() {
                             label="Provider Priority"
                             hint="Order used when launching without an explicit provider. Empty means fail closed unless a provider is selected explicitly."
                         >
-                            <Input
+                            <ProviderPriorityEditor
                                 value={nodeProviderPriority}
-                                onChange={e => setNodeProviderPriority(e.target.value)}
-                                placeholder="hermes-cli, claude-cli, codex-cli, gemini-cli"
-                                onKeyDown={e => { if (e.key === 'Enter') handleAddNode() }}
+                                availableProviders={availableCliProviders}
+                                onChange={setNodeProviderPriority}
                             />
                         </FormField>
                         <div className="flex gap-2 mt-3">
@@ -598,22 +590,22 @@ export default function RepoMesh() {
                                             label="Provider priority"
                                             hint="Used when launches omit an explicit provider. Empty keeps fail-closed behavior until a provider is selected manually."
                                         >
-                                            <div className="flex flex-col gap-2 sm:flex-row">
-                                                <Input
-                                                    value={nodeProviderPriorityDrafts[node.id] ?? providerPriority.join(', ')}
-                                                    onChange={e => setNodeProviderPriorityDrafts(prev => ({ ...prev, [node.id]: e.target.value }))}
-                                                    placeholder="hermes-cli, claude-cli, codex-cli, gemini-cli"
-                                                    onKeyDown={e => { if (e.key === 'Enter') void handleUpdateNodeProviderPriority(node) }}
-                                                />
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-secondary btn-sm shrink-0"
-                                                    onClick={() => void handleUpdateNodeProviderPriority(node)}
-                                                    disabled={savingNodePolicyId === node.id}
-                                                >
-                                                    {savingNodePolicyId === node.id ? 'Saving...' : 'Save policy'}
-                                                </button>
-                                            </div>
+                                            <ProviderPriorityEditor
+                                                value={nodeProviderPriorityDrafts[node.id] ?? providerPriority}
+                                                availableProviders={availableCliProviders}
+                                                onChange={next => setNodeProviderPriorityDrafts(prev => ({ ...prev, [node.id]: next }))}
+                                                disabled={savingNodePolicyId === node.id}
+                                                saveButton={(
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-secondary btn-sm shrink-0"
+                                                        onClick={() => void handleUpdateNodeProviderPriority(node)}
+                                                        disabled={savingNodePolicyId === node.id}
+                                                    >
+                                                        {savingNodePolicyId === node.id ? 'Saving...' : 'Save policy'}
+                                                    </button>
+                                                )}
+                                            />
                                             <div className="mt-2 text-[12px]">
                                                 <span className="text-text-muted">Effective provider priority: </span>
                                                 <span className={priorityStatus.configured ? 'text-text-primary font-mono' : 'text-amber-400'}>
