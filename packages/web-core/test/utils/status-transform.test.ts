@@ -43,6 +43,52 @@ function createPayload(overrides: Partial<StatusReportPayload> = {}): StatusRepo
 }
 
 describe('statusPayloadToEntries', () => {
+    it('scopes CLI and ACP entry ids and instance ids by daemon while keeping raw session ids for compatibility', () => {
+        const cliSession = createSession({
+            id: 'shared-session',
+            providerSessionId: 'provider-shared',
+            transport: 'pty',
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+        })
+        const acpSession = createSession({
+            id: 'shared-session',
+            providerSessionId: 'provider-shared',
+            transport: 'acp',
+            providerType: 'claude-code',
+            providerName: 'Claude Code',
+        })
+
+        const firstEntries = statusPayloadToEntries(createPayload({ sessions: [cliSession, acpSession] }), {
+            daemonId: 'machine-1',
+        })
+        const secondEntries = statusPayloadToEntries(createPayload({ sessions: [cliSession, acpSession] }), {
+            daemonId: 'machine-2',
+        })
+
+        expect(firstEntries.find(entry => entry.transport === 'pty')).toMatchObject({
+            id: 'machine-1:cli:shared-session',
+            sessionId: 'shared-session',
+            instanceId: 'machine-1:shared-session',
+            providerSessionId: 'provider-shared',
+            daemonId: 'machine-1',
+        })
+        expect(secondEntries.find(entry => entry.transport === 'pty')).toMatchObject({
+            id: 'machine-2:cli:shared-session',
+            sessionId: 'shared-session',
+            instanceId: 'machine-2:shared-session',
+            providerSessionId: 'provider-shared',
+            daemonId: 'machine-2',
+        })
+        expect(firstEntries.find(entry => entry.transport === 'acp')).toMatchObject({
+            id: 'machine-1:acp:shared-session',
+            sessionId: 'shared-session',
+            instanceId: 'machine-1:shared-session',
+            providerSessionId: 'provider-shared',
+            daemonId: 'machine-1',
+        })
+    })
+
     it('builds daemon, IDE, CLI, and ACP entries from top-level sessions', () => {
         const ideChild = createSession({
             id: 'agent-child',

@@ -44,7 +44,40 @@ function getStreamKey(stream: { sessionId?: string; instanceId?: string; agentTy
 }
 
 function getConversationTabKey(sessionId: string | undefined, fallbackKey: string): string {
-    return sessionId || fallbackKey;
+    // Tab/panel identity must be globally unique across connected daemons.
+    // Keep raw sessionId/providerSessionId on the conversation for URL/history compatibility,
+    // but use the daemon-scoped route id as the stable Dockview tab key.
+    return fallbackKey || sessionId || 'unknown';
+}
+
+function isConversationIdentityDebugEnabled(): boolean {
+    if (typeof window === 'undefined') return false;
+    try {
+        return !!((window as any).__ADHDEV_CONVERSATION_DEBUG__ || window.localStorage.getItem('adhdev_conversation_debug') === '1');
+    } catch {
+        return false;
+    }
+}
+
+function logConversationIdentitySummary(conversations: ActiveConversation[]): void {
+    const tabKeyCounts = new Map<string, number>();
+    for (const conversation of conversations) {
+        tabKeyCounts.set(conversation.tabKey, (tabKeyCounts.get(conversation.tabKey) || 0) + 1);
+    }
+    const duplicates = Array.from(tabKeyCounts.entries()).filter(([, count]) => count > 1).map(([tabKey]) => tabKey);
+    if (duplicates.length === 0 && !isConversationIdentityDebugEnabled()) return;
+    const payload = conversations.map(conversation => ({
+        daemonId: conversation.daemonId,
+        sessionId: conversation.sessionId,
+        providerSessionId: conversation.providerSessionId,
+        tabKey: conversation.tabKey,
+        duplicate: duplicates.includes(conversation.tabKey),
+    }));
+    if (duplicates.length > 0) {
+        console.warn('[dashboard-conversations] duplicate tabKey detected after buildConversations', { duplicates, conversations: payload });
+    } else {
+        console.debug('[dashboard-conversations] buildConversations', payload);
+    }
 }
 
 
@@ -320,9 +353,11 @@ export function buildConversations(
     connectionStates?: Record<string, string>,
 ): ActiveConversation[] {
     const machineNames = buildMachineNameMap(allIdes);
-    return chatIdes.flatMap((ide) => buildScopedIdeConversations(ide, {
+    const conversations = chatIdes.flatMap((ide) => buildScopedIdeConversations(ide, {
         machineNames,
         connectionStates,
         defaultConnectionState: 'new',
     }));
+    logConversationIdentitySummary(conversations);
+    return conversations;
 }

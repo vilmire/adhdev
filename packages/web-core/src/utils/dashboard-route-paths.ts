@@ -22,17 +22,30 @@ export function resolveDashboardSessionTargetFromEntry(args: {
   conversations: ActiveConversation[]
 }): string | null {
   const sessionId = typeof args.entrySessionId === 'string' ? args.entrySessionId.trim() : ''
-  if (sessionId) return sessionId
-
   const instanceId = typeof args.entryInstanceId === 'string' ? args.entryInstanceId.trim() : ''
-  if (instanceId) return instanceId
-
   const routeId = typeof args.entryRouteId === 'string' ? args.entryRouteId.trim() : ''
-  if (!routeId) return null
 
-  const preferredConversation = getPreferredConversationForIde(args.conversations, routeId)
-    || args.conversations.find((conversation) => conversation.routeId === routeId)
-  if (!preferredConversation) return null
+  const matchingConversation = args.conversations.find((conversation) => {
+    if (routeId && conversation.routeId !== routeId) return false
+    const tokens = [
+      conversation.providerSessionId,
+      conversation.sessionId,
+      conversation.nativeSessionId,
+      conversation.tabKey,
+    ].map(value => typeof value === 'string' ? value.trim() : '').filter(Boolean)
+    return Boolean(
+      (sessionId && tokens.includes(sessionId))
+      || (instanceId && tokens.includes(instanceId))
+      || (routeId && conversation.routeId === routeId),
+    )
+  })
+  if (matchingConversation?.tabKey) return matchingConversation.tabKey
 
-  return getDashboardActiveTabKeyForConversation(preferredConversation)
+  if (routeId) {
+    const preferredConversation = getPreferredConversationForIde(args.conversations, routeId)
+      || args.conversations.find((conversation) => conversation.routeId === routeId)
+    if (preferredConversation?.tabKey) return preferredConversation.tabKey
+  }
+
+  return sessionId || instanceId || routeId || null
 }

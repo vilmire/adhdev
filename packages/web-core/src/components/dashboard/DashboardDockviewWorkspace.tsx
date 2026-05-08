@@ -280,6 +280,10 @@ function buildInitialDockviewLayout(
 
 function syncDockviewPanels(api: DockviewApi, visibleConversations: ActiveConversation[]) {
     const visibleKeys = new Set(visibleConversations.map(conversation => conversation.tabKey))
+    const tabKeyCounts = new Map<string, number>()
+    for (const conversation of visibleConversations) {
+        tabKeyCounts.set(conversation.tabKey, (tabKeyCounts.get(conversation.tabKey) || 0) + 1)
+    }
 
     for (const panel of [...api.panels]) {
         if (isRemotePanelId(panel.id)) continue
@@ -289,6 +293,15 @@ function syncDockviewPanels(api: DockviewApi, visibleConversations: ActiveConver
     for (const conversation of visibleConversations) {
         const existing = api.getPanel(conversation.tabKey)
         if (existing) {
+            if ((tabKeyCounts.get(conversation.tabKey) || 0) > 1) {
+                console.warn('[dashboard-conversations] Dockview panel already exists for duplicate tabKey', {
+                    tabKey: conversation.tabKey,
+                    daemonId: conversation.daemonId,
+                    sessionId: conversation.sessionId,
+                    providerSessionId: conversation.providerSessionId,
+                    panelId: existing.id,
+                })
+            }
             existing.update({ params: { tabKey: conversation.tabKey } })
             if (existing.title !== getDockviewTitle(conversation)) {
                 existing.api.setTitle(getDockviewTitle(conversation))

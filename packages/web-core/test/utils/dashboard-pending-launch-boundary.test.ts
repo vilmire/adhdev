@@ -33,7 +33,7 @@ describe('dashboard pending launch boundary cleanup', () => {
       routeId: 'route-1',
       sessionId: 'runtime-session-1',
       providerSessionId: 'provider-session-1',
-      tabKey: 'provider-session-1',
+      tabKey: 'machine-1:cli:runtime-session-1',
       agentName: 'Hermes',
       agentType: 'hermes-cli',
       status: 'idle',
@@ -53,7 +53,7 @@ describe('dashboard pending launch boundary cleanup', () => {
       targetSessionId: 'runtime-session-1',
       providerSessionId: 'provider-session-1',
       workspaceName: '/Users/me/project',
-    }, conversations)).toBe('provider-session-1')
+    }, conversations)).toBe('machine-1:cli:runtime-session-1')
   })
 
   it('does not resolve a provider-priority launch from another provider completion event', () => {

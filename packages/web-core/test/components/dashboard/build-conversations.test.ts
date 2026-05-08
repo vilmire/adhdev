@@ -54,7 +54,7 @@ describe('build conversations shared context', () => {
             routeId: 'machine-1:ide:cursor-1',
             machineName: 'Studio Mac',
             connectionState: 'connected',
-            tabKey: 'cursor-1',
+            tabKey: 'machine-1:ide:cursor-1',
             sessionCapabilities: ['read_chat', 'open_panel'],
             inboxBucket: 'task_complete',
             completionMarker: 'done-1',
@@ -206,6 +206,44 @@ describe('build conversations shared context', () => {
             displayPrimary: 'repo',
             displaySecondary: 'Codex CLI',
         })
+    })
+
+    it('uses daemon-scoped tab keys for native CLI conversations with duplicate runtime session ids', () => {
+        const first = createIdeEntry({
+            id: 'machine-1:cli:shared-session',
+            daemonId: 'machine-1',
+            sessionId: 'shared-session',
+            providerSessionId: 'provider-shared',
+            type: 'hermes-cli',
+            transport: 'pty',
+            cliName: 'Hermes Agent',
+            mode: 'chat',
+        })
+        const second = createIdeEntry({
+            id: 'machine-2:cli:shared-session',
+            daemonId: 'machine-2',
+            sessionId: 'shared-session',
+            providerSessionId: 'provider-shared',
+            type: 'hermes-cli',
+            transport: 'pty',
+            cliName: 'Hermes Agent',
+            mode: 'chat',
+        })
+
+        const firstConversation = buildScopedIdeConversations(first)[0]
+        const secondConversation = buildScopedIdeConversations(second)[0]
+
+        expect(firstConversation).toMatchObject({
+            sessionId: 'shared-session',
+            providerSessionId: 'provider-shared',
+            tabKey: 'machine-1:cli:shared-session',
+        })
+        expect(secondConversation).toMatchObject({
+            sessionId: 'shared-session',
+            providerSessionId: 'provider-shared',
+            tabKey: 'machine-2:cli:shared-session',
+        })
+        expect(firstConversation?.tabKey).not.toBe(secondConversation?.tabKey)
     })
 
     it('renders only daemon-provided native CLI transcript messages without frontend local message overlays', () => {

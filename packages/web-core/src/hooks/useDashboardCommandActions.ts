@@ -17,6 +17,7 @@ interface DashboardLaunchTracker {
   providerType?: string
   workspacePath?: string | null
   resumeSessionId?: string | null
+  launchedSessionId?: string | null
   startedAt: number
 }
 
@@ -120,7 +121,15 @@ export function useDashboardCommandActions({
       const result = res?.result || res
       const launchedSessionId = result?.sessionId || result?.id
       if (res?.success && launchedSessionId) {
-        onOpenSession(launchedSessionId)
+        trackPendingLaunch({
+          machineId,
+          kind,
+          providerType,
+          workspacePath: opts?.workspacePath || null,
+          resumeSessionId: opts?.resumeSessionId || null,
+          launchedSessionId,
+          startedAt,
+        })
         return { ok: true }
       }
       if (res?.success) {

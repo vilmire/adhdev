@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildConversationSourceSignature, buildConversationTargetMap } from '../../src/hooks/useDashboardConversations'
+import { buildConversationSourceSignature, buildConversationTargetMap, dedupeChatIdes } from '../../src/hooks/useDashboardConversations'
 import { buildScopedIdeConversations } from '../../src/components/dashboard/buildConversations'
 import type { ActiveConversation } from '../../src/components/dashboard/types'
 import type { DaemonData } from '../../src/types'
@@ -37,6 +37,26 @@ function createCliEntry(overrides: Partial<DaemonData> = {}): DaemonData {
         ...overrides,
     }
 }
+
+describe('dedupeChatIdes', () => {
+    it('keeps duplicate raw CLI session ids when entries belong to different daemons', () => {
+        const first = createCliEntry({
+            id: 'machine-1:cli:shared-session',
+            daemonId: 'machine-1',
+            sessionId: 'shared-session',
+        })
+        const second = createCliEntry({
+            id: 'machine-2:cli:shared-session',
+            daemonId: 'machine-2',
+            sessionId: 'shared-session',
+        })
+
+        expect(dedupeChatIdes([first, second]).map(entry => entry.id)).toEqual([
+            'machine-1:cli:shared-session',
+            'machine-2:cli:shared-session',
+        ])
+    })
+})
 
 describe('buildConversationSourceSignature', () => {
     it('changes when the last assistant message content changes in place without a new id or timestamp', () => {

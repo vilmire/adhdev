@@ -4,7 +4,7 @@ import type { ActiveConversation } from '../components/dashboard/types'
 import { eventManager, type StatusEventPayload } from '../managers/EventManager'
 import type { DaemonData } from '../types'
 import { isAcpEntry, isCliEntry } from '../utils/daemon-utils'
-import { getDashboardActiveTabKeyForConversation, resolveDashboardSessionTargetFromEntry } from '../utils/dashboard-route-paths'
+import { resolveDashboardSessionTargetFromEntry } from '../utils/dashboard-route-paths'
 import type { WorkspaceLaunchKind } from '../pages/machine/types'
 
 export interface PendingDashboardLaunch {
@@ -13,6 +13,7 @@ export interface PendingDashboardLaunch {
     providerType?: string
     workspacePath?: string | null
     resumeSessionId?: string | null
+    launchedSessionId?: string | null
     startedAt: number
 }
 
@@ -62,7 +63,7 @@ function resolveConversationTargetFromEvent(payload: StatusEventPayload, convers
         )
     })
     if (matchingConversation) {
-        return getDashboardActiveTabKeyForConversation(matchingConversation)
+        return matchingConversation.tabKey
     }
     return targetSessionId || providerSessionId || null
 }
@@ -81,9 +82,11 @@ export function resolvePendingLaunchTargetFromStatusEvent(
     if (launch.providerType && eventProviderType !== launch.providerType) return null
 
     const resumeSessionId = normalizeSessionToken(launch.resumeSessionId)
+    const launchedSessionId = normalizeSessionToken(launch.launchedSessionId)
     const providerSessionId = normalizeSessionToken(payload.providerSessionId)
     const targetSessionId = normalizeSessionToken(payload.targetSessionId)
     if (resumeSessionId && resumeSessionId !== providerSessionId && resumeSessionId !== targetSessionId) return null
+    if (launchedSessionId && launchedSessionId !== providerSessionId && launchedSessionId !== targetSessionId) return null
 
     const expectedWorkspace = normalizeWorkspacePath(launch.workspacePath)
     if (expectedWorkspace) {
@@ -139,6 +142,17 @@ export function useDashboardPendingLaunch({
             if (pendingDashboardLaunch.resumeSessionId) {
                 const entryProviderSessionId = String(entry.providerSessionId || '')
                 return entryProviderSessionId === pendingDashboardLaunch.resumeSessionId
+            }
+
+            if (pendingDashboardLaunch.launchedSessionId) {
+                const launchedSessionId = String(pendingDashboardLaunch.launchedSessionId || '')
+                const entryTokens = [
+                    entry.providerSessionId,
+                    entry.sessionId,
+                    entry.instanceId,
+                    entry.id,
+                ].map(value => String(value || '')).filter(Boolean)
+                return entryTokens.includes(launchedSessionId)
             }
 
             if (normalizedTargetWorkspace) {

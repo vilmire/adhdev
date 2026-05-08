@@ -70,6 +70,24 @@ describe('dashboard route paths', () => {
     expect(resolveDashboardSessionTargetFromEntry({
       entryRouteId: 'machine-1:ide:cursor-1',
       conversations: [nativeConversation, preferredConversation, siblingConversation],
-    })).toBe('native-1')
+    })).toBe('native-tab')
+  })
+
+  it('resolves raw launch session ids to the final conversation tab key', () => {
+    const conversation = createConversation({
+      sessionId: 'shared-session',
+      providerSessionId: 'provider-shared',
+      nativeSessionId: 'machine-2:shared-session',
+      routeId: 'machine-2:cli:shared-session',
+      tabKey: 'machine-2:cli:shared-session',
+      streamSource: 'native',
+    })
+
+    expect(resolveDashboardSessionTargetFromEntry({
+      entrySessionId: 'shared-session',
+      entryInstanceId: 'machine-2:shared-session',
+      entryRouteId: 'machine-2:cli:shared-session',
+      conversations: [conversation],
+    })).toBe('machine-2:cli:shared-session')
   })
 })

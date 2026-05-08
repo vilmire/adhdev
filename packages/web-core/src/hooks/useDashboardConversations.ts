@@ -14,21 +14,29 @@ interface UseDashboardConversationsOptions {
     hiddenTabs: Set<string>
 }
 
-function dedupeChatIdes(ides: DaemonData[]) {
+function getChatIdeDedupeKey(ide: DaemonData) {
+    const daemonId = String(ide.daemonId || '').trim()
+    const id = String(ide.id || '').trim()
+    if (!daemonId || id.startsWith(`${daemonId}:`)) return id
+    return `${daemonId}:${id}`
+}
+
+export function dedupeChatIdes(ides: DaemonData[]) {
     const filtered = ides.filter(ide => ide.type !== 'adhdev-daemon')
     const seen = new Map<string, DaemonData>()
 
     for (const ide of filtered) {
-        const existing = seen.get(ide.id)
+        const dedupeKey = getChatIdeDedupeKey(ide)
+        const existing = seen.get(dedupeKey)
         if (!existing) {
-            seen.set(ide.id, ide)
+            seen.set(dedupeKey, ide)
             continue
         }
 
         const existingRichness = (existing.workspace ? 1 : 0) + (existing.activeChat ? 1 : 0)
         const incomingRichness = (ide.workspace ? 1 : 0) + (ide.activeChat ? 1 : 0)
         if (incomingRichness > existingRichness || (ide.timestamp || 0) > (existing.timestamp || 0)) {
-            seen.set(ide.id, ide)
+            seen.set(dedupeKey, ide)
         }
     }
 
@@ -271,6 +279,7 @@ export function useDashboardConversations({
             for (const lookupKey of buildConversationLookupKeys({
                 providerSessionId: conversation.providerSessionId,
                 sessionId: conversation.sessionId,
+                tabKey: conversation.tabKey,
             })) {
                 map.set(lookupKey, sessionTarget)
             }

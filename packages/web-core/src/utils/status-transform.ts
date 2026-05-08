@@ -87,6 +87,33 @@ function groupChildSessions(sessions: SessionEntryWithInboxMarkers[]) {
     return { topLevel, childrenByParent }
 }
 
+function scopeSessionInstanceId(daemonId: string, sessionId: string): string {
+    if (!sessionId) return sessionId
+    return sessionId.startsWith(`${daemonId}:`) ? sessionId : `${daemonId}:${sessionId}`
+}
+
+function isStatusTransformDebugEnabled(): boolean {
+    if (typeof window === 'undefined') return false
+    try {
+        return !!((window as any).__ADHDEV_CONVERSATION_DEBUG__ || window.localStorage.getItem('adhdev_conversation_debug') === '1')
+    } catch {
+        return false
+    }
+}
+
+function logStatusEntries(entries: DaemonData[]): void {
+    if (!isStatusTransformDebugEnabled()) return
+    console.debug('[dashboard-conversations] statusPayloadToEntries', entries.map(entry => ({
+        id: entry.id,
+        daemonId: entry.daemonId,
+        sessionId: entry.sessionId,
+        instanceId: entry.instanceId,
+        providerSessionId: entry.providerSessionId,
+        transport: entry.transport,
+        type: entry.type,
+    })))
+}
+
 /**
  * Convert a StatusResponse payload into DaemonData[] entries.
  * Returns: [daemonEntry, ...ideEntries, ...cliEntries, ...acpEntries]
@@ -160,7 +187,7 @@ export function statusPayloadToEntries(
             type: mergedSession.providerType,
             status: mergedSession.cdpConnected ? 'online' : 'detected',
             daemonId,
-            instanceId: session.id,
+            instanceId: scopeSessionInstanceId(daemonId, session.id),
             workspace: mergedSession.workspace,
             terminals: 0,
             childSessions,
@@ -208,7 +235,7 @@ export function statusPayloadToEntries(
             agentType: mergedSession.providerType,
             status: mergedSession.status || 'running',
             daemonId,
-            instanceId: session.id,
+            instanceId: scopeSessionInstanceId(daemonId, session.id),
             cliName: mergedSession.providerName || mergedSession.providerType,
             mode: mergedSession.mode || existingEntry?.mode || 'terminal',
             workspace: mergedSession.workspace || '',
@@ -255,7 +282,7 @@ export function statusPayloadToEntries(
             agentType: mergedSession.providerType,
             status: mergedSession.status || 'running',
             daemonId,
-            instanceId: session.id,
+            instanceId: scopeSessionInstanceId(daemonId, session.id),
             cliName: mergedSession.providerName || mergedSession.providerType,
             mode: 'chat',
             workspace: mergedSession.workspace || '',
@@ -285,5 +312,6 @@ export function statusPayloadToEntries(
         } as DaemonData)
     }
 
+    logStatusEntries(entries)
     return entries
 }
