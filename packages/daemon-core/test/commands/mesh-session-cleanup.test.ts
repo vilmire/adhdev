@@ -85,6 +85,7 @@ describe('mesh session cleanup', () => {
       meshId: 'mesh-1',
       nodeId: 'node-a',
       mode: 'stop_and_delete',
+      sessionIds: ['running-1', 'done-1'],
       inlineMesh: {
         id: 'mesh-1',
         name: 'Mesh',
@@ -105,6 +106,109 @@ describe('mesh session cleanup', () => {
     expect(sessionHostControl.deleteSession).toHaveBeenCalledTimes(2)
     expect(sessionHostControl.stopSession).toHaveBeenCalledTimes(1)
     expect(sessionHostControl.stopSession).toHaveBeenCalledWith('running-1')
+  })
+
+  it('protects live runtimes from broad workspace cleanup unless explicit session IDs are requested', async () => {
+    const { router, sessionHostControl } = createRouter({
+      listSessions: vi.fn(async () => [
+        { sessionId: 'coordinator-live', workspace: '/repo/worktree-a', lifecycle: 'running' },
+        { sessionId: 'smoke-stopped', workspace: '/repo/worktree-a', lifecycle: 'stopped' },
+      ]),
+    })
+
+    const result = await router.execute('cleanup_mesh_sessions', {
+      meshId: 'mesh-1',
+      nodeId: 'node-a',
+      mode: 'stop_and_delete',
+      dryRun: true,
+      inlineMesh: {
+        id: 'mesh-1',
+        name: 'Mesh',
+        policy: {},
+        nodes: [{ id: 'node-a', workspace: '/repo/worktree-a' }],
+      },
+    })
+
+    expect(result).toMatchObject({
+      success: true,
+      mode: 'stop_and_delete',
+      dryRun: true,
+      matchedCount: 2,
+      matchedBySurfaceKind: {
+        live_runtime: 1,
+        recovery_snapshot: 0,
+        inactive_record: 1,
+      },
+      deletedSessionIds: ['smoke-stopped'],
+      skippedSessionIds: ['coordinator-live'],
+      skippedLiveSessionIds: ['coordinator-live'],
+    })
+    expect(sessionHostControl.stopSession).not.toHaveBeenCalled()
+    expect(sessionHostControl.deleteSession).not.toHaveBeenCalled()
+  })
+
+  it('allows explicit session IDs to target live runtimes during manual cleanup', async () => {
+    const { router, sessionHostControl } = createRouter({
+      listSessions: vi.fn(async () => [
+        { sessionId: 'smoke-live', workspace: '/repo/worktree-a', lifecycle: 'running' },
+      ]),
+    })
+
+    const result = await router.execute('cleanup_mesh_sessions', {
+      meshId: 'mesh-1',
+      nodeId: 'node-a',
+      mode: 'stop',
+      sessionIds: ['smoke-live'],
+      inlineMesh: {
+        id: 'mesh-1',
+        name: 'Mesh',
+        policy: {},
+        nodes: [{ id: 'node-a', workspace: '/repo/worktree-a' }],
+      },
+    })
+
+    expect(result).toMatchObject({
+      success: true,
+      stoppedSessionIds: ['smoke-live'],
+      skippedLiveSessionIds: [],
+    })
+    expect(sessionHostControl.stopSession).toHaveBeenCalledWith('smoke-live')
+  })
+
+  it('reports older hosts with unsupported delete as stopped-only with records remaining', async () => {
+    const unsupported = new Error('Unsupported session host request: delete_session')
+    const { router } = createRouter({
+      listSessions: vi.fn(async () => [
+        { sessionId: 'done-1', workspace: '/repo/worktree-a', lifecycle: 'stopped' },
+        { sessionId: 'snapshot-1', workspace: '/repo/worktree-a', lifecycle: 'failed', meta: { restoredFromStorage: true } },
+      ]),
+      deleteSession: vi.fn(async () => { throw unsupported }),
+    })
+
+    const result = await router.execute('cleanup_mesh_sessions', {
+      meshId: 'mesh-1',
+      nodeId: 'node-a',
+      mode: 'delete_stopped',
+      inlineMesh: {
+        id: 'mesh-1',
+        name: 'Mesh',
+        policy: {},
+        nodes: [{ id: 'node-a', workspace: '/repo/worktree-a' }],
+      },
+    })
+
+    expect(result).toMatchObject({
+      success: true,
+      deleteUnsupported: true,
+      effectiveCleanup: 'delete_unsupported_records_remain',
+      deleteUnsupportedSessionIds: ['done-1', 'snapshot-1'],
+      recordsRemainSessionIds: ['done-1', 'snapshot-1'],
+      matchedBySurfaceKind: {
+        live_runtime: 0,
+        recovery_snapshot: 1,
+        inactive_record: 1,
+      },
+    })
   })
 
   it('applies mesh policy cleanup before removing a node', async () => {

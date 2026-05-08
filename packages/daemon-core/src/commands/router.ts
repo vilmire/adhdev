@@ -378,15 +378,35 @@ export class DaemonCommandRouter {
             : undefined;
         const sessions = await this.deps.sessionHostControl.listSessions();
         const matched = sessions.filter(record => this.sessionMatchesMeshNode(record, args.node, args.nodeId, requestedSessionIds));
+        const hasExplicitSessionIds = !!requestedSessionIds?.size;
         const stoppedSessionIds: string[] = [];
         const deletedSessionIds: string[] = [];
         const skippedSessionIds: string[] = [];
+        const skippedLiveSessionIds: string[] = [];
         const deleteUnsupportedSessionIds: string[] = [];
+        const recordsRemainSessionIds: string[] = [];
         const errors: Array<{ sessionId: string; error: string }> = [];
+        const matchedBySurfaceKind = {
+            live_runtime: 0,
+            recovery_snapshot: 0,
+            inactive_record: 0,
+        };
+
+        for (const record of matched) {
+            const surfaceKind = getSessionHostSurfaceKind(record);
+            matchedBySurfaceKind[surfaceKind] += 1;
+        }
 
         for (const record of matched) {
             const sessionId = String(record.sessionId);
             const completed = this.isCompletedHostedSession(record);
+            const surfaceKind = getSessionHostSurfaceKind(record);
+            const liveRuntime = surfaceKind === 'live_runtime';
+            if (!hasExplicitSessionIds && liveRuntime) {
+                skippedSessionIds.push(sessionId);
+                skippedLiveSessionIds.push(sessionId);
+                continue;
+            }
             try {
                 if (args.mode === 'stop') {
                     if (!completed) {
@@ -418,6 +438,7 @@ export class DaemonCommandRouter {
                 if (message.includes('Unsupported session host request: delete_session')
                     && (args.mode === 'delete_stopped' || args.mode === 'stop_and_delete')) {
                     deleteUnsupportedSessionIds.push(sessionId);
+                    recordsRemainSessionIds.push(sessionId);
                     if (args.mode === 'stop_and_delete' && !completed) {
                         try {
                             await this.deps.sessionHostControl.stopSession(sessionId);
@@ -434,15 +455,25 @@ export class DaemonCommandRouter {
             }
         }
 
+        const deleteUnsupported = deleteUnsupportedSessionIds.length > 0;
         return {
             success: errors.length === 0,
             mode: args.mode,
             dryRun: args.dryRun === true,
             matchedCount: matched.length,
+            matchedBySurfaceKind,
             stoppedSessionIds,
             deletedSessionIds,
             skippedSessionIds,
-            ...(deleteUnsupportedSessionIds.length ? { deleteUnsupportedSessionIds } : {}),
+            skippedLiveSessionIds,
+            ...(deleteUnsupported ? {
+                deleteUnsupported: true,
+                effectiveCleanup: args.mode === 'stop_and_delete'
+                    ? 'stopped_only_records_remain'
+                    : 'delete_unsupported_records_remain',
+                deleteUnsupportedSessionIds,
+                recordsRemainSessionIds,
+            } : {}),
             ...(errors.length ? { errors } : {}),
         };
     }
