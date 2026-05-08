@@ -22,7 +22,7 @@ function buildMeshSystemMessage(args: {
 }): string {
     const metadata = formatCompletionMetadata(args.metadataEvent);
     if (args.event === 'agent:generating_completed') {
-        return `[System] ${args.nodeLabel} has completed its task and is now idle${metadata}. You may use mesh_read_chat to review its progress.`;
+        return `[System] ${args.nodeLabel} has completed its task and is now idle${metadata}. This completion came from the agent status event path; use mesh_read_chat once to review its final progress, but do not poll repeatedly.`;
     }
     if (args.event === 'agent:waiting_approval') {
         return `[System] ${args.nodeLabel} is waiting for approval to proceed${metadata}. You may use mesh_read_chat and mesh_approve to handle it.`;

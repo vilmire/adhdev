@@ -381,6 +381,7 @@ export class DaemonCommandRouter {
         const stoppedSessionIds: string[] = [];
         const deletedSessionIds: string[] = [];
         const skippedSessionIds: string[] = [];
+        const deleteUnsupportedSessionIds: string[] = [];
         const errors: Array<{ sessionId: string; error: string }> = [];
 
         for (const record of matched) {
@@ -413,7 +414,23 @@ export class DaemonCommandRouter {
                     continue;
                 }
             } catch (e: any) {
-                errors.push({ sessionId, error: e?.message || String(e) });
+                const message = e?.message || String(e);
+                if (message.includes('Unsupported session host request: delete_session')
+                    && (args.mode === 'delete_stopped' || args.mode === 'stop_and_delete')) {
+                    deleteUnsupportedSessionIds.push(sessionId);
+                    if (args.mode === 'stop_and_delete' && !completed) {
+                        try {
+                            await this.deps.sessionHostControl.stopSession(sessionId);
+                            stoppedSessionIds.push(sessionId);
+                        } catch (stopError: any) {
+                            errors.push({ sessionId, error: stopError?.message || String(stopError) });
+                            continue;
+                        }
+                    }
+                    skippedSessionIds.push(sessionId);
+                    continue;
+                }
+                errors.push({ sessionId, error: message });
             }
         }
 
@@ -425,6 +442,7 @@ export class DaemonCommandRouter {
             stoppedSessionIds,
             deletedSessionIds,
             skippedSessionIds,
+            ...(deleteUnsupportedSessionIds.length ? { deleteUnsupportedSessionIds } : {}),
             ...(errors.length ? { errors } : {}),
         };
     }

@@ -195,7 +195,7 @@ async function commandForNode(
     command: string,
     args: Record<string, unknown> = {},
 ): Promise<any> {
-    if (ctx.transport instanceof IpcTransport && node.daemonId) {
+    if (ctx.transport instanceof IpcTransport && node.daemonId && node.daemonId !== ctx.localDaemonId) {
         return ctx.transport.meshCommand(node.daemonId, command, args);
     }
     if (isLocalTransport(ctx.transport)) {

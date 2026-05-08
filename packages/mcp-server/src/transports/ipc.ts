@@ -71,9 +71,12 @@ export class IpcTransport {
         fn();
       };
 
+      const timeoutMs = type === 'mesh_relay_command'
+        ? 60_000
+        : 15_000;
       const timeout = setTimeout(() => {
-        finish(() => reject(new Error(`Daemon IPC command '${type}' timed out after 15s`)));
-      }, 15_000);
+        finish(() => reject(new Error(`Daemon IPC command '${type}' timed out after ${Math.round(timeoutMs / 1000)}s`)));
+      }, timeoutMs);
 
       let commandSent = false;
       const send = () => {
