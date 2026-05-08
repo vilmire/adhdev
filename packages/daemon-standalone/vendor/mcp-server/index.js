@@ -25756,7 +25756,7 @@ function buildRulesSection(coordinatorCliType) {
 - **Delegate analysis too.** If you need to understand a bug or explore the codebase, send that investigation as a task to a node. Do not do it yourself.
 - **Respect explicit provider requests.** If the user names an agent/provider, pass the matching provider type to \`mesh_launch_session\`: Hermes \u2192 \`hermes-cli\`, Claude Code/Claude \u2192 \`claude-cli\`, Codex \u2192 \`codex-cli\`, Gemini \u2192 \`gemini-cli\`. Never substitute \`claude-cli\` just because the coordinator itself is Claude Code.
 - **Front-load the task message.** When calling \`mesh_send_task\`, include everything the agent needs: what files to touch, what the problem is, what the fix should look like. The agent won't ask follow-up questions.
-- **Don't inspect code.** Trust the agent's output. Verify via \`mesh_git_status\`, not by reading source files.
+- **Don't inspect code.** Treat delegated agent summaries as self-reports, not verification. Verify side effects via \`mesh_git_status\` (including related repo freshness when configured), not by reading source files.
 - **Don't over-parallelize.** Start with 1-2 concurrent tasks. Scale up if they succeed. Never launch a duplicate session or second worker solely because \`mesh_read_chat\` has no final assistant message while the delegated session is still showing tool/terminal activity.
 - **Handle failures gracefully.** If a task fails, read the chat to understand why, then retry or reassign.
 - **Keep the user informed.** Report progress after each delegation round \u2014 one or two sentences, not a narration.
@@ -57192,6 +57192,49 @@ function isGitStatusDirty(status) {
   if (typeof status?.dirty === "boolean") return status.dirty;
   return countUncommittedChanges(status) > 0;
 }
+function readRelatedRepos(node) {
+  const raw = Array.isArray(node.relatedRepos) ? node.relatedRepos : Array.isArray(node.policy?.relatedRepos) ? node.policy.relatedRepos : [];
+  return raw.map((entry) => ({
+    label: typeof entry?.label === "string" ? entry.label.trim() : "",
+    workspace: typeof entry?.workspace === "string" ? entry.workspace.trim() : ""
+  })).filter((entry) => Boolean(entry.label && entry.workspace));
+}
+function summarizeRelatedRepoStatus(repo, status) {
+  const dirty = isGitStatusDirty(status);
+  return {
+    label: repo.label,
+    workspace: repo.workspace,
+    isGitRepo: status?.isGitRepo === true,
+    branch: status?.branch ?? null,
+    ahead: Number.isFinite(Number(status?.ahead)) ? Number(status.ahead) : 0,
+    behind: Number.isFinite(Number(status?.behind)) ? Number(status.behind) : 0,
+    dirty,
+    uncommittedChanges: countUncommittedChanges(status),
+    head: status?.headCommit ?? null,
+    lastCommitSummary: status?.headMessage ?? null,
+    ...status?.reason ? { reason: status.reason } : {},
+    ...status?.error ? { error: status.error } : {}
+  };
+}
+async function collectRelatedRepoStatuses(ctx, node) {
+  const relatedRepos = readRelatedRepos(node);
+  if (!relatedRepos.length) return [];
+  const results = [];
+  for (const repo of relatedRepos) {
+    try {
+      const statusResult = !isLocalTransport(ctx.transport) && node.daemonId ? await ctx.transport.gitStatus(node.daemonId, repo.workspace, false) : await commandForNode(ctx, node, "git_status", { workspace: repo.workspace });
+      const status = extractGitStatus(statusResult);
+      results.push(summarizeRelatedRepoStatus(repo, status));
+    } catch (e) {
+      results.push({
+        label: repo.label,
+        workspace: repo.workspace,
+        error: e?.message || "related repo status failed"
+      });
+    }
+  }
+  return results;
+}
 function readProviderPriority(policy) {
   const raw = policy?.providerPriority;
   return Array.isArray(raw) ? raw.map((type2) => typeof type2 === "string" ? type2.trim() : "").filter(Boolean) : [];
@@ -57432,6 +57475,8 @@ async function meshStatus(ctx) {
       entry.health = "degraded";
       entry.error = e.message;
     }
+    const relatedRepos = await collectRelatedRepoStatuses(ctx, node);
+    if (relatedRepos.length) entry.relatedRepos = relatedRepos;
     results.push(entry);
   }
   return JSON.stringify({
@@ -57455,6 +57500,7 @@ async function meshListNodes(ctx) {
       repoRoot: n.repoRoot,
       isLocalWorktree: n.isLocalWorktree,
       policy: n.policy,
+      relatedRepos: readRelatedRepos(n),
       ...getNodeLaunchReadiness(n),
       userOverrides: n.userOverrides
     }))
@@ -57592,7 +57638,8 @@ async function meshGitStatus(ctx, args) {
       nodeId: args.node_id,
       workspace: node.workspace,
       status: extractGitStatus(result),
-      diff: extractGitDiff(result)
+      diff: extractGitDiff(result),
+      relatedRepos: await collectRelatedRepoStatuses(ctx, node)
     }, null, 2);
   } else if (isLocalTransport(ctx.transport)) {
     const statusResult = await commandForNode(ctx, node, "git_status", {
@@ -57605,7 +57652,8 @@ async function meshGitStatus(ctx, args) {
       nodeId: args.node_id,
       workspace: node.workspace,
       status: extractGitStatus(statusResult),
-      diff: extractGitDiff(diffResult)
+      diff: extractGitDiff(diffResult),
+      relatedRepos: await collectRelatedRepoStatuses(ctx, node)
     }, null, 2);
   } else {
     return JSON.stringify({ error: "No daemonId available for cloud git_status probe" });
