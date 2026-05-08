@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as net from 'net';
 import {
+  SESSION_HOST_SUPPORTED_REQUEST_TYPES,
   SessionHostRegistry,
   createLineParser,
   createResponseEnvelope,
@@ -514,6 +515,7 @@ export class SessionHostServer extends EventEmitter {
       hostStartedAt: this.startedAt,
       endpoint: this.endpoint.path,
       runtimeCount: this.runtimes.size,
+      supportedRequestTypes: [...SESSION_HOST_SUPPORTED_REQUEST_TYPES],
       sessions,
       liveRuntimes,
       recoverySnapshots,

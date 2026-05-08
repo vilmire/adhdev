@@ -219,6 +219,7 @@ export interface SessionHostDiagnostics {
   hostStartedAt: number;
   endpoint: string;
   runtimeCount: number;
+  supportedRequestTypes?: SessionHostRequestType[];
   sessions?: SessionHostRecord[];
   liveRuntimes?: SessionHostRecord[];
   recoverySnapshots?: SessionHostRecord[];
@@ -248,6 +249,30 @@ export type SessionHostRequest =
   | { type: 'restart_session'; payload: RestartSessionPayload }
   | { type: 'prune_duplicate_sessions'; payload?: PruneDuplicateSessionsPayload }
   | { type: 'list_sessions'; payload?: {} };
+
+export type SessionHostRequestType = SessionHostRequest['type'];
+
+export const SESSION_HOST_SUPPORTED_REQUEST_TYPES: readonly SessionHostRequestType[] = [
+  'create_session',
+  'attach_session',
+  'detach_session',
+  'send_input',
+  'resize_session',
+  'stop_session',
+  'delete_session',
+  'resume_session',
+  'acquire_write',
+  'release_write',
+  'get_snapshot',
+  'clear_session_buffer',
+  'update_session_meta',
+  'get_host_diagnostics',
+  'force_detach_client',
+  'send_signal',
+  'restart_session',
+  'prune_duplicate_sessions',
+  'list_sessions',
+];
 
 export interface SessionHostResponse<T = unknown> {
   success: boolean;
