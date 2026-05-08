@@ -22,6 +22,7 @@ import type { SessionTransport } from '../shared-types.js';
 
 const RECENT_SEND_WINDOW_MS = 1200;
 export const READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS = 25_000;
+const HERMES_CLI_STARTING_SEND_SETTLE_MS = 2_000;
 const recentSendByTarget = new Map<string, number>();
 
 interface ApprovalSelectableInstance extends ProviderInstance {
@@ -99,6 +100,19 @@ function buildSendInputSignature(input: InputEnvelope): string {
 
 function getSendChatInputEnvelope(args: any): InputEnvelope {
     return normalizeInputEnvelope(args?.input ? { input: args.input } : args);
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitOnceForFreshHermesCliStart(adapter: CliAdapter, log: (msg: string) => void): Promise<void> {
+    if (adapter.cliType !== 'hermes-cli') return;
+    const status = typeof adapter.getStatus === 'function' ? adapter.getStatus()?.status : undefined;
+    if (status !== 'starting') return;
+
+    log(`Hermes CLI is still starting; waiting ${HERMES_CLI_STARTING_SEND_SETTLE_MS}ms before first send`);
+    await sleep(HERMES_CLI_STARTING_SEND_SETTLE_MS);
 }
 
 function getHistorySessionId(h: CommandHelpers, args: any): string | undefined {
@@ -1120,6 +1134,7 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
             try {
                 assertTextOnlyInput(provider, input);
                 if (!text) return { success: false, error: 'text required for PTY send' };
+                await waitOnceForFreshHermesCliStart(adapter, _log);
                 await adapter.sendMessage(text);
                 return _logSendSuccess(`${transport}-adapter`, adapter.cliType);
             } catch (e: any) {

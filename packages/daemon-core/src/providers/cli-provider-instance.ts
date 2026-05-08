@@ -1032,8 +1032,11 @@ export class CliProviderInstance implements ProviderInstance {
                 const aTime = getTime(a.message);
                 const bTime = getTime(b.message);
                 if (aTime && bTime && aTime !== bTime) return aTime - bTime;
-                if (aTime && !bTime && a.source === 'runtime' && b.source === 'parsed') return -1;
-                if (!aTime && bTime && a.source === 'parsed' && b.source === 'runtime') return 1;
+                // Many provider-owned CLI transcripts (including Hermes CLI in debug bundles)
+                // do not carry timestamps on parsed messages. In that case there is no safe
+                // clock basis for interleaving timestamped runtime/system messages into the
+                // provider transcript, so preserve parsed order and append runtime entries by
+                // their insertion index instead of moving them ahead of the whole transcript.
                 return a.index - b.index;
             })
             .map((entry) => entry.message));

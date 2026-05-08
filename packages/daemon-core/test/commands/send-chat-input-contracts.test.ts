@@ -2,6 +2,54 @@ import { describe, expect, it, vi } from 'vitest'
 import { handleSendChat } from '../../src/commands/chat-commands.js'
 
 describe('handleSendChat input contracts', () => {
+  it('waits once for a freshly launched Hermes CLI runtime that is still starting before sending', async () => {
+    vi.useFakeTimers()
+
+    try {
+      const sendMessage = vi.fn(async () => {})
+      const resultPromise = handleSendChat({
+        getCdp: () => null,
+        getProvider: () => ({ type: 'hermes-cli', name: 'Hermes CLI', category: 'cli' }),
+        getProviderScript: () => null,
+        evaluateProviderScript: async () => null,
+        getCliAdapter: () => ({
+          cliType: 'hermes-cli',
+          sendMessage,
+          getStatus: () => ({ status: 'starting' }),
+        }) as any,
+        currentManagerKey: undefined,
+        currentIdeType: undefined,
+        currentProviderType: undefined,
+        currentSession: undefined,
+        agentStream: null,
+        ctx: { instanceManager: { getInstance: () => null } },
+        historyWriter: { appendNewMessages: () => {} },
+      } as any, {
+        agentType: 'hermes-cli',
+        message: 'launch-race-message',
+      })
+
+      await Promise.resolve()
+      expect(sendMessage).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(1999)
+      expect(sendMessage).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(1)
+
+      await expect(resultPromise).resolves.toMatchObject({
+        success: true,
+        sent: true,
+        method: 'pty-adapter',
+        targetAgent: 'hermes-cli',
+      })
+      expect(sendMessage).toHaveBeenCalledTimes(1)
+      expect(sendMessage).toHaveBeenCalledWith('launch-race-message')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('rejects non-text input for PTY transports instead of flattening it', async () => {
     const sendMessage = vi.fn()
     const result = await handleSendChat({
