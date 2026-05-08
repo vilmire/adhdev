@@ -18,6 +18,7 @@ import { LOG, getRecentLogs } from '../logging/logger.js';
 import { getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
 import { buildChatMessageSignature } from '../chat/chat-signatures.js';
 import type { ChatMessage } from '../types.js';
+import { filterUserFacingChatMessages } from '../providers/chat-message-normalization.js';
 import type { SessionTransport } from '../shared-types.js';
 
 const RECENT_SEND_WINDOW_MS = 1200;
@@ -316,13 +317,26 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any): Co
         return { success: false, error: error?.message || String(error) };
     }
     const messages = normalizeReadChatMessages(validatedPayload);
-    const sync = buildFullTail(messages, normalizeReadChatTailLimit(args));
+    const visibleMessages = filterUserFacingChatMessages(messages);
+    const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
+    const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
+    const returnedDebugReadChat = debugReadChat
+        ? {
+            ...debugReadChat,
+            fullMsgCount: typeof debugReadChat.fullMsgCount === 'number'
+                ? debugReadChat.fullMsgCount
+                : messages.length,
+            visibleMsgCount: visibleMessages.length,
+            hiddenMsgCount,
+            returnedMsgCount: sync.messages.length,
+        }
+        : undefined;
     return {
         success: true,
         ...validatedPayload,
         messages: sync.messages,
         totalMessages: sync.totalMessages,
-        ...(debugReadChat ? { debugReadChat } : {}),
+        ...(returnedDebugReadChat ? { debugReadChat: returnedDebugReadChat } : {}),
     };
 }
 
