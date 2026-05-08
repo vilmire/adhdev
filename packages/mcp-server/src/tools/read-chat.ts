@@ -1,6 +1,7 @@
 import type { McpTransport } from '../transports/mode.js';
 import { isLocalTransport } from '../transports/mode.js';
 import { compactChatPayload, messageContent } from './chat-compact.js';
+import { annotateRapidReadChatAdvisory, type RapidReadChatAdvisory } from './read-chat-polling-advisory.js';
 import { FORMAT_PROP } from './list-sessions.js';
 
 export const READ_CHAT_TOOL = {
@@ -42,13 +43,23 @@ export async function readChat(
       ...(args.session_id ? { targetSessionId: args.session_id } : {}),
       tailLimit: limit,
     });
-    return formatChatResult(result, args.session_id, args.format, limit, args.compact);
+    const annotated = annotateRapidReadChatAdvisory(result as Record<string, any>, {
+      key: `local:${args.session_id ?? '__active__'}`,
+      toolName: 'read_chat',
+      completionCallbackExpected: false,
+    });
+    return formatChatResult(annotated, args.session_id, args.format, limit, args.compact);
   }
 
   if (!args.daemon_id) throw new Error('daemon_id is required in cloud mode');
   const targetId = args.session_id ? `${args.daemon_id}:session:${args.session_id}` : args.daemon_id;
   const result = await transport.readChat(targetId, { limit, sessionId: args.session_id });
-  return formatChatResult(result, args.session_id, args.format, limit, args.compact);
+  const annotated = annotateRapidReadChatAdvisory(result as Record<string, any>, {
+    key: `cloud:${args.daemon_id}:${args.session_id ?? '__active__'}`,
+    toolName: 'read_chat',
+    completionCallbackExpected: false,
+  });
+  return formatChatResult(annotated, args.session_id, args.format, limit, args.compact);
 }
 
 function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'json', limit = 50, compact = false): string {
@@ -67,6 +78,7 @@ function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'js
       return JSON.stringify({
         session_id: sessionId ?? null,
         ...compactPayload,
+        ...(result?.pollingAdvisory ? { pollingAdvisory: result.pollingAdvisory as RapidReadChatAdvisory } : {}),
         messages: compactPayload.messages.map((m: any) => ({
           role: m.role,
           kind: m.kind ?? null,
@@ -77,6 +89,7 @@ function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'js
     }
     return JSON.stringify({
       session_id: sessionId ?? null,
+      ...(result?.pollingAdvisory ? { pollingAdvisory: result.pollingAdvisory as RapidReadChatAdvisory } : {}),
       messages: outputMessages.slice(-limit).map((m: any) => ({
         role: m.role,
         kind: m.kind ?? null,
@@ -86,12 +99,19 @@ function formatChatResult(result: any, sessionId?: string, format?: 'text' | 'js
     }, null, 2);
   }
 
-  if (outputMessages.length === 0) return 'No messages in chat.';
+  if (outputMessages.length === 0) {
+    return result?.pollingAdvisory
+      ? `No messages in chat.\n\nAdvisory: ${(result.pollingAdvisory as RapidReadChatAdvisory).message}`
+      : 'No messages in chat.';
+  }
   const lines = outputMessages.slice(-limit).map((m: any) => {
     const role = m.role === 'user' ? 'User' : m.role === 'assistant' ? 'Agent' : m.role;
     const content = messageContent(m);
     const truncated = content.length > 500 ? `${content.slice(0, 500)}…` : content;
     return `[${role}] ${truncated}`;
   });
+  if (result?.pollingAdvisory) {
+    lines.push(`Advisory: ${(result.pollingAdvisory as RapidReadChatAdvisory).message}`);
+  }
   return lines.join('\n\n');
 }

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { READ_CHAT_TOOL, readChat } from '../src/tools/read-chat.js';
+import { clearRapidReadChatAdvisoryStateForTests } from '../src/tools/read-chat-polling-advisory.js';
 
 test('readChat schema exposes opt-in compact mode', () => {
   assert.equal((READ_CHAT_TOOL.inputSchema.properties as any).compact.type, 'boolean');
@@ -65,6 +66,35 @@ test('readChat compact text filters tool terminal and internal messages', async 
   assert.match(output, /visible user/);
   assert.match(output, /visible assistant/);
   assert.doesNotMatch(output, /hidden tool/);
+});
+
+test('readChat json includes rapid polling advisory on repeated generating reads', async () => {
+  clearRapidReadChatAdvisoryStateForTests();
+  const localTransport = {
+    async command() {
+      return {
+        success: true,
+        status: 'generating',
+        messages: [{ role: 'assistant', content: 'still working' }],
+      };
+    },
+  } as any;
+
+  await readChat(localTransport, {
+    session_id: 'session-rapid',
+    limit: 5,
+    format: 'json',
+  });
+  const output = await readChat(localTransport, {
+    session_id: 'session-rapid',
+    limit: 5,
+    format: 'json',
+  });
+  const parsed = JSON.parse(output);
+
+  assert.equal(parsed.pollingAdvisory.type, 'rapid_read_chat_polling');
+  assert.match(parsed.pollingAdvisory.message, /completion callback\/status event/i);
+  assert.deepEqual(parsed.messages.map((message: { content: string }) => message.content), ['still working']);
 });
 
 test('readChat local mode sends tailLimit and caps formatted output to requested limit', async () => {

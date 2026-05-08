@@ -16,6 +16,7 @@ import { IpcTransport } from '../transports/ipc.js';
 import { isLocalTransport } from '../transports/mode.js';
 import type { McpTransport } from '../transports/mode.js';
 import { compactChatPayload } from './chat-compact.js';
+import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
 
 export interface MeshContext {
@@ -576,13 +577,22 @@ export async function meshReadChat(
             ...(providerSessionId ? { providerSessionId } : {}),
             tailLimit: args.tail ?? 10,
         });
-        const payload = unwrapCommandPayload(result);
+        const payload = annotateRapidReadChatAdvisory(unwrapCommandPayload(result) as Record<string, any>, {
+            key: `mesh:${args.node_id}:${args.session_id}`,
+            toolName: 'mesh_read_chat',
+            completionCallbackExpected: true,
+        });
         if (args.compact) {
-            return JSON.stringify(compactChatPayload(payload, {
+            const compactPayload = compactChatPayload(payload, {
                 nodeId: args.node_id,
                 sessionId: args.session_id,
                 limit: args.tail ?? 10,
-            }), null, 2);
+            });
+            return JSON.stringify(
+                payload.pollingAdvisory ? { ...compactPayload, pollingAdvisory: payload.pollingAdvisory } : compactPayload,
+                null,
+                2,
+            );
         }
         return JSON.stringify(payload, null, 2);
     } else {
