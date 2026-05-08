@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { CliProviderInstance } from '../../src/providers/cli-provider-instance.js'
 
 describe('CliProviderInstance runtime message merge ordering', () => {
-  it('preserves parsed transcript order when parsed messages have no timestamps', () => {
+  it('keeps timed non-user-facing runtime overlays from becoming the final turn after untimed parsed assistant messages', () => {
     const instance = Object.create(CliProviderInstance.prototype) as CliProviderInstance & {
       runtimeMessages: Array<{ key: string; message: any }>
     }
@@ -27,8 +27,8 @@ describe('CliProviderInstance runtime message merge ordering', () => {
 
     expect(merged.map((message) => message.content)).toEqual([
       'first parsed turn',
-      'second parsed turn',
       'Runtime restored',
+      'second parsed turn',
     ])
   })
 
