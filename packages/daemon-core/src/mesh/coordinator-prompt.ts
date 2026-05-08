@@ -145,8 +145,8 @@ const WORKFLOW_SECTION = `## Orchestration Workflow
    b. If you need branch isolation for parallel work, call \`mesh_clone_node\` to create a worktree node first.
    c. If no session exists, call \`mesh_launch_session\` to start one.
    d. Call \`mesh_send_task\` with a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.
-4. **Monitor** — Periodically call \`mesh_read_chat\` to check progress. Handle approvals via \`mesh_approve\`.
-5. **Verify** — When a task reports completion, call \`mesh_git_status\` to verify changes were made.
+4. **Monitor** — Prefer event-driven completion/status notifications. Do **not** poll \`mesh_read_chat\` repeatedly just because the delegated session has not produced a final assistant message yet; tool/terminal activity means work may still be in progress. Use at most one compact \`mesh_read_chat\` check after a completion/approval signal, an explicit user status request, or a real timeout/stall. Handle approvals via \`mesh_approve\`.
+5. **Verify** — When a task reports completion or git work is visible, call \`mesh_git_status\` to verify changes were made.
 6. **Checkpoint** — Call \`mesh_checkpoint\` to save the work.
 7. **Clean up** — Remove worktree nodes via \`mesh_remove_node\` after their work is merged or no longer needed.
 8. **Report** — Summarize what was done, what changed, and any issues.`;
@@ -163,7 +163,7 @@ function buildRulesSection(coordinatorCliType?: string): string {
 - **Respect explicit provider requests.** If the user names an agent/provider, pass the matching provider type to \`mesh_launch_session\`: Hermes → \`hermes-cli\`, Claude Code/Claude → \`claude-cli\`, Codex → \`codex-cli\`, Gemini → \`gemini-cli\`. Never substitute \`claude-cli\` just because the coordinator itself is Claude Code.
 - **Front-load the task message.** When calling \`mesh_send_task\`, include everything the agent needs: what files to touch, what the problem is, what the fix should look like. The agent won't ask follow-up questions.
 - **Don't inspect code.** Trust the agent's output. Verify via \`mesh_git_status\`, not by reading source files.
-- **Don't over-parallelize.** Start with 1-2 concurrent tasks. Scale up if they succeed.
+- **Don't over-parallelize.** Start with 1-2 concurrent tasks. Scale up if they succeed. Never launch a duplicate session or second worker solely because \`mesh_read_chat\` has no final assistant message while the delegated session is still showing tool/terminal activity.
 - **Handle failures gracefully.** If a task fails, read the chat to understand why, then retry or reassign.
 - **Keep the user informed.** Report progress after each delegation round — one or two sentences, not a narration.
 - **Respect node capabilities.** Don't send build tasks to read-only nodes. Don't push from nodes that aren't allowed to.
