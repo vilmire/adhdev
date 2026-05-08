@@ -117,6 +117,18 @@ function readNodeProviderPriority(node: MeshNode): string[] {
         })
 }
 
+function describeNodeProviderPriority(node: MeshNode): { configured: boolean; label: string; launchBlockedMessage?: string } {
+    const providerPriority = readNodeProviderPriority(node)
+    if (!providerPriority.length) {
+        return {
+            configured: false,
+            label: 'not configured',
+            launchBlockedMessage: 'launch not ready unless an explicit provider is selected',
+        }
+    }
+    return { configured: true, label: providerPriority.join(' → ') }
+}
+
 function readMeshPolicy(mesh: MeshEntry | null): Record<string, any> {
     return { ...DEFAULT_MESH_POLICY, ...(mesh?.policy || {}) }
 }
@@ -575,6 +587,7 @@ export default function RepoMesh() {
                     <div className="flex flex-col gap-2">
                         {selectedMesh.nodes.map(node => {
                             const providerPriority = readNodeProviderPriority(node)
+                            const priorityStatus = describeNodeProviderPriority(node)
                             return (
                             <div key={node.id} className="flex items-center justify-between p-3 rounded-lg border border-border-subtle bg-bg-primary">
                                 <div>
@@ -600,6 +613,15 @@ export default function RepoMesh() {
                                                 >
                                                     {savingNodePolicyId === node.id ? 'Saving...' : 'Save policy'}
                                                 </button>
+                                            </div>
+                                            <div className="mt-2 text-[12px]">
+                                                <span className="text-text-muted">Effective provider priority: </span>
+                                                <span className={priorityStatus.configured ? 'text-text-primary font-mono' : 'text-amber-400'}>
+                                                    {priorityStatus.label}
+                                                </span>
+                                                {priorityStatus.launchBlockedMessage && (
+                                                    <span className="ml-2 text-amber-400">({priorityStatus.launchBlockedMessage})</span>
+                                                )}
                                             </div>
                                         </FormField>
                                     </div>
