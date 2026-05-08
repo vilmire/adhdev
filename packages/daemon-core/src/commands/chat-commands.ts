@@ -19,6 +19,7 @@ import { getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js
 import { buildChatMessageSignature } from '../chat/chat-signatures.js';
 import type { ChatMessage } from '../types.js';
 import type { SessionTransport } from '../shared-types.js';
+import { filterUserFacingChatMessages, normalizeChatMessages } from '../providers/chat-message-normalization.js';
 
 const RECENT_SEND_WINDOW_MS = 1200;
 export const READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS = 25_000;
@@ -195,7 +196,7 @@ function normalizeReadChatTailLimit(args: any): number {
 
 function normalizeReadChatMessages(payload: Record<string, any>): ChatMessage[] {
     const messages = Array.isArray(payload.messages) ? payload.messages as ChatMessage[] : [];
-    return messages;
+    return normalizeChatMessages(messages);
 }
 
 
@@ -316,13 +317,22 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any): Co
         return { success: false, error: error?.message || String(error) };
     }
     const messages = normalizeReadChatMessages(validatedPayload);
-    const sync = buildFullTail(messages, normalizeReadChatTailLimit(args));
+    const visibleMessages = filterUserFacingChatMessages(messages);
+    const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
+    const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
+    const nextDebugReadChat = {
+        ...(debugReadChat || {}),
+        fullMsgCount: messages.length,
+        visibleMsgCount: visibleMessages.length,
+        hiddenMsgCount,
+        returnedMsgCount: sync.messages.length,
+    };
     return {
         success: true,
         ...validatedPayload,
         messages: sync.messages,
         totalMessages: sync.totalMessages,
-        ...(debugReadChat ? { debugReadChat } : {}),
+        debugReadChat: nextDebugReadChat,
     };
 }
 

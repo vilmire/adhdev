@@ -311,6 +311,8 @@ export {
   buildUserChatMessage,
   normalizeChatMessage,
   normalizeChatMessages,
+  isUserFacingChatMessage,
+  filterUserFacingChatMessages,
 } from './providers/chat-message-normalization.js';
 export type { BuiltinChatMessageKind, ChatMessageKind } from './providers/chat-message-normalization.js';
 export { VersionArchive, detectAllVersions } from './providers/version-archive.js';

@@ -92,13 +92,18 @@ describe('handleReadChat for CLI adapters', () => {
     expect(result.success).toBe(true)
     expect(result.status).toBe('generating')
     expect(result.messages).toEqual([
-      expect.objectContaining({ role: 'user', content: 'run pwd' }),
-      expect.objectContaining({ role: 'assistant', kind: 'terminal', content: '$ pwd' }),
-      expect.objectContaining({ role: 'assistant', content: 'Working on it' }),
+      expect.objectContaining({ role: 'user', content: 'run pwd', kind: 'standard' }),
+      expect.objectContaining({ role: 'assistant', content: 'Working on it', kind: 'standard' }),
     ])
+    expect((result as any).debugReadChat).toEqual(expect.objectContaining({
+      fullMsgCount: 3,
+      visibleMsgCount: 2,
+      hiddenMsgCount: 1,
+      returnedMsgCount: 2,
+    }))
   })
 
-  it('includes CLI provider runtime system messages in read_chat results', async () => {
+  it('keeps CLI provider runtime system messages in debug counts without returning them as user-visible read_chat rows', async () => {
     const getScriptParsedStatus = vi.fn(() => ({
       status: 'idle',
       messages: [
@@ -166,10 +171,14 @@ describe('handleReadChat for CLI adapters', () => {
     expect(result.messages).toEqual([
       expect.objectContaining({ role: 'user', content: 'run tests' }),
       expect.objectContaining({ role: 'assistant', content: 'Done' }),
-      expect.objectContaining({ role: 'system', kind: 'system', senderName: 'System', content: 'Auto-approved: Yes' }),
     ])
-    expect((result as any).debugReadChat?.parsedMsgCount).toBe(2)
-    expect((result as any).debugReadChat?.returnedMsgCount).toBe(3)
+    expect((result as any).debugReadChat).toEqual(expect.objectContaining({
+      parsedMsgCount: 2,
+      fullMsgCount: 3,
+      visibleMsgCount: 2,
+      hiddenMsgCount: 1,
+      returnedMsgCount: 2,
+    }))
   })
 
   it('does not replace a provider-authoritative parsed transcript with longer adapter history', async () => {
@@ -634,11 +643,22 @@ describe('handleReadChat for CLI adapters', () => {
     const result = await handleReadChat(helpers as any, { agentType: 'hermes-cli' })
 
     expect(result.success).toBe(true)
-    expect(result.totalMessages).toBe(5)
-    expect(result.messages).toEqual(messages.map(message => expect.objectContaining(message)))
+    expect(result.totalMessages).toBe(4)
+    expect(result.messages).toEqual([
+      expect.objectContaining(messages[0]),
+      expect.objectContaining(messages[1]),
+      expect.objectContaining(messages[2]),
+      expect.objectContaining(messages[4]),
+    ])
+    expect((result as any).debugReadChat).toEqual(expect.objectContaining({
+      fullMsgCount: 5,
+      visibleMsgCount: 4,
+      hiddenMsgCount: 1,
+      returnedMsgCount: 4,
+    }))
   })
 
-  it('applies tailLimit as a plain transport window without injecting hidden conversation anchors', async () => {
+  it('applies tailLimit after filtering hidden tool/terminal activity rows', async () => {
     const messages = [
       { role: 'user', content: '고쳐줘', kind: 'standard', timestamp: 1 },
       { role: 'assistant', content: '수정 완료 요약', kind: 'standard', timestamp: 2 },
@@ -654,12 +674,16 @@ describe('handleReadChat for CLI adapters', () => {
     const result = await handleReadChat(helpers as any, { agentType: 'hermes-cli', tailLimit: 50 })
 
     expect(result.success).toBe(true)
-    expect(result.totalMessages).toBe(62)
+    expect(result.totalMessages).toBe(2)
     const returnedMessages = result.messages as any[]
-    expect(returnedMessages).toHaveLength(50)
-    expect(returnedMessages.map(message => message.content)).toEqual(
-      messages.slice(-50).map(message => message.content),
-    )
+    expect(returnedMessages).toHaveLength(2)
+    expect(returnedMessages.map(message => message.content)).toEqual(['고쳐줘', '수정 완료 요약'])
+    expect((result as any).debugReadChat).toEqual(expect.objectContaining({
+      fullMsgCount: 62,
+      visibleMsgCount: 2,
+      hiddenMsgCount: 60,
+      returnedMsgCount: 2,
+    }))
   })
 
 
@@ -766,7 +790,7 @@ describe('handleReadChat for CLI adapters', () => {
     ])
   })
 
-  it('does not collapse repeated activity rows before applying tail sync', async () => {
+  it('filters repeated hidden activity rows before applying tail sync', async () => {
     const messages = [
       { role: 'user', content: 'debug this bubble' },
       { role: 'assistant', kind: 'tool', senderName: 'Plan', content: 'plan 3 task(s)' },
@@ -781,7 +805,13 @@ describe('handleReadChat for CLI adapters', () => {
     const result = await handleReadChat(helpers as any, { agentType: 'hermes-cli', tailLimit: 4 })
 
     expect(result.success).toBe(true)
-    expect(result.totalMessages).toBe(7)
-    expect(result.messages).toEqual(messages.slice(-4).map(message => expect.objectContaining(message)))
+    expect(result.totalMessages).toBe(1)
+    expect(result.messages).toEqual([expect.objectContaining(messages[0])])
+    expect((result as any).debugReadChat).toEqual(expect.objectContaining({
+      fullMsgCount: 7,
+      visibleMsgCount: 1,
+      hiddenMsgCount: 6,
+      returnedMsgCount: 1,
+    }))
   })
 })

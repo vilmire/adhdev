@@ -1,0 +1,45 @@
+{
+  "name": "@adhdev/mcp-server",
+  "version": "0.9.75",
+  "description": "ADHDev MCP server \u2014 expose IDE agents as MCP tools",
+  "main": "dist/index.js",
+  "bin": {
+    "adhdev-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/index.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "adhdev",
+    "mcp",
+    "model-context-protocol",
+    "ide-agents"
+  ],
+  "author": "vilmire",
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.2.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vilmire/adhdev.git",
+    "directory": "packages/mcp-server"
+  },
+  "homepage": "https://github.com/vilmire/adhdev#readme"
+}

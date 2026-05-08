@@ -25,7 +25,7 @@ import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { normalizeProviderSessionId } from './provider-session-id.js';
-import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages } from './chat-message-normalization.js';
+import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind } from './chat-message-normalization.js';
 
 type PersistableCliHistoryMessage = {
     role: string;
@@ -1007,7 +1007,7 @@ export class CliProviderInstance implements ProviderInstance {
     private mergeConversationMessages(parsedMessages: any[]): ChatMessage[] {
         if (this.runtimeMessages.length === 0) return normalizeChatMessages(parsedMessages);
 
-        type MergeEntry = { message: ChatMessage; index: number; source: 'parsed' | 'runtime' };
+        type MergeEntry = { message: ChatMessage; index: number; source: 'parsed' | 'runtime'; runtimeKey?: string };
         const parsedEntries: MergeEntry[] = parsedMessages.map((message, index) => ({
             message,
             index,
@@ -1017,6 +1017,7 @@ export class CliProviderInstance implements ProviderInstance {
             message: entry.message,
             index: parsedMessages.length + index,
             source: 'runtime',
+            runtimeKey: entry.key,
         }));
         const getTime = (message: ChatMessage): number => {
             const value = typeof message.receivedAt === 'number'
@@ -1027,16 +1028,49 @@ export class CliProviderInstance implements ProviderInstance {
             return Number.isFinite(value) && value > 0 ? value : 0;
         };
 
+        const getRole = (message: ChatMessage): string => typeof message.role === 'string'
+            ? message.role.trim().toLowerCase()
+            : '';
+        const isRuntimeOverlay = (entry: MergeEntry): boolean => {
+            if (entry.source !== 'runtime') return false;
+            const key = typeof entry.runtimeKey === 'string' ? entry.runtimeKey.trim().toLowerCase() : '';
+            if (key.startsWith('auto_approval:')) return true;
+            return !isUserFacingChatMessage(entry.message);
+        };
+        const shouldKeepParsedBeforeUntimedRuntime = (message: ChatMessage): boolean => {
+            const role = getRole(message);
+            return role === 'user' || role === 'human';
+        };
+        const shouldKeepParsedAfterUntimedRuntime = (message: ChatMessage): boolean => {
+            const role = getRole(message);
+            if (role !== 'assistant') return false;
+            const kind = resolveChatMessageKind(message);
+            return kind === 'standard' || kind === 'terminal';
+        };
+
         return normalizeChatMessages([...parsedEntries, ...runtimeEntries]
             .sort((a, b) => {
                 const aTime = getTime(a.message);
                 const bTime = getTime(b.message);
                 if (aTime && bTime && aTime !== bTime) return aTime - bTime;
+                if (a.source !== b.source && aTime !== bTime) {
+                    const parsedEntry = a.source === 'parsed' ? a : b.source === 'parsed' ? b : null;
+                    const runtimeEntry = a.source === 'runtime' ? a : b.source === 'runtime' ? b : null;
+                    if (parsedEntry && runtimeEntry && isRuntimeOverlay(runtimeEntry) && getTime(parsedEntry.message) === 0 && getTime(runtimeEntry.message) > 0) {
+                        if (shouldKeepParsedBeforeUntimedRuntime(parsedEntry.message)) {
+                            return a.source === 'parsed' ? -1 : 1;
+                        }
+                        if (shouldKeepParsedAfterUntimedRuntime(parsedEntry.message)) {
+                            return a.source === 'parsed' ? 1 : -1;
+                        }
+                    }
+                }
                 // Many provider-owned CLI transcripts (including Hermes CLI in debug bundles)
                 // do not carry timestamps on parsed messages. In that case there is no safe
                 // clock basis for interleaving timestamped runtime/system messages into the
-                // provider transcript, so preserve parsed order and append runtime entries by
-                // their insertion index instead of moving them ahead of the whole transcript.
+                // provider transcript. Keep user prompts before runtime overlays, but do not
+                // let timed runtime/system/tool/internal overlays become the final chat turns
+                // after an untimed parsed assistant transcript.
                 return a.index - b.index;
             })
             .map((entry) => entry.message));

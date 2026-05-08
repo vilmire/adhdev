@@ -65,7 +65,7 @@ describe('handleReadChat CLI parser authority', () => {
     expect(result.error).toContain('parse exploded')
   })
 
-  it('uses parser-provided transcript rows as-is and applies tailLimit as a plain suffix window', async () => {
+  it('uses parser-provided transcript rows after visibility filtering and applies tailLimit to visible chat', async () => {
     const allMessages = [
       { role: 'user', content: '고쳐줘', kind: 'standard', timestamp: 1 },
       { role: 'assistant', content: '수정 완료 요약', kind: 'standard', timestamp: 2 },
@@ -90,10 +90,14 @@ describe('handleReadChat CLI parser authority', () => {
     const result = await handleReadChat(createHelpers(adapter) as any, { agentType: 'hermes-cli', tailLimit: 50 })
 
     expect(result.success).toBe(true)
-    expect(result.totalMessages).toBe(62)
-    expect(result.messages).toHaveLength(50)
-    expect((result.messages as any[]).map(message => message.content)).toEqual(
-      allMessages.slice(-50).map(message => message.content),
-    )
+    expect(result.totalMessages).toBe(2)
+    expect(result.messages).toHaveLength(2)
+    expect((result.messages as any[]).map(message => message.content)).toEqual(['고쳐줘', '수정 완료 요약'])
+    expect((result as any).debugReadChat).toEqual(expect.objectContaining({
+      fullMsgCount: 62,
+      visibleMsgCount: 2,
+      hiddenMsgCount: 60,
+      returnedMsgCount: 2,
+    }))
   })
 })
