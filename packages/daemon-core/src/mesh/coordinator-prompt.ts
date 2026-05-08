@@ -162,7 +162,7 @@ function buildRulesSection(coordinatorCliType?: string): string {
 - **Delegate analysis too.** If you need to understand a bug or explore the codebase, send that investigation as a task to a node. Do not do it yourself.
 - **Respect explicit provider requests.** If the user names an agent/provider, pass the matching provider type to \`mesh_launch_session\`: Hermes → \`hermes-cli\`, Claude Code/Claude → \`claude-cli\`, Codex → \`codex-cli\`, Gemini → \`gemini-cli\`. Never substitute \`claude-cli\` just because the coordinator itself is Claude Code.
 - **Front-load the task message.** When calling \`mesh_send_task\`, include everything the agent needs: what files to touch, what the problem is, what the fix should look like. The agent won't ask follow-up questions.
-- **Don't inspect code.** Trust the agent's output. Verify via \`mesh_git_status\`, not by reading source files.
+- **Don't inspect code.** Treat delegated agent summaries as self-reports, not verification. Verify side effects via \`mesh_git_status\` (including related repo freshness when configured), not by reading source files.
 - **Don't over-parallelize.** Start with 1-2 concurrent tasks. Scale up if they succeed. Never launch a duplicate session or second worker solely because \`mesh_read_chat\` has no final assistant message while the delegated session is still showing tool/terminal activity.
 - **Handle failures gracefully.** If a task fails, read the chat to understand why, then retry or reassign.
 - **Keep the user informed.** Report progress after each delegation round — one or two sentences, not a narration.

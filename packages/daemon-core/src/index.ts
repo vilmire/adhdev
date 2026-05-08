@@ -88,6 +88,7 @@ export type {
   RepoMeshNodeHealth,
   RepoMeshPolicy,
   RepoMeshNodePolicy,
+  RepoMeshRelatedRepo,
   RepoMeshNodeCapabilities,
   DetectedCommand,
   ProjectContextSnapshot,

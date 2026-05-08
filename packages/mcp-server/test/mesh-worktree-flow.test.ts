@@ -799,6 +799,111 @@ test('mesh_git_status and mesh_remove_node refresh ctx.mesh from daemon cache wh
   assert.ok(meshCommands.includes('remove_mesh_node'), 'remove_mesh_node relayed to daemon');
 });
 
+test('mesh status and git status include explicitly configured related repo freshness', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ command: string; workspace?: unknown }> = [];
+  transport.command = async (command, args = {}) => {
+    calls.push({ command, workspace: args.workspace });
+    if (command === 'get_mesh') {
+      return { success: false };
+    }
+    if (command === 'git_status') {
+      const workspace = String(args.workspace);
+      if (workspace === '/provider/repo') {
+        return {
+          success: true,
+          status: {
+            workspace,
+            repoRoot: workspace,
+            isGitRepo: true,
+            branch: 'main',
+            ahead: 1,
+            behind: 2,
+            modified: 1,
+            staged: 0,
+            untracked: 0,
+            deleted: 0,
+            renamed: 0,
+            hasConflicts: false,
+            conflictFiles: [],
+            headCommit: 'abc1234',
+            headMessage: 'fix(provider): sample',
+          },
+        };
+      }
+      return {
+        success: true,
+        status: {
+          workspace,
+          repoRoot: workspace,
+          isGitRepo: true,
+          branch: 'main',
+          ahead: 0,
+          behind: 0,
+          modified: 0,
+          staged: 0,
+          untracked: 0,
+          deleted: 0,
+          renamed: 0,
+          hasConflicts: false,
+          conflictFiles: [],
+          headCommit: 'root123',
+          headMessage: 'root commit',
+        },
+      };
+    }
+    if (command === 'git_diff_summary') {
+      return { success: true, diffSummary: { files: [], totalInsertions: 0, totalDeletions: 0 } };
+    }
+    throw new Error(`unexpected command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    throw new Error('unexpected mesh command');
+  };
+
+  const mesh = {
+    id: 'mesh-related',
+    name: 'Related Repo Mesh',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [
+      {
+        id: 'node-main',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-main',
+        userOverrides: {},
+        policy: {
+          relatedRepos: [{ label: 'providers', workspace: '/provider/repo' }],
+        },
+      },
+    ],
+  };
+  const ctx = { mesh, transport, localDaemonId: 'daemon-main' };
+
+  const status = JSON.parse(await meshStatus(ctx as any));
+  assert.equal(status.nodes[0].relatedRepos[0].label, 'providers');
+  assert.equal(status.nodes[0].relatedRepos[0].branch, 'main');
+  assert.equal(status.nodes[0].relatedRepos[0].ahead, 1);
+  assert.equal(status.nodes[0].relatedRepos[0].behind, 2);
+  assert.equal(status.nodes[0].relatedRepos[0].dirty, true);
+  assert.equal(status.nodes[0].relatedRepos[0].head, 'abc1234');
+  assert.equal(status.nodes[0].relatedRepos[0].lastCommitSummary, 'fix(provider): sample');
+
+  const listed = JSON.parse(await meshListNodes(ctx as any));
+  assert.deepEqual(listed.nodes[0].relatedRepos, [{ label: 'providers', workspace: '/provider/repo' }]);
+
+  const gitStatus = JSON.parse(await meshGitStatus(ctx as any, { node_id: 'node-main' }));
+  assert.equal(gitStatus.relatedRepos[0].label, 'providers');
+  assert.ok(calls.some(call => call.command === 'git_status' && call.workspace === '/provider/repo'));
+});
+
 test('mesh tool registry documents the 12 exposed mesh tools including read-debug, worktree clone/remove, and session cleanup', () => {
   assert.equal(ALL_MESH_TOOLS.length, 12);
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_read_debug'));

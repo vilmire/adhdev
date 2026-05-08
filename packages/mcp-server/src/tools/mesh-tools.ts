@@ -16,7 +16,7 @@ import { IpcTransport } from '../transports/ipc.js';
 import { isLocalTransport } from '../transports/mode.js';
 import type { McpTransport } from '../transports/mode.js';
 import { compactChatPayload } from './chat-compact.js';
-import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshPolicy } from '@adhdev/daemon-core';
+import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
 
 export interface MeshContext {
     mesh: LocalMeshEntry;
@@ -153,6 +153,62 @@ function isGitStatusDirty(status: any): boolean {
     if (typeof status?.isDirty === 'boolean') return status.isDirty;
     if (typeof status?.dirty === 'boolean') return status.dirty;
     return countUncommittedChanges(status) > 0;
+}
+
+function readRelatedRepos(node: LocalMeshNodeEntry): RepoMeshRelatedRepo[] {
+    const raw = Array.isArray((node as any).relatedRepos)
+        ? (node as any).relatedRepos
+        : Array.isArray((node.policy as any)?.relatedRepos)
+            ? (node.policy as any).relatedRepos
+            : [];
+
+    return raw
+        .map((entry: any) => ({
+            label: typeof entry?.label === 'string' ? entry.label.trim() : '',
+            workspace: typeof entry?.workspace === 'string' ? entry.workspace.trim() : '',
+        }))
+        .filter((entry: RepoMeshRelatedRepo) => Boolean(entry.label && entry.workspace));
+}
+
+function summarizeRelatedRepoStatus(repo: RepoMeshRelatedRepo, status: any): Record<string, unknown> {
+    const dirty = isGitStatusDirty(status);
+    return {
+        label: repo.label,
+        workspace: repo.workspace,
+        isGitRepo: status?.isGitRepo === true,
+        branch: status?.branch ?? null,
+        ahead: Number.isFinite(Number(status?.ahead)) ? Number(status.ahead) : 0,
+        behind: Number.isFinite(Number(status?.behind)) ? Number(status.behind) : 0,
+        dirty,
+        uncommittedChanges: countUncommittedChanges(status),
+        head: status?.headCommit ?? null,
+        lastCommitSummary: status?.headMessage ?? null,
+        ...(status?.reason ? { reason: status.reason } : {}),
+        ...(status?.error ? { error: status.error } : {}),
+    };
+}
+
+async function collectRelatedRepoStatuses(ctx: MeshContext, node: LocalMeshNodeEntry): Promise<Array<Record<string, unknown>>> {
+    const relatedRepos = readRelatedRepos(node);
+    if (!relatedRepos.length) return [];
+
+    const results: Array<Record<string, unknown>> = [];
+    for (const repo of relatedRepos) {
+        try {
+            const statusResult = !isLocalTransport(ctx.transport) && node.daemonId
+                ? await (ctx.transport as CloudTransport).gitStatus(node.daemonId, repo.workspace, false)
+                : await commandForNode(ctx, node, 'git_status', { workspace: repo.workspace });
+            const status = extractGitStatus(statusResult);
+            results.push(summarizeRelatedRepoStatus(repo, status));
+        } catch (e: any) {
+            results.push({
+                label: repo.label,
+                workspace: repo.workspace,
+                error: e?.message || 'related repo status failed',
+            });
+        }
+    }
+    return results;
 }
 
 function findNodeByWorkspace(mesh: LocalMeshEntry, workspace: string): LocalMeshNodeEntry {
@@ -434,6 +490,9 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
             entry.error = e.message;
         }
 
+        const relatedRepos = await collectRelatedRepoStatuses(ctx, node);
+        if (relatedRepos.length) entry.relatedRepos = relatedRepos;
+
         results.push(entry);
     }
 
@@ -459,6 +518,7 @@ export async function meshListNodes(ctx: MeshContext): Promise<string> {
             repoRoot: n.repoRoot,
             isLocalWorktree: n.isLocalWorktree,
             policy: n.policy,
+            relatedRepos: readRelatedRepos(n),
             ...getNodeLaunchReadiness(n),
             userOverrides: n.userOverrides,
         })),
@@ -639,6 +699,7 @@ export async function meshGitStatus(
             workspace: node.workspace,
             status: extractGitStatus(result),
             diff: extractGitDiff(result),
+            relatedRepos: await collectRelatedRepoStatuses(ctx, node),
         }, null, 2);
     } else if (isLocalTransport(ctx.transport)) {
         const statusResult = await commandForNode(ctx, node, 'git_status', {
@@ -652,6 +713,7 @@ export async function meshGitStatus(
             workspace: node.workspace,
             status: extractGitStatus(statusResult),
             diff: extractGitDiff(diffResult),
+            relatedRepos: await collectRelatedRepoStatuses(ctx, node),
         }, null, 2);
     } else {
         return JSON.stringify({ error: 'No daemonId available for cloud git_status probe' });

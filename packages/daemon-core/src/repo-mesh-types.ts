@@ -73,12 +73,25 @@ export interface RepoMeshPolicy {
     sessionCleanupOnNodeRemove?: RepoMeshSessionCleanupMode;
 }
 
+export interface RepoMeshRelatedRepo {
+    /** Stable display label for an explicitly configured associated checkout. */
+    label: string;
+    /** Absolute checkout/workspace path for git freshness probes. */
+    workspace: string;
+}
+
 export interface RepoMeshNodePolicy {
     readOnly?: boolean;
     canPush?: boolean;
     maxConcurrentSessions?: number;
     /** Ordered provider preference used when mesh_launch_session omits an explicit type. */
     providerPriority?: string[];
+    /**
+     * Optional associated/external repos that must be checked alongside this node.
+     * These are explicit policy/config entries only; Repo Mesh does not auto-discover
+     * sibling paths so freshness checks stay fail-closed and non-surprising.
+     */
+    relatedRepos?: RepoMeshRelatedRepo[];
 }
 
 export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
@@ -204,6 +217,8 @@ export interface LocalMeshNodeEntry {
     worktreeBranch?: string;
     /** Node ID this worktree was cloned from */
     clonedFromNodeId?: string;
+    /** Optional associated/external repos configured as node metadata. */
+    relatedRepos?: RepoMeshRelatedRepo[];
 }
 
 // ─── Mesh Status (runtime, not persisted) ───────
