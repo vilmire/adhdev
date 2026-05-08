@@ -103,7 +103,24 @@ describe('handleReadChat for CLI adapters', () => {
     }))
   })
 
-  it('keeps CLI provider runtime system messages in debug counts without returning them as user-visible read_chat rows', async () => {
+  it('keeps intentionally user-facing terminal rows in read_chat results', async () => {
+    const { helpers } = createCliReadChatHarness([
+      { role: 'user', content: 'show build output' },
+      { role: 'assistant', kind: 'terminal', content: 'npm test passed', meta: { transcriptVisibility: 'visible' } },
+      { role: 'assistant', kind: 'terminal', content: 'internal command echo' },
+    ])
+
+    const result = await handleReadChat(helpers as any, { agentType: 'hermes-cli' })
+
+    expect(result.success).toBe(true)
+    expect(result.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'show build output' }),
+      expect.objectContaining({ role: 'assistant', kind: 'terminal', content: 'npm test passed' }),
+    ])
+    expect((result as any).debugReadChat?.hiddenMsgCount).toBe(1)
+  })
+
+  it('keeps CLI provider runtime system messages out of user-visible read_chat results', async () => {
     const getScriptParsedStatus = vi.fn(() => ({
       status: 'idle',
       messages: [
@@ -630,7 +647,7 @@ describe('handleReadChat for CLI adapters', () => {
     })
   })
 
-  it('returns parser-provided duplicate rows without replay collapse or daemon dedupe', async () => {
+  it('returns parser-provided duplicate user-visible rows without replay collapse or daemon dedupe', async () => {
     const messages = [
       { role: 'user', content: 'debug this bubble' },
       { role: 'assistant', content: 'I found the issue.' },
@@ -658,7 +675,7 @@ describe('handleReadChat for CLI adapters', () => {
     }))
   })
 
-  it('applies tailLimit after filtering hidden tool/terminal activity rows', async () => {
+  it('applies tailLimit after filtering internal activity rows out of the user-visible window', async () => {
     const messages = [
       { role: 'user', content: '고쳐줘', kind: 'standard', timestamp: 1 },
       { role: 'assistant', content: '수정 완료 요약', kind: 'standard', timestamp: 2 },
@@ -790,7 +807,7 @@ describe('handleReadChat for CLI adapters', () => {
     ])
   })
 
-  it('filters repeated hidden activity rows before applying tail sync', async () => {
+  it('keeps repeated internal activity rows out of the user-visible tail', async () => {
     const messages = [
       { role: 'user', content: 'debug this bubble' },
       { role: 'assistant', kind: 'tool', senderName: 'Plan', content: 'plan 3 task(s)' },

@@ -179,25 +179,44 @@ function readMessageMeta(message: ChatMessage): Record<string, unknown> | null {
     : null;
 }
 
-function isExplicitlyHiddenFromTranscript(meta: Record<string, unknown> | null): boolean {
-  if (!meta) return false;
-  const visibility = typeof meta.transcriptVisibility === 'string'
-    ? meta.transcriptVisibility.trim().toLowerCase()
-    : '';
-  return visibility === 'hidden'
-    || visibility === 'debug'
-    || meta.internal === true
-    || meta.debug === true
-    || meta.statusOnly === true
-    || meta.controlOnly === true;
+function readStringField(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
-function isExplicitlyVisibleInTranscript(meta: Record<string, unknown> | null): boolean {
-  if (!meta) return false;
-  const visibility = typeof meta.transcriptVisibility === 'string'
-    ? meta.transcriptVisibility.trim().toLowerCase()
-    : '';
-  return visibility === 'visible' || meta.userFacing === true;
+function isExplicitlyHiddenFromTranscript(message: ChatMessage, meta: Record<string, unknown> | null): boolean {
+  const record = message as ChatMessage & Record<string, unknown>;
+  const visibility = readStringField(record.visibility || meta?.visibility || meta?.transcriptVisibility);
+  const audience = readStringField(record.audience || meta?.audience);
+  const source = readStringField(record.source || meta?.source);
+
+  return visibility === 'hidden'
+    || visibility === 'debug'
+    || visibility === 'internal'
+    || audience === 'debug'
+    || audience === 'trace'
+    || audience === 'internal'
+    || source === 'runtime_status'
+    || source === 'provider_chrome'
+    || source === 'control'
+    || record.internal === true
+    || record.isInternal === true
+    || record.debug === true
+    || meta?.internal === true
+    || meta?.isInternal === true
+    || meta?.debug === true
+    || meta?.statusOnly === true
+    || meta?.controlOnly === true;
+}
+
+function isExplicitlyVisibleInTranscript(message: ChatMessage, meta: Record<string, unknown> | null): boolean {
+  const record = message as ChatMessage & Record<string, unknown>;
+  const visibility = readStringField(record.visibility || meta?.visibility || meta?.transcriptVisibility);
+  const audience = readStringField(record.audience || meta?.audience);
+  return visibility === 'visible'
+    || visibility === 'user'
+    || audience === 'chat'
+    || record.userFacing === true
+    || meta?.userFacing === true;
 }
 
 /**
@@ -212,8 +231,8 @@ function isExplicitlyVisibleInTranscript(meta: Record<string, unknown> | null): 
 export function isUserFacingChatMessage(message: ChatMessage | null | undefined): boolean {
   if (!message) return false;
   const meta = readMessageMeta(message);
-  if (isExplicitlyHiddenFromTranscript(meta)) return false;
-  if (isExplicitlyVisibleInTranscript(meta)) return true;
+  if (isExplicitlyHiddenFromTranscript(message, meta)) return false;
+  if (isExplicitlyVisibleInTranscript(message, meta)) return true;
 
   const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
   const kind = resolveChatMessageKind(message);

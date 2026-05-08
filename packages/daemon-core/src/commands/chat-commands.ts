@@ -320,19 +320,23 @@ function buildReadChatCommandResult(payload: Record<string, any>, args: any): Co
     const visibleMessages = filterUserFacingChatMessages(messages);
     const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
     const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
-    const nextDebugReadChat = {
-        ...(debugReadChat || {}),
-        fullMsgCount: messages.length,
-        visibleMsgCount: visibleMessages.length,
-        hiddenMsgCount,
-        returnedMsgCount: sync.messages.length,
-    };
+    const returnedDebugReadChat = debugReadChat
+        ? {
+            ...debugReadChat,
+            fullMsgCount: typeof debugReadChat.fullMsgCount === 'number'
+                ? debugReadChat.fullMsgCount
+                : messages.length,
+            visibleMsgCount: visibleMessages.length,
+            hiddenMsgCount,
+            returnedMsgCount: sync.messages.length,
+        }
+        : undefined;
     return {
         success: true,
         ...validatedPayload,
         messages: sync.messages,
         totalMessages: sync.totalMessages,
-        debugReadChat: nextDebugReadChat,
+        ...(returnedDebugReadChat ? { debugReadChat: returnedDebugReadChat } : {}),
     };
 }
 
