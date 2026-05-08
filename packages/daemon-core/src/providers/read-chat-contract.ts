@@ -77,6 +77,14 @@ function validateMessage(message: unknown, source: string, index: number): ChatM
   if (typeof message.senderName === 'string') normalized.senderName = message.senderName
   if (typeof (message as any)._type === 'string') normalized._type = (message as any)._type
   if (typeof (message as any)._sub === 'string') normalized._sub = (message as any)._sub
+  if (typeof (message as any).visibility === 'string') normalized.visibility = (message as any).visibility
+  if (typeof (message as any).transcriptVisibility === 'string') normalized.transcriptVisibility = (message as any).transcriptVisibility
+  if (typeof (message as any).audience === 'string') normalized.audience = (message as any).audience
+  if (typeof (message as any).source === 'string') normalized.source = (message as any).source
+  if (typeof (message as any).userFacing === 'boolean') normalized.userFacing = (message as any).userFacing
+  if (typeof (message as any).internal === 'boolean') normalized.internal = (message as any).internal
+  if (typeof (message as any).isInternal === 'boolean') normalized.isInternal = (message as any).isInternal
+  if (typeof (message as any).debug === 'boolean') normalized.debug = (message as any).debug
 
   return normalized
 }

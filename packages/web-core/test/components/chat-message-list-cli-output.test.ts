@@ -47,11 +47,29 @@ describe('ChatMessageList CLI assistant rendering', () => {
         role: 'assistant',
         kind: 'tool',
         content: 'Visible tool summary',
-        meta: { visibility: 'chat' },
+        meta: { transcriptVisibility: 'visible' },
       } as ChatMessage,
     ])
 
     expect(html).toContain('Visible tool summary')
+  })
+
+  it('hides semantically internal runtime activity even when the kind is standard', () => {
+    const html = renderMessages([
+      {
+        role: 'assistant',
+        kind: 'standard',
+        content: 'INTERNAL_RUNTIME_STATUS_SHOULD_NOT_RENDER',
+        meta: { transcriptVisibility: 'internal', audience: 'debug', source: 'runtime_activity', isInternal: true },
+      } as ChatMessage,
+      {
+        role: 'assistant',
+        content: '사용자에게 보이는 최종 답변',
+      } as ChatMessage,
+    ])
+
+    expect(html).not.toContain('INTERNAL_RUNTIME_STATUS_SHOULD_NOT_RENDER')
+    expect(html).toContain('사용자에게 보이는 최종 답변')
   })
 
   it('does not truncate standard assistant bubbles just because they are long', () => {

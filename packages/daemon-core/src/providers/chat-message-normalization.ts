@@ -183,11 +183,16 @@ function readStringField(value: unknown): string {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
+function readVisibilityField(message: ChatMessage, meta: Record<string, unknown> | null): string {
+  const record = message as ChatMessage & Record<string, unknown>;
+  return readStringField(record.visibility ?? record.transcriptVisibility ?? meta?.visibility ?? meta?.transcriptVisibility);
+}
+
 function isExplicitlyHiddenFromTranscript(message: ChatMessage, meta: Record<string, unknown> | null): boolean {
   const record = message as ChatMessage & Record<string, unknown>;
-  const visibility = readStringField(record.visibility || meta?.visibility || meta?.transcriptVisibility);
-  const audience = readStringField(record.audience || meta?.audience);
-  const source = readStringField(record.source || meta?.source);
+  const visibility = readVisibilityField(message, meta);
+  const audience = readStringField(record.audience ?? meta?.audience);
+  const source = readStringField(record.source ?? meta?.source);
 
   return visibility === 'hidden'
     || visibility === 'debug'
@@ -196,6 +201,7 @@ function isExplicitlyHiddenFromTranscript(message: ChatMessage, meta: Record<str
     || audience === 'trace'
     || audience === 'internal'
     || source === 'runtime_status'
+    || source === 'runtime_activity'
     || source === 'provider_chrome'
     || source === 'control'
     || record.internal === true
@@ -210,10 +216,11 @@ function isExplicitlyHiddenFromTranscript(message: ChatMessage, meta: Record<str
 
 function isExplicitlyVisibleInTranscript(message: ChatMessage, meta: Record<string, unknown> | null): boolean {
   const record = message as ChatMessage & Record<string, unknown>;
-  const visibility = readStringField(record.visibility || meta?.visibility || meta?.transcriptVisibility);
-  const audience = readStringField(record.audience || meta?.audience);
+  const visibility = readVisibilityField(message, meta);
+  const audience = readStringField(record.audience ?? meta?.audience);
   return visibility === 'visible'
     || visibility === 'user'
+    || visibility === 'chat'
     || audience === 'chat'
     || record.userFacing === true
     || meta?.userFacing === true;

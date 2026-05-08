@@ -45,12 +45,21 @@ describe('chat message transcript visibility', () => {
       content: 'visible command result',
       visibility: 'user',
     }) as any)).toBe(true)
+
+    expect(isUserFacingChatMessage(message({
+      role: 'assistant',
+      kind: 'tool',
+      content: 'visible provider-authored activity',
+      transcriptVisibility: 'chat',
+    }) as any)).toBe(true)
   })
 
   it('hides internal/debug/provider chrome even when the kind looks standard', () => {
     const rows = [
       message({ role: 'assistant', content: 'real answer' }),
       message({ role: 'assistant', content: '· 1 background terminal running · /ps to view…', source: 'runtime_status' }),
+      message({ role: 'assistant', content: 'internal runtime activity', source: 'runtime_activity' }),
+      message({ role: 'assistant', content: 'top-level internal transcript row', transcriptVisibility: 'internal' }),
       message({ role: 'assistant', content: 'thinking with medium effort', meta: { visibility: 'debug' } }),
       message({ role: 'assistant', content: '⚡ mcp_adhdev_mesh_mesh_read_chat', audience: 'trace' }),
       message({ role: 'assistant', content: 'provider title row', meta: { source: 'provider_chrome' } }),

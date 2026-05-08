@@ -235,10 +235,40 @@ export function shouldRenderChatMessageInVisibleTranscript(message: ChatMessage)
     const kind = typeof message.kind === 'string'
         ? message.kind.trim().toLowerCase()
         : (role === 'tool' ? 'tool' : 'standard');
-    const meta = message.meta as (MessageMeta & { visibility?: unknown }) | undefined;
-    const visibility = typeof meta?.visibility === 'string' ? meta.visibility.trim().toLowerCase() : '';
+    const meta = message.meta as (MessageMeta & {
+        visibility?: unknown
+        transcriptVisibility?: unknown
+        audience?: unknown
+        source?: unknown
+        isInternal?: unknown
+        internal?: unknown
+        debug?: unknown
+    }) | undefined;
+    const record = message as ChatMessage & {
+        visibility?: unknown
+        transcriptVisibility?: unknown
+        audience?: unknown
+        source?: unknown
+        userFacing?: unknown
+        isInternal?: unknown
+        internal?: unknown
+        debug?: unknown
+    };
+    const visibility = typeof (record.visibility ?? record.transcriptVisibility ?? meta?.visibility ?? meta?.transcriptVisibility) === 'string'
+        ? String(record.visibility ?? record.transcriptVisibility ?? meta?.visibility ?? meta?.transcriptVisibility).trim().toLowerCase()
+        : '';
+    const audience = typeof (record.audience ?? meta?.audience) === 'string'
+        ? String(record.audience ?? meta?.audience).trim().toLowerCase()
+        : '';
+    const source = typeof (record.source ?? meta?.source) === 'string'
+        ? String(record.source ?? meta?.source).trim().toLowerCase()
+        : '';
 
-    if (visibility === 'chat' || visibility === 'visible') return true;
+    if (visibility === 'chat' || visibility === 'visible' || visibility === 'user' || audience === 'chat' || record.userFacing === true || meta?.userFacing === true) return true;
+    if (visibility === 'hidden' || visibility === 'debug' || visibility === 'internal') return false;
+    if (audience === 'debug' || audience === 'trace' || audience === 'internal') return false;
+    if (source === 'runtime_status' || source === 'runtime_activity' || source === 'provider_chrome' || source === 'control') return false;
+    if (record.isInternal === true || record.internal === true || record.debug === true || meta?.isInternal === true || meta?.internal === true || meta?.debug === true) return false;
     if (role === 'tool') return false;
     if ((role === 'assistant' || !role) && (kind === 'tool' || kind === 'terminal')) return false;
     return true;

@@ -49,6 +49,15 @@ export interface ChatMessage {
   /** Optional: fiber metadata */
   _type?: string;
   _sub?: string;
+  /** Transcript visibility/audience contract for separating chat-visible content from internal/debug runtime rows. */
+  visibility?: 'visible' | 'user' | 'chat' | 'hidden' | 'debug' | 'internal' | (string & {});
+  transcriptVisibility?: 'visible' | 'user' | 'chat' | 'hidden' | 'debug' | 'internal' | (string & {});
+  audience?: 'chat' | 'debug' | 'trace' | 'internal' | (string & {});
+  source?: 'assistant_text' | 'tool_call' | 'terminal_command' | 'runtime_activity' | 'runtime_status' | 'provider_chrome' | 'control' | (string & {});
+  userFacing?: boolean;
+  internal?: boolean;
+  isInternal?: boolean;
+  debug?: boolean;
   /** Meta information for thought/terminal logs etc */
   meta?: { label?: string; isRunning?: boolean } | Record<string, any>;
   /** Sender name for shared sessions */
