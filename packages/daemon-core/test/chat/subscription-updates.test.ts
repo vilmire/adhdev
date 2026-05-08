@@ -16,7 +16,7 @@ describe('chat subscription update helpers', () => {
       lastDeliveredSignature: '',
       result: {
         success: true,
-        messages: [{ id: 'msg-2', content: 'hello' }],
+        messages: [{ id: 'msg-2', role: 'assistant', content: 'hello' }],
         status: 'generating',
         title: 'Repo Thread',
         activeModal: {
@@ -60,16 +60,75 @@ describe('chat subscription update helpers', () => {
       result: {
         success: true,
         syncMode: 'noop',
-        messages: [{ id: 'msg-5', content: 'parser tail' }],
+        messages: [{ id: 'msg-5', role: 'assistant', content: 'parser tail' }],
       } as any,
     })
 
     expect(prepared.update).toMatchObject({
       topic: 'session.chat_tail',
-      messages: [{ id: 'msg-5', content: 'parser tail' }],
+      messages: [{ id: 'msg-5', role: 'assistant', kind: 'standard', content: 'parser tail' }],
     })
     expect(prepared.seq).toBe(3)
     expect(prepared.cursor).toEqual({ tailLimit: 25 })
+  })
+
+  it('filters internal runtime chatter from user-visible chat-tail updates without string matching', () => {
+    const arbitraryTerminalContent = '$ arbitrary-tool --flag=not-a-blacklist-example'
+    const arbitraryToolContent = 'custom_tool_name payload={"anything":true}'
+    const prepared = prepareSessionChatTailUpdate({
+      key: 'sub-visibility',
+      sessionId: 'session-visibility',
+      seq: 10,
+      timestamp: 999,
+      cursor: { tailLimit: 40 },
+      lastDeliveredSignature: '',
+      result: {
+        success: true,
+        status: 'idle',
+        messages: [
+          { id: 'u1', role: 'user', content: 'question' },
+          {
+            id: 'terminal-internal',
+            role: 'assistant',
+            kind: 'terminal',
+            senderName: 'Terminal',
+            content: arbitraryTerminalContent,
+            meta: {
+              transcriptVisibility: 'internal',
+              audience: 'debug',
+              source: 'runtime_activity',
+              isInternal: true,
+            },
+          },
+          {
+            id: 'tool-internal-standard-kind',
+            role: 'assistant',
+            kind: 'standard',
+            content: arbitraryToolContent,
+            source: 'runtime_activity',
+          },
+          { id: 'a1', role: 'assistant', content: 'final answer' },
+          {
+            id: 'visible-terminal',
+            role: 'assistant',
+            kind: 'terminal',
+            senderName: 'Terminal',
+            content: 'intentional visible output',
+            meta: { transcriptVisibility: 'visible' },
+          },
+        ],
+      } as any,
+    })
+
+    expect(prepared.update?.messages.map((message: any) => message.id)).toEqual([
+      'u1',
+      'a1',
+      'visible-terminal',
+    ])
+    expect(prepared.update?.messages.find((message: any) => message.id === 'visible-terminal')).toMatchObject({
+      kind: 'terminal',
+      meta: { transcriptVisibility: 'visible' },
+    })
   })
 
   it('suppresses failed read_chat results without advancing cursor or publishing empty-success chat-tail', () => {

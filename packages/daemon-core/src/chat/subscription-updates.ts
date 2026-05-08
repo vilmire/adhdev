@@ -8,6 +8,7 @@ import {
   buildSessionModalDeliverySignature,
 } from './chat-signatures.js'
 import { normalizeManagedStatus } from '../status/normalize.js'
+import { filterUserFacingChatMessages, normalizeChatMessages } from '../providers/chat-message-normalization.js'
 
 export interface ChatTailSubscriptionCursor {
   tailLimit: number
@@ -101,7 +102,8 @@ export function prepareSessionChatTailUpdate(
     }
   }
 
-  const messages = Array.isArray(result.messages) ? result.messages : []
+  const fullMessages = normalizeChatMessages(Array.isArray(result.messages) ? result.messages as any[] : [])
+  const messages = filterUserFacingChatMessages(fullMessages)
   const title = typeof result.title === 'string' ? result.title : undefined
   const activeModal = normalizeChatTailActiveModal(result.activeModal)
   const status = typeof result.status === 'string' ? result.status : 'idle'
