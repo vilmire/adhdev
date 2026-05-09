@@ -19,6 +19,7 @@ import { buildChatMessageSignature } from '@adhdev/daemon-core/chat/chat-signatu
 import type { Pluggable, PluggableList } from 'unified';
 import { IconThought } from './Icons';
 import { stringifyTextContent } from '../utils/text';
+import { classifyChatMessageForDisplay, filterChatMessagesForDefaultTranscript, filterChatActivityMessages, mergeChatAndActivityMessages } from './dashboard/chat-activity-visibility';
 
 // ─── Types ────────────────────────────────────
 
@@ -47,6 +48,8 @@ export interface ChatMessageListProps {
     receivedAtMap?: Record<string, number>;
     /** Daemon-provided hash for the current last message; avoids re-hashing large idle transcripts. */
     lastMessageHash?: string;
+    /** Opt-in: show tool/terminal/runtime activity rows in a distinct activity surface. */
+    showActivityMessages?: boolean;
     /** custom empty state */
     emptyState?: React.ReactNode;
     /** Load previous messages when user clicks load button */
@@ -231,48 +234,7 @@ function getRenderableTimestamp(message: ChatMessage, index: number, receivedAtM
 }
 
 export function shouldRenderChatMessageInVisibleTranscript(message: ChatMessage): boolean {
-    const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
-    const kind = typeof message.kind === 'string'
-        ? message.kind.trim().toLowerCase()
-        : (role === 'tool' ? 'tool' : 'standard');
-    const meta = message.meta as (MessageMeta & {
-        visibility?: unknown
-        transcriptVisibility?: unknown
-        audience?: unknown
-        source?: unknown
-        userFacing?: unknown
-        isInternal?: unknown
-        internal?: unknown
-        debug?: unknown
-    }) | undefined;
-    const record = message as ChatMessage & {
-        visibility?: unknown
-        transcriptVisibility?: unknown
-        audience?: unknown
-        source?: unknown
-        userFacing?: unknown
-        isInternal?: unknown
-        internal?: unknown
-        debug?: unknown
-    };
-    const visibility = typeof (record.visibility ?? record.transcriptVisibility ?? meta?.visibility ?? meta?.transcriptVisibility) === 'string'
-        ? String(record.visibility ?? record.transcriptVisibility ?? meta?.visibility ?? meta?.transcriptVisibility).trim().toLowerCase()
-        : '';
-    const audience = typeof (record.audience ?? meta?.audience) === 'string'
-        ? String(record.audience ?? meta?.audience).trim().toLowerCase()
-        : '';
-    const source = typeof (record.source ?? meta?.source) === 'string'
-        ? String(record.source ?? meta?.source).trim().toLowerCase()
-        : '';
-
-    if (visibility === 'chat' || visibility === 'visible' || visibility === 'user' || audience === 'chat' || record.userFacing === true || meta?.userFacing === true) return true;
-    if (visibility === 'hidden' || visibility === 'debug' || visibility === 'internal') return false;
-    if (audience === 'debug' || audience === 'trace' || audience === 'internal') return false;
-    if (source === 'runtime_status' || source === 'runtime_activity' || source === 'provider_chrome' || source === 'control') return false;
-    if (record.isInternal === true || record.internal === true || record.debug === true || meta?.isInternal === true || meta?.internal === true || meta?.debug === true) return false;
-    if (role === 'tool') return false;
-    if ((role === 'assistant' || !role) && (kind === 'tool' || kind === 'terminal')) return false;
-    return true;
+    return classifyChatMessageForDisplay(message).isUserFacing;
 }
 
 function likelyNeedsMarkdownRender(content: string): boolean {
@@ -466,14 +428,34 @@ const ChatMessageRow = memo(function ChatMessageRow({
     const role = (message.role || '').toLowerCase();
     const isUser = role === 'user' || role === 'human';
     const kind = message.kind || (role === 'tool' ? 'tool' : 'standard');
+    const displayClassification = classifyChatMessageForDisplay(message);
     const structuredParts = isStructuredMessagePartArray(message.content) ? message.content : null;
     const hasStructuredRenderer = !!structuredParts?.some((part) => part.type !== 'text');
     const contentStr = stringifyTextContent(message.content, { joiner: '\n' });
 
+    if (displayClassification.isActivityFacing && kind !== 'thought' && kind !== 'tool' && kind !== 'terminal') {
+        const label = displayClassification.label || 'Activity';
+        return (
+            <div className="self-start chat-msg-activity" data-chat-activity-row="true">
+                <div className="chat-msg-activity-meta" aria-label="Activity message">
+                    <span className="activity-dot" />
+                    <span>{label}</span>
+                </div>
+                {hasStructuredRenderer && structuredParts ? (
+                    <div className="chat-msg-activity-body">
+                        <MessagePartsRenderer parts={structuredParts} renderAsPreformatted={false} />
+                    </div>
+                ) : (
+                    <div className="chat-msg-activity-body" style={{ whiteSpace: 'pre-wrap' }}>{contentStr}</div>
+                )}
+            </div>
+        );
+    }
+
     if (kind === 'thought') {
         const label = typeof message.meta?.label === 'string' ? message.meta.label : 'Thought';
         return (
-            <div className="self-start chat-msg-thought">
+            <div className="self-start chat-msg-thought" data-chat-activity-row={displayClassification.isActivityFacing ? 'true' : undefined}>
                 <div className="chat-msg-header">
                     <IconThought size={13} />
                     <span>{label}</span>
@@ -487,7 +469,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
 
     if (kind === 'tool') {
         return (
-            <div className="self-start chat-msg-tool">
+            <div className="self-start chat-msg-tool" data-chat-activity-row={displayClassification.isActivityFacing ? 'true' : undefined}>
                 <div className="chat-msg-tool-meta" aria-label="Tool message">
                     <span className="tool-icon">⏺</span>
                     <span className="tool-label">Tool</span>
@@ -507,7 +489,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
         const icon = message.meta?.isRunning ? '⏳' : '✅';
         const label = typeof message.meta?.label === 'string' ? message.meta.label : 'Ran command';
         return (
-            <div className="self-start chat-msg-terminal">
+            <div className="self-start chat-msg-terminal" data-chat-activity-row={displayClassification.isActivityFacing ? 'true' : undefined}>
                 <div className="chat-msg-header">
                     <span>{icon}</span>
                     <span>{label}</span>
@@ -604,7 +586,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
 // ─── Component ────────────────────────────────
 
 const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(function ChatMessageList(
-    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true },
+    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true },
     ref
 ) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -680,10 +662,11 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
     // Visible chat transcript hides internal provider/coordinator activity rows.
     // The daemon/read_chat transcript still preserves these messages for debug/export paths.
-    const visibleMessages = useMemo(
-        () => messages.filter(shouldRenderChatMessageInVisibleTranscript),
-        [messages],
-    );
+    const visibleMessages = useMemo(() => {
+        const chatMessages = filterChatMessagesForDefaultTranscript(messages);
+        const activityMessages = filterChatActivityMessages(messages);
+        return mergeChatAndActivityMessages(chatMessages, activityMessages, showActivityMessages);
+    }, [messages, showActivityMessages]);
 
     const visibleLastMessageHash = visibleMessages.length === messages.length ? lastMessageHash : undefined;
 
@@ -1108,6 +1091,7 @@ const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     && prev.contextKey === next.contextKey
     && prev.receivedAtMap === next.receivedAtMap
     && prev.lastMessageHash === next.lastMessageHash
+    && prev.showActivityMessages === next.showActivityMessages
     && prev.emptyState === next.emptyState
     && prev.onLoadMore === next.onLoadMore
     && prev.isLoadingMore === next.isLoadingMore

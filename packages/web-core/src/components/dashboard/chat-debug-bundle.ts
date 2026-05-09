@@ -83,6 +83,8 @@ export interface BuildChatFrontendDebugSnapshotOptions {
         controlsVisible: boolean
         visibleLiveCount: number
         hiddenLiveCount: number
+        activityVisible?: boolean
+        activityCount?: number
         isInputActive: boolean
         isVisible: boolean
     }

@@ -33,6 +33,12 @@ import { useSessionChatTailController } from './session-chat-tail-controller';
 import { buildVisibleConversationMessages, getConversationLiveMessages } from './conversation-message-snapshot';
 import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
 import { buildGitSystemBubbleMessages } from './git-system-bubbles';
+import {
+    CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY,
+    filterChatActivityMessages,
+    readChatActivityVisiblePreference,
+    writeChatActivityVisiblePreference,
+} from './chat-activity-visibility';
 
 export interface ChatPaneProps {
     activeConv: ActiveConversation;
@@ -99,12 +105,14 @@ export default function ChatPane({
     })
 
     const [visibleLiveCount, setVisibleLiveCount] = useState(defaultVisibleLiveMessages);
+    const [showActivityMessages, setShowActivityMessages] = useState(() => readChatActivityVisiblePreference());
 
     const tabKey = activeConv.tabKey;
     const historyMessages = chatTailState.historyMessages;
     const hasMoreHistory = chatTailState.hasMoreHistory;
     const loadError = chatTailState.historyError;
     const liveMessages = getConversationLiveMessages(activeConv, chatTailState);
+    const activityToggleCount = filterChatActivityMessages(liveMessages).length;
 
     useEffect(() => {
         setVisibleLiveCount(defaultVisibleLiveMessages);
@@ -216,6 +224,8 @@ export default function ChatPane({
             ui: {
                 controlsVisible: areControlsVisible,
                 visibleLiveCount,
+                activityVisible: showActivityMessages,
+                activityCount: activityToggleCount,
                 hiddenLiveCount,
                 isInputActive,
                 isVisible,
@@ -240,6 +250,7 @@ export default function ChatPane({
     }, [
         activeConv,
         actionLogs,
+        activityToggleCount,
         allMessages,
         areControlsVisible,
         chatTailState.hasLiveSnapshot,
@@ -255,9 +266,27 @@ export default function ChatPane({
         isVisible,
         loadError,
         sendCommand,
+        showActivityMessages,
         visibleBarControls.length,
         visibleLiveCount,
     ]);
+
+    const handleActivityToggle = useCallback(() => {
+        setShowActivityMessages((current) => {
+            const next = !current;
+            writeChatActivityVisiblePreference(next);
+            return next;
+        });
+    }, []);
+
+    useEffect(() => {
+        const onStorage = (event: StorageEvent) => {
+            if (event.key !== CHAT_ACTIVITY_VISIBILITY_STORAGE_KEY) return;
+            setShowActivityMessages(readChatActivityVisiblePreference());
+        };
+        window.addEventListener('storage', onStorage);
+        return () => window.removeEventListener('storage', onStorage);
+    }, []);
 
     const handleControlsToggleDebugGesture = useCallback(() => {
         const result = recordControlsToggleDebugGesture(debugGestureStateRef.current);
@@ -340,7 +369,22 @@ export default function ChatPane({
     return (
         <div className="flex-1 min-h-0 w-full flex flex-col">
             {/* Message Stream */}
-                <ChatMessageList
+            <div className="chat-activity-toggle-bar">
+                <button
+                    type="button"
+                    className={`chat-activity-toggle ${showActivityMessages ? 'chat-activity-toggle-active' : ''}`}
+                    onClick={handleActivityToggle}
+                    aria-pressed={showActivityMessages}
+                    title="Show tool, terminal, and runtime activity rows"
+                >
+                    <span className="chat-activity-toggle-dot" />
+                    Activity
+                    {activityToggleCount > 0 && (
+                        <span className="chat-activity-toggle-count">{activityToggleCount}</span>
+                    )}
+                </button>
+            </div>
+            <ChatMessageList
                 messages={allMessages}
                 actionLogs={visibleActionLogs}
                 agentName={getConversationProviderLabel(activeConv) || panelLabel || 'Agent'}
@@ -350,6 +394,7 @@ export default function ChatPane({
                 contextKey={activeConv.tabKey}
                 receivedAtMap={receivedAtMap}
                 lastMessageHash={activeConv.lastMessageHash}
+                showActivityMessages={showActivityMessages}
                 onLoadMore={handleLoadMore}
                 isLoadingMore={isLoadingMore}
                 hasMoreHistory={hasMoreHistory}
