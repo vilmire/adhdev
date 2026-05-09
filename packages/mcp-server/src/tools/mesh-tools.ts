@@ -662,6 +662,7 @@ export async function meshLaunchSession(
         }
 
         const coordinatorNode = resolveCoordinatorNode(ctx);
+        const coordinatorDaemonId = coordinatorNode?.daemonId || ctx.localDaemonId;
         const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
         const result = await commandForNode(ctx, node, 'launch_cli', {
             cliType: resolvedProviderType,
@@ -670,7 +671,7 @@ export async function meshLaunchSession(
                 meshNodeFor: ctx.mesh.id,
                 meshNodeId: args.node_id,
                 spawnedSessionVisibility,
-                ...(coordinatorNode?.daemonId ? { meshCoordinatorDaemonId: coordinatorNode.daemonId } : {}),
+                ...(coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {}),
                 ...(coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {}),
                 launchedByCoordinator: true
             }

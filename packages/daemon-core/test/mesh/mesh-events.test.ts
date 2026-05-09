@@ -10,7 +10,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
   getMeshByRepo: meshConfigMocks.getMeshByRepo,
 }))
 
-import { setupMeshEventForwarding } from '../../src/mesh/mesh-events.js'
+import { handleMeshForwardEvent, setupMeshEventForwarding } from '../../src/mesh/mesh-events.js'
 
 function createComponents() {
   let listener: ((event: any) => void) | undefined
@@ -162,5 +162,31 @@ describe('setupMeshEventForwarding', () => {
     })
 
     expect(coordinator.onEvent).not.toHaveBeenCalled()
+  })
+
+  it('injects forwarded stopped and long-generating coordinator hints from remote worker daemons', () => {
+    const { components, coordinator } = createComponents()
+
+    const stopped = handleMeshForwardEvent(components, {
+      event: 'agent:stopped',
+      meshId: 'mesh_inline_1',
+      nodeId: 'node_child_1',
+      targetSessionId: 'runtime-session-1',
+      providerType: 'hermes-cli',
+    })
+    const longGenerating = handleMeshForwardEvent(components, {
+      event: 'monitor:long_generating',
+      meshId: 'mesh_inline_1',
+      nodeId: 'node_child_1',
+      targetSessionId: 'runtime-session-1',
+      providerType: 'hermes-cli',
+    })
+
+    expect(stopped).toEqual({ success: true, forwarded: 1 })
+    expect(longGenerating).toEqual({ success: true, forwarded: 1 })
+    expect(coordinator.onEvent).toHaveBeenCalledTimes(2)
+    expect(coordinator.onEvent.mock.calls[0][1].input.textFallback).toContain('has stopped')
+    expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('has been generating for a long time')
+    expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('mesh_read_chat once')
   })
 })

@@ -6,6 +6,17 @@ function readNonEmptyString(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
+const MESH_COORDINATOR_EVENTS = new Set([
+    'agent:generating_completed',
+    'agent:waiting_approval',
+    'agent:stopped',
+    'monitor:long_generating',
+]);
+
+function isMeshCoordinatorEvent(eventName: unknown): eventName is string {
+    return typeof eventName === 'string' && MESH_COORDINATOR_EVENTS.has(eventName);
+}
+
 function formatCompletionMetadata(event: Record<string, unknown>): string {
     const parts = [
         readNonEmptyString(event.targetSessionId) ? `session_id=${readNonEmptyString(event.targetSessionId)}` : '',
@@ -26,6 +37,12 @@ function buildMeshSystemMessage(args: {
     }
     if (args.event === 'agent:waiting_approval') {
         return `[System] ${args.nodeLabel} is waiting for approval to proceed${metadata}. You may use mesh_read_chat and mesh_approve to handle it.`;
+    }
+    if (args.event === 'agent:stopped') {
+        return `[System] ${args.nodeLabel} has stopped${metadata}. Use mesh_read_chat once if you need to inspect its last output.`;
+    }
+    if (args.event === 'monitor:long_generating') {
+        return `[System] ${args.nodeLabel} has been generating for a long time${metadata}. Use mesh_read_chat once for a status check, but do not poll repeatedly.`;
     }
     return '';
 }
@@ -63,7 +80,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
 
 export function handleMeshForwardEvent(components: DaemonComponents, payload: Record<string, unknown>) {
     const eventName = readNonEmptyString(payload.event);
-    if (eventName !== 'agent:generating_completed' && eventName !== 'agent:waiting_approval') {
+    if (!isMeshCoordinatorEvent(eventName)) {
         return { success: false, error: 'unsupported mesh event' };
     }
     const meshId = readNonEmptyString(payload.meshId);
@@ -86,8 +103,8 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
 
 export function setupMeshEventForwarding(components: DaemonComponents) {
     components.instanceManager.onEvent((event) => {
-        // We only care about agent sub-session completion or waiting approval
-        if (event.event !== 'agent:generating_completed' && event.event !== 'agent:waiting_approval') return;
+        // We only care about lightweight Repo Mesh coordinator control/status hints.
+        if (!isMeshCoordinatorEvent(event.event)) return;
 
         const instanceId = readNonEmptyString(event.instanceId);
         if (!instanceId) return;

@@ -149,6 +149,54 @@ test('mesh_launch_session stamps delegated sessions hidden when mesh policy requ
   assert.equal(calls[0].args.settings?.launchedByCoordinator, true);
 });
 
+test('mesh_launch_session stamps coordinator daemon id for remote worker nodes even when coordinator is not a mesh node', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command === 'launch_cli') return { success: true, sessionId: 'session-remote' };
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: 'mesh-remote-worker',
+      name: 'Remote Worker Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-remote-worker',
+        workspace: '/repo-remote',
+        repoRoot: '/repo-remote',
+        daemonId: 'daemon-worker',
+        userOverrides: {},
+        policy: { canPush: true },
+      }],
+    },
+    transport,
+  };
+
+  const launchText = await meshLaunchSession(ctx, { node_id: 'node-remote-worker', type: 'hermes-cli' });
+
+  assert.equal(JSON.parse(launchText).sessionId, 'session-remote');
+  assert.equal(calls[0].daemonId, 'daemon-worker');
+  assert.equal(calls[0].command, 'launch_cli');
+  assert.equal(calls[0].args.settings?.meshCoordinatorDaemonId, 'daemon-coordinator');
+  assert.equal(calls[0].args.settings?.meshNodeFor, 'mesh-remote-worker');
+  assert.equal(calls[0].args.settings?.meshNodeId, 'node-remote-worker');
+  assert.equal(calls[0].args.settings?.launchedByCoordinator, true);
+});
+
 test('mesh_checkpoint routes untracked checkpoint requests with the exact multiword message', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
