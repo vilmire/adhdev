@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import * as os from 'node:os'
@@ -64,7 +65,7 @@ function resolveHermesMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetupO
       reason: 'Could not resolve the ADHDev MCP server entrypoint and a Node runtime with WebSocket support for daemon IPC mode',
     }
   }
-  const configPath = resolveMcpConfigPath(HERMES_MCP_CONFIG_PATH, options.workspace)
+  const configPath = join(resolveHermesCoordinatorHome(options.meshId, options.workspace), 'config.yaml')
   if (!configPath.trim()) {
     return createHermesManualMeshCoordinatorSetup(options.meshId, options.workspace)
   }
@@ -175,6 +176,12 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
 
 function renderMeshCoordinatorTemplate(template: string, values: Record<string, string>): string {
   return template.replace(/\{\{\s*(meshId|workspace|serverName|adhdevMcpCommand)\s*\}\}/g, (_, key: string) => values[key] || '')
+}
+
+function resolveHermesCoordinatorHome(meshId: string, workspace: string): string {
+  const key = `${meshId || 'mesh'}\n${resolve(workspace || os.tmpdir())}`
+  const hash = createHash('sha256').update(key).digest('hex').slice(0, 16)
+  return join(os.tmpdir(), `adhdev-hermes-mesh-coordinator-${hash}`)
 }
 
 function resolveMcpConfigPath(configPath: string, workspace: string): string {

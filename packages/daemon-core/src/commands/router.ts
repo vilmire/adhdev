@@ -1672,6 +1672,10 @@ export class DaemonCommandRouter {
 
                     const cliArgs: string[] = [];
                     const launchEnv: Record<string, string> = {};
+                    if (configFormat === 'hermes_config_yaml') {
+                        launchEnv.HERMES_HOME = dirname(mcpConfigPath);
+                        launchEnv.HERMES_IGNORE_USER_CONFIG = '';
+                    }
                     if (systemPrompt) {
                         if (configFormat === 'hermes_config_yaml') {
                             launchEnv.HERMES_EPHEMERAL_SYSTEM_PROMPT = systemPrompt;

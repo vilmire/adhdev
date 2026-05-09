@@ -483,22 +483,30 @@ describe('resolveMeshCoordinatorSetup', () => {
 
       expect(result).toMatchObject({ success: true, sessionId: 'hermes-session-1', mcpConfigWritten: true })
       const configText = readFileSync(configPath, 'utf-8')
-      expect(configText).toContain('mcp_servers:')
-      expect(configText).toContain('existing:')
-      expect(configText).toContain('adhdev-mesh:')
-      expect(configText).toContain('ADHDEV_MCP_TRANSPORT: ipc')
-      expect(configText).toContain('ADHDEV_INLINE_MESH:')
-      expect(configText).toContain('mesh_hermes')
-      expect(configText).not.toContain('mcpServers')
+      expect(configText).toBe('model:\n  provider: openrouter\nmcp_servers:\n  existing:\n    command: existing-server\n')
 
-      expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.objectContaining({
+      const launchCall = (cliManager.handleCliCommand as any).mock.calls[0]?.[1] as any
+      expect(launchCall).toBeTruthy()
+      expect(launchCall).toEqual(expect.objectContaining({
         cliType: 'hermes-cli',
         dir: workspace,
         cliArgs: undefined,
         env: expect.objectContaining({
           HERMES_EPHEMERAL_SYSTEM_PROMPT: expect.stringContaining('Repo Mesh'),
+          HERMES_IGNORE_USER_CONFIG: '',
+          HERMES_HOME: expect.stringContaining('adhdev-hermes-mesh-coordinator-'),
         }),
       }))
+      const isolatedConfigPath = join(String(launchCall.env.HERMES_HOME), 'config.yaml')
+      expect(isolatedConfigPath).not.toBe(configPath)
+      const isolatedConfigText = readFileSync(isolatedConfigPath, 'utf-8')
+      expect(isolatedConfigText).toContain('mcp_servers:')
+      expect(isolatedConfigText).not.toContain('existing:')
+      expect(isolatedConfigText).toContain('adhdev-mesh:')
+      expect(isolatedConfigText).toContain('ADHDEV_MCP_TRANSPORT: ipc')
+      expect(isolatedConfigText).toContain('ADHDEV_INLINE_MESH:')
+      expect(isolatedConfigText).toContain('mesh_hermes')
+      expect(isolatedConfigText).not.toContain('mcpServers')
     } finally {
       if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
       else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
