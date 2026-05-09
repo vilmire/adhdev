@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, chmodSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, chmodSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -442,8 +442,12 @@ describe('resolveMeshCoordinatorSetup', () => {
     writeFileSync(configPath, 'model:\n  provider: openrouter\nmcp_servers:\n  existing:\n    command: existing-server\n', 'utf-8')
     const previousMcpEntry = process.env.ADHDEV_MCP_SERVER_PATH
     const previousHome = process.env.HOME
+    const previousHermesHome = process.env.HERMES_HOME
     process.env.ADHDEV_MCP_SERVER_PATH = mcpEntry
     process.env.HOME = workspace
+    delete process.env.HERMES_HOME
+    writeFileSync(join(configDir, '.env'), 'OPENROUTER_API_KEY=[REDACTED]\n', 'utf-8')
+    writeFileSync(join(configDir, 'auth.json'), '{"providers":{}}\n', 'utf-8')
 
     const provider: ProviderModule = {
       ...baseProvider,
@@ -501,17 +505,23 @@ describe('resolveMeshCoordinatorSetup', () => {
       expect(isolatedConfigPath).not.toBe(configPath)
       const isolatedConfigText = readFileSync(isolatedConfigPath, 'utf-8')
       expect(isolatedConfigText).toContain('mcp_servers:')
+      expect(isolatedConfigText).toContain('model:')
+      expect(isolatedConfigText).toContain('provider: openrouter')
       expect(isolatedConfigText).not.toContain('existing:')
       expect(isolatedConfigText).toContain('adhdev-mesh:')
       expect(isolatedConfigText).toContain('ADHDEV_MCP_TRANSPORT: ipc')
       expect(isolatedConfigText).toContain('ADHDEV_INLINE_MESH:')
       expect(isolatedConfigText).toContain('mesh_hermes')
       expect(isolatedConfigText).not.toContain('mcpServers')
+      expect(existsSync(join(String(launchCall.env.HERMES_HOME), '.env'))).toBe(true)
+      expect(existsSync(join(String(launchCall.env.HERMES_HOME), 'auth.json'))).toBe(true)
     } finally {
       if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
       else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
       if (previousHome === undefined) delete process.env.HOME
       else process.env.HOME = previousHome
+      if (previousHermesHome === undefined) delete process.env.HERMES_HOME
+      else process.env.HERMES_HOME = previousHermesHome
       rmSync(workspace, { recursive: true, force: true })
     }
   })

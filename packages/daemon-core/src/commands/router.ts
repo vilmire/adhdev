@@ -41,6 +41,8 @@ import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
+import { homedir } from 'os';
+import { join as pathJoin, resolve as pathResolve } from 'path';
 
 type ReleaseChannel = 'stable' | 'preview';
 const CHANNEL_NPM_TAG: Record<ReleaseChannel, 'latest' | 'next'> = { stable: 'latest', preview: 'next' };
@@ -134,6 +136,36 @@ function parseMeshCoordinatorMcpConfig(text: string, format: MeshCoordinatorConf
 function serializeMeshCoordinatorMcpConfig(config: Record<string, any>, format: MeshCoordinatorConfigFormat): string {
     if (format === 'claude_mcp_json') return JSON.stringify(config, null, 2);
     return loadYamlModule().dump(config, { noRefs: true, lineWidth: 120 });
+}
+
+function resolveHermesUserHome(): string {
+    const explicitHome = process.env.HERMES_HOME?.trim();
+    return explicitHome || pathJoin(homedir(), '.hermes');
+}
+
+function loadHermesCoordinatorBaseConfig(targetConfigPath: string): { config: Record<string, any>; sourceHome: string; sourceConfigPath: string } {
+    const sourceHome = resolveHermesUserHome();
+    const sourceConfigPath = pathJoin(sourceHome, 'config.yaml');
+    if (!fs.existsSync(sourceConfigPath)) return { config: {}, sourceHome, sourceConfigPath };
+    if (pathResolve(sourceConfigPath) === pathResolve(targetConfigPath)) return { config: {}, sourceHome, sourceConfigPath };
+
+    const parsed = parseMeshCoordinatorMcpConfig(fs.readFileSync(sourceConfigPath, 'utf-8'), 'hermes_config_yaml');
+    const { mcp_servers: _mcpServers, ...baseConfig } = parsed;
+    return { config: baseConfig, sourceHome, sourceConfigPath };
+}
+
+function copyHermesCoordinatorCredentialFiles(sourceHome: string, targetHome: string) {
+    if (pathResolve(sourceHome) === pathResolve(targetHome)) return;
+    for (const fileName of ['.env', 'auth.json']) {
+        const sourcePath = pathJoin(sourceHome, fileName);
+        const targetPath = pathJoin(targetHome, fileName);
+        if (!fs.existsSync(sourcePath)) continue;
+        try {
+            fs.copyFileSync(sourcePath, targetPath);
+        } catch (error: any) {
+            LOG.warn('MeshCoordinator', `Could not copy Hermes ${fileName} into isolated coordinator home: ${error?.message || error}`);
+        }
+    }
 }
 
 // ─── Types ───
@@ -1601,6 +1633,16 @@ export class DaemonCommandRouter {
                     const hermesManualFallback = cliType === 'hermes-cli' && configFormat === 'hermes_config_yaml'
                         ? createHermesManualMeshCoordinatorSetup(meshId, workspace)
                         : null;
+                    let hermesBaseConfig: { config: Record<string, any>; sourceHome: string; sourceConfigPath: string } | null = null;
+                    if (hermesManualFallback) {
+                        try {
+                            hermesBaseConfig = loadHermesCoordinatorBaseConfig(mcpConfigPath);
+                        } catch (error: any) {
+                            const message = `Failed to parse Hermes base config for automatic coordinator setup: ${error?.message || error}`;
+                            LOG.error('MeshCoordinator', message);
+                            return { success: false, code: 'mesh_coordinator_config_parse_failed', error: message, meshId, cliType, workspace };
+                        }
+                    }
                     const returnManualFallback = (message: string) => ({
                         success: false,
                         code: 'mesh_coordinator_manual_mcp_setup_required',
@@ -1636,10 +1678,14 @@ export class DaemonCommandRouter {
 
                     // Backup existing MCP config if present.
                     const hadExistingMcpConfig = existsSync(mcpConfigPath);
-                    let existingMcpConfig: Record<string, any> = {};
+                    let existingMcpConfig: Record<string, any> = hermesBaseConfig?.config || {};
+                    if (hermesBaseConfig) {
+                        copyHermesCoordinatorCredentialFiles(hermesBaseConfig.sourceHome, dirname(mcpConfigPath));
+                    }
                     if (hadExistingMcpConfig) {
                         try {
-                            existingMcpConfig = parseMeshCoordinatorMcpConfig(readFileSync(mcpConfigPath, 'utf-8'), configFormat);
+                            const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(readFileSync(mcpConfigPath, 'utf-8'), configFormat);
+                            existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
                             copyFileSync(mcpConfigPath, mcpConfigPath + '.backup');
                         } catch (error: any) {
                             LOG.error('MeshCoordinator', `Failed to parse existing MCP config ${mcpConfigPath}: ${error?.message || error}`);
