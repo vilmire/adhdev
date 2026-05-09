@@ -76,7 +76,31 @@ function materializeImageDataPart(part: Extract<InputPart, { type: 'image' }>, i
     fs.mkdirSync(dir, { recursive: true });
     const filePath = path.join(dir, safeInputImageBasename(index, part.mimeType));
     fs.writeFileSync(filePath, Buffer.from(rawData, 'base64'));
+    cleanupStaleMaterializedImages(dir);
     return filePath;
+}
+
+const MATERIALIZED_IMAGE_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
+const MATERIALIZED_IMAGE_CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+let lastMaterializedImageCleanupAt = 0;
+
+function cleanupStaleMaterializedImages(dir: string): void {
+    const now = Date.now();
+    if (now - lastMaterializedImageCleanupAt < MATERIALIZED_IMAGE_CLEANUP_INTERVAL_MS) return;
+    lastMaterializedImageCleanupAt = now;
+    try {
+        const entries = fs.readdirSync(dir);
+        for (const entry of entries) {
+            if (!entry.startsWith('adhdev-input-image-')) continue;
+            const fullPath = path.join(dir, entry);
+            try {
+                const stat = fs.statSync(fullPath);
+                if (now - stat.mtimeMs > MATERIALIZED_IMAGE_MAX_AGE_MS) {
+                    fs.unlinkSync(fullPath);
+                }
+            } catch { /* file may have been removed concurrently */ }
+        }
+    } catch { /* dir may not exist or be inaccessible */ }
 }
 
 export function buildCliStructuredInputPrompt(
@@ -113,7 +137,13 @@ export function buildCliStructuredInputPrompt(
         }
     });
 
-    if (input.textFallback.trim()) promptParts.push(input.textFallback.trim());
+    // Only use textFallback when no explicit text parts were collected — it is
+    // the flattened version of the same parts, so appending it alongside them
+    // would duplicate the content for multipart inputs.
+    const hasExplicitTextParts = input.parts.some((part) => part.type === 'text' && part.text.trim());
+    if (!hasExplicitTextParts && input.textFallback.trim()) {
+        promptParts.push(input.textFallback.trim());
+    }
 
     const ordered = [
         ...imageRefs,
