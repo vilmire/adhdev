@@ -1162,12 +1162,25 @@ export async function handleSendChat(h: CommandHelpers, args: any): Promise<Comm
         }
     }
 
-    // PTY transport: text-only send via adapter
+    // PTY transport: route structured input through the provider instance so
+    // provider-specific CLI attachment strategies (for example Hermes file-path
+    // image prompts) are applied instead of collapsing everything to text.
     if (transport === 'pty') {
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (adapter) {
             _log(`${transport} adapter: ${adapter.cliType}`);
             try {
+                const hasStructuredParts = input.parts.some((part) => part.type !== 'text');
+                if (hasStructuredParts) {
+                    const target = getTargetInstance(h, args);
+                    if (!target || target.category !== 'cli') {
+                        return { success: false, error: `CLI instance not found for ${provider?.type || args?.agentType || 'unknown'}` };
+                    }
+                    assertProviderSupportsDeclaredInput(provider, input);
+                    await waitOnceForFreshHermesCliStart(adapter, _log);
+                    target.onEvent('send_message', { input });
+                    return _logSendSuccess(`${transport}-instance`, target.type);
+                }
                 assertTextOnlyInput(provider, input);
                 if (!text) return { success: false, error: 'text required for PTY send' };
                 await waitOnceForFreshHermesCliStart(adapter, _log);

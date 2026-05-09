@@ -50,23 +50,83 @@ describe('handleSendChat input contracts', () => {
     }
   })
 
-  it('rejects non-text input for PTY transports instead of flattening it', async () => {
+  it('routes declared structured PTY input to the provider instance instead of flattening it', async () => {
     const sendMessage = vi.fn()
+    const onEvent = vi.fn()
     const result = await handleSendChat({
       getCdp: () => null,
-      getProvider: () => ({ type: 'hermes-cli', name: 'Hermes CLI', category: 'cli' }),
+      getProvider: () => ({
+        type: 'hermes-cli',
+        name: 'Hermes CLI',
+        category: 'cli',
+        capabilities: {
+          input: {
+            multipart: true,
+            mediaTypes: ['text', 'image'],
+            strategies: [{ mediaType: 'image', strategies: ['resource_link', 'text_fallback'], native: false }],
+          },
+        },
+      }),
       getProviderScript: () => null,
       evaluateProviderScript: async () => null,
       getCliAdapter: () => ({ cliType: 'hermes-cli', sendMessage }) as any,
       currentManagerKey: undefined,
       currentIdeType: undefined,
       currentProviderType: undefined,
-      currentSession: undefined,
+      currentSession: { sessionId: 'sess-cli-1', transport: 'pty', providerType: 'hermes-cli' },
       agentStream: null,
-      ctx: { instanceManager: { getInstance: () => null } },
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: 'sess-cli-1', adapterKey: 'adapter-1' }) },
+        instanceManager: { getInstance: () => ({ category: 'cli', type: 'hermes-cli', onEvent }) },
+      },
       historyWriter: { appendNewMessages: () => {} },
     } as any, {
       agentType: 'hermes-cli',
+      targetSessionId: 'sess-cli-1',
+      input: {
+        parts: [
+          { type: 'text', text: 'describe this image' },
+          { type: 'image', mimeType: 'image/png', data: 'img-base64' },
+        ],
+        textFallback: 'describe this image',
+      },
+    })
+
+    expect(result).toMatchObject({ success: true, sent: true, method: 'pty-instance', targetAgent: 'hermes-cli' })
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(onEvent).toHaveBeenCalledWith('send_message', {
+      input: {
+        parts: [
+          { type: 'text', text: 'describe this image' },
+          { type: 'image', mimeType: 'image/png', data: 'img-base64' },
+        ],
+        textFallback: 'describe this image',
+      },
+    })
+  })
+
+  it('rejects structured PTY input when the CLI provider did not declare media support', async () => {
+    const sendMessage = vi.fn()
+    const onEvent = vi.fn()
+    const result = await handleSendChat({
+      getCdp: () => null,
+      getProvider: () => ({ type: 'plain-cli', name: 'Plain CLI', category: 'cli' }),
+      getProviderScript: () => null,
+      evaluateProviderScript: async () => null,
+      getCliAdapter: () => ({ cliType: 'plain-cli', sendMessage }) as any,
+      currentManagerKey: undefined,
+      currentIdeType: undefined,
+      currentProviderType: undefined,
+      currentSession: { sessionId: 'sess-cli-2', transport: 'pty', providerType: 'plain-cli' },
+      agentStream: null,
+      ctx: {
+        sessionRegistry: { get: () => ({ sessionId: 'sess-cli-2', adapterKey: 'adapter-2' }) },
+        instanceManager: { getInstance: () => ({ category: 'cli', type: 'plain-cli', onEvent }) },
+      },
+      historyWriter: { appendNewMessages: () => {} },
+    } as any, {
+      agentType: 'plain-cli',
+      targetSessionId: 'sess-cli-2',
       input: {
         parts: [
           { type: 'text', text: 'describe this image' },
@@ -76,8 +136,9 @@ describe('handleSendChat input contracts', () => {
     })
 
     expect(result.success).toBe(false)
-    expect(result.error).toContain('only supports text input')
+    expect(result.error).toContain('does not support input type: image')
     expect(sendMessage).not.toHaveBeenCalled()
+    expect(onEvent).not.toHaveBeenCalled()
   })
 
   it('routes structured ACP input to the provider instance instead of collapsing it to plain text', async () => {
