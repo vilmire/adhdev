@@ -5,6 +5,43 @@ export const BUILTIN_CHAT_MESSAGE_KINDS = ['standard', 'thought', 'tool', 'termi
 export type BuiltinChatMessageKind = typeof BUILTIN_CHAT_MESSAGE_KINDS[number];
 export type ChatMessageKind = BuiltinChatMessageKind | (string & {});
 
+export const CHAT_MESSAGE_VISIBILITIES = ['user', 'debug', 'internal', 'hidden'] as const;
+export const CHAT_MESSAGE_TRANSCRIPT_VISIBILITIES = ['visible', 'chat', 'user', 'debug', 'internal', 'hidden'] as const;
+export const CHAT_MESSAGE_AUDIENCES = ['chat', 'debug', 'trace', 'internal'] as const;
+export const CHAT_MESSAGE_SOURCES = [
+  'assistant_text',
+  'tool_call',
+  'terminal_command',
+  'runtime_activity',
+  'runtime_status',
+  'provider_chrome',
+  'control',
+] as const;
+export const CHAT_MESSAGE_ACTIVITY_SOURCES = ['tool_call', 'terminal_command', 'runtime_activity'] as const;
+export const CHAT_MESSAGE_INTERNAL_SOURCES = ['runtime_status', 'provider_chrome', 'control'] as const;
+
+export type ChatMessageVisibility = typeof CHAT_MESSAGE_VISIBILITIES[number] | (string & {});
+export type ChatMessageTranscriptVisibility = typeof CHAT_MESSAGE_TRANSCRIPT_VISIBILITIES[number] | (string & {});
+export type ChatMessageAudience = typeof CHAT_MESSAGE_AUDIENCES[number] | (string & {});
+export type ChatMessageSource = typeof CHAT_MESSAGE_SOURCES[number] | (string & {});
+export type ChatMessageTranscriptSurface = 'chat' | 'activity' | 'internal';
+
+export interface ChatMessageVisibilityClassification {
+  surface: ChatMessageTranscriptSurface;
+  isUserFacing: boolean;
+  isActivityFacing: boolean;
+  isInternal: boolean;
+  explicitUserFacing: boolean;
+  explicitHidden: boolean;
+  role: string;
+  kind: ChatMessageKind;
+  visibility: string;
+  transcriptVisibility: string;
+  audience: string;
+  source: string;
+}
+
+
 const KNOWN_CHAT_MESSAGE_KINDS = new Set<string>(BUILTIN_CHAT_MESSAGE_KINDS);
 const CHAT_MESSAGE_KIND_ALIASES: Record<string, BuiltinChatMessageKind> = {
   text: 'standard',
@@ -183,71 +220,195 @@ function readStringField(value: unknown): string {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
+function readRecordField(message: ChatMessage, meta: Record<string, unknown> | null, key: string): unknown {
+  const record = message as ChatMessage & Record<string, unknown>;
+  return record[key] ?? meta?.[key];
+}
+
 function readVisibilityField(message: ChatMessage, meta: Record<string, unknown> | null): string {
-  const record = message as ChatMessage & Record<string, unknown>;
-  return readStringField(record.visibility ?? record.transcriptVisibility ?? meta?.visibility ?? meta?.transcriptVisibility);
+  return readStringField(readRecordField(message, meta, 'visibility'));
 }
 
-function isExplicitlyHiddenFromTranscript(message: ChatMessage, meta: Record<string, unknown> | null): boolean {
+function readTranscriptVisibilityField(message: ChatMessage, meta: Record<string, unknown> | null): string {
   const record = message as ChatMessage & Record<string, unknown>;
-  const visibility = readVisibilityField(message, meta);
-  const audience = readStringField(record.audience ?? meta?.audience);
-  const source = readStringField(record.source ?? meta?.source);
-
-  return visibility === 'hidden'
-    || visibility === 'debug'
-    || visibility === 'internal'
-    || audience === 'debug'
-    || audience === 'trace'
-    || audience === 'internal'
-    || source === 'runtime_status'
-    || source === 'runtime_activity'
-    || source === 'provider_chrome'
-    || source === 'control'
-    || record.internal === true
-    || record.isInternal === true
-    || record.debug === true
-    || meta?.internal === true
-    || meta?.isInternal === true
-    || meta?.debug === true
-    || meta?.statusOnly === true
-    || meta?.controlOnly === true;
+  return readStringField(record.transcriptVisibility ?? meta?.transcriptVisibility ?? record.visibility ?? meta?.visibility);
 }
 
-function isExplicitlyVisibleInTranscript(message: ChatMessage, meta: Record<string, unknown> | null): boolean {
+const EXPLICIT_HIDDEN_VISIBILITIES = new Set(['hidden', 'debug', 'internal']);
+const EXPLICIT_VISIBLE_VISIBILITIES = new Set(['visible', 'user', 'chat']);
+const HIDDEN_AUDIENCES = new Set(['debug', 'trace', 'internal']);
+const ACTIVITY_SOURCE_SET = new Set<string>(CHAT_MESSAGE_ACTIVITY_SOURCES);
+const INTERNAL_SOURCE_SET = new Set<string>(CHAT_MESSAGE_INTERNAL_SOURCES);
+
+function hasBooleanMarker(message: ChatMessage, meta: Record<string, unknown> | null, keys: string[]): boolean {
   const record = message as ChatMessage & Record<string, unknown>;
-  const visibility = readVisibilityField(message, meta);
-  const audience = readStringField(record.audience ?? meta?.audience);
-  return visibility === 'visible'
-    || visibility === 'user'
-    || visibility === 'chat'
-    || audience === 'chat'
-    || record.userFacing === true
-    || meta?.userFacing === true;
+  return keys.some((key) => record[key] === true || meta?.[key] === true);
 }
 
-/**
- * Product chat transcript visibility contract.
- *
- * read_chat/debug paths may preserve every normalized message, including tool,
- * terminal, thought, status, and control rows. The default user-facing chat UX
- * should only render meaningful conversation turns unless a producer explicitly
- * marks a non-standard row as user-facing. This keeps internal tool/status/control
- * plumbing out of the ordinary transcript without matching provider-specific text.
- */
-export function isUserFacingChatMessage(message: ChatMessage | null | undefined): boolean {
-  if (!message) return false;
-  const meta = readMessageMeta(message);
-  if (isExplicitlyHiddenFromTranscript(message, meta)) return false;
-  if (isExplicitlyVisibleInTranscript(message, meta)) return true;
+function isActivityKind(kind: ChatMessageKind): boolean {
+  return kind === 'thought' || kind === 'tool' || kind === 'terminal';
+}
 
-  const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
-  const kind = resolveChatMessageKind(message);
+function isOrdinaryVisibleTurn(message: ChatMessage, role: string, kind: ChatMessageKind): boolean {
   if (role === 'user' || role === 'human') return kind === 'standard' || kind === '';
   if (role === 'assistant') return kind === 'standard' || kind === '';
   return false;
 }
 
+/**
+ * Shared transcript visibility protocol for all ADHDev provider chat messages.
+ *
+ * Producers can stamp visibility/audience/source/userFacing/internal/debug either
+ * at the top level or under `meta`. Consumers should use this classifier instead
+ * of matching command text, icons, provider names, or terminal UI fragments.
+ */
+export function classifyChatMessageVisibility(message: ChatMessage | null | undefined): ChatMessageVisibilityClassification {
+  if (!message) {
+    return {
+      surface: 'internal',
+      isUserFacing: false,
+      isActivityFacing: false,
+      isInternal: true,
+      explicitUserFacing: false,
+      explicitHidden: true,
+      role: '',
+      kind: 'standard',
+      visibility: '',
+      transcriptVisibility: '',
+      audience: '',
+      source: '',
+    };
+  }
+
+  const meta = readMessageMeta(message);
+  const role = typeof message.role === 'string' ? message.role.trim().toLowerCase() : '';
+  const kind = resolveChatMessageKind(message);
+  const visibility = readVisibilityField(message, meta);
+  const transcriptVisibility = readTranscriptVisibilityField(message, meta);
+  const audience = readStringField(readRecordField(message, meta, 'audience'));
+  const source = readStringField(readRecordField(message, meta, 'source'));
+  const explicitHidden = EXPLICIT_HIDDEN_VISIBILITIES.has(visibility)
+    || EXPLICIT_HIDDEN_VISIBILITIES.has(transcriptVisibility)
+    || HIDDEN_AUDIENCES.has(audience)
+    || hasBooleanMarker(message, meta, ['internal', 'isInternal', 'debug', 'statusOnly', 'controlOnly']);
+  const explicitUserFacing = EXPLICIT_VISIBLE_VISIBILITIES.has(visibility)
+    || EXPLICIT_VISIBLE_VISIBILITIES.has(transcriptVisibility)
+    || audience === 'chat'
+    || hasBooleanMarker(message, meta, ['userFacing']);
+
+  if (explicitHidden) {
+    const activityLike = isActivityKind(kind) || ACTIVITY_SOURCE_SET.has(source);
+    return {
+      surface: activityLike ? 'activity' : 'internal',
+      isUserFacing: false,
+      isActivityFacing: activityLike,
+      isInternal: !activityLike,
+      explicitUserFacing,
+      explicitHidden,
+      role,
+      kind,
+      visibility,
+      transcriptVisibility,
+      audience,
+      source,
+    };
+  }
+
+  if (explicitUserFacing) {
+    return {
+      surface: 'chat',
+      isUserFacing: true,
+      isActivityFacing: false,
+      isInternal: false,
+      explicitUserFacing,
+      explicitHidden,
+      role,
+      kind,
+      visibility,
+      transcriptVisibility,
+      audience,
+      source,
+    };
+  }
+
+  if (INTERNAL_SOURCE_SET.has(source) || role === 'system' || kind === 'system') {
+    return {
+      surface: 'internal',
+      isUserFacing: false,
+      isActivityFacing: false,
+      isInternal: true,
+      explicitUserFacing,
+      explicitHidden,
+      role,
+      kind,
+      visibility,
+      transcriptVisibility,
+      audience,
+      source,
+    };
+  }
+
+  if (ACTIVITY_SOURCE_SET.has(source) || isActivityKind(kind)) {
+    return {
+      surface: 'activity',
+      isUserFacing: false,
+      isActivityFacing: true,
+      isInternal: false,
+      explicitUserFacing,
+      explicitHidden,
+      role,
+      kind,
+      visibility,
+      transcriptVisibility,
+      audience,
+      source,
+    };
+  }
+
+  const isUserFacing = isOrdinaryVisibleTurn(message, role, kind);
+  return {
+    surface: isUserFacing ? 'chat' : 'internal',
+    isUserFacing,
+    isActivityFacing: false,
+    isInternal: !isUserFacing,
+    explicitUserFacing,
+    explicitHidden,
+    role,
+    kind,
+    visibility,
+    transcriptVisibility,
+    audience,
+    source,
+  };
+}
+
+export function isUserFacingChatMessage(message: ChatMessage | null | undefined): boolean {
+  return classifyChatMessageVisibility(message).isUserFacing;
+}
+
+export function isActivityChatMessage(message: ChatMessage | null | undefined): boolean {
+  return classifyChatMessageVisibility(message).isActivityFacing;
+}
+
+export function isInternalChatMessage(message: ChatMessage | null | undefined): boolean {
+  return classifyChatMessageVisibility(message).isInternal;
+}
+
 export function filterUserFacingChatMessages<T extends ChatMessage>(messages: T[] | null | undefined): T[] {
   return (Array.isArray(messages) ? messages : []).filter((message) => isUserFacingChatMessage(message));
+}
+
+export function filterActivityChatMessages<T extends ChatMessage>(messages: T[] | null | undefined): T[] {
+  return (Array.isArray(messages) ? messages : []).filter((message) => isActivityChatMessage(message));
+}
+
+export function filterInternalChatMessages<T extends ChatMessage>(messages: T[] | null | undefined): T[] {
+  return (Array.isArray(messages) ? messages : []).filter((message) => isInternalChatMessage(message));
+}
+
+export function filterChatMessagesByVisibility<T extends ChatMessage>(
+  messages: T[] | null | undefined,
+  surface: ChatMessageTranscriptSurface,
+): T[] {
+  return (Array.isArray(messages) ? messages : []).filter((message) => classifyChatMessageVisibility(message).surface === surface);
 }

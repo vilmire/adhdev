@@ -312,10 +312,22 @@ export {
   buildUserChatMessage,
   normalizeChatMessage,
   normalizeChatMessages,
+  CHAT_MESSAGE_VISIBILITIES,
+  CHAT_MESSAGE_TRANSCRIPT_VISIBILITIES,
+  CHAT_MESSAGE_AUDIENCES,
+  CHAT_MESSAGE_SOURCES,
+  CHAT_MESSAGE_ACTIVITY_SOURCES,
+  CHAT_MESSAGE_INTERNAL_SOURCES,
+  classifyChatMessageVisibility,
   isUserFacingChatMessage,
+  isActivityChatMessage,
+  isInternalChatMessage,
   filterUserFacingChatMessages,
+  filterActivityChatMessages,
+  filterInternalChatMessages,
+  filterChatMessagesByVisibility,
 } from './providers/chat-message-normalization.js';
-export type { BuiltinChatMessageKind, ChatMessageKind } from './providers/chat-message-normalization.js';
+export type { BuiltinChatMessageKind, ChatMessageKind, ChatMessageVisibility, ChatMessageTranscriptVisibility, ChatMessageAudience, ChatMessageSource, ChatMessageTranscriptSurface, ChatMessageVisibilityClassification } from './providers/chat-message-normalization.js';
 export { VersionArchive, detectAllVersions } from './providers/version-archive.js';
 export type { ProviderVersionInfo, VersionHistory } from './providers/version-archive.js';
 
