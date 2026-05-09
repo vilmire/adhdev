@@ -99,10 +99,21 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
         const workspace = readNonEmptyString(state.workspace);
         if (!workspace) return;
         const settings = state.settings && typeof state.settings === 'object' ? state.settings as Record<string, unknown> : {};
+
+        // Coordinator sessions must never inject events into themselves.
+        // A coordinator instance carries meshCoordinatorFor but not meshNodeFor/launchedByCoordinator.
+        if (readNonEmptyString(settings.meshCoordinatorFor)) return;
+
         const meshIdFromRuntime = readNonEmptyString(settings.meshNodeFor);
 
-        // Prefer runtime mesh metadata: delegated mesh-node agents can come from inline/cloud meshes
-        // that are not present in local meshes.json. Fall back to persisted mesh lookup for legacy sessions.
+        // Only forward events for sessions that were explicitly launched as mesh-node delegates
+        // (meshNodeFor set by mesh_launch_session) or that carry the launchedByCoordinator flag.
+        // Do NOT fall back to workspace-based mesh lookup: that would pick up coordinator sessions
+        // and any other CLI session that happens to share the same workspace, causing spurious
+        // system-message injection into the coordinator's own conversation.
+        const isMeshDelegate = Boolean(meshIdFromRuntime || settings.launchedByCoordinator);
+        if (!isMeshDelegate) return;
+
         const mesh = meshIdFromRuntime ? getMesh(meshIdFromRuntime) : getMeshByRepo(workspace);
         const meshId = meshIdFromRuntime || readNonEmptyString(mesh?.id);
         if (!meshId) return;
