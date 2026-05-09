@@ -64,6 +64,10 @@ describe('TerminalTranscriptAccumulator overwrite handling', () => {
     expect(sanitizeTerminalText('abcde\x1b[2KXY\n')).toBe('     XY\n');
   });
 
+  it('supports CSI 1J without shifting cells after the cursor', () => {
+    expect(sanitizeTerminalText('alpha\nbeta gamma\x1b[5D\x1b[1JXY\n')).toBe('\n     XYmma\n');
+  });
+
   it('does not leak repeated rewritten command fragments like mesh_read_chat readback noise', () => {
     const command = "mon-core/src/config/mesh-config.ts packages/mcp-server/src/server.ts packages/mcp-server/src/tools/mesh-tools.ts | sed -n '1,260p'";
     const sequence = [

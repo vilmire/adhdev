@@ -348,8 +348,8 @@ export class TerminalTranscriptAccumulator {
                 this.lines.splice(this.row + 1);
             } else if (mode === 1) {
                 for (let r = 0; r < this.row; r += 1) this.lines[r] = [];
-                this.lines[this.row] = this.lines[this.row].slice(this.col);
-                this.col = 0;
+                const line = this.lines[this.row];
+                for (let c = 0; c <= Math.min(this.col, line.length - 1); c += 1) line[c] = ' ';
             }
         } else if (final === 'K') {
             const mode = Number(params || 0) || 0;
