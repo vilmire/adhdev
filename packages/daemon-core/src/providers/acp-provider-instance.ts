@@ -121,6 +121,41 @@ function appendPromptText(promptParts: ContentBlock[], text: string | undefined)
     promptParts.push({ type: 'text', text: normalized });
 }
 
+function getUriDisplayName(uri: string | undefined, fallback: string): string {
+    if (!uri) return fallback;
+    try {
+        const pathname = uri.startsWith('file://') ? new URL(uri).pathname : uri;
+        return pathname.split(/[\\/]/).filter(Boolean).pop() || fallback;
+    } catch {
+        return uri.split(/[\\/]/).filter(Boolean).pop() || fallback;
+    }
+}
+
+function appendResourceLink(
+    promptParts: ContentBlock[],
+    uri: string,
+    fallbackName: string,
+    mimeType?: string,
+    description?: string,
+    metadata?: Pick<Extract<ContentBlock, { type: 'resource_link' }>, 'title' | 'size' | 'annotations'> & { name?: string },
+): void {
+    promptParts.push({
+        type: 'resource_link',
+        uri,
+        name: metadata?.name || getUriDisplayName(uri, fallbackName),
+        ...(metadata?.title ? { title: metadata.title } : {}),
+        ...(mimeType ? { mimeType } : {}),
+        ...(description ? { description } : {}),
+        ...(typeof metadata?.size === 'number' ? { size: metadata.size } : {}),
+        ...(metadata?.annotations ? { annotations: metadata.annotations } : {}),
+    });
+}
+
+function appendMediaFallbackText(promptParts: ContentBlock[], label: string, details: Array<string | undefined>): void {
+    const normalizedDetails = details.map((value) => typeof value === 'string' ? value.trim() : '').filter(Boolean);
+    appendPromptText(promptParts, `[${[label, ...normalizedDetails].join(': ')}]`);
+}
+
 export function buildAcpPromptParts(input: InputEnvelope, agentCapabilities?: Record<string, any>): ContentBlock[] {
     const caps = getPromptCapabilityFlags(agentCapabilities);
     const promptParts: ContentBlock[] = [];
@@ -132,59 +167,82 @@ export function buildAcpPromptParts(input: InputEnvelope, agentCapabilities?: Re
         }
 
         if (part.type === 'image') {
-            if (!caps.image) {
-                throw new Error('ACP agent does not support input type: image');
+            if (caps.image && part.data) {
+                promptParts.push({
+                    type: 'image',
+                    data: part.data,
+                    mimeType: part.mimeType,
+                    ...(part.uri ? { uri: part.uri } : {}),
+                    ...(part.alt ? { alt: part.alt } : {}),
+                });
+                if (part.alt) appendPromptText(promptParts, part.alt);
+            } else if (part.uri) {
+                appendResourceLink(promptParts, part.uri, 'image', part.mimeType, part.alt);
+                if (part.alt) appendPromptText(promptParts, part.alt);
+            } else {
+                appendMediaFallbackText(promptParts, 'Image attachment', [part.alt, part.mimeType]);
             }
-            if (!part.data) {
-                throw new Error('ACP image input requires inline image data');
-            }
-            promptParts.push({
-                type: 'image',
-                data: part.data,
-                mimeType: part.mimeType,
-                ...(part.uri ? { uri: part.uri } : {}),
-            });
             continue;
         }
 
         if (part.type === 'audio') {
-            if (!caps.audio) {
-                throw new Error('ACP agent does not support input type: audio');
+            if (caps.audio && part.data) {
+                promptParts.push({
+                    type: 'audio',
+                    data: part.data,
+                    mimeType: part.mimeType,
+                    ...(part.uri ? { uri: part.uri } : {}),
+                    ...(part.transcript ? { transcript: part.transcript } : {}),
+                });
+                if (part.transcript) appendPromptText(promptParts, part.transcript);
+            } else if (part.uri) {
+                appendResourceLink(promptParts, part.uri, 'audio', part.mimeType, part.transcript);
+                if (part.transcript) appendPromptText(promptParts, part.transcript);
+            } else {
+                appendMediaFallbackText(promptParts, 'Audio attachment', [part.transcript, part.mimeType]);
             }
-            if (!part.data) {
-                throw new Error('ACP audio input requires inline audio data');
-            }
-            promptParts.push({
-                type: 'audio',
-                data: part.data,
-                mimeType: part.mimeType,
-            });
             continue;
         }
 
         if (part.type === 'resource') {
-            if (!caps.embeddedContext) {
-                throw new Error('ACP agent does not support input type: resource');
-            }
-            if (part.text) {
+            if (caps.embeddedContext && part.text) {
                 promptParts.push({
                     type: 'resource',
                     resource: { uri: part.uri, text: part.text, mimeType: part.mimeType ?? null },
                 });
                 continue;
             }
-            if (part.data) {
+            if (caps.embeddedContext && part.data) {
                 promptParts.push({
                     type: 'resource',
                     resource: { uri: part.uri, blob: part.data, mimeType: part.mimeType ?? null },
                 });
                 continue;
             }
-            throw new Error('ACP resource input requires embedded text or binary data');
+            appendResourceLink(promptParts, part.uri, part.name || 'resource', part.mimeType, part.text);
+            if (part.text) appendPromptText(promptParts, part.text);
+            continue;
+        }
+
+        if (part.type === 'resource_link') {
+            appendResourceLink(promptParts, part.uri, part.name, part.mimeType, part.description, {
+                name: part.name,
+                ...(part.title ? { title: part.title } : {}),
+                ...(typeof part.size === 'number' ? { size: part.size } : {}),
+                ...(part.annotations ? { annotations: part.annotations } : {}),
+            });
+            continue;
         }
 
         if (part.type === 'video') {
-            throw new Error('ACP agent does not support input type: video');
+            // ACP v0.16 prompt capabilities do not advertise native video input. Preserve meaning by
+            // sending a linked resource when possible, plus transcript/descriptive text when present.
+            if (part.uri) {
+                appendResourceLink(promptParts, part.uri, 'video', part.mimeType, part.transcript);
+                if (part.transcript) appendPromptText(promptParts, part.transcript);
+            } else {
+                appendMediaFallbackText(promptParts, 'Video attachment', [part.transcript, part.mimeType]);
+            }
         }
     }
 
@@ -962,6 +1020,7 @@ export class AcpProviderInstance implements ProviderInstance {
                         data: b.data,
                         mimeType: b.mimeType,
                         ...(b.uri ? { uri: b.uri } : {}),
+                        ...(b.alt ? { alt: b.alt } : {}),
                     };
                 }
                 if (b.type === 'audio') {
@@ -969,14 +1028,31 @@ export class AcpProviderInstance implements ProviderInstance {
                         type: 'audio',
                         data: b.data,
                         mimeType: b.mimeType,
+                        ...(b.uri ? { uri: b.uri } : {}),
+                        ...(b.transcript ? { transcript: b.transcript } : {}),
                     };
+                }
+                if (b.type === 'video') {
+                    return b.uri
+                        ? {
+                            type: 'resource_link',
+                            uri: b.uri,
+                            name: path.basename(b.uri),
+                            mimeType: b.mimeType,
+                            ...(b.transcript ? { description: b.transcript } : {}),
+                        }
+                        : { type: 'text', text: b.transcript || `[Video attachment: ${b.mimeType}]` };
                 }
                 if (b.type === 'resource_link') {
                     return {
                         type: 'resource_link',
                         uri: b.uri,
                         name: b.name,
+                        ...(b.title ? { title: b.title } : {}),
+                        ...(b.description ? { description: b.description } : {}),
                         ...(b.mimeType ? { mimeType: b.mimeType } : {}),
+                        ...(typeof b.size === 'number' ? { size: b.size } : {}),
+                        ...(b.annotations ? { annotations: b.annotations } : {}),
                     };
                 }
                 if (b.type === 'resource') return { type: 'resource', resource: b.resource };
@@ -1056,7 +1132,7 @@ export class AcpProviderInstance implements ProviderInstance {
 
         switch (update.sessionUpdate) {
             case 'agent_message_chunk': {
-                const content = update.content;
+                const content: any = update.content;
                 if (content.type === 'text') {
                     this.partialContent += content.text;
                 } else if (content.type === 'image') {
@@ -1071,6 +1147,17 @@ export class AcpProviderInstance implements ProviderInstance {
                         type: 'audio',
                         data: content.data,
                         mimeType: content.mimeType,
+                        ...(content.uri ? { uri: content.uri } : {}),
+                        ...(content.transcript ? { transcript: content.transcript } : {}),
+                    });
+                } else if (content.type === 'video') {
+                    this.partialBlocks.push({
+                        type: 'video',
+                        data: content.data,
+                        mimeType: content.mimeType,
+                        ...(content.uri ? { uri: content.uri } : {}),
+                        ...(content.transcript ? { transcript: content.transcript } : {}),
+                        ...(content.posterUri ? { posterUri: content.posterUri } : {}),
                     });
                 } else if (content.type === 'resource_link') {
                     this.partialBlocks.push({

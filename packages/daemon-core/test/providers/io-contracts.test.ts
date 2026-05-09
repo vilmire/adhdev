@@ -54,6 +54,39 @@ describe('provider io contracts', () => {
         textFallback: 'please inspect the attached image',
       })
     })
+
+    it('preserves resource_link input parts and semantic metadata', () => {
+      expect(normalizeInputEnvelope({
+        input: {
+          parts: [
+            {
+              type: 'resource_link',
+              uri: 'file:///tmp/report.md',
+              name: 'report.md',
+              title: 'Quarterly report',
+              description: 'Executive summary document',
+              mimeType: 'text/markdown',
+              size: 1234,
+              annotations: { audience: ['user', 'assistant'], priority: 0.7 },
+            },
+          ],
+        },
+      })).toEqual({
+        parts: [
+          {
+            type: 'resource_link',
+            uri: 'file:///tmp/report.md',
+            name: 'report.md',
+            title: 'Quarterly report',
+            description: 'Executive summary document',
+            mimeType: 'text/markdown',
+            size: 1234,
+            annotations: { audience: ['user', 'assistant'], priority: 0.7 },
+          },
+        ],
+        textFallback: 'Quarterly report\nreport.md\nExecutive summary document\nfile:///tmp/report.md',
+      })
+    })
   })
 
   describe('normalizeMessageParts', () => {

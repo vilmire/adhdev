@@ -128,6 +128,7 @@ export type ContentBlock =
   | TextBlock
   | ImageBlock
   | AudioBlock
+  | VideoBlock
   | ResourceLinkBlock
   | ResourceBlock;
 
@@ -144,6 +145,7 @@ export interface ImageBlock {
   data: string;       // base64-encoded
   mimeType: string;   // 'image/png', 'image/jpeg', etc.
   uri?: string;       // optional URL reference
+  alt?: string;
   annotations?: ContentAnnotations;
 }
 
@@ -152,6 +154,19 @@ export interface AudioBlock {
   type: 'audio';
   data: string;       // base64-encoded
   mimeType: string;
+  uri?: string;
+  transcript?: string;
+  annotations?: ContentAnnotations;
+}
+
+/** Video content — ADHDev canonical display block. ACP prompt input degrades video to resource_link/text. */
+export interface VideoBlock {
+  type: 'video';
+  data?: string;      // base64-encoded
+  mimeType: string;
+  uri?: string;
+  transcript?: string;
+  posterUri?: string;
   annotations?: ContentAnnotations;
 }
 

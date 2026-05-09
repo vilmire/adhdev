@@ -5,6 +5,7 @@ export type InputPart =
   | ImageInputPart
   | AudioInputPart
   | VideoInputPart
+  | ResourceLinkInputPart
   | ResourceInputPart
 
 export interface TextInputPart {
@@ -33,6 +34,7 @@ export interface VideoInputPart {
   mimeType: string
   uri?: string
   data?: string
+  transcript?: string
   posterUri?: string
 }
 
@@ -43,6 +45,17 @@ export interface ResourceInputPart {
   name?: string
   text?: string
   data?: string
+}
+
+export interface ResourceLinkInputPart {
+  type: 'resource_link'
+  uri: string
+  name: string
+  title?: string
+  description?: string
+  mimeType?: string
+  size?: number
+  annotations?: ContentAnnotations
 }
 
 export interface InputEnvelope {
@@ -73,6 +86,7 @@ export interface ImageMessagePart {
   mimeType: string
   uri?: string
   data?: string
+  alt?: string
   annotations?: ContentAnnotations
 }
 
@@ -90,6 +104,7 @@ export interface VideoMessagePart {
   mimeType: string
   uri?: string
   data?: string
+  transcript?: string
   posterUri?: string
   annotations?: ContentAnnotations
 }
@@ -98,8 +113,11 @@ export interface ResourceLinkMessagePart {
   type: 'resource_link'
   uri: string
   name: string
+  title?: string
+  description?: string
   mimeType?: string
   size?: number
+  annotations?: ContentAnnotations
 }
 
 export interface ResourceMessagePart {
@@ -149,6 +167,10 @@ export function flattenMessageParts(parts: MessagePart[]): string {
     .map((part) => {
       if (part.type === 'text') return part.text
       if (part.type === 'resource') return part.resource.text || ''
+      if (part.type === 'image') return part.alt || (part.data ? `[image: ${part.mimeType}]` : '')
+      if (part.type === 'audio') return part.transcript || (part.data ? `[audio: ${part.mimeType}]` : '')
+      if (part.type === 'video') return part.transcript || (part.data ? `[video: ${part.mimeType}]` : '')
+      if (part.type === 'resource_link') return [part.name, part.description].filter(Boolean).join('\n')
       return ''
     })
     .filter((value) => value.length > 0)
@@ -247,6 +269,7 @@ function normalizeInputPartObject(raw: Record<string, unknown>): InputPart | nul
       mimeType: raw.mimeType,
       ...(typeof raw.uri === 'string' ? { uri: raw.uri } : {}),
       ...(typeof raw.data === 'string' ? { data: raw.data } : {}),
+      ...(typeof raw.transcript === 'string' ? { transcript: raw.transcript } : {}),
       ...(typeof raw.posterUri === 'string' ? { posterUri: raw.posterUri } : {}),
     }
   }
@@ -262,10 +285,14 @@ function normalizeInputPartObject(raw: Record<string, unknown>): InputPart | nul
   }
   if (type === 'resource_link' && typeof raw.uri === 'string') {
     return {
-      type: 'resource',
+      type,
       uri: raw.uri,
+      name: typeof raw.name === 'string' ? raw.name : getUriDisplayName(raw.uri, 'resource'),
+      ...(typeof raw.title === 'string' ? { title: raw.title } : {}),
+      ...(typeof raw.description === 'string' ? { description: raw.description } : {}),
       ...(typeof raw.mimeType === 'string' ? { mimeType: raw.mimeType } : {}),
-      ...(typeof raw.name === 'string' ? { name: raw.name } : {}),
+      ...(typeof raw.size === 'number' && Number.isFinite(raw.size) ? { size: raw.size } : {}),
+      ...normalizeAnnotationsProperty(raw.annotations),
     }
   }
   return null
@@ -282,6 +309,7 @@ function normalizeMessagePartObject(raw: Record<string, unknown>): MessagePart |
       mimeType: raw.mimeType,
       ...(typeof raw.uri === 'string' ? { uri: raw.uri } : {}),
       ...(typeof raw.data === 'string' ? { data: raw.data } : {}),
+      ...(typeof raw.alt === 'string' ? { alt: raw.alt } : {}),
     }
   }
   if (type === 'audio' && typeof raw.mimeType === 'string') {
@@ -299,6 +327,7 @@ function normalizeMessagePartObject(raw: Record<string, unknown>): MessagePart |
       mimeType: raw.mimeType,
       ...(typeof raw.uri === 'string' ? { uri: raw.uri } : {}),
       ...(typeof raw.data === 'string' ? { data: raw.data } : {}),
+      ...(typeof raw.transcript === 'string' ? { transcript: raw.transcript } : {}),
       ...(typeof raw.posterUri === 'string' ? { posterUri: raw.posterUri } : {}),
     }
   }
@@ -307,8 +336,11 @@ function normalizeMessagePartObject(raw: Record<string, unknown>): MessagePart |
       type,
       uri: raw.uri,
       name: raw.name,
+      ...(typeof raw.title === 'string' ? { title: raw.title } : {}),
+      ...(typeof raw.description === 'string' ? { description: raw.description } : {}),
       ...(typeof raw.mimeType === 'string' ? { mimeType: raw.mimeType } : {}),
-      ...(typeof raw.size === 'number' ? { size: raw.size } : {}),
+      ...(typeof raw.size === 'number' && Number.isFinite(raw.size) ? { size: raw.size } : {}),
+      ...normalizeAnnotationsProperty(raw.annotations),
     }
   }
   if (type === 'resource' && raw.resource && typeof raw.resource === 'object') {
@@ -331,10 +363,36 @@ function flattenInputParts(parts: InputPart[]): string {
   return parts
     .map((part) => {
       if (part.type === 'text') return part.text
-      if (part.type === 'audio') return part.transcript || ''
-      if (part.type === 'resource') return part.text || ''
+      if (part.type === 'image') return part.alt || (part.data ? `[image: ${part.mimeType}]` : '')
+      if (part.type === 'audio') return part.transcript || (part.data ? `[audio: ${part.mimeType}]` : '')
+      if (part.type === 'video') return part.transcript || (part.data ? `[video: ${part.mimeType}]` : '')
+      if (part.type === 'resource_link') return [part.title, part.name, part.description, part.uri].filter(Boolean).join('\n')
+      if (part.type === 'resource') return part.text || part.name || part.uri
       return ''
     })
     .filter((value) => value.length > 0)
     .join('\n')
+}
+
+function getUriDisplayName(uri: string, fallback: string): string {
+  try {
+    const pathname = uri.startsWith('file://') ? new URL(uri).pathname : uri
+    return pathname.split(/[\\/]/).filter(Boolean).pop() || fallback
+  } catch {
+    return uri.split(/[\\/]/).filter(Boolean).pop() || fallback
+  }
+}
+
+function normalizeAnnotationsProperty(value: unknown): { annotations?: ContentAnnotations } {
+  if (!value || typeof value !== 'object') return {}
+  const record = value as Record<string, unknown>
+  const annotations: ContentAnnotations = {}
+  if (Array.isArray(record.audience)) {
+    const audience = record.audience.filter((item): item is 'user' | 'assistant' => item === 'user' || item === 'assistant')
+    if (audience.length > 0) annotations.audience = audience
+  }
+  if (typeof record.priority === 'number' && Number.isFinite(record.priority)) {
+    annotations.priority = record.priority
+  }
+  return Object.keys(annotations).length > 0 ? { annotations } : {}
 }

@@ -247,7 +247,11 @@ type StructuredMessagePart = {
     uri?: string;
     data?: string;
     mimeType?: string;
+    alt?: string;
+    transcript?: string;
     name?: string;
+    title?: string;
+    description?: string;
     posterUri?: string;
     resource?: {
         uri?: string;
@@ -281,6 +285,16 @@ function buildMediaSrc(part: StructuredMessagePart): string | undefined {
     return undefined;
 }
 
+function renderStructuredPlaceholder(kind: string, label: string, detail?: string): React.ReactNode {
+    return (
+        <div className="rounded-md border border-border-subtle p-2 text-sm" role="note">
+            <span className="font-medium">{kind}</span>
+            {label ? <span className="ml-1 break-all">{label}</span> : null}
+            {detail ? <div className="mt-1 opacity-80" style={{ whiteSpace: 'pre-wrap' }}>{detail}</div> : null}
+        </div>
+    );
+}
+
 function renderTextLikeContent(content: string, renderAsPreformatted: boolean): React.ReactNode {
     if (!content) return null;
     if (renderAsPreformatted) {
@@ -306,12 +320,13 @@ function MessagePartsRenderer({ parts, renderAsPreformatted }: { parts: Structur
 
                 if (part.type === 'image') {
                     const src = buildMediaSrc(part);
-                    if (!src) return null;
+                    const alt = part.alt || part.description || getResourceDisplayName(part.uri, 'image');
+                    if (!src) return <div key={`image-fallback-${index}`}>{renderStructuredPlaceholder('Image', alt, part.mimeType)}</div>;
                     return (
                         <img
                             key={`image-${index}`}
                             src={src}
-                            alt={getResourceDisplayName(part.uri, 'image')}
+                            alt={alt}
                             className="max-w-full rounded-md border border-border-subtle"
                         />
                     );
@@ -319,38 +334,49 @@ function MessagePartsRenderer({ parts, renderAsPreformatted }: { parts: Structur
 
                 if (part.type === 'audio') {
                     const src = buildMediaSrc(part);
-                    return src ? <audio key={`audio-${index}`} controls src={src} className="max-w-full" /> : null;
+                    return src ? (
+                        <div key={`audio-${index}`} className="flex flex-col gap-1">
+                            <audio controls src={src} className="max-w-full" />
+                            {part.transcript ? <div className="text-sm opacity-80" style={{ whiteSpace: 'pre-wrap' }}>{part.transcript}</div> : null}
+                        </div>
+                    ) : <div key={`audio-fallback-${index}`}>{renderStructuredPlaceholder('Audio', getResourceDisplayName(part.uri, 'audio'), part.transcript || part.mimeType)}</div>;
                 }
 
                 if (part.type === 'video') {
                     const src = buildMediaSrc(part);
-                    if (src) {
-                        return (
-                            <video
-                                key={`video-${index}`}
-                                controls
-                                src={src}
-                                poster={part.posterUri}
-                                className="max-w-full rounded-md border border-border-subtle"
-                            />
-                        );
-                    }
-                    if (part.uri) {
-                        return (
-                            <a key={`video-link-${index}`} href={part.uri} target="_blank" rel="noreferrer" className="underline break-all">
-                                {getResourceDisplayName(part.uri, 'video')}
-                            </a>
-                        );
-                    }
-                    return null;
+                    const label = part.title || part.name || part.alt || getResourceDisplayName(part.uri, 'video');
+                    const detail = [part.transcript, part.description, part.mimeType].filter(Boolean).join('\n');
+                    return (
+                        <div key={`video-${index}`} className="flex flex-col gap-1">
+                            {src ? (
+                                <video
+                                    controls
+                                    src={src}
+                                    poster={part.posterUri}
+                                    className="max-w-full rounded-md border border-border-subtle"
+                                />
+                            ) : (
+                                renderStructuredPlaceholder('Video', label, detail)
+                            )}
+                            {src && detail ? <div className="text-sm opacity-80" style={{ whiteSpace: 'pre-wrap' }}>{detail}</div> : null}
+                        </div>
+                    );
                 }
 
                 if (part.type === 'resource_link') {
-                    if (!part.uri) return null;
+                    const label = part.title || part.name || getResourceDisplayName(part.uri, 'resource');
+                    const detail = [part.description, part.mimeType].filter(Boolean).join('\n');
                     return (
-                        <a key={`resource-link-${index}`} href={part.uri} target="_blank" rel="noreferrer" className="underline break-all">
-                            {part.name || getResourceDisplayName(part.uri, 'resource')}
-                        </a>
+                        <div key={`resource-link-${index}`} className="flex flex-col gap-1">
+                            {part.uri ? (
+                                <a href={part.uri} target="_blank" rel="noreferrer" download className="underline break-all">
+                                    {label}
+                                </a>
+                            ) : (
+                                renderStructuredPlaceholder('Resource', label, detail)
+                            )}
+                            {part.uri && detail ? <div className="text-sm opacity-80" style={{ whiteSpace: 'pre-wrap' }}>{detail}</div> : null}
+                        </div>
                     );
                 }
 

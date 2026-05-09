@@ -56,6 +56,11 @@ function getActivityLabel(message: ChatMessage, kind: string, source: string): s
     return 'Activity'
 }
 
+function hasStructuredDisplayContent(message: ChatMessage): boolean {
+    const content = (message as ChatMessage & { content?: unknown }).content
+    return Array.isArray(content) && content.some((part) => !!part && typeof part === 'object' && (part as { type?: unknown }).type !== 'text')
+}
+
 export function classifyChatMessageForDisplay(message: ChatMessage | null | undefined): ChatVisibilityClassification {
     if (!message) {
         return { surface: 'internal', isUserFacing: false, isActivityFacing: false, isInternal: true, role: '', kind: 'standard', label: 'Internal' }
@@ -90,6 +95,9 @@ export function classifyChatMessageForDisplay(message: ChatMessage | null | unde
     }
     if (explicitUserFacing) {
         return { surface: 'chat', isUserFacing: true, isActivityFacing: false, isInternal: false, role, kind, label: getActivityLabel(message, kind, source) }
+    }
+    if ((role === 'system' || kind === 'system') && hasStructuredDisplayContent(message)) {
+        return { surface: 'chat', isUserFacing: true, isActivityFacing: false, isInternal: false, role, kind, label: 'Chat' }
     }
     if (INTERNAL_SOURCES.has(source) || role === 'system' || kind === 'system') {
         return { surface: 'internal', isUserFacing: false, isActivityFacing: false, isInternal: true, role, kind, label: 'Internal' }
