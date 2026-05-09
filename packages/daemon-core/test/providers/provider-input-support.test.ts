@@ -100,6 +100,32 @@ describe('provider input support', () => {
     expect(support).toEqual({ text: true, multipart: false, mediaTypes: ['text'], strategies: [] })
   })
 
+  it('exposes declared non-ACP provider input support without enabling undeclared providers', () => {
+    expect(getEffectiveMessageInputSupport({ category: 'cli' } as any)).toEqual({ text: true, multipart: false, mediaTypes: ['text'], strategies: [] })
+
+    const support = getEffectiveMessageInputSupport({
+      category: 'cli',
+      capabilities: {
+        input: {
+          multipart: true,
+          mediaTypes: ['text', 'image'],
+          strategies: [
+            { mediaType: 'image', strategies: ['resource_link', 'text_fallback'], native: false, degradation: ['text_fallback'] },
+          ],
+        },
+      },
+    } as any)
+
+    expect(support).toEqual({
+      text: true,
+      multipart: true,
+      mediaTypes: ['text', 'image'],
+      strategies: [
+        { mediaType: 'image', strategies: ['resource_link', 'text_fallback'], native: false, degradation: ['text_fallback'] },
+      ],
+    })
+  })
+
   it('computes ACP effective native media only from declared input and runtime prompt capabilities and never native video', () => {
     const provider = {
       category: 'acp',

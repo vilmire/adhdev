@@ -10,8 +10,8 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { createRequire } from 'node:module';
-import { normalizeInputEnvelope, type ProviderModule, flattenContent } from './contracts.js';
-import { assertTextOnlyInput } from './provider-input-support.js';
+import { normalizeInputEnvelope, type ProviderModule, flattenContent, type InputEnvelope, type InputPart } from './contracts.js';
+import { assertProviderSupportsDeclaredInput, getEffectiveMessageInputSupport } from './provider-input-support.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext, ProviderErrorReason, HotChatSessionState, SessionModalState } from './provider-instance.js';
 import { ProviderCliAdapter } from '../cli-adapters/provider-cli-adapter.js';
 import type { CliProviderModule } from '../cli-adapters/provider-cli-adapter.js';
@@ -34,6 +34,95 @@ type PersistableCliHistoryMessage = {
     senderName?: string;
     receivedAt?: number;
 };
+
+const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+    'image/gif': '.gif',
+    'image/webp': '.webp',
+    'image/bmp': '.bmp',
+    'image/tiff': '.tiff',
+    'image/svg+xml': '.svg',
+};
+
+function filePathFromUri(uri: string): string | null {
+    if (!uri) return null;
+    if (uri.startsWith('file://')) {
+        try {
+            return decodeURIComponent(new URL(uri).pathname);
+        } catch {
+            return uri.slice('file://'.length);
+        }
+    }
+    if (path.isAbsolute(uri)) return uri;
+    return null;
+}
+
+function extensionForImageMime(mimeType: string): string {
+    return IMAGE_MIME_EXTENSIONS[mimeType.toLowerCase()] || '.img';
+}
+
+function safeInputImageBasename(index: number, mimeType: string): string {
+    const extension = extensionForImageMime(mimeType);
+    const suffix = crypto.randomBytes(6).toString('hex');
+    return `adhdev-input-image-${Date.now()}-${index}-${suffix}${extension}`;
+}
+
+function materializeImageDataPart(part: Extract<InputPart, { type: 'image' }>, index: number, dir: string): string | null {
+    if (!part.data) return null;
+    const rawData = part.data.includes(',') ? part.data.split(',').pop() || '' : part.data;
+    if (!rawData) return null;
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, safeInputImageBasename(index, part.mimeType));
+    fs.writeFileSync(filePath, Buffer.from(rawData, 'base64'));
+    return filePath;
+}
+
+export function buildCliStructuredInputPrompt(
+    input: InputEnvelope,
+    options: { materializeDir?: string } = {},
+): string {
+    const promptParts: string[] = [];
+    const imageRefs: string[] = [];
+    const resourceRefs: string[] = [];
+    const materializeDir = options.materializeDir || path.join(os.tmpdir(), 'adhdev-input-media');
+
+    input.parts.forEach((part, index) => {
+        if (part.type === 'text' && part.text.trim()) {
+            promptParts.push(part.text.trim());
+            return;
+        }
+
+        if (part.type === 'image') {
+            const localPath = typeof part.uri === 'string' ? filePathFromUri(part.uri) : null;
+            const materializedPath = !localPath && part.data ? materializeImageDataPart(part, index, materializeDir) : null;
+            const ref = localPath || materializedPath || part.uri || '';
+            if (ref) imageRefs.push(ref);
+            if (part.alt?.trim()) promptParts.push(part.alt.trim());
+            return;
+        }
+
+        if (part.type === 'resource_link') {
+            resourceRefs.push([part.title, part.name, part.description, part.uri].filter(Boolean).join('\n'));
+            return;
+        }
+
+        if (part.type === 'resource') {
+            resourceRefs.push([part.name, part.text, part.uri].filter(Boolean).join('\n'));
+        }
+    });
+
+    if (input.textFallback.trim()) promptParts.push(input.textFallback.trim());
+
+    const ordered = [
+        ...imageRefs,
+        ...promptParts,
+        ...resourceRefs,
+    ].filter((value, index, values) => value.trim().length > 0 && values.indexOf(value) === index);
+
+    return ordered.join('\n');
+}
 
 function normalizePersistableCliHistoryContent(content: unknown): string {
     return flattenContent(content as any).replace(/\s+/g, ' ').trim();
@@ -476,6 +565,7 @@ export class CliProviderInstance implements ProviderInstance {
             resume: this.provider.resume,
             controlValues: surface.controlValues,
             providerControls: this.provider.controls,
+            messageInput: getEffectiveMessageInputSupport(this.provider),
             summaryMetadata: surface.summaryMetadata as any,
             errorMessage: this.errorMessage,
             errorReason: this.errorReason,
@@ -532,9 +622,10 @@ export class CliProviderInstance implements ProviderInstance {
     onEvent(event: string, data?: any): void {
         if (event === 'send_message') {
             const input = normalizeInputEnvelope(data);
-            assertTextOnlyInput(this.provider, input);
-            if (input.textFallback) {
-                void this.adapter.sendMessage(input.textFallback).catch((e: any) => {
+            assertProviderSupportsDeclaredInput(this.provider, input);
+            const promptText = buildCliStructuredInputPrompt(input);
+            if (promptText) {
+                void this.adapter.sendMessage(promptText).catch((e: any) => {
                     LOG.warn('CLI', `[${this.type}] send_message failed: ${e?.message || e}`);
                 });
             }

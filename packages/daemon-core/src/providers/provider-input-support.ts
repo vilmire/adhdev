@@ -137,7 +137,16 @@ export function getEffectiveMessageInputSupport(
   runtimeCapabilities?: Record<string, any> | null,
 ): MessageInputSupport {
   if (provider?.category !== 'acp') {
-    return { ...TEXT_ONLY_MESSAGE_INPUT_SUPPORT, mediaTypes: [...TEXT_ONLY_MESSAGE_INPUT_SUPPORT.mediaTypes], strategies: [] }
+    const declared = supportFromDeclared(provider)
+    return {
+      ...declared,
+      mediaTypes: [...declared.mediaTypes],
+      strategies: declared.strategies.map((strategy) => ({
+        ...strategy,
+        strategies: [...strategy.strategies],
+        ...(strategy.degradation ? { degradation: [...strategy.degradation] } : {}),
+      })),
+    }
   }
 
   const declared = supportFromDeclared(provider)
