@@ -8,6 +8,7 @@
  *   npx @adhdev/mcp-server --mode ipc --repo-mesh mesh_xxx  # cloud daemon IPC mode
  */
 
+import { buildMcpHelpText } from './help.js';
 import { startMcpServer } from './server.js';
 
 export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): {
@@ -70,33 +71,7 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
 }
 
 function printHelp(): void {
-  console.error(`
-adhdev-mcp — ADHDev MCP Server
-
-Usage:
-  adhdev-mcp                                    Local mode (requires standalone daemon)
-  adhdev-mcp --api-key <key>                    Cloud mode (ADHDev cloud API)
-  adhdev-mcp --mode ipc --repo-mesh <mesh_id>   Cloud daemon IPC mesh mode
-  adhdev-mcp --repo-mesh <mesh_id>              Mesh mode (coordinator-scoped tools)
-
-Options:
-  --mode <mode>           Transport: local, cloud, or ipc
-  --port <n>              Standalone or IPC daemon port (defaults: local 3847, ipc 19222)
-  --password <pass>       Standalone daemon password (if set)
-  --api-key <key>         ADHDev cloud API key (switches to cloud mode)
-  --base-url <url>        Override cloud API base URL
-  --repo-mesh <mesh_id>   Enable mesh mode — exposes only mesh-scoped coordinator tools
-  --help                  Show this help
-
-Environment variables:
-  ADHDEV_API_KEY      API key (cloud mode)
-  ADHDEV_PASSWORD     Daemon password (local mode)
-  ADHDEV_MESH_ID      Mesh ID (mesh mode)
-  ADHDEV_MCP_TRANSPORT Transport: local, cloud, or ipc
-
-Standard tools:   list_daemons, list_sessions, launch_session, stop_session, check_pending, read_chat, read_chat_debug, send_chat, approve, git_status, git_log, git_diff, git_checkpoint, git_push, screenshot
-Mesh tools:       mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat, mesh_read_debug, mesh_launch_session, mesh_git_status, mesh_checkpoint, mesh_approve, mesh_clone_node, mesh_remove_node
-`.trim());
+  console.error(buildMcpHelpText());
 }
 
 startMcpServer(parseArgs(process.argv)).catch((err) => {
