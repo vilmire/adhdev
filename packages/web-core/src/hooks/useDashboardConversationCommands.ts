@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
+import type { ImageAttachment } from '../components/dashboard/ChatInputBar'
 import { getProviderArgs, getRouteTarget, getConversationSendBlockMessage, getInlineSendFailureMessage } from './dashboardCommandUtils'
 import { getExplicitSessionRevealCommand } from '../components/dashboard/dashboardSessionCommands'
 
@@ -78,6 +79,43 @@ function getActionFailureText(buttonText: string, error?: unknown): string {
     return `⚠️ **${buttonText}** failed — ${message}`
 }
 
+/**
+ * Build the payload for a send_chat command.
+ * When attachments are present, build a structured InputEnvelope so the daemon
+ * can route image data to the correct provider input path.
+ * Falls back to the plain {message} shape for text-only sends.
+ */
+function buildSendChatPayload(
+    message: string,
+    attachments: ImageAttachment[] | undefined,
+    activeConv: ActiveConversation,
+): Record<string, unknown> {
+    const providerArgs = getProviderArgs(activeConv)
+    if (!attachments || attachments.length === 0) {
+        return { message, ...providerArgs }
+    }
+
+    // Structured input envelope — matches daemon's normalizeInputEnvelope contract
+    const parts: unknown[] = attachments.map((att) => ({
+        type: 'image',
+        mimeType: att.mimeType,
+        data: att.data,
+        alt: att.name,
+    }))
+    if (message) {
+        parts.push({ type: 'text', text: message })
+    }
+
+    return {
+        message,          // kept for backward-compat with older daemons
+        input: {
+            parts,
+            textFallback: message,
+        },
+        ...providerArgs,
+    }
+}
+
 export function useDashboardConversationCommands({
     sendDaemonCommand,
     activeConv,
@@ -94,7 +132,7 @@ export function useDashboardConversationCommands({
         setSendFeedbackMessage(null)
     }, [activeConv?.tabKey])
 
-    const handleSendChat = useCallback(async (rawMessage: string): Promise<boolean> => {
+    const handleSendChat = useCallback(async (rawMessage: string, attachments?: ImageAttachment[]): Promise<boolean> => {
         if (!activeConv) return false
         if (sendInFlightRef.current) return false
 
@@ -133,10 +171,7 @@ export function useDashboardConversationCommands({
                 return false
             }
 
-            const raw = await sendDaemonCommand(routeTarget, 'send_chat', {
-                message,
-                ...getProviderArgs(activeConv),
-            })
+            const raw = await sendDaemonCommand(routeTarget, 'send_chat', buildSendChatPayload(message, attachments, activeConv))
             const res = unwrapCommandResult(raw)
 
             if (res?.deduplicated) {

@@ -4,6 +4,7 @@ import PaneGroupContent from './PaneGroupContent'
 import ConversationMetaChips from './ConversationMetaChips'
 import type { ActiveConversation, CliConversationViewMode } from './types'
 import { isCliConv } from './types'
+import type { ImageAttachment } from './ChatInputBar'
 import { useRef } from 'react'
 import type { CliTerminalHandle } from '../CliTerminal'
 import CliViewModeToggle from './CliViewModeToggle'
@@ -27,7 +28,7 @@ interface DashboardMobileChatRoomProps {
     onStopCli?: (conversation?: ActiveConversation) => void | Promise<void>
     cliViewMode: CliConversationViewMode | null
     onSetCliViewMode: (mode: CliConversationViewMode) => void
-    handleSendChat: (message: string, images?: string[]) => Promise<boolean>
+    handleSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
     handleFocusAgent: () => Promise<void>
     handleModalButton: (button: string) => void
     handleRelaunch: () => void

@@ -215,6 +215,7 @@ export function statusPayloadToEntries(
             ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
             ...(mergedSession.summaryMetadata !== undefined && { summaryMetadata: mergedSession.summaryMetadata }),
             ...(mergedSession.settings !== undefined && { settings: mergedSession.settings }),
+            ...(mergedSession.messageInput !== undefined && { messageInput: mergedSession.messageInput }),
             timestamp: ts,
         } as DaemonData)
     }
@@ -261,6 +262,7 @@ export function statusPayloadToEntries(
             ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
             ...(mergedSession.summaryMetadata !== undefined && { summaryMetadata: mergedSession.summaryMetadata }),
             ...(mergedSession.settings !== undefined && { settings: mergedSession.settings }),
+            ...(mergedSession.messageInput !== undefined && { messageInput: mergedSession.messageInput }),
             timestamp: ts,
             _isCli: true,
         } as DaemonData)
@@ -307,6 +309,7 @@ export function statusPayloadToEntries(
             ...(mergedSession.providerControls !== undefined && { providerControls: mergedSession.providerControls }),
             ...(mergedSession.summaryMetadata !== undefined && { summaryMetadata: mergedSession.summaryMetadata }),
             ...(mergedSession.settings !== undefined && { settings: mergedSession.settings }),
+            ...(mergedSession.messageInput !== undefined && { messageInput: mergedSession.messageInput }),
             timestamp: ts,
             _isAcp: true,
         } as DaemonData)

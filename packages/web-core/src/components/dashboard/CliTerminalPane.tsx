@@ -21,7 +21,7 @@ export interface CliTerminalPaneProps {
     clearToken?: number;
     /** Outer terminal ref for bumpResize etc. */
     terminalRef: React.RefObject<CliTerminalHandle | null>;
-    handleSendChat: (message: string) => Promise<boolean>;
+    handleSendChat: (message: string, attachments?: import('./ChatInputBar').ImageAttachment[]) => Promise<boolean>;
     isSendingChat?: boolean;
     sendFeedbackMessage?: string | null;
     isVisible?: boolean;

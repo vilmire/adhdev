@@ -5,7 +5,7 @@
  * Reusable across Dashboard, mobile views, widgets, etc.
  */
 import type { DaemonData } from '../../types';
-import type { GitCompactSummary, RecentSessionBucket } from '@adhdev/daemon-core';
+import type { GitCompactSummary, MessageInputSupport, RecentSessionBucket } from '@adhdev/daemon-core';
 import { deriveNativeConversationStatus, deriveStreamConversationStatus, formatIdeType, getAgentDisplayName, getMachineDisplayName, isGenericAgentTitle } from '../../utils/daemon-utils';
 import { isCliConv, isAcpConv } from './types';
 import type { ActiveConversation, DashboardMessage } from './types';
@@ -149,6 +149,7 @@ export function buildIdeConversations(
         surfaceHidden?: boolean;
         git?: GitCompactSummary;
         settings?: Record<string, any>;
+        messageInput?: MessageInputSupport;
     }[] = Array.isArray(ide.childSessions)
         ? ide.childSessions.map(child => ({
             sessionId: child.id,
@@ -174,6 +175,7 @@ export function buildIdeConversations(
             surfaceHidden: child.surfaceHidden,
             git: child.git,
             settings: child.settings,
+            messageInput: child.messageInput,
         }))
         : [];
     const useConversationFirst = isConversationFirstIde(ide);
@@ -248,6 +250,7 @@ export function buildIdeConversations(
             machineName,
             connectionState,
             settings: ide.settings,
+            messageInput: ide.messageInput,
         });
     }
 
@@ -307,6 +310,7 @@ export function buildIdeConversations(
             machineName,
             connectionState,
             settings: stream.settings,
+            messageInput: stream.messageInput,
         });
     }
 
@@ -338,6 +342,7 @@ export function buildIdeConversations(
             tabKey: getConversationTabKey(ide.sessionId || ide.instanceId, ide.id),
             connectionState,
             settings: ide.settings,
+            messageInput: ide.messageInput,
         });
     }
 

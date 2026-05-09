@@ -2,7 +2,7 @@
  * Shared types for Dashboard components
  */
 
-import type { GitCompactSummary, RecentSessionBucket, SessionTransport } from '@adhdev/daemon-core';
+import type { GitCompactSummary, MessageInputSupport, RecentSessionBucket, SessionTransport } from '@adhdev/daemon-core';
 import type { ChatMessage } from '../../types';
 
 export type CliConversationViewMode = 'terminal' | 'chat';
@@ -49,6 +49,8 @@ export interface ActiveConversation {
     connectionState?: string;
     sessionCapabilities?: string[];
     settings?: Record<string, any>;
+    /** Effective message input/media support. Absent → text-only. */
+    messageInput?: MessageInputSupport;
 }
 
 /** CLI detection: PTY transport */

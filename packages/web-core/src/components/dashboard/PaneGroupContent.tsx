@@ -9,6 +9,7 @@ import ChatPane from './ChatPane'
 import { IconWarning } from '../Icons'
 import { useSessionModalSubscription } from '../../hooks/useSessionModalSubscription'
 import ConversationMetaChips from './ConversationMetaChips'
+import type { ImageAttachment } from './ChatInputBar'
 
 interface PaneGroupContentProps {
     activeConv: ActiveConversation
@@ -18,7 +19,7 @@ interface PaneGroupContentProps {
     terminalRef: RefObject<CliTerminalHandle | null>
     handleModalButton: (button: string) => void
     handleRelaunch: () => void
-    handleSendChat: (message: string) => Promise<boolean>
+    handleSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>
     isSendingChat: boolean
     sendFeedbackMessage?: string | null
     handleFocusAgent: () => void

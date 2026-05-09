@@ -79,6 +79,10 @@ export type {
   CliProviderState,
   AcpProviderState,
   ExtensionProviderState,
+  MessageInputSupport,
+  InputMediaStrategyDescriptor,
+  InputAttachmentStrategy,
+  InputMediaType,
 } from './shared-types.js';
 
 // ── Repo Mesh Types (cross-package) ──

@@ -5,7 +5,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import ChatMessageList, { getChatMessageStableKey } from '../ChatMessageList';
 import ChatControlsSection from './ChatControlsSection';
-import ChatInputBar from './ChatInputBar';
+import ChatInputBar, { type ImageAttachment } from './ChatInputBar';
 import { getVisibleBarControls } from './ControlsBar';
 import { useControlsBarVisibility } from '../../hooks/useControlsBarVisibility';
 import { useTransport } from '../../context/TransportContext';
@@ -43,7 +43,7 @@ import {
 export interface ChatPaneProps {
     activeConv: ActiveConversation;
     ideEntry?: DaemonData;
-    handleSendChat: (message: string) => Promise<boolean>;
+    handleSendChat: (message: string, attachments?: ImageAttachment[]) => Promise<boolean>;
     isSendingChat?: boolean;
     sendFeedbackMessage?: string | null;
     handleFocusAgent: () => void;
@@ -427,6 +427,7 @@ export default function ChatPane({
                     isActive={isInputActive}
                     showControlsToggle={visibleBarControls.length > 0}
                     onControlsToggle={handleControlsToggleDebugGesture}
+                    messageInput={activeConv.messageInput}
                 />
             )}
         </div>

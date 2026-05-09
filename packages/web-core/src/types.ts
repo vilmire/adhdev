@@ -15,6 +15,7 @@ import type {
     RuntimeWriteOwner,
     RuntimeAttachedClient,
     TerminalBackendStatus,
+    MessageInputSupport,
 } from '@adhdev/daemon-core';
 
 // Re-export shared types for convenience
@@ -42,6 +43,7 @@ export type {
     DashboardStatusEventPayload,
     DaemonStatusEventPayload,
     ProviderResumeCapability,
+    MessageInputSupport,
 } from '@adhdev/daemon-core';
 
 export interface RecentLaunchEntry {
@@ -216,6 +218,8 @@ export interface BaseDaemonData {
     /** @internal Status payload included an explicit sessions list, even if empty. */
     _sessionListAuthoritative?: boolean;
     settings?: Record<string, any>;
+    /** Effective message input/media support for this session. Fail-closed to text-only when absent. */
+    messageInput?: MessageInputSupport;
 }
 
 // Backward compatibility alias for web-core components
