@@ -52,6 +52,9 @@ Repository: \`${mesh.repoIdentity}\`${mesh.defaultBranch ? `\nDefault branch: \`
     // ── Tools ──
     sections.push(TOOLS_SECTION);
 
+    // ── Tool Exposure Preflight ──
+    sections.push(TOOL_EXPOSURE_PREFLIGHT_SECTION);
+
     // ── Workflow ──
     sections.push(WORKFLOW_SECTION);
 
@@ -135,6 +138,10 @@ const TOOLS_SECTION = `## Available Tools
 | \`mesh_approve\` | Approve/reject a pending agent action |
 | \`mesh_clone_node\` | Create a worktree node for isolated parallel branch work |
 | \`mesh_remove_node\` | Remove a node (cleans up worktree if applicable) |`;
+
+const TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
+
+Before doing any coordinator work, confirm that the actual callable tool list includes \`mesh_status\` and the other \`mesh_*\` tools from the table above. If this Repo Mesh coordinator prompt is present but the callable \`mesh_*\` tools are missing, the MCP server/tool manifest is stale or not injected yet. Do not substitute terminal/file/git tools, do not inspect or edit the repository directly, and do not continue as a non-mesh local coding agent. Stop immediately and tell the user to run \`/reload-mcp\` or start a fresh coordinator session so ADHDev can reconnect \`adhdev-mesh\`.`;
 
 const WORKFLOW_SECTION = `## Orchestration Workflow
 

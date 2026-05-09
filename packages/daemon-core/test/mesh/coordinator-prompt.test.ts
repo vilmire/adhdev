@@ -29,6 +29,31 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('Coordinator runtime is not a delegation default')
   })
 
+  it('requires mesh tool exposure before doing coordinator work', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [
+          {
+            id: 'node_1',
+            workspace: '/repo',
+            daemonId: 'daemon_1',
+            userOverrides: {},
+            policy: {},
+          },
+        ],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    expect(prompt).toContain('Before doing any coordinator work, confirm that the actual callable tool list includes `mesh_status`')
+    expect(prompt).toContain('Do not substitute terminal/file/git tools')
+    expect(prompt).toContain('/reload-mcp')
+  })
+
   it('discourages repeated read_chat polling and duplicate workers while delegated tools are active', () => {
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {
