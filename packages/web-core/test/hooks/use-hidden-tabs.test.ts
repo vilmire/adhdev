@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  getAutoHiddenConversationTargets,
   getHiddenConversationStorageKey,
   isConversationHidden,
 } from '../../src/hooks/useHiddenTabs'
@@ -23,5 +24,37 @@ describe('useHiddenTabs helpers', () => {
       tabKey: 'tab-b',
       routeId: 'machine-1:ide:cursor-1',
     })).toBe(true)
+  })
+
+  it('selects mesh-spawned hidden policy sessions for one-time auto-hide without re-hiding manually shown sessions', () => {
+    const hiddenMeshConversation = {
+      providerSessionId: 'provider-hidden',
+      sessionId: 'runtime-hidden',
+      tabKey: 'tab-hidden',
+      routeId: 'machine-1:runtime-hidden',
+      settings: {
+        launchedByCoordinator: true,
+        meshNodeFor: 'mesh-1',
+        spawnedSessionVisibility: 'hidden',
+      },
+    }
+    const visibleMeshConversation = {
+      providerSessionId: 'provider-visible',
+      sessionId: 'runtime-visible',
+      tabKey: 'tab-visible',
+      routeId: 'machine-1:runtime-visible',
+      settings: {
+        launchedByCoordinator: true,
+        meshNodeFor: 'mesh-1',
+        spawnedSessionVisibility: 'visible',
+      },
+    }
+
+    expect(getAutoHiddenConversationTargets([
+      hiddenMeshConversation,
+      visibleMeshConversation,
+    ], new Set())).toEqual([hiddenMeshConversation])
+    expect(getAutoHiddenConversationTargets([hiddenMeshConversation], new Set(['provider:provider-hidden']))).toEqual([])
+    expect(getAutoHiddenConversationTargets([hiddenMeshConversation], new Set(), new Set(['provider:provider-hidden']))).toEqual([])
   })
 })

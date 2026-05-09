@@ -56,6 +56,7 @@ export type RepoMeshNodeHealth =
 // ─── Policy Types ───────────────────────────────
 
 export type RepoMeshSessionCleanupMode = 'preserve' | 'stop' | 'delete_stopped' | 'stop_and_delete';
+export type RepoMeshSpawnedSessionVisibility = 'visible' | 'hidden';
 
 export interface RepoMeshPolicy {
     requirePreTaskCheckpoint: boolean;
@@ -65,6 +66,12 @@ export interface RepoMeshPolicy {
     dirtyWorkspaceBehavior: 'block' | 'warn' | 'checkpoint_then_continue';
     maxParallelTasks: number;
     allowedProviders?: string[];
+    /**
+     * Whether sessions spawned by mesh/coordinator policy should auto-open as visible
+     * dashboard tabs or start hidden. Defaults to 'visible' to preserve existing
+     * watch-the-agents behavior; hidden sessions remain discoverable and manually openable.
+     */
+    spawnedSessionVisibility?: RepoMeshSpawnedSessionVisibility;
     /**
      * What to do with delegated session-host records for a node when it is removed.
      * Defaults to 'preserve' so completed work can be reviewed later and live
@@ -101,6 +108,7 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     requireApprovalForDestructiveGit: true,
     dirtyWorkspaceBehavior: 'warn',
     maxParallelTasks: 2,
+    spawnedSessionVisibility: 'visible',
     sessionCleanupOnNodeRemove: 'preserve',
 };
 

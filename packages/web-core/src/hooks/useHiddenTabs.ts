@@ -13,6 +13,11 @@ import type { ConversationTarget } from '../components/dashboard/conversation-id
 import { buildConversationLookupKeys, buildConversationTargetKey } from '../components/dashboard/conversation-identity'
 
 const STORAGE_KEY = 'adhdev_hiddenTabs';
+const AUTO_HIDDEN_STORAGE_KEY = 'adhdev_autoHiddenMeshTabs';
+
+export type AutoHideConversationTarget = ConversationTarget & {
+    settings?: Record<string, any>
+}
 
 function loadHidden(): Set<string> {
     try {
@@ -28,6 +33,20 @@ function saveHidden(set: Set<string>): void {
     } catch { /* noop */ }
 }
 
+function loadAutoHidden(): Set<string> {
+    try {
+        const raw = localStorage.getItem(AUTO_HIDDEN_STORAGE_KEY);
+        if (raw) return new Set(JSON.parse(raw));
+    } catch { /* noop */ }
+    return new Set();
+}
+
+function saveAutoHidden(set: Set<string>): void {
+    try {
+        localStorage.setItem(AUTO_HIDDEN_STORAGE_KEY, JSON.stringify([...set]));
+    } catch { /* noop */ }
+}
+
 export function getHiddenConversationStorageKey(target: ConversationTarget): string {
     return buildConversationTargetKey(target)
 }
@@ -36,8 +55,29 @@ export function isConversationHidden(hiddenTabs: Set<string>, target: Conversati
     return buildConversationLookupKeys(target).some((key) => hiddenTabs.has(key))
 }
 
+export function shouldAutoHideMeshConversation(target: AutoHideConversationTarget): boolean {
+    return target.settings?.launchedByCoordinator === true
+        && typeof target.settings?.meshNodeFor === 'string'
+        && target.settings.meshNodeFor.trim().length > 0
+        && target.settings?.spawnedSessionVisibility === 'hidden'
+}
+
+export function getAutoHiddenConversationTargets(
+    conversations: AutoHideConversationTarget[],
+    hiddenTabs: Set<string>,
+    autoHiddenTabs: Set<string> = new Set(),
+): AutoHideConversationTarget[] {
+    return conversations.filter((conversation) => {
+        if (!shouldAutoHideMeshConversation(conversation)) return false
+        const targetKey = getHiddenConversationStorageKey(conversation)
+        if (autoHiddenTabs.has(targetKey)) return false
+        return !isConversationHidden(hiddenTabs, conversation)
+    })
+}
+
 export function useHiddenTabs() {
     const [hiddenTabs, setHiddenTabs] = useState<Set<string>>(loadHidden);
+    const [autoHiddenTabs, setAutoHiddenTabs] = useState<Set<string>>(loadAutoHidden);
 
     const toggleTarget = useCallback((target: ConversationTarget) => {
         const targetKey = getHiddenConversationStorageKey(target)
@@ -61,6 +101,24 @@ export function useHiddenTabs() {
         });
     }, []);
 
+    const autoHideTarget = useCallback((target: ConversationTarget) => {
+        const targetKey = getHiddenConversationStorageKey(target)
+        setHiddenTabs(prev => {
+            if (prev.has(targetKey)) return prev;
+            const next = new Set(prev);
+            next.add(targetKey);
+            saveHidden(next);
+            return next;
+        });
+        setAutoHiddenTabs(prev => {
+            if (prev.has(targetKey)) return prev;
+            const next = new Set(prev);
+            next.add(targetKey);
+            saveAutoHidden(next);
+            return next;
+        });
+    }, []);
+
     const showTarget = useCallback((target: ConversationTarget) => {
         const targetKey = getHiddenConversationStorageKey(target)
         setHiddenTabs(prev => {
@@ -68,6 +126,13 @@ export function useHiddenTabs() {
             const next = new Set(prev);
             next.delete(targetKey);
             saveHidden(next);
+            return next;
+        });
+        setAutoHiddenTabs(prev => {
+            if (prev.has(targetKey)) return prev;
+            const next = new Set(prev);
+            next.add(targetKey);
+            saveAutoHidden(next);
             return next;
         });
     }, []);
@@ -104,5 +169,5 @@ export function useHiddenTabs() {
 
     const isHidden = useCallback((target: ConversationTarget) => isConversationHidden(hiddenTabs, target), [hiddenTabs]);
 
-    return { hiddenTabs, toggleTarget, hideTarget, showTarget, showAllTabs, hideAllForDaemon, showAllForDaemon, isHidden };
+    return { hiddenTabs, autoHiddenTabs, toggleTarget, hideTarget, autoHideTarget, showTarget, showAllTabs, hideAllForDaemon, showAllForDaemon, isHidden };
 }
