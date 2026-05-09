@@ -94,6 +94,7 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   assert.deepEqual(calls[1].args.settings, {
     meshNodeFor: 'mesh-worktree-flow',
     meshNodeId: 'node-worktree',
+    spawnedSessionVisibility: 'visible',
     launchedByCoordinator: true,
   });
 
@@ -102,6 +103,50 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   assert.ok(!ctx.mesh.nodes.some(node => node.id === 'node-worktree'));
   assert.equal(calls[2].daemonId, 'daemon-source');
   assert.equal(calls[2].command, 'remove_mesh_node');
+});
+
+test('mesh_launch_session stamps delegated sessions hidden when mesh policy requests hidden spawned session visibility', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    calls.push({ daemonId, command, args });
+    if (command === 'launch_cli') return { success: true, sessionId: 'session-hidden' };
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const ctx = {
+    mesh: {
+      id: 'mesh-hidden-visibility',
+      name: 'Hidden Visibility Mesh',
+      repoIdentity: 'example/repo',
+      policy: { spawnedSessionVisibility: 'hidden' },
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-hidden',
+        workspace: '/repo-hidden',
+        repoRoot: '/repo-hidden',
+        daemonId: 'daemon-hidden',
+        userOverrides: {},
+        policy: { canPush: true },
+      }],
+    },
+    transport,
+  };
+
+  const launchText = await meshLaunchSession(ctx, { node_id: 'node-hidden', type: 'hermes-cli' });
+
+  assert.equal(JSON.parse(launchText).sessionId, 'session-hidden');
+  assert.equal(calls[0].command, 'launch_cli');
+  assert.equal(calls[0].args.settings?.spawnedSessionVisibility, 'hidden');
+  assert.equal(calls[0].args.settings?.launchedByCoordinator, true);
 });
 
 test('mesh_checkpoint routes untracked checkpoint requests with the exact multiword message', async () => {

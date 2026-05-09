@@ -130,6 +130,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
               requireApprovalForDestructiveGit: true,
               dirtyWorkspaceBehavior: 'warn',
               maxParallelTasks: 2,
+              spawnedSessionVisibility: 'visible',
               ...policy,
             },
             coordinator,

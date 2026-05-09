@@ -12,7 +12,7 @@ import {
     reconcileCliViewModeOverrides,
 } from '../components/dashboard/cliViewModeOverrides'
 import { useWarmSessionChatTailControllers } from '../components/dashboard/session-chat-tail-controller'
-import { useHiddenTabs, isConversationHidden } from '../hooks/useHiddenTabs'
+import { useHiddenTabs, isConversationHidden, getAutoHiddenConversationTargets } from '../hooks/useHiddenTabs'
 import { useDashboardConversationMeta } from '../hooks/useDashboardConversationMeta'
 import { useDashboardConversations } from '../hooks/useDashboardConversations'
 import { useDashboardActiveTabRequests } from '../hooks/useDashboardActiveTabRequests'
@@ -140,6 +140,8 @@ export default function Dashboard() {
     // ─── Hidden Tabs ───
     const {
         hiddenTabs,
+        autoHiddenTabs,
+        autoHideTarget: autoHideConversation,
         hideTarget: hideHiddenConversation,
         toggleTarget: toggleHiddenConversation,
         showTarget: showHiddenConversation,
@@ -161,6 +163,15 @@ export default function Dashboard() {
         () => new Map(conversations.map(conversation => [conversation.tabKey, conversation])),
         [conversations],
     )
+    const autoHiddenConversationTargets = useMemo(
+        () => getAutoHiddenConversationTargets(conversations, hiddenTabs, autoHiddenTabs),
+        [conversations, hiddenTabs, autoHiddenTabs],
+    )
+    useEffect(() => {
+        for (const conversation of autoHiddenConversationTargets) {
+            autoHideConversation(conversation)
+        }
+    }, [autoHiddenConversationTargets, autoHideConversation])
     useWarmSessionChatTailControllers(visibleConversations, warmChatTailOptions)
     useEffect(() => {
         if (Object.keys(cliViewModeOverrides).length === 0) return

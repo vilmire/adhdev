@@ -225,6 +225,10 @@ function readProviderPriority(policy: unknown): string[] {
         : [];
 }
 
+function readSpawnedSessionVisibility(policy: unknown): 'visible' | 'hidden' {
+    return (policy as any)?.spawnedSessionVisibility === 'hidden' ? 'hidden' : 'visible';
+}
+
 function missingProviderPriorityMessage(nodeId: string): string {
     return `Node '${nodeId}' has no providerPriority policy; pass type explicitly or configure node.policy.providerPriority`;
 }
@@ -658,12 +662,14 @@ export async function meshLaunchSession(
         }
 
         const coordinatorNode = resolveCoordinatorNode(ctx);
+        const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
         const result = await commandForNode(ctx, node, 'launch_cli', {
             cliType: resolvedProviderType,
             dir: node.workspace,
             settings: {
                 meshNodeFor: ctx.mesh.id,
                 meshNodeId: args.node_id,
+                spawnedSessionVisibility,
                 ...(coordinatorNode?.daemonId ? { meshCoordinatorDaemonId: coordinatorNode.daemonId } : {}),
                 ...(coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {}),
                 launchedByCoordinator: true

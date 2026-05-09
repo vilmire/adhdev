@@ -75,6 +75,7 @@ export function normalizeRepoIdentity(remoteUrl: string): string {
 // ─── CRUD Operations ────────────────────────────
 
 const SESSION_CLEANUP_MODES = new Set(['preserve', 'stop', 'delete_stopped', 'stop_and_delete']);
+const SPAWNED_SESSION_VISIBILITY_MODES = new Set(['visible', 'hidden']);
 
 function mergeMeshPolicy(base: RepoMeshPolicy | undefined, patch: Partial<RepoMeshPolicy> | undefined): RepoMeshPolicy {
     const policy: RepoMeshPolicy = { ...DEFAULT_MESH_POLICY, ...(base || {}), ...(patch || {}) };
@@ -85,6 +86,9 @@ function mergeMeshPolicy(base: RepoMeshPolicy | undefined, patch: Partial<RepoMe
     policy.maxParallelTasks = Number.isFinite(maxParallelTasks) ? Math.max(1, Math.min(8, Math.floor(maxParallelTasks))) : 2;
     if (!SESSION_CLEANUP_MODES.has(String(policy.sessionCleanupOnNodeRemove))) {
         policy.sessionCleanupOnNodeRemove = 'preserve';
+    }
+    if (!SPAWNED_SESSION_VISIBILITY_MODES.has(String(policy.spawnedSessionVisibility))) {
+        policy.spawnedSessionVisibility = 'visible';
     }
     return policy;
 }
