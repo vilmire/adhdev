@@ -173,32 +173,216 @@ export interface CliProviderModule {
 function stripAnsi(str: string): string {
     // eslint-disable-next-line no-control-regex
     return str
-        .replace(/\x1B\][^\x07]*\x07/g, '')
-        .replace(/\x1B\][\s\S]*?\x1B\\/g, '')
+        .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, '')
         .replace(/\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g, '')
-        .replace(/\x1B\[\d*[A-HJKSTfG]/g, ' ')
-        .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
-        .replace(/  +/g, ' ');
+        .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+}
+
+type SavedCursor = { row: number; col: number };
+
+function parseCount(params: string, fallback = 1): number {
+    const first = Number(String(params || '').split(';')[0] || fallback);
+    return Math.max(1, Number.isFinite(first) ? first : fallback);
+}
+
+function isCombiningMark(ch: string): boolean {
+    return /[\u0300-\u036F\u1AB0-\u1AFF\u1DC0-\u1DFF\u20D0-\u20FF\uFE20-\uFE2F]/.test(ch);
+}
+
+function isWideCodePoint(ch: string): boolean {
+    const cp = ch.codePointAt(0) || 0;
+    return cp >= 0x1100 && (
+        cp <= 0x115F || cp === 0x2329 || cp === 0x232A ||
+        (cp >= 0x2E80 && cp <= 0xA4CF && cp !== 0x303F) ||
+        (cp >= 0xAC00 && cp <= 0xD7A3) ||
+        (cp >= 0xF900 && cp <= 0xFAFF) ||
+        (cp >= 0xFE10 && cp <= 0xFE19) ||
+        (cp >= 0xFE30 && cp <= 0xFE6F) ||
+        (cp >= 0xFF00 && cp <= 0xFF60) ||
+        (cp >= 0xFFE0 && cp <= 0xFFE6) ||
+        (cp >= 0x1F300 && cp <= 0x1FAFF)
+    );
+}
+
+/**
+ * Stateful, transcript-oriented terminal cell accumulator.
+ *
+ * CLI transcript parsing must not consume raw PTY append text for user-visible
+ * readback: CLIs rewrite prompts/status/tool lines with CR, BS, CSI cursor
+ * motion and erase-line. This accumulator preserves parser state across chunks
+ * and mutates rendered cells before exposing plain transcript text. It is a
+ * deliberately small terminal model for readback buffers; live UI rendering still
+ * uses TerminalScreen's ghostty/xterm backend.
+ */
+export class TerminalTranscriptAccumulator {
+    private lines: string[][] = [[]];
+    private row = 0;
+    private col = 0;
+    private savedCursor: SavedCursor | null = null;
+    private pendingEscape = '';
+
+    append(data: string): string {
+        const input = this.pendingEscape + String(data || '');
+        this.pendingEscape = '';
+        for (let i = 0; i < input.length; i += 1) {
+            let ch = input[i];
+            if (ch === '\x1B') {
+                const consumed = this.consumeEscape(input.slice(i));
+                if (consumed === 0) {
+                    this.pendingEscape = input.slice(i);
+                    break;
+                }
+                i += consumed - 1;
+                continue;
+            }
+            const cp = input.codePointAt(i);
+            if (cp && cp > 0xFFFF) {
+                ch = String.fromCodePoint(cp);
+                i += 1;
+            }
+            this.writeControlOrChar(ch);
+        }
+        return this.getText();
+    }
+
+    reset(): void {
+        this.lines = [[]];
+        this.row = 0;
+        this.col = 0;
+        this.savedCursor = null;
+        this.pendingEscape = '';
+    }
+
+    getText(): string {
+        return this.lines.map(line => line.join('').replace(/[ \t]+$/g, '')).join('\n');
+    }
+
+    private ensureRow(row = this.row): void {
+        while (this.lines.length <= row) this.lines.push([]);
+    }
+
+    private writeControlOrChar(ch: string): void {
+        if (ch === '\r') {
+            this.col = 0;
+            return;
+        }
+        if (ch === '\n') {
+            this.row += 1;
+            this.col = 0;
+            this.ensureRow();
+            return;
+        }
+        if (ch === '\b') {
+            this.col = Math.max(0, this.col - 1);
+            return;
+        }
+        if (ch < ' ' || ch === '\x7F') return;
+
+        this.ensureRow();
+        const line = this.lines[this.row];
+        if (isCombiningMark(ch) && this.col > 0) {
+            line[this.col - 1] = `${line[this.col - 1] || ''}${ch}`;
+            return;
+        }
+        while (line.length < this.col) line.push(' ');
+        line[this.col] = ch;
+        this.col += isWideCodePoint(ch) ? 2 : 1;
+    }
+
+    private consumeEscape(seq: string): number {
+        if (seq.length < 2) return 0;
+        const next = seq[1];
+        if (next === '7') {
+            this.savedCursor = { row: this.row, col: this.col };
+            return 2;
+        }
+        if (next === '8') {
+            if (this.savedCursor) {
+                this.row = this.savedCursor.row;
+                this.col = this.savedCursor.col;
+                this.ensureRow();
+            }
+            return 2;
+        }
+        if (next === ']') {
+            const bel = seq.indexOf('\x07', 2);
+            const st = seq.indexOf('\x1B\\', 2);
+            const end = bel >= 0 && (st < 0 || bel < st) ? bel + 1 : st >= 0 ? st + 2 : 0;
+            return end;
+        }
+        if (next === '[') {
+            const match = seq.match(/^\x1B\[([0-?]*)([ -/]*)([@-~])/);
+            if (!match) return seq.length < 32 ? 0 : 1;
+            this.applyCsi(match[1] || '', match[3]);
+            return match[0].length;
+        }
+        if (/[P^_X]/.test(next)) {
+            const bel = seq.indexOf('\x07', 2);
+            const st = seq.indexOf('\x1B\\', 2);
+            const end = bel >= 0 && (st < 0 || bel < st) ? bel + 1 : st >= 0 ? st + 2 : 0;
+            return end;
+        }
+        return 2;
+    }
+
+    private applyCsi(params: string, final: string): void {
+        const count = parseCount(params);
+        this.ensureRow();
+        if (final === 'A') this.row = Math.max(0, this.row - count);
+        else if (final === 'B') this.row += count;
+        else if (final === 'C') this.col += count;
+        else if (final === 'D') this.col = Math.max(0, this.col - count);
+        else if (final === 'G') this.col = Math.max(0, count - 1);
+        else if (final === 'H' || final === 'f') {
+            const parts = String(params || '').split(';');
+            this.row = Math.max(0, (Number(parts[0] || 1) || 1) - 1);
+            this.col = Math.max(0, (Number(parts[1] || 1) || 1) - 1);
+        } else if (final === 'J') {
+            const mode = Number(params || 0) || 0;
+            if (mode === 2 || mode === 3) {
+                this.lines = [[]];
+                this.row = 0;
+                this.col = 0;
+            } else if (mode === 0) {
+                this.lines[this.row] = this.lines[this.row].slice(0, this.col);
+                this.lines.splice(this.row + 1);
+            } else if (mode === 1) {
+                for (let r = 0; r < this.row; r += 1) this.lines[r] = [];
+                this.lines[this.row] = this.lines[this.row].slice(this.col);
+                this.col = 0;
+            }
+        } else if (final === 'K') {
+            const mode = Number(params || 0) || 0;
+            const line = this.lines[this.row];
+            if (mode === 2) this.lines[this.row] = [];
+            else if (mode === 1) {
+                for (let c = 0; c <= Math.min(this.col, line.length - 1); c += 1) line[c] = ' ';
+            } else {
+                this.lines[this.row] = line.slice(0, this.col);
+            }
+        } else if (final === 's') {
+            this.savedCursor = { row: this.row, col: this.col };
+        } else if (final === 'u') {
+            if (this.savedCursor) {
+                this.row = this.savedCursor.row;
+                this.col = this.savedCursor.col;
+            }
+        }
+        this.ensureRow();
+    }
 }
 
 function stripTerminalNoise(str: string): string {
     return String(str || '')
         .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
-        .replace(/(^|[\s([])(?:\??\d{1,4}(?:;\d{1,4})*[A-Za-z])(?=$|[\s)\]])/g, '$1')
-        .replace(/(^|[\s([])(?:\[\??\d{1,4}(?:;\d{1,4})*[A-Za-z])(?=$|[\s)\]])/g, '$1')
-        .replace(/(^|[\s([])(?:\d{1,4};\?)(?=$|[\s)\]])/g, '$1')
-        .replace(/(^|[\s([])(?:\d+\$r[0-9;\" ]*[A-Za-z]?)(?=$|[\s)\]])/g, '$1')
-        .replace(/(^|[\s([])(?:>\|[A-Za-z0-9_.:-]+(?:\([^)]*\))?)(?=$|[\s)\]])/g, '$1')
-        .replace(/(^|[\s([])(?:[A-Z]\d(?:\s+[A-Z]\d)+)(?=$|[\s)\]])/g, '$1')
-        .replace(/(^|[\s([])(?:\d+;[^\s)\]]+)(?=$|[\s)\]])/g, '$1')
         .replace(/\r+/g, '\n')
         .replace(/[ \t]+\n/g, '\n')
-        .replace(/\n{3,}/g, '\n\n')
-        .replace(/ {2,}/g, ' ');
+        .replace(/\n{4,}/g, '\n\n\n');
 }
 
 export function sanitizeTerminalText(str: string): string {
-    return stripTerminalNoise(stripAnsi(str));
+    const accumulator = new TerminalTranscriptAccumulator();
+    return stripTerminalNoise(stripAnsi(accumulator.append(str)));
 }
 
 export function listCliScriptNames(scripts: CliScripts | undefined): string[] {

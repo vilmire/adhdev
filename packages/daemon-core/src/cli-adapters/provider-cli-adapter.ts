@@ -35,6 +35,7 @@ import {
     normalizeScreenSnapshot,
     promptLikelyVisible,
     sanitizeTerminalText,
+    TerminalTranscriptAccumulator,
     type CliChatMessage,
     type CliProviderModule,
     type CliScriptInput,
@@ -195,8 +196,10 @@ export class ProviderCliAdapter implements CliAdapter {
     // ─── CLI Scripts (script-based parsing) ───
     private cliScripts: CliScripts;
     private runtimeSettings: Record<string, any> = {};
-    /** Full accumulated ANSI-stripped PTY output */
+    /** Full accumulated rendered PTY transcript for parser/readback use */
     private accumulatedBuffer: string = '';
+    /** Stateful rendered transcript accumulator; raw debug remains in accumulatedRawBuffer. */
+    private transcriptAccumulator = new TerminalTranscriptAccumulator();
     /** Full accumulated raw PTY output (with ANSI) */
     private accumulatedRawBuffer: string = '';
     /** Current visible terminal screen snapshot */
@@ -287,6 +290,7 @@ export class ProviderCliAdapter implements CliAdapter {
 
     private resetTerminalScreen(rows?: number, cols?: number): void {
         this.terminalScreen.reset(rows, cols);
+        this.transcriptAccumulator.reset();
         this.lastScreenText = '';
         this.lastScreenSnapshot = '';
         this.lastScreenChangeAt = 0;
@@ -634,6 +638,7 @@ export class ProviderCliAdapter implements CliAdapter {
     private handleOutput(rawData: string): void {
         this.terminalScreen.write(rawData);
         const cleanData = sanitizeTerminalText(rawData);
+        const renderedTranscript = this.transcriptAccumulator.append(rawData);
         const now = Date.now();
         const shouldReadScreen = this.shouldReadTerminalScreenSnapshot(now);
         const screenText = shouldReadScreen ? this.readTerminalScreenText(now) : this.lastScreenText;
@@ -680,15 +685,21 @@ export class ProviderCliAdapter implements CliAdapter {
             }
         }
 
-        // Rolling buffers
+        // Rolling parser/readback buffers. `accumulatedBuffer` and
+        // `recentOutputBuffer` intentionally use the rendered transcript state,
+        // not raw PTY append text, so overwritten CLI status/tool lines do not
+        // leak stale cells into read_chat / mesh_read_chat compact summaries.
         const prevRecentLen = this.recentOutputBuffer.length;
-        const prevAccumulatedLen = this.accumulatedBuffer.length;
         const prevAccumulatedRawLen = this.accumulatedRawBuffer.length;
-        this.recentOutputBuffer = appendBoundedText(this.recentOutputBuffer, cleanData, ProviderCliAdapter.MAX_RECENT_OUTPUT_BUFFER);
-        this.accumulatedBuffer = appendBoundedText(this.accumulatedBuffer, cleanData, ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
+        const nextAccumulatedBuffer = renderedTranscript.length <= ProviderCliAdapter.MAX_ACCUMULATED_BUFFER
+            ? renderedTranscript
+            : renderedTranscript.slice(-ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
+        const nextRecentOutputBuffer = nextAccumulatedBuffer.slice(-ProviderCliAdapter.MAX_RECENT_OUTPUT_BUFFER);
+        this.recentOutputBuffer = nextRecentOutputBuffer;
+        this.accumulatedBuffer = nextAccumulatedBuffer;
         this.accumulatedRawBuffer = appendBoundedText(this.accumulatedRawBuffer, rawData, ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
-        const droppedRecent = this.recordBoundedAppendDrop(prevRecentLen, cleanData.length, this.recentOutputBuffer.length);
-        const droppedClean = this.recordBoundedAppendDrop(prevAccumulatedLen, cleanData.length, this.accumulatedBuffer.length);
+        const droppedRecent = Math.max(0, prevRecentLen - this.recentOutputBuffer.length);
+        const droppedClean = Math.max(0, renderedTranscript.length - this.accumulatedBuffer.length);
         const droppedRaw = this.recordBoundedAppendDrop(prevAccumulatedRawLen, rawData.length, this.accumulatedRawBuffer.length);
         this.recentOutputDroppedChars += droppedRecent;
         this.accumulatedBufferDroppedChars += droppedClean;
