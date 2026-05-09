@@ -16,7 +16,7 @@ import type { ProviderInstance } from '../providers/provider-instance.js';
 import { readProviderChatHistory } from '../config/chat-history.js';
 import { LOG, getRecentLogs } from '../logging/logger.js';
 import { getRecentDebugTrace, recordDebugTrace } from '../logging/debug-trace.js';
-import { buildChatMessageSignature } from '../chat/chat-signatures.js';
+import { buildChatMessageSignature, hashSignatureParts } from '../chat/chat-signatures.js';
 import type { ChatMessage } from '../types.js';
 import type { SessionTransport } from '../shared-types.js';
 import { filterUserFacingChatMessages, normalizeChatMessages } from '../providers/chat-message-normalization.js';
@@ -93,10 +93,32 @@ function buildRecentSendKey(h: CommandHelpers, args: any, provider: ProviderModu
     return `${transport}:${target}:${signature.trim()}`;
 }
 
-function buildSendInputSignature(input: InputEnvelope): string {
+function summarizeSendInputPart(part: any): string {
+    if (!part || typeof part !== 'object') return String(part ?? '');
+    if (part.type === 'text') return `text:${String(part.text || '').trim()}`;
+    const fields = [
+        `type=${String(part.type || '')}`,
+        `mime=${String(part.mimeType || '')}`,
+        `uri=${String(part.uri || '')}`,
+        `name=${String(part.name || '')}`,
+    ];
+    const data = typeof part.data === 'string'
+        ? part.data
+        : typeof part.resource?.blob === 'string'
+            ? part.resource.blob
+            : '';
+    if (data) fields.push(`dataLen=${data.length}`, `dataHash=${hashSignatureParts([data]).slice(0, 12)}`);
+    const textish = [part.alt, part.transcript, part.description, part.title, part.resource?.uri]
+        .filter((value) => typeof value === 'string' && value.trim())
+        .join('\u001f');
+    if (textish) fields.push(`meta=${hashSignatureParts([textish]).slice(0, 12)}`);
+    return fields.join(';');
+}
+
+export function buildSendInputSignature(input: InputEnvelope): string {
     const text = typeof input.textFallback === 'string' ? input.textFallback.trim() : '';
-    if (text) return text;
-    return JSON.stringify(input.parts || []);
+    const partSummaries = (input.parts || []).map(summarizeSendInputPart);
+    return hashSignatureParts([text, ...partSummaries]);
 }
 
 function getSendChatInputEnvelope(args: any): InputEnvelope {

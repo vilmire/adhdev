@@ -30,6 +30,7 @@ import {
     IDE_PROVIDER_SESSION_CAPABILITIES_BASE,
     EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE,
 } from '../providers/open-panel-support.js';
+import { TEXT_ONLY_MESSAGE_INPUT_SUPPORT } from '../providers/provider-input-support.js';
 
 export type SessionEntryProfile = 'full' | 'live' | 'metadata';
 
@@ -189,7 +190,7 @@ function buildIdeWorkspaceSession(
         ...(git && { git }),
         activeChat,
         ...(summaryMetadata && { summaryMetadata }),
-        ...(includeSessionMetadata && { capabilities: state.sessionCapabilities || IDE_SESSION_CAPABILITIES }),
+        ...(includeSessionMetadata && { capabilities: state.sessionCapabilities || IDE_SESSION_CAPABILITIES, messageInput: state.messageInput || TEXT_ONLY_MESSAGE_INPUT_SUPPORT }),
         cdpConnected: state.cdpConnected ?? isCdpConnected(cdpManagers, state.type),
         ...(includeSessionControls && {
             ...(controlValues && { controlValues }),
@@ -229,7 +230,7 @@ function buildExtensionAgentSession(
         ...(git && { git }),
         activeChat,
         ...(summaryMetadata && { summaryMetadata }),
-        ...(includeSessionMetadata && { capabilities: ext.sessionCapabilities || EXTENSION_SESSION_CAPABILITIES }),
+        ...(includeSessionMetadata && { capabilities: ext.sessionCapabilities || EXTENSION_SESSION_CAPABILITIES, messageInput: ext.messageInput || TEXT_ONLY_MESSAGE_INPUT_SUPPORT }),
         ...(includeSessionControls && {
             ...(controlValues && { controlValues }),
             providerControls: ext.providerControls,
@@ -307,6 +308,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         ...(summaryMetadata && { summaryMetadata }),
         ...(includeSessionMetadata && {
             capabilities: state.mode === 'terminal' ? PTY_SESSION_CAPABILITIES : CLI_CHAT_SESSION_CAPABILITIES,
+            messageInput: state.messageInput || TEXT_ONLY_MESSAGE_INPUT_SUPPORT,
         }),
         ...(includeSessionControls && {
             ...(controlValues && { controlValues }),
@@ -341,7 +343,7 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
         ...(git && { git }),
         activeChat,
         ...(summaryMetadata && { summaryMetadata }),
-        ...(includeSessionMetadata && { capabilities: ACP_SESSION_CAPABILITIES }),
+        ...(includeSessionMetadata && { capabilities: ACP_SESSION_CAPABILITIES, messageInput: state.messageInput || TEXT_ONLY_MESSAGE_INPUT_SUPPORT }),
         ...(includeSessionControls && {
             ...(controlValues && { controlValues }),
             providerControls: state.providerControls,

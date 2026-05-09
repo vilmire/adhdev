@@ -336,7 +336,9 @@ export type SessionCapability =
     | 'mark_notification_unread';
 
 import type { RuntimeWriteOwner, RuntimeAttachedClient, SessionStatus } from './shared-types-extra.js';
+import type { MessageInputSupport } from './providers/provider-input-support.js';
 export type { RuntimeWriteOwner, RuntimeAttachedClient, SessionStatus } from './shared-types-extra.js';
+export type { MessageInputSupport, InputMediaStrategyDescriptor, InputAttachmentStrategy, InputMediaType } from './providers/provider-input-support.js';
 
 export interface SessionEntry {
     id: string;
@@ -364,6 +366,8 @@ export interface SessionEntry {
     resume?: ProviderResumeCapability;
     activeChat: SessionActiveChatData | null;
     capabilities?: SessionCapability[];
+    /** Effective message input/media support for this session. Defaults fail-closed to text-only. */
+    messageInput?: MessageInputSupport;
     cdpConnected?: boolean;
     /** Dynamic control current values (generic key-value) */
     controlValues?: Record<string, string | number | boolean>;

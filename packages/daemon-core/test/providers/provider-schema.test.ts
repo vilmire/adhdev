@@ -41,6 +41,41 @@ describe('validateProviderDefinition', () => {
     expect(result.warnings).toEqual([])
   })
 
+  it('accepts omitted input capabilities as text-only default and validates input strategy descriptors', () => {
+    const result = validateProviderDefinition({
+      type: 'future-acp',
+      name: 'Future ACP',
+      category: 'acp',
+      spawn: { command: 'future-acp' },
+      capabilities: {
+        output: { richContent: false, mediaTypes: ['text'] },
+        controls: { typedResults: true },
+      },
+      contractVersion: 2,
+    })
+    expect(result.errors).not.toContain('capabilities.input is required')
+
+    const strategyResult = validateProviderDefinition({
+      type: 'future-acp',
+      name: 'Future ACP',
+      category: 'acp',
+      spawn: { command: 'future-acp' },
+      capabilities: {
+        input: {
+          multipart: true,
+          mediaTypes: ['text', 'image'],
+          strategies: [
+            { mediaType: 'image', strategies: ['native_acp'], native: true, degradation: ['resource_link', 'text_fallback'] },
+          ],
+        },
+        output: { richContent: false, mediaTypes: ['text'] },
+        controls: { typedResults: true },
+      },
+      contractVersion: 2,
+    })
+    expect(strategyResult.errors).toEqual([])
+  })
+
   it('rejects contractVersion 2 providers that omit capabilities', () => {
     const result = validateProviderDefinition({
       type: 'foo-cli',

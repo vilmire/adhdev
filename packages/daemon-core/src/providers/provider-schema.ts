@@ -2,6 +2,7 @@ import type { ProviderControlDef, ProviderControlType, ProviderModule } from './
 import { providerHasOpenPanelSupport } from './open-panel-support.js'
 
 const VALID_CAPABILITY_MEDIA_TYPES = new Set(['text', 'image', 'audio', 'video', 'resource'])
+const VALID_INPUT_STRATEGIES = new Set(['native', 'native_acp', 'resource_link', 'text_fallback', 'paste', 'upload'])
 
 const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'type',
@@ -158,16 +159,45 @@ function validateCapabilities(provider: ProviderModule, controls: ProviderContro
   }
 
   const input = capabilities.input
-  if (!input || typeof input !== 'object') {
-    errors.push('capabilities.input is required')
-  } else {
-    if (typeof input.multipart !== 'boolean') {
+  if (input !== undefined) {
+    if (!input || typeof input !== 'object') {
+      errors.push('capabilities.input must be an object when provided')
+    } else if (typeof input.multipart !== 'boolean') {
       errors.push('capabilities.input.multipart must be boolean')
     }
-    if (!Array.isArray(input.mediaTypes) || input.mediaTypes.length === 0) {
-      errors.push('capabilities.input.mediaTypes must be a non-empty array')
-    } else if (input.mediaTypes.some((type) => typeof type !== 'string' || !VALID_CAPABILITY_MEDIA_TYPES.has(type))) {
-      errors.push(`capabilities.input.mediaTypes must only include: ${Array.from(VALID_CAPABILITY_MEDIA_TYPES).join(', ')}`)
+    if (input && typeof input === 'object') {
+      const mediaTypes = Array.isArray(input.mediaTypes) ? input.mediaTypes : undefined
+      if (!mediaTypes || mediaTypes.length === 0) {
+        errors.push('capabilities.input.mediaTypes must be a non-empty array')
+      } else if (mediaTypes.some((type) => typeof type !== 'string' || !VALID_CAPABILITY_MEDIA_TYPES.has(type))) {
+        errors.push(`capabilities.input.mediaTypes must only include: ${Array.from(VALID_CAPABILITY_MEDIA_TYPES).join(', ')}`)
+      }
+    }
+    if (input && typeof input === 'object' && input.strategies !== undefined) {
+      if (!Array.isArray(input.strategies)) {
+        errors.push('capabilities.input.strategies must be an array when provided')
+      } else {
+        for (const strategy of input.strategies) {
+          if (!strategy || typeof strategy !== 'object' || Array.isArray(strategy)) {
+            errors.push('capabilities.input.strategies entries must be objects')
+            continue
+          }
+          const entry = strategy as Record<string, unknown>
+          if (typeof entry.mediaType !== 'string' || !VALID_CAPABILITY_MEDIA_TYPES.has(entry.mediaType)) {
+            errors.push(`capabilities.input.strategies.mediaType must only include: ${Array.from(VALID_CAPABILITY_MEDIA_TYPES).join(', ')}`)
+          }
+          for (const field of ['strategies', 'degradation'] as const) {
+            const values = entry[field]
+            if (values === undefined) continue
+            if (!Array.isArray(values) || values.some((value) => typeof value !== 'string' || !VALID_INPUT_STRATEGIES.has(value))) {
+              errors.push(`capabilities.input.strategies.${field} must only include: ${Array.from(VALID_INPUT_STRATEGIES).join(', ')}`)
+            }
+          }
+          if (entry.native !== undefined && typeof entry.native !== 'boolean') {
+            errors.push('capabilities.input.strategies.native must be boolean when provided')
+          }
+        }
+      }
     }
   }
 

@@ -610,7 +610,16 @@ export interface ProviderModule {
  // ─── Contract version / capability declaration ───
   contractVersion?: number;
   capabilities?: {
-    input?: { multipart?: boolean; mediaTypes?: Array<'text' | 'image' | 'audio' | 'video' | 'resource'> };
+    input?: {
+      multipart?: boolean;
+      mediaTypes?: Array<'text' | 'image' | 'audio' | 'video' | 'resource'>;
+      strategies?: Array<{
+        mediaType: 'text' | 'image' | 'audio' | 'video' | 'resource';
+        strategies?: Array<'native' | 'native_acp' | 'resource_link' | 'text_fallback' | 'paste' | 'upload'>;
+        native?: boolean;
+        degradation?: Array<'native' | 'native_acp' | 'resource_link' | 'text_fallback' | 'paste' | 'upload'>;
+      }>;
+    };
     output?: { richContent?: boolean; mediaTypes?: Array<'text' | 'image' | 'audio' | 'video' | 'resource'> };
     controls?: { typedResults?: boolean };
   };
