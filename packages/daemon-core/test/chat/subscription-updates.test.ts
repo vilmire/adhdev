@@ -72,7 +72,7 @@ describe('chat subscription update helpers', () => {
     expect(prepared.cursor).toEqual({ tailLimit: 25 })
   })
 
-  it('filters internal runtime chatter from user-visible chat-tail updates without string matching', () => {
+  it('preserves activity rows in chat-tail updates so the dashboard Activity toggle can reveal them', () => {
     const arbitraryTerminalContent = '$ arbitrary-tool --flag=not-a-blacklist-example'
     const arbitraryToolContent = 'custom_tool_name payload={"anything":true}'
     const prepared = prepareSessionChatTailUpdate({
@@ -122,9 +122,15 @@ describe('chat subscription update helpers', () => {
 
     expect(prepared.update?.messages.map((message: any) => message.id)).toEqual([
       'u1',
+      'terminal-internal',
+      'tool-internal-standard-kind',
       'a1',
       'visible-terminal',
     ])
+    expect(prepared.update?.messages.find((message: any) => message.id === 'terminal-internal')).toMatchObject({
+      kind: 'terminal',
+      meta: { transcriptVisibility: 'internal' },
+    })
     expect(prepared.update?.messages.find((message: any) => message.id === 'visible-terminal')).toMatchObject({
       kind: 'terminal',
       meta: { transcriptVisibility: 'visible' },

@@ -83,4 +83,84 @@ describe('setupMeshEventForwarding', () => {
     expect(text).toContain('mesh_read_chat once')
     expect(text).toContain('do not poll repeatedly')
   })
+
+  it('does not inject completion event when the completed session is a coordinator (meshCoordinatorFor set)', () => {
+    // This reproduces the bug: a coordinator session completing on the same workspace
+    // must not be forwarded back into another coordinator session.
+    meshConfigMocks.getMesh.mockReturnValue(undefined)
+    meshConfigMocks.getMeshByRepo.mockReturnValue({ id: 'mesh_inline_1', nodes: [] })
+
+    let listener: ((event: any) => void) | undefined
+    const coordinatorState = {
+      instanceId: 'coordinator-session-self',
+      workspace: '/repo/main',
+      settings: { meshCoordinatorFor: 'mesh_inline_1' },
+    }
+    const coordinator = {
+      category: 'cli',
+      getState: vi.fn(() => coordinatorState),
+      onEvent: vi.fn(),
+    }
+    const instanceManager = {
+      onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
+      getInstance: vi.fn(() => coordinator),
+      getByCategory: vi.fn((category: string) => category === 'cli' ? [coordinator] : []),
+    }
+    const components = { instanceManager } as any
+    setupMeshEventForwarding(components)
+
+    listener!({
+      event: 'agent:generating_completed',
+      instanceId: 'coordinator-session-self',
+      targetSessionId: 'coordinator-session-self',
+      providerType: 'hermes-cli',
+    })
+
+    expect(coordinator.onEvent).not.toHaveBeenCalled()
+  })
+
+  it('does not inject completion event for unrelated CLI sessions without mesh metadata', () => {
+    // Sessions without meshNodeFor or launchedByCoordinator must not be forwarded,
+    // even if getMeshByRepo returns a mesh for the same workspace.
+    meshConfigMocks.getMesh.mockReturnValue(undefined)
+    meshConfigMocks.getMeshByRepo.mockReturnValue({ id: 'mesh_inline_1', nodes: [] })
+
+    let listener: ((event: any) => void) | undefined
+    const unrelatedState = {
+      instanceId: 'unrelated-session-1',
+      workspace: '/repo/main',
+      settings: {}, // no meshNodeFor, no launchedByCoordinator
+    }
+    const coordinatorState = {
+      instanceId: 'coordinator-session-1',
+      workspace: '/repo/main',
+      settings: { meshCoordinatorFor: 'mesh_inline_1' },
+    }
+    const unrelated = {
+      category: 'cli',
+      getState: vi.fn(() => unrelatedState),
+      onEvent: vi.fn(),
+    }
+    const coordinator = {
+      category: 'cli',
+      getState: vi.fn(() => coordinatorState),
+      onEvent: vi.fn(),
+    }
+    const instanceManager = {
+      onEvent: vi.fn((cb: (event: any) => void) => { listener = cb }),
+      getInstance: vi.fn((id: string) => id === 'unrelated-session-1' ? unrelated : undefined),
+      getByCategory: vi.fn((category: string) => category === 'cli' ? [unrelated, coordinator] : []),
+    }
+    const components = { instanceManager } as any
+    setupMeshEventForwarding(components)
+
+    listener!({
+      event: 'agent:generating_completed',
+      instanceId: 'unrelated-session-1',
+      targetSessionId: 'unrelated-session-1',
+      providerType: 'hermes-cli',
+    })
+
+    expect(coordinator.onEvent).not.toHaveBeenCalled()
+  })
 })

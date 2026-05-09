@@ -79,7 +79,8 @@ describe('ChatInputBar send-state copy', () => {
     )
 
     expect(html).toContain('aria-hidden="false"')
-    expect(html).toContain('max-height:72px')
+    // Active input reserves enough vertical room for optional image attachment previews.
+    expect(html).toContain('max-height:200px')
     expect(html).toContain('opacity:1')
     expect(html).toContain('pointer-events:auto')
     expect(html).toContain('title="Send message to Hermes Agent"')
