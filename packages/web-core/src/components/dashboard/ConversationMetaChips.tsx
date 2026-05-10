@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ActiveConversation } from './types'
-import { IconMonitor, IconPlug, IconServer } from '../Icons'
+import { IconMonitor, IconPlug, IconServer, IconLayers } from '../Icons'
 import {
     getConversationIdeChipLabel,
     getConversationMachineId,
@@ -37,8 +37,10 @@ export default function ConversationMetaChips({
     const providerChipLabel = getConversationProviderLabel(conversation)
     const ideChipLabel = getConversationIdeChipLabel(conversation)
     const isMeshNode = conversation.settings?.meshNodeFor;
+    const meshQueueStats = conversation.meshQueueStats;
+    const isMeshCoordinator = conversation.settings?.meshCoordinatorFor;
 
-    if (!showIdeChip && !showExtensionChip && !showProviderChip && !machineLabel && !isMeshNode) {
+    if (!showIdeChip && !showExtensionChip && !showProviderChip && !machineLabel && !isMeshNode && !meshQueueStats) {
         return null;
     }
 
@@ -115,6 +117,18 @@ export default function ConversationMetaChips({
                 <span className="conversation-meta-chip" title="Mesh node">
                     <IconServer size={12} />
                     <span>Mesh Node</span>
+                </span>
+            )}
+            {isMeshCoordinator && meshQueueStats && (
+                <span 
+                    className={`conversation-meta-chip ${meshQueueStats.pending > 0 ? 'is-active' : ''}`}
+                    style={meshQueueStats.failed > 0 ? { color: 'var(--color-red-400)', borderColor: 'var(--color-red-400)' } : undefined}
+                    title={`Queue: ${meshQueueStats.pending} pending, ${meshQueueStats.assigned} assigned, ${meshQueueStats.completed} completed, ${meshQueueStats.failed} failed`}
+                >
+                    <IconLayers size={12} />
+                    <span>
+                        {meshQueueStats.pending} Pending
+                    </span>
                 </span>
             )}
         </div>

@@ -219,6 +219,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             childSessions: i.childSessions || [],
             cdpConnected: i.cdpConnected || false,
             daemonId: machineId!,
+            lastMessageAt: i.lastMessageAt,
         }))
 
     const cliSessions: CliSessionEntry[] = allIdes
@@ -236,6 +237,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             runtimeWriteOwner: i.runtimeWriteOwner || null,
             runtimeAttachedClients: i.runtimeAttachedClients || [],
             daemonId: machineId!,
+            lastMessageAt: i.lastMessageAt,
         }))
 
     const acpSessions: AcpSessionEntry[] = allIdes
@@ -247,6 +249,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             activeChat: i.activeChat || null,
             providerSessionId: i.providerSessionId,
             daemonId: machineId!,
+            lastMessageAt: i.lastMessageAt,
         }))
 
     const displayName = machineEntry ? getMachineDisplayName(machineEntry, { fallbackId: machineId }) : ''
@@ -279,7 +282,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             providerType: session.type,
             subtitle: session.workspace || undefined,
             workspace: session.workspace || undefined,
-            lastLaunchedAt: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
+            lastLaunchedAt: session.lastMessageAt || 0,
         })),
         ...cliSessions.map(session => ({
             id: `cli:${session.type}:${session.workspace || ''}`,
@@ -289,7 +292,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             providerSessionId: session.providerSessionId,
             subtitle: session.workspace || undefined,
             workspace: session.workspace || undefined,
-            lastLaunchedAt: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
+            lastLaunchedAt: session.lastMessageAt || 0,
         })),
         ...acpSessions.map(session => ({
             id: `acp:${session.type}:${session.workspace || ''}`,
@@ -299,7 +302,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             providerSessionId: session.providerSessionId,
             subtitle: getProviderSummaryLine(session.summaryMetadata) || session.workspace || undefined,
             workspace: session.workspace || undefined,
-            lastLaunchedAt: session.activeChat?.messages?.at?.(-1)?.timestamp || 0,
+            lastLaunchedAt: session.lastMessageAt || 0,
         })),
     ]
         .sort((a, b) => (b.lastLaunchedAt || 0) - (a.lastLaunchedAt || 0))

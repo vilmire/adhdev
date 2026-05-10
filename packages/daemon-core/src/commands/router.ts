@@ -1315,6 +1315,22 @@ export class DaemonCommandRouter {
                 }
             }
 
+            case 'get_mesh_ledger': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                try {
+                    const { readLedgerEntries, getLedgerSummary } = await import('../mesh/mesh-ledger.js');
+                    const tail = typeof args?.tail === 'number' ? args.tail : 20;
+                    const since = typeof args?.since === 'string' ? args.since : undefined;
+                    const kind = Array.isArray(args?.kind) ? args.kind.filter((k: any) => typeof k === 'string') : undefined;
+                    const entries = readLedgerEntries(meshId, { tail, since, kind });
+                    const summary = getLedgerSummary(meshId);
+                    return { success: true, entries, summary };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
             case 'add_mesh_node': {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 const workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';
@@ -1394,6 +1410,65 @@ export class DaemonCommandRouter {
                 }
             }
 
+            case 'refine_mesh_node': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
+                if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+                try {
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                    const mesh = meshRecord?.mesh;
+                    const node = mesh?.nodes?.find((n: any) => n.id === nodeId || n.nodeId === nodeId);
+                    if (!node) return { success: false, error: `Node '${nodeId}' not found in mesh` };
+
+                    if (!node.isLocalWorktree || !node.workspace) {
+                        return { success: false, error: `Refinery requires a local worktree node` };
+                    }
+
+                    const sourceNode = node.clonedFromNodeId
+                        ? mesh?.nodes.find((n: any) => n.id === node.clonedFromNodeId || n.nodeId === node.clonedFromNodeId)
+                        : mesh?.nodes.find((n: any) => !n.isLocalWorktree);
+                    const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
+                    if (!repoRoot) return { success: false, error: 'Source node repoRoot not found' };
+
+                    const { execFile } = await import('node:child_process');
+                    const { promisify } = await import('node:util');
+                    const execFileAsync = promisify(execFile);
+
+                    const { stdout: branchStdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: node.workspace, encoding: 'utf8' });
+                    const branch = branchStdout.trim();
+                    if (!branch) return { success: false, error: 'Could not determine branch of the worktree node' };
+
+                    const { stdout: baseBranchStdout } = await execFileAsync('git', ['branch', '--show-current'], { cwd: repoRoot, encoding: 'utf8' });
+                    const baseBranch = baseBranchStdout.trim();
+
+                    try {
+                        await execFileAsync('git', ['merge', '--no-ff', branch, '-m', `Auto-merge branch '${branch}' via Refinery`], { cwd: repoRoot, encoding: 'utf8' });
+                    } catch (e: any) {
+                        return { success: false, error: `Merge failed (conflicts?): ${e.message}` };
+                    }
+
+                    const removeResult = await this.execute('remove_mesh_node', {
+                        meshId,
+                        nodeId,
+                        sessionCleanupMode: 'kill',
+                        inlineMesh: args?.inlineMesh,
+                    });
+
+                    try {
+                        const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
+                        appendLedgerEntry(meshId, {
+                            kind: 'node_removed',
+                            nodeId,
+                            payload: { refined: true, mergedBranch: branch, into: baseBranch },
+                        });
+                    } catch {}
+
+                    return { success: true, merged: true, branch, into: baseBranch, removeResult };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
             case 'remove_mesh_node': {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 const nodeId = typeof args?.nodeId === 'string' ? args.nodeId.trim() : '';
@@ -1436,6 +1511,19 @@ export class DaemonCommandRouter {
                         const { removeNode } = await import('../config/mesh-config.js');
                         removed = removeNode(meshId, nodeId);
                     }
+
+                    // Record in task ledger
+                    if (removed) {
+                        try {
+                            const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
+                            appendLedgerEntry(meshId, {
+                                kind: 'node_removed',
+                                nodeId,
+                                payload: { worktree: !!node?.isLocalWorktree, sessionCleanupMode },
+                            });
+                        } catch { /* ledger append is best-effort */ }
+                    }
+
                     return { success: true, removed, ...(sessionCleanup ? { sessionCleanup } : {}) };
                 } catch (e: any) {
                     return { success: false, error: e.message };
@@ -1498,12 +1586,35 @@ export class DaemonCommandRouter {
                         if (!node) return { success: false, error: 'Failed to register worktree node' };
                     }
 
+                    // Record in task ledger
+                    try {
+                        const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
+                        appendLedgerEntry(meshId, {
+                            kind: 'node_cloned',
+                            nodeId: node.id,
+                            payload: { sourceNodeId, branch: result.branch, worktreePath: result.worktreePath },
+                        });
+                    } catch { /* ledger append is best-effort */ }
+
                     return {
                         success: true,
                         node,
                         worktreePath: result.worktreePath,
                         branch: result.branch,
                     };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+            case 'trigger_mesh_queue': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                try {
+                    const { triggerMeshQueue } = await import('../mesh/mesh-events.js');
+                    if (meshId) {
+                        triggerMeshQueue(this.deps as any, meshId);
+                    }
+                    return { success: true };
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }
@@ -1756,6 +1867,18 @@ export class DaemonCommandRouter {
                     }
 
                     LOG.info('MeshCoordinator', `Launched ${cliType} coordinator for mesh ${meshId} in ${workspace}`);
+
+                    // Record coordinator launch in task ledger
+                    try {
+                        const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
+                        appendLedgerEntry(meshId, {
+                            kind: 'coordinator_started',
+                            sessionId: launchResult.sessionId || launchResult.id,
+                            providerType: cliType,
+                            payload: { workspace },
+                        });
+                    } catch { /* ledger append is best-effort */ }
+
                     return {
                         success: true,
                         meshId,

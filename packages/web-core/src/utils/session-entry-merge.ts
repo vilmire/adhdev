@@ -22,9 +22,6 @@ function hasExplicitProviderName(value: string | null | undefined, providerType:
   return typeof value === 'string' && value.trim().length > 0 && value !== providerType
 }
 
-function hasOwnProperty(value: object, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key)
-}
 
 export function mergeActiveChatData(
   incoming: SessionEntry['activeChat'] | null | undefined,
@@ -33,26 +30,13 @@ export function mergeActiveChatData(
   if (!incoming) return existing ?? null
   if (!existing) return incoming ?? null
 
-  const incomingHasMessages = hasOwnProperty(incoming, 'messages')
-  const mergedMessages = incomingHasMessages
-    ? (Array.isArray(incoming.messages) ? incoming.messages : [])
-    : existing.messages
-
-  const merged = {
+  return {
     ...existing,
     ...incoming,
-    activeModal: incoming.activeModal ?? null,
+    messages: [],
+    activeModal: null,
     inputContent: incoming.inputContent ?? existing.inputContent,
   }
-
-  if (incomingHasMessages) {
-    return {
-      ...merged,
-      messages: mergedMessages,
-    }
-  }
-
-  return merged
 }
 
 export function mergeSessionEntrySummary(

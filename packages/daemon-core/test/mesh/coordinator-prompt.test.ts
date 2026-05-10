@@ -77,7 +77,7 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).not.toContain('Periodically call `mesh_read_chat`')
     expect(prompt).toContain('Do **not** poll `mesh_read_chat` repeatedly')
     expect(prompt).toContain('Do not call `mesh_read_chat` again within a few seconds for the same generating session')
-    expect(prompt).toContain('completion callback/status event')
+    expect(prompt).toContain('completion/approval signal')
     expect(prompt).toContain('Use at most one compact `mesh_read_chat` check')
     expect(prompt).toContain('Never launch a duplicate session or second worker solely because `mesh_read_chat` has no final assistant message')
   })

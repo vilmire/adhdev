@@ -24,6 +24,7 @@ import {
     normalizeManagedStatus,
     type NormalizeActiveChatOptions,
 } from './normalize.js';
+import { getMeshQueueStats } from '../mesh/mesh-work-queue.js';
 import { normalizeProviderStateControlValues } from '../providers/provider-patch-state.js';
 import { normalizeProviderSummaryMetadata } from '../providers/summary-metadata.js';
 import {
@@ -177,6 +178,8 @@ function buildIdeWorkspaceSession(
     const workspace = state.workspace || null;
     const git = getGitSummaryForWorkspace(workspace, options);
     const title = activeChat?.title || state.name;
+    const meshCoordinatorFor = state.settings?.meshCoordinatorFor as string | undefined;
+    const meshQueueStats = meshCoordinatorFor ? getMeshQueueStats(meshCoordinatorFor) : undefined;
     return {
         id: state.instanceId || state.type,
         parentId: null,
@@ -200,6 +203,7 @@ function buildIdeWorkspaceSession(
         errorReason: state.errorReason,
         lastUpdated: state.lastUpdated,
         settings: state.settings,
+        ...(meshQueueStats && { meshQueueStats }),
     };
 }
 
@@ -216,6 +220,8 @@ function buildExtensionAgentSession(
     const includeSessionControls = shouldIncludeSessionControls(profile);
     const workspace = parent.workspace || null;
     const git = getGitSummaryForWorkspace(workspace, options);
+    const meshCoordinatorFor = ext.settings?.meshCoordinatorFor as string | undefined;
+    const meshQueueStats = meshCoordinatorFor ? getMeshQueueStats(meshCoordinatorFor) : undefined;
     return {
         id: ext.instanceId || `${parent.instanceId}:${ext.type}`,
         parentId: parent.instanceId || parent.type,
@@ -239,6 +245,7 @@ function buildExtensionAgentSession(
         errorReason: ext.errorReason,
         lastUpdated: ext.lastUpdated,
         settings: ext.settings,
+        ...(meshQueueStats && { meshQueueStats }),
     };
 }
 
@@ -279,6 +286,8 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
     const includeSessionControls = shouldIncludeSessionControls(profile);
     const workspace = state.workspace || null;
     const git = getGitSummaryForWorkspace(workspace, options);
+    const meshCoordinatorFor = state.settings?.meshCoordinatorFor as string | undefined;
+    const meshQueueStats = meshCoordinatorFor ? getMeshQueueStats(meshCoordinatorFor) : undefined;
     return {
         id: state.instanceId,
         parentId: null,
@@ -318,6 +327,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         errorReason: state.errorReason,
         lastUpdated: state.lastUpdated,
         settings: state.settings,
+        ...(meshQueueStats && { meshQueueStats }),
     };
 }
 
@@ -330,6 +340,8 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
     const includeSessionControls = shouldIncludeSessionControls(profile);
     const workspace = state.workspace || null;
     const git = getGitSummaryForWorkspace(workspace, options);
+    const meshCoordinatorFor = state.settings?.meshCoordinatorFor as string | undefined;
+    const meshQueueStats = meshCoordinatorFor ? getMeshQueueStats(meshCoordinatorFor) : undefined;
     return {
         id: state.instanceId,
         parentId: null,
@@ -352,6 +364,7 @@ function buildAcpSession(state: AcpProviderState, options: SessionEntryBuildOpti
         errorReason: state.errorReason,
         lastUpdated: state.lastUpdated,
         settings: state.settings,
+        ...(meshQueueStats && { meshQueueStats }),
     };
 }
 

@@ -149,6 +149,17 @@ export type { CoordinatorPromptContext } from './mesh/coordinator-prompt.js';
 export { syncMeshes } from './mesh/mesh-sync.js';
 export type { MeshSyncTransport, MeshSyncResult, RemoteMeshRecord } from './mesh/mesh-sync.js';
 
+// ── Mesh Task Ledger ──
+export { appendLedgerEntry, readLedgerEntries, getLedgerSummary, getLedgerDir, getSessionRecoveryContext } from './mesh/mesh-ledger.js';
+export type { MeshLedgerEntry, MeshLedgerKind, MeshLedgerSummary, ReadLedgerOptions, SessionRecoveryContext } from './mesh/mesh-ledger.js';
+
+// ── Mesh Work Queue (GUPP) ──
+export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus } from './mesh/mesh-work-queue.js';
+export type { MeshWorkQueueEntry, MeshTaskStatus } from './mesh/mesh-work-queue.js';
+
+// ── Mesh Events ──
+export { triggerMeshQueue } from './mesh/mesh-events.js';
+
 // ── State Store ──
 export { loadState, saveState, resetState } from './config/state-store.js';
 export type { DaemonState } from './config/state-store.js';

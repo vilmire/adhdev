@@ -28,6 +28,46 @@ export class CloudTransport {
     };
   }
 
+  async listRemoteMeshes(): Promise<{ meshes: any[] }> {
+    const res = await fetch(`${this.baseUrl}/api/v1/repo-meshes`, { headers: this.headers() });
+    if (!res.ok) throw new Error(`List remote meshes failed: ${res.status}`);
+    return res.json();
+  }
+
+  async createRemoteMesh(data: {
+    name: string;
+    repo_identity: string;
+    repo_remote_url?: string;
+    default_branch?: string;
+    policy?: string;
+  }): Promise<{ mesh: any }> {
+    const res = await fetch(`${this.baseUrl}/api/v1/repo-meshes`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error(`Create remote mesh failed: ${res.status}`);
+    return res.json();
+  }
+
+  async deleteRemoteMesh(meshId: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/api/v1/repo-meshes/${encodeURIComponent(meshId)}`, {
+      method: 'DELETE',
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new Error(`Delete remote mesh failed: ${res.status}`);
+  }
+
+  async syncMeshLedger(meshId: string, data: { newEntries: any[] }): Promise<{ missingEntries: any[] }> {
+    const res = await fetch(`${this.baseUrl}/api/v1/repo-meshes/${encodeURIComponent(meshId)}/ledger/sync`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error(`Sync mesh ledger failed: ${res.status}`);
+    return res.json();
+  }
+
   async listDaemons(): Promise<any> {
     const res = await fetch(`${this.baseUrl}/api/v1/daemons`, { headers: this.headers() });
     if (!res.ok) throw new Error(`List daemons failed: ${res.status}`);
@@ -136,7 +176,7 @@ export class CloudTransport {
     return res.json();
   }
 
-  async launch(daemonId: string, opts: { type: string; dir?: string; model?: string }): Promise<any> {
+  async launch(daemonId: string, opts: { type: string; dir?: string; model?: string; settings?: Record<string, any> }): Promise<any> {
     const res = await fetch(
       `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/launch`,
       {
@@ -199,6 +239,71 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Git checkpoint failed: ${res.status}`);
+    return res.json();
+  }
+
+  async meshCloneNode(daemonId: string, payload: any): Promise<any> {
+    const res = await fetch(
+      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/mesh/clone-node`,
+      {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(payload),
+      },
+    );
+    if (!res.ok) throw new Error(`Mesh clone node failed: ${res.status}`);
+    return res.json();
+  }
+
+  async meshRemoveNode(daemonId: string, payload: any): Promise<any> {
+    const res = await fetch(
+      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/mesh/remove-node`,
+      {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(payload),
+      },
+    );
+    if (!res.ok) throw new Error(`Mesh remove node failed: ${res.status}`);
+    return res.json();
+  }
+
+  async meshCleanupSessions(daemonId: string, payload: any): Promise<any> {
+    const res = await fetch(
+      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/mesh/cleanup-sessions`,
+      {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(payload),
+      },
+    );
+    if (!res.ok) throw new Error(`Mesh cleanup sessions failed: ${res.status}`);
+    return res.json();
+  }
+
+  async meshEnqueueTask(daemonId: string, payload: any): Promise<any> {
+    const res = await fetch(
+      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/mesh/enqueue`,
+      {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(payload),
+      },
+    );
+    if (!res.ok) throw new Error(`Mesh enqueue task failed: ${res.status}`);
+    return res.json();
+  }
+
+  async meshRefineNode(daemonId: string, payload: any): Promise<any> {
+    const res = await fetch(
+      `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/mesh/refine-node`,
+      {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(payload),
+      },
+    );
+    if (!res.ok) throw new Error(`Mesh refine node failed: ${res.status}`);
     return res.json();
   }
 

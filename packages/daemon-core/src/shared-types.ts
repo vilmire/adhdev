@@ -389,6 +389,12 @@ export interface SessionEntry {
     seenCompletionMarker?: string;
     surfaceHidden?: boolean;
     settings?: Record<string, any>;
+    meshQueueStats?: {
+        pending: number;
+        assigned: number;
+        completed: number;
+        failed: number;
+    };
 }
 
 /**
@@ -428,6 +434,12 @@ export interface CompactSessionEntry {
     providerControls?: ProviderControlSchema[];
     summaryMetadata?: ProviderSummaryMetadata;
     settings?: Record<string, any>;
+    meshQueueStats?: {
+        pending: number;
+        assigned: number;
+        completed: number;
+        failed: number;
+    };
 }
 
 export type VersionUpdateReason =

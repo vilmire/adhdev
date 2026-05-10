@@ -76,7 +76,7 @@ export function buildSelectedMachineRecentLaunches(
                     ? (summaryLine || entry.workspace || undefined)
                     : (entry.workspace || undefined),
                 workspace: entry.workspace || undefined,
-                timestamp: entry.activeChat?.messages?.at?.(-1)?.timestamp || 0,
+                timestamp: entry.lastMessageAt || 0,
             }
         })
         .sort((a, b) => b.timestamp - a.timestamp)

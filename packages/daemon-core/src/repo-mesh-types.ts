@@ -78,6 +78,12 @@ export interface RepoMeshPolicy {
      * runtimes are never stopped/deleted unless the mesh owner opts in.
      */
     sessionCleanupOnNodeRemove?: RepoMeshSessionCleanupMode;
+    /**
+     * Maximum number of automatic retry recommendations for a failed task on the
+     * same node before the daemon advises the coordinator to escalate or reassign.
+     * Defaults to 1 (allow one retry). Set to 0 to disable auto-recovery advice.
+     */
+    maxTaskRetries?: number;
 }
 
 export interface RepoMeshRelatedRepo {
@@ -110,6 +116,7 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     maxParallelTasks: 2,
     spawnedSessionVisibility: 'visible',
     sessionCleanupOnNodeRemove: 'preserve',
+    maxTaskRetries: 1,
 };
 
 // ─── Capabilities ───────────────────────────────

@@ -49,6 +49,12 @@ export interface ActiveConversation {
     connectionState?: string;
     sessionCapabilities?: string[];
     settings?: Record<string, any>;
+    meshQueueStats?: {
+        pending: number;
+        assigned: number;
+        completed: number;
+        failed: number;
+    };
     /** Effective message input/media support. Absent → text-only. */
     messageInput?: MessageInputSupport;
 }

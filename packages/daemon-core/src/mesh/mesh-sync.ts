@@ -26,6 +26,8 @@ export interface MeshSyncTransport {
     }): Promise<{ mesh: RemoteMeshRecord }>;
     /** DELETE /api/v1/repo-meshes/:id */
     deleteRemoteMesh(meshId: string): Promise<void>;
+    /** POST /api/v1/repo-meshes/:id/ledger/sync */
+    syncMeshLedger?(meshId: string, data: { newEntries: any[] }): Promise<{ missingEntries: any[] }>;
 }
 
 export interface RemoteMeshRecord {
@@ -105,5 +107,35 @@ export async function syncMeshes(transport: MeshSyncTransport): Promise<MeshSync
         }
     }
 
+    // Sync ledgers for all local meshes if the transport supports it
+    if (transport.syncMeshLedger) {
+        for (const local of localMeshes) {
+            try {
+                await syncMeshLedger(local.id, transport);
+            } catch (e: any) {
+                result.errors.push(`Ledger sync failed for "${local.name}": ${e.message}`);
+            }
+        }
+    }
+
     return result;
+}
+
+/**
+ * Sync the task ledger for a specific mesh.
+ */
+export async function syncMeshLedger(meshId: string, transport: MeshSyncTransport): Promise<void> {
+    if (!transport.syncMeshLedger) return;
+    const { readLedgerEntries, appendRemoteLedgerEntries } = await import('./mesh-ledger.js');
+    
+    // Read all local entries (no tail)
+    const localEntries = readLedgerEntries(meshId);
+    
+    // Send to cloud and get missing entries back
+    const res = await transport.syncMeshLedger(meshId, { newEntries: localEntries });
+    
+    // Append any missing entries from the cloud
+    if (res.missingEntries && res.missingEntries.length > 0) {
+        appendRemoteLedgerEntries(meshId, res.missingEntries);
+    }
 }

@@ -218,6 +218,12 @@ export interface BaseDaemonData {
     /** @internal Status payload included an explicit sessions list, even if empty. */
     _sessionListAuthoritative?: boolean;
     settings?: Record<string, any>;
+    meshQueueStats?: {
+        pending: number;
+        assigned: number;
+        completed: number;
+        failed: number;
+    };
     /** Effective message input/media support for this session. Fail-closed to text-only when absent. */
     messageInput?: MessageInputSupport;
 }

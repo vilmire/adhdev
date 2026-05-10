@@ -37,11 +37,12 @@ import { STOP_SESSION_TOOL, stopSession } from './tools/stop-session.js';
 import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
 import {
   ALL_MESH_TOOLS, meshStatus, meshListNodes, meshSendTask, meshReadChat,
+  meshEnqueueTask, meshViewQueue,
   meshReadDebug,
   meshLaunchSession, meshGitStatus, meshCheckpoint, meshApprove,
-  meshCloneNode, meshRemoveNode, meshCleanupSessions,
-  type MeshContext,
+  meshCloneNode, meshRemoveNode, meshRefineNode, meshCleanupSessions, meshTaskHistory
 } from './tools/mesh-tools.js';
+import type { MeshContext } from './tools/mesh-tools.js';
 
 export interface AdhdevMcpServerOptions {
   mode: 'local' | 'cloud' | 'ipc';
@@ -227,6 +228,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
         switch (name) {
           case 'mesh_status': text = await meshStatus(meshCtx); break;
           case 'mesh_list_nodes': text = await meshListNodes(meshCtx); break;
+          case 'mesh_enqueue_task': text = await meshEnqueueTask(meshCtx, a as any); break;
+          case 'mesh_view_queue': text = await meshViewQueue(meshCtx, a as any); break;
           case 'mesh_send_task': text = await meshSendTask(meshCtx, a as any); break;
           case 'mesh_read_chat': text = await meshReadChat(meshCtx, a as any); break;
           case 'mesh_read_debug': text = await meshReadDebug(meshCtx, a as any); break;
@@ -236,7 +239,9 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_approve': text = await meshApprove(meshCtx, a as any); break;
           case 'mesh_clone_node': text = await meshCloneNode(meshCtx, a as any); break;
           case 'mesh_remove_node': text = await meshRemoveNode(meshCtx, a as any); break;
+          case 'mesh_refine_node': text = await meshRefineNode(meshCtx, a as any); break;
           case 'mesh_cleanup_sessions': text = await meshCleanupSessions(meshCtx, a as any); break;
+          case 'mesh_task_history': text = await meshTaskHistory(meshCtx, a as any); break;
           default: return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
         }
         return { content: [{ type: 'text', text }] };

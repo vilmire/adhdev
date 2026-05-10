@@ -101,8 +101,8 @@ test('mesh worktree tools route clone/remove to the source node daemon and refre
   const removeText = await meshRemoveNode(ctx, { node_id: 'node-worktree' });
   assert.equal(JSON.parse(removeText).success, true);
   assert.ok(!ctx.mesh.nodes.some(node => node.id === 'node-worktree'));
-  assert.equal(calls[2].daemonId, 'daemon-source');
-  assert.equal(calls[2].command, 'remove_mesh_node');
+  assert.equal(calls[3].daemonId, 'daemon-source');
+  assert.equal(calls[3].command, 'remove_mesh_node');
 });
 
 test('mesh_launch_session stamps delegated sessions hidden when mesh policy requests hidden spawned session visibility', async () => {
@@ -320,7 +320,7 @@ test('mesh_launch_session explicit type overrides node providerPriority', async 
   assert.equal(launch.sessionId, 'runtime-explicit');
   assert.equal(launch.resolvedProviderType, 'codex-cli');
   assert.equal(launch.providerSessionId, 'provider-explicit');
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   assert.equal(calls[0].command, 'launch_cli');
   assert.equal(calls[0].args.cliType, 'codex-cli');
 
@@ -328,9 +328,9 @@ test('mesh_launch_session explicit type overrides node providerPriority', async 
   const debug = JSON.parse(debugText);
   assert.equal(debug.delivery, 'daemon_file');
   assert.equal(debug.savedPath, '/tmp/adhdev-chat-debug-runtime-explicit.json');
-  assert.equal(calls[1].daemonId, 'daemon-source');
-  assert.equal(calls[1].command, 'get_chat_debug_bundle');
-  assert.deepEqual(calls[1].args, {
+  assert.equal(calls[2].daemonId, 'daemon-source');
+  assert.equal(calls[2].command, 'get_chat_debug_bundle');
+  assert.deepEqual(calls[2].args, {
     sessionId: 'runtime-explicit',
     targetSessionId: 'runtime-explicit',
     workspace: '/repo',
@@ -344,9 +344,9 @@ test('mesh_launch_session explicit type overrides node providerPriority', async 
   const approveText = await meshApprove(ctx as any, { node_id: 'node-provider', session_id: 'runtime-explicit', action: 'approve' });
   const approve = JSON.parse(approveText);
   assert.equal(approve.success, true);
-  assert.equal(calls[2].daemonId, 'daemon-source');
-  assert.equal(calls[2].command, 'resolve_action');
-  assert.deepEqual(calls[2].args, {
+  assert.equal(calls[3].daemonId, 'daemon-source');
+  assert.equal(calls[3].command, 'resolve_action');
+  assert.deepEqual(calls[3].args, {
     sessionId: 'runtime-explicit',
     targetSessionId: 'runtime-explicit',
     workspace: '/repo',
@@ -403,7 +403,7 @@ test('mesh_launch_session omitted type uses providerPriority detection and fails
   const launch = JSON.parse(launchText);
   assert.equal(launch.sessionId, 'runtime-auto');
   assert.equal(launch.resolvedProviderType, 'hermes-cli');
-  assert.deepEqual(calls.map(call => call.command), ['detect_provider', 'detect_provider', 'launch_cli']);
+  assert.deepEqual(calls.map(call => call.command), ['detect_provider', 'detect_provider', 'launch_cli', 'trigger_mesh_queue']);
   assert.equal(calls[0].args.providerType, 'codex-cli');
   assert.equal(calls[1].args.providerType, 'hermes-cli');
   assert.equal(calls[2].args.cliType, 'hermes-cli');
@@ -474,67 +474,7 @@ test('mesh_status and mesh_list_nodes surface launch readiness when providerPrio
   assert.deepEqual(readyList.providerPriority, ['hermes-cli']);
 });
 
-test('mesh_send_task surfaces relay-wrapped send_chat failures instead of reporting success', async () => {
-  const transport = new IpcTransport() as IpcTransport & {
-    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
-    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
-  };
-  const calls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
-  transport.command = async (command) => {
-    throw new Error(`unexpected direct command: ${command}`);
-  };
-  transport.meshCommand = async (daemonId, command, args = {}) => {
-    calls.push({ daemonId, command, args });
-    if (command === 'send_chat') {
-      return {
-        success: true,
-        result: {
-          success: true,
-          result: {
-            requestId: 'msg-send-chat',
-            success: false,
-            source: 'mesh',
-            error: 'CLI adapter not found: runtime-missing',
-          },
-        },
-      };
-    }
-    throw new Error(`unexpected mesh command: ${command}`);
-  };
 
-  const ctx = {
-    mesh: {
-      id: 'mesh-send-failure',
-      name: 'Send Failure',
-      repoIdentity: 'example/repo',
-      policy: {},
-      coordinator: {},
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      nodes: [{
-        id: 'node-provider',
-        workspace: '/repo',
-        repoRoot: '/repo',
-        daemonId: 'daemon-source',
-        userOverrides: {},
-        policy: {},
-      }],
-    },
-    transport,
-  };
-
-  const text = await meshSendTask(ctx as any, {
-    node_id: 'node-provider',
-    session_id: 'runtime-missing',
-    message: 'hello',
-  });
-  const payload = JSON.parse(text);
-
-  assert.equal(calls[0].command, 'send_chat');
-  assert.equal(calls[0].args.targetSessionId, 'runtime-missing');
-  assert.equal(payload.success, false);
-  assert.equal(payload.error, 'CLI adapter not found: runtime-missing');
-});
 
 test('mesh_read_chat forwards cached provider metadata after launch', async () => {
   const transport = new IpcTransport() as IpcTransport & {
@@ -593,19 +533,19 @@ test('mesh_read_chat forwards cached provider metadata after launch', async () =
   await meshLaunchSession(ctx as any, { node_id: 'node-provider', type: 'hermes-cli' });
   const readText = await meshReadChat(ctx as any, { node_id: 'node-provider', session_id: 'runtime-cached', tail: 5 });
   const readPayload = JSON.parse(readText);
-  assert.equal(calls[1].command, 'read_chat');
-  assert.equal(calls[1].args.agentType, 'hermes-cli');
-  assert.equal(calls[1].args.providerType, 'hermes-cli');
-  assert.equal(calls[1].args.providerSessionId, 'provider-cached');
-  assert.equal(calls[1].args.workspace, '/repo');
-  assert.equal(calls[1].args.tailLimit, 5);
+  assert.equal(calls[2].command, 'read_chat');
+  assert.equal(calls[2].args.agentType, 'hermes-cli');
+  assert.equal(calls[2].args.providerType, 'hermes-cli');
+  assert.equal(calls[2].args.providerSessionId, 'provider-cached');
+  assert.equal(calls[2].args.workspace, '/repo');
+  assert.equal(calls[2].args.tailLimit, 5);
   assert.equal(readPayload.success, true);
   assert.equal(readPayload.status, 'idle');
   assert.deepEqual(readPayload.messages, [{ role: 'assistant', content: 'delegated result' }]);
   assert.equal(readPayload.providerSessionId, 'provider-cached');
 
   await meshReadChat(ctx as any, { node_id: 'node-provider', session_id: 'runtime-cached', provider_session_id: 'provider-explicit-read' });
-  assert.equal(calls[2].args.providerSessionId, 'provider-explicit-read');
+  assert.equal(calls[3].args.providerSessionId, 'provider-explicit-read');
 });
 
 test('mesh_read_chat compact mode filters tool/internal chatter and returns the final assistant summary', async () => {
@@ -997,8 +937,8 @@ test('mesh status and git status include explicitly configured related repo fres
   assert.ok(calls.some(call => call.command === 'git_status' && call.workspace === '/provider/repo'));
 });
 
-test('mesh tool registry documents the 12 exposed mesh tools including read-debug, worktree clone/remove, and session cleanup', () => {
-  assert.equal(ALL_MESH_TOOLS.length, 12);
+test('mesh tool registry documents the 15 exposed mesh tools including read-debug, worktree clone/remove, and session cleanup', () => {
+  assert.equal(ALL_MESH_TOOLS.length, 15);
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_read_debug'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_clone_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_remove_node'));

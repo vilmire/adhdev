@@ -11,6 +11,7 @@ export interface IdeSessionEntry {
     aiAgents: { id: string; name: string; status: string; version?: string }[]
     activeChat: any; chats: any[]; childSessions: SessionEntry[]
     cdpConnected: boolean; daemonId: string
+    lastMessageAt?: number
 }
 
 export interface CliSessionEntry {
@@ -21,6 +22,7 @@ export interface CliSessionEntry {
     runtimeKey?: string; runtimeDisplayName?: string; runtimeWorkspaceLabel?: string
     runtimeWriteOwner?: RuntimeWriteOwner | null
     runtimeAttachedClients?: RuntimeAttachedClient[]
+    lastMessageAt?: number
 }
 
 export interface AcpSessionEntry {
@@ -28,6 +30,7 @@ export interface AcpSessionEntry {
     workspace: string; activeChat: any; daemonId: string
     providerSessionId?: string
     summaryMetadata?: DaemonData['summaryMetadata']
+    lastMessageAt?: number
 }
 
 export interface WorkspaceRow { id: string; path: string; label?: string; addedAt: number }
