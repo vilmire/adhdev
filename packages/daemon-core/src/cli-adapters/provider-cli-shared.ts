@@ -48,11 +48,21 @@ export interface ParsedSession {
 }
 
 export interface CliScripts {
-    parseSession?: (input: CliScriptInput & { tail?: string; tailScreen?: CliScreenSnapshot }) => ParsedSession | null;
-    detectStatus?: (input: CliStatusInput) => string | null;
-    parseApproval?: (input: CliApprovalInput) => { message: string; buttons: string[] } | null;
+    /**
+     * Optional state factory. Called once per CLI session start (or script reload).
+     * The returned object is passed as the first argument to detectStatus, parseApproval,
+     * and parseSession on every invocation, allowing scripts to maintain per-session state
+     * (e.g. last-seen status, approval fingerprints, stability counters).
+     *
+     * Scripts that don't define createState() receive null as the state argument,
+     * making this change fully backward compatible.
+     */
+    createState?: () => unknown;
+    parseSession?: (state: unknown, input: CliScriptInput & { tail?: string; tailScreen?: CliScreenSnapshot }) => ParsedSession | null;
+    detectStatus?: (state: unknown, input: CliStatusInput) => string | null;
+    parseApproval?: (state: unknown, input: CliApprovalInput) => { message: string; buttons: string[] } | null;
     resolveAction?: (data: any) => string;
-    [name: string]: ((input: any) => any) | undefined;
+    [name: string]: ((state: unknown, input: any) => any) | ((data: any) => any) | (() => unknown) | undefined;
 }
 
 export interface CliScreenLine {

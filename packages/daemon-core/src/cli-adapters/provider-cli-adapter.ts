@@ -195,6 +195,8 @@ export class ProviderCliAdapter implements CliAdapter {
 
     // ─── CLI Scripts (script-based parsing) ───
     private cliScripts: CliScripts;
+    /** Per-session opaque state object created by cliScripts.createState(), reset on stop. */
+    private scriptState: unknown = null;
     private runtimeSettings: Record<string, any> = {};
     /** Full accumulated rendered PTY transcript for parser/readback use */
     private accumulatedBuffer: string = '';
@@ -477,6 +479,9 @@ export class ProviderCliAdapter implements CliAdapter {
         this.cliScripts = scripts;
         this.parsedStatusCache = null;
         this.parseErrorMessage = null;
+        // Initialize per-session state: createState() is called once here and on script reload.
+        // The returned object lives until the PTY exits (scriptState = null on exit).
+        this.scriptState = typeof scripts.createState === 'function' ? scripts.createState() : null;
         const scriptNames = listCliScriptNames(scripts);
         LOG.info('CLI', `[${this.cliType}] CLI scripts injected: [${scriptNames.join(', ')}]`);
     }
@@ -610,6 +615,7 @@ export class ProviderCliAdapter implements CliAdapter {
             this.ready = false;
             this.startupParseGate = false;
             this.spawnAt = 0;
+            this.scriptState = null;
             this.onStatusChange?.();
         });
 
@@ -1470,7 +1476,7 @@ export class ProviderCliAdapter implements CliAdapter {
                 scope: this.currentTurnScope,
                 runtimeSettings: this.runtimeSettings,
             });
-            const session = this.cliScripts.parseSession({ ...input, tail, tailScreen: buildCliScreenSnapshot(tail) });
+            const session = this.cliScripts.parseSession(this.scriptState, { ...input, tail, tailScreen: buildCliScreenSnapshot(tail) });
             this.parseErrorMessage = null;
             return session && typeof session === 'object' ? session : null;
         } catch (e: any) {
@@ -1485,7 +1491,7 @@ export class ProviderCliAdapter implements CliAdapter {
         if (!this.cliScripts?.detectStatus) return null;
         try {
             const screenText = this.terminalScreen.getText();
-            const status = this.cliScripts.detectStatus({
+            const status = this.cliScripts.detectStatus(this.scriptState, {
                 tail: text.slice(-500),
                 screenText,
                 rawBuffer: this.accumulatedRawBuffer,
@@ -1505,7 +1511,7 @@ export class ProviderCliAdapter implements CliAdapter {
         try {
             const screenText = this.terminalScreen.getText();
             const buffer = screenText || this.accumulatedBuffer;
-            return this.cliScripts.parseApproval({
+            return this.cliScripts.parseApproval(this.scriptState, {
                 buffer,
                 screenText,
                 rawBuffer: this.accumulatedRawBuffer,
@@ -1640,7 +1646,7 @@ export class ProviderCliAdapter implements CliAdapter {
             scope: this.currentTurnScope,
             runtimeSettings: this.runtimeSettings,
         });
-        return await Promise.resolve(fn({
+        return await Promise.resolve(fn(this.scriptState, {
             ...input,
             args: args && typeof args === 'object' ? { ...args } : {},
         }));
