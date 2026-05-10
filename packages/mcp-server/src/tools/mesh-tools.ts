@@ -501,14 +501,29 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         results.push(entry);
     }
 
-    return JSON.stringify({
+    const response: Record<string, unknown> = {
         meshId: mesh.id,
         meshName: mesh.name,
         repoIdentity: mesh.repoIdentity,
         policy: mesh.policy,
         refreshedAt: new Date().toISOString(),
         nodes: results,
-    }, null, 2);
+    };
+
+    // Drain MCP-coordinator pending events queued by the daemon (same-machine case).
+    if (ctx.transport instanceof IpcTransport) {
+        try {
+            const eventsResult = await (ctx.transport as IpcTransport).command('get_pending_mesh_events', {}) as any;
+            const pendingEvents = Array.isArray(eventsResult?.events) ? eventsResult.events : [];
+            if (pendingEvents.length > 0) {
+                response.pendingCoordinatorEvents = pendingEvents;
+            }
+        } catch {
+            // Non-fatal: pending events are best-effort.
+        }
+    }
+
+    return JSON.stringify(response, null, 2);
 }
 
 export async function meshListNodes(ctx: MeshContext): Promise<string> {

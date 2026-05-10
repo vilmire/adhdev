@@ -88,4 +88,24 @@ describe('TerminalTranscriptAccumulator overwrite handling', () => {
   it('keeps combining marks attached while processing overwrites', () => {
     expect(sanitizeTerminalText('cafe\u0301\rCAFÉ\n')).toBe('CAFÉ\n');
   });
+
+  it('renders CJK wide characters without inserting phantom spaces', () => {
+    // Korean syllables are wide (2-cell) characters.
+    // Before the fix, each wide char left a trailing space in the cell array.
+    const acc = new TerminalTranscriptAccumulator();
+    expect(acc.append('안녕하세요')).toBe('안녕하세요');
+
+    acc.reset();
+    expect(acc.append('지금까지 분석으로')).toBe('지금까지 분석으로');
+
+    acc.reset();
+    // Mixed ASCII and Korean: spacing must be correct for both.
+    expect(acc.append('hello 안녕 world')).toBe('hello 안녕 world');
+  });
+
+  it('rewrites over CJK wide characters correctly', () => {
+    const acc = new TerminalTranscriptAccumulator();
+    // Write Korean, then overwrite the first two cells with ASCII
+    expect(acc.append('가나다\r\x1b[2KAB\n')).toBe('AB\n');
+  });
 });

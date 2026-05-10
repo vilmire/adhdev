@@ -36,7 +36,7 @@ import { createInteractionId, getRecentDebugTrace, recordDebugTrace } from '../l
 import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../session-host/runtime-surface.js';
 import { createHermesManualMeshCoordinatorSetup, resolveMeshCoordinatorSetup } from './mesh-coordinator.js';
 import { buildSessionEntries } from '../status/builders.js';
-import { handleMeshForwardEvent } from '../mesh/mesh-events.js';
+import { handleMeshForwardEvent, drainPendingMeshCoordinatorEvents } from '../mesh/mesh-events.js';
 import { buildMachineInfo, buildStatusSnapshot } from '../status/snapshot.js';
 import { getSessionCompletionMarker } from '../status/snapshot.js';
 import { execNpmCommandSync, resolveCurrentGlobalInstallSurface, spawnDetachedDaemonUpgradeHelper } from './upgrade-helper.js';
@@ -649,6 +649,11 @@ export class DaemonCommandRouter {
             // ─── CLI / ACP commands ───
             case 'mesh_forward_event': {
                 return handleMeshForwardEvent({ instanceManager: this.deps.instanceManager } as any, args as Record<string, unknown>);
+            }
+
+            case 'get_pending_mesh_events': {
+                const events = drainPendingMeshCoordinatorEvents();
+                return { success: true, events };
             }
 
             case 'launch_cli':

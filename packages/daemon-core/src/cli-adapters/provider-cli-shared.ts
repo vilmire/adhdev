@@ -285,8 +285,10 @@ export class TerminalTranscriptAccumulator {
             return;
         }
         while (line.length < this.col) line.push(' ');
+        const wide = isWideCodePoint(ch);
         line[this.col] = ch;
-        this.col += isWideCodePoint(ch) ? 2 : 1;
+        if (wide) line[this.col + 1] = '';
+        this.col += wide ? 2 : 1;
     }
 
     private consumeEscape(seq: string): number {

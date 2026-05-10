@@ -698,7 +698,9 @@ export class ProviderCliAdapter implements CliAdapter {
         this.recentOutputBuffer = nextRecentOutputBuffer;
         this.accumulatedBuffer = nextAccumulatedBuffer;
         this.accumulatedRawBuffer = appendBoundedText(this.accumulatedRawBuffer, rawData, ProviderCliAdapter.MAX_ACCUMULATED_BUFFER);
-        const droppedRecent = Math.max(0, prevRecentLen - this.recentOutputBuffer.length);
+        // recentOutputBuffer is a 1000-char sliding window over accumulatedBuffer.
+        // Anything that doesn't fit in the window is considered dropped.
+        const droppedRecent = Math.max(0, renderedTranscript.length - ProviderCliAdapter.MAX_RECENT_OUTPUT_BUFFER);
         const droppedClean = Math.max(0, renderedTranscript.length - this.accumulatedBuffer.length);
         const droppedRaw = this.recordBoundedAppendDrop(prevAccumulatedRawLen, rawData.length, this.accumulatedRawBuffer.length);
         this.recentOutputDroppedChars += droppedRecent;

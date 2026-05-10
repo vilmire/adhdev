@@ -2,6 +2,30 @@ import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
 import { getMesh, getMeshByRepo } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 
+// ---------------------------------------------------------------------------
+// MCP coordinator pending-event queue
+// ---------------------------------------------------------------------------
+// When a mesh event fires but no CLI coordinator session is registered (e.g.
+// the coordinator is Claude Code running via MCP), we buffer the event here.
+// The MCP server drains this queue on every mesh_status / mesh_send_task poll.
+// ---------------------------------------------------------------------------
+
+export interface PendingMeshCoordinatorEvent {
+    event: string;
+    meshId: string;
+    nodeLabel: string;
+    metadataEvent: Record<string, unknown>;
+    queuedAt: number;
+}
+
+const MAX_PENDING_EVENTS = 50;
+const pendingMeshCoordinatorEvents: PendingMeshCoordinatorEvent[] = [];
+
+/** Drain and return all pending coordinator events, clearing the queue. */
+export function drainPendingMeshCoordinatorEvents(): PendingMeshCoordinatorEvent[] {
+    return pendingMeshCoordinatorEvents.splice(0);
+}
+
 function readNonEmptyString(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
@@ -61,7 +85,20 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         return true;
     });
 
-    if (coordinatorInstances.length === 0) return { success: true, forwarded: 0 };
+    if (coordinatorInstances.length === 0) {
+        // No CLI coordinator session found — buffer for MCP-based coordinators.
+        if (pendingMeshCoordinatorEvents.length < MAX_PENDING_EVENTS) {
+            pendingMeshCoordinatorEvents.push({
+                event: args.event,
+                meshId: args.meshId,
+                nodeLabel: args.nodeLabel,
+                metadataEvent: args.metadataEvent,
+                queuedAt: Date.now(),
+            });
+            LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
+        }
+        return { success: true, forwarded: 0 };
+    }
 
     const messageText = buildMeshSystemMessage({
         event: args.event,
