@@ -155,12 +155,12 @@ async function ipcDispatchToRemoteAgent(
     // mesh_relay_command wraps the response: { success, result: { success, status: { sessions[] } } }
     if (!sessionId) {
         try {
-            const relayResult = await transport.meshCommand(daemonId, 'get_status_metadata', {});
+                const relayResult = await transport.meshCommand(daemonId, 'get_status_metadata', {});
             // Unwrap relay envelope: relayResult.result.status.sessions
             const innerResult = relayResult?.result ?? relayResult;
             const statusObj = innerResult?.status ?? innerResult;
             const sessions: any[] = Array.isArray(statusObj?.sessions) ? statusObj.sessions : [];
-
+    
             // Prefer sessions launched for this specific mesh node
             const meshSessions = sessions.filter((s: any) =>
                 s?.settings?.meshNodeFor === ctx.mesh.id ||
@@ -176,9 +176,10 @@ async function ipcDispatchToRemoteAgent(
                 if (!resolvedProviderType) {
                     resolvedProviderType = targetSession.providerType || targetSession.cliType || '';
                 }
-            }
-        } catch {
-            // fall through — will attempt dispatch with just providerType (fuzzy)
+                    } else {
+                    }
+        } catch (e: any) {
+                // fall through — will attempt dispatch with just providerType (fuzzy)
         }
     }
 
@@ -189,7 +190,6 @@ async function ipcDispatchToRemoteAgent(
 
     try {
         await transport.meshCommand(daemonId, 'agent_command', {
-            // Precise match when sessionId known, fuzzy type match otherwise
             ...(sessionId ? { targetSessionId: sessionId } : {}),
             agentType: resolvedProviderType,
             cliType: resolvedProviderType,
