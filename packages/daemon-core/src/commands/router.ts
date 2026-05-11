@@ -1777,6 +1777,15 @@ export class DaemonCommandRouter {
                             }
                         }
 
+                        // Provide a kickoff prompt so the agent begins orchestration immediately
+                        // instead of hanging in an interactive wait state.
+                        const kickoffPrompt = 'Assess the mesh status and begin orchestration.';
+                        if (cliType === 'codex-cli') {
+                            cliCmdArgs.push(kickoffPrompt);
+                        } else if (cliType === 'gemini-cli') {
+                            cliCmdArgs.push('-i', kickoffPrompt);
+                        }
+
                         const cliCmdLaunch: any = await this.deps.cliManager.handleCliCommand('launch_cli', {
                             cliType,
                             dir: workspace,
