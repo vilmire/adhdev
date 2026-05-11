@@ -74,6 +74,13 @@ function formatCompletionMetadata(event: Record<string, unknown>): string {
     return parts.length > 0 ? ` (${parts.join('; ')})` : '';
 }
 
+function getMeshWithCache(components: DaemonComponents, meshId: string): any | undefined {
+    const localMesh = getMesh(meshId);
+    if (localMesh) return localMesh;
+    return components.router?.getCachedInlineMesh(meshId);
+}
+
+
 export function tryAssignQueueTask(
     components: DaemonComponents,
     meshId: string,
@@ -89,7 +96,7 @@ export function tryAssignQueueTask(
     LOG.info('MeshQueue', `Node ${nodeId} (${sessionId}) pulled task ${task.id}`);
 
     // Check if the node is remote
-    const mesh = getMesh(meshId);
+    const mesh = getMeshWithCache(components, meshId);
     const node = mesh?.nodes.find((n: any) => n.id === nodeId);
     
     // If the node is explicitly remote and we have a dispatch mechanism, route via P2P
@@ -128,7 +135,7 @@ export function tryAssignQueueTask(
  * Called when a new task is enqueued, in case nodes are already idle.
  */
 export function triggerMeshQueue(components: DaemonComponents, meshId: string) {
-    const mesh = getMesh(meshId);
+    const mesh = getMeshWithCache(components, meshId);
     if (!mesh) return;
 
     // Find all CLI instances that belong to this mesh and are idle
@@ -444,7 +451,7 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
         const isMeshDelegate = Boolean(meshIdFromRuntime || settings.launchedByCoordinator);
         if (!isMeshDelegate) return;
 
-        const mesh = meshIdFromRuntime ? getMesh(meshIdFromRuntime) : getMeshByRepo(workspace);
+        const mesh = meshIdFromRuntime ? getMeshWithCache(components, meshIdFromRuntime) : getMeshByRepo(workspace);
         const meshId = meshIdFromRuntime || readNonEmptyString(mesh?.id);
         if (!meshId) return;
 

@@ -332,7 +332,7 @@ export class DaemonCommandRouter {
         this.deps = deps;
     }
 
-    private getCachedInlineMesh(meshId: string, inlineMesh?: unknown): any | undefined {
+    public getCachedInlineMesh(meshId: string, inlineMesh?: unknown): any | undefined {
         if (inlineMesh && typeof inlineMesh === 'object') {
             this.inlineMeshCache.set(meshId, inlineMesh as any);
             return inlineMesh as any;
