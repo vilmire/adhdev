@@ -640,9 +640,7 @@ export async function meshEnqueueTask(
         const task = enqueueTask(ctx.mesh.id, args.message);
         
         // Tell the daemon to try assigning the new task to any idle node
-        if (ctx.transport instanceof IpcTransport && ctx.localDaemonId) {
-            ctx.transport.meshCommand(ctx.localDaemonId, 'trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
-        } else if (isLocalTransport(ctx.transport)) {
+        if (isLocalTransport(ctx.transport)) {
             ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
         }
 
@@ -689,7 +687,11 @@ export async function meshSendTask(
         const task = enqueueTask(ctx.mesh.id, args.message, { targetNodeId: args.node_id });
 
         // Tell daemon to trigger queue processing
-        if (ctx.transport instanceof IpcTransport && node.daemonId && node.daemonId !== ctx.localDaemonId) {
+        const isLocalNode =
+            (ctx.localMachineId && node.machineId === ctx.localMachineId) ||
+            (ctx.localDaemonId && node.daemonId === ctx.localDaemonId);
+
+        if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
             ctx.transport.meshCommand(node.daemonId, 'trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
         } else if (isLocalTransport(ctx.transport)) {
             ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
@@ -867,7 +869,11 @@ export async function meshLaunchSession(
         } catch { /* ledger append is best-effort */ }
 
         // Tell daemon to trigger queue processing so the new session immediately picks up pending tasks
-        if (ctx.transport instanceof IpcTransport && node.daemonId && node.daemonId !== ctx.localDaemonId) {
+        const isLocalNode =
+            (ctx.localMachineId && node.machineId === ctx.localMachineId) ||
+            (ctx.localDaemonId && node.daemonId === ctx.localDaemonId);
+
+        if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
             ctx.transport.meshCommand(node.daemonId, 'trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
         } else if (isLocalTransport(ctx.transport)) {
             ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
