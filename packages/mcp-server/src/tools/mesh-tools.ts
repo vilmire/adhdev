@@ -273,7 +273,9 @@ export const MESH_STATUS_TOOL = {
     description: 'Get the current status of all nodes in the repo mesh — health, git state, active sessions. Use this to decide which node to send work to.',
     inputSchema: {
         type: 'object' as const,
-        properties: {},
+        properties: {
+            _gemini_compat: { type: 'string', description: 'Dummy property for Gemini compatibility. Ignore this.' },
+        },
     },
 };
 
@@ -282,7 +284,9 @@ export const MESH_LIST_NODES_TOOL = {
     description: 'List all nodes in the mesh with their capabilities, platform, and workspace paths.',
     inputSchema: {
         type: 'object' as const,
-        properties: {},
+        properties: {
+            _gemini_compat: { type: 'string', description: 'Dummy property for Gemini compatibility. Ignore this.' },
+        },
     },
 };
 
