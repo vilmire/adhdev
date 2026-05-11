@@ -69,7 +69,9 @@ export function tryAssignQueueTask(
     providerType: string
 ): boolean {
     const task = claimNextTask(meshId, nodeId, sessionId);
-    if (!task) return false;
+    if (!task) {
+        return false;
+    }
 
     LOG.info('MeshQueue', `Node ${nodeId} (${sessionId}) pulled task ${task.id}`);
     
@@ -165,6 +167,7 @@ function buildMeshSystemMessage(args: {
 function injectMeshSystemMessage(components: DaemonComponents, args: {
     meshId: string;
     sourceInstanceId?: string;
+    nodeId?: string;
     nodeLabel: string;
     event: string;
     metadataEvent: Record<string, unknown>;
@@ -172,7 +175,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     // ── Task Queue & Ledger ──
     if (args.event === 'agent:generating_completed') {
         const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId);
-        const nodeId = readNonEmptyString(args.metadataEvent.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
+        const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
         
         if (sessionId) {
@@ -186,7 +189,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         }
     } else if (args.event === 'agent:ready') {
         const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId);
-        const nodeId = readNonEmptyString(args.metadataEvent.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
+        const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
         
         if (sessionId && nodeId && providerType) {
@@ -206,7 +209,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         try {
             appendLedgerEntry(args.meshId, {
                 kind: ledgerKind,
-                nodeId: readNonEmptyString(args.metadataEvent.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
+                nodeId: readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
                 sessionId: readNonEmptyString(args.metadataEvent.targetSessionId) || undefined,
                 providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
                 payload: {
@@ -230,7 +233,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
 
             recoveryContext = getSessionRecoveryContext(args.meshId, {
                 sessionId: readNonEmptyString(args.metadataEvent.targetSessionId) || undefined,
-                nodeId: readNonEmptyString(args.metadataEvent.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
+                nodeId: readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
                 maxRetries,
             });
             recoveryContext.failedProviderType = readNonEmptyString(args.metadataEvent.providerType) || null;
@@ -338,6 +341,7 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
     const nodeLabel = nodeId ? `Node '${nodeId}'` : workspace ? `Agent at ${workspace}` : 'Remote agent';
     return injectMeshSystemMessage(components, {
         meshId,
+        nodeId,
         nodeLabel,
         event: eventName,
         metadataEvent: {
@@ -385,6 +389,7 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
         // Determine node label. Inline/cloud meshes may be unavailable here, so preserve runtime node id.
         const targetNode = mesh?.nodes?.find((n: any) => n.workspace === workspace);
         const runtimeNodeId = readNonEmptyString(settings.meshNodeId);
+        const resolvedNodeId = targetNode?.id || runtimeNodeId;
         const nodeLabel = targetNode
             ? `Node '${targetNode.id}'`
             : runtimeNodeId
@@ -394,6 +399,7 @@ export function setupMeshEventForwarding(components: DaemonComponents) {
         injectMeshSystemMessage(components, {
             meshId,
             sourceInstanceId: instanceId,
+            nodeId: resolvedNodeId,
             nodeLabel,
             event: event.event,
             metadataEvent: event,
