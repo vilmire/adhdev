@@ -83,6 +83,9 @@ export interface DaemonInitConfig {
 
     /** Fired before send_chat is dispatched — used for turn snapshot hooks */
     onBeforeSendChat?: (params: { workspace: string; sessionId: string }) => void;
+
+    /** Relays a command to a remote mesh node daemon */
+    dispatchMeshCommand?: (daemonId: string, command: string, args: Record<string, unknown>) => Promise<any>;
 }
 
 // ─── Result ───
@@ -100,6 +103,7 @@ export interface DaemonComponents {
     sessionRegistry: SessionRegistry;
     detectedIdes: { value: IDEInfo[] };
     refreshProviderAvailability: (providerType?: string) => Promise<void>;
+    dispatchMeshCommand?: (daemonId: string, command: string, args: Record<string, unknown>) => Promise<any>;
 }
 
 export interface DaemonDevSupportOptions {
@@ -331,6 +335,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         sessionRegistry,
         detectedIdes: detectedIdesRef,
         refreshProviderAvailability,
+        dispatchMeshCommand: config.dispatchMeshCommand,
     };
 
     // 11. Setup Mesh Event Forwarding

@@ -3,7 +3,7 @@ import { getMesh, getMeshByRepo } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, getSessionRecoveryContext } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
-import { claimNextTask, updateSessionTaskStatus, enqueueTask } from './mesh-work-queue.js';
+import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus } from './mesh-work-queue.js';
 
 // ---------------------------------------------------------------------------
 // MCP coordinator pending-event queue
@@ -62,7 +62,7 @@ function formatCompletionMetadata(event: Record<string, unknown>): string {
 }
 
 export function tryAssignQueueTask(
-    components: { cliManager: any },
+    components: DaemonComponents,
     meshId: string,
     nodeId: string,
     sessionId: string,
@@ -74,14 +74,37 @@ export function tryAssignQueueTask(
     }
 
     LOG.info('MeshQueue', `Node ${nodeId} (${sessionId}) pulled task ${task.id}`);
+
+    // Check if the node is remote
+    const mesh = getMesh(meshId);
+    const node = mesh?.nodes.find((n: any) => n.id === nodeId);
     
+    // If the node is explicitly remote and we have a dispatch mechanism, route via P2P
+    if (node?.daemonId && components.dispatchMeshCommand) {
+        const isLocalNode = components.cliManager.adapters.has(sessionId);
+        if (!isLocalNode) {
+            components.dispatchMeshCommand(node.daemonId, 'agent_command', {
+                targetSessionId: sessionId,
+                cliType: providerType,
+                action: 'send_chat',
+                message: task.message,
+            }).catch((e: any) => {
+                LOG.error('MeshQueue', `Failed to dispatch task via P2P to remote node ${nodeId}: ${e?.message}`);
+                updateTaskStatus(meshId, task.id, 'failed');
+            });
+            return true;
+        }
+    }
+
+    // Local routing
     components.cliManager.handleCliCommand('agent_command', {
         targetSessionId: sessionId,
         cliType: providerType,
         action: 'send_chat',
         message: task.message,
     }).catch((e: any) => {
-        LOG.error('MeshQueue', `Failed to dispatch task to node ${nodeId}: ${e?.message}`);
+        LOG.error('MeshQueue', `Failed to dispatch task locally to node ${nodeId}: ${e?.message}`);
+        updateTaskStatus(meshId, task.id, 'failed');
     });
 
     return true;
