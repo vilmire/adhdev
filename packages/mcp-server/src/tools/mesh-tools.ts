@@ -127,6 +127,70 @@ function extractLaunchPayload(value: any): any {
     return findNestedPayload(value, payload => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
 }
 
+/**
+ * For IpcTransport + remote node: resolve an active session on the node and
+ * dispatch an agent_command directly via P2P relay (mesh_relay_command).
+ *
+ * This bypasses the local queue (which remote daemons cannot read) and sends
+ * the message directly to the session running on the remote daemon.
+ *
+ * Returns { success, sessionId } or throws.
+ */
+async function ipcDispatchToRemoteAgent(
+    ctx: MeshContext,
+    node: LocalMeshNodeEntry,
+    args: { session_id?: string; message: string; providerType?: string },
+): Promise<{ success: true; dispatched: true; sessionId: string } | { success: false; error: string }> {
+    const transport = ctx.transport as IpcTransport;
+    const daemonId = node.daemonId!;
+
+    let sessionId = args.session_id?.trim() || '';
+    let resolvedProviderType = args.providerType?.trim() || '';
+
+    // If no session_id given, ask the remote daemon for its active CLI sessions.
+    if (!sessionId) {
+        try {
+            const sessionsResult = await transport.meshCommand(daemonId, 'get_cli_sessions', {});
+            const payload = unwrapCommandPayload(sessionsResult);
+            const sessions: any[] = Array.isArray(payload?.sessions)
+                ? payload.sessions
+                : Array.isArray(sessionsResult?.sessions)
+                    ? sessionsResult.sessions
+                    : [];
+
+            // Prefer a session that is mesh node delegate for this mesh
+            const meshSessions = sessions.filter((s: any) =>
+                s?.settings?.meshNodeFor === ctx.mesh.id ||
+                s?.settings?.meshNodeId === node.id ||
+                s?.settings?.launchedByCoordinator === true
+            );
+            const targetSession = meshSessions[0] || sessions[0];
+            if (targetSession?.sessionId || targetSession?.id) {
+                sessionId = targetSession.sessionId || targetSession.id;
+                if (!resolvedProviderType) resolvedProviderType = targetSession.providerType || targetSession.cliType || '';
+            }
+        } catch {
+            // fall through — will fail below
+        }
+    }
+
+    if (!sessionId) {
+        return { success: false, error: `No active session found on remote node '${node.id}'. Use mesh_launch_session first.` };
+    }
+
+    try {
+        await transport.meshCommand(daemonId, 'agent_command', {
+            targetSessionId: sessionId,
+            cliType: resolvedProviderType,
+            action: 'send_chat',
+            message: args.message,
+        });
+        return { success: true, dispatched: true, sessionId };
+    } catch (e: any) {
+        return { success: false, error: `P2P dispatch failed: ${e?.message || String(e)}` };
+    }
+}
+
 function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | undefined {
     const preferredNodeId = typeof ctx.mesh.coordinator?.preferredNodeId === 'string'
         ? ctx.mesh.coordinator.preferredNodeId.trim()
@@ -638,10 +702,29 @@ export async function meshEnqueueTask(
 ): Promise<string> {
     try {
         const task = enqueueTask(ctx.mesh.id, args.message);
-        
-        // Tell the daemon to try assigning the new task to any idle node
+
+        // Tell the daemon to try assigning the new task to any idle node.
+        // For IpcTransport we also directly notify remote nodes via P2P,
+        // because the local queue file is not accessible by remote daemons.
         if (isLocalTransport(ctx.transport)) {
             ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
+
+            if (ctx.transport instanceof IpcTransport) {
+                // Notify each remote node's daemon so it can pick up the task
+                // if one of its sessions happens to be idle.
+                for (const node of ctx.mesh.nodes) {
+                    const isLocalNode =
+                        (ctx.localMachineId && (node as any).machineId === ctx.localMachineId) ||
+                        (ctx.localDaemonId && node.daemonId === ctx.localDaemonId);
+                    if (!isLocalNode && node.daemonId) {
+                        (ctx.transport as IpcTransport).meshCommand(
+                            node.daemonId,
+                            'trigger_mesh_queue',
+                            { meshId: ctx.mesh.id },
+                        ).catch(() => {});
+                    }
+                }
+            }
         }
 
         return JSON.stringify({ success: true, taskId: task.id, status: task.status });
@@ -674,6 +757,7 @@ export async function meshSendTask(
     }
 
     try {
+        // ── CloudTransport: delegate to Cloud API ──────────────────────────────
         if (!isLocalTransport(ctx.transport) && node.daemonId) {
             const res = await (ctx.transport as CloudTransport).meshEnqueueTask(node.daemonId, {
                 meshId: ctx.mesh.id,
@@ -683,17 +767,42 @@ export async function meshSendTask(
             return JSON.stringify(res);
         }
 
-        // Local enqueue targeted at this specific node
-        const task = enqueueTask(ctx.mesh.id, args.message, { targetNodeId: args.node_id });
-
-        // Tell daemon to trigger queue processing
+        // ── IpcTransport + remote node: direct P2P agent_command dispatch ──────
+        //
+        // The local queue file (mesh-ledger/*.queue.json) is stored on THIS
+        // machine and is inaccessible to the remote daemon.  Sending
+        // trigger_mesh_queue to the remote daemon would always be a no-op
+        // because it cannot read the queue.  Instead we relay agent_command
+        // directly over P2P so the remote daemon forwards it to its agent.
         const isLocalNode =
-            (ctx.localMachineId && node.machineId === ctx.localMachineId) ||
+            (ctx.localMachineId && (node as any).machineId === ctx.localMachineId) ||
             (ctx.localDaemonId && node.daemonId === ctx.localDaemonId);
 
         if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
-            ctx.transport.meshCommand(node.daemonId, 'trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
-        } else if (isLocalTransport(ctx.transport)) {
+            const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id || ''));
+            const result = await ipcDispatchToRemoteAgent(ctx, node, {
+                session_id: args.session_id,
+                message: args.message,
+                providerType: cached?.providerType,
+            });
+            if (result.success) {
+                // Record dispatch in ledger so task_history is accurate
+                try {
+                    appendLedgerEntry(ctx.mesh.id, {
+                        kind: 'task_dispatched',
+                        nodeId: args.node_id,
+                        sessionId: result.sessionId,
+                        payload: { message: args.message, via: 'p2p_direct' },
+                    });
+                } catch { /* best-effort */ }
+            }
+            return JSON.stringify({ ...result, nodeId: args.node_id });
+        }
+
+        // ── LocalTransport or local IpcTransport node: use queue ───────────────
+        const task = enqueueTask(ctx.mesh.id, args.message, { targetNodeId: args.node_id });
+
+        if (isLocalTransport(ctx.transport)) {
             ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
         }
 
