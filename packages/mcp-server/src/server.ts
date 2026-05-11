@@ -184,6 +184,16 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     }
 
     let localDaemonId: string | undefined;
+    let localMachineId: string | undefined;
+
+    if (transport instanceof LocalTransport || transport instanceof IpcTransport) {
+      try {
+        const { loadConfig } = await import('@adhdev/daemon-core');
+        const cfg = loadConfig();
+        if (cfg.registeredMachineId) localMachineId = cfg.registeredMachineId;
+      } catch { /* best-effort */ }
+    }
+
     if (transport instanceof IpcTransport) {
       try {
         const statusResult = await transport.getStatus();
@@ -192,7 +202,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       } catch { /* best-effort metadata for remote completion forwarding */ }
     }
 
-    const meshCtx: MeshContext = { mesh, transport, ...(localDaemonId ? { localDaemonId } : {}) };
+    const meshCtx: MeshContext = { mesh, transport, ...(localDaemonId ? { localDaemonId } : {}), ...(localMachineId ? { localMachineId } : {}) };
 
     const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
 

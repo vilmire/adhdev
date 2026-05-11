@@ -25,6 +25,8 @@ export interface MeshContext {
     transport: McpTransport;
     /** Daemon ID for this local machine (local mode) */
     localDaemonId?: string;
+    /** Machine Registry ID for this local machine */
+    localMachineId?: string;
 }
 
 type MeshSessionProviderMetadata = {
@@ -132,6 +134,10 @@ function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | undefine
     if (preferredNodeId) {
         const preferred = ctx.mesh.nodes.find(n => n.id === preferredNodeId && typeof n.daemonId === 'string' && n.daemonId.trim());
         if (preferred) return preferred;
+    }
+    if (ctx.localMachineId) {
+        const byMachine = ctx.mesh.nodes.find(n => n.machineId === ctx.localMachineId);
+        if (byMachine) return byMachine;
     }
     if (ctx.localDaemonId) {
         return ctx.mesh.nodes.find(n => n.daemonId === ctx.localDaemonId);
@@ -257,7 +263,11 @@ async function commandForNode(
     command: string,
     args: Record<string, unknown> = {},
 ): Promise<any> {
-    if (ctx.transport instanceof IpcTransport && node.daemonId && node.daemonId !== ctx.localDaemonId) {
+    const isLocalNode =
+        (ctx.localMachineId && node.machineId === ctx.localMachineId) ||
+        (ctx.localDaemonId && node.daemonId === ctx.localDaemonId);
+
+    if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
         return ctx.transport.meshCommand(node.daemonId, command, args);
     }
     if (isLocalTransport(ctx.transport)) {
