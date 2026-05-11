@@ -114,7 +114,7 @@ export function tryAssignQueueTask(
  * Triggers a queue check for all nodes in the mesh.
  * Called when a new task is enqueued, in case nodes are already idle.
  */
-export function triggerMeshQueue(components: { instanceManager: any; cliManager: any }, meshId: string) {
+export function triggerMeshQueue(components: DaemonComponents, meshId: string) {
     const mesh = getMesh(meshId);
     if (!mesh) return;
 
