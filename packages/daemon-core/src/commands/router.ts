@@ -1747,9 +1747,9 @@ export class DaemonCommandRouter {
                         const cliCmdEnv: Record<string, string> = {};
                         if (cliCmdSystemPrompt) {
                             if (cliType === 'codex-cli') {
-                                // Codex reads `instructions` from config.toml as system instructions.
+                                // Codex reads `developer_instructions` from config.toml as system instructions.
                                 // The -c flag overrides a config key for this session only.
-                                cliCmdArgs.push('-c', `instructions=${JSON.stringify(cliCmdSystemPrompt)}`);
+                                cliCmdArgs.push('-c', `developer_instructions=${JSON.stringify(cliCmdSystemPrompt)}`);
                             } else if (cliType === 'gemini-cli') {
                                 // Gemini CLI auto-loads GEMINI.md from CWD as project context.
                                 // Write a temporary GEMINI.md to the workspace before launch.
