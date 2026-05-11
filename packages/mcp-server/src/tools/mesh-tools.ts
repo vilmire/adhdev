@@ -145,47 +145,59 @@ async function ipcDispatchToRemoteAgent(
     const daemonId = node.daemonId!;
 
     let sessionId = args.session_id?.trim() || '';
-    let resolvedProviderType = args.providerType?.trim() || '';
+    // Resolve provider type: caller arg > node policy providerPriority > empty (fuzzy fallback)
+    const providerPriorityList: string[] = Array.isArray((node.policy as any)?.providerPriority)
+        ? (node.policy as any).providerPriority
+        : [];
+    let resolvedProviderType = args.providerType?.trim() || providerPriorityList[0] || '';
 
-    // If no session_id given, ask the remote daemon for its active CLI sessions.
+    // If no session_id given, ask the remote daemon via get_status_metadata
     if (!sessionId) {
         try {
-            const sessionsResult = await transport.meshCommand(daemonId, 'get_cli_sessions', {});
-            const payload = unwrapCommandPayload(sessionsResult);
+            const statusResult = await transport.meshCommand(daemonId, 'get_status_metadata', {});
+            const payload = unwrapCommandPayload(statusResult);
             const sessions: any[] = Array.isArray(payload?.sessions)
                 ? payload.sessions
-                : Array.isArray(sessionsResult?.sessions)
-                    ? sessionsResult.sessions
+                : Array.isArray(payload?.status?.sessions)
+                    ? payload.status.sessions
                     : [];
 
-            // Prefer a session that is mesh node delegate for this mesh
+            // Prefer sessions launched for this specific mesh node
             const meshSessions = sessions.filter((s: any) =>
                 s?.settings?.meshNodeFor === ctx.mesh.id ||
                 s?.settings?.meshNodeId === node.id ||
                 s?.settings?.launchedByCoordinator === true
             );
-            const targetSession = meshSessions[0] || sessions[0];
-            if (targetSession?.sessionId || targetSession?.id) {
-                sessionId = targetSession.sessionId || targetSession.id;
-                if (!resolvedProviderType) resolvedProviderType = targetSession.providerType || targetSession.cliType || '';
+            const targetSession = meshSessions[0] || sessions.find((s: any) =>
+                !resolvedProviderType || s?.providerType === resolvedProviderType || s?.cliType === resolvedProviderType
+            ) || sessions[0];
+
+            if (targetSession?.id || targetSession?.sessionId) {
+                sessionId = targetSession.id || targetSession.sessionId;
+                if (!resolvedProviderType) {
+                    resolvedProviderType = targetSession.providerType || targetSession.cliType || '';
+                }
             }
         } catch {
-            // fall through — will fail below
+            // fall through — will attempt dispatch with just providerType (fuzzy)
         }
     }
 
-    if (!sessionId) {
-        return { success: false, error: `No active session found on remote node '${node.id}'. Use mesh_launch_session first.` };
+    // agent_command requires agentType — fail if we cannot determine provider type
+    if (!resolvedProviderType) {
+        return { success: false, error: `Cannot dispatch to remote node '${node.id}': providerType unknown. Set providerPriority on the node policy or call mesh_launch_session first.` };
     }
 
     try {
         await transport.meshCommand(daemonId, 'agent_command', {
-            targetSessionId: sessionId,
+            // Precise match when sessionId known, fuzzy type match otherwise
+            ...(sessionId ? { targetSessionId: sessionId } : {}),
+            agentType: resolvedProviderType,
             cliType: resolvedProviderType,
             action: 'send_chat',
             message: args.message,
         });
-        return { success: true, dispatched: true, sessionId };
+        return { success: true, dispatched: true, sessionId: sessionId || resolvedProviderType };
     } catch (e: any) {
         return { success: false, error: `P2P dispatch failed: ${e?.message || String(e)}` };
     }
