@@ -361,9 +361,11 @@ export const GhosttyTerminalView = forwardRef<TerminalRendererHandle, GhosttyTer
 
         disposable = term.onData((data: string) => {
           if (readOnlyRef.current) return;
+          const cleanData = data.replace(/\x1b\[[?>][0-9;]*c/g, '');
+          if (!cleanData) return;
           const restoreViewportAfterInput = pendingLocalInputViewportRestoreRef.current ?? preserveViewportAfterLocalInput(term);
           pendingLocalInputViewportRestoreRef.current = null;
-          onInputRef.current(data);
+          onInputRef.current(cleanData);
           restorePreservedLocalInputViewport(restoreViewportAfterInput);
           scheduleInOwnerWindow(() => {
             restorePreservedLocalInputViewport(restoreViewportAfterInput);

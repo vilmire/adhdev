@@ -114,10 +114,10 @@ export async function handlePtyInput(h: CommandHelpers, args: any): Promise<Comm
     const { cliType, data, targetSessionId } = args || {};
     if (!data) return { success: false, error: 'data required' };
 
-    // Filter out VT100/VT420 Device Attributes responses (e.g. \x1b[?1;2c)
+    // Filter out VT100/VT420 Device Attributes responses (e.g. \x1b[?1;2c or \x1b[>0;276;0c)
     // These are echoed by xterm.js in the dashboard in response to \x1b[c queries
     // and pollute the CLI input buffer.
-    const cleanData = typeof data === 'string' ? data.replace(/\x1b\[\?[0-9;]*c/g, '') : data;
+    const cleanData = typeof data === 'string' ? data.replace(/\x1b\[[?>][0-9;]*c/g, '') : data;
     if (!cleanData) return { success: true };
 
     const adapter = h.getCliAdapter(targetSessionId || cliType);
