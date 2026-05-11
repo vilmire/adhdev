@@ -177,10 +177,6 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
     const cliArgs = Array.isArray(input.cliArgs) ? [...input.cliArgs] : [];
     const env: Record<string, string> = { ...(input.env || {}), ...COORDINATOR_DELEGATED_ENV_UNSETS };
 
-    if (cliType === 'hermes-cli' && !hasCliArg(cliArgs, '--ignore-user-config')) {
-        cliArgs.unshift('--ignore-user-config');
-    }
-
     if (cliType === 'claude-cli' && !hasCliArg(cliArgs, '--mcp-config')) {
         cliArgs.unshift('--mcp-config', ensureEmptyDelegatedMcpConfig(input.workspace));
     }
