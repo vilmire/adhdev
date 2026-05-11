@@ -833,6 +833,8 @@ export class CliProviderInstance implements ProviderInstance {
                         this.completedDebounceTimer = null;
                     }, 3000);
                 }
+            } else if (newStatus === 'idle' && this.lastStatus === 'starting') {
+                this.pushEvent({ event: 'agent:ready', chatTitle, timestamp: now });
             } else if (newStatus === 'stopped') {
                 // Cancel any pending debounce
                 if (this.generatingDebounceTimer) { clearTimeout(this.generatingDebounceTimer); this.generatingDebounceTimer = null; }

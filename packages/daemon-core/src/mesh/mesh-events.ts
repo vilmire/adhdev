@@ -37,6 +37,7 @@ const MESH_COORDINATOR_EVENTS = new Set([
     'agent:generating_completed',
     'agent:waiting_approval',
     'agent:stopped',
+    'agent:ready',
     'monitor:long_generating',
 ]);
 
@@ -182,6 +183,16 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
                 }, 500);
             }
+        }
+    } else if (args.event === 'agent:ready') {
+        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId);
+        const nodeId = readNonEmptyString(args.metadataEvent.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
+        const providerType = readNonEmptyString(args.metadataEvent.providerType);
+        
+        if (sessionId && nodeId && providerType) {
+            setTimeout(() => {
+                tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
+            }, 500);
         }
     } else if (args.event === 'agent:stopped') {
         const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId);
