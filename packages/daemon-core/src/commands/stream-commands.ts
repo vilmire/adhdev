@@ -113,11 +113,18 @@ export async function handleOpenPanel(h: CommandHelpers, args: any): Promise<Com
 export async function handlePtyInput(h: CommandHelpers, args: any): Promise<CommandResult> {
     const { cliType, data, targetSessionId } = args || {};
     if (!data) return { success: false, error: 'data required' };
+
+    // Filter out VT100/VT420 Device Attributes responses (e.g. \x1b[?1;2c)
+    // These are echoed by xterm.js in the dashboard in response to \x1b[c queries
+    // and pollute the CLI input buffer.
+    const cleanData = typeof data === 'string' ? data.replace(/\x1b\[\?[0-9;]*c/g, '') : data;
+    if (!cleanData) return { success: true };
+
     const adapter = h.getCliAdapter(targetSessionId || cliType);
     if (!adapter || typeof adapter.writeRaw !== 'function') {
         return { success: false, error: `CLI adapter not found: ${targetSessionId || cliType || 'unknown'}` };
     }
-    await adapter.writeRaw(data);
+    await adapter.writeRaw(cleanData);
     return { success: true };
 }
 

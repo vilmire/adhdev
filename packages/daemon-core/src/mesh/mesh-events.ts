@@ -76,7 +76,7 @@ export function tryAssignQueueTask(
         targetSessionId: sessionId,
         cliType: providerType,
         action: 'send_chat',
-        input: task.message,
+        message: task.message,
     }).catch((e: any) => {
         LOG.error('MeshQueue', `Failed to dispatch task to node ${nodeId}: ${e?.message}`);
     });
