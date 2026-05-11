@@ -714,30 +714,52 @@ export async function meshEnqueueTask(
     try {
         const task = enqueueTask(ctx.mesh.id, args.message);
 
-        // Tell the daemon to try assigning the new task to any idle node.
-        // For IpcTransport we also directly notify remote nodes via P2P,
-        // because the local queue file is not accessible by remote daemons.
-        if (isLocalTransport(ctx.transport)) {
+        // ── LocalTransport: queue-based pull (standalone daemon, all local) ─────
+        if (isLocalTransport(ctx.transport) && !(ctx.transport instanceof IpcTransport)) {
             ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
-
-            if (ctx.transport instanceof IpcTransport) {
-                // Notify each remote node's daemon so it can pick up the task
-                // if one of its sessions happens to be idle.
-                for (const node of ctx.mesh.nodes) {
-                    const isLocalNode =
-                        (ctx.localMachineId && (node as any).machineId === ctx.localMachineId) ||
-                        (ctx.localDaemonId && node.daemonId === ctx.localDaemonId);
-                    if (!isLocalNode && node.daemonId) {
-                        (ctx.transport as IpcTransport).meshCommand(
-                            node.daemonId,
-                            'trigger_mesh_queue',
-                            { meshId: ctx.mesh.id },
-                        ).catch(() => {});
-                    }
-                }
-            }
+            return JSON.stringify({ success: true, taskId: task.id, status: task.status });
         }
 
+        // ── IpcTransport (Cloud Mesh): the queue file lives on THIS machine only.
+        //    Remote daemons on other machines cannot read the local queue file.
+        //    Strategy: trigger local queue for local nodes, and for remote nodes
+        //    directly P2P-dispatch to the first idle session found (enqueue-and-push).
+        if (ctx.transport instanceof IpcTransport) {
+            // 1. Trigger local queue for local node pick-up
+            ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
+
+            // 2. For each remote node, directly dispatch to an idle session via P2P
+            const dispatchPromises: Promise<void>[] = [];
+            for (const node of ctx.mesh.nodes) {
+                const isLocalNode =
+                    (ctx.localMachineId && (node as any).machineId === ctx.localMachineId) ||
+                    (ctx.localDaemonId && node.daemonId === ctx.localDaemonId);
+                if (isLocalNode || !node.daemonId) continue;
+
+                dispatchPromises.push(
+                    ipcDispatchToRemoteAgent(ctx, node, { message: args.message })
+                        .then(result => {
+                            if (result.success) {
+                                try {
+                                    appendLedgerEntry(ctx.mesh.id, {
+                                        kind: 'task_dispatched',
+                                        nodeId: node.id,
+                                        sessionId: result.sessionId,
+                                        payload: { message: args.message, via: 'p2p_direct', taskId: task.id },
+                                    });
+                                } catch { /* best-effort */ }
+                            }
+                        })
+                        .catch(() => { /* non-fatal: no idle session or P2P failure */ }),
+                );
+            }
+            // Fire-and-forget — don't block the coordinator response
+            Promise.all(dispatchPromises).catch(() => {});
+
+            return JSON.stringify({ success: true, taskId: task.id, status: task.status });
+        }
+
+        // ── CloudTransport fallback ───────────────────────────────────────────────
         return JSON.stringify({ success: true, taskId: task.id, status: task.status });
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e.message });
