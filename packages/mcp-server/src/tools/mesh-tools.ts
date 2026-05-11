@@ -151,16 +151,15 @@ async function ipcDispatchToRemoteAgent(
         : [];
     let resolvedProviderType = args.providerType?.trim() || providerPriorityList[0] || '';
 
-    // If no session_id given, ask the remote daemon via get_status_metadata
+    // If no session_id given, ask the remote daemon via get_status_metadata.
+    // mesh_relay_command wraps the response: { success, result: { success, status: { sessions[] } } }
     if (!sessionId) {
         try {
-            const statusResult = await transport.meshCommand(daemonId, 'get_status_metadata', {});
-            const payload = unwrapCommandPayload(statusResult);
-            const sessions: any[] = Array.isArray(payload?.sessions)
-                ? payload.sessions
-                : Array.isArray(payload?.status?.sessions)
-                    ? payload.status.sessions
-                    : [];
+            const relayResult = await transport.meshCommand(daemonId, 'get_status_metadata', {});
+            // Unwrap relay envelope: relayResult.result.status.sessions
+            const innerResult = relayResult?.result ?? relayResult;
+            const statusObj = innerResult?.status ?? innerResult;
+            const sessions: any[] = Array.isArray(statusObj?.sessions) ? statusObj.sessions : [];
 
             // Prefer sessions launched for this specific mesh node
             const meshSessions = sessions.filter((s: any) =>
