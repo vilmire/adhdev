@@ -29,6 +29,15 @@ export type MeshCoordinatorSetup =
       template: string
     }
   | {
+      /** Provider registers MCP via its own CLI command (e.g. `codex mcp add` / `gemini mcp add`). */
+      kind: 'cli_command'
+      serverName: string
+      /** The rendered shell command to execute before launching the coordinator session. */
+      command: string
+      requiresRestart: boolean
+      instructions: string
+    }
+  | {
       kind: 'unsupported'
       reason: string
     }
@@ -152,6 +161,24 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
     if (!instructions || !template?.trim()) {
       return { kind: 'unsupported', reason: 'Provider manual MCP setup is missing instructions or template' }
     }
+    const renderedTemplate = renderMeshCoordinatorTemplate(template, {
+      meshId,
+      workspace,
+      serverName,
+      adhdevMcpCommand: options.adhdevMcpCommand || DEFAULT_ADHDEV_MCP_COMMAND,
+    })
+    // Detect if the template is a runnable CLI command (single line, no YAML/JSON structure).
+    // If so, use cli_command kind so the daemon can execute it automatically.
+    const isCliCommand = !renderedTemplate.trim().includes('\n') && !renderedTemplate.trim().startsWith('{')
+    if (isCliCommand) {
+      return {
+        kind: 'cli_command',
+        serverName,
+        command: renderedTemplate.trim(),
+        requiresRestart: mcpConfig.requiresRestart === true,
+        instructions: instructions,
+      }
+    }
     return {
       kind: 'manual',
       serverName,
@@ -159,12 +186,7 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
       configPathCommand: mcpConfig.configPathCommand,
       requiresRestart: mcpConfig.requiresRestart === true,
       instructions,
-      template: renderMeshCoordinatorTemplate(template, {
-        meshId,
-        workspace,
-        serverName,
-        adhdevMcpCommand: options.adhdevMcpCommand || DEFAULT_ADHDEV_MCP_COMMAND,
-      }),
+      template: renderedTemplate,
     }
   }
 
