@@ -6,6 +6,19 @@ import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
 import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus } from './mesh-work-queue.js';
 
 // ---------------------------------------------------------------------------
+// Remote Node Idle Session Tracking
+// ---------------------------------------------------------------------------
+// Tracks remote sessions that emitted 'agent:ready' so triggerMeshQueue 
+// can assign tasks to them.
+// ---------------------------------------------------------------------------
+interface RemoteIdleSession {
+    nodeId: string;
+    sessionId: string;
+    providerType: string;
+}
+const remoteIdleSessions = new Map<string, RemoteIdleSession>(); // key: `${nodeId}:${sessionId}`
+
+// ---------------------------------------------------------------------------
 // MCP coordinator pending-event queue
 // ---------------------------------------------------------------------------
 // When a mesh event fires but no CLI coordinator session is registered (e.g.
@@ -141,6 +154,18 @@ export function triggerMeshQueue(components: DaemonComponents, meshId: string) {
             tryAssignQueueTask(components, meshId, nodeId, sessionId, providerType);
         }
     }
+
+    // Also check known idle remote sessions
+    for (const [key, idle] of remoteIdleSessions.entries()) {
+        // Find if this node is in the same mesh
+        const node = mesh.nodes.find((n: any) => n.id === idle.nodeId);
+        if (node) {
+            const assigned = tryAssignQueueTask(components, meshId, idle.nodeId, idle.sessionId, idle.providerType);
+            if (assigned) {
+                remoteIdleSessions.delete(key);
+            }
+        }
+    }
 }
 
 function buildMeshSystemMessage(args: {
@@ -216,12 +241,26 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
         
         if (sessionId && nodeId && providerType) {
+            remoteIdleSessions.set(`${nodeId}:${sessionId}`, { nodeId, sessionId, providerType });
             setTimeout(() => {
-                tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
+                const assigned = tryAssignQueueTask(components, args.meshId, nodeId, sessionId, providerType);
+                if (assigned) {
+                    remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
+                }
             }, 500);
+        }
+    } else if (args.event === 'agent:generating_started') {
+        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId);
+        const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
+        if (sessionId && nodeId) {
+            remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
         }
     } else if (args.event === 'agent:stopped') {
         const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId);
+        const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
+        if (sessionId && nodeId) {
+            remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
+        }
         if (sessionId) {
             updateSessionTaskStatus(args.meshId, sessionId, 'failed');
         }
