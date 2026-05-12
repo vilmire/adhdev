@@ -264,10 +264,10 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                     nodeId: nodeId || undefined,
                     sessionId,
                     providerType: providerType || undefined,
-                    taskId: completedTask.id,
                     payload: {
                         event: args.event,
                         nodeLabel: args.nodeLabel,
+                        taskId: completedTask.id,
                         completedViaReady: true,
                         providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
                     },
