@@ -1456,6 +1456,14 @@ export class ProviderCliAdapter implements CliAdapter {
 
  // ─── Script Execution ──────────────────────────
 
+    private invokeCliScript<T>(script: Function, input: any): T {
+        const hasStateFactory = typeof this.cliScripts?.createState === 'function';
+        const expectsStateArgument = hasStateFactory || this.scriptState !== null || script.length >= 2;
+        return expectsStateArgument
+            ? script(this.scriptState, input)
+            : script(input);
+    }
+
     private runParseSession(): ParsedSession | null {
         if (typeof this.cliScripts?.parseSession !== 'function') {
             this.parseErrorMessage = `${this.cliType} parseSession unavailable`;
@@ -1476,7 +1484,10 @@ export class ProviderCliAdapter implements CliAdapter {
                 scope: this.currentTurnScope,
                 runtimeSettings: this.runtimeSettings,
             });
-            const session = this.cliScripts.parseSession(this.scriptState, { ...input, tail, tailScreen: buildCliScreenSnapshot(tail) });
+            const session = this.invokeCliScript<ParsedSession | null>(
+                this.cliScripts.parseSession,
+                { ...input, tail, tailScreen: buildCliScreenSnapshot(tail) },
+            );
             this.parseErrorMessage = null;
             return session && typeof session === 'object' ? session : null;
         } catch (e: any) {
@@ -1491,7 +1502,7 @@ export class ProviderCliAdapter implements CliAdapter {
         if (!this.cliScripts?.detectStatus) return null;
         try {
             const screenText = this.terminalScreen.getText();
-            const status = this.cliScripts.detectStatus(this.scriptState, {
+            const status = this.invokeCliScript<string | null>(this.cliScripts.detectStatus, {
                 tail: text.slice(-500),
                 screenText,
                 rawBuffer: this.accumulatedRawBuffer,
@@ -1511,7 +1522,7 @@ export class ProviderCliAdapter implements CliAdapter {
         try {
             const screenText = this.terminalScreen.getText();
             const buffer = screenText || this.accumulatedBuffer;
-            return this.cliScripts.parseApproval(this.scriptState, {
+            return this.invokeCliScript<{ message: string; buttons: string[] } | null>(this.cliScripts.parseApproval, {
                 buffer,
                 screenText,
                 rawBuffer: this.accumulatedRawBuffer,

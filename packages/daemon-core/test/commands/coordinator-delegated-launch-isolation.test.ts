@@ -33,7 +33,7 @@ describe('coordinator delegated CLI launch isolation', () => {
     })
   })
 
-  it('starts delegated Hermes agents without user config so global adhdev-mesh MCP is not inherited', () => {
+  it('preserves delegated Hermes args so user default model/provider config is still used', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-child-hermes-'))
 
     const result = buildCoordinatorDelegatedCliLaunchOptions({
@@ -42,8 +42,24 @@ describe('coordinator delegated CLI launch isolation', () => {
       cliArgs: ['--model', 'test'],
     })
 
-    expect(result.cliArgs).toEqual(['--ignore-user-config', '--model', 'test'])
+    expect(result.cliArgs).toEqual(['--model', 'test'])
+    expect(result.cliArgs).not.toContain('--ignore-user-config')
     expect(result.env.HERMES_EPHEMERAL_SYSTEM_PROMPT).toBe('')
+  })
+
+  it('does not inject model/provider flags for delegated Hermes launches without explicit overrides', () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-child-hermes-default-model-'))
+
+    const result = buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'hermes-cli',
+      workspace,
+    })
+
+    expect(result.cliArgs).toEqual([])
+    expect(result.cliArgs).not.toContain('--ignore-user-config')
+    expect(result.cliArgs).not.toContain('--model')
+    expect(result.cliArgs).not.toContain('--provider')
+    expect(Object.keys(result.env).some((key) => /^HERMES_.*MODEL/.test(key))).toBe(false)
   })
 
   it('starts delegated Claude agents with an isolated empty MCP config instead of repo .mcp coordinator setup', () => {
