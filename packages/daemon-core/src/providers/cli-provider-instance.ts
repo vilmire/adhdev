@@ -40,6 +40,7 @@ type CompletedDebouncePending = {
     duration: number;
     timestamp: number;
     firstObservedAt: number;
+    loggedBlockReason?: string;
 };
 
 const COMPLETED_FINALIZATION_RETRY_MS = 1000;
@@ -781,7 +782,10 @@ export class CliProviderInstance implements ProviderInstance {
         if (blockReason) {
             const waitedMs = Date.now() - pending.firstObservedAt;
             if (waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS) {
-                LOG.info('CLI', `[${this.type}] waiting to emit completed until transcript finalizes (${blockReason})`);
+                if (pending.loggedBlockReason !== blockReason) {
+                    LOG.info('CLI', `[${this.type}] waiting to emit completed until transcript finalizes (${blockReason})`);
+                    pending.loggedBlockReason = blockReason;
+                }
                 this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
                 return;
             }
