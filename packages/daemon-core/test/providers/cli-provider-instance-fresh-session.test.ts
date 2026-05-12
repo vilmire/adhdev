@@ -319,6 +319,66 @@ describe('CliProviderInstance lightweight hot chat state', () => {
       vi.useRealTimers()
     }
   })
+
+  it('waits for read_chat-finalized assistant transcript before emitting completion', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-13T00:00:00Z'))
+    try {
+      const instance = new CliProviderInstance({
+        type: 'hermes-cli',
+        name: 'Hermes Agent',
+        category: 'cli',
+        spawn: { command: 'hermes', args: [] },
+      } as any, '/tmp/project') as any
+      const events: any[] = []
+      instance.pushEvent = (event: any) => events.push(event)
+      instance.historyWriter = { appendNewMessages: vi.fn() }
+      instance.lastStatus = 'idle'
+
+      let status = 'generating'
+      let parsed = {
+        status: 'generating',
+        title: 'Hermes Agent',
+        messages: [
+          { role: 'assistant', content: 'previous reply', kind: 'standard' },
+          { role: 'user', content: 'current prompt', kind: 'standard' },
+        ],
+      }
+      const getScriptParsedStatus = vi.fn(() => parsed)
+      instance.adapter = {
+        getStatus: () => ({ status, activeModal: null, messages: [] }),
+        getScriptParsedStatus,
+        getPartialResponse: () => '',
+        getRuntimeMetadata: () => null,
+      }
+
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+      expect(events.map((event) => event.event)).toContain('agent:generating_started')
+
+      status = 'idle'
+      instance.detectStatusTransition()
+      vi.advanceTimersByTime(3000)
+
+      expect(getScriptParsedStatus).toHaveBeenCalledTimes(1)
+      expect(events.map((event) => event.event)).not.toContain('agent:generating_completed')
+
+      parsed = {
+        status: 'idle',
+        title: 'Hermes Agent',
+        messages: [
+          { role: 'assistant', content: 'previous reply', kind: 'standard' },
+          { role: 'user', content: 'current prompt', kind: 'standard' },
+          { role: 'assistant', content: 'final summary', kind: 'standard' },
+        ],
+      }
+      vi.advanceTimersByTime(1000)
+
+      expect(events.map((event) => event.event)).toContain('agent:generating_completed')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('CliProviderInstance incremental history persistence', () => {
