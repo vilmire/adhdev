@@ -18,7 +18,7 @@ import type { McpTransport } from '../transports/mode.js';
 import { compactChatPayload } from './chat-compact.js';
 import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
-import { appendLedgerEntry, readLedgerEntries, getLedgerSummary, enqueueTask, getQueue } from '@adhdev/daemon-core';
+import { appendLedgerEntry, readLedgerEntries, getLedgerSummary, enqueueTask, getQueue, getSessionRecoveryContext } from '@adhdev/daemon-core';
 
 export interface MeshContext {
     mesh: LocalMeshEntry;
@@ -211,7 +211,7 @@ function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | undefine
         if (preferred) return preferred;
     }
     if (ctx.localMachineId) {
-        const byMachine = ctx.mesh.nodes.find(n => n.machineId === ctx.localMachineId);
+        const byMachine = ctx.mesh.nodes.find(n => (n as any).machineId === ctx.localMachineId);
         if (byMachine) return byMachine;
     }
     if (ctx.localDaemonId) {
@@ -339,7 +339,7 @@ async function commandForNode(
     args: Record<string, unknown> = {},
 ): Promise<any> {
     const isLocalNode =
-        (ctx.localMachineId && node.machineId === ctx.localMachineId) ||
+        (ctx.localMachineId && (node as any).machineId === ctx.localMachineId) ||
         (ctx.localDaemonId && node.daemonId === ctx.localDaemonId);
 
     if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
@@ -355,7 +355,7 @@ async function commandForNode(
 
 export const MESH_STATUS_TOOL = {
     name: 'mesh_status',
-    description: 'Get the current status of all nodes in the repo mesh — health, git state, active sessions. Use this to decide which node to send work to.',
+    description: 'Get the current status of all nodes in the repo mesh — health, git state, active sessions, recovery hints, and recommended next steps. Use this to decide which node to send work to or how to recover from failures.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -605,6 +605,8 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
     const { mesh, transport } = ctx;
     const results: any[] = [];
 
+    const ledgerSummary = getLedgerSummary(mesh.id);
+
     for (const node of mesh.nodes) {
         const entry: any = {
             nodeId: node.id,
@@ -640,6 +642,38 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
             entry.error = e.message;
         }
 
+        // Recovery Hints & Next-step reporting
+        const recoveryContext = getSessionRecoveryContext(mesh.id, { nodeId: node.id });
+        if (recoveryContext.consecutiveNodeFailures > 0) {
+            entry.recoveryHints = {
+                consecutiveFailures: recoveryContext.consecutiveNodeFailures,
+                lastTaskMessage: recoveryContext.lastTaskMessage,
+                advice: recoveryContext.advice,
+                retryRecommended: recoveryContext.retryRecommended,
+            };
+        }
+
+        const nextStepHints: string[] = [];
+        if (entry.health === 'online' && node.isLocalWorktree) {
+            nextStepHints.push(`Merge worktree to base via mesh_refine_node(node_id: "${node.id}")`);
+        } else if (entry.health === 'dirty') {
+            nextStepHints.push(`Commit changes via mesh_checkpoint(node_id: "${node.id}", message: "...")`);
+        } else if (entry.health === 'degraded' && entry.error?.includes('git')) {
+            nextStepHints.push('Initialize git repository or check workspace path.');
+        }
+
+        if (recoveryContext.consecutiveNodeFailures > 0) {
+            if (recoveryContext.retryRecommended) {
+                nextStepHints.push(`Retry task on this node or launch a fresh session.`);
+            } else {
+                nextStepHints.push(`Consider reassigning work to a different node.`);
+            }
+        }
+
+        if (nextStepHints.length > 0) {
+            entry.nextStepHints = nextStepHints;
+        }
+
         const relatedRepos = await collectRelatedRepoStatuses(ctx, node);
         if (relatedRepos.length) entry.relatedRepos = relatedRepos;
 
@@ -657,7 +691,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
 
     // Include task ledger summary for coordinator context
     try {
-        response.ledgerSummary = getLedgerSummary(mesh.id);
+        response.ledgerSummary = ledgerSummary;
     } catch { /* ledger read is best-effort */ }
 
     // Drain MCP-coordinator pending events queued by the daemon (same-machine case).
@@ -833,9 +867,12 @@ export async function meshSendTask(
         }
 
         // ── LocalTransport or local IpcTransport node: use queue ───────────────
-        const task = enqueueTask(ctx.mesh.id, args.message, { targetNodeId: args.node_id });
+        const task = enqueueTask(ctx.mesh.id, args.message, {
+            targetNodeId: args.node_id,
+            targetSessionId: args.session_id,
+        });
 
-        if (isLocalTransport(ctx.transport)) {
+        if (isLocalTransport(ctx.transport) || ctx.transport instanceof IpcTransport) {
             ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
         }
 
@@ -1012,7 +1049,7 @@ export async function meshLaunchSession(
 
         // Tell daemon to trigger queue processing so the new session immediately picks up pending tasks
         const isLocalNode =
-            (ctx.localMachineId && node.machineId === ctx.localMachineId) ||
+            (ctx.localMachineId && (node as any).machineId === ctx.localMachineId) ||
             (ctx.localDaemonId && node.daemonId === ctx.localDaemonId);
 
         if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {

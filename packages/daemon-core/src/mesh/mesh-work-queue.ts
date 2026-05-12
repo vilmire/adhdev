@@ -12,6 +12,8 @@ export interface MeshWorkQueueEntry {
     status: MeshTaskStatus;
     /** If specified, only this node can claim the task (used by legacy mesh_send_task) */
     targetNodeId?: string;
+    /** If specified, only this runtime session can claim the task */
+    targetSessionId?: string;
     /** The node that actually claimed and is executing the task */
     assignedNodeId?: string;
     /** The session currently executing the task */
@@ -47,7 +49,7 @@ function writeQueue(meshId: string, queue: MeshWorkQueueEntry[]): void {
 export function enqueueTask(
     meshId: string,
     message: string,
-    opts?: { targetNodeId?: string }
+    opts?: { targetNodeId?: string; targetSessionId?: string }
 ): MeshWorkQueueEntry {
     const queue = readQueue(meshId);
     const entry: MeshWorkQueueEntry = {
@@ -56,6 +58,7 @@ export function enqueueTask(
         message,
         status: 'pending',
         targetNodeId: opts?.targetNodeId,
+        targetSessionId: opts?.targetSessionId,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
     };
@@ -83,11 +86,15 @@ export function claimNextTask(meshId: string, nodeId: string, sessionId: string)
     const queue = readQueue(meshId);
     
     // Find highest priority task:
-    // 1. Pending tasks explicitly targeted at this node
-    // 2. Pending tasks with no target node
-    let targetIdx = queue.findIndex(q => q.status === 'pending' && q.targetNodeId === nodeId);
+    // 1. Pending tasks explicitly targeted at this runtime session
+    // 2. Pending tasks explicitly targeted at this node (but not another session)
+    // 3. Pending tasks with no target node/session
+    let targetIdx = queue.findIndex(q => q.status === 'pending' && q.targetSessionId === sessionId);
     if (targetIdx === -1) {
-        targetIdx = queue.findIndex(q => q.status === 'pending' && !q.targetNodeId);
+        targetIdx = queue.findIndex(q => q.status === 'pending' && q.targetNodeId === nodeId && !q.targetSessionId);
+    }
+    if (targetIdx === -1) {
+        targetIdx = queue.findIndex(q => q.status === 'pending' && !q.targetNodeId && !q.targetSessionId);
     }
 
     if (targetIdx === -1) return null;

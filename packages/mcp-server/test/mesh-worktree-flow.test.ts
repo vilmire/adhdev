@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshApprove, meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { getQueue } from '@adhdev/daemon-core';
 
 test('mesh worktree tools route clone/remove to the source node daemon and refresh MCP mesh context', async () => {
   const transport = new IpcTransport() as IpcTransport & {
@@ -937,10 +938,62 @@ test('mesh status and git status include explicitly configured related repo fres
   assert.ok(calls.some(call => call.command === 'git_status' && call.workspace === '/provider/repo'));
 });
 
-test('mesh tool registry documents the 15 exposed mesh tools including read-debug, worktree clone/remove, and session cleanup', () => {
-  assert.equal(ALL_MESH_TOOLS.length, 15);
+test('local IPC mesh_send_task preserves target session and triggers queue processing', async () => {
+  const meshId = `mesh-ipc-send-${Date.now()}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const directCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  transport.command = async (command, args = {}) => {
+    directCalls.push({ command, args });
+    return { success: true };
+  };
+  transport.meshCommand = async () => {
+    throw new Error('unexpected remote mesh command');
+  };
+
+  const mesh = {
+    id: meshId,
+    name: 'IPC Send Task Mesh',
+    repoIdentity: 'example/repo',
+    policy: {},
+    coordinator: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    nodes: [{
+      id: 'node-local',
+      workspace: '/repo',
+      repoRoot: '/repo',
+      daemonId: 'daemon-local',
+      userOverrides: {},
+      policy: {},
+    }],
+  };
+  const ctx = { mesh, transport, localDaemonId: 'daemon-local' };
+
+  const text = await meshSendTask(ctx as any, {
+    node_id: 'node-local',
+    session_id: 'session-hermes',
+    message: 'run targeted task',
+  });
+  const result = JSON.parse(text);
+  assert.equal(result.success, true);
+  assert.equal(directCalls.length, 1);
+  assert.equal(directCalls[0].command, 'trigger_mesh_queue');
+  assert.equal(directCalls[0].args.meshId, meshId);
+
+  const queued = getQueue(meshId);
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].targetNodeId, 'node-local');
+  assert.equal((queued[0] as any).targetSessionId, 'session-hermes');
+});
+
+test('mesh tool registry documents the 16 exposed mesh tools including read-debug, worktree clone/remove/refine, and session cleanup', () => {
+  assert.equal(ALL_MESH_TOOLS.length, 16);
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_read_debug'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_clone_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_remove_node'));
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_cleanup_sessions'));
 });

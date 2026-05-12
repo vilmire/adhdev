@@ -65,6 +65,36 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(c2?.id).to.equal(t1.id);
     });
 
+    it('should only claim session-targeted tasks if the runtime session matches', () => {
+        const t1 = enqueueTask(meshId, 'session targeted task', {
+            targetNodeId: 'node-target',
+            targetSessionId: 'session-target',
+        });
+
+        // Another idle session on the same node must not steal the task.
+        const c1 = claimNextTask(meshId, 'node-target', 'session-other');
+        expect(c1).to.be.null;
+
+        const c2 = claimNextTask(meshId, 'node-target', 'session-target');
+        expect(c2).to.not.be.null;
+        expect(c2?.id).to.equal(t1.id);
+        expect(c2?.assignedSessionId).to.equal('session-target');
+    });
+
+    it('prioritizes session-targeted tasks over broader node-targeted work for that session', () => {
+        const nodeTask = enqueueTask(meshId, 'node targeted task', { targetNodeId: 'node-target' });
+        const sessionTask = enqueueTask(meshId, 'session targeted task', {
+            targetNodeId: 'node-target',
+            targetSessionId: 'session-target',
+        });
+
+        const c1 = claimNextTask(meshId, 'node-target', 'session-target');
+        expect(c1?.id).to.equal(sessionTask.id);
+
+        const c2 = claimNextTask(meshId, 'node-target', 'session-other');
+        expect(c2?.id).to.equal(nodeTask.id);
+    });
+
     it('should update task status', () => {
         const task = enqueueTask(meshId, 'status task');
         expect(task.status).to.equal('pending');

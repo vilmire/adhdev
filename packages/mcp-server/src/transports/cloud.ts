@@ -31,7 +31,7 @@ export class CloudTransport {
   async listRemoteMeshes(): Promise<{ meshes: any[] }> {
     const res = await fetch(`${this.baseUrl}/api/v1/repo-meshes`, { headers: this.headers() });
     if (!res.ok) throw new Error(`List remote meshes failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async createRemoteMesh(data: {
@@ -47,7 +47,7 @@ export class CloudTransport {
       body: JSON.stringify(data),
     });
     if (!res.ok) throw new Error(`Create remote mesh failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async deleteRemoteMesh(meshId: string): Promise<void> {
@@ -65,13 +65,13 @@ export class CloudTransport {
       body: JSON.stringify(data),
     });
     if (!res.ok) throw new Error(`Sync mesh ledger failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async listDaemons(): Promise<any> {
     const res = await fetch(`${this.baseUrl}/api/v1/daemons`, { headers: this.headers() });
     if (!res.ok) throw new Error(`List daemons failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async getStatus(targetId: string): Promise<any> {
@@ -80,7 +80,7 @@ export class CloudTransport {
       { headers: this.headers() },
     );
     if (!res.ok) throw new Error(`Status failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   /** Get all sessions for a daemon (returns CompactSessionEntry[]). */
@@ -90,7 +90,7 @@ export class CloudTransport {
       { headers: this.headers() },
     );
     if (!res.ok) throw new Error(`Daemon status failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async readChat(targetId: string, opts: { limit?: number; sessionId?: string } = {}): Promise<any> {
@@ -103,7 +103,7 @@ export class CloudTransport {
       { headers: this.headers() },
     );
     if (!res.ok) throw new Error(`Read chat failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async getChatDebugBundle(
@@ -124,7 +124,7 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Chat debug bundle failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async sendChat(targetId: string, message: string, opts: { sessionId?: string; ideType?: string } = {}): Promise<any> {
@@ -137,7 +137,7 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Send chat failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async approve(targetId: string, action: 'approve' | 'reject', agentType?: string): Promise<any> {
@@ -150,7 +150,7 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Approve failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async gitStatus(daemonId: string, workspace: string, includeDiff = true): Promise<any> {
@@ -160,7 +160,7 @@ export class CloudTransport {
       { headers: this.headers() },
     );
     if (!res.ok) throw new Error(`Git status failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async stop(daemonId: string, opts: { id?: string; type?: string; dir?: string }): Promise<any> {
@@ -173,7 +173,7 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Stop failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async launch(daemonId: string, opts: { type: string; dir?: string; model?: string; settings?: Record<string, any> }): Promise<any> {
@@ -186,7 +186,7 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Launch failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async gitLog(daemonId: string, workspace: string, opts: { limit?: number; file?: string; since?: string; until?: string } = {}): Promise<any> {
@@ -200,7 +200,7 @@ export class CloudTransport {
       { headers: this.headers() },
     );
     if (!res.ok) throw new Error(`Git log failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async gitDiff(daemonId: string, workspace: string, opts: { file?: string; maxLines?: number; staged?: boolean } = {}): Promise<any> {
@@ -213,7 +213,7 @@ export class CloudTransport {
       { headers: this.headers() },
     );
     if (!res.ok) throw new Error(`Git diff failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async gitPush(daemonId: string, opts: { workspace: string; remote?: string; branch?: string }): Promise<any> {
@@ -226,7 +226,7 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Git push failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async gitCheckpoint(daemonId: string, opts: { workspace: string; message: string; includeUntracked?: boolean }): Promise<any> {
@@ -239,7 +239,7 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Git checkpoint failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async meshCloneNode(daemonId: string, payload: any): Promise<any> {
@@ -252,7 +252,7 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Mesh clone node failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async meshRemoveNode(daemonId: string, payload: any): Promise<any> {
@@ -265,7 +265,7 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Mesh remove node failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async meshCleanupSessions(daemonId: string, payload: any): Promise<any> {
@@ -278,7 +278,7 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Mesh cleanup sessions failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async meshEnqueueTask(daemonId: string, payload: any): Promise<any> {
@@ -291,7 +291,7 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Mesh enqueue task failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async meshRefineNode(daemonId: string, payload: any): Promise<any> {
@@ -304,7 +304,7 @@ export class CloudTransport {
       },
     );
     if (!res.ok) throw new Error(`Mesh refine node failed: ${res.status}`);
-    return res.json();
+    return res.json() as any;
   }
 
   async ping(): Promise<boolean> {
