@@ -84,6 +84,14 @@ export function getQueue(meshId: string, opts?: { status?: MeshTaskStatus[] }): 
  */
 export function claimNextTask(meshId: string, nodeId: string, sessionId: string): MeshWorkQueueEntry | null {
     const queue = readQueue(meshId);
+
+    // A worker must finish or fail its current queued assignment before it can
+    // claim another one. maxParallelTasks limits total mesh concurrency; it is
+    // not permission for one node/session to accumulate multiple assigned items.
+    const hasActiveAssignment = queue.some(q => q.status === 'assigned' && (
+        q.assignedSessionId === sessionId || q.assignedNodeId === nodeId
+    ));
+    if (hasActiveAssignment) return null;
     
     // Find highest priority task:
     // 1. Pending tasks explicitly targeted at this runtime session

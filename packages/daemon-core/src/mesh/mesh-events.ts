@@ -47,6 +47,7 @@ function readNonEmptyString(value: unknown): string {
 }
 
 const MESH_COORDINATOR_EVENTS = new Set([
+    'agent:generating_started',
     'agent:generating_completed',
     'agent:waiting_approval',
     'agent:stopped',
@@ -229,7 +230,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
 }) {
     // ── Task Queue & Ledger ──
     if (args.event === 'agent:generating_completed') {
-        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId);
+        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId) || readNonEmptyString(args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
         
@@ -243,9 +244,31 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             }
         }
     } else if (args.event === 'agent:ready') {
-        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId);
+        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId) || readNonEmptyString(args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
+        const completedTask = sessionId
+            ? updateSessionTaskStatus(args.meshId, sessionId, 'completed')
+            : null;
+        if (completedTask) {
+            try {
+                appendLedgerEntry(args.meshId, {
+                    kind: 'task_completed',
+                    nodeId: nodeId || undefined,
+                    sessionId,
+                    providerType: providerType || undefined,
+                    taskId: completedTask.id,
+                    payload: {
+                        event: args.event,
+                        nodeLabel: args.nodeLabel,
+                        completedViaReady: true,
+                        providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
+                    },
+                });
+            } catch (e: any) {
+                LOG.warn('MeshLedger', `Failed to record task_completed from ready: ${e?.message || e}`);
+            }
+        }
         
         if (sessionId && nodeId && providerType) {
             remoteIdleSessions.set(`${nodeId}:${sessionId}`, { nodeId, sessionId, providerType });
@@ -257,13 +280,13 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             }, 500);
         }
     } else if (args.event === 'agent:generating_started') {
-        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId);
+        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId) || readNonEmptyString(args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         if (sessionId && nodeId) {
             remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
         }
     } else if (args.event === 'agent:stopped') {
-        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId);
+        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId) || readNonEmptyString(args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         if (sessionId && nodeId) {
             remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
@@ -279,7 +302,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             appendLedgerEntry(args.meshId, {
                 kind: ledgerKind,
                 nodeId: readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
-                sessionId: readNonEmptyString(args.metadataEvent.targetSessionId) || undefined,
+                sessionId: readNonEmptyString(args.metadataEvent.targetSessionId) || readNonEmptyString(args.sourceInstanceId) || undefined,
                 providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
                 payload: {
                     event: args.event,
@@ -301,7 +324,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             const maxRetries = mesh?.policy?.maxTaskRetries ?? 1;
 
             recoveryContext = getSessionRecoveryContext(args.meshId, {
-                sessionId: readNonEmptyString(args.metadataEvent.targetSessionId) || undefined,
+                sessionId: readNonEmptyString(args.metadataEvent.targetSessionId) || readNonEmptyString(args.sourceInstanceId) || undefined,
                 nodeId: readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
                 maxRetries,
             });
