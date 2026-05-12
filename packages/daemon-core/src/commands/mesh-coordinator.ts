@@ -50,6 +50,8 @@ export interface ResolveMeshCoordinatorSetupOptions {
   adhdevMcpCommand?: string
   adhdevMcpEntryPath?: string
   nodeExecutable?: string
+  adhdevMcpTransport?: 'local' | 'ipc'
+  adhdevMcpPort?: number
 }
 
 const DEFAULT_SERVER_NAME = 'adhdev-mesh'
@@ -67,6 +69,8 @@ function resolveHermesMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetupO
     meshId: options.meshId,
     nodeExecutable: options.nodeExecutable,
     adhdevMcpEntryPath: options.adhdevMcpEntryPath,
+    adhdevMcpTransport: options.adhdevMcpTransport,
+    adhdevMcpPort: options.adhdevMcpPort,
   })
   if (!mcpServer) {
     return {
@@ -139,6 +143,8 @@ export function resolveMeshCoordinatorSetup(options: ResolveMeshCoordinatorSetup
       meshId,
       nodeExecutable: options.nodeExecutable,
       adhdevMcpEntryPath: options.adhdevMcpEntryPath,
+      adhdevMcpTransport: options.adhdevMcpTransport,
+      adhdevMcpPort: options.adhdevMcpPort,
     })
     if (!mcpServer) {
       return {
@@ -218,15 +224,35 @@ function resolveAdhdevMcpServerLaunch(options: {
   meshId: string
   nodeExecutable?: string
   adhdevMcpEntryPath?: string
+  adhdevMcpTransport?: 'local' | 'ipc'
+  adhdevMcpPort?: number
 }): MeshCoordinatorMcpServerLaunch | null {
   const entryPath = resolveAdhdevMcpEntryPath(options.adhdevMcpEntryPath)
   if (!entryPath) return null
   const nodeExecutable = resolveMcpNodeExecutable(options.nodeExecutable)
   if (!nodeExecutable) return null
+  const transport = resolveMcpTransport(options.adhdevMcpTransport)
+  const args = [entryPath, '--mode', transport, '--repo-mesh', options.meshId]
+  const port = resolveMcpPort(options.adhdevMcpPort)
+  if (port !== undefined) args.push('--port', String(port))
   return {
     command: nodeExecutable,
-    args: [entryPath, '--mode', 'ipc', '--repo-mesh', options.meshId],
+    args,
   }
+}
+
+function resolveMcpTransport(explicitTransport?: 'local' | 'ipc'): 'local' | 'ipc' {
+  if (explicitTransport === 'local' || explicitTransport === 'ipc') return explicitTransport
+  const envTransport = process.env.ADHDEV_COORDINATOR_MCP_TRANSPORT?.trim()
+  return envTransport === 'local' ? 'local' : 'ipc'
+}
+
+function resolveMcpPort(explicitPort?: number): number | undefined {
+  if (typeof explicitPort === 'number' && Number.isInteger(explicitPort) && explicitPort > 0) return explicitPort
+  const raw = process.env.ADHDEV_COORDINATOR_MCP_PORT?.trim()
+  if (!raw) return undefined
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
 }
 
 function resolveMcpNodeExecutable(explicitExecutable?: string): string | null {

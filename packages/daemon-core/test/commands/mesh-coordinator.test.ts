@@ -78,6 +78,37 @@ describe('resolveMeshCoordinatorSetup', () => {
     })
   })
 
+  it('can target a standalone local MCP transport and custom port', () => {
+    const provider: ProviderModule = {
+      ...baseProvider,
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'auto_import',
+          format: 'claude_mcp_json',
+          path: '.mcp.json',
+          serverName: 'adhdev-mesh',
+        },
+      },
+    }
+
+    expect(resolveMeshCoordinatorSetup({
+      provider,
+      meshId: 'mesh_local',
+      workspace: '/repo',
+      nodeExecutable: '/usr/local/bin/node',
+      adhdevMcpEntryPath: '/opt/adhdev/vendor/mcp-server/index.js',
+      adhdevMcpTransport: 'local',
+      adhdevMcpPort: 3957,
+    })).toEqual(expect.objectContaining({
+      kind: 'auto_import',
+      mcpServer: {
+        command: '/usr/local/bin/node',
+        args: ['/opt/adhdev/vendor/mcp-server/index.js', '--mode', 'local', '--repo-mesh', 'mesh_local', '--port', '3957'],
+      },
+    }))
+  })
+
   it('honors an explicit MCP Node override after verifying it can run WebSocket IPC', () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-mcp-node-runtime-'))
     const goodBin = join(root, 'good-bin')

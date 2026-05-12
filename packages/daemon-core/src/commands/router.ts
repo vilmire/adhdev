@@ -1932,9 +1932,11 @@ export class DaemonCommandRouter {
                         args: coordinatorSetup.mcpServer.args,
                     };
                     if (args?.inlineMesh) {
+                        const modeArgIndex = coordinatorSetup.mcpServer.args.findIndex((value: string) => value === '--mode');
+                        const mcpTransport = modeArgIndex >= 0 ? coordinatorSetup.mcpServer.args[modeArgIndex + 1] : 'ipc';
                         mcpServerEntry.env = {
                             ADHDEV_INLINE_MESH: JSON.stringify(mesh),
-                            ADHDEV_MCP_TRANSPORT: 'ipc',
+                            ADHDEV_MCP_TRANSPORT: mcpTransport === 'local' ? 'local' : 'ipc',
                         };
                     }
 

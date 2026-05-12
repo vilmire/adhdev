@@ -575,6 +575,10 @@ class StandaloneServer {
       saveStandaloneBindHostPreference(persistedStandaloneBindHost);
     }
     const port = options.port || DEFAULT_PORT;
+    // Repo Mesh coordinators launched from standalone must talk back to this
+    // standalone HTTP daemon, not the user's global cloud-daemon IPC port.
+    process.env.ADHDEV_COORDINATOR_MCP_TRANSPORT = 'local';
+    process.env.ADHDEV_COORDINATOR_MCP_PORT = String(port);
     const host = options.host || persistedStandaloneBindHost;
     this.listenHost = host;
     const sessionHostEndpoint = await ensureSessionHostReady();
