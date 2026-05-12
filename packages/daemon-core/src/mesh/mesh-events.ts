@@ -276,7 +276,6 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                         nodeLabel: args.nodeLabel,
                         taskId: completedTask.id,
                         completedViaReady: true,
-                        taskId: completedTask.id,
                         providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
                         finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
                     },
