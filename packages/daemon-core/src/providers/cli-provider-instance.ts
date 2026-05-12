@@ -114,6 +114,15 @@ function cleanupStaleMaterializedImages(dir: string): void {
     } catch { /* dir may not exist or be inaccessible */ }
 }
 
+function hasNonEmptyCliModalButtons(activeModal: unknown): boolean {
+    const buttons = (activeModal as any)?.buttons;
+    return Array.isArray(buttons) && buttons.some((button) => String(button || '').trim().length > 0);
+}
+
+function isCliGeneratingLikeStatus(status: unknown): boolean {
+    return status === 'generating' || status === 'streaming' || status === 'long_generating' || status === 'starting';
+}
+
 export function buildCliStructuredInputPrompt(
     input: InputEnvelope,
     options: { materializeDir?: string } = {},
@@ -522,6 +531,10 @@ export class CliProviderInstance implements ProviderInstance {
         const canonicalBackedHistory = this.syncCanonicalSavedHistoryIfNeeded();
 
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
+        const parsedChatStatus = typeof parsedStatus?.status === 'string' && parsedStatus.status.trim()
+            ? parsedStatus.status.trim()
+            : undefined;
+        const suppressStaleParsedBusyStatus = this.shouldSuppressStaleParsedBusyStatus(parsedStatus, adapterStatus);
 
         if (parsedMessages.length > 0) {
             const shouldSkipReplayPersist =
@@ -529,7 +542,7 @@ export class CliProviderInstance implements ProviderInstance {
                 && adapterStatus.status === 'idle'
                 && parsedStatus?.status === 'idle';
             let messagesToSave = parsedMessages;
-            if ((parsedStatus?.status === 'generating' || parsedStatus?.status === 'long_generating')) {
+            if (!suppressStaleParsedBusyStatus && (parsedChatStatus === 'generating' || parsedChatStatus === 'long_generating')) {
                 const lastIdx = messagesToSave.length - 1;
                 if (lastIdx >= 0 && messagesToSave[lastIdx]?.role === 'assistant') {
                     messagesToSave = messagesToSave.slice(0, lastIdx);
@@ -564,6 +577,13 @@ export class CliProviderInstance implements ProviderInstance {
             summaryMetadata: this.summaryMetadata as any,
             controlValues: this.controlValues,
         });
+        const activeChatStatus = parseErrorMessage
+            ? 'error'
+            : autoApproveActive && parsedStatus?.status === 'waiting_approval'
+            ? 'generating'
+            : (adapterStatus.status !== 'idle'
+                ? visibleStatus
+                : (suppressStaleParsedBusyStatus ? visibleStatus : (parsedChatStatus || visibleStatus)));
 
         return {
             type: this.type,
@@ -574,13 +594,7 @@ export class CliProviderInstance implements ProviderInstance {
             activeChat: {
                 id: `${this.type}_${this.workingDir}`,
                 title: parsedStatus?.title || dirName,
-                status: parseErrorMessage
-                    ? 'error'
-                    : autoApproveActive && parsedStatus?.status === 'waiting_approval'
-                    ? 'generating'
-                    : (adapterStatus.status !== 'idle'
-                        ? visibleStatus
-                        : (parsedStatus?.status || visibleStatus)),
+                status: activeChatStatus,
                 messages: mergedMessages,
                 activeModal: autoApproveActive ? null : (parsedStatus?.activeModal ?? adapterStatus.activeModal),
                 inputContent: '',
@@ -727,6 +741,31 @@ export class CliProviderInstance implements ProviderInstance {
         const role = typeof lastVisible?.role === 'string' ? lastVisible.role.trim().toLowerCase() : '';
         const content = lastVisible ? flattenContent(lastVisible.content).trim() : '';
         return role === 'assistant' && !!content;
+    }
+
+    private hasAdapterPendingResponse(): boolean {
+        const adapterAny = this.adapter as any;
+        if (adapterAny?.isWaitingForResponse === true) return true;
+        if (adapterAny?.currentTurnScope) return true;
+        try {
+            if (typeof this.adapter.isProcessing === 'function' && this.adapter.isProcessing()) return true;
+        } catch { /* defensive: status rendering must not fail because of adapter diagnostics */ }
+        try {
+            const partial = typeof this.adapter.getPartialResponse === 'function'
+                ? this.adapter.getPartialResponse()
+                : '';
+            if (typeof partial === 'string' && partial.trim()) return true;
+        } catch { /* defensive: missing partial means no pending response evidence */ }
+        return false;
+    }
+
+    private shouldSuppressStaleParsedBusyStatus(parsedStatus: any, adapterStatus: any): boolean {
+        const parsedRawStatus = typeof parsedStatus?.status === 'string' ? parsedStatus.status.trim() : '';
+        const adapterRawStatus = typeof adapterStatus?.status === 'string' ? adapterStatus.status.trim() : '';
+        if (!isCliGeneratingLikeStatus(parsedRawStatus)) return false;
+        if (adapterRawStatus !== 'idle') return false;
+        if (hasNonEmptyCliModalButtons(parsedStatus?.activeModal ?? parsedStatus?.modal)) return false;
+        return !this.hasAdapterPendingResponse();
     }
 
     private getCompletedFinalizationBlockReason(latestVisibleStatus: string): string | null {

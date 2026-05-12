@@ -117,6 +117,68 @@ describe('CliProviderInstance provider patch state', () => {
     expect(state.activeChat.messages[1]).toEqual(expect.objectContaining({ content: 'done' }))
   })
 
+  it('does not let stale parsed generating override an idle adapter on dashboard/session surfaces', () => {
+    const instance = new CliProviderInstance({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      spawn: { command: 'hermes', args: [] },
+    } as any, '/tmp/project') as any
+
+    instance.adapter = {
+      getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        title: 'project',
+        status: 'generating',
+        messages: [
+          { role: 'user', content: 'say ok', bubbleState: 'final' },
+          { role: 'assistant', content: 'REMOTE-MESH-OK', bubbleState: 'streaming', meta: { streaming: true } },
+        ],
+      }),
+      getPartialResponse: () => '',
+      isProcessing: () => false,
+      getRuntimeMetadata: () => null,
+    }
+    instance.historyWriter = { appendNewMessages: vi.fn() }
+
+    const state = instance.getState() as any
+    expect(state.status).toBe('idle')
+    expect(state.activeChat.status).toBe('idle')
+    expect(state.activeChat.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'say ok' }),
+      expect.objectContaining({ role: 'assistant', content: 'REMOTE-MESH-OK' }),
+    ])
+  })
+
+  it('keeps parsed generating visible when the adapter still has a pending response signal', () => {
+    const instance = new CliProviderInstance({
+      type: 'hermes-cli',
+      name: 'Hermes Agent',
+      category: 'cli',
+      spawn: { command: 'hermes', args: [] },
+    } as any, '/tmp/project') as any
+
+    instance.adapter = {
+      getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+      getScriptParsedStatus: () => ({
+        title: 'project',
+        status: 'generating',
+        messages: [
+          { role: 'user', content: 'continue' },
+          { role: 'assistant', content: 'still working', bubbleState: 'streaming', meta: { streaming: true } },
+        ],
+      }),
+      getPartialResponse: () => 'still working',
+      isProcessing: () => true,
+      getRuntimeMetadata: () => null,
+    }
+    instance.historyWriter = { appendNewMessages: vi.fn() }
+
+    const state = instance.getState() as any
+    expect(state.status).toBe('idle')
+    expect(state.activeChat.status).toBe('generating')
+  })
+
   it('keeps all runtime overlay messages instead of slicing the live chat tail to 50', () => {
     const instance = new CliProviderInstance({
       type: 'claude-cli',
