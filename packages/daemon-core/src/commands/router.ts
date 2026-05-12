@@ -154,6 +154,35 @@ function loadHermesCoordinatorBaseConfig(targetConfigPath: string): { config: Re
     return { config: baseConfig, sourceHome, sourceConfigPath };
 }
 
+function stripHermesCoordinatorTempModelProviderOverrides(config: Record<string, any>): Record<string, any> {
+    const {
+        model: _model,
+        provider: _provider,
+        default_model: _defaultModel,
+        defaultProvider: _defaultProvider,
+        default_provider: _defaultProviderSnake,
+        modelProvider: _modelProvider,
+        model_provider: _modelProviderSnake,
+        ...sanitized
+    } = config;
+    const delegation = sanitized.delegation;
+    if (delegation && typeof delegation === 'object' && !Array.isArray(delegation)) {
+        const {
+            model: _delegationModel,
+            provider: _delegationProvider,
+            modelProvider: _delegationModelProvider,
+            model_provider: _delegationModelProviderSnake,
+            ...delegationRest
+        } = delegation;
+        if (Object.keys(delegationRest).length > 0) {
+            sanitized.delegation = delegationRest;
+        } else {
+            delete sanitized.delegation;
+        }
+    }
+    return sanitized;
+}
+
 function copyHermesCoordinatorCredentialFiles(sourceHome: string, targetHome: string) {
     if (pathResolve(sourceHome) === pathResolve(targetHome)) return;
     for (const fileName of ['.env', 'auth.json']) {
@@ -1958,7 +1987,10 @@ export class DaemonCommandRouter {
                     if (hadExistingMcpConfig) {
                         try {
                             const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(readFileSync(mcpConfigPath, 'utf-8'), configFormat);
-                            existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
+                            const existingCoordinatorConfig = hermesManualFallback
+                                ? stripHermesCoordinatorTempModelProviderOverrides(parsedExistingMcpConfig)
+                                : parsedExistingMcpConfig;
+                            existingMcpConfig = { ...existingMcpConfig, ...existingCoordinatorConfig };
                             copyFileSync(mcpConfigPath, mcpConfigPath + '.backup');
                         } catch (error: any) {
                             LOG.error('MeshCoordinator', `Failed to parse existing MCP config ${mcpConfigPath}: ${error?.message || error}`);

@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, chmodSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DaemonCommandRouter } from '../../src/commands/router.js'
 import { resolveMeshCoordinatorSetup } from '../../src/commands/mesh-coordinator.js'
@@ -39,6 +40,12 @@ function findWebSocketNode(): string {
     if (nodeSupportsWebSocket(candidate)) return candidate
   }
   throw new Error('No WebSocket-capable Node runtime available for Repo Mesh MCP test')
+}
+
+function resolveHermesCoordinatorHomeForTest(meshId: string, workspace: string): string {
+  const key = `${meshId || 'mesh'}\n${resolve(workspace || tmpdir())}`
+  const hash = createHash('sha256').update(key).digest('hex').slice(0, 16)
+  return join(tmpdir(), `adhdev-hermes-mesh-coordinator-${hash}`)
 }
 
 describe('resolveMeshCoordinatorSetup', () => {
@@ -477,7 +484,7 @@ describe('resolveMeshCoordinatorSetup', () => {
     process.env.ADHDEV_MCP_SERVER_PATH = mcpEntry
     process.env.HOME = workspace
     delete process.env.HERMES_HOME
-    writeFileSync(join(configDir, '.env'), 'OPENROUTER_API_KEY=[REDACTED]\n', 'utf-8')
+    writeFileSync(join(configDir, '.env'), 'OPENROUTER_API_KEY=***', 'utf-8')
     writeFileSync(join(configDir, 'auth.json'), '{"providers":{}}\n', 'utf-8')
 
     const provider: ProviderModule = {
@@ -554,6 +561,86 @@ describe('resolveMeshCoordinatorSetup', () => {
       if (previousHermesHome === undefined) delete process.env.HERMES_HOME
       else process.env.HERMES_HOME = previousHermesHome
       rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('does not let a stale Hermes coordinator temp config override the user Hermes model/provider', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-hermes-coordinator-stale-'))
+    const configDir = join(workspace, '.hermes')
+    const configPath = join(configDir, 'config.yaml')
+    const mcpEntry = join(workspace, 'mcp-server.js')
+    const meshId = 'mesh_hermes_stale_model'
+    const staleCoordinatorHome = resolveHermesCoordinatorHomeForTest(meshId, workspace)
+    const staleCoordinatorConfigPath = join(staleCoordinatorHome, 'config.yaml')
+    mkdirSync(configDir, { recursive: true })
+    mkdirSync(staleCoordinatorHome, { recursive: true })
+    writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
+    writeFileSync(configPath, 'model:\n  provider: kilocode\n  default: kilo-auto/frontier\nmcp_servers:\n  existing:\n    command: existing-server\n', 'utf-8')
+    writeFileSync(staleCoordinatorConfigPath, 'model:\n  provider: openai-codex\n  default: gpt-5.5\nmcp_servers:\n  stale:\n    command: stale-server\n', 'utf-8')
+    const previousMcpEntry = process.env.ADHDEV_MCP_SERVER_PATH
+    const previousHome = process.env.HOME
+    const previousHermesHome = process.env.HERMES_HOME
+    process.env.ADHDEV_MCP_SERVER_PATH = mcpEntry
+    process.env.HOME = workspace
+    delete process.env.HERMES_HOME
+
+    const provider: ProviderModule = {
+      ...baseProvider,
+      type: 'hermes-cli',
+      meshCoordinator: {
+        supported: true,
+        mcpConfig: {
+          mode: 'manual',
+          format: 'hermes_config_yaml',
+          serverName: 'adhdev-mesh',
+          configPathCommand: 'hermes config path',
+          requiresRestart: true,
+          instructions: 'Hermes CLI does not auto-import repo-local .mcp.json. Add this MCP server to Hermes config under mcp_servers, then start a fresh Hermes session.',
+          template: 'mcp_servers:\n  {{serverName}}:\n    command: {{adhdevMcpCommand}}\n    args:\n      - --repo-mesh\n      - {{meshId}}\n    enabled: true\n',
+        },
+      },
+    }
+    const cliManager = {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'hermes-session-stale-model' })),
+    }
+    const router = createAutoImportRouter(provider, cliManager)
+    const inlineMesh = {
+      id: meshId,
+      name: 'Hermes Mesh Stale Model',
+      repoIdentity: 'example/repo',
+      nodes: [{ id: 'node-1', workspace, policy: {} }],
+      policy: {},
+      coordinator: {},
+    }
+
+    try {
+      const result = await router.execute('launch_mesh_coordinator', {
+        meshId,
+        cliType: 'hermes-cli',
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({ success: true, sessionId: 'hermes-session-stale-model', mcpConfigWritten: true })
+      const launchCall = (cliManager.handleCliCommand as any).mock.calls[0]?.[1] as any
+      expect(launchCall).toBeTruthy()
+      expect(launchCall.env.HERMES_HOME).toBe(staleCoordinatorHome)
+      const isolatedConfigText = readFileSync(staleCoordinatorConfigPath, 'utf-8')
+      expect(isolatedConfigText).toContain('provider: kilocode')
+      expect(isolatedConfigText).toContain('default: kilo-auto/frontier')
+      expect(isolatedConfigText).not.toContain('provider: openai-codex')
+      expect(isolatedConfigText).not.toContain('default: gpt-5.5')
+      expect(launchCall.cliArgs).toBeUndefined()
+      expect(launchCall.env).not.toHaveProperty('HERMES_MODEL')
+      expect(launchCall.env).not.toHaveProperty('HERMES_PROVIDER')
+    } finally {
+      if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
+      else process.env.ADHDEV_MCP_SERVER_PATH = previousMcpEntry
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      if (previousHermesHome === undefined) delete process.env.HERMES_HOME
+      else process.env.HERMES_HOME = previousHermesHome
+      rmSync(workspace, { recursive: true, force: true })
+      rmSync(staleCoordinatorHome, { recursive: true, force: true })
     }
   })
 
