@@ -225,7 +225,7 @@ export class ProviderCliAdapter implements CliAdapter {
         currentTurnScope: TurnParseScope | null;
         recentOutputBuffer: string;
         accumulatedBuffer: string;
-        accumulatedRawBuffer: string;
+        accumulatedRawBufferKey: string;
         screenText: string;
         currentStatus: CliSessionStatus['status'];
         activeModal: { message: string; buttons: string[] } | null;
@@ -300,15 +300,23 @@ export class ProviderCliAdapter implements CliAdapter {
         this.lastScreenSnapshotReadAt = Number.NEGATIVE_INFINITY;
     }
 
+    private getAccumulatedRawBufferCacheKey(): string {
+        return this.accumulatedRawBuffer
+            .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, '')
+            .replace(/\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g, '')
+            .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+    }
+
     private getFreshParsedStatusCache(): any | null {
         const cached = this.parsedStatusCache;
+        const accumulatedRawBufferKey = this.getAccumulatedRawBufferCacheKey();
         if (
             cached
             && cached.responseBuffer === this.responseBuffer
             && cached.currentTurnScope === this.currentTurnScope
             && cached.recentOutputBuffer === this.recentOutputBuffer
             && cached.accumulatedBuffer === this.accumulatedBuffer
-            && cached.accumulatedRawBuffer === this.accumulatedRawBuffer
+            && cached.accumulatedRawBufferKey === accumulatedRawBufferKey
             && cached.screenText === this.lastScreenText
             && cached.currentStatus === this.currentStatus
             && cached.activeModal === this.activeModal
@@ -1589,13 +1597,14 @@ export class ProviderCliAdapter implements CliAdapter {
         const screenText = this.readTerminalScreenText();
         const parseScreenText = this.getParseScreenText(screenText);
         const cached = this.parsedStatusCache;
+        const accumulatedRawBufferKey = this.getAccumulatedRawBufferCacheKey();
         if (
             cached
             && cached.responseBuffer === this.responseBuffer
             && cached.currentTurnScope === this.currentTurnScope
             && cached.recentOutputBuffer === this.recentOutputBuffer
             && cached.accumulatedBuffer === this.accumulatedBuffer
-            && cached.accumulatedRawBuffer === this.accumulatedRawBuffer
+            && cached.accumulatedRawBufferKey === accumulatedRawBufferKey
             && cached.screenText === parseScreenText
             && cached.currentStatus === this.currentStatus
             && cached.activeModal === this.activeModal
@@ -1635,7 +1644,7 @@ export class ProviderCliAdapter implements CliAdapter {
             currentTurnScope: this.currentTurnScope,
             recentOutputBuffer: this.recentOutputBuffer,
             accumulatedBuffer: this.accumulatedBuffer,
-            accumulatedRawBuffer: this.accumulatedRawBuffer,
+            accumulatedRawBufferKey,
             screenText: parseScreenText,
             currentStatus: this.currentStatus,
             activeModal: this.activeModal,
