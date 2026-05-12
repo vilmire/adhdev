@@ -200,6 +200,71 @@ test('mesh_launch_session stamps coordinator daemon id for remote worker nodes e
   assert.equal(calls[0].args.settings?.launchedByCoordinator, true);
 });
 
+test('mesh_launch_session reports recoverable worktree launch failure when daemon mesh transport is unavailable', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: `mesh-worktree-launch-failure-${Date.now()}`,
+      name: 'Worktree Launch Failure Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-worktree-failed',
+        workspace: '/repo-parent/.adhdev-worktrees/mesh/feat-failed',
+        repoRoot: '/repo-parent/.adhdev-worktrees/mesh/feat-failed',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+        isLocalWorktree: true,
+        worktreeBranch: 'feat/failed',
+        clonedFromNodeId: 'node-source',
+      }],
+    },
+    transport,
+  };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (_daemonId, command) => {
+    if (command === 'launch_cli' || command === 'git_status') {
+      throw new Error("P2P DataChannel command 'launch_cli' to daemon-remote timed out after 30s");
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const launchText = await meshLaunchSession(ctx, { node_id: 'node-worktree-failed', type: 'hermes-cli' });
+  const launch = JSON.parse(launchText);
+  assert.equal(launch.success, false);
+  assert.equal(launch.recoverable, true);
+  assert.equal(launch.code, 'p2p_unavailable');
+  assert.equal(launch.nodeId, 'node-worktree-failed');
+  assert.equal(launch.daemonId, 'daemon-remote');
+  assert.equal(launch.workspace, '/repo-parent/.adhdev-worktrees/mesh/feat-failed');
+  assert.equal(launch.worktreeBranch, 'feat/failed');
+  assert.equal(launch.cleanup?.tool, 'mesh_remove_node');
+  assert.equal(launch.cleanup?.args?.node_id, 'node-worktree-failed');
+  assert.ok(launch.retryHint.includes('mesh_launch_session'));
+
+  const statusText = await meshStatus(ctx);
+  const status = JSON.parse(statusText);
+  const nodeStatus = status.nodes.find((node: any) => node.nodeId === 'node-worktree-failed');
+  assert.equal(nodeStatus.health, 'degraded');
+  assert.equal(nodeStatus.launchReady, false);
+  assert.equal(nodeStatus.launchBlockedReason, 'p2p_unavailable');
+  assert.equal(nodeStatus.degradedReason, 'worktree_launch_failed');
+  assert.ok(nodeStatus.nextStepHints.some((hint: string) => hint.includes('mesh_remove_node')));
+});
+
 test('mesh_checkpoint routes untracked checkpoint requests with the exact multiword message', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;

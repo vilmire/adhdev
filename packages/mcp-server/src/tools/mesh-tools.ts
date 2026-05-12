@@ -312,6 +312,104 @@ function extractLaunchPayload(value: any): any {
     return findNestedPayload(value, payload => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
 }
 
+type MeshLaunchFailureClassification = {
+    code: 'p2p_unavailable' | 'local_ipc_unavailable' | 'mesh_transport_timeout' | 'mesh_launch_failed';
+    reason: string;
+    transport: string;
+};
+
+function classifyMeshLaunchFailure(error: unknown): MeshLaunchFailureClassification {
+    const message = error instanceof Error ? error.message : String(error || 'launch failed');
+    const lower = message.toLowerCase();
+    if (lower.includes('p2p') || lower.includes('datachannel') || lower.includes('node-datachannel')) {
+        return { code: 'p2p_unavailable', reason: 'daemon_mesh_p2p_transport_unavailable', transport: 'daemon_mesh_p2p' };
+    }
+    if (lower.includes('cannot connect to daemon ipc') || lower.includes('daemon ipc command')) {
+        return { code: 'local_ipc_unavailable', reason: 'local_daemon_ipc_unavailable', transport: 'local_ipc' };
+    }
+    if (lower.includes('timed out') || lower.includes('timeout')) {
+        return { code: 'mesh_transport_timeout', reason: 'mesh_transport_timeout', transport: 'mesh_transport' };
+    }
+    return { code: 'mesh_launch_failed', reason: 'provider_launch_failed', transport: 'mesh_transport' };
+}
+
+function buildWorktreeCleanupHint(node: LocalMeshNodeEntry): Record<string, unknown> | undefined {
+    if (!node.isLocalWorktree) return undefined;
+    return {
+        tool: 'mesh_remove_node',
+        args: { node_id: node.id, session_cleanup_mode: 'preserve' },
+        hint: `If the worktree is no longer needed, remove the orphan worktree node with mesh_remove_node(node_id: "${node.id}").`,
+    };
+}
+
+function buildRecoverableLaunchFailure(
+    ctx: MeshContext,
+    node: LocalMeshNodeEntry,
+    providerType: string | undefined,
+    error: unknown,
+): Record<string, unknown> {
+    const message = error instanceof Error ? error.message : String(error || 'launch failed');
+    const classified = classifyMeshLaunchFailure(error);
+    const cleanup = buildWorktreeCleanupHint(node);
+    return {
+        success: false,
+        recoverable: true,
+        code: classified.code,
+        reason: classified.reason,
+        transport: classified.transport,
+        error: message,
+        meshId: ctx.mesh.id,
+        nodeId: node.id,
+        daemonId: node.daemonId,
+        workspace: node.workspace,
+        isLocalWorktree: node.isLocalWorktree === true,
+        worktreeBranch: node.worktreeBranch,
+        clonedFromNodeId: node.clonedFromNodeId,
+        ...(providerType ? { resolvedProviderType: providerType } : {}),
+        retryHint: `Retry mesh_launch_session(node_id: "${node.id}"${providerType ? `, type: "${providerType}"` : ''}) after daemon mesh transport/P2P is healthy.`,
+        ...(cleanup ? { cleanup } : {}),
+        nextStepHints: [
+            `Retry mesh_launch_session(node_id: "${node.id}"${providerType ? `, type: "${providerType}"` : ''}) after checking daemon/P2P health.`,
+            ...(cleanup ? [`Cleanup orphan worktree node with mesh_remove_node(node_id: "${node.id}") if retry is not desired.`] : []),
+            'Run mesh_status to see the degraded reason and recovery hints before redispatching work.',
+        ],
+    };
+}
+
+function recordRecoverableLaunchFailure(
+    ctx: MeshContext,
+    node: LocalMeshNodeEntry,
+    providerType: string | undefined,
+    error: unknown,
+): Record<string, unknown> {
+    const failure = buildRecoverableLaunchFailure(ctx, node, providerType, error);
+    try {
+        appendLedgerEntry(ctx.mesh.id, {
+            kind: 'recovery_attempted',
+            nodeId: node.id,
+            providerType,
+            payload: {
+                event: 'session_launch_failed',
+                ...failure,
+            },
+        });
+    } catch { /* ledger append is best-effort */ }
+    return failure;
+}
+
+function getLatestActiveLaunchFailure(meshId: string, nodeId: string): Record<string, unknown> | null {
+    const entries = readLedgerEntries(meshId, { tail: 200 });
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+        const entry = entries[i];
+        if (entry.nodeId !== nodeId) continue;
+        if (entry.kind === 'session_launched' || entry.kind === 'node_removed') return null;
+        if (entry.kind === 'recovery_attempted' && entry.payload?.event === 'session_launch_failed') {
+            return { timestamp: entry.timestamp, ...entry.payload };
+        }
+    }
+    return null;
+}
+
 /**
  * For IpcTransport + remote node: resolve an active session on the node and
  * dispatch an agent_command directly via P2P relay (mesh_relay_command).
@@ -868,8 +966,21 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
             };
         }
 
+        const activeLaunchFailure = getLatestActiveLaunchFailure(mesh.id, node.id);
+        if (activeLaunchFailure && node.isLocalWorktree) {
+            entry.health = 'degraded';
+            entry.degradedReason = 'worktree_launch_failed';
+            entry.launchReady = false;
+            entry.launchBlockedReason = activeLaunchFailure.code || 'mesh_launch_failed';
+            entry.launchBlockedMessage = activeLaunchFailure.error || 'Previous worktree session launch failed';
+            entry.lastLaunchFailure = activeLaunchFailure;
+        }
+
         const nextStepHints: string[] = [];
-        if (entry.health === 'online' && node.isLocalWorktree) {
+        if (entry.degradedReason === 'worktree_launch_failed') {
+            nextStepHints.push(`Retry mesh_launch_session(node_id: "${node.id}") after daemon mesh transport/P2P is healthy.`);
+            nextStepHints.push(`If retry is not desired, cleanup the orphan worktree node with mesh_remove_node(node_id: "${node.id}").`);
+        } else if (entry.health === 'online' && node.isLocalWorktree) {
             nextStepHints.push(`Merge worktree to base via mesh_refine_node(node_id: "${node.id}")`);
         } else if (entry.health === 'dirty') {
             nextStepHints.push(`Commit changes via mesh_checkpoint(node_id: "${node.id}", message: "...")`);
@@ -1347,19 +1458,28 @@ export async function meshLaunchSession(
         const coordinatorNode = resolveCoordinatorNode(ctx);
         const coordinatorDaemonId = coordinatorNode?.daemonId || ctx.localDaemonId;
         const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
-        const result = await commandForNode(ctx, node, 'launch_cli', {
-            cliType: resolvedProviderType,
-            dir: node.workspace,
-            settings: {
-                meshNodeFor: ctx.mesh.id,
-                meshNodeId: args.node_id,
-                spawnedSessionVisibility,
-                ...(coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {}),
-                ...(coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {}),
-                launchedByCoordinator: true
-            }
-        });
+        let result: any;
+        try {
+            result = await commandForNode(ctx, node, 'launch_cli', {
+                cliType: resolvedProviderType,
+                dir: node.workspace,
+                settings: {
+                    meshNodeFor: ctx.mesh.id,
+                    meshNodeId: args.node_id,
+                    spawnedSessionVisibility,
+                    ...(coordinatorDaemonId ? { meshCoordinatorDaemonId: coordinatorDaemonId } : {}),
+                    ...(coordinatorNode?.id ? { meshCoordinatorNodeId: coordinatorNode.id } : {}),
+                    launchedByCoordinator: true
+                }
+            });
+        } catch (e: any) {
+            return JSON.stringify(recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, e), null, 2);
+        }
         const launchPayload = extractLaunchPayload(result);
+        if (launchPayload?.success === false || result?.success === false) {
+            const launchError = new Error(launchPayload?.error || result?.error || 'launch_cli rejected the session launch');
+            return JSON.stringify(recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, launchError), null, 2);
+        }
         const runtimeSessionId = typeof launchPayload?.sessionId === 'string'
             ? launchPayload.sessionId
             : typeof launchPayload?.id === 'string'
@@ -1444,7 +1564,7 @@ export async function meshLaunchSession(
 
             return JSON.stringify({ ...res, resolvedProviderType }, null, 2);
         } catch (e: any) {
-            return JSON.stringify({ success: false, error: e.message });
+            return JSON.stringify(recordRecoverableLaunchFailure(ctx, node, resolvedProviderType, e), null, 2);
         }
     } else {
         return JSON.stringify({ error: 'Cloud mesh launch_session requires node daemonId' });
