@@ -206,6 +206,136 @@ describe('ProviderCliAdapter message fallback shaping', () => {
     })
   })
 
+  it('initializes constructor-provided script state before the first parser call', () => {
+    const state = { seen: 1 }
+    const createState = vi.fn(() => state)
+    const parseSession = vi.fn((receivedState: any, input: any) => ({
+      status: receivedState === state && input.buffer === 'stateful accumulated buffer' ? 'idle' : 'error',
+      messages: [],
+      modal: null,
+      parsedStatus: 'idle',
+    }))
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        createState,
+        parseSession,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => 'stateful terminal screen'),
+    }
+    adapter.accumulatedBuffer = 'stateful accumulated buffer'
+    adapter.accumulatedRawBuffer = 'stateful raw buffer'
+    adapter.recentOutputBuffer = 'stateful recent buffer'
+    adapter.responseBuffer = ''
+    adapter.currentStatus = 'idle'
+    adapter.activeModal = null
+
+    const result = adapter.getScriptParsedStatus()
+
+    expect(createState).toHaveBeenCalledTimes(1)
+    expect(parseSession).toHaveBeenCalledTimes(1)
+    expect(parseSession.mock.calls[0][0]).toBe(state)
+    expect(parseSession.mock.calls[0][1]).toMatchObject({
+      buffer: 'stateful accumulated buffer',
+      rawBuffer: 'stateful raw buffer',
+      screenText: 'stateful terminal screen',
+    })
+    expect(result).toMatchObject({ status: 'idle' })
+  })
+
+  it('normalizes undefined injected script state to null for stateful parser hooks', () => {
+    const parseSession = vi.fn((receivedState: any) => ({
+      status: receivedState === null ? 'idle' : 'error',
+      messages: [],
+      modal: null,
+      parsedStatus: 'idle',
+    }))
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {},
+    } as any, '/tmp/project') as any
+
+    adapter.setCliScripts({ createState: () => undefined, parseSession } as any)
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => 'terminal screen'),
+    }
+    adapter.accumulatedBuffer = 'accumulated buffer'
+    adapter.accumulatedRawBuffer = 'raw buffer'
+    adapter.recentOutputBuffer = 'recent buffer'
+    adapter.responseBuffer = ''
+    adapter.currentStatus = 'idle'
+    adapter.activeModal = null
+
+    const result = adapter.getScriptParsedStatus()
+
+    expect(parseSession).toHaveBeenCalledTimes(1)
+    expect(parseSession.mock.calls[0][0]).toBeNull()
+    expect(result).toMatchObject({ status: 'idle' })
+  })
+
+  it('invokes custom input-only scripts with parse input as the first argument', async () => {
+    const customScript = vi.fn((input: any) => input.args.answer)
+    const adapter = new ProviderCliAdapter({
+      type: 'test-cli',
+      name: 'Test CLI',
+      category: 'cli',
+      binary: 'test-cli',
+      spawn: {
+        command: 'test-cli',
+        args: [],
+        shell: true,
+        env: {},
+      },
+      scripts: {
+        customScript,
+      },
+    } as any, '/tmp/project') as any
+
+    adapter.terminalScreen = {
+      write: vi.fn(),
+      getText: vi.fn(() => 'custom script terminal screen'),
+    }
+    adapter.accumulatedBuffer = 'custom accumulated buffer'
+    adapter.accumulatedRawBuffer = 'custom raw buffer'
+    adapter.recentOutputBuffer = 'custom recent buffer'
+    adapter.responseBuffer = ''
+    adapter.currentStatus = 'idle'
+    adapter.activeModal = null
+
+    const result = await adapter.invokeScript('customScript', { answer: 42 })
+
+    expect(result).toBe(42)
+    expect(customScript).toHaveBeenCalledTimes(1)
+    expect(customScript.mock.calls[0][0]).toMatchObject({
+      buffer: 'custom accumulated buffer',
+      rawBuffer: 'custom raw buffer',
+      args: { answer: 42 },
+    })
+  })
+
   it('logs unresolved missing CLI scripts as info instead of warning noise', () => {
     const warnSpy = vi.spyOn(LOG, 'warn').mockImplementation(() => {})
     const infoSpy = vi.spyOn(LOG, 'info').mockImplementation(() => {})

@@ -460,6 +460,7 @@ export class ProviderCliAdapter implements CliAdapter {
 
         // Scripts are required — loaded by ProviderLoader via compatibility array
         this.cliScripts = provider.scripts || {};
+        this.scriptState = typeof this.cliScripts.createState === 'function' ? (this.cliScripts.createState() ?? null) : null;
         const scriptNames = listCliScriptNames(this.cliScripts);
         if (scriptNames.length > 0) {
             LOG.info('CLI', `[${this.cliType}] CLI scripts: [${scriptNames.join(', ')}]`);
@@ -491,7 +492,7 @@ export class ProviderCliAdapter implements CliAdapter {
         this.parseErrorMessage = null;
         // Initialize per-session state: createState() is called once here and on script reload.
         // The returned object lives until the PTY exits (scriptState = null on exit).
-        this.scriptState = typeof scripts.createState === 'function' ? scripts.createState() : null;
+        this.scriptState = typeof scripts.createState === 'function' ? (scripts.createState() ?? null) : null;
         const scriptNames = listCliScriptNames(scripts);
         LOG.info('CLI', `[${this.cliType}] CLI scripts injected: [${scriptNames.join(', ')}]`);
     }
@@ -1670,7 +1671,7 @@ export class ProviderCliAdapter implements CliAdapter {
             scope: this.currentTurnScope,
             runtimeSettings: this.runtimeSettings,
         });
-        return await Promise.resolve(fn(this.scriptState, {
+        return await Promise.resolve(this.invokeCliScript(fn, {
             ...input,
             args: args && typeof args === 'object' ? { ...args } : {},
         }));
