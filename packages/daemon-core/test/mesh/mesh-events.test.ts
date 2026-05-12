@@ -12,7 +12,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
   getMeshByRepo: meshConfigMocks.getMeshByRepo,
 }))
 
-import { handleMeshForwardEvent, setupMeshEventForwarding } from '../../src/mesh/mesh-events.js'
+import { handleMeshForwardEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { claimNextTask, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { getLedgerDir } from '../../src/mesh/mesh-ledger.js'
 
@@ -223,5 +223,55 @@ describe('setupMeshEventForwarding', () => {
     expect(coordinator.onEvent.mock.calls[0][1].input.textFallback).toContain('has stopped')
     expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('has been generating for a long time')
     expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('mesh_read_chat once')
+  })
+
+  it('does not let stopped delegated session records claim targeted queue tasks', () => {
+    const meshId = `mesh_stopped_claim_${Date.now()}`
+    const queuePath = path.join(getLedgerDir(), `${meshId}.queue.json`)
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+      const queued = enqueueTask(meshId, 'targeted task for stopped session', {
+        targetNodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-stopped',
+      })
+      const stoppedSource = {
+        category: 'cli',
+        getState: vi.fn(() => ({
+          instanceId: 'runtime-session-stopped',
+          workspace: '/repo/worktree-a',
+          status: 'stopped',
+          type: 'hermes-cli',
+          settings: {
+            meshNodeFor: meshId,
+            meshNodeId: 'node_child_1',
+            launchedByCoordinator: true,
+          },
+        })),
+      }
+      const components = {
+        instanceManager: {
+          getByCategory: vi.fn((category: string) => category === 'cli' ? [stoppedSource] : []),
+        },
+        cliManager: {
+          adapters: new Map(),
+          handleCliCommand: vi.fn(),
+        },
+      } as any
+
+      triggerMeshQueue(components, meshId)
+
+      const [entry] = getQueue(meshId)
+      expect(entry.id).toBe(queued.id)
+      expect(entry.status).toBe('pending')
+      expect(entry.assignedSessionId).toBeUndefined()
+      expect(components.cliManager.handleCliCommand).not.toHaveBeenCalled()
+    } finally {
+      if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
+    }
   })
 })

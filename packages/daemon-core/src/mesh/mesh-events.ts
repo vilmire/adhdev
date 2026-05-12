@@ -153,13 +153,17 @@ export function triggerMeshQueue(components: DaemonComponents, meshId: string) {
         const settings = state.settings as Record<string, unknown> || {};
         
         const instMeshId = readNonEmptyString(settings.meshNodeFor);
-        if (instMeshId !== meshId && !settings.launchedByCoordinator) continue;
+        if (instMeshId !== meshId) continue;
 
         const nodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
         if (!nodeId) continue;
 
-        // Is it idle? (online and waiting for input)
-        if (state.status !== 'idle' && state.status !== 'stopped' && state.activeChat?.status !== 'waiting_input') continue;
+        // Only genuinely idle live sessions can pull work. Restored/stopped
+        // records are kept for transcript/recovery visibility, but assigning
+        // queue items to them strands tasks in assigned/pending without chat.
+        const status = readNonEmptyString(state.status).toLowerCase();
+        if (['stopped', 'failed', 'terminated', 'exited', 'closed'].includes(status)) continue;
+        if (status !== 'idle' && state.activeChat?.status !== 'waiting_input') continue;
 
         const sessionId = state.instanceId;
         const providerType = state.type || readNonEmptyString(settings.providerType);

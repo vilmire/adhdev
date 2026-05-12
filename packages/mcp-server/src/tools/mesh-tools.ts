@@ -88,6 +88,35 @@ function unwrapCommandPayload(value: any): any {
     return current;
 }
 
+function isTerminalSessionRecord(session: any): boolean {
+    const status = typeof session?.status === 'string' ? session.status.toLowerCase() : '';
+    const lifecycle = typeof session?.lifecycle === 'string' ? session.lifecycle.toLowerCase() : '';
+    const state = typeof session?.state === 'string' ? session.state.toLowerCase() : '';
+    return [status, lifecycle, state].some(value => ['stopped', 'failed', 'terminated', 'exited', 'closed'].includes(value));
+}
+
+function isIdleSessionRecord(session: any): boolean {
+    if (isTerminalSessionRecord(session)) return false;
+    const status = typeof session?.status === 'string' ? session.status.toLowerCase() : '';
+    const chatStatus = typeof session?.activeChat?.status === 'string' ? session.activeChat.status.toLowerCase() : '';
+    return status === 'idle' || chatStatus === 'waiting_input';
+}
+
+function chooseDispatchableSession(sessions: any[], providerType: string, meshId: string, nodeId: string): any | undefined {
+    const live = sessions.filter(session => !isTerminalSessionRecord(session));
+    const matchingProvider = (session: any) => !providerType || session?.providerType === providerType || session?.cliType === providerType;
+    const meshSessions = live.filter((session: any) =>
+        session?.settings?.meshNodeFor === meshId ||
+        session?.settings?.meshNodeId === nodeId
+    );
+    return meshSessions.find(session => isIdleSessionRecord(session) && matchingProvider(session))
+        || meshSessions.find(matchingProvider)
+        || live.find(session => isIdleSessionRecord(session) && matchingProvider(session))
+        || live.find(matchingProvider)
+        || live.find(isIdleSessionRecord)
+        || live[0];
+}
+
 function findNestedPayload(value: any, predicate: (payload: any) => boolean): any {
     const seen = new Set<any>();
     const stack: Array<{ payload: any; depth: number }> = [{ payload: value, depth: 0 }];
@@ -161,23 +190,17 @@ async function ipcDispatchToRemoteAgent(
             const statusObj = innerResult?.status ?? innerResult;
             const sessions: any[] = Array.isArray(statusObj?.sessions) ? statusObj.sessions : [];
     
-            // Prefer sessions launched for this specific mesh node
-            const meshSessions = sessions.filter((s: any) =>
-                s?.settings?.meshNodeFor === ctx.mesh.id ||
-                s?.settings?.meshNodeId === node.id ||
-                s?.settings?.launchedByCoordinator === true
-            );
-            const targetSession = meshSessions[0] || sessions.find((s: any) =>
-                !resolvedProviderType || s?.providerType === resolvedProviderType || s?.cliType === resolvedProviderType
-            ) || sessions[0];
+            // Prefer live idle sessions launched for this mesh node. Never route
+            // a new task into restored/stopped session records; that produces the
+            // coordinator-visible "pending only, chat never received it" failure.
+            const targetSession = chooseDispatchableSession(sessions, resolvedProviderType, ctx.mesh.id, node.id);
 
             if (targetSession?.id || targetSession?.sessionId) {
                 sessionId = targetSession.id || targetSession.sessionId;
                 if (!resolvedProviderType) {
                     resolvedProviderType = targetSession.providerType || targetSession.cliType || '';
                 }
-                    } else {
-                    }
+            }
         } catch (e: any) {
                 // fall through — will attempt dispatch with just providerType (fuzzy)
         }
@@ -189,13 +212,17 @@ async function ipcDispatchToRemoteAgent(
     }
 
     try {
-        await transport.meshCommand(daemonId, 'agent_command', {
+        const dispatchResult = await transport.meshCommand(daemonId, 'agent_command', {
             ...(sessionId ? { targetSessionId: sessionId } : {}),
             agentType: resolvedProviderType,
             cliType: resolvedProviderType,
             action: 'send_chat',
             message: args.message,
         });
+        const dispatchPayload = unwrapCommandPayload(dispatchResult);
+        if (dispatchPayload?.success === false || dispatchResult?.success === false) {
+            return { success: false, error: `P2P dispatch failed: ${dispatchPayload?.error || dispatchResult?.error || 'agent_command rejected the task'}` };
+        }
         return { success: true, dispatched: true, sessionId: sessionId || resolvedProviderType };
     } catch (e: any) {
         return { success: false, error: `P2P dispatch failed: ${e?.message || String(e)}` };
@@ -866,7 +893,40 @@ export async function meshSendTask(
             return JSON.stringify({ ...result, nodeId: args.node_id });
         }
 
-        // ── LocalTransport or local IpcTransport node: use queue ───────────────
+        // ── LocalTransport or local IpcTransport node ────────────────────────
+        // If the coordinator explicitly targets a runtime session, push directly
+        // and surface route failures immediately instead of creating a queue item
+        // that can remain pending forever when the session was already stopped.
+        if (args.session_id && isLocalTransport(ctx.transport)) {
+            const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
+            const dispatchResult = await commandForNode(ctx, node, 'agent_command', {
+                targetSessionId: args.session_id,
+                ...(cached?.providerType ? { agentType: cached.providerType, cliType: cached.providerType, providerType: cached.providerType } : {}),
+                action: 'send_chat',
+                message: args.message,
+            });
+            const dispatchPayload = unwrapCommandPayload(dispatchResult);
+            if (dispatchPayload?.success === false || dispatchResult?.success === false) {
+                return JSON.stringify({
+                    success: false,
+                    nodeId: args.node_id,
+                    sessionId: args.session_id,
+                    error: dispatchPayload?.error || dispatchResult?.error || 'agent_command rejected the task',
+                });
+            }
+            try {
+                appendLedgerEntry(ctx.mesh.id, {
+                    kind: 'task_dispatched',
+                    nodeId: args.node_id,
+                    sessionId: args.session_id,
+                    providerType: cached?.providerType,
+                    payload: { message: args.message, via: 'local_direct' },
+                });
+            } catch { /* best-effort */ }
+            return JSON.stringify({ success: true, dispatched: true, nodeId: args.node_id, sessionId: args.session_id });
+        }
+
+        // ── Untargeted local task: use queue pull ─────────────────────────────
         const task = enqueueTask(ctx.mesh.id, args.message, {
             targetNodeId: args.node_id,
             targetSessionId: args.session_id,

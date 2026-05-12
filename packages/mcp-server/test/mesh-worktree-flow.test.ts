@@ -938,7 +938,7 @@ test('mesh status and git status include explicitly configured related repo fres
   assert.ok(calls.some(call => call.command === 'git_status' && call.workspace === '/provider/repo'));
 });
 
-test('local IPC mesh_send_task preserves target session and triggers queue processing', async () => {
+test('local IPC mesh_send_task with explicit session pushes directly instead of stranding a targeted queue item', async () => {
   const meshId = `mesh-ipc-send-${Date.now()}`;
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -947,7 +947,8 @@ test('local IPC mesh_send_task preserves target session and triggers queue proce
   const directCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
   transport.command = async (command, args = {}) => {
     directCalls.push({ command, args });
-    return { success: true };
+    if (command === 'agent_command') return { success: true };
+    throw new Error(`unexpected direct command: ${command}`);
   };
   transport.meshCommand = async () => {
     throw new Error('unexpected remote mesh command');
@@ -979,14 +980,15 @@ test('local IPC mesh_send_task preserves target session and triggers queue proce
   });
   const result = JSON.parse(text);
   assert.equal(result.success, true);
+  assert.equal(result.dispatched, true);
   assert.equal(directCalls.length, 1);
-  assert.equal(directCalls[0].command, 'trigger_mesh_queue');
-  assert.equal(directCalls[0].args.meshId, meshId);
+  assert.equal(directCalls[0].command, 'agent_command');
+  assert.equal(directCalls[0].args.targetSessionId, 'session-hermes');
+  assert.equal(directCalls[0].args.action, 'send_chat');
+  assert.equal(directCalls[0].args.message, 'run targeted task');
 
   const queued = getQueue(meshId);
-  assert.equal(queued.length, 1);
-  assert.equal(queued[0].targetNodeId, 'node-local');
-  assert.equal((queued[0] as any).targetSessionId, 'session-hermes');
+  assert.equal(queued.length, 0);
 });
 
 test('mesh tool registry documents the 16 exposed mesh tools including read-debug, worktree clone/remove/refine, and session cleanup', () => {
