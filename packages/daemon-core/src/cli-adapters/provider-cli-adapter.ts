@@ -225,6 +225,7 @@ export class ProviderCliAdapter implements CliAdapter {
         currentTurnScope: TurnParseScope | null;
         recentOutputBuffer: string;
         accumulatedBuffer: string;
+        accumulatedRawBuffer: string;
         screenText: string;
         currentStatus: CliSessionStatus['status'];
         activeModal: { message: string; buttons: string[] } | null;
@@ -307,6 +308,7 @@ export class ProviderCliAdapter implements CliAdapter {
             && cached.currentTurnScope === this.currentTurnScope
             && cached.recentOutputBuffer === this.recentOutputBuffer
             && cached.accumulatedBuffer === this.accumulatedBuffer
+            && cached.accumulatedRawBuffer === this.accumulatedRawBuffer
             && cached.screenText === this.lastScreenText
             && cached.currentStatus === this.currentStatus
             && cached.activeModal === this.activeModal
@@ -1593,6 +1595,7 @@ export class ProviderCliAdapter implements CliAdapter {
             && cached.currentTurnScope === this.currentTurnScope
             && cached.recentOutputBuffer === this.recentOutputBuffer
             && cached.accumulatedBuffer === this.accumulatedBuffer
+            && cached.accumulatedRawBuffer === this.accumulatedRawBuffer
             && cached.screenText === parseScreenText
             && cached.currentStatus === this.currentStatus
             && cached.activeModal === this.activeModal
@@ -1632,6 +1635,7 @@ export class ProviderCliAdapter implements CliAdapter {
             currentTurnScope: this.currentTurnScope,
             recentOutputBuffer: this.recentOutputBuffer,
             accumulatedBuffer: this.accumulatedBuffer,
+            accumulatedRawBuffer: this.accumulatedRawBuffer,
             screenText: parseScreenText,
             currentStatus: this.currentStatus,
             activeModal: this.activeModal,
