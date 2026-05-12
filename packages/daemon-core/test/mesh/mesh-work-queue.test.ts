@@ -52,6 +52,30 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(claimed2?.id).to.equal(t2.id);
     });
 
+    it('does not let a node/session claim another task while one is still assigned', () => {
+        const t1 = enqueueTask(meshId, 'task 1');
+        const t2 = enqueueTask(meshId, 'task 2');
+        const t3 = enqueueTask(meshId, 'task 3');
+
+        const first = claimNextTask(meshId, 'node1', 'session1');
+        expect(first?.id).to.equal(t1.id);
+
+        // The same session must not stack a second queued task before closing
+        // the first one.
+        expect(claimNextTask(meshId, 'node1', 'session1')).to.be.null;
+
+        // A different session on the same node is still the same worker node;
+        // it must not over-claim while the node has active assigned work.
+        expect(claimNextTask(meshId, 'node1', 'session2')).to.be.null;
+
+        const otherNode = claimNextTask(meshId, 'node2', 'session3');
+        expect(otherNode?.id).to.equal(t2.id);
+
+        updateSessionTaskStatus(meshId, 'session1', 'completed');
+        const afterCompletion = claimNextTask(meshId, 'node1', 'session1');
+        expect(afterCompletion?.id).to.equal(t3.id);
+    });
+
     it('should only claim targeted tasks if node matches', () => {
         const t1 = enqueueTask(meshId, 'targeted task', { targetNodeId: 'node-target' });
         
@@ -81,7 +105,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(c2?.assignedSessionId).to.equal('session-target');
     });
 
-    it('prioritizes session-targeted tasks over broader node-targeted work for that session', () => {
+    it('prioritizes session-targeted tasks and waits to claim broader node work until the node is idle', () => {
         const nodeTask = enqueueTask(meshId, 'node targeted task', { targetNodeId: 'node-target' });
         const sessionTask = enqueueTask(meshId, 'session targeted task', {
             targetNodeId: 'node-target',
@@ -91,6 +115,9 @@ describe('Mesh Work Queue (GUPP)', () => {
         const c1 = claimNextTask(meshId, 'node-target', 'session-target');
         expect(c1?.id).to.equal(sessionTask.id);
 
+        expect(claimNextTask(meshId, 'node-target', 'session-other')).to.be.null;
+
+        updateSessionTaskStatus(meshId, 'session-target', 'completed');
         const c2 = claimNextTask(meshId, 'node-target', 'session-other');
         expect(c2?.id).to.equal(nodeTask.id);
     });

@@ -46,6 +46,13 @@ function readNonEmptyString(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
+function resolveEventSessionId(event: Record<string, unknown>, fallback?: unknown): string {
+    return readNonEmptyString(event.targetSessionId)
+        || readNonEmptyString(event.sessionId)
+        || readNonEmptyString(event.instanceId)
+        || readNonEmptyString(fallback);
+}
+
 const MESH_COORDINATOR_EVENTS = new Set([
     'agent:generating_started',
     'agent:generating_completed',
@@ -230,7 +237,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
 }) {
     // ── Task Queue & Ledger ──
     if (args.event === 'agent:generating_completed') {
-        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId) || readNonEmptyString(args.sourceInstanceId);
+        const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
         
@@ -244,7 +251,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             }
         }
     } else if (args.event === 'agent:ready') {
-        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId) || readNonEmptyString(args.sourceInstanceId);
+        const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
         const completedTask = sessionId
@@ -280,13 +287,13 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             }, 500);
         }
     } else if (args.event === 'agent:generating_started') {
-        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId) || readNonEmptyString(args.sourceInstanceId);
+        const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         if (sessionId && nodeId) {
             remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
         }
     } else if (args.event === 'agent:stopped') {
-        const sessionId = readNonEmptyString(args.metadataEvent.targetSessionId) || readNonEmptyString(args.sourceInstanceId);
+        const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         if (sessionId && nodeId) {
             remoteIdleSessions.delete(`${nodeId}:${sessionId}`);
@@ -302,7 +309,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             appendLedgerEntry(args.meshId, {
                 kind: ledgerKind,
                 nodeId: readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
-                sessionId: readNonEmptyString(args.metadataEvent.targetSessionId) || readNonEmptyString(args.sourceInstanceId) || undefined,
+                sessionId: resolveEventSessionId(args.metadataEvent, args.sourceInstanceId) || undefined,
                 providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
                 payload: {
                     event: args.event,
@@ -324,7 +331,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             const maxRetries = mesh?.policy?.maxTaskRetries ?? 1;
 
             recoveryContext = getSessionRecoveryContext(args.meshId, {
-                sessionId: readNonEmptyString(args.metadataEvent.targetSessionId) || readNonEmptyString(args.sourceInstanceId) || undefined,
+                sessionId: resolveEventSessionId(args.metadataEvent, args.sourceInstanceId) || undefined,
                 nodeId: readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
                 maxRetries,
             });
@@ -437,7 +444,7 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
         nodeLabel,
         event: eventName,
         metadataEvent: {
-            targetSessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId),
+            targetSessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.instanceId),
             providerType: readNonEmptyString(payload.providerType),
             providerSessionId: readNonEmptyString(payload.providerSessionId),
         },

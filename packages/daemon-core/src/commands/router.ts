@@ -1331,6 +1331,21 @@ export class DaemonCommandRouter {
                 }
             }
 
+            case 'get_mesh_queue': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                try {
+                    const { getQueue } = await import('../mesh/mesh-work-queue.js');
+                    const status = Array.isArray(args?.status)
+                        ? args.status.map((s: any) => typeof s === 'string' ? s.trim() : '').filter(Boolean)
+                        : undefined;
+                    const queue = getQueue(meshId, { status: status as any });
+                    return { success: true, queue };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
             case 'add_mesh_node': {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 const workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';

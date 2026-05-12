@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
+import * as fs from 'fs'
+import * as path from 'path'
 
 const meshConfigMocks = vi.hoisted(() => ({
   getMesh: vi.fn(),
@@ -11,14 +13,16 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 }))
 
 import { handleMeshForwardEvent, setupMeshEventForwarding } from '../../src/mesh/mesh-events.js'
+import { claimNextTask, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
+import { getLedgerDir } from '../../src/mesh/mesh-ledger.js'
 
-function createComponents() {
+function createComponents(meshId = 'mesh_inline_1') {
   let listener: ((event: any) => void) | undefined
   const sourceState = {
     instanceId: 'runtime-session-1',
     workspace: '/repo/worktree-a',
     settings: {
-      meshNodeFor: 'mesh_inline_1',
+      meshNodeFor: meshId,
       meshNodeId: 'node_child_1',
     },
   }
@@ -26,7 +30,7 @@ function createComponents() {
     instanceId: 'coordinator-session-1',
     workspace: '/repo/main',
     settings: {
-      meshCoordinatorFor: 'mesh_inline_1',
+      meshCoordinatorFor: meshId,
     },
   }
   const source = {
@@ -82,6 +86,37 @@ describe('setupMeshEventForwarding', () => {
     expect(text).toContain('status event path')
     expect(text).toContain('mesh_read_chat once')
     expect(text).toContain('do not poll repeatedly')
+  })
+
+  it('marks the assigned queue task completed when a completion event only carries instanceId', () => {
+    const meshId = `mesh_completion_fallback_${Date.now()}`
+    const queuePath = path.join(getLedgerDir(), `${meshId}.queue.json`)
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'queued task')
+      const claimed = claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+      expect(claimed?.id).toBe(queued.id)
+      expect(getQueue(meshId)[0].status).toBe('assigned')
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:generating_completed',
+        instanceId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        providerSessionId: 'provider-history-1',
+      })
+
+      expect(getQueue(meshId)[0].status).toBe('completed')
+    } finally {
+      if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
+    }
   })
 
   it('does not inject completion event when the completed session is a coordinator (meshCoordinatorFor set)', () => {
