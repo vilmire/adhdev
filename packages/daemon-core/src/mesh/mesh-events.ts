@@ -240,13 +240,15 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     metadataEvent: Record<string, unknown>;
 }) {
     // ── Task Queue & Ledger ──
+    let completedTaskForLedger: { id?: string } | null = null;
     if (args.event === 'agent:generating_completed') {
         const sessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
         const nodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
         const providerType = readNonEmptyString(args.metadataEvent.providerType);
         
         if (sessionId) {
-            updateSessionTaskStatus(args.meshId, sessionId, 'completed');
+            const completedTask = updateSessionTaskStatus(args.meshId, sessionId, 'completed');
+            completedTaskForLedger = completedTask ? { id: completedTask.id } : null;
             if (nodeId && providerType) {
                 // Short delay to allow completion event to propagate before pulling next
                 setTimeout(() => {
@@ -262,6 +264,7 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
             ? updateSessionTaskStatus(args.meshId, sessionId, 'completed')
             : null;
         if (completedTask) {
+            completedTaskForLedger = { id: completedTask.id };
             try {
                 appendLedgerEntry(args.meshId, {
                     kind: 'task_completed',
@@ -273,7 +276,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                         nodeLabel: args.nodeLabel,
                         taskId: completedTask.id,
                         completedViaReady: true,
+                        taskId: completedTask.id,
                         providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
+                        finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
                     },
                 });
             } catch (e: any) {
@@ -318,7 +323,9 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                 payload: {
                     event: args.event,
                     nodeLabel: args.nodeLabel,
+                    taskId: completedTaskForLedger?.id || undefined,
                     providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
+                    finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
                 },
             });
         } catch (e: any) {
@@ -451,6 +458,7 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
             targetSessionId: readNonEmptyString(payload.targetSessionId) || readNonEmptyString(payload.sessionId) || readNonEmptyString(payload.instanceId),
             providerType: readNonEmptyString(payload.providerType),
             providerSessionId: readNonEmptyString(payload.providerSessionId),
+            finalSummary: readNonEmptyString(payload.finalSummary) || readNonEmptyString(payload.summary),
         },
     });
 }

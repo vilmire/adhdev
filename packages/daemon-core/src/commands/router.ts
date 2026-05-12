@@ -1569,7 +1569,13 @@ export class DaemonCommandRouter {
                             appendLedgerEntry(meshId, {
                                 kind: 'node_removed',
                                 nodeId,
-                                payload: { worktree: !!node?.isLocalWorktree, sessionCleanupMode },
+                                payload: {
+                                    worktree: !!node?.isLocalWorktree,
+                                    sessionCleanupMode,
+                                    workspace: typeof node?.workspace === 'string' ? node.workspace : undefined,
+                                    daemonId: typeof node?.daemonId === 'string' ? node.daemonId : undefined,
+                                    worktreeBranch: typeof node?.worktreeBranch === 'string' ? node.worktreeBranch : undefined,
+                                },
                             });
                         } catch { /* ledger append is best-effort */ }
                     }

@@ -38,11 +38,18 @@ const meshSessionProviderMetadata = new Map<string, MeshSessionProviderMetadata>
 
 // ─── Helpers ────────────────────────────────────
 
+function readString(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
 function findNode(mesh: LocalMeshEntry, nodeId: string): LocalMeshNodeEntry {
     const node = mesh.nodes.find(n => n.id === nodeId);
     if (!node) throw new Error(`Node '${nodeId}' is not a member of mesh '${mesh.name}'`);
     return node;
 }
+
+const DUPLICATE_DISPATCH_WINDOW_MS = 60_000;
+const STALE_ASSIGNED_QUEUE_MS = 30 * 60_000;
 
 /**
  * Refresh the MCP process's mesh snapshot from the daemon inline mesh cache.
@@ -72,6 +79,155 @@ async function findNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<Lo
     const refreshed = ctx.mesh.nodes.find(n => n.id === nodeId);
     if (!refreshed) throw new Error(`Node '${nodeId}' is not a member of mesh '${ctx.mesh.name}'`);
     return refreshed;
+}
+
+async function findOptionalNodeWithRefresh(ctx: MeshContext, nodeId: string): Promise<LocalMeshNodeEntry | null> {
+    const hit = ctx.mesh.nodes.find(n => n.id === nodeId);
+    if (hit) return hit;
+
+    await refreshMeshFromDaemon(ctx);
+
+    return ctx.mesh.nodes.find(n => n.id === nodeId) ?? null;
+}
+
+function hasRecentDuplicateDispatch(ctx: MeshContext, args: { node_id: string; session_id?: string; message: string }): { duplicate: boolean; entry?: any; source?: 'ledger' | 'queue' } {
+    const now = Date.now();
+    const normalizedMessage = args.message.trim();
+
+    for (const task of getQueue(ctx.mesh.id)) {
+        const timestamp = new Date(task.updatedAt || task.createdAt).getTime();
+        if (!Number.isFinite(timestamp) || now - timestamp > DUPLICATE_DISPATCH_WINDOW_MS) continue;
+        if (task.targetNodeId && task.targetNodeId !== args.node_id) continue;
+        if (task.assignedNodeId && task.assignedNodeId !== args.node_id) continue;
+        if (args.session_id && task.targetSessionId !== args.session_id && task.assignedSessionId !== args.session_id) continue;
+        if (task.message?.trim() === normalizedMessage) {
+            return { duplicate: true, entry: task, source: 'queue' };
+        }
+    }
+
+    const entries = readLedgerEntries(ctx.mesh.id, { tail: 200 });
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+        const entry = entries[i];
+        const timestamp = new Date(entry.timestamp).getTime();
+        if (Number.isFinite(timestamp) && now - timestamp > DUPLICATE_DISPATCH_WINDOW_MS) break;
+        if (entry.kind !== 'task_dispatched') continue;
+        if (entry.nodeId !== args.node_id) continue;
+        if (args.session_id && entry.sessionId !== args.session_id) continue;
+        if (typeof entry.payload?.message !== 'string') continue;
+        if (entry.payload.message.trim() === normalizedMessage) {
+            return { duplicate: true, entry, source: 'ledger' };
+        }
+    }
+    return { duplicate: false };
+}
+
+function buildMissingNodeReadChatRecovery(ctx: MeshContext, args: { node_id: string; session_id: string; provider_session_id?: string; tail?: number; compact?: boolean }): Record<string, unknown> {
+    const entries = readLedgerEntries(ctx.mesh.id, { tail: 300 });
+    const relatedEntries = entries.filter(entry => entry.nodeId === args.node_id || entry.sessionId === args.session_id);
+    const completedEntries = relatedEntries.filter(entry => entry.kind === 'task_completed');
+    const lastDispatch = [...relatedEntries].reverse().find(entry => entry.kind === 'task_dispatched');
+    const lastTerminal = [...relatedEntries].reverse().find(entry => entry.kind === 'task_completed' || entry.kind === 'task_failed' || entry.kind === 'task_stalled');
+    const lastRemoved = [...relatedEntries].reverse().find(entry => entry.kind === 'node_removed');
+    const lastLaunch = [...relatedEntries].reverse().find(entry => entry.kind === 'session_launched');
+    const providerSessionId = args.provider_session_id
+        || readString(lastTerminal?.payload?.providerSessionId)
+        || readString(lastLaunch?.payload?.providerSessionId)
+        || readString(lastDispatch?.payload?.providerSessionId);
+    const finalSummary = readString(lastTerminal?.payload?.finalSummary)
+        || readString(lastTerminal?.payload?.compactSummary)
+        || readString(lastTerminal?.payload?.summary);
+    const ledger = {
+        taskCompletedFound: completedEntries.length > 0,
+        nodeRemovedFound: !!lastRemoved,
+        providerType: lastTerminal?.providerType || lastLaunch?.providerType || lastDispatch?.providerType,
+        providerSessionId,
+        nodeRemovedAt: lastRemoved?.timestamp,
+        sessionCleanupMode: readString(lastRemoved?.payload?.sessionCleanupMode),
+        readDebugLocator: readString(lastTerminal?.payload?.readDebugLocator) || readString(lastTerminal?.payload?.debugBundlePath),
+    };
+
+    if (finalSummary) {
+        return {
+            success: true,
+            compact: args.compact === true,
+            recoveredFromLedger: true,
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+            summary: finalSummary,
+            ledger,
+            messages: [{ role: 'assistant', content: finalSummary, isHistorical: true }],
+        };
+    }
+
+    return {
+        success: false,
+        recoverable: true,
+        code: 'mesh_removed_node_transcript_unavailable',
+        error: `Node '${args.node_id}' is not a current member of mesh '${ctx.mesh.name}'.`,
+        nodeId: args.node_id,
+        sessionId: args.session_id,
+        providerSessionId,
+        reason: 'node_not_in_current_mesh_snapshot',
+        ledger,
+        completedSessionSeenInLedger: ledger.taskCompletedFound,
+        lastDispatch: lastDispatch ? {
+            timestamp: lastDispatch.timestamp,
+            sessionId: lastDispatch.sessionId,
+            providerType: lastDispatch.providerType,
+            taskId: typeof lastDispatch.payload?.taskId === 'string' ? lastDispatch.payload.taskId : undefined,
+            messagePreview: typeof lastDispatch.payload?.message === 'string' ? lastDispatch.payload.message.slice(0, 500) : undefined,
+        } : null,
+        lastTerminalEvent: lastTerminal ? {
+            kind: lastTerminal.kind,
+            timestamp: lastTerminal.timestamp,
+            sessionId: lastTerminal.sessionId,
+            providerType: lastTerminal.providerType,
+            taskId: typeof lastTerminal.payload?.taskId === 'string' ? lastTerminal.payload.taskId : undefined,
+            payload: lastTerminal.payload,
+        } : null,
+        nextSteps: [
+            providerSessionId
+                ? `Retry mesh_read_chat with provider_session_id='${providerSessionId}' on a current live node for the same daemon if one exists.`
+                : 'If the node UI shows a provider transcript id, retry mesh_read_chat/mesh_read_debug with provider_session_id.',
+            'Use mesh_read_debug with the provider_session_id or daemon-side debug bundle locator if available.',
+            'Check mesh_task_history for task_completed and node_removed entries before redispatching; do not resend solely because transcript recovery failed.',
+            'If this node was removed with stop_and_delete, the runtime transcript may be gone; rely on the ledger summary/locator or ask the operator for the saved UI output.',
+        ],
+        recoveryHints: [
+            'The worktree/node may have been removed or the mesh snapshot may be stale after task completion.',
+            'If you have a provider_session_id, retry mesh_read_chat with that value while targeting a live node for the same daemon if available.',
+            'Use mesh_read_debug with provider_session_id, or inspect the daemon/session-host history locator if the transcript has already been archived.',
+            'Avoid redispatching the same task solely because read_chat could not recover the transcript; check task_history and git status first.',
+        ],
+    };
+}
+
+function annotateQueueStaleness(queue: any[]): any[] {
+    const now = Date.now();
+    return queue.map(task => {
+        const taskStatus = typeof task?.status === 'string' ? task.status : undefined;
+        const annotated = {
+            ...task,
+            taskStatus,
+            dispatchedAt: task?.createdAt,
+            ...(taskStatus === 'assigned' ? { activeTaskId: task.id } : {}),
+            ...(taskStatus === 'completed' || taskStatus === 'failed' ? {
+                isHistorical: true,
+                completedAt: task.updatedAt,
+            } : {}),
+        };
+        if (taskStatus !== 'assigned') return annotated;
+        const updatedAt = new Date(task.updatedAt).getTime();
+        const ageMs = Number.isFinite(updatedAt) ? now - updatedAt : null;
+        if (ageMs === null || ageMs < STALE_ASSIGNED_QUEUE_MS) return annotated;
+        return {
+            ...annotated,
+            stale: true,
+            staleAssigned: true,
+            staleReason: 'assigned task has not reached a terminal state within 30 minutes',
+            assignedAgeMs: ageMs,
+        };
+    });
 }
 
 function unwrapCommandPayload(value: any): any {
@@ -864,8 +1020,16 @@ export async function meshViewQueue(
     args: { status?: string[] },
 ): Promise<string> {
     try {
-        const queue = getQueue(ctx.mesh.id, { status: args.status as any });
-        return JSON.stringify({ success: true, queue }, null, 2);
+        const queue = annotateQueueStaleness(getQueue(ctx.mesh.id, { status: args.status as any }));
+        const staleAssignedTasks = queue.filter((task: any) => task?.status === 'assigned' && task?.staleAssigned);
+        return JSON.stringify({
+            success: true,
+            queue,
+            staleAssignedTasks,
+            staleAssignedCount: staleAssignedTasks.length,
+            // Back-compat alias for callers already reading the first hardening payload.
+            staleAssignments: staleAssignedTasks,
+        }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e.message });
     }
@@ -936,6 +1100,28 @@ export async function meshSendTask(
         return JSON.stringify({ error: `Node '${args.node_id}' is read-only` });
     }
 
+    // Avoid duplicate side effects when an MCP/tool call is interrupted after
+    // the daemon already accepted the send and the coordinator retries the
+    // exact same node/session/message immediately.
+    const duplicate = hasRecentDuplicateDispatch(ctx, args);
+    if (duplicate.duplicate) {
+        return JSON.stringify({
+            success: true,
+            duplicate: true,
+            dispatched: false,
+            warning: 'Duplicate mesh_send_task suppressed: the same node/session/message was dispatched recently.',
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+            source: duplicate.source,
+            previousDispatch: duplicate.entry ? {
+                id: duplicate.entry.id,
+                timestamp: duplicate.entry.timestamp || duplicate.entry.updatedAt || duplicate.entry.createdAt,
+                nodeId: duplicate.entry.nodeId || duplicate.entry.targetNodeId || duplicate.entry.assignedNodeId,
+                sessionId: duplicate.entry.sessionId || duplicate.entry.targetSessionId || duplicate.entry.assignedSessionId,
+            } : undefined,
+        });
+    }
+
     try {
         // ── CloudTransport: delegate to Cloud API ──────────────────────────────
         if (!isLocalTransport(ctx.transport) && node.daemonId) {
@@ -967,16 +1153,21 @@ export async function meshSendTask(
             });
             if (result.success) {
                 // Record dispatch in ledger so task_history is accurate
+                const dispatchedSessionId = args.session_id || result.sessionId;
                 try {
                     appendLedgerEntry(ctx.mesh.id, {
                         kind: 'task_dispatched',
                         nodeId: args.node_id,
-                        sessionId: result.sessionId,
-                        payload: { message: args.message, via: 'p2p_direct' },
+                        sessionId: dispatchedSessionId,
+                        payload: {
+                            message: args.message,
+                            via: 'p2p_direct',
+                            ...(dispatchedSessionId ? { targetSessionId: dispatchedSessionId } : {}),
+                        },
                     });
                 } catch { /* best-effort */ }
             }
-            return JSON.stringify({ ...result, nodeId: args.node_id });
+            return JSON.stringify({ ...result, nodeId: args.node_id, dispatched: result.success === true });
         }
 
         // ── LocalTransport or local IpcTransport node ────────────────────────
@@ -1032,7 +1223,10 @@ export async function meshReadChat(
     ctx: MeshContext,
     args: { node_id: string; session_id: string; provider_session_id?: string; tail?: number; compact?: boolean },
 ): Promise<string> {
-    const node = await findNodeWithRefresh(ctx, args.node_id); // membership check
+    const node = await findOptionalNodeWithRefresh(ctx, args.node_id);
+    if (!node) {
+        return JSON.stringify(buildMissingNodeReadChatRecovery(ctx, args), null, 2);
+    }
 
     if (isLocalTransport(ctx.transport)) {
         const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));

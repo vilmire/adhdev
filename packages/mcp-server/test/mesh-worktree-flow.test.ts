@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { join } from 'node:path';
+import { writeFileSync } from 'node:fs';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshApprove, meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshQueueCancel, meshQueueRequeue, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
-import { enqueueTask, getQueue, claimNextTask } from '@adhdev/daemon-core';
+import { meshApprove, meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { appendLedgerEntry, claimNextTask, enqueueTask, getLedgerDir, getQueue } from '@adhdev/daemon-core';
 
 test('mesh worktree tools route clone/remove to the source node daemon and refresh MCP mesh context', async () => {
   const transport = new IpcTransport() as IpcTransport & {
@@ -613,6 +615,165 @@ test('mesh_read_chat compact mode filters tool/internal chatter and returns the 
     'Final summary: implemented V1 and tests pass',
   ]);
   assert.equal(payload.summary, 'Final summary: implemented V1 and tests pass');
+});
+
+test('mesh_read_chat returns recoverable completion context instead of throwing for removed node', async () => {
+  const meshId = `mesh-removed-read-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  appendLedgerEntry(meshId, {
+    kind: 'session_launched',
+    nodeId: 'node-removed',
+    sessionId: 'session-finished',
+    providerType: 'hermes-cli',
+    payload: { providerSessionId: 'provider-finished' },
+  });
+  appendLedgerEntry(meshId, {
+    kind: 'task_completed',
+    nodeId: 'node-removed',
+    sessionId: 'session-finished',
+    providerType: 'hermes-cli',
+    payload: { providerSessionId: 'provider-finished' },
+  });
+  appendLedgerEntry(meshId, {
+    kind: 'node_removed',
+    nodeId: 'node-removed',
+    payload: { sessionCleanupMode: 'stop_and_delete' },
+  });
+
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  transport.command = async (command) => {
+    if (command === 'get_mesh') {
+      return { success: true, mesh: { id: meshId, name: 'Removed Read', nodes: [], updatedAt: new Date().toISOString() } };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+
+  const text = await meshReadChat({
+    mesh: {
+      id: meshId,
+      name: 'Removed Read',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [],
+    },
+    transport,
+  } as any, { node_id: 'node-removed', session_id: 'session-finished', compact: true });
+  const payload = JSON.parse(text);
+  assert.equal(payload.success, false);
+  assert.equal(payload.recoverable, true);
+  assert.equal(payload.code, 'mesh_removed_node_transcript_unavailable');
+  assert.equal(payload.nodeId, 'node-removed');
+  assert.equal(payload.sessionId, 'session-finished');
+  assert.equal(payload.ledger.taskCompletedFound, true);
+  assert.equal(payload.ledger.nodeRemovedFound, true);
+  assert.equal(payload.ledger.providerSessionId, 'provider-finished');
+  assert.match(payload.nextSteps[0], /provider_session_id/);
+});
+
+test('mesh_send_task dedupes rapid identical node/session/message dispatch retries', async () => {
+  const meshId = `mesh-dedupe-send-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  let agentCommandCalls = 0;
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (_daemonId, command) => {
+    if (command === 'agent_command') {
+      agentCommandCalls += 1;
+      return { success: true };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+  const ctx = {
+    localDaemonId: 'daemon-local',
+    mesh: {
+      id: meshId,
+      name: 'Dedupe Send',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-remote',
+        workspace: '/repo',
+        repoRoot: '/repo',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+      }],
+    },
+    transport,
+  };
+
+  const first = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote', session_id: 'session-a', message: 'same task' }));
+  const second = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote', session_id: 'session-a', message: 'same task' }));
+
+  assert.equal(first.success, true);
+  assert.equal(second.success, true);
+  assert.equal(second.duplicate, true);
+  assert.equal(second.dispatched, false);
+  assert.equal(agentCommandCalls, 1);
+});
+
+test('mesh_view_queue annotates stale assigned tasks and historical task metadata', async () => {
+  const meshId = `mesh-stale-queue-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const staleUpdatedAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+  const completedAt = new Date(Date.now() - 60_000).toISOString();
+  const queuePath = join(getLedgerDir(), `${meshId}.queue.json`);
+  writeFileSync(queuePath, JSON.stringify([
+    {
+      id: 'task-stale-assigned',
+      meshId,
+      message: 'old task still assigned',
+      status: 'assigned',
+      targetNodeId: 'node-old',
+      targetSessionId: 'session-old',
+      assignedNodeId: 'node-old',
+      assignedSessionId: 'session-old',
+      createdAt: staleUpdatedAt,
+      updatedAt: staleUpdatedAt,
+    },
+    {
+      id: 'task-completed',
+      meshId,
+      message: 'done task',
+      status: 'completed',
+      targetNodeId: 'node-old',
+      createdAt: completedAt,
+      updatedAt: completedAt,
+    },
+  ], null, 2));
+
+  const payload = JSON.parse(await meshViewQueue({
+    mesh: {
+      id: meshId,
+      name: 'Stale Queue',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [],
+    },
+    transport: {} as any,
+  } as any, {}));
+
+  assert.equal(payload.success, true);
+  assert.equal(payload.staleAssignedCount, 1);
+  assert.equal(payload.staleAssignedTasks[0].id, 'task-stale-assigned');
+  assert.equal(payload.queue[0].taskStatus, 'assigned');
+  assert.equal(payload.queue[0].activeTaskId, 'task-stale-assigned');
+  assert.equal(payload.queue[0].staleAssigned, true);
+  assert.equal(payload.queue[1].isHistorical, true);
+  assert.equal(payload.queue[1].completedAt, completedAt);
 });
 
 test('mesh_clone_node upserts clone returned through payload-wrapped live relay shape before immediate resolver use', async () => {
