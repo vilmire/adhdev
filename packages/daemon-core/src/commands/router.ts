@@ -417,6 +417,103 @@ export class DaemonCommandRouter {
         return false;
     }
 
+    private async cleanupLocalWorktreeNode(args: {
+        mesh: any;
+        node: any;
+        nodeId: string;
+    }): Promise<{ success: true; skipped?: boolean; removedPath?: string; repoRoot?: string; reason?: string } | { success: false; code: string; error: string; recoveryHint: string }> {
+        const workspace = typeof args.node?.workspace === 'string' ? args.node.workspace.trim() : '';
+        if (!workspace) {
+            return {
+                success: false,
+                code: 'mesh_worktree_cleanup_missing_workspace',
+                error: `Worktree node '${args.nodeId}' is missing workspace metadata`,
+                recoveryHint: 'Inspect the mesh node record before removing it, or remove stale metadata manually only after confirming no managed worktree remains.',
+            };
+        }
+
+        const worktreeExists = fs.existsSync(workspace);
+        const sourceNode = args.node?.clonedFromNodeId
+            ? args.mesh?.nodes?.find((n: any) => n.id === args.node.clonedFromNodeId || n.nodeId === args.node.clonedFromNodeId)
+            : args.mesh?.nodes?.find((n: any) => !n.isLocalWorktree);
+        const repoRoot = typeof sourceNode?.repoRoot === 'string' && sourceNode.repoRoot.trim()
+            ? sourceNode.repoRoot.trim()
+            : typeof sourceNode?.workspace === 'string' && sourceNode.workspace.trim()
+                ? sourceNode.workspace.trim()
+                : '';
+
+        if (!worktreeExists) {
+            return { success: true, skipped: true, removedPath: workspace, repoRoot: repoRoot || undefined, reason: 'worktree_path_missing' };
+        }
+        if (!repoRoot || !fs.existsSync(repoRoot)) {
+            return {
+                success: false,
+                code: 'mesh_worktree_cleanup_missing_source_repo',
+                error: `Refusing to remove worktree '${workspace}' because the source repo root is unavailable`,
+                recoveryHint: 'Run mesh_remove_node from the machine that owns the source repo, or verify the source node metadata before retrying.',
+            };
+        }
+        if (typeof args.node?.worktreeBranch !== 'string' || !args.node.worktreeBranch.trim()) {
+            return {
+                success: false,
+                code: 'mesh_worktree_cleanup_missing_branch',
+                error: `Refusing to remove worktree '${workspace}' because worktreeBranch metadata is missing`,
+                recoveryHint: 'Confirm this is an ADHDev-managed worktree before removing it manually; managed worktree nodes include worktreeBranch metadata.',
+            };
+        }
+
+        const { resolveWorktreePath, listWorktrees, removeWorktree } = await import('../git/git-worktree.js');
+        const normalizePath = (value: string) => {
+            const resolved = pathResolve(value);
+            try { return fs.realpathSync(resolved); } catch { return resolved; }
+        };
+        const expectedPath = normalizePath(resolveWorktreePath(repoRoot, String(args.mesh?.name || args.mesh?.id || 'mesh'), args.node.worktreeBranch));
+        const actualPath = normalizePath(workspace);
+        if (actualPath !== expectedPath) {
+            return {
+                success: false,
+                code: 'mesh_worktree_cleanup_unexpected_path',
+                error: `Refusing to remove worktree '${workspace}' because it is not at the expected managed path '${expectedPath}'`,
+                recoveryHint: 'Use git worktree list/status to inspect the path. Retry only after confirming the mesh node metadata points to an ADHDev-managed worktree.',
+            };
+        }
+
+        const entries = await listWorktrees(repoRoot);
+        const managedEntry = entries.find(entry => normalizePath(entry.path) === actualPath);
+        if (!managedEntry) {
+            return {
+                success: false,
+                code: 'mesh_worktree_cleanup_not_registered',
+                error: `Refusing to remove '${workspace}' because it is not registered in git worktree list for '${repoRoot}'`,
+                recoveryHint: 'Inspect git worktree list --porcelain from the source repo. If the path was already removed, prune git worktrees before retrying.',
+            };
+        }
+        if (managedEntry.branch && managedEntry.branch !== args.node.worktreeBranch) {
+            return {
+                success: false,
+                code: 'mesh_worktree_cleanup_branch_mismatch',
+                error: `Refusing to remove '${workspace}' because git reports branch '${managedEntry.branch}', expected '${args.node.worktreeBranch}'`,
+                recoveryHint: 'Inspect the worktree branch and mesh metadata before retrying cleanup.',
+            };
+        }
+
+        try {
+            const result = await removeWorktree(repoRoot, workspace, { requireClean: true });
+            return { success: true, removedPath: result.removedPath, repoRoot };
+        } catch (e: any) {
+            const message = String(e?.message || e || 'worktree cleanup failed');
+            const dirty = message.includes('dirty worktree') || message.includes('local changes');
+            return {
+                success: false,
+                code: dirty ? 'mesh_worktree_cleanup_dirty' : 'mesh_worktree_cleanup_failed',
+                error: message,
+                recoveryHint: dirty
+                    ? 'Commit, stash, or intentionally discard the worktree changes before retrying mesh_remove_node. The mesh registry entry is preserved until cleanup is safe.'
+                    : 'Inspect git worktree status/list from the source repo and retry after resolving the reported cleanup failure.',
+            };
+        }
+    }
+
     private isCompletedHostedSession(record: any): boolean {
         return record?.lifecycle === 'stopped' || record?.lifecycle === 'failed' || record?.lifecycle === 'interrupted';
     }
@@ -1566,21 +1663,21 @@ export class DaemonCommandRouter {
                         if (sessionCleanup.success === false) return { success: false, removed: false, sessionCleanup };
                     }
 
-                    // If this is a worktree node, clean up the git worktree first
-                    if (node?.isLocalWorktree && node.workspace) {
-                        try {
-                            const sourceNode = node.clonedFromNodeId
-                                ? mesh?.nodes.find((n: any) => n.id === node.clonedFromNodeId || n.nodeId === node.clonedFromNodeId)
-                                : mesh?.nodes.find((n: any) => !n.isLocalWorktree);
-                            const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
-                            if (repoRoot) {
-                                const { removeWorktree } = await import('../git/git-worktree.js');
-                                await removeWorktree(repoRoot, node.workspace);
-                            }
-                        } catch (e: any) {
-                            LOG.warn('MeshNode', `Worktree cleanup failed for ${nodeId}: ${e.message}`);
-                            // Continue with node removal even if worktree cleanup fails
+                    let worktreeCleanup: Record<string, unknown> | undefined;
+                    if (node?.isLocalWorktree) {
+                        const cleanupResult = await this.cleanupLocalWorktreeNode({ mesh, node, nodeId });
+                        if (cleanupResult.success === false) {
+                            return {
+                                success: false,
+                                removed: false,
+                                code: cleanupResult.code,
+                                error: cleanupResult.error,
+                                recoveryHint: cleanupResult.recoveryHint,
+                                ...(sessionCleanup ? { sessionCleanup } : {}),
+                                worktreeCleanup: cleanupResult,
+                            };
                         }
+                        worktreeCleanup = cleanupResult;
                     }
 
                     let removed = false;
@@ -1609,7 +1706,7 @@ export class DaemonCommandRouter {
                         } catch { /* ledger append is best-effort */ }
                     }
 
-                    return { success: true, removed, ...(sessionCleanup ? { sessionCleanup } : {}) };
+                    return { success: true, removed, ...(sessionCleanup ? { sessionCleanup } : {}), ...(worktreeCleanup ? { worktreeCleanup } : {}) };
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }

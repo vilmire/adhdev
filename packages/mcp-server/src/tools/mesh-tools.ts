@@ -759,6 +759,21 @@ async function commandForNode(
     throw new Error(`Command '${command}' requires daemon IPC/local transport for node '${node.id}'`);
 }
 
+function isP2pTransportUnavailableError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error || '');
+    return /p2p|datachannel|mesh_relay_command|daemon_mesh_p2p_transport_unavailable/i.test(message)
+        && /unavailable|failed|timeout|timed out|not connected|closed/i.test(message);
+}
+
+function buildRemoveNodeArgs(ctx: MeshContext, nodeId: string, sessionCleanupMode?: string): Record<string, unknown> {
+    return {
+        meshId: ctx.mesh.id,
+        nodeId,
+        ...(sessionCleanupMode ? { sessionCleanupMode } : {}),
+        inlineMesh: ctx.mesh,
+    };
+}
+
 // ─── Tool Definitions ───────────────────────────
 
 export const MESH_STATUS_TOOL = {
@@ -1910,12 +1925,30 @@ export async function meshRemoveNode(
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
     if (isLocalTransport(ctx.transport)) {
-        const result = await commandForNode(ctx, node, 'remove_mesh_node', {
-            meshId: ctx.mesh.id,
-            nodeId: args.node_id,
-            ...(args.session_cleanup_mode ? { sessionCleanupMode: args.session_cleanup_mode } : {}),
-            inlineMesh: ctx.mesh,
-        });
+        const removeArgs = buildRemoveNodeArgs(ctx, args.node_id, args.session_cleanup_mode);
+        let result: any;
+        let transportFallback: Record<string, unknown> | undefined;
+        try {
+            result = await commandForNode(ctx, node, 'remove_mesh_node', removeArgs);
+        } catch (e: any) {
+            if (ctx.transport instanceof IpcTransport && (node as any).isLocalWorktree && isP2pTransportUnavailableError(e)) {
+                result = await ctx.transport.command('remove_mesh_node', removeArgs);
+                transportFallback = {
+                    from: 'p2p_mesh_relay',
+                    to: 'local_control_plane',
+                    reason: e?.message || String(e),
+                };
+            } else {
+                return JSON.stringify({
+                    success: false,
+                    code: isP2pTransportUnavailableError(e) ? 'p2p_unavailable' : 'mesh_remove_node_failed',
+                    error: e?.message || String(e),
+                    recoveryHint: isP2pTransportUnavailableError(e)
+                        ? 'If this is an ADHDev-managed local worktree, retry from a coordinator connected to the daemon that owns the worktree; dashboard command/data-plane traffic still requires P2P.'
+                        : 'Inspect mesh_status and retry after resolving the reported failure.',
+                }, null, 2);
+            }
+        }
         if (result?.success && result.removed !== false) {
             const idx = ctx.mesh.nodes.findIndex(n => n.id === args.node_id);
             if (idx >= 0) {
@@ -1923,7 +1956,7 @@ export async function meshRemoveNode(
                 ctx.mesh.updatedAt = new Date().toISOString();
             }
         }
-        return JSON.stringify(result, null, 2);
+        return JSON.stringify({ ...(result || {}), ...(transportFallback ? { transportFallback } : {}) }, null, 2);
     } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
         try {
             const res = await (ctx.transport as CloudTransport).meshRemoveNode(node.daemonId, {

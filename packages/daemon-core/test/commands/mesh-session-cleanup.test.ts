@@ -1,5 +1,26 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { DaemonCommandRouter } from '../../src/commands/router'
+import { createWorktree, resolveWorktreePath } from '../../src/git/git-worktree'
+
+const execFileAsync = promisify(execFile)
+
+async function createTempGitRepo(prefix: string) {
+  const dir = await mkdtemp(join(tmpdir(), prefix))
+  const repoRoot = join(dir, 'repo')
+  await execFileAsync('git', ['init', repoRoot])
+  await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoRoot })
+  await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: repoRoot })
+  await writeFile(join(repoRoot, 'README.md'), '# test\n')
+  await execFileAsync('git', ['add', 'README.md'], { cwd: repoRoot })
+  await execFileAsync('git', ['commit', '-m', 'init'], { cwd: repoRoot })
+  return { dir, repoRoot }
+}
 
 function createRouter(overrides: Record<string, unknown> = {}) {
   const sessionHostControl = {
@@ -238,5 +259,77 @@ describe('mesh session cleanup', () => {
       },
     })
     expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('done-1', { force: false })
+  })
+
+  it('blocks local worktree removal when the path is not the managed worktree path', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-unsafe-path-')
+    try {
+      const branch = 'feat/safe-path'
+      const unsafePath = join(dir, 'not-managed-worktree')
+      await execFileAsync('git', ['worktree', 'add', unsafePath, '-b', branch], { cwd: repoRoot })
+      const inlineMesh = {
+        id: 'mesh-safe-path',
+        name: 'Safe Path Mesh',
+        policy: {},
+        nodes: [
+          { id: 'source', workspace: repoRoot, repoRoot },
+          { id: 'node-worktree', workspace: unsafePath, repoRoot: unsafePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
+        ],
+      }
+      const { router } = createRouter()
+
+      const result = await router.execute('remove_mesh_node', {
+        meshId: inlineMesh.id,
+        nodeId: 'node-worktree',
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({
+        success: false,
+        removed: false,
+        code: 'mesh_worktree_cleanup_unexpected_path',
+      })
+      expect(existsSync(unsafePath)).toBe(true)
+      expect(inlineMesh.nodes.some(node => node.id === 'node-worktree')).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('blocks local worktree removal when the managed worktree has local changes', async () => {
+    const { dir, repoRoot } = await createTempGitRepo('adhdev-mesh-dirty-worktree-')
+    try {
+      const branch = 'feat/dirty-worktree'
+      const meshName = 'dirty-worktree-mesh'
+      const created = await createWorktree({ repoRoot, branch, meshName })
+      await writeFile(join(created.worktreePath, 'dirty.txt'), 'uncommitted\n')
+      const inlineMesh = {
+        id: 'mesh-dirty-worktree',
+        name: meshName,
+        policy: {},
+        nodes: [
+          { id: 'source', workspace: repoRoot, repoRoot },
+          { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
+        ],
+      }
+      expect(created.worktreePath).toBe(resolveWorktreePath(repoRoot, meshName, branch))
+      const { router } = createRouter()
+
+      const result = await router.execute('remove_mesh_node', {
+        meshId: inlineMesh.id,
+        nodeId: 'node-worktree',
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({
+        success: false,
+        removed: false,
+      })
+      expect(String((result as any).error)).toContain('Refusing to remove dirty worktree')
+      expect(existsSync(created.worktreePath)).toBe(true)
+      expect(inlineMesh.nodes.some(node => node.id === 'node-worktree')).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

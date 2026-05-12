@@ -265,6 +265,162 @@ test('mesh_launch_session reports recoverable worktree launch failure when daemo
   assert.ok(nodeStatus.nextStepHints.some((hint: string) => hint.includes('mesh_remove_node')));
 });
 
+test('mesh_remove_node falls back to local control-plane cleanup for degraded local worktree nodes when P2P relay is unavailable', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const directCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  const relayCalls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: 'mesh-remove-fallback',
+      name: 'Remove Fallback Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-worktree-orphan',
+        workspace: '/repo-parent/.adhdev-worktrees/mesh/feat-orphan',
+        repoRoot: '/repo-parent/.adhdev-worktrees/mesh/feat-orphan',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+        isLocalWorktree: true,
+        worktreeBranch: 'feat/orphan',
+        clonedFromNodeId: 'node-source',
+      }],
+    },
+    transport,
+  };
+
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    relayCalls.push({ daemonId, command, args });
+    throw new Error("P2P DataChannel command 'remove_mesh_node' to daemon-remote timed out after 30s");
+  };
+  transport.command = async (command, args = {}) => {
+    directCalls.push({ command, args });
+    if (command === 'remove_mesh_node') return { success: true, removed: true, worktreeCleanup: { skipped: true, reason: 'worktree_path_missing' } };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+
+  const text = await meshRemoveNode(ctx, { node_id: 'node-worktree-orphan', session_cleanup_mode: 'preserve' });
+  const result = JSON.parse(text);
+
+  assert.equal(result.success, true);
+  assert.equal(result.removed, true);
+  assert.equal(result.transportFallback.from, 'p2p_mesh_relay');
+  assert.equal(result.transportFallback.to, 'local_control_plane');
+  assert.equal(relayCalls.length, 1);
+  assert.equal(relayCalls[0].command, 'remove_mesh_node');
+  assert.equal(directCalls.length, 1);
+  assert.equal(directCalls[0].command, 'remove_mesh_node');
+  assert.equal((directCalls[0].args.inlineMesh as any).id, 'mesh-remove-fallback');
+  assert.equal(directCalls[0].args.sessionCleanupMode, 'preserve');
+  assert.ok(!ctx.mesh.nodes.some(node => node.id === 'node-worktree-orphan'));
+});
+
+test('mesh_remove_node does not use local control-plane fallback for non-worktree P2P failures', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  let directCalls = 0;
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: 'mesh-remove-no-fallback',
+      name: 'Remove No Fallback Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-remote-normal',
+        workspace: '/repo-remote',
+        repoRoot: '/repo-remote',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+  };
+
+  transport.meshCommand = async () => {
+    throw new Error("P2P DataChannel command 'remove_mesh_node' to daemon-remote timed out after 30s");
+  };
+  transport.command = async () => {
+    directCalls += 1;
+    throw new Error('direct fallback must not be used');
+  };
+
+  const text = await meshRemoveNode(ctx, { node_id: 'node-remote-normal' });
+  const result = JSON.parse(text);
+
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'p2p_unavailable');
+  assert.equal(directCalls, 0);
+  assert.ok(ctx.mesh.nodes.some(node => node.id === 'node-remote-normal'));
+});
+
+test('mesh_launch_session still does not use local fallback when P2P relay is unavailable', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  let directLaunchCalls = 0;
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: 'mesh-launch-no-fallback',
+      name: 'Launch No Fallback Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-worktree-launch-no-fallback',
+        workspace: '/repo-parent/.adhdev-worktrees/mesh/feat-launch',
+        repoRoot: '/repo-parent/.adhdev-worktrees/mesh/feat-launch',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+        isLocalWorktree: true,
+        worktreeBranch: 'feat/launch',
+        clonedFromNodeId: 'node-source',
+      }],
+    },
+    transport,
+  };
+
+  transport.meshCommand = async (_daemonId, command) => {
+    if (command === 'launch_cli' || command === 'git_status') {
+      throw new Error("P2P DataChannel command 'launch_cli' to daemon-remote timed out after 30s");
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+  transport.command = async (command) => {
+    if (command === 'launch_cli') directLaunchCalls += 1;
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+
+  const text = await meshLaunchSession(ctx, { node_id: 'node-worktree-launch-no-fallback', type: 'hermes-cli' });
+  const result = JSON.parse(text);
+
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'p2p_unavailable');
+  assert.equal(directLaunchCalls, 0);
+});
+
 test('mesh_checkpoint routes untracked checkpoint requests with the exact multiword message', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;

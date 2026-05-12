@@ -49,6 +49,11 @@ export interface WorktreeEntry {
     bare: boolean;
 }
 
+export interface WorktreeRemoveOptions {
+    /** Refuse to remove a worktree with uncommitted or untracked changes. */
+    requireClean?: boolean;
+}
+
 export interface WorktreeRemoveResult {
     success: true;
     removedPath: string;
@@ -120,17 +125,30 @@ export async function createWorktree(opts: WorktreeCreateOptions): Promise<Workt
 /**
  * Remove a git worktree and clean up the directory.
  *
- * Runs: git worktree remove <worktreePath> --force
+ * Runs: git worktree remove <worktreePath>
  */
-export async function removeWorktree(repoRoot: string, worktreePath: string): Promise<WorktreeRemoveResult> {
+export async function removeWorktree(repoRoot: string, worktreePath: string, opts: WorktreeRemoveOptions = {}): Promise<WorktreeRemoveResult> {
     if (!existsSync(worktreePath)) {
         // Already gone — just prune
         await pruneWorktrees(repoRoot);
         return { success: true, removedPath: worktreePath };
     }
 
+    if (opts.requireClean) {
+        const { stdout } = await execFileAsync('git', ['status', '--porcelain'], {
+            cwd: worktreePath,
+            encoding: 'utf8',
+            timeout: GIT_TIMEOUT_MS,
+            maxBuffer: GIT_MAX_BUFFER,
+            windowsHide: true,
+        });
+        if (stdout.trim()) {
+            throw new Error(`Refusing to remove dirty worktree: ${worktreePath}`);
+        }
+    }
+
     try {
-        await execFileAsync('git', ['worktree', 'remove', worktreePath, '--force'], {
+        await execFileAsync('git', ['worktree', 'remove', worktreePath], {
             cwd: repoRoot,
             encoding: 'utf8',
             timeout: GIT_TIMEOUT_MS,
