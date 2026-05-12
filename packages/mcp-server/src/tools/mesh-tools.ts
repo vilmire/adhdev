@@ -5,10 +5,11 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 12 tools: mesh_status, mesh_list_nodes, mesh_send_task, mesh_read_chat,
- *           mesh_read_debug,
- *           mesh_launch_session, mesh_git_status, mesh_checkpoint, mesh_approve,
- *           mesh_clone_node, mesh_remove_node, mesh_cleanup_sessions
+ * 18 tools: mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
+ *           mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
+ *           mesh_read_debug, mesh_launch_session, mesh_git_status, mesh_checkpoint,
+ *           mesh_approve, mesh_clone_node, mesh_remove_node, mesh_refine_node,
+ *           mesh_cleanup_sessions, mesh_task_history
  */
 
 import { CloudTransport } from '../transports/cloud.js';
@@ -613,6 +614,132 @@ function getNodeLaunchReadiness(node: LocalMeshNodeEntry): Record<string, unknow
     };
 }
 
+function readNumeric(value: unknown, fallback = 0): number {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function buildBranchConvergence(
+    mesh: LocalMeshEntry,
+    node: LocalMeshNodeEntry,
+    status: any,
+    dirty: boolean,
+    uncommittedChanges: number,
+): Record<string, unknown> {
+    const defaultBranch = readString(mesh.defaultBranch) ?? 'main';
+    const branch = readString(status?.branch) ?? readString(node.worktreeBranch) ?? null;
+    const ahead = readNumeric(status?.ahead);
+    const behind = readNumeric(status?.behind);
+    const upstream = readString(status?.upstream) ?? null;
+    const hasConflicts = status?.hasConflicts === true || (Array.isArray(status?.conflictFiles) && status.conflictFiles.length > 0);
+    const base = {
+        defaultBranch,
+        branch,
+        upstream,
+        ahead,
+        behind,
+        isWorktree: node.isLocalWorktree === true,
+        isDefaultBranch: branch === defaultBranch,
+    };
+
+    if (status?.isGitRepo !== true) {
+        return {
+            ...base,
+            status: 'blocked_review',
+            needsConvergence: true,
+            reason: 'git_status_unavailable',
+            nextStep: `Resolve git status for node '${node.id}' before marking the task complete.`,
+        };
+    }
+
+    if (!branch) {
+        return {
+            ...base,
+            status: 'blocked_review',
+            needsConvergence: true,
+            reason: 'branch_unknown',
+            nextStep: `Inspect node '${node.id}' git branch before deciding whether it is merged to ${defaultBranch}.`,
+        };
+    }
+
+    if (hasConflicts || dirty || uncommittedChanges > 0) {
+        return {
+            ...base,
+            status: 'not_mergeable',
+            needsConvergence: true,
+            reason: hasConflicts ? 'conflicts_present' : 'dirty_workspace',
+            nextStep: `Commit, checkpoint, or resolve node '${node.id}' before any main convergence step.`,
+        };
+    }
+
+    if (branch === defaultBranch) {
+        if (ahead > 0 || behind > 0) {
+            return {
+                ...base,
+                status: 'blocked_review',
+                needsConvergence: true,
+                reason: 'default_branch_not_even_with_upstream',
+                nextStep: `Bring ${defaultBranch} even with its upstream before declaring convergence complete.`,
+            };
+        }
+        return {
+            ...base,
+            status: 'merged_to_main',
+            needsConvergence: false,
+            reason: 'clean_default_branch',
+            nextStep: null,
+        };
+    }
+
+    if (node.isLocalWorktree) {
+        return {
+            ...base,
+            status: 'cleanup_candidate',
+            needsConvergence: true,
+            reason: 'clean_non_default_worktree_branch',
+            nextStep: `Run mesh_refine_node(node_id: "${node.id}") or explicitly classify this worktree as blocked_review/not_mergeable before ending the task.`,
+        };
+    }
+
+    if (!upstream || ahead > 0 || behind > 0) {
+        return {
+            ...base,
+            status: 'blocked_review',
+            needsConvergence: true,
+            reason: !upstream ? 'feature_branch_missing_upstream' : 'feature_branch_not_even_with_upstream',
+            nextStep: `Push or reconcile branch '${branch}', then merge it into ${defaultBranch} or mark it not_mergeable with a reason.`,
+        };
+    }
+
+    return {
+        ...base,
+        status: 'pushed_feature_branch_needs_merge',
+        needsConvergence: true,
+        reason: 'clean_non_default_branch',
+        nextStep: `Review and merge branch '${branch}' into ${defaultBranch}; do not report the task as fully complete while it remains off main.`,
+    };
+}
+
+function summarizeBranchConvergence(nodes: any[]): Record<string, unknown> {
+    const followUps = nodes
+        .filter(node => node?.branchConvergence?.needsConvergence === true)
+        .map(node => ({
+            nodeId: node.nodeId,
+            workspace: node.workspace,
+            branch: node.branchConvergence.branch,
+            status: node.branchConvergence.status,
+            reason: node.branchConvergence.reason,
+            nextStep: node.branchConvergence.nextStep,
+        }));
+
+    return {
+        needsFollowUp: followUps.length > 0,
+        unresolvedCount: followUps.length,
+        requiredFinalStates: ['merged_to_main', 'pushed_feature_branch_needs_merge', 'blocked_review', 'cleanup_candidate', 'not_mergeable'],
+        followUps,
+    };
+}
+
 async function commandForNode(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
@@ -937,6 +1064,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
                 entry.branch = status?.branch;
                 entry.isDirty = dirty;
                 entry.uncommittedChanges = uncommittedChanges;
+                entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
             } else if (isLocalTransport(transport)) {
                 const statusResult = await commandForNode(ctx, node, 'git_status', { workspace: node.workspace });
                 const status = extractGitStatus(statusResult);
@@ -946,6 +1074,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
                 entry.branch = status?.branch;
                 entry.isDirty = dirty;
                 entry.uncommittedChanges = uncommittedChanges;
+                entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
             } else {
                 entry.health = 'unknown';
                 entry.note = 'No daemonId available for cloud status probe';
@@ -988,6 +1117,10 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
             nextStepHints.push('Initialize git repository or check workspace path.');
         }
 
+        if (entry.branchConvergence?.needsConvergence === true && entry.branchConvergence.nextStep) {
+            nextStepHints.push(String(entry.branchConvergence.nextStep));
+        }
+
         if (recoveryContext.consecutiveNodeFailures > 0) {
             if (recoveryContext.retryRecommended) {
                 nextStepHints.push(`Retry task on this node or launch a fresh session.`);
@@ -1013,6 +1146,7 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         policy: mesh.policy,
         refreshedAt: new Date().toISOString(),
         nodes: results,
+        branchConvergenceSummary: summarizeBranchConvergence(results),
     };
 
     // Include task ledger summary for coordinator context

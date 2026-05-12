@@ -542,6 +542,76 @@ test('mesh_status and mesh_list_nodes surface launch readiness when providerPrio
   assert.deepEqual(readyList.providerPriority, ['hermes-cli']);
 });
 
+test('mesh_status surfaces branch convergence follow-up for clean non-main branches and worktrees', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  transport.command = async (command) => {
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (_daemonId, command, args = {}) => {
+    if (command !== 'git_status') throw new Error(`unexpected mesh command: ${command}`);
+    const workspace = String((args as any).workspace || '');
+    if (workspace.endsWith('/main')) {
+      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, modified: 0 } } } };
+    }
+    if (workspace.endsWith('/feature')) {
+      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'fix/feature', upstream: 'origin/fix/feature', ahead: 0, behind: 0, modified: 0 } } } };
+    }
+    if (workspace.endsWith('/worktree')) {
+      return { success: true, result: { success: true, result: { status: { isGitRepo: true, branch: 'fix/worktree', modified: 0 } } } };
+    }
+    throw new Error(`unexpected workspace: ${workspace}`);
+  };
+
+  const ctx = {
+    mesh: {
+      id: 'mesh-convergence',
+      name: 'Convergence Mesh',
+      repoIdentity: 'example/repo',
+      defaultBranch: 'main',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [
+        { id: 'node-main', workspace: '/repo/main', repoRoot: '/repo/main', daemonId: 'daemon-main', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] } },
+        { id: 'node-feature', workspace: '/repo/feature', repoRoot: '/repo/feature', daemonId: 'daemon-feature', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] } },
+        { id: 'node-worktree', workspace: '/repo/worktree', repoRoot: '/repo/worktree', daemonId: 'daemon-worktree', userOverrides: {}, policy: { providerPriority: ['hermes-cli'] }, isLocalWorktree: true, worktreeBranch: 'fix/worktree' },
+      ],
+    },
+    transport,
+  };
+
+  const statusText = await meshStatus(ctx as any);
+  const status = JSON.parse(statusText);
+  const main = status.nodes.find((node: any) => node.nodeId === 'node-main');
+  const feature = status.nodes.find((node: any) => node.nodeId === 'node-feature');
+  const worktree = status.nodes.find((node: any) => node.nodeId === 'node-worktree');
+
+  assert.equal(main.branchConvergence.status, 'merged_to_main');
+  assert.equal(main.branchConvergence.needsConvergence, false);
+  assert.equal(feature.branchConvergence.status, 'pushed_feature_branch_needs_merge');
+  assert.equal(feature.branchConvergence.needsConvergence, true);
+  assert.match(feature.branchConvergence.nextStep, /do not report the task as fully complete/);
+  assert.equal(worktree.branchConvergence.status, 'cleanup_candidate');
+  assert.equal(worktree.branchConvergence.needsConvergence, true);
+  assert.match(worktree.branchConvergence.nextStep, /mesh_refine_node/);
+
+  assert.equal(status.branchConvergenceSummary.needsFollowUp, true);
+  assert.equal(status.branchConvergenceSummary.unresolvedCount, 2);
+  assert.deepEqual(
+    status.branchConvergenceSummary.followUps.map((item: any) => [item.nodeId, item.status]),
+    [
+      ['node-feature', 'pushed_feature_branch_needs_merge'],
+      ['node-worktree', 'cleanup_candidate'],
+    ],
+  );
+  assert.ok(feature.nextStepHints.some((hint: string) => hint.includes('merge branch')));
+  assert.ok(worktree.nextStepHints.some((hint: string) => hint.includes('mesh_refine_node')));
+});
+
 
 
 test('mesh_read_chat forwards cached provider metadata after launch', async () => {

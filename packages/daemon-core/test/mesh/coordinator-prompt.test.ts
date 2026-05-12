@@ -81,4 +81,36 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('Use at most one compact `mesh_read_chat` check')
     expect(prompt).toContain('Never launch a duplicate session or second worker solely because `mesh_read_chat` has no final assistant message')
   })
+
+  it('requires a branch convergence final state before reporting completion', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        defaultBranch: 'main',
+        nodes: [
+          {
+            id: 'node_1',
+            workspace: '/repo',
+            daemonId: 'daemon_1',
+            userOverrides: {},
+            policy: {},
+          },
+        ],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    expect(prompt).toContain('Converge branches')
+    expect(prompt).toContain('branchConvergenceSummary')
+    expect(prompt).toContain('`mesh_refine_node`')
+    expect(prompt).toContain('`merged_to_main`')
+    expect(prompt).toContain('`pushed_feature_branch_needs_merge`')
+    expect(prompt).toContain('`blocked_review`')
+    expect(prompt).toContain('`cleanup_candidate`')
+    expect(prompt).toContain('`not_mergeable`')
+    expect(prompt).toContain('Do not strand completed branches')
+  })
 })
