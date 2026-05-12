@@ -31,7 +31,7 @@ import {
 } from '../utils/mesh-coordinator-setup'
 
 // ─── Types (matches daemon-core LocalMeshEntry shape) ───
-interface MeshNode {
+export interface MeshNode {
     id: string
     workspace: string
     repoRoot?: string
@@ -52,6 +52,20 @@ interface MeshEntry {
     nodes: MeshNode[]
     createdAt: string
     updatedAt: string
+}
+
+export interface MeshQueueEntry {
+    id: string
+    meshId?: string
+    message: string
+    status: 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled' | string
+    targetNodeId?: string
+    targetSessionId?: string
+    assignedNodeId?: string
+    assignedSessionId?: string
+    nodeId?: string
+    sessionId?: string
+    updatedAt?: string
 }
 
 interface AvailableCliAgent {
@@ -108,6 +122,35 @@ function describeNodeProviderPriority(node: MeshNode): { configured: boolean; la
         }
     }
     return { configured: true, label: providerPriority.join(' → ') }
+}
+
+export function getNodeActiveAssignments(node: MeshNode, queue: MeshQueueEntry[]): MeshQueueEntry[] {
+    return queue.filter(task => {
+        if (task.status !== 'assigned') return false
+        const assignedNodeId = task.assignedNodeId || task.nodeId
+        return assignedNodeId === node.id
+    })
+}
+
+export function describeNodeActiveAssignmentLabel(task: MeshQueueEntry): string {
+    const sessionId = task.assignedSessionId || task.sessionId || 'unassigned session'
+    const message = task.message.length > 80 ? `${task.message.slice(0, 77)}…` : task.message
+    return `${sessionId}: ${message}`
+}
+
+function getNodeActiveSessions(node: MeshNode, daemonRecord: any): Array<{ id: string; provider: string; status: string }> {
+    const buckets = [
+        ...(Array.isArray(daemonRecord?.cliSessions) ? daemonRecord.cliSessions : []),
+        ...(Array.isArray(daemonRecord?.acpSessions) ? daemonRecord.acpSessions : []),
+        ...(Array.isArray(daemonRecord?.sessions) ? daemonRecord.sessions : []),
+    ]
+    return buckets
+        .filter((session: any) => session?.settings?.meshNodeId === node.id || session?.workspace === node.workspace)
+        .map((session: any) => ({
+            id: session.sessionId || session.id || session.instanceId || 'unknown',
+            provider: session.providerType || session.cliType || session.acpType || session.type || 'unknown',
+            status: session.status || session.activeChat?.status || 'unknown',
+        }))
 }
 
 function readMeshPolicy(mesh: MeshEntry | null): Record<string, any> {
@@ -177,6 +220,8 @@ export default function RepoMesh() {
     const [savingPolicy, setSavingPolicy] = useState(false)
     const [savingNodePolicyId, setSavingNodePolicyId] = useState<string | null>(null)
     const [nodeProviderPriorityDrafts, setNodeProviderPriorityDrafts] = useState<ProviderPriorityDrafts>({})
+    const [meshQueue, setMeshQueue] = useState<MeshQueueEntry[]>([])
+    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
 
     // Create form
     const [showCreate, setShowCreate] = useState(false)
@@ -203,6 +248,13 @@ export default function RepoMesh() {
         }
     }, [showAddNode, availableCliProviders, nodeProviderPriority.length])
 
+    useEffect(() => {
+        const nodeIds = new Set((selectedMesh?.nodes || []).map(node => node.id))
+        if (selectedNodeId && !nodeIds.has(selectedNodeId)) {
+            setSelectedNodeId(null)
+        }
+    }, [selectedMesh, selectedNodeId])
+
     // ─── Data loading ───
     const loadMeshes = useCallback(async () => {
         if (!daemonId) return
@@ -222,7 +274,25 @@ export default function RepoMesh() {
         }
     }, [daemonId, sendCommand])
 
+    const loadQueue = useCallback(async (meshId: string | null) => {
+        if (!daemonId || !meshId) {
+            setMeshQueue([])
+            return
+        }
+        try {
+            const res: any = await sendCommand(daemonId, 'get_mesh_queue', { meshId })
+            if (res?.success) {
+                setMeshQueue(Array.isArray(res.queue) ? res.queue : [])
+            } else {
+                setMeshQueue([])
+            }
+        } catch {
+            setMeshQueue([])
+        }
+    }, [daemonId, sendCommand])
+
     useEffect(() => { void loadMeshes() }, [loadMeshes])
+    useEffect(() => { void loadQueue(selectedMeshId) }, [loadQueue, selectedMeshId])
 
     // ─── Actions ───
     async function handleCreate() {
@@ -270,6 +340,7 @@ export default function RepoMesh() {
                 setNodeWorkspace('')
                 setNodeProviderPriority([])
                 await loadMeshes()
+                await loadQueue(selectedMeshId)
             } else {
                 setError(res?.error || 'Add node failed')
             }
@@ -285,7 +356,9 @@ export default function RepoMesh() {
         if (!confirm(`Remove this node?\n\nNode removal cleanup policy: ${cleanupLabel}`)) return
         try {
             await sendCommand(daemonId, 'remove_mesh_node', { meshId: selectedMeshId, nodeId })
+            if (selectedNodeId === nodeId) setSelectedNodeId(null)
             await loadMeshes()
+            await loadQueue(selectedMeshId)
         } catch (e: any) {
             setError(e?.message || 'Remove node failed')
         }
@@ -580,50 +653,114 @@ export default function RepoMesh() {
                         {selectedMesh.nodes.map(node => {
                             const providerPriority = readNodeProviderPriority(node)
                             const priorityStatus = describeNodeProviderPriority(node)
+                            const activeAssignments = getNodeActiveAssignments(node, meshQueue)
+                            const activeSessions = getNodeActiveSessions(node, daemon)
+                            const isSelected = selectedNodeId === node.id
                             return (
-                            <div key={node.id} className="flex items-center justify-between p-3 rounded-lg border border-border-subtle bg-bg-primary">
-                                <div>
-                                    <div className="text-sm font-medium">{node.workspace.split('/').pop()}</div>
-                                    <div className="text-[10px] text-text-muted font-mono">{node.workspace}</div>
-                                    <div className="mt-3 max-w-2xl">
-                                        <FormField
-                                            label="Provider priority"
-                                            hint="Used when launches omit an explicit provider. Empty keeps fail-closed behavior until a provider is selected manually."
-                                        >
-                                            <ProviderPriorityEditor
-                                                value={nodeProviderPriorityDrafts[node.id] ?? providerPriority}
-                                                availableProviders={availableCliProviders}
-                                                onChange={next => setNodeProviderPriorityDrafts(prev => ({ ...prev, [node.id]: next }))}
-                                                disabled={savingNodePolicyId === node.id}
-                                                saveButton={(
-                                                    <button
-                                                        type="button"
-                                                        className="btn btn-secondary btn-sm shrink-0"
-                                                        onClick={() => void handleUpdateNodeProviderPriority(node)}
-                                                        disabled={savingNodePolicyId === node.id}
-                                                    >
-                                                        {savingNodePolicyId === node.id ? 'Saving...' : 'Save policy'}
-                                                    </button>
-                                                )}
-                                            />
-                                            <div className="mt-2 text-[12px]">
-                                                <span className="text-text-muted">Effective provider priority: </span>
-                                                <span className={priorityStatus.configured ? 'text-text-primary font-mono' : 'text-amber-400'}>
-                                                    {priorityStatus.label}
+                            <div
+                                key={node.id}
+                                className={`p-3 rounded-lg border bg-bg-primary cursor-pointer transition-colors ${isSelected ? 'border-accent-primary/60' : 'border-border-subtle hover:border-accent-primary/35'}`}
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => setSelectedNodeId(isSelected ? null : node.id)}
+                                onKeyDown={event => {
+                                    if (event.key === 'Enter' || event.key === ' ') {
+                                        event.preventDefault()
+                                        setSelectedNodeId(isSelected ? null : node.id)
+                                    }
+                                }}
+                            >
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <div className="flex items-center gap-2">
+                                            <div className="text-sm font-medium">{node.workspace.split('/').pop()}</div>
+                                            {activeAssignments.length > 0 && (
+                                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-300 border border-orange-500/25">
+                                                    {activeAssignments.length} active task{activeAssignments.length === 1 ? '' : 's'}
                                                 </span>
-                                                {priorityStatus.launchBlockedMessage && (
-                                                    <span className="ml-2 text-amber-400">({priorityStatus.launchBlockedMessage})</span>
-                                                )}
-                                            </div>
-                                        </FormField>
+                                            )}
+                                        </div>
+                                        <div className="text-[10px] text-text-muted font-mono">{node.workspace}</div>
+                                        <div className="mt-3 max-w-2xl" onClick={event => event.stopPropagation()}>
+                                            <FormField
+                                                label="Provider priority"
+                                                hint="Used when launches omit an explicit provider. Empty keeps fail-closed behavior until a provider is selected manually."
+                                            >
+                                                <ProviderPriorityEditor
+                                                    value={nodeProviderPriorityDrafts[node.id] ?? providerPriority}
+                                                    availableProviders={availableCliProviders}
+                                                    onChange={next => setNodeProviderPriorityDrafts(prev => ({ ...prev, [node.id]: next }))}
+                                                    disabled={savingNodePolicyId === node.id}
+                                                    saveButton={(
+                                                        <button
+                                                            type="button"
+                                                            className="btn btn-secondary btn-sm shrink-0"
+                                                            onClick={event => {
+                                                                event.stopPropagation()
+                                                                void handleUpdateNodeProviderPriority(node)
+                                                            }}
+                                                            disabled={savingNodePolicyId === node.id}
+                                                        >
+                                                            {savingNodePolicyId === node.id ? 'Saving...' : 'Save policy'}
+                                                        </button>
+                                                    )}
+                                                />
+                                                <div className="mt-2 text-[12px]">
+                                                    <span className="text-text-muted">Effective provider priority: </span>
+                                                    <span className={priorityStatus.configured ? 'text-text-primary font-mono' : 'text-amber-400'}>
+                                                        {priorityStatus.label}
+                                                    </span>
+                                                    {priorityStatus.launchBlockedMessage && (
+                                                        <span className="ml-2 text-amber-400">({priorityStatus.launchBlockedMessage})</span>
+                                                    )}
+                                                </div>
+                                            </FormField>
+                                        </div>
                                     </div>
+                                    <button
+                                        className="text-text-muted hover:text-red-400 transition-colors bg-transparent border-none cursor-pointer"
+                                        onClick={event => {
+                                            event.stopPropagation()
+                                            void handleRemoveNode(node.id)
+                                        }}
+                                    >
+                                        <IconX size={14} />
+                                    </button>
                                 </div>
-                                <button
-                                    className="text-text-muted hover:text-red-400 transition-colors bg-transparent border-none cursor-pointer"
-                                    onClick={() => handleRemoveNode(node.id)}
-                                >
-                                    <IconX size={14} />
-                                </button>
+                                {isSelected && (
+                                    <div className="mt-3 rounded-lg border border-border-subtle bg-bg-secondary/60 p-3 text-[12px] text-text-muted">
+                                        <div className="grid gap-2 sm:grid-cols-2">
+                                            <div><span className="text-text-secondary">Node ID:</span> <span className="font-mono">{node.id}</span></div>
+                                            <div><span className="text-text-secondary">Launch ready:</span> <span className={priorityStatus.configured ? 'text-green-400' : 'text-amber-400'}>{priorityStatus.configured ? 'yes' : 'provider priority not configured'}</span></div>
+                                            <div><span className="text-text-secondary">Repo root:</span> <span className="font-mono">{node.repoRoot || node.workspace}</span></div>
+                                            <div><span className="text-text-secondary">Active sessions:</span> {activeSessions.length}</div>
+                                            <div><span className="text-text-secondary">Branch / git:</span> not loaded in standalone list view</div>
+                                            <div><span className="text-text-secondary">Health:</span> {activeAssignments.length > 0 || activeSessions.length > 0 ? 'active' : 'idle/unknown'}</div>
+                                        </div>
+                                        <div className="mt-3">
+                                            <div className="text-text-secondary mb-1">Active queue assignments</div>
+                                            {activeAssignments.length === 0 ? (
+                                                <div>No active assigned queue task for this node.</div>
+                                            ) : (
+                                                <ul className="m-0 pl-4">
+                                                    {activeAssignments.map(task => (
+                                                        <li key={task.id} className="font-mono">{describeNodeActiveAssignmentLabel(task)}</li>
+                                                    ))}
+                                                </ul>
+                                            )}
+                                        </div>
+                                        {activeSessions.length > 0 && (
+                                            <div className="mt-3">
+                                                <div className="text-text-secondary mb-1">Active sessions</div>
+                                                <ul className="m-0 pl-4">
+                                                    {activeSessions.map(session => (
+                                                        <li key={session.id} className="font-mono">{session.provider} / {session.status} / {session.id}</li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                             )
                         })}

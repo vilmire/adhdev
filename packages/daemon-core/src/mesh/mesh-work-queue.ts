@@ -230,6 +230,12 @@ export interface MeshWorkQueueStats {
     completed: number;
     failed: number;
     cancelled: number;
+    activeAssignments: Array<{
+        id: string;
+        nodeId?: string;
+        sessionId?: string;
+        message: string;
+    }>;
 }
 
 /**
@@ -243,5 +249,13 @@ export function getMeshQueueStats(meshId: string): MeshWorkQueueStats {
         completed: queue.filter(q => q.status === 'completed').length,
         failed: queue.filter(q => q.status === 'failed').length,
         cancelled: queue.filter(q => q.status === 'cancelled').length,
+        activeAssignments: queue
+            .filter(q => q.status === 'assigned')
+            .map(q => ({
+                id: q.id,
+                nodeId: q.assignedNodeId,
+                sessionId: q.assignedSessionId,
+                message: q.message,
+            })),
     };
 }

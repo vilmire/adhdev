@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { RepoMeshHermesMcpConfig } from '../../src/pages/RepoMesh'
+import { RepoMeshHermesMcpConfig, getNodeActiveAssignments, describeNodeActiveAssignmentLabel } from '../../src/pages/RepoMesh'
 
 describe('RepoMeshHermesMcpConfig', () => {
   it('shows Hermes YAML setup without advertising Claude auto-import config', () => {
@@ -48,5 +48,23 @@ describe('RepoMeshHermesMcpConfig', () => {
     expect(html).toContain('Start a fresh CLI session after editing config.')
     expect(html).not.toContain('mcpServers')
     expect(html).not.toContain('Claude')
+  })
+})
+
+describe('RepoMesh node active assignment helpers', () => {
+  it('selects assigned queue entries for the node and produces a concise UI label', () => {
+    const assignments = getNodeActiveAssignments(
+      { id: 'node-a', workspace: '/repo/worktree-a', userOverrides: {}, policy: {} } as any,
+      [
+        { id: 'task-1', status: 'assigned', message: 'Fix queue lifecycle', assignedNodeId: 'node-a', assignedSessionId: 'session-a' },
+        { id: 'task-2', status: 'pending', message: 'Pending', targetNodeId: 'node-a' },
+        { id: 'task-3', status: 'assigned', message: 'Other node', assignedNodeId: 'node-b', assignedSessionId: 'session-b' },
+      ] as any,
+    )
+
+    expect(assignments).toHaveLength(1)
+    expect(assignments[0].id).toBe('task-1')
+    expect(describeNodeActiveAssignmentLabel(assignments[0])).toContain('session-a')
+    expect(describeNodeActiveAssignmentLabel(assignments[0])).toContain('Fix queue lifecycle')
   })
 })

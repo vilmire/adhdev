@@ -394,6 +394,13 @@ export interface SessionEntry {
         assigned: number;
         completed: number;
         failed: number;
+        cancelled?: number;
+        activeAssignments?: Array<{
+            id: string;
+            nodeId?: string;
+            sessionId?: string;
+            message: string;
+        }>;
     };
 }
 
@@ -439,6 +446,13 @@ export interface CompactSessionEntry {
         assigned: number;
         completed: number;
         failed: number;
+        cancelled?: number;
+        activeAssignments?: Array<{
+            id: string;
+            nodeId?: string;
+            sessionId?: string;
+            message: string;
+        }>;
     };
 }
 

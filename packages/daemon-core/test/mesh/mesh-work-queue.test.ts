@@ -9,7 +9,8 @@ import {
     updateTaskStatus,
     updateSessionTaskStatus,
     cancelTask,
-    requeueTask
+    requeueTask,
+    getMeshQueueStats
 } from '../../src/mesh/mesh-work-queue.js';
 import { getLedgerDir } from '../../src/mesh/mesh-ledger.js';
 
@@ -145,6 +146,34 @@ describe('Mesh Work Queue (GUPP)', () => {
         
         const q = getQueue(meshId);
         expect(q[0].status).to.equal('failed');
+    });
+
+    it('exposes active assignment details in queue stats for status/UI surfaces', () => {
+        const task = enqueueTask(meshId, 'visible active task');
+        claimNextTask(meshId, 'node-active', 'session-active');
+
+        const stats = getMeshQueueStats(meshId);
+
+        expect(stats.pending).to.equal(0);
+        expect(stats.assigned).to.equal(1);
+        expect(stats.activeAssignments).to.deep.equal([{
+            id: task.id,
+            nodeId: 'node-active',
+            sessionId: 'session-active',
+            message: 'visible active task',
+        }]);
+    });
+
+    it('releases a node/session after failed or cancelled assignments', () => {
+        const failedTask = enqueueTask(meshId, 'will fail');
+        const cancelledTask = enqueueTask(meshId, 'will cancel');
+        const nextTask = enqueueTask(meshId, 'next task');
+
+        expect(claimNextTask(meshId, 'node-release', 'session-release')?.id).to.equal(failedTask.id);
+        updateSessionTaskStatus(meshId, 'session-release', 'failed');
+        expect(claimNextTask(meshId, 'node-release', 'session-release')?.id).to.equal(cancelledTask.id);
+        cancelTask(meshId, cancelledTask.id, { reason: 'operator cancelled' });
+        expect(claimNextTask(meshId, 'node-release', 'session-release')?.id).to.equal(nextTask.id);
     });
 
     it('cancels stale queue tasks without deleting audit history', () => {
