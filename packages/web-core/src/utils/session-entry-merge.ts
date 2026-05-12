@@ -30,11 +30,14 @@ export function mergeActiveChatData(
   if (!incoming) return existing ?? null
   if (!existing) return incoming ?? null
 
+  const incomingHasMessages = Object.prototype.hasOwnProperty.call(incoming, 'messages')
+  const incomingHasActiveModal = Object.prototype.hasOwnProperty.call(incoming, 'activeModal')
+
   return {
     ...existing,
     ...incoming,
-    messages: [],
-    activeModal: null,
+    messages: incomingHasMessages ? (incoming.messages ?? []) : existing.messages,
+    activeModal: incomingHasActiveModal ? (incoming.activeModal ?? null) : existing.activeModal,
     inputContent: incoming.inputContent ?? existing.inputContent,
   }
 }
