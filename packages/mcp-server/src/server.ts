@@ -37,7 +37,7 @@ import { STOP_SESSION_TOOL, stopSession } from './tools/stop-session.js';
 import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
 import {
   ALL_MESH_TOOLS, meshStatus, meshListNodes, meshSendTask, meshReadChat,
-  meshEnqueueTask, meshViewQueue,
+  meshEnqueueTask, meshViewQueue, meshQueueCancel, meshQueueRequeue,
   meshReadDebug,
   meshLaunchSession, meshGitStatus, meshCheckpoint, meshApprove,
   meshCloneNode, meshRemoveNode, meshRefineNode, meshCleanupSessions, meshTaskHistory
@@ -240,6 +240,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_list_nodes': text = await meshListNodes(meshCtx); break;
           case 'mesh_enqueue_task': text = await meshEnqueueTask(meshCtx, a as any); break;
           case 'mesh_view_queue': text = await meshViewQueue(meshCtx, a as any); break;
+          case 'mesh_queue_cancel': text = await meshQueueCancel(meshCtx, a as any); break;
+          case 'mesh_queue_requeue': text = await meshQueueRequeue(meshCtx, a as any); break;
           case 'mesh_send_task': text = await meshSendTask(meshCtx, a as any); break;
           case 'mesh_read_chat': text = await meshReadChat(meshCtx, a as any); break;
           case 'mesh_read_debug': text = await meshReadDebug(meshCtx, a as any); break;

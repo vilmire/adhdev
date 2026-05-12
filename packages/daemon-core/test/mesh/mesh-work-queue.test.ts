@@ -7,7 +7,9 @@ import {
     getQueue,
     claimNextTask,
     updateTaskStatus,
-    updateSessionTaskStatus
+    updateSessionTaskStatus,
+    cancelTask,
+    requeueTask
 } from '../../src/mesh/mesh-work-queue.js';
 import { getLedgerDir } from '../../src/mesh/mesh-ledger.js';
 
@@ -143,5 +145,42 @@ describe('Mesh Work Queue (GUPP)', () => {
         
         const q = getQueue(meshId);
         expect(q[0].status).to.equal('failed');
+    });
+
+    it('cancels stale queue tasks without deleting audit history', () => {
+        const task = enqueueTask(meshId, 'stale pending task', {
+            targetNodeId: 'node1',
+            targetSessionId: 'dead-session',
+        });
+
+        const cancelled = cancelTask(meshId, task.id, { reason: 'dead session target' });
+
+        expect(cancelled?.id).to.equal(task.id);
+        expect(cancelled?.status).to.equal('cancelled');
+        expect(cancelled?.cancelReason).to.equal('dead session target');
+        const q = getQueue(meshId);
+        expect(q).to.have.length(1);
+        expect(q[0].status).to.equal('cancelled');
+        expect(q[0].targetSessionId).to.equal('dead-session');
+    });
+
+    it('requeues stale assigned tasks and clears dead session ownership by default', () => {
+        const task = enqueueTask(meshId, 'stale assigned task', {
+            targetNodeId: 'node1',
+            targetSessionId: 'dead-session',
+        });
+        const claimed = claimNextTask(meshId, 'node1', 'dead-session');
+        expect(claimed?.id).to.equal(task.id);
+
+        const requeued = requeueTask(meshId, task.id, { reason: 'retry on another session' });
+
+        expect(requeued?.status).to.equal('pending');
+        expect(requeued?.assignedNodeId).to.be.undefined;
+        expect(requeued?.assignedSessionId).to.be.undefined;
+        expect(requeued?.targetNodeId).to.equal('node1');
+        expect(requeued?.targetSessionId).to.be.undefined;
+        expect(requeued?.requeueReason).to.equal('retry on another session');
+        const next = claimNextTask(meshId, 'node1', 'fresh-session');
+        expect(next?.id).to.equal(task.id);
     });
 });

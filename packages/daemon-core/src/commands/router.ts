@@ -1346,6 +1346,41 @@ export class DaemonCommandRouter {
                 }
             }
 
+            case 'cancel_mesh_queue_task': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const taskId = typeof args?.taskId === 'string' ? args.taskId.trim() : '';
+                if (!meshId || !taskId) return { success: false, error: 'meshId and taskId required' };
+                try {
+                    const { cancelTask } = await import('../mesh/mesh-work-queue.js');
+                    const reason = typeof args?.reason === 'string' ? args.reason : undefined;
+                    const task = cancelTask(meshId, taskId, { reason });
+                    if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
+                    return { success: true, task };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
+            case 'requeue_mesh_queue_task': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                const taskId = typeof args?.taskId === 'string' ? args.taskId.trim() : '';
+                if (!meshId || !taskId) return { success: false, error: 'meshId and taskId required' };
+                try {
+                    const { requeueTask } = await import('../mesh/mesh-work-queue.js');
+                    const task = requeueTask(meshId, taskId, {
+                        reason: typeof args?.reason === 'string' ? args.reason : undefined,
+                        targetNodeId: typeof args?.targetNodeId === 'string' ? args.targetNodeId.trim() : undefined,
+                        targetSessionId: typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : undefined,
+                        clearTargetNode: args?.clearTargetNode === true,
+                        clearTargetSession: args?.clearTargetSession !== false,
+                    });
+                    if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
+                    return { success: true, task };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
             case 'add_mesh_node': {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 const workspace = typeof args?.workspace === 'string' ? args.workspace.trim() : '';

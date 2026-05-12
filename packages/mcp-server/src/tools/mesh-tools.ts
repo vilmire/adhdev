@@ -18,7 +18,7 @@ import type { McpTransport } from '../transports/mode.js';
 import { compactChatPayload } from './chat-compact.js';
 import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
-import { appendLedgerEntry, readLedgerEntries, getLedgerSummary, enqueueTask, getQueue, getSessionRecoveryContext } from '@adhdev/daemon-core';
+import { appendLedgerEntry, readLedgerEntries, getLedgerSummary, enqueueTask, getQueue, cancelTask, requeueTask, getSessionRecoveryContext } from '@adhdev/daemon-core';
 
 export interface MeshContext {
     mesh: LocalMeshEntry;
@@ -416,16 +416,46 @@ export const MESH_ENQUEUE_TASK_TOOL = {
 
 export const MESH_VIEW_QUEUE_TOOL = {
     name: 'mesh_view_queue',
-    description: 'View the current status of the mesh work queue (pending, assigned, completed, failed tasks).',
+    description: 'View the current status of the mesh work queue (pending, assigned, completed, failed, cancelled tasks).',
     inputSchema: {
         type: 'object' as const,
         properties: {
             status: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Filter by task status: pending, assigned, completed, failed. Returns all if omitted.',
+                description: 'Filter by task status: pending, assigned, completed, failed, cancelled. Returns all if omitted.',
             },
         },
+    },
+};
+
+export const MESH_QUEUE_CANCEL_TOOL = {
+    name: 'mesh_queue_cancel',
+    description: 'Cancel a pending/assigned/completed/failed mesh queue task without deleting audit history. Use this to retire stale queue items that target dead sessions.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            task_id: { type: 'string', description: 'Queue task ID to cancel.' },
+            reason: { type: 'string', description: 'Optional operator-visible reason for cancellation.' },
+        },
+        required: ['task_id'],
+    },
+};
+
+export const MESH_QUEUE_REQUEUE_TOOL = {
+    name: 'mesh_queue_requeue',
+    description: 'Return a mesh queue task to pending for retry. By default clears stale assigned owner and target session so another live session can claim it.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            task_id: { type: 'string', description: 'Queue task ID to requeue.' },
+            reason: { type: 'string', description: 'Optional operator-visible reason for requeueing.' },
+            target_node_id: { type: 'string', description: 'Optional replacement target node ID.' },
+            target_session_id: { type: 'string', description: 'Optional replacement target runtime session ID.' },
+            clear_target_node: { type: 'boolean', description: 'When true, remove any existing target node constraint.' },
+            keep_target_session: { type: 'boolean', description: 'When true, preserve an existing target session if target_session_id is not provided. Defaults false to avoid stale session targets.' },
+        },
+        required: ['task_id'],
     },
 };
 
@@ -611,6 +641,8 @@ export const ALL_MESH_TOOLS = [
     MESH_LIST_NODES_TOOL,
     MESH_ENQUEUE_TASK_TOOL,
     MESH_VIEW_QUEUE_TOOL,
+    MESH_QUEUE_CANCEL_TOOL,
+    MESH_QUEUE_REQUEUE_TOOL,
     MESH_SEND_TASK_TOOL,
     MESH_READ_CHAT_TOOL,
     MESH_READ_DEBUG_TOOL,
@@ -834,6 +866,60 @@ export async function meshViewQueue(
     try {
         const queue = getQueue(ctx.mesh.id, { status: args.status as any });
         return JSON.stringify({ success: true, queue }, null, 2);
+    } catch (e: any) {
+        return JSON.stringify({ success: false, error: e.message });
+    }
+}
+
+export async function meshQueueCancel(
+    ctx: MeshContext,
+    args: { task_id?: string; taskId?: string; reason?: string },
+): Promise<string> {
+    try {
+        const taskId = (args.task_id || args.taskId || '').trim();
+        if (!taskId) return JSON.stringify({ success: false, error: 'task_id required' });
+        const task = cancelTask(ctx.mesh.id, taskId, { reason: args.reason });
+        if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
+        return JSON.stringify({ success: true, task }, null, 2);
+    } catch (e: any) {
+        return JSON.stringify({ success: false, error: e.message });
+    }
+}
+
+export async function meshQueueRequeue(
+    ctx: MeshContext,
+    args: {
+        task_id?: string;
+        taskId?: string;
+        reason?: string;
+        target_node_id?: string;
+        targetNodeId?: string;
+        target_session_id?: string;
+        targetSessionId?: string;
+        clear_target_node?: boolean;
+        clearTargetNode?: boolean;
+        keep_target_session?: boolean;
+        keepTargetSession?: boolean;
+    },
+): Promise<string> {
+    try {
+        const taskId = (args.task_id || args.taskId || '').trim();
+        if (!taskId) return JSON.stringify({ success: false, error: 'task_id required' });
+        const targetNodeId = (args.target_node_id || args.targetNodeId || '').trim() || undefined;
+        const targetSessionId = (args.target_session_id || args.targetSessionId || '').trim() || undefined;
+        const keepTargetSession = args.keep_target_session === true || args.keepTargetSession === true;
+        const task = requeueTask(ctx.mesh.id, taskId, {
+            reason: args.reason,
+            targetNodeId,
+            targetSessionId,
+            clearTargetNode: args.clear_target_node === true || args.clearTargetNode === true,
+            clearTargetSession: targetSessionId ? false : !keepTargetSession,
+        });
+        if (!task) return JSON.stringify({ success: false, error: `Queue task '${taskId}' not found` });
+        if (isLocalTransport(ctx.transport)) {
+            ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
+        }
+        return JSON.stringify({ success: true, task }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e.message });
     }

@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshApprove, meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
-import { getQueue } from '@adhdev/daemon-core';
+import { meshApprove, meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshQueueCancel, meshQueueRequeue, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { enqueueTask, getQueue, claimNextTask } from '@adhdev/daemon-core';
 
 test('mesh worktree tools route clone/remove to the source node daemon and refresh MCP mesh context', async () => {
   const transport = new IpcTransport() as IpcTransport & {
@@ -991,11 +991,66 @@ test('local IPC mesh_send_task with explicit session pushes directly instead of 
   assert.equal(queued.length, 0);
 });
 
-test('mesh tool registry documents the 16 exposed mesh tools including read-debug, worktree clone/remove/refine, and session cleanup', () => {
-  assert.equal(ALL_MESH_TOOLS.length, 16);
+test('mesh queue management tools cancel and requeue stale assignments without deleting entries', async () => {
+  const meshId = `mesh-queue-admin-${Date.now()}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  transport.command = async (command) => {
+    if (command === 'trigger_mesh_queue') return { success: true };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async () => {
+    throw new Error('unexpected remote mesh command');
+  };
+  const ctx = {
+    mesh: {
+      id: meshId,
+      name: 'Queue Admin Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-admin',
+        workspace: '/repo-admin',
+        repoRoot: '/repo-admin',
+        daemonId: 'daemon-admin',
+        userOverrides: {},
+        policy: {},
+      }],
+    },
+    transport,
+  } as any;
+
+  const cancelTarget = enqueueTask(meshId, 'cancel stale task', { targetNodeId: 'node-admin', targetSessionId: 'dead-session' });
+  const assigned = enqueueTask(meshId, 'requeue stale task', { targetNodeId: 'node-admin', targetSessionId: 'dead-session' });
+  claimNextTask(meshId, 'node-admin', 'dead-session');
+
+  const cancelResult = JSON.parse(await meshQueueCancel(ctx, { task_id: cancelTarget.id, reason: 'dead session' }));
+  assert.equal(cancelResult.success, true);
+  assert.equal(cancelResult.task.status, 'cancelled');
+
+  const requeueResult = JSON.parse(await meshQueueRequeue(ctx, { task_id: assigned.id, reason: 'retry fresh session' }));
+  assert.equal(requeueResult.success, true);
+  assert.equal(requeueResult.task.status, 'pending');
+  assert.equal(requeueResult.task.assignedSessionId, undefined);
+  assert.equal(requeueResult.task.targetSessionId, undefined);
+
+  const queue = getQueue(meshId);
+  assert.equal(queue.find(task => task.id === cancelTarget.id)?.status, 'cancelled');
+  assert.equal(queue.find(task => task.id === assigned.id)?.status, 'pending');
+});
+
+test('mesh tool registry documents the 18 exposed mesh tools including queue cancel/requeue, read-debug, worktree clone/remove/refine, and session cleanup', () => {
+  assert.equal(ALL_MESH_TOOLS.length, 18);
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_read_debug'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_clone_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_remove_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_refine_node'));
   assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_cleanup_sessions'));
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_queue_cancel'));
+  assert.ok(ALL_MESH_TOOLS.some(tool => tool.name === 'mesh_queue_requeue'));
 });

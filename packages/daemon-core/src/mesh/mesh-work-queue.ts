@@ -3,7 +3,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { getLedgerDir } from './mesh-ledger.js';
 
-export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed';
+export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
 
 export interface MeshWorkQueueEntry {
     id: string;
@@ -18,6 +18,13 @@ export interface MeshWorkQueueEntry {
     assignedNodeId?: string;
     /** The session currently executing the task */
     assignedSessionId?: string;
+    /** Human/operator reason for terminal cancellation. */
+    cancelReason?: string;
+    cancelledAt?: string;
+    /** Human/operator reason for manually requeueing a task. */
+    requeueReason?: string;
+    requeuedAt?: string;
+    requeueCount?: number;
     createdAt: string;
     updatedAt: string;
 }
@@ -137,6 +144,65 @@ export function updateTaskStatus(
 }
 
 /**
+ * Mark a queue task as manually cancelled without deleting audit history.
+ */
+export function cancelTask(
+    meshId: string,
+    taskId: string,
+    opts?: { reason?: string },
+): MeshWorkQueueEntry | null {
+    const queue = readQueue(meshId);
+    const idx = queue.findIndex(q => q.id === taskId);
+    if (idx === -1) return null;
+
+    const now = new Date().toISOString();
+    queue[idx].status = 'cancelled';
+    queue[idx].updatedAt = now;
+    queue[idx].cancelledAt = now;
+    if (opts?.reason) queue[idx].cancelReason = opts.reason;
+    writeQueue(meshId, queue);
+    return queue[idx];
+}
+
+/**
+ * Return a queue task to pending for retry. By default, dead session targeting
+ * and assigned ownership are cleared so stale assignments do not strand again.
+ */
+export function requeueTask(
+    meshId: string,
+    taskId: string,
+    opts?: {
+        reason?: string;
+        targetNodeId?: string;
+        targetSessionId?: string;
+        clearTargetNode?: boolean;
+        clearTargetSession?: boolean;
+    },
+): MeshWorkQueueEntry | null {
+    const queue = readQueue(meshId);
+    const idx = queue.findIndex(q => q.id === taskId);
+    if (idx === -1) return null;
+
+    const entry = queue[idx];
+    const now = new Date().toISOString();
+    entry.status = 'pending';
+    delete entry.assignedNodeId;
+    delete entry.assignedSessionId;
+    delete entry.cancelledAt;
+    delete entry.cancelReason;
+    if (opts?.clearTargetNode) delete entry.targetNodeId;
+    if (typeof opts?.targetNodeId === 'string') entry.targetNodeId = opts.targetNodeId;
+    if (opts?.clearTargetSession !== false) delete entry.targetSessionId;
+    if (typeof opts?.targetSessionId === 'string') entry.targetSessionId = opts.targetSessionId;
+    entry.updatedAt = now;
+    entry.requeuedAt = now;
+    entry.requeueCount = (entry.requeueCount || 0) + 1;
+    if (opts?.reason) entry.requeueReason = opts.reason;
+    writeQueue(meshId, queue);
+    return entry;
+}
+
+/**
  * Update the status of the task currently assigned to a specific session.
  */
 export function updateSessionTaskStatus(
@@ -163,6 +229,7 @@ export interface MeshWorkQueueStats {
     assigned: number;
     completed: number;
     failed: number;
+    cancelled: number;
 }
 
 /**
@@ -175,5 +242,6 @@ export function getMeshQueueStats(meshId: string): MeshWorkQueueStats {
         assigned: queue.filter(q => q.status === 'assigned').length,
         completed: queue.filter(q => q.status === 'completed').length,
         failed: queue.filter(q => q.status === 'failed').length,
+        cancelled: queue.filter(q => q.status === 'cancelled').length,
     };
 }

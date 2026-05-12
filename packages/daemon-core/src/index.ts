@@ -154,7 +154,7 @@ export { appendLedgerEntry, readLedgerEntries, getLedgerSummary, getLedgerDir, g
 export type { MeshLedgerEntry, MeshLedgerKind, MeshLedgerSummary, ReadLedgerOptions, SessionRecoveryContext } from './mesh/mesh-ledger.js';
 
 // ── Mesh Work Queue (GUPP) ──
-export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus } from './mesh/mesh-work-queue.js';
+export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask } from './mesh/mesh-work-queue.js';
 export type { MeshWorkQueueEntry, MeshTaskStatus } from './mesh/mesh-work-queue.js';
 
 // ── Mesh Events ──
