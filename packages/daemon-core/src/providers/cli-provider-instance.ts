@@ -35,6 +35,17 @@ type PersistableCliHistoryMessage = {
     receivedAt?: number;
 };
 
+type CompletedDebouncePending = {
+    chatTitle: string;
+    duration: number;
+    timestamp: number;
+    firstObservedAt: number;
+    loggedBlockReason?: string;
+};
+
+const COMPLETED_FINALIZATION_RETRY_MS = 1000;
+const COMPLETED_FINALIZATION_MAX_WAIT_MS = 30_000;
+
 const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
     'image/png': '.png',
     'image/jpeg': '.jpg',
@@ -101,6 +112,15 @@ function cleanupStaleMaterializedImages(dir: string): void {
             } catch { /* file may have been removed concurrently */ }
         }
     } catch { /* dir may not exist or be inaccessible */ }
+}
+
+function hasNonEmptyCliModalButtons(activeModal: unknown): boolean {
+    const buttons = (activeModal as any)?.buttons;
+    return Array.isArray(buttons) && buttons.some((button) => String(button || '').trim().length > 0);
+}
+
+function isCliGeneratingLikeStatus(status: unknown): boolean {
+    return status === 'generating' || status === 'streaming' || status === 'long_generating' || status === 'starting';
 }
 
 export function buildCliStructuredInputPrompt(
@@ -511,6 +531,10 @@ export class CliProviderInstance implements ProviderInstance {
         const canonicalBackedHistory = this.syncCanonicalSavedHistoryIfNeeded();
 
         const dirName = this.workingDir.split('/').filter(Boolean).pop() || 'session';
+        const parsedChatStatus = typeof parsedStatus?.status === 'string' && parsedStatus.status.trim()
+            ? parsedStatus.status.trim()
+            : undefined;
+        const suppressStaleParsedBusyStatus = this.shouldSuppressStaleParsedBusyStatus(parsedStatus, adapterStatus);
 
         if (parsedMessages.length > 0) {
             const shouldSkipReplayPersist =
@@ -518,7 +542,7 @@ export class CliProviderInstance implements ProviderInstance {
                 && adapterStatus.status === 'idle'
                 && parsedStatus?.status === 'idle';
             let messagesToSave = parsedMessages;
-            if ((parsedStatus?.status === 'generating' || parsedStatus?.status === 'long_generating')) {
+            if (!suppressStaleParsedBusyStatus && (parsedChatStatus === 'generating' || parsedChatStatus === 'long_generating')) {
                 const lastIdx = messagesToSave.length - 1;
                 if (lastIdx >= 0 && messagesToSave[lastIdx]?.role === 'assistant') {
                     messagesToSave = messagesToSave.slice(0, lastIdx);
@@ -553,6 +577,13 @@ export class CliProviderInstance implements ProviderInstance {
             summaryMetadata: this.summaryMetadata as any,
             controlValues: this.controlValues,
         });
+        const activeChatStatus = parseErrorMessage
+            ? 'error'
+            : autoApproveActive && parsedStatus?.status === 'waiting_approval'
+            ? 'generating'
+            : (adapterStatus.status !== 'idle'
+                ? visibleStatus
+                : (suppressStaleParsedBusyStatus ? visibleStatus : (parsedChatStatus || visibleStatus)));
 
         return {
             type: this.type,
@@ -563,13 +594,7 @@ export class CliProviderInstance implements ProviderInstance {
             activeChat: {
                 id: `${this.type}_${this.workingDir}`,
                 title: parsedStatus?.title || dirName,
-                status: parseErrorMessage
-                    ? 'error'
-                    : autoApproveActive && parsedStatus?.status === 'waiting_approval'
-                    ? 'generating'
-                    : (adapterStatus.status !== 'idle'
-                        ? visibleStatus
-                        : (parsedStatus?.status || visibleStatus)),
+                status: activeChatStatus,
                 messages: mergedMessages,
                 activeModal: autoApproveActive ? null : (parsedStatus?.activeModal ?? adapterStatus.activeModal),
                 inputContent: '',
@@ -680,7 +705,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     private completedDebounceTimer: NodeJS.Timeout | null = null;
-    private completedDebouncePending: { chatTitle: string; duration: number; timestamp: number } | null = null;
+    private completedDebouncePending: CompletedDebouncePending | null = null;
 
     private async enforceFreshSessionLaunchIfNeeded(): Promise<void> {
         const scriptName = getForcedNewSessionScriptName(this.provider, this.launchMode);
@@ -707,6 +732,119 @@ export class CliProviderInstance implements ProviderInstance {
         }
 
         this.applyProviderResponse(parsed.payload, { phase: 'immediate' });
+    }
+
+    private completionHasFinalAssistantMessage(messages: unknown): boolean {
+        const visibleMessages = (Array.isArray(messages) ? messages : [])
+            .filter((message: any) => isUserFacingChatMessage(message as ChatMessage));
+        const lastVisible = visibleMessages[visibleMessages.length - 1] as ChatMessage | undefined;
+        const role = typeof lastVisible?.role === 'string' ? lastVisible.role.trim().toLowerCase() : '';
+        const content = lastVisible ? flattenContent(lastVisible.content).trim() : '';
+        return role === 'assistant' && !!content;
+    }
+
+    private hasAdapterPendingResponse(): boolean {
+        const adapterAny = this.adapter as any;
+        if (adapterAny?.isWaitingForResponse === true) return true;
+        if (adapterAny?.currentTurnScope) return true;
+        try {
+            if (typeof this.adapter.isProcessing === 'function' && this.adapter.isProcessing()) return true;
+        } catch { /* defensive: status rendering must not fail because of adapter diagnostics */ }
+        try {
+            const partial = typeof this.adapter.getPartialResponse === 'function'
+                ? this.adapter.getPartialResponse()
+                : '';
+            if (typeof partial === 'string' && partial.trim()) return true;
+        } catch { /* defensive: missing partial means no pending response evidence */ }
+        return false;
+    }
+
+    private shouldSuppressStaleParsedBusyStatus(parsedStatus: any, adapterStatus: any): boolean {
+        const parsedRawStatus = typeof parsedStatus?.status === 'string' ? parsedStatus.status.trim() : '';
+        const adapterRawStatus = typeof adapterStatus?.status === 'string' ? adapterStatus.status.trim() : '';
+        if (!isCliGeneratingLikeStatus(parsedRawStatus)) return false;
+        if (adapterRawStatus !== 'idle') return false;
+        if (hasNonEmptyCliModalButtons(parsedStatus?.activeModal ?? parsedStatus?.modal)) return false;
+        return !this.hasAdapterPendingResponse();
+    }
+
+    private getCompletedFinalizationBlockReason(latestVisibleStatus: string): string | null {
+        if (latestVisibleStatus !== 'idle') return `status:${latestVisibleStatus}`;
+
+        const adapterAny = this.adapter as any;
+        if (adapterAny?.isWaitingForResponse === true) return 'adapter_waiting_for_response';
+        if (adapterAny?.currentTurnScope) return 'adapter_turn_scope_active';
+
+        const partial = typeof this.adapter.getPartialResponse === 'function'
+            ? this.adapter.getPartialResponse()
+            : '';
+        if (typeof partial === 'string' && partial.trim()) return 'partial_response_pending';
+
+        let parsed: any;
+        try {
+            parsed = this.adapter.getScriptParsedStatus();
+        } catch (error: any) {
+            return `parse_error:${error?.message || String(error)}`;
+        }
+
+        const parsedStatus = typeof parsed?.status === 'string' ? parsed.status : 'unknown';
+        if (parsedStatus !== 'idle') return `parsed_status:${parsedStatus}`;
+        if (parsed?.activeModal || parsed?.modal) return 'parsed_modal_active';
+        if (!this.completionHasFinalAssistantMessage(parsed?.messages)) return 'missing_final_assistant';
+
+        return null;
+    }
+
+    private scheduleCompletedDebounceFlush(delayMs: number): void {
+        if (this.completedDebounceTimer) clearTimeout(this.completedDebounceTimer);
+        this.completedDebounceTimer = setTimeout(() => this.flushCompletedDebounceIfFinalized(), delayMs);
+    }
+
+    private flushCompletedDebounceIfFinalized(): void {
+        const pending = this.completedDebouncePending;
+        if (!pending) {
+            this.completedDebounceTimer = null;
+            return;
+        }
+
+        const latestStatus = this.adapter.getStatus({ allowParse: false });
+        const latestAutoApproveActive = latestStatus.status === 'waiting_approval' && this.shouldAutoApprove();
+        const latestVisibleStatus = latestAutoApproveActive ? 'generating' : latestStatus.status;
+        if (latestVisibleStatus !== 'idle') {
+            LOG.info('CLI', `[${this.type}] cancelled pending completed (resumed ${latestVisibleStatus})`);
+            this.completedDebouncePending = null;
+            this.completedDebounceTimer = null;
+            return;
+        }
+
+        const blockReason = this.getCompletedFinalizationBlockReason(latestVisibleStatus);
+        if (blockReason) {
+            const waitedMs = Date.now() - pending.firstObservedAt;
+            if (waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS) {
+                if (pending.loggedBlockReason !== blockReason) {
+                    LOG.info('CLI', `[${this.type}] waiting to emit completed until transcript finalizes (${blockReason})`);
+                    pending.loggedBlockReason = blockReason;
+                }
+                this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
+                return;
+            }
+            LOG.warn('CLI', `[${this.type}] suppressed completed event after ${waitedMs}ms without finalized assistant turn (${blockReason})`);
+            this.completedDebouncePending = null;
+            this.completedDebounceTimer = null;
+            this.generatingStartedAt = 0;
+            return;
+        }
+
+        LOG.info('CLI', `[${this.type}] completed in ${pending.duration}s`);
+        this.pushEvent({
+            event: 'agent:generating_completed',
+            chatTitle: pending.chatTitle,
+            duration: pending.duration,
+            timestamp: pending.timestamp,
+        });
+        this.completedDebouncePending = null;
+        this.completedDebounceTimer = null;
+        this.generatingStartedAt = 0;
     }
 
     private maybeAutoApproveStatus(adapterStatus: any, now = Date.now()): boolean {
@@ -811,27 +949,10 @@ export class CliProviderInstance implements ProviderInstance {
                     this.generatingDebouncePending = null;
                     this.generatingStartedAt = 0;
                 } else {
-                    // Debounce completed — wait 3s, if still idle then emit
-                    if (this.completedDebounceTimer) clearTimeout(this.completedDebounceTimer);
-                    this.completedDebouncePending = { chatTitle, duration, timestamp: now };
-                    this.completedDebounceTimer = setTimeout(() => {
-                        if (this.completedDebouncePending) {
-                            const latestStatus = this.adapter.getStatus({ allowParse: false });
-                            const latestAutoApproveActive = latestStatus.status === 'waiting_approval' && this.shouldAutoApprove();
-                            const latestVisibleStatus = latestAutoApproveActive ? 'generating' : latestStatus.status;
-                            if (latestVisibleStatus !== 'idle') {
-                                LOG.info('CLI', `[${this.type}] cancelled pending completed (resumed ${latestVisibleStatus})`);
-                                this.completedDebouncePending = null;
-                                this.completedDebounceTimer = null;
-                                return;
-                            }
-                            LOG.info('CLI', `[${this.type}] completed in ${this.completedDebouncePending.duration}s`);
-                            this.pushEvent({ event: 'agent:generating_completed', ...this.completedDebouncePending });
-                            this.completedDebouncePending = null;
-                            this.generatingStartedAt = 0;
-                        }
-                        this.completedDebounceTimer = null;
-                    }, 3000);
+                    // Debounce completed, then require the rich transcript path that read_chat
+                    // uses to show an idle turn whose last user-facing message is assistant.
+                    this.completedDebouncePending = { chatTitle, duration, timestamp: now, firstObservedAt: now };
+                    this.scheduleCompletedDebounceFlush(3000);
                 }
             } else if (newStatus === 'idle' && this.lastStatus === 'starting') {
                 this.pushEvent({ event: 'agent:ready', chatTitle, timestamp: now });
