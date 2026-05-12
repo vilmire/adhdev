@@ -12,8 +12,8 @@ export default defineConfig({
   // Bundle daemon-core and ESM-only runtime deps into the published CJS CLI.
   // Leaving chalk external makes the standalone bin crash with require(esm)
   // before even `adhdev-standalone --help` can render from a fresh install.
-  external: ['ws', 'node-pty', 'open'],
-  noExternal: [/^@adhdev\//, 'chalk', 'conf'],
+  external: ['ws', 'node-pty', 'open', '@adhdev/session-host-daemon'],
+  noExternal: [/^@adhdev\/(?!session-host-daemon(?:\/|$))/, 'chalk', 'conf'],
   banner: {
     js: '#!/usr/bin/env node',
   },
