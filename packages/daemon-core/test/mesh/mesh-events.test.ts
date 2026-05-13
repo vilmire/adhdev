@@ -7,14 +7,22 @@ const meshConfigMocks = vi.hoisted(() => ({
   getMeshByRepo: vi.fn(),
 }))
 
+const detectCliMocks = vi.hoisted(() => ({
+  detectCLI: vi.fn(),
+}))
+
 vi.mock('../../src/config/mesh-config.js', () => ({
   getMesh: meshConfigMocks.getMesh,
   getMeshByRepo: meshConfigMocks.getMeshByRepo,
 }))
 
+vi.mock('../../src/detection/cli-detector.js', () => ({
+  detectCLI: detectCliMocks.detectCLI,
+}))
+
 import { handleMeshForwardEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { claimNextTask, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
-import { getLedgerDir } from '../../src/mesh/mesh-ledger.js'
+import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
 
 function createComponents(meshId = 'mesh_inline_1') {
   let listener: ((event: any) => void) | undefined
@@ -55,6 +63,45 @@ function createComponents(meshId = 'mesh_inline_1') {
       listener(event)
     },
     coordinator,
+  }
+}
+
+function cleanupMeshFiles(meshId: string) {
+  const queuePath = path.join(getLedgerDir(), `${meshId}.queue.json`)
+  const ledgerPath = path.join(getLedgerDir(), `${meshId}.jsonl`)
+  if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
+  if (fs.existsSync(ledgerPath)) fs.unlinkSync(ledgerPath)
+}
+
+function createQueueAutoLaunchComponents(args?: {
+  existingCliInstances?: any[]
+  launchResult?: any
+  launchDelayMs?: number
+}) {
+  const launchResult = args?.launchResult ?? { success: true, sessionId: 'auto-session-1' }
+  const cliManager = {
+    adapters: new Map(),
+    handleCliCommand: vi.fn((command: string) => {
+      if (command === 'launch_cli' && args?.launchDelayMs) {
+        return new Promise(resolve => setTimeout(() => resolve(launchResult), args.launchDelayMs))
+      }
+      return Promise.resolve(command === 'launch_cli' ? launchResult : { success: true })
+    }),
+  }
+  return {
+    components: {
+      instanceManager: {
+        getByCategory: vi.fn((category: string) => category === 'cli' ? (args?.existingCliInstances || []) : []),
+      },
+      cliManager,
+      providerLoader: {
+        resolveAlias: vi.fn((type: string) => type),
+        isMachineProviderEnabled: vi.fn(() => true),
+        setCliDetectionResults: vi.fn(),
+      },
+      onStatusChange: vi.fn(),
+    } as any,
+    cliManager,
   }
 }
 
@@ -227,7 +274,6 @@ describe('setupMeshEventForwarding', () => {
 
   it('does not let stopped delegated session records claim targeted queue tasks', () => {
     const meshId = `mesh_stopped_claim_${Date.now()}`
-    const queuePath = path.join(getLedgerDir(), `${meshId}.queue.json`)
     try {
       meshConfigMocks.getMesh.mockReturnValue({
         id: meshId,
@@ -271,7 +317,173 @@ describe('setupMeshEventForwarding', () => {
       expect(entry.assignedSessionId).toBeUndefined()
       expect(components.cliManager.handleCliCommand).not.toHaveBeenCalled()
     } finally {
-      if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('auto-launches one provider session for a pending task when no idle session exists', async () => {
+    const meshId = `mesh_auto_launch_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
+        policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
+      })
+      detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
+      const queued = enqueueTask(meshId, 'queued task')
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(cliManager.handleCliCommand).toHaveBeenCalledWith('launch_cli', expect.objectContaining({
+        cliType: 'hermes-cli',
+        dir: '/repo/worktree-a',
+        settings: expect.objectContaining({
+          meshNodeFor: meshId,
+          meshNodeId: 'node_child_1',
+          spawnedSessionVisibility: 'hidden',
+          launchedByCoordinator: true,
+          autoLaunchedForQueueTaskId: queued.id,
+        }),
+      }))
+      expect(cliManager.handleCliCommand).toHaveBeenCalledWith('agent_command', expect.objectContaining({
+        targetSessionId: 'auto-session-1',
+        cliType: 'hermes-cli',
+        action: 'send_chat',
+        message: 'queued task',
+      }))
+      const [entry] = getQueue(meshId)
+      expect(entry.status).toBe('assigned')
+      expect(entry.assignedNodeId).toBe('node_child_1')
+      expect(entry.assignedSessionId).toBe('auto-session-1')
+      expect(entry.autoLaunch?.status).toBe('completed')
+      expect(readLedgerEntries(meshId).some(e => e.kind === 'session_auto_launch' && e.payload?.phase === 'completed')).toBe(true)
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('skips auto spin-up when maxParallelTasks is already reached', async () => {
+    const meshId = `mesh_auto_launch_max_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
+        policy: { maxParallelTasks: 1 },
+      })
+      enqueueTask(meshId, 'already running')
+      claimNextTask(meshId, 'other_node', 'other_session')
+      enqueueTask(meshId, 'pending task')
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+      const pending = getQueue(meshId).find(entry => entry.message === 'pending task')
+      expect(pending?.status).toBe('pending')
+      expect(pending?.autoLaunch?.reason).toBe('max_parallel_tasks_reached')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('skips dirty nodes instead of auto-launching into them', async () => {
+    const meshId = `mesh_auto_launch_dirty_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'dirty', git: { dirty: true }, policy: { providerPriority: ['hermes-cli'] } }],
+        policy: { maxParallelTasks: 2 },
+      })
+      enqueueTask(meshId, 'pending task')
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+      const [entry] = getQueue(meshId)
+      expect(entry.status).toBe('pending')
+      expect(entry.autoLaunch?.reason).toBe('dirty_workspace')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('does not auto-launch another session for a node that already has an active assigned task', async () => {
+    const meshId = `mesh_auto_launch_active_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
+        policy: { maxParallelTasks: 2 },
+      })
+      enqueueTask(meshId, 'already running')
+      claimNextTask(meshId, 'node_child_1', 'busy_session')
+      enqueueTask(meshId, 'pending task')
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+      const pending = getQueue(meshId).find(entry => entry.message === 'pending task')
+      expect(pending?.status).toBe('pending')
+      expect(pending?.autoLaunch?.reason).toBe('node_has_active_assignment')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('skips remote nodes instead of local auto-launching through cliManager', async () => {
+    const meshId = `mesh_auto_launch_remote_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{
+          id: 'node_remote_1',
+          workspace: '/repo/remote-worktree',
+          health: 'online',
+          daemonId: 'daemon_remote_machine',
+          machineId: 'mach_remote',
+          policy: { providerPriority: ['hermes-cli'] },
+        }],
+        policy: { maxParallelTasks: 2 },
+      })
+      enqueueTask(meshId, 'pending remote task')
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
+      const [entry] = getQueue(meshId)
+      expect(entry.status).toBe('pending')
+      expect(entry.autoLaunch?.reason).toBe('remote_auto_launch_unsupported')
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('auto-launches at most one new session in a trigger cycle even with multiple pending tasks', async () => {
+    const meshId = `mesh_auto_launch_one_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
+        policy: { maxParallelTasks: 3 },
+      })
+      detectCliMocks.detectCLI.mockResolvedValue({ path: '/bin/hermes' })
+      enqueueTask(meshId, 'task 1')
+      enqueueTask(meshId, 'task 2')
+      enqueueTask(meshId, 'task 3')
+      const { components, cliManager } = createQueueAutoLaunchComponents()
+
+      await triggerMeshQueue(components, meshId)
+
+      expect(cliManager.handleCliCommand.mock.calls.filter(([command]: [string]) => command === 'launch_cli')).toHaveLength(1)
+      expect(cliManager.handleCliCommand.mock.calls.filter(([command]: [string]) => command === 'agent_command')).toHaveLength(1)
+      expect(getQueue(meshId).filter(entry => entry.status === 'assigned')).toHaveLength(1)
+      expect(getQueue(meshId).filter(entry => entry.status === 'pending')).toHaveLength(2)
+    } finally {
+      cleanupMeshFiles(meshId)
     }
   })
 })

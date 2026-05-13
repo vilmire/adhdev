@@ -1,0 +1,152 @@
+export type P2pRelayFailureCode =
+  | 'p2p_unavailable'
+  | 'p2p_timeout'
+  | 'p2p_not_connected'
+  | 'p2p_datachannel_closed'
+  | 'p2p_no_route'
+  | 'p2p_daemon_offline'
+  | 'mesh_logic_or_provider_failure';
+
+export interface P2pRelayFailureContext {
+  command?: string;
+  targetDaemonId?: string;
+}
+
+export interface P2pRelayFailureClassification {
+  code: P2pRelayFailureCode;
+  reason: string;
+  transport: 'p2p' | 'unknown';
+  recoverable: boolean;
+  retryRecommended: boolean;
+  nextAction: string;
+  noFallbackReason: string;
+}
+
+export interface P2pRelayFailurePayload extends P2pRelayFailureClassification {
+  success: false;
+  error: string;
+  command?: string;
+  targetDaemonId?: string;
+}
+
+const NO_FALLBACK_REASON = 'Repo Mesh command/data-plane is P2P-only; WS/REST command fallback is intentionally disabled to preserve the transport boundary.';
+const P2P_NEXT_ACTION = 'Check daemon/P2P health, wait briefly for connection establishment, then do one bounded retry or requeue the mesh task after clearing stale target session metadata.';
+const NON_P2P_NEXT_ACTION = 'Inspect the provider/command error and fix the underlying logic or configuration before retrying.';
+
+function messageFromError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const candidate = (error as any).error ?? (error as any).message ?? (error as any).reason;
+    if (typeof candidate === 'string') return candidate;
+  }
+  return String(error || 'mesh relay command failed');
+}
+
+export function classifyP2pRelayFailure(error: unknown, _context: P2pRelayFailureContext = {}): P2pRelayFailureClassification {
+  const message = messageFromError(error);
+  const lower = message.toLowerCase();
+
+  const hasP2pSignal = /p2p|datachannel|node-datachannel|webrtc|ice|mesh_relay_command|daemon_mesh_p2p_transport/i.test(message);
+  const hasFailureSignal = /unavailable|missing|failed|failure|timeout|timed out|not connected|closed|disconnected|offline|no route|route unavailable|cannot send|cannot establish/i.test(message);
+
+  // Validation errors that merely mention mesh_relay_command are not transport failures.
+  if (/requires targetdaemonid and command|providerpriority|no inference provider|permission denied|read-only|not a member/i.test(message)) {
+    return {
+      code: 'mesh_logic_or_provider_failure',
+      reason: 'mesh_logic_or_provider_failure',
+      transport: 'unknown',
+      recoverable: false,
+      retryRecommended: false,
+      nextAction: NON_P2P_NEXT_ACTION,
+      noFallbackReason: NO_FALLBACK_REASON,
+    };
+  }
+
+  let code: P2pRelayFailureCode | null = null;
+  let reason = '';
+
+  if (/timeout|timed out/i.test(message) && (hasP2pSignal || /mesh transport/i.test(message))) {
+    code = 'p2p_timeout';
+    reason = 'daemon_mesh_p2p_timeout';
+  } else if (/no route|route unavailable/i.test(message)) {
+    code = 'p2p_no_route';
+    reason = 'daemon_mesh_p2p_no_route';
+  } else if (/offline|not owned|not found|not connected to server/i.test(message) && /daemon|peer|target/i.test(message)) {
+    code = 'p2p_daemon_offline';
+    reason = 'daemon_mesh_target_offline';
+  } else if (/closed|disconnected/i.test(message) && (hasP2pSignal || /state changed/i.test(message))) {
+    code = 'p2p_datachannel_closed';
+    reason = 'daemon_mesh_p2p_datachannel_closed';
+  } else if (/not connected|cannot send|cannot establish/i.test(message) && hasP2pSignal) {
+    code = 'p2p_not_connected';
+    reason = 'daemon_mesh_p2p_not_connected';
+  } else if (hasP2pSignal && hasFailureSignal) {
+    code = 'p2p_unavailable';
+    reason = 'daemon_mesh_p2p_transport_unavailable';
+  }
+
+  if (!code) {
+    return {
+      code: 'mesh_logic_or_provider_failure',
+      reason: 'mesh_logic_or_provider_failure',
+      transport: 'unknown',
+      recoverable: false,
+      retryRecommended: false,
+      nextAction: NON_P2P_NEXT_ACTION,
+      noFallbackReason: NO_FALLBACK_REASON,
+    };
+  }
+
+  return {
+    code,
+    reason,
+    transport: 'p2p',
+    recoverable: true,
+    retryRecommended: true,
+    nextAction: P2P_NEXT_ACTION,
+    noFallbackReason: NO_FALLBACK_REASON,
+  };
+}
+
+export function isP2pRelayTransportFailure(error: unknown): boolean {
+  return classifyP2pRelayFailure(error).recoverable === true;
+}
+
+export function buildP2pRelayFailurePayload(error: unknown, context: P2pRelayFailureContext = {}): P2pRelayFailurePayload {
+  const classification = classifyP2pRelayFailure(error, context);
+  return {
+    success: false,
+    ...classification,
+    error: messageFromError(error),
+    ...(context.command ? { command: context.command } : {}),
+    ...(context.targetDaemonId ? { targetDaemonId: context.targetDaemonId } : {}),
+  };
+}
+
+export class P2pRelayFailureError extends Error {
+  code: P2pRelayFailureCode;
+  reason: string;
+  transport: 'p2p' | 'unknown';
+  recoverable: boolean;
+  retryRecommended: boolean;
+  nextAction: string;
+  noFallbackReason: string;
+  command?: string;
+  targetDaemonId?: string;
+
+  constructor(message: string, context: P2pRelayFailureContext = {}) {
+    super(message);
+    this.name = 'P2pRelayFailureError';
+    const payload = buildP2pRelayFailurePayload(message, context);
+    this.code = payload.code;
+    this.reason = payload.reason;
+    this.transport = payload.transport;
+    this.recoverable = payload.recoverable;
+    this.retryRecommended = payload.retryRecommended;
+    this.nextAction = payload.nextAction;
+    this.noFallbackReason = payload.noFallbackReason;
+    this.command = context.command;
+    this.targetDaemonId = context.targetDaemonId;
+  }
+}

@@ -25,6 +25,15 @@ export interface MeshWorkQueueEntry {
     requeueReason?: string;
     requeuedAt?: string;
     requeueCount?: number;
+    /** Last automatic queue session spin-up attempt, for mesh_view_queue/debug visibility. */
+    autoLaunch?: {
+        status: 'skipped' | 'started' | 'failed' | 'completed';
+        reason?: string;
+        nodeId?: string;
+        providerType?: string;
+        sessionId?: string;
+        updatedAt: string;
+    };
     createdAt: string;
     updatedAt: string;
 }
@@ -139,6 +148,24 @@ export function updateTaskStatus(
 
     queue[idx].status = status;
     queue[idx].updatedAt = new Date().toISOString();
+    writeQueue(meshId, queue);
+    return queue[idx];
+}
+
+export function recordTaskAutoLaunch(
+    meshId: string,
+    taskId: string,
+    autoLaunch: Omit<NonNullable<MeshWorkQueueEntry['autoLaunch']>, 'updatedAt'>,
+): MeshWorkQueueEntry | null {
+    const queue = readQueue(meshId);
+    const idx = queue.findIndex(q => q.id === taskId);
+    if (idx === -1) return null;
+    const now = new Date().toISOString();
+    queue[idx].autoLaunch = {
+        ...autoLaunch,
+        updatedAt: now,
+    };
+    queue[idx].updatedAt = now;
     writeQueue(meshId, queue);
     return queue[idx];
 }
