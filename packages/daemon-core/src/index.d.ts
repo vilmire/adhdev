@@ -22,6 +22,9 @@ export { appendRecentActivity, getRecentActivity } from './config/recent-activit
 export type { RecentActivityEntry } from './config/recent-activity.js';
 export { getSavedProviderSessions, upsertSavedProviderSession } from './config/saved-sessions.js';
 export type { SavedProviderSessionEntry } from './config/saved-sessions.js';
+export { triggerMeshQueue } from './mesh/mesh-events.js';
+export { P2pRelayFailureError, buildP2pRelayFailurePayload, classifyP2pRelayFailure, isP2pRelayTransportFailure } from './mesh/p2p-relay-failure.js';
+export type { P2pRelayFailureClassification, P2pRelayFailureCode, P2pRelayFailureContext, P2pRelayFailurePayload } from './mesh/p2p-relay-failure.js';
 export { loadState, saveState, resetState } from './config/state-store.js';
 export type { DaemonState } from './config/state-store.js';
 export { detectIDEs } from './detection/ide-detector.js';

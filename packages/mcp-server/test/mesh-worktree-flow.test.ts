@@ -246,13 +246,17 @@ test('mesh_launch_session reports recoverable worktree launch failure when daemo
   const launch = JSON.parse(launchText);
   assert.equal(launch.success, false);
   assert.equal(launch.recoverable, true);
-  assert.equal(launch.code, 'p2p_unavailable');
+  assert.equal(launch.code, 'p2p_timeout');
   assert.equal(launch.nodeId, 'node-worktree-failed');
   assert.equal(launch.daemonId, 'daemon-remote');
   assert.equal(launch.workspace, '/repo-parent/.adhdev-worktrees/mesh/feat-failed');
   assert.equal(launch.worktreeBranch, 'feat/failed');
   assert.equal(launch.cleanup?.tool, 'mesh_remove_node');
   assert.equal(launch.cleanup?.args?.node_id, 'node-worktree-failed');
+  assert.equal(launch.transport, 'p2p');
+  assert.equal(launch.retryRecommended, true);
+  assert.match(launch.nextAction, /bounded retry/i);
+  assert.match(launch.noFallbackReason, /WS\/REST command fallback/i);
   assert.ok(launch.retryHint.includes('mesh_launch_session'));
 
   const statusText = await meshStatus(ctx);
@@ -260,9 +264,65 @@ test('mesh_launch_session reports recoverable worktree launch failure when daemo
   const nodeStatus = status.nodes.find((node: any) => node.nodeId === 'node-worktree-failed');
   assert.equal(nodeStatus.health, 'degraded');
   assert.equal(nodeStatus.launchReady, false);
-  assert.equal(nodeStatus.launchBlockedReason, 'p2p_unavailable');
+  assert.equal(nodeStatus.launchBlockedReason, 'p2p_timeout');
   assert.equal(nodeStatus.degradedReason, 'worktree_launch_failed');
   assert.ok(nodeStatus.nextStepHints.some((hint: string) => hint.includes('mesh_remove_node')));
+});
+
+test('mesh_send_task preserves P2P relay recovery payload for coordinator feedback', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: `mesh-send-relay-failure-${Date.now()}`,
+      name: 'Send Relay Failure Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-remote-worker',
+        workspace: '/repo-remote',
+        repoRoot: '/repo-remote',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+      }],
+    },
+    transport,
+  };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (_daemonId, command) => {
+    if (command === 'get_status_metadata') {
+      return { success: true, result: { success: true, status: { sessions: [{ id: 'session-remote', providerType: 'hermes-cli', status: 'idle' }] } } };
+    }
+    if (command === 'agent_command') {
+      throw new Error("P2P DataChannel command 'agent_command' to daemon-remote timed out after 30s");
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const sendText = await meshSendTask(ctx, { node_id: 'node-remote-worker', session_id: 'session-remote', message: 'do work' });
+  const send = JSON.parse(sendText);
+
+  assert.equal(send.success, false);
+  assert.equal(send.recoverable, true);
+  assert.equal(send.code, 'p2p_timeout');
+  assert.equal(send.transport, 'p2p');
+  assert.equal(send.retryRecommended, true);
+  assert.match(send.nextAction, /requeue/i);
+  assert.match(send.noFallbackReason, /WS\/REST command fallback/i);
+  assert.equal(send.nodeId, 'node-remote-worker');
+  assert.equal(send.sessionId, 'session-remote');
 });
 
 test('mesh_remove_node falls back to local control-plane cleanup for degraded local worktree nodes when P2P relay is unavailable', async () => {

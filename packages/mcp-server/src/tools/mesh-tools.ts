@@ -19,7 +19,19 @@ import type { McpTransport } from '../transports/mode.js';
 import { compactChatPayload } from './chat-compact.js';
 import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
-import { appendLedgerEntry, readLedgerEntries, getLedgerSummary, enqueueTask, getQueue, cancelTask, requeueTask, getSessionRecoveryContext } from '@adhdev/daemon-core';
+import {
+    appendLedgerEntry,
+    buildP2pRelayFailurePayload,
+    cancelTask,
+    classifyP2pRelayFailure,
+    enqueueTask,
+    getQueue,
+    getLedgerSummary,
+    getSessionRecoveryContext,
+    isP2pRelayTransportFailure,
+    readLedgerEntries,
+    requeueTask,
+} from '@adhdev/daemon-core';
 
 export interface MeshContext {
     mesh: LocalMeshEntry;
@@ -314,24 +326,50 @@ function extractLaunchPayload(value: any): any {
 }
 
 type MeshLaunchFailureClassification = {
-    code: 'p2p_unavailable' | 'local_ipc_unavailable' | 'mesh_transport_timeout' | 'mesh_launch_failed';
+    code: string;
     reason: string;
     transport: string;
+    recoverable: boolean;
+    retryRecommended: boolean;
+    nextAction: string;
+    noFallbackReason?: string;
 };
 
 function classifyMeshLaunchFailure(error: unknown): MeshLaunchFailureClassification {
     const message = error instanceof Error ? error.message : String(error || 'launch failed');
     const lower = message.toLowerCase();
-    if (lower.includes('p2p') || lower.includes('datachannel') || lower.includes('node-datachannel')) {
-        return { code: 'p2p_unavailable', reason: 'daemon_mesh_p2p_transport_unavailable', transport: 'daemon_mesh_p2p' };
+    const p2pClassification = classifyP2pRelayFailure(error, { command: 'launch_cli' });
+    if (p2pClassification.recoverable) {
+        return p2pClassification;
     }
     if (lower.includes('cannot connect to daemon ipc') || lower.includes('daemon ipc command')) {
-        return { code: 'local_ipc_unavailable', reason: 'local_daemon_ipc_unavailable', transport: 'local_ipc' };
+        return {
+            code: 'local_ipc_unavailable',
+            reason: 'local_daemon_ipc_unavailable',
+            transport: 'local_ipc',
+            recoverable: true,
+            retryRecommended: true,
+            nextAction: 'Check the local daemon IPC connection, then retry mesh_launch_session once after the daemon is reachable.',
+        };
     }
     if (lower.includes('timed out') || lower.includes('timeout')) {
-        return { code: 'mesh_transport_timeout', reason: 'mesh_transport_timeout', transport: 'mesh_transport' };
+        return {
+            code: 'mesh_transport_timeout',
+            reason: 'mesh_transport_timeout',
+            transport: 'mesh_transport',
+            recoverable: true,
+            retryRecommended: true,
+            nextAction: 'Check mesh transport health, then do one bounded retry before requeueing or relaunching the task.',
+        };
     }
-    return { code: 'mesh_launch_failed', reason: 'provider_launch_failed', transport: 'mesh_transport' };
+    return {
+        code: 'mesh_launch_failed',
+        reason: 'provider_launch_failed',
+        transport: 'mesh_transport',
+        recoverable: false,
+        retryRecommended: false,
+        nextAction: 'Inspect the provider launch error and fix the underlying provider/configuration issue before retrying.',
+    };
 }
 
 function buildWorktreeCleanupHint(node: LocalMeshNodeEntry): Record<string, unknown> | undefined {
@@ -354,10 +392,13 @@ function buildRecoverableLaunchFailure(
     const cleanup = buildWorktreeCleanupHint(node);
     return {
         success: false,
-        recoverable: true,
+        recoverable: classified.recoverable,
         code: classified.code,
         reason: classified.reason,
         transport: classified.transport,
+        retryRecommended: classified.retryRecommended,
+        nextAction: classified.nextAction,
+        ...(classified.noFallbackReason ? { noFallbackReason: classified.noFallbackReason } : {}),
         error: message,
         meshId: ctx.mesh.id,
         nodeId: node.id,
@@ -411,6 +452,26 @@ function getLatestActiveLaunchFailure(meshId: string, nodeId: string): Record<st
     return null;
 }
 
+type RemoteAgentDispatchResult =
+    | { success: true; dispatched: true; sessionId: string }
+    | ({ success: false; error: string } & Record<string, unknown>);
+
+function buildCoordinatorP2pRelayFailure(
+    error: unknown,
+    context: { command: string; targetDaemonId?: string; nodeId?: string; sessionId?: string },
+): { success: false; error: string } & Record<string, unknown> {
+    const payload = buildP2pRelayFailurePayload(error, {
+        command: context.command,
+        targetDaemonId: context.targetDaemonId,
+    });
+    return {
+        ...payload,
+        ...(context.nodeId ? { nodeId: context.nodeId } : {}),
+        ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+        retryHint: payload.retryRecommended ? payload.nextAction : 'Do not retry as a P2P transport recovery; inspect the command/provider error first.',
+    };
+}
+
 /**
  * For IpcTransport + remote node: resolve an active session on the node and
  * dispatch an agent_command directly via P2P relay (mesh_relay_command).
@@ -424,7 +485,7 @@ async function ipcDispatchToRemoteAgent(
     ctx: MeshContext,
     node: LocalMeshNodeEntry,
     args: { session_id?: string; message: string; providerType?: string },
-): Promise<{ success: true; dispatched: true; sessionId: string } | { success: false; error: string }> {
+): Promise<RemoteAgentDispatchResult> {
     const transport = ctx.transport as IpcTransport;
     const daemonId = node.daemonId!;
 
@@ -476,11 +537,32 @@ async function ipcDispatchToRemoteAgent(
         });
         const dispatchPayload = unwrapCommandPayload(dispatchResult);
         if (dispatchPayload?.success === false || dispatchResult?.success === false) {
-            return { success: false, error: `P2P dispatch failed: ${dispatchPayload?.error || dispatchResult?.error || 'agent_command rejected the task'}` };
+            const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
+            const errorMessage = dispatchPayload?.error || dispatchResult?.error || 'agent_command rejected the task';
+            return {
+                ...buildCoordinatorP2pRelayFailure(source?.error || errorMessage, {
+                    command: 'agent_command',
+                    targetDaemonId: daemonId,
+                    nodeId: node.id,
+                    sessionId,
+                }),
+                ...(source && typeof source === 'object' ? source : {}),
+                success: false,
+                error: `P2P dispatch failed: ${errorMessage}`,
+            };
         }
         return { success: true, dispatched: true, sessionId: sessionId || resolvedProviderType };
     } catch (e: any) {
-        return { success: false, error: `P2P dispatch failed: ${e?.message || String(e)}` };
+        const errorMessage = e?.message || String(e);
+        return {
+            ...buildCoordinatorP2pRelayFailure(e, {
+                command: 'agent_command',
+                targetDaemonId: daemonId,
+                nodeId: node.id,
+                sessionId,
+            }),
+            error: `P2P dispatch failed: ${errorMessage}`,
+        };
     }
 }
 
@@ -795,9 +877,7 @@ async function commandForNode(
 }
 
 function isP2pTransportUnavailableError(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error || '');
-    return /p2p|datachannel|mesh_relay_command|daemon_mesh_p2p_transport_unavailable/i.test(message)
-        && /unavailable|failed|timeout|timed out|not connected|closed/i.test(message);
+    return isP2pRelayTransportFailure(error);
 }
 
 function buildRemoveNodeArgs(ctx: MeshContext, nodeId: string, sessionCleanupMode?: string): Record<string, unknown> {
@@ -1506,7 +1586,13 @@ export async function meshSendTask(
 
         return JSON.stringify({ success: true, nodeId: args.node_id, taskId: task.id, status: task.status });
     } catch (e: any) {
-        return JSON.stringify({ success: false, error: e.message });
+        const failure = buildCoordinatorP2pRelayFailure(e, {
+            command: 'mesh_send_task',
+            targetDaemonId: node.daemonId,
+            nodeId: args.node_id,
+            sessionId: args.session_id,
+        });
+        return JSON.stringify(failure);
     }
 }
 

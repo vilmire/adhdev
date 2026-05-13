@@ -160,6 +160,20 @@ export type { MeshWorkQueueEntry, MeshTaskStatus, MeshWorkQueueStats } from './m
 // ── Mesh Events ──
 export { triggerMeshQueue } from './mesh/mesh-events.js';
 
+// ── Mesh P2P Relay Failure Classification ──
+export {
+  P2pRelayFailureError,
+  buildP2pRelayFailurePayload,
+  classifyP2pRelayFailure,
+  isP2pRelayTransportFailure,
+} from './mesh/p2p-relay-failure.js';
+export type {
+  P2pRelayFailureClassification,
+  P2pRelayFailureCode,
+  P2pRelayFailureContext,
+  P2pRelayFailurePayload,
+} from './mesh/p2p-relay-failure.js';
+
 // ── State Store ──
 export { loadState, saveState, resetState } from './config/state-store.js';
 export type { DaemonState } from './config/state-store.js';
