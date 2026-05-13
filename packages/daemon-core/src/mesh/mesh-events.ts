@@ -3,7 +3,7 @@ import { loadConfig } from '../config/config.js';
 import { getMesh, getMeshByRepo } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
-import { appendLedgerEntry, getSessionRecoveryContext } from './mesh-ledger.js';
+import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
 import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch } from './mesh-work-queue.js';
 
@@ -565,6 +565,14 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
                         completedViaReady: true,
                         providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
                         finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+                        evidence: buildTaskCompletionEvidence({
+                            event: 'agent:ready',
+                            nodeId,
+                            sessionId,
+                            providerType: providerType || undefined,
+                            providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
+                            finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+                        }),
                     },
                 });
             } catch (e: any) {
@@ -601,17 +609,31 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     const ledgerKind = EVENT_TO_LEDGER_KIND[args.event];
     if (ledgerKind) {
         try {
+            const ledgerNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined;
+            const ledgerSessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId) || undefined;
+            const ledgerProviderType = readNonEmptyString(args.metadataEvent.providerType) || undefined;
+            const completionEvidence = ledgerKind === 'task_completed' && ledgerNodeId && ledgerSessionId
+                ? buildTaskCompletionEvidence({
+                    event: 'agent:generating_completed',
+                    nodeId: ledgerNodeId,
+                    sessionId: ledgerSessionId,
+                    providerType: ledgerProviderType,
+                    providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
+                    finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+                })
+                : undefined;
             appendLedgerEntry(args.meshId, {
                 kind: ledgerKind,
-                nodeId: readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId) || undefined,
-                sessionId: resolveEventSessionId(args.metadataEvent, args.sourceInstanceId) || undefined,
-                providerType: readNonEmptyString(args.metadataEvent.providerType) || undefined,
+                nodeId: ledgerNodeId,
+                sessionId: ledgerSessionId,
+                providerType: ledgerProviderType,
                 payload: {
                     event: args.event,
                     nodeLabel: args.nodeLabel,
                     taskId: completedTaskForLedger?.id || undefined,
                     providerSessionId: readNonEmptyString(args.metadataEvent.providerSessionId) || undefined,
                     finalSummary: readNonEmptyString(args.metadataEvent.finalSummary) || undefined,
+                    evidence: completionEvidence,
                 },
             });
         } catch (e: any) {

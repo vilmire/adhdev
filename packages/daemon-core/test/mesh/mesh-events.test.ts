@@ -161,8 +161,82 @@ describe('setupMeshEventForwarding', () => {
       })
 
       expect(getQueue(meshId)[0].status).toBe('completed')
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect(completedEntry?.payload.evidence).toMatchObject({
+        source: 'agent_status_event',
+        event: 'agent:generating_completed',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        transcriptHandle: {
+          kind: 'provider_session',
+          sessionId: 'runtime-session-1',
+          providerSessionId: 'provider-history-1',
+          finalSummaryAvailable: false,
+        },
+        git: {
+          status: 'deferred',
+          reason: 'ordinary_completion_git_status_not_checked',
+        },
+        validation: {
+          status: 'deferred',
+          commandsRun: [],
+          reason: 'ordinary_completion_validation_not_run',
+        },
+        checkpoint: {
+          attempted: false,
+          reason: 'not_attempted_for_ordinary_completion',
+        },
+      })
     } finally {
+      cleanupMeshFiles(meshId)
       if (fs.existsSync(queuePath)) fs.unlinkSync(queuePath)
+    }
+  })
+
+  it('records task completion evidence when a ready event completes an assigned task', () => {
+    const meshId = `mesh_ready_evidence_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: {},
+      })
+      meshConfigMocks.getMeshByRepo.mockReturnValue(undefined)
+
+      const queued = enqueueTask(meshId, 'queued task')
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+
+      const { components, emit } = createComponents(meshId)
+      setupMeshEventForwarding(components)
+      emit({
+        event: 'agent:ready',
+        instanceId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        providerSessionId: 'provider-history-ready',
+        finalSummary: 'ready summary',
+      })
+
+      const completedEntry = readLedgerEntries(meshId).find(entry => entry.kind === 'task_completed')
+      expect(completedEntry?.payload.taskId).toBe(queued.id)
+      expect(completedEntry?.payload.evidence).toMatchObject({
+        source: 'agent_status_event',
+        event: 'agent:ready',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        transcriptHandle: {
+          kind: 'provider_session',
+          providerSessionId: 'provider-history-ready',
+          finalSummaryAvailable: true,
+        },
+        checkpoint: {
+          attempted: false,
+          reason: 'not_attempted_for_ordinary_completion',
+        },
+      })
+    } finally {
+      cleanupMeshFiles(meshId)
     }
   })
 

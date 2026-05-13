@@ -49,6 +49,44 @@ export interface MeshLedgerEntry {
     payload: Record<string, unknown>;
 }
 
+export interface MeshTaskCompletionEvidence {
+    source: 'agent_status_event';
+    event: 'agent:generating_completed' | 'agent:ready';
+    nodeId: string;
+    sessionId: string;
+    providerType?: string;
+    completedAt: string;
+    transcriptHandle: {
+        kind: 'provider_session' | 'runtime_session';
+        sessionId: string;
+        providerSessionId?: string;
+        finalSummaryAvailable: boolean;
+    };
+    git: {
+        status: 'deferred';
+        reason: string;
+    };
+    validation: {
+        status: 'deferred';
+        commandsRun: string[];
+        reason: string;
+    };
+    checkpoint: {
+        attempted: false;
+        reason: 'not_attempted_for_ordinary_completion';
+    };
+}
+
+export interface BuildTaskCompletionEvidenceOptions {
+    event: MeshTaskCompletionEvidence['event'];
+    nodeId: string;
+    sessionId: string;
+    providerType?: string;
+    providerSessionId?: string;
+    finalSummary?: string;
+    completedAt?: string;
+}
+
 export interface MeshLedgerSummary {
     meshId: string;
     totalEntries: number;
@@ -137,6 +175,38 @@ function getRotatedPath(meshId: string, index: number): string {
 }
 
 // ─── Core API ───────────────────────────────────
+
+export function buildTaskCompletionEvidence(opts: BuildTaskCompletionEvidenceOptions): MeshTaskCompletionEvidence {
+    const providerSessionId = opts.providerSessionId?.trim() || undefined;
+    const providerType = opts.providerType?.trim() || undefined;
+    return {
+        source: 'agent_status_event',
+        event: opts.event,
+        nodeId: opts.nodeId,
+        sessionId: opts.sessionId,
+        providerType,
+        completedAt: opts.completedAt || new Date().toISOString(),
+        transcriptHandle: {
+            kind: providerSessionId ? 'provider_session' : 'runtime_session',
+            sessionId: opts.sessionId,
+            providerSessionId,
+            finalSummaryAvailable: typeof opts.finalSummary === 'string' && opts.finalSummary.trim().length > 0,
+        },
+        git: {
+            status: 'deferred',
+            reason: 'ordinary_completion_git_status_not_checked',
+        },
+        validation: {
+            status: 'deferred',
+            commandsRun: [],
+            reason: 'ordinary_completion_validation_not_run',
+        },
+        checkpoint: {
+            attempted: false,
+            reason: 'not_attempted_for_ordinary_completion',
+        },
+    };
+}
 
 /**
  * Append a new entry to the mesh ledger.

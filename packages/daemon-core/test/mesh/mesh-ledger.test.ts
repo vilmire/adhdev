@@ -28,6 +28,7 @@ import {
     getLedgerSummary,
     getLedgerDir,
     MAX_LEDGER_SLICE_LIMIT,
+    buildTaskCompletionEvidence,
 } from '../../src/mesh/mesh-ledger.js';
 import type { MeshLedgerEntry, MeshLedgerKind } from '../../src/mesh/mesh-ledger.js';
 
@@ -44,6 +45,48 @@ describe('mesh-ledger', () => {
         try {
             rmSync(testTmpDir, { recursive: true, force: true });
         } catch { /* cleanup best-effort */ }
+    });
+
+    describe('buildTaskCompletionEvidence', () => {
+        it('records deferred evidence for ordinary agent status completions', () => {
+            const evidence = buildTaskCompletionEvidence({
+                event: 'agent:generating_completed',
+                nodeId: 'node_child_1',
+                sessionId: 'runtime-session-1',
+                providerType: 'hermes-cli',
+                providerSessionId: 'provider-history-1',
+                finalSummary: 'done',
+                completedAt: '2026-05-13T13:20:47.000Z',
+            });
+
+            expect(evidence).toEqual({
+                source: 'agent_status_event',
+                event: 'agent:generating_completed',
+                nodeId: 'node_child_1',
+                sessionId: 'runtime-session-1',
+                providerType: 'hermes-cli',
+                completedAt: '2026-05-13T13:20:47.000Z',
+                transcriptHandle: {
+                    kind: 'provider_session',
+                    sessionId: 'runtime-session-1',
+                    providerSessionId: 'provider-history-1',
+                    finalSummaryAvailable: true,
+                },
+                git: {
+                    status: 'deferred',
+                    reason: 'ordinary_completion_git_status_not_checked',
+                },
+                validation: {
+                    status: 'deferred',
+                    commandsRun: [],
+                    reason: 'ordinary_completion_validation_not_run',
+                },
+                checkpoint: {
+                    attempted: false,
+                    reason: 'not_attempted_for_ordinary_completion',
+                },
+            });
+        });
     });
 
     describe('appendLedgerEntry', () => {
