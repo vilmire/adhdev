@@ -1414,8 +1414,22 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
                 entry.note = 'No daemonId available for cloud status probe';
             }
         } catch (e: any) {
+            const failure = buildCoordinatorP2pRelayFailure(e, {
+                command: 'git_status',
+                targetDaemonId: node.daemonId,
+                nodeId: node.id,
+            });
             entry.health = 'degraded';
-            entry.error = e.message;
+            entry.error = failure.error;
+            entry.degradedReason = failure.recoverable ? 'p2p_relay_failure' : 'git_status_unavailable';
+            Object.assign(entry, {
+                code: failure.code,
+                transport: failure.transport,
+                recoverable: failure.recoverable,
+                retryRecommended: failure.retryRecommended,
+                nextAction: failure.nextAction,
+                noFallbackReason: failure.noFallbackReason,
+            });
         }
 
         // Recovery Hints & Next-step reporting
@@ -2082,31 +2096,43 @@ export async function meshGitStatus(
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
-    if (!isLocalTransport(ctx.transport) && node.daemonId) {
-        const result = await (ctx.transport as CloudTransport).gitStatus(node.daemonId, node.workspace, true);
-        return JSON.stringify({
+    try {
+        if (!isLocalTransport(ctx.transport) && node.daemonId) {
+            const result = await (ctx.transport as CloudTransport).gitStatus(node.daemonId, node.workspace, true);
+            return JSON.stringify({
+                nodeId: args.node_id,
+                workspace: node.workspace,
+                status: extractGitStatus(result),
+                diff: extractGitDiff(result),
+                relatedRepos: await collectRelatedRepoStatuses(ctx, node),
+            }, null, 2);
+        } else if (isLocalTransport(ctx.transport)) {
+            const statusResult = await commandForNode(ctx, node, 'git_status', {
+                workspace: node.workspace,
+            });
+            const diffResult = await commandForNode(ctx, node, 'git_diff_summary', {
+                workspace: node.workspace,
+            });
+            return JSON.stringify({
+                nodeId: args.node_id,
+                workspace: node.workspace,
+                status: extractGitStatus(statusResult),
+                diff: extractGitDiff(diffResult),
+                relatedRepos: await collectRelatedRepoStatuses(ctx, node),
+            }, null, 2);
+        } else {
+            return JSON.stringify({ error: 'No daemonId available for cloud git_status probe' });
+        }
+    } catch (e: any) {
+        const failure = buildCoordinatorP2pRelayFailure(e, {
+            command: 'git_status',
+            targetDaemonId: node.daemonId,
             nodeId: args.node_id,
-            workspace: node.workspace,
-            status: extractGitStatus(result),
-            diff: extractGitDiff(result),
-            relatedRepos: await collectRelatedRepoStatuses(ctx, node),
-        }, null, 2);
-    } else if (isLocalTransport(ctx.transport)) {
-        const statusResult = await commandForNode(ctx, node, 'git_status', {
-            workspace: node.workspace,
-        });
-        const diffResult = await commandForNode(ctx, node, 'git_diff_summary', {
-            workspace: node.workspace,
         });
         return JSON.stringify({
-            nodeId: args.node_id,
+            ...failure,
             workspace: node.workspace,
-            status: extractGitStatus(statusResult),
-            diff: extractGitDiff(diffResult),
-            relatedRepos: await collectRelatedRepoStatuses(ctx, node),
         }, null, 2);
-    } else {
-        return JSON.stringify({ error: 'No daemonId available for cloud git_status probe' });
     }
 }
 

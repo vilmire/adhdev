@@ -269,6 +269,111 @@ test('mesh_launch_session reports recoverable worktree launch failure when daemo
   assert.ok(nodeStatus.nextStepHints.some((hint: string) => hint.includes('mesh_remove_node')));
 });
 
+test('mesh_git_status preserves P2P relay recovery payload for coordinator feedback', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: `mesh-git-status-relay-failure-${Date.now()}`,
+      name: 'Git Status Relay Failure Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-remote-git',
+        workspace: '/repo-remote',
+        repoRoot: '/repo-remote',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+      }],
+    },
+    transport,
+  };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (_daemonId, command) => {
+    if (command === 'git_status') {
+      throw new Error("P2P DataChannel command 'git_status' to daemon-remote timed out after 30s");
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const statusText = await meshGitStatus(ctx, { node_id: 'node-remote-git' });
+  const status = JSON.parse(statusText);
+
+  assert.equal(status.success, false);
+  assert.equal(status.recoverable, true);
+  assert.equal(status.code, 'p2p_timeout');
+  assert.equal(status.transport, 'p2p');
+  assert.equal(status.retryRecommended, true);
+  assert.match(status.noFallbackReason, /WS\/REST command fallback/i);
+  assert.equal(status.nodeId, 'node-remote-git');
+  assert.equal(status.targetDaemonId, 'daemon-remote');
+  assert.equal(status.command, 'git_status');
+});
+
+test('mesh_status marks git_status P2P timeout as recoverable degraded node metadata', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: `mesh-status-relay-failure-${Date.now()}`,
+      name: 'Status Relay Failure Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-remote-status',
+        workspace: '/repo-remote',
+        repoRoot: '/repo-remote',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+      }],
+    },
+    transport,
+  };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    if (command === 'get_pending_mesh_events') return { events: [] };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (_daemonId, command) => {
+    if (command === 'git_status') {
+      throw new Error("P2P DataChannel command 'git_status' to daemon-remote timed out after 30s");
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const statusText = await meshStatus(ctx);
+  const status = JSON.parse(statusText);
+  const nodeStatus = status.nodes.find((node: any) => node.nodeId === 'node-remote-status');
+
+  assert.equal(nodeStatus.health, 'degraded');
+  assert.equal(nodeStatus.recoverable, true);
+  assert.equal(nodeStatus.code, 'p2p_timeout');
+  assert.equal(nodeStatus.transport, 'p2p');
+  assert.equal(nodeStatus.retryRecommended, true);
+  assert.match(nodeStatus.noFallbackReason, /WS\/REST command fallback/i);
+});
+
 test('mesh_send_task preserves P2P relay recovery payload for coordinator feedback', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
