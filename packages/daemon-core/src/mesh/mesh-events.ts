@@ -1,9 +1,11 @@
 import type { DaemonComponents } from '../boot/daemon-lifecycle.js';
+import { loadConfig } from '../config/config.js';
 import { getMesh, getMeshByRepo } from '../config/mesh-config.js';
+import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
 import { appendLedgerEntry, getSessionRecoveryContext } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
-import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus } from './mesh-work-queue.js';
+import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch } from './mesh-work-queue.js';
 
 // ---------------------------------------------------------------------------
 // Remote Node Idle Session Tracking
@@ -138,11 +140,296 @@ export function tryAssignQueueTask(
     return true;
 }
 
+const autoLaunchInProgress = new Set<string>();
+const autoLaunchCooldownUntil = new Map<string, number>();
+const AUTO_LAUNCH_COOLDOWN_MS = 5_000;
+
+function normalizeProviderPriority(policy: unknown): string[] {
+    const raw = policy && typeof policy === 'object' && !Array.isArray(policy)
+        ? (policy as Record<string, unknown>).providerPriority
+        : undefined;
+    if (!Array.isArray(raw)) return [];
+    const seen = new Set<string>();
+    return raw
+        .map(type => typeof type === 'string' ? type.trim() : '')
+        .filter(Boolean)
+        .filter(type => {
+            if (seen.has(type)) return false;
+            seen.add(type);
+            return true;
+        });
+}
+
+function isTerminalSessionStatus(status: string): boolean {
+    return ['stopped', 'failed', 'terminated', 'exited', 'closed'].includes(status);
+}
+
+function isIdleSessionState(state: any): boolean {
+    const status = readNonEmptyString(state?.status).toLowerCase();
+    if (isTerminalSessionStatus(status)) return false;
+    return status === 'idle' || state?.activeChat?.status === 'waiting_input';
+}
+
+function isDirtyNode(node: any): boolean {
+    return node?.health === 'dirty' || node?.git?.dirty === true;
+}
+
+function isLaunchableNode(node: any): boolean {
+    if (!node || node.status === 'disabled' || node.status === 'removed') return false;
+    const health = readNonEmptyString(node.health).toLowerCase();
+    if (!health) return true;
+    return health === 'online' || health === 'unknown';
+}
+
+function localAutoLaunchSkipReason(node: any): string | null {
+    const daemonId = readNonEmptyString(node?.daemonId);
+    const machineId = readNonEmptyString(node?.machineId);
+    const appConfig = loadConfig();
+    const localMachineId = readNonEmptyString(appConfig.machineId) || readNonEmptyString(appConfig.registeredMachineId);
+    const cloudDaemonId = localMachineId ? `daemon_${localMachineId}` : '';
+    const standaloneDaemonId = localMachineId ? `standalone_${localMachineId}` : '';
+
+    const daemonMatchesLocal = !daemonId || daemonId === cloudDaemonId || daemonId === standaloneDaemonId;
+    const machineMatchesLocal = !machineId || (localMachineId && machineId === localMachineId);
+
+    // ADHDev-managed local worktrees are explicitly safe to launch locally, but
+    // still must not be auto-launched if their metadata points at another
+    // daemon/machine. Remote nodes require an explicit coordinator launch path.
+    if (node?.isLocalWorktree === true) {
+        return daemonMatchesLocal && machineMatchesLocal ? null : 'remote_auto_launch_unsupported';
+    }
+
+    // Legacy/local workspace nodes may not have daemon/machine metadata. If
+    // metadata is present, require it to identify this daemon/machine before
+    // using the local cliManager.launch_cli path.
+    if (daemonId || machineId) {
+        return daemonMatchesLocal && machineMatchesLocal ? null : 'remote_auto_launch_unsupported';
+    }
+
+    return null;
+}
+
+function activeAssignedCount(meshId: string): number {
+    return getQueue(meshId, { status: ['assigned'] as any }).length;
+}
+
+function nodeHasActiveAssignment(meshId: string, nodeId: string): boolean {
+    return getQueue(meshId, { status: ['assigned'] as any }).some(task => task.assignedNodeId === nodeId);
+}
+
+function liveSessionCountForNode(components: DaemonComponents, meshId: string, nodeId: string): number {
+    return components.instanceManager.getByCategory('cli').filter((inst: any) => {
+        const state = inst.getState();
+        const settings = state.settings as Record<string, unknown> || {};
+        if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
+        const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
+        if (instNodeId !== nodeId) return false;
+        const status = readNonEmptyString(state.status).toLowerCase();
+        return !isTerminalSessionStatus(status);
+    }).length;
+}
+
+function recordAutoLaunchEvent(meshId: string, args: {
+    phase: 'skipped' | 'started' | 'failed' | 'completed';
+    taskId: string;
+    nodeId?: string;
+    providerType?: string;
+    sessionId?: string;
+    reason?: string;
+    error?: string;
+}) {
+    try {
+        appendLedgerEntry(meshId, {
+            kind: 'session_auto_launch',
+            nodeId: args.nodeId,
+            sessionId: args.sessionId,
+            providerType: args.providerType,
+            payload: {
+                phase: args.phase,
+                taskId: args.taskId,
+                reason: args.reason,
+                error: args.error,
+            },
+        });
+    } catch (e: any) {
+        LOG.warn('MeshQueue', `Failed to record auto-launch ledger event: ${e?.message || e}`);
+    }
+}
+
+function markAutoLaunch(meshId: string, taskId: string, args: {
+    status: 'skipped' | 'started' | 'failed' | 'completed';
+    reason?: string;
+    nodeId?: string;
+    providerType?: string;
+    sessionId?: string;
+    error?: string;
+}) {
+    recordTaskAutoLaunch(meshId, taskId, {
+        status: args.status,
+        reason: args.reason || args.error,
+        nodeId: args.nodeId,
+        providerType: args.providerType,
+        sessionId: args.sessionId,
+    });
+    recordAutoLaunchEvent(meshId, {
+        phase: args.status,
+        taskId,
+        nodeId: args.nodeId,
+        providerType: args.providerType,
+        sessionId: args.sessionId,
+        reason: args.reason,
+        error: args.error,
+    });
+}
+
+async function resolveUsableProvider(components: DaemonComponents, nodeId: string, node: any): Promise<{ providerType?: string; reason?: string }> {
+    const providerPriority = normalizeProviderPriority(node?.policy);
+    if (!providerPriority.length) return { reason: 'missing_provider_priority' };
+    const providerLoader = components.providerLoader;
+    if (!providerLoader) return { reason: 'provider_loader_unavailable' };
+
+    const failed: string[] = [];
+    for (const requestedType of providerPriority) {
+        const normalizedType = typeof providerLoader.resolveAlias === 'function'
+            ? providerLoader.resolveAlias(requestedType)
+            : requestedType;
+        if (typeof providerLoader.isMachineProviderEnabled === 'function' && !providerLoader.isMachineProviderEnabled(normalizedType)) {
+            failed.push(`${requestedType}: disabled`);
+            continue;
+        }
+        let detected: any;
+        try {
+            detected = await detectCLI(normalizedType, providerLoader, { includeVersion: false });
+        } catch (e: any) {
+            failed.push(`${requestedType}: detect failed: ${e?.message || e}`);
+            continue;
+        }
+        if (typeof providerLoader.setCliDetectionResults === 'function') {
+            providerLoader.setCliDetectionResults([{
+                id: normalizedType,
+                installed: !!detected,
+                path: detected?.path,
+            }], false);
+        }
+        (components as any).onStatusChange?.();
+        if (detected) return { providerType: normalizedType };
+        failed.push(`${requestedType}: not detected`);
+    }
+    return { reason: `provider_priority_unusable: ${failed.join('; ') || nodeId}` };
+}
+
+async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, meshId: string, mesh: any): Promise<boolean> {
+    const queue = getQueue(meshId);
+    const pending = queue.filter(task => task.status === 'pending');
+    if (!pending.length) return false;
+
+    const maxParallelTasks = Math.max(1, Math.floor(Number(mesh?.policy?.maxParallelTasks) || 2));
+    for (const task of pending) {
+        if (activeAssignedCount(meshId) >= maxParallelTasks) {
+            markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'max_parallel_tasks_reached' });
+            return false;
+        }
+        if (task.targetSessionId) {
+            markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_constraint' });
+            continue;
+        }
+
+        const candidateNodes = Array.isArray(mesh?.nodes)
+            ? mesh.nodes.filter((node: any) => task.targetNodeId ? node?.id === task.targetNodeId : true)
+            : [];
+        if (!candidateNodes.length) {
+            markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'no_matching_node', nodeId: task.targetNodeId });
+            continue;
+        }
+
+        for (const node of candidateNodes) {
+            const nodeId = readNonEmptyString(node?.id);
+            if (!nodeId) continue;
+            const launchKey = `${meshId}:${nodeId}`;
+            const cooldownUntil = autoLaunchCooldownUntil.get(launchKey) || 0;
+            if (autoLaunchInProgress.has(launchKey)) {
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'auto_launch_in_progress', nodeId });
+                continue;
+            }
+            if (Date.now() < cooldownUntil) {
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'auto_launch_cooldown', nodeId });
+                continue;
+            }
+            if (isDirtyNode(node)) {
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'dirty_workspace', nodeId });
+                continue;
+            }
+            if (!isLaunchableNode(node)) {
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'node_not_launch_ready', nodeId });
+                continue;
+            }
+            const localSkipReason = localAutoLaunchSkipReason(node);
+            if (localSkipReason) {
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: localSkipReason, nodeId });
+                continue;
+            }
+            if (nodeHasActiveAssignment(meshId, nodeId)) {
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'node_has_active_assignment', nodeId });
+                continue;
+            }
+            const maxConcurrentSessions = Number(node?.policy?.maxConcurrentSessions);
+            if (Number.isFinite(maxConcurrentSessions) && maxConcurrentSessions >= 0 && liveSessionCountForNode(components, meshId, nodeId) >= maxConcurrentSessions) {
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'max_concurrent_sessions_reached', nodeId });
+                continue;
+            }
+
+            autoLaunchInProgress.add(launchKey);
+            try {
+                const resolved = await resolveUsableProvider(components, nodeId, node);
+                if (!resolved.providerType) {
+                    markAutoLaunch(meshId, task.id, { status: 'skipped', reason: resolved.reason || 'provider_unusable', nodeId });
+                    continue;
+                }
+
+                markAutoLaunch(meshId, task.id, { status: 'started', nodeId, providerType: resolved.providerType });
+                const launchResult: any = await components.cliManager.handleCliCommand('launch_cli', {
+                    cliType: resolved.providerType,
+                    dir: node.workspace,
+                    settings: {
+                        meshNodeFor: meshId,
+                        meshNodeId: nodeId,
+                        spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || 'hidden',
+                        launchedByCoordinator: true,
+                        autoLaunchedForQueueTaskId: task.id,
+                    },
+                });
+                if (!launchResult?.success) {
+                    const reason = launchResult?.error || 'launch_cli_failed';
+                    markAutoLaunch(meshId, task.id, { status: 'failed', reason, nodeId, providerType: resolved.providerType });
+                    autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+                    return false;
+                }
+                const sessionId = readNonEmptyString(launchResult.sessionId) || readNonEmptyString(launchResult.id) || readNonEmptyString(launchResult.runtimeSessionId);
+                if (!sessionId) {
+                    markAutoLaunch(meshId, task.id, { status: 'failed', reason: 'launch_missing_session_id', nodeId, providerType: resolved.providerType });
+                    autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+                    return false;
+                }
+                markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: resolved.providerType, sessionId });
+                tryAssignQueueTask(components, meshId, nodeId, sessionId, resolved.providerType);
+                return true;
+            } catch (e: any) {
+                markAutoLaunch(meshId, task.id, { status: 'failed', error: e?.message || String(e), nodeId });
+                autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+                return false;
+            } finally {
+                autoLaunchInProgress.delete(launchKey);
+            }
+        }
+    }
+    return false;
+}
+
 /**
  * Triggers a queue check for all nodes in the mesh.
  * Called when a new task is enqueued, in case nodes are already idle.
  */
-export function triggerMeshQueue(components: DaemonComponents, meshId: string) {
+export async function triggerMeshQueue(components: DaemonComponents, meshId: string): Promise<void> {
     const mesh = getMeshWithCache(components, meshId);
     if (!mesh) return;
 
@@ -161,9 +448,7 @@ export function triggerMeshQueue(components: DaemonComponents, meshId: string) {
         // Only genuinely idle live sessions can pull work. Restored/stopped
         // records are kept for transcript/recovery visibility, but assigning
         // queue items to them strands tasks in assigned/pending without chat.
-        const status = readNonEmptyString(state.status).toLowerCase();
-        if (['stopped', 'failed', 'terminated', 'exited', 'closed'].includes(status)) continue;
-        if (status !== 'idle' && state.activeChat?.status !== 'waiting_input') continue;
+        if (!isIdleSessionState(state)) continue;
 
         const sessionId = state.instanceId;
         const providerType = state.type || readNonEmptyString(settings.providerType);
@@ -185,6 +470,8 @@ export function triggerMeshQueue(components: DaemonComponents, meshId: string) {
             }
         }
     }
+
+    await maybeAutoLaunchOneQueueSession(components, meshId, mesh);
 }
 
 function buildMeshSystemMessage(args: {
