@@ -150,8 +150,10 @@ export { syncMeshes } from './mesh/mesh-sync.js';
 export type { MeshSyncTransport, MeshSyncResult, RemoteMeshRecord } from './mesh/mesh-sync.js';
 
 // ── Mesh Task Ledger ──
-export { appendLedgerEntry, readLedgerEntries, getLedgerSummary, getLedgerDir, getSessionRecoveryContext } from './mesh/mesh-ledger.js';
-export type { MeshLedgerEntry, MeshLedgerKind, MeshLedgerSummary, ReadLedgerOptions, SessionRecoveryContext } from './mesh/mesh-ledger.js';
+export { appendLedgerEntry, appendRemoteLedgerEntries, readLedgerEntries, readLedgerSlice, getLedgerSummary, getLedgerDir, getSessionRecoveryContext, MAX_LEDGER_SLICE_LIMIT } from './mesh/mesh-ledger.js';
+export type { AppendRemoteLedgerResult, MeshLedgerEntry, MeshLedgerKind, MeshLedgerSlice, MeshLedgerSummary, ReadLedgerOptions, ReadLedgerSliceOptions, SessionRecoveryContext } from './mesh/mesh-ledger.js';
+export { buildMeshLedgerReconciliationEvidence, buildMeshLedgerReplicaEvidence } from './mesh/mesh-ledger-reconciliation.js';
+export type { MeshLedgerReconciliationEvidence, MeshLedgerReplicaEvidence, MeshLedgerReplicaStatus } from './mesh/mesh-ledger-reconciliation.js';
 
 // ── Mesh Work Queue (GUPP) ──
 export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats } from './mesh/mesh-work-queue.js';

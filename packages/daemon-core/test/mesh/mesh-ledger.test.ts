@@ -22,9 +22,12 @@ vi.mock('../../src/config/config.js', () => ({
 
 import {
     appendLedgerEntry,
+    appendRemoteLedgerEntries,
     readLedgerEntries,
+    readLedgerSlice,
     getLedgerSummary,
     getLedgerDir,
+    MAX_LEDGER_SLICE_LIMIT,
 } from '../../src/mesh/mesh-ledger.js';
 import type { MeshLedgerEntry, MeshLedgerKind } from '../../src/mesh/mesh-ledger.js';
 
@@ -151,6 +154,87 @@ describe('mesh-ledger', () => {
             expect(entries).toHaveLength(2);
             expect(entries[0].payload.index).toBe(3);
             expect(entries[1].payload.index).toBe(4);
+        });
+    });
+
+    describe('readLedgerSlice', () => {
+        it('returns bounded cursor-addressable slices', () => {
+            const entries: MeshLedgerEntry[] = [];
+            for (let i = 0; i < 5; i++) {
+                entries.push(appendLedgerEntry(testMeshId, { kind: 'task_dispatched', payload: { index: i } }));
+            }
+
+            const first = readLedgerSlice(testMeshId, { limit: 2 });
+            expect(first.protocol).toBe('adhdev.mesh.ledger.slice.v1');
+            expect(first.entries).toHaveLength(2);
+            expect(first.entries[0].payload.index).toBe(0);
+            expect(first.cursor.afterId).toBeNull();
+            expect(first.cursor.nextAfterId).toBe(entries[1].id);
+            expect(first.cursor.hasMore).toBe(true);
+            expect(first.sourceOfTruth.kind).toBe('local_jsonl');
+            expect(first.sourceOfTruth.bounded).toBe(true);
+
+            const second = readLedgerSlice(testMeshId, { afterId: first.cursor.nextAfterId ?? undefined, limit: 2 });
+            expect(second.entries).toHaveLength(2);
+            expect(second.entries[0].payload.index).toBe(2);
+            expect(second.cursor.afterId).toBe(entries[1].id);
+            expect(second.cursor.nextAfterId).toBe(entries[3].id);
+            expect(second.cursor.hasMore).toBe(true);
+        });
+
+        it('clamps slice limit to the protocol maximum', () => {
+            for (let i = 0; i < MAX_LEDGER_SLICE_LIMIT + 5; i++) {
+                appendLedgerEntry(testMeshId, { kind: 'task_dispatched', payload: { index: i } });
+            }
+
+            const slice = readLedgerSlice(testMeshId, { limit: MAX_LEDGER_SLICE_LIMIT + 100 });
+            expect(slice.entries).toHaveLength(MAX_LEDGER_SLICE_LIMIT);
+            expect(slice.cursor.limit).toBe(MAX_LEDGER_SLICE_LIMIT);
+            expect(slice.cursor.hasMore).toBe(true);
+        });
+    });
+
+    describe('appendRemoteLedgerEntries', () => {
+        it('imports valid remote entries and skips duplicates', () => {
+            const remoteEntry: MeshLedgerEntry = {
+                id: `remote-${randomUUID()}`,
+                meshId: testMeshId,
+                timestamp: new Date().toISOString(),
+                kind: 'task_completed',
+                nodeId: 'node_remote',
+                payload: { result: 'ok' },
+            };
+
+            const first = appendRemoteLedgerEntries(testMeshId, [remoteEntry]);
+            expect(first.accepted).toBe(1);
+            expect(first.skippedDuplicate).toBe(0);
+            expect(first.rejectedInvalid).toBe(0);
+
+            const duplicate = appendRemoteLedgerEntries(testMeshId, [remoteEntry]);
+            expect(duplicate.accepted).toBe(0);
+            expect(duplicate.skippedDuplicate).toBe(1);
+            expect(duplicate.rejectedInvalid).toBe(0);
+
+            const entries = readLedgerEntries(testMeshId);
+            expect(entries.filter(entry => entry.id === remoteEntry.id)).toHaveLength(1);
+        });
+
+        it('rejects malformed and cross-mesh remote entries', () => {
+            const valid: MeshLedgerEntry = {
+                id: `remote-${randomUUID()}`,
+                meshId: testMeshId,
+                timestamp: new Date().toISOString(),
+                kind: 'task_failed',
+                payload: { error: 'boom' },
+            };
+            const result = appendRemoteLedgerEntries(testMeshId, [
+                valid,
+                { ...valid, id: `remote-${randomUUID()}`, meshId: 'different-mesh' },
+                { ...valid, id: '', meshId: testMeshId },
+            ] as MeshLedgerEntry[]);
+
+            expect(result.accepted).toBe(1);
+            expect(result.rejectedInvalid).toBe(2);
         });
     });
 

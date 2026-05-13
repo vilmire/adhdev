@@ -5,11 +5,11 @@
  * to mesh member nodes only. The coordinator uses these to delegate work
  * to agents across the mesh via natural conversation.
  *
- * 18 tools: mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
+ * 19 tools: mesh_status, mesh_list_nodes, mesh_enqueue_task, mesh_view_queue,
  *           mesh_queue_cancel, mesh_queue_requeue, mesh_send_task, mesh_read_chat,
  *           mesh_read_debug, mesh_launch_session, mesh_git_status, mesh_checkpoint,
  *           mesh_approve, mesh_clone_node, mesh_remove_node, mesh_refine_node,
- *           mesh_cleanup_sessions, mesh_task_history
+ *           mesh_cleanup_sessions, mesh_task_history, mesh_reconcile_ledger
  */
 
 import { CloudTransport } from '../transports/cloud.js';
@@ -21,6 +21,9 @@ import { annotateRapidReadChatAdvisory } from './read-chat-polling-advisory.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry, RepoMeshPolicy, RepoMeshRelatedRepo } from '@adhdev/daemon-core';
 import {
     appendLedgerEntry,
+    appendRemoteLedgerEntries,
+    buildMeshLedgerReconciliationEvidence,
+    buildMeshLedgerReplicaEvidence,
     buildP2pRelayFailurePayload,
     cancelTask,
     classifyP2pRelayFailure,
@@ -30,6 +33,7 @@ import {
     getSessionRecoveryContext,
     isP2pRelayTransportFailure,
     readLedgerEntries,
+    readLedgerSlice,
     requeueTask,
 } from '@adhdev/daemon-core';
 
@@ -1339,6 +1343,21 @@ export const MESH_TASK_HISTORY_TOOL = {
     },
 };
 
+export const MESH_RECONCILE_LEDGER_TOOL = {
+    name: 'mesh_reconcile_ledger',
+    description: 'Reconcile daemon-local mesh ledgers by querying bounded ledger slices over P2P/DataChannel and importing missing entries into the coordinator local JSONL ledger. Cloud/D1 is not used as a ledger source of truth.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_ids: { type: 'array', items: { type: 'string' }, description: 'Optional node IDs to query. Defaults to all mesh nodes.' },
+            limit: { type: 'number', description: 'Bounded slice size per node. Defaults to 100 and is clamped by daemon-core.' },
+            after_id: { type: 'string', description: 'Optional cursor entry ID; remote slices return entries strictly after this ID when present.' },
+            since: { type: 'string', description: 'Optional ISO timestamp lower bound for queried entries.' },
+            import_entries: { type: 'boolean', description: 'When false, query and report evidence without importing remote entries. Defaults true.' },
+        },
+    },
+};
+
 export const MESH_REFINE_NODE_TOOL = {
     name: 'mesh_refine_node',
     description: 'The Refinery: Automatically validate and merge a completed worktree node back into its base branch. This tool automates the validation gate and merge queue step. It will merge the node\'s branch into its base branch and cleanly remove the worktree node and its sessions.',
@@ -1370,6 +1389,7 @@ export const ALL_MESH_TOOLS = [
     MESH_REFINE_NODE_TOOL,
     MESH_CLEANUP_SESSIONS_TOOL,
     MESH_TASK_HISTORY_TOOL,
+    MESH_RECONCILE_LEDGER_TOOL,
 ];
 
 // ─── Tool Implementations ───────────────────────
@@ -1528,6 +1548,95 @@ export async function meshTaskHistory(
     const entries = readLedgerEntries(mesh.id, { tail, kind });
     const summary = getLedgerSummary(mesh.id);
     return JSON.stringify({ meshId: mesh.id, entries, summary }, null, 2);
+}
+
+export async function meshReconcileLedger(
+    ctx: MeshContext,
+    args: { node_ids?: string[]; limit?: number; after_id?: string; since?: string; import_entries?: boolean },
+): Promise<string> {
+    await refreshMeshFromDaemon(ctx);
+    const requestedNodeIds = Array.isArray(args.node_ids)
+        ? new Set(args.node_ids.map(id => typeof id === 'string' ? id.trim() : '').filter(Boolean))
+        : null;
+    const nodes = ctx.mesh.nodes.filter(node => !requestedNodeIds || requestedNodeIds.has(node.id));
+    const replicas: any[] = [];
+    const shouldImport = args.import_entries !== false;
+    const queryArgs = {
+        meshId: ctx.mesh.id,
+        ...(typeof args.limit === 'number' ? { limit: args.limit } : {}),
+        ...(typeof args.after_id === 'string' && args.after_id.trim() ? { afterId: args.after_id.trim() } : {}),
+        ...(typeof args.since === 'string' && args.since.trim() ? { since: args.since.trim() } : {}),
+    };
+
+    for (const node of nodes) {
+        try {
+            if (isLocalControlPlaneNode(ctx, node) || !node.daemonId) {
+                const slice = readLedgerSlice(ctx.mesh.id, queryArgs);
+                replicas.push(buildMeshLedgerReplicaEvidence({
+                    nodeId: node.id,
+                    daemonId: node.daemonId,
+                    transport: 'local',
+                    slice,
+                    status: 'local',
+                }));
+                continue;
+            }
+
+            const result = await commandForNode(ctx, node, 'get_mesh_ledger_slice', queryArgs);
+            const payload = unwrapCommandPayload(result);
+            if (payload?.success === false) {
+                throw new Error(payload.error || 'remote get_mesh_ledger_slice failed');
+            }
+            const slice = payload?.slice ?? payload;
+            if (slice?.protocol !== 'adhdev.mesh.ledger.slice.v1' || !Array.isArray(slice.entries)) {
+                throw new Error('remote daemon returned an invalid ledger slice payload');
+            }
+            const importResult = shouldImport
+                ? appendRemoteLedgerEntries(ctx.mesh.id, slice.entries)
+                : { accepted: 0, skippedDuplicate: 0, rejectedInvalid: 0, entries: [] };
+            replicas.push(buildMeshLedgerReplicaEvidence({
+                nodeId: node.id,
+                daemonId: node.daemonId,
+                transport: 'p2p_datachannel',
+                slice,
+                importResult,
+            }));
+            if (shouldImport && importResult.accepted > 0) {
+                appendLedgerEntry(ctx.mesh.id, {
+                    kind: 'ledger_replicated',
+                    nodeId: node.id,
+                    payload: {
+                        protocol: 'adhdev.mesh.ledger.slice.v1',
+                        imported: importResult.accepted,
+                        skippedDuplicate: importResult.skippedDuplicate,
+                        rejectedInvalid: importResult.rejectedInvalid,
+                        nextAfterId: slice.cursor?.nextAfterId ?? null,
+                        via: 'p2p_datachannel',
+                    },
+                });
+            }
+        } catch (e: any) {
+            replicas.push(buildMeshLedgerReplicaEvidence({
+                nodeId: node.id,
+                daemonId: node.daemonId,
+                transport: node.daemonId ? 'p2p_datachannel' : 'local',
+                status: 'failed',
+                error: e?.message ?? String(e),
+            }));
+        }
+    }
+
+    const evidence = buildMeshLedgerReconciliationEvidence(ctx.mesh.id, replicas);
+    appendLedgerEntry(ctx.mesh.id, {
+        kind: 'ledger_reconciled',
+        payload: {
+            protocol: evidence.protocol,
+            sourceOfTruth: evidence.sourceOfTruth,
+            totals: evidence.totals,
+            convergence: evidence.convergence,
+        },
+    });
+    return JSON.stringify({ success: true, evidence }, null, 2);
 }
 
 export async function meshListNodes(ctx: MeshContext): Promise<string> {

@@ -40,7 +40,7 @@ import {
   meshEnqueueTask, meshViewQueue, meshQueueCancel, meshQueueRequeue,
   meshReadDebug,
   meshLaunchSession, meshGitStatus, meshCheckpoint, meshApprove,
-  meshCloneNode, meshRemoveNode, meshRefineNode, meshCleanupSessions, meshTaskHistory
+  meshCloneNode, meshRemoveNode, meshRefineNode, meshCleanupSessions, meshTaskHistory, meshReconcileLedger
 } from './tools/mesh-tools.js';
 import type { MeshContext } from './tools/mesh-tools.js';
 
@@ -254,6 +254,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
           case 'mesh_refine_node': text = await meshRefineNode(meshCtx, a as any); break;
           case 'mesh_cleanup_sessions': text = await meshCleanupSessions(meshCtx, a as any); break;
           case 'mesh_task_history': text = await meshTaskHistory(meshCtx, a as any); break;
+          case 'mesh_reconcile_ledger': text = await meshReconcileLedger(meshCtx, a as any); break;
           default: return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
         }
         return { content: [{ type: 'text', text }] };

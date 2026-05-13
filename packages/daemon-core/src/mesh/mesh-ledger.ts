@@ -34,6 +34,8 @@ export type MeshLedgerKind =
     | 'node_removed'
     | 'coordinator_started'
     | 'recovery_attempted'
+    | 'ledger_replicated'
+    | 'ledger_reconciled'
     ;
 
 export interface MeshLedgerEntry {
@@ -66,11 +68,52 @@ export interface ReadLedgerOptions {
     kind?: MeshLedgerKind[];
 }
 
+export interface ReadLedgerSliceOptions {
+    /** Return entries strictly after this entry id. If not found, starts from the beginning of the filtered set. */
+    afterId?: string;
+    /** Return entries at or after this timestamp. */
+    since?: string;
+    /** Optional event kind filter. */
+    kind?: MeshLedgerKind[];
+    /** Maximum entries to return. Clamped to a bounded protocol maximum. */
+    limit?: number;
+}
+
+export interface MeshLedgerCursor {
+    afterId: string | null;
+    nextAfterId: string | null;
+    limit: number;
+    hasMore: boolean;
+}
+
+export interface MeshLedgerSlice {
+    protocol: 'adhdev.mesh.ledger.slice.v1';
+    meshId: string;
+    entries: MeshLedgerEntry[];
+    cursor: MeshLedgerCursor;
+    summary: MeshLedgerSummary;
+    sourceOfTruth: {
+        kind: 'local_jsonl';
+        path: string;
+        bounded: true;
+        maxLimit: number;
+    };
+}
+
+export interface AppendRemoteLedgerResult {
+    accepted: number;
+    skippedDuplicate: number;
+    rejectedInvalid: number;
+    entries: MeshLedgerEntry[];
+}
+
 // ─── Constants ──────────────────────────────────
 
 const LEDGER_DIR_NAME = 'mesh-ledger';
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 const RECENT_FAILURE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+const DEFAULT_LEDGER_SLICE_LIMIT = 100;
+export const MAX_LEDGER_SLICE_LIMIT = 500;
 
 // ─── Path Helpers ───────────────────────────────
 
@@ -136,23 +179,59 @@ export function appendLedgerEntry(
     }
 }
 
+function clampLedgerSliceLimit(limit: unknown): number {
+    if (typeof limit !== 'number' || !Number.isFinite(limit)) return DEFAULT_LEDGER_SLICE_LIMIT;
+    return Math.max(1, Math.min(MAX_LEDGER_SLICE_LIMIT, Math.floor(limit)));
+}
+
+function isValidRemoteLedgerEntry(meshId: string, value: unknown): value is MeshLedgerEntry {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const entry = value as Partial<MeshLedgerEntry>;
+    if (typeof entry.id !== 'string' || !entry.id.trim()) return false;
+    if (entry.meshId !== meshId) return false;
+    if (typeof entry.timestamp !== 'string' || Number.isNaN(new Date(entry.timestamp).getTime())) return false;
+    if (typeof entry.kind !== 'string' || !entry.kind.trim()) return false;
+    if (!entry.payload || typeof entry.payload !== 'object' || Array.isArray(entry.payload)) return false;
+    return true;
+}
+
 /**
- * Append entries received from the cloud to the local ledger.
- * This skips deduplicated entries and just writes new ones.
+ * Append entries received over local-first/P2P ledger replication to the local ledger.
+ * This skips deduplicated entries and rejects malformed/cross-mesh entries.
  */
-export function appendRemoteLedgerEntries(meshId: string, entries: MeshLedgerEntry[]): void {
-    if (entries.length === 0) return;
+export function appendRemoteLedgerEntries(meshId: string, entries: MeshLedgerEntry[]): AppendRemoteLedgerResult {
+    if (entries.length === 0) return { accepted: 0, skippedDuplicate: 0, rejectedInvalid: 0, entries: [] };
     const ledgerPath = getLedgerPath(meshId);
 
     // Read existing to deduplicate by ID
     const existing = new Set(readLedgerEntries(meshId).map(e => e.id));
-    const newEntries = entries.filter(e => !existing.has(e.id));
+    const validEntries: MeshLedgerEntry[] = [];
+    let rejectedInvalid = 0;
+    let skippedDuplicate = 0;
+    for (const entry of entries) {
+        if (!isValidRemoteLedgerEntry(meshId, entry)) {
+            rejectedInvalid++;
+            continue;
+        }
+        if (existing.has(entry.id)) {
+            skippedDuplicate++;
+            continue;
+        }
+        existing.add(entry.id);
+        validEntries.push(entry);
+    }
 
-    if (newEntries.length === 0) return;
+    if (validEntries.length === 0) {
+        return { accepted: 0, skippedDuplicate, rejectedInvalid, entries: [] };
+    }
 
     try {
-        const lines = newEntries.map(e => JSON.stringify(e)).join('\n') + '\n';
+        const lines = validEntries.map(e => JSON.stringify(e)).join('\n') + '\n';
         appendFileSync(ledgerPath, lines, { encoding: 'utf-8', mode: 0o600 });
+        for (const entry of validEntries) {
+            meshLedgerEvents.emit('append', meshId, entry);
+        }
+        return { accepted: validEntries.length, skippedDuplicate, rejectedInvalid, entries: validEntries };
     } catch (e: any) {
         throw new Error(`Failed to append remote ledger entries for mesh ${meshId}: ${e.message}`);
     }
@@ -204,6 +283,40 @@ export function readLedgerEntries(meshId: string, opts?: ReadLedgerOptions): Mes
     }
 
     return entries;
+}
+
+/**
+ * Read a bounded, cursor-addressable ledger slice for local-first/P2P replication.
+ * The result is intentionally small and self-describing so coordinators can query
+ * remote daemons on demand without Cloud/D1 becoming a ledger data-plane.
+ */
+export function readLedgerSlice(meshId: string, opts?: ReadLedgerSliceOptions): MeshLedgerSlice {
+    const limit = clampLedgerSliceLimit(opts?.limit);
+    let entries = readLedgerEntries(meshId, { since: opts?.since, kind: opts?.kind });
+    const afterId = typeof opts?.afterId === 'string' && opts.afterId.trim() ? opts.afterId.trim() : null;
+    if (afterId) {
+        const index = entries.findIndex(entry => entry.id === afterId);
+        entries = index >= 0 ? entries.slice(index + 1) : entries;
+    }
+    const bounded = entries.slice(0, limit);
+    return {
+        protocol: 'adhdev.mesh.ledger.slice.v1',
+        meshId,
+        entries: bounded,
+        cursor: {
+            afterId,
+            nextAfterId: bounded.length ? bounded[bounded.length - 1].id : afterId,
+            limit,
+            hasMore: entries.length > bounded.length,
+        },
+        summary: getLedgerSummary(meshId),
+        sourceOfTruth: {
+            kind: 'local_jsonl',
+            path: getLedgerPath(meshId),
+            bounded: true,
+            maxLimit: MAX_LEDGER_SLICE_LIMIT,
+        },
+    };
 }
 
 /**
