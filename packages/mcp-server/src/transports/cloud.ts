@@ -58,16 +58,6 @@ export class CloudTransport {
     if (!res.ok) throw new Error(`Delete remote mesh failed: ${res.status}`);
   }
 
-  async syncMeshLedger(meshId: string, data: { newEntries: any[] }): Promise<{ missingEntries: any[] }> {
-    const res = await fetch(`${this.baseUrl}/api/v1/repo-meshes/${encodeURIComponent(meshId)}/ledger/sync`, {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify(data),
-    });
-    if (!res.ok) throw new Error(`Sync mesh ledger failed: ${res.status}`);
-    return res.json() as any;
-  }
-
   async listDaemons(): Promise<any> {
     const res = await fetch(`${this.baseUrl}/api/v1/daemons`, { headers: this.headers() });
     if (!res.ok) throw new Error(`List daemons failed: ${res.status}`);

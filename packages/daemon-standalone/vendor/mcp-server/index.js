@@ -25094,6 +25094,7 @@ __export(dist_exports, {
   MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS: () => MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
   MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS: () => MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
   NodePtyTransportFactory: () => NodePtyTransportFactory,
+  P2pRelayFailureError: () => P2pRelayFailureError,
   ProviderCliAdapter: () => ProviderCliAdapter,
   ProviderInstanceManager: () => ProviderInstanceManager,
   ProviderLoader: () => ProviderLoader,
@@ -25110,6 +25111,7 @@ __export(dist_exports, {
   buildChatTailDeliverySignature: () => buildChatTailDeliverySignature,
   buildCoordinatorSystemPrompt: () => buildCoordinatorSystemPrompt,
   buildMachineInfo: () => buildMachineInfo,
+  buildP2pRelayFailurePayload: () => buildP2pRelayFailurePayload,
   buildPinnedGlobalInstallCommand: () => buildPinnedGlobalInstallCommand,
   buildRuntimeSystemChatMessage: () => buildRuntimeSystemChatMessage,
   buildSessionEntries: () => buildSessionEntries,
@@ -25124,6 +25126,7 @@ __export(dist_exports, {
   claimNextTask: () => claimNextTask,
   classifyChatMessageVisibility: () => classifyChatMessageVisibility,
   classifyHotChatSessionsForSubscriptionFlush: () => classifyHotChatSessionsForSubscriptionFlush,
+  classifyP2pRelayFailure: () => classifyP2pRelayFailure,
   clearDebugTrace: () => clearDebugTrace,
   compareGitSnapshots: () => compareGitSnapshots,
   configureDebugTraceStore: () => configureDebugTraceStore,
@@ -25191,6 +25194,7 @@ __export(dist_exports, {
   isInternalChatMessage: () => isInternalChatMessage,
   isManagedStatusWaiting: () => isManagedStatusWaiting,
   isManagedStatusWorking: () => isManagedStatusWorking,
+  isP2pRelayTransportFailure: () => isP2pRelayTransportFailure,
   isPathInside: () => isPathInside,
   isSessionHostLiveRuntime: () => isSessionHostLiveRuntime,
   isSessionHostRecoverySnapshot: () => isSessionHostRecoverySnapshot,
@@ -25304,13 +25308,25 @@ async function createWorktree(opts) {
     branch
   };
 }
-async function removeWorktree(repoRoot, worktreePath) {
+async function removeWorktree(repoRoot, worktreePath, opts = {}) {
   if (!(0, import_fs3.existsSync)(worktreePath)) {
     await pruneWorktrees(repoRoot);
     return { success: true, removedPath: worktreePath };
   }
+  if (opts.requireClean) {
+    const { stdout } = await execFileAsync2("git", ["status", "--porcelain"], {
+      cwd: worktreePath,
+      encoding: "utf8",
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: GIT_MAX_BUFFER,
+      windowsHide: true
+    });
+    if (stdout.trim()) {
+      throw new Error(`Refusing to remove dirty worktree: ${worktreePath}`);
+    }
+  }
   try {
-    await execFileAsync2("git", ["worktree", "remove", worktreePath, "--force"], {
+    await execFileAsync2("git", ["worktree", "remove", worktreePath], {
       cwd: repoRoot,
       encoding: "utf8",
       timeout: GIT_TIMEOUT_MS,
@@ -25319,7 +25335,33 @@ async function removeWorktree(repoRoot, worktreePath) {
     });
   } catch (error48) {
     const stderr = typeof error48.stderr === "string" ? error48.stderr : "";
-    throw new Error(`git worktree remove failed: ${stderr.trim() || error48.message}`);
+    const stdout = typeof error48.stdout === "string" ? error48.stdout : "";
+    const detail = `${stderr}
+${stdout}
+${error48.message || ""}`;
+    if (opts.allowSubmoduleForceFallback && SUBMODULE_WORKTREE_REMOVE_RE.test(detail)) {
+      try {
+        await execFileAsync2("git", ["worktree", "remove", "--force", worktreePath], {
+          cwd: repoRoot,
+          encoding: "utf8",
+          timeout: GIT_TIMEOUT_MS,
+          maxBuffer: GIT_MAX_BUFFER,
+          windowsHide: true
+        });
+      } catch (forceError) {
+        const forceStderr = typeof forceError.stderr === "string" ? forceError.stderr : "";
+        const forceStdout = typeof forceError.stdout === "string" ? forceError.stdout : "";
+        throw new Error(`git worktree remove --force fallback failed: ${forceStderr.trim() || forceStdout.trim() || forceError.message}`);
+      }
+      return {
+        success: true,
+        removedPath: worktreePath,
+        fallback: "git_worktree_remove_force_submodule",
+        forced: true,
+        reason: "working_trees_containing_submodules"
+      };
+    }
+    throw new Error(`git worktree remove failed: ${stderr.trim() || stdout.trim() || error48.message}`);
   }
   return { success: true, removedPath: worktreePath };
 }
@@ -25461,7 +25503,8 @@ function ensureMachineId(config2) {
   };
 }
 function getConfigDir() {
-  const dir = (0, import_path.join)((0, import_os2.homedir)(), ".adhdev");
+  const override = process.env.ADHDEV_CONFIG_DIR;
+  const dir = override && override.trim() ? override.trim() : (0, import_path.join)((0, import_os2.homedir)(), ".adhdev");
   if (!(0, import_fs4.existsSync)(dir)) {
     (0, import_fs4.mkdirSync)(dir, { recursive: true });
   }
@@ -25674,6 +25717,7 @@ function addNode(meshId, opts) {
     workspace: opts.workspace.trim(),
     repoRoot: opts.repoRoot,
     daemonId: opts.daemonId,
+    machineId: opts.machineId,
     userOverrides: opts.userOverrides || {},
     policy: opts.policy || {},
     isLocalWorktree: opts.isLocalWorktree,
@@ -25785,7 +25829,8 @@ function buildRulesSection(coordinatorCliType) {
 - **Minimize coordinator context.** The coordinator's job is routing, not implementing. Do not read source files, run commands, or analyze code directly \u2014 delegate all of that to node agents. Your context should stay lean.
 - **Delegate analysis too.** If you need to understand a bug or explore the codebase, send that investigation as a task to the queue or a node. Do not do it yourself.
 - **Respect explicit provider requests.** If the user names an agent/provider, pass the matching provider type to \`mesh_launch_session\`: Hermes \u2192 \`hermes-cli\`, Claude Code/Claude \u2192 \`claude-cli\`, Codex \u2192 \`codex-cli\`, Gemini \u2192 \`gemini-cli\`. Never substitute \`claude-cli\` just because the coordinator itself is Claude Code.
-- **Front-load the task message.** When calling \`mesh_enqueue_task\` or \`mesh_send_task\`, include everything the agent needs: what files to touch, what the problem is, what the fix should look like. The agent won't ask follow-up questions.
+- **Front-load new task messages.** When calling \`mesh_enqueue_task\` or \`mesh_send_task\` for a new task, include everything the agent needs: what files to touch, what the problem is, what the fix should look like. The agent won't ask follow-up questions.
+- **Avoid context-wasting restarts.** For follow-up, retry, commit/push, preview, or cleanup work on the same issue, prefer the existing idle session and send only the delta from its last verified state. Start a fresh chat/session only for genuinely independent work, explicit provider/user request, unsafe transcript contamination, or required branch/worktree isolation.
 - **Don't inspect code.** Treat delegated agent summaries as self-reports, not verification. Verify side effects via \`mesh_git_status\` (including related repo freshness when configured), not by reading source files.
 - **Don't over-parallelize.** Start with 1-2 concurrent tasks. Scale up if they succeed. Never launch a duplicate session or second worker solely because \`mesh_read_chat\` has no final assistant message while the delegated session is still showing tool/terminal activity.
 - **Handle failures with context.** If a task fails, check \`mesh_task_history\` first to see if this task was attempted before and how it failed. Read the chat to understand why, then decide: retry on the same node, reassign to a different node, or escalate to the user.
@@ -25794,6 +25839,7 @@ function buildRulesSection(coordinatorCliType) {
 - **Respect node capabilities.** Don't send build tasks to read-only nodes. Don't push from nodes that aren't allowed to.
 - **Never fabricate tool results.** Always call the actual tool; never pretend you did.
 - **Clean up worktree nodes.** After a worktree task completes and its changes are merged or checkpointed, call \`mesh_remove_node\` to free resources.
+- **Do not strand completed branches.** A checkpointed or clean feature/worktree branch is not done by itself. Merge/refine it to the mesh default branch, or explicitly report one of \`pushed_feature_branch_needs_merge\`, \`blocked_review\`, \`cleanup_candidate\`, or \`not_mergeable\` with the next action.
 - **Name worktree branches meaningfully.** Use descriptive names like \`feat/auth-refactor\` or \`fix/build-123\`.${coordinatorNote}`;
 }
 function getLedgerDir() {
@@ -26077,6 +26123,19 @@ function updateTaskStatus(meshId, taskId, status) {
   writeQueue(meshId, queue);
   return queue[idx];
 }
+function recordTaskAutoLaunch(meshId, taskId, autoLaunch) {
+  const queue = readQueue(meshId);
+  const idx = queue.findIndex((q) => q.id === taskId);
+  if (idx === -1) return null;
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  queue[idx].autoLaunch = {
+    ...autoLaunch,
+    updatedAt: now
+  };
+  queue[idx].updatedAt = now;
+  writeQueue(meshId, queue);
+  return queue[idx];
+}
 function cancelTask(meshId, taskId, opts) {
   const queue = readQueue(meshId);
   const idx = queue.findIndex((q) => q.id === taskId);
@@ -26125,12 +26184,29 @@ function updateSessionTaskStatus(meshId, sessionId, status) {
 }
 function getMeshQueueStats(meshId) {
   const queue = readQueue(meshId);
+  const pending = queue.filter((q) => q.status === "pending").length;
+  const assigned = queue.filter((q) => q.status === "assigned").length;
+  const completed = queue.filter((q) => q.status === "completed").length;
+  const failed = queue.filter((q) => q.status === "failed").length;
+  const cancelled = queue.filter((q) => q.status === "cancelled").length;
   return {
-    pending: queue.filter((q) => q.status === "pending").length,
-    assigned: queue.filter((q) => q.status === "assigned").length,
-    completed: queue.filter((q) => q.status === "completed").length,
-    failed: queue.filter((q) => q.status === "failed").length,
-    cancelled: queue.filter((q) => q.status === "cancelled").length,
+    total: queue.length,
+    active: pending + assigned,
+    historical: completed + failed + cancelled,
+    pending,
+    assigned,
+    completed,
+    failed,
+    cancelled,
+    activeCounts: {
+      pending,
+      assigned
+    },
+    historicalCounts: {
+      completed,
+      failed,
+      cancelled
+    },
     activeAssignments: queue.filter((q) => q.status === "assigned").map((q) => ({
       id: q.id,
       nodeId: q.assignedNodeId,
@@ -26138,6 +26214,129 @@ function getMeshQueueStats(meshId) {
       message: q.message
     }))
   };
+}
+function parseVersion(raw) {
+  const match = raw.match(/v?(\d+\.\d+(?:\.\d+)?(?:-[a-zA-Z0-9.]+)?)/);
+  return match ? match[1] : raw.split("\n")[0].slice(0, 100);
+}
+function shellQuote(value) {
+  if (/^[a-zA-Z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
+}
+function expandHome(value) {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("~")) return trimmed;
+  return path8.join(os22.homedir(), trimmed.slice(1));
+}
+function isExplicitCommandPath(command) {
+  const trimmed = command.trim();
+  return path8.isAbsolute(trimmed) || trimmed.includes("/") || trimmed.includes("\\") || trimmed.startsWith("~");
+}
+function resolveCommandPath(command) {
+  const trimmed = command.trim();
+  if (!trimmed) return null;
+  if (isExplicitCommandPath(trimmed)) {
+    const expanded = expandHome(trimmed);
+    const candidate = path8.isAbsolute(expanded) ? expanded : path8.resolve(expanded);
+    return (0, import_fs8.existsSync)(candidate) ? candidate : null;
+  }
+  return null;
+}
+function execAsync(cmd, timeoutMs = 5e3) {
+  return new Promise((resolve162) => {
+    const child = (0, import_child_process2.exec)(cmd, {
+      encoding: "utf-8",
+      timeout: timeoutMs,
+      ...process.platform === "win32" ? { windowsHide: true } : {}
+    }, (err, stdout) => {
+      if (err || !stdout?.trim()) {
+        resolve162(null);
+      } else {
+        resolve162(stdout.trim());
+      }
+    });
+    child.on("error", () => resolve162(null));
+  });
+}
+async function detectCLIs(providerLoader, options) {
+  const platform10 = os22.platform();
+  const whichCmd = platform10 === "win32" ? "where" : "which";
+  const includeVersion = options?.includeVersion !== false;
+  const cliList = providerLoader ? providerLoader.getCliDetectionList() : [];
+  const results = await Promise.all(
+    cliList.map(async (cli) => {
+      try {
+        const explicitPath = resolveCommandPath(cli.command);
+        const pathResult = explicitPath || await execAsync(`${whichCmd} ${shellQuote(cli.command)}`);
+        if (!pathResult) return { ...cli, installed: false };
+        const firstPath = explicitPath || pathResult.split("\n")[0];
+        let version2;
+        if (includeVersion) {
+          const versionCommands = [
+            `"${firstPath}" --version`,
+            `"${firstPath}" -V`,
+            `"${firstPath}" -v`,
+            cli.versionCommand
+          ].filter((v) => !!v);
+          try {
+            for (const versionCommand of versionCommands) {
+              const versionResult = await execAsync(versionCommand, 3e3);
+              if (versionResult) {
+                version2 = parseVersion(versionResult);
+                break;
+              }
+            }
+          } catch {
+          }
+        }
+        return { ...cli, installed: true, version: version2, path: firstPath };
+      } catch {
+        return { ...cli, installed: false };
+      }
+    })
+  );
+  return results;
+}
+async function detectCLI(cliId, providerLoader, options) {
+  const resolvedId = providerLoader ? providerLoader.resolveAlias(cliId) : cliId;
+  if (providerLoader) {
+    const cliList = providerLoader.getCliDetectionList();
+    const target = cliList.find((c) => c.id === resolvedId);
+    if (target) {
+      const platform10 = os22.platform();
+      const whichCmd = platform10 === "win32" ? "where" : "which";
+      try {
+        const explicitPath = resolveCommandPath(target.command);
+        const pathResult = explicitPath || await execAsync(`${whichCmd} ${shellQuote(target.command)}`);
+        if (!pathResult) return null;
+        const firstPath = explicitPath || pathResult.split("\n")[0];
+        let version2;
+        if (options?.includeVersion !== false) {
+          const versionCommands = [
+            `"${firstPath}" --version`,
+            `"${firstPath}" -V`,
+            `"${firstPath}" -v`,
+            target.versionCommand
+          ].filter((v) => !!v);
+          try {
+            for (const versionCommand of versionCommands) {
+              const versionResult = await execAsync(versionCommand, 3e3);
+              if (versionResult) {
+                version2 = parseVersion(versionResult);
+                break;
+              }
+            }
+          } catch {
+          }
+        }
+        return { ...target, installed: true, version: version2, path: firstPath };
+      } catch {
+        return null;
+      }
+    }
+  }
+  const all = await detectCLIs(providerLoader, options);
+  return all.find((c) => c.id === resolvedId && c.installed) || null;
 }
 function setLogLevel(level) {
   currentLevel = level;
@@ -26153,13 +26352,13 @@ function getDaemonLogDir() {
   return LOG_DIR;
 }
 function getCurrentDaemonLogPath(date5 = /* @__PURE__ */ new Date()) {
-  return path8.join(LOG_DIR, `daemon-${date5.toISOString().slice(0, 10)}.log`);
+  return path9.join(LOG_DIR, `daemon-${date5.toISOString().slice(0, 10)}.log`);
 }
 function checkDateRotation() {
   const today = getDateStr();
   if (today !== currentDate) {
     currentDate = today;
-    currentLogFile = path8.join(LOG_DIR, `daemon-${currentDate}.log`);
+    currentLogFile = path9.join(LOG_DIR, `daemon-${currentDate}.log`);
     cleanOldLogs();
   }
 }
@@ -26173,7 +26372,7 @@ function cleanOldLogs() {
       const dateMatch = file2.match(/daemon-(\d{4}-\d{2}-\d{2})/);
       if (dateMatch && dateMatch[1] < cutoffStr) {
         try {
-          fs2.unlinkSync(path8.join(LOG_DIR, file2));
+          fs2.unlinkSync(path9.join(LOG_DIR, file2));
         } catch {
         }
       }
@@ -26348,7 +26547,235 @@ function tryAssignQueueTask(components, meshId, nodeId, sessionId, providerType)
   });
   return true;
 }
-function triggerMeshQueue(components, meshId) {
+function normalizeProviderPriority(policy) {
+  const raw = policy && typeof policy === "object" && !Array.isArray(policy) ? policy.providerPriority : void 0;
+  if (!Array.isArray(raw)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  return raw.map((type2) => typeof type2 === "string" ? type2.trim() : "").filter(Boolean).filter((type2) => {
+    if (seen.has(type2)) return false;
+    seen.add(type2);
+    return true;
+  });
+}
+function isTerminalSessionStatus(status) {
+  return ["stopped", "failed", "terminated", "exited", "closed"].includes(status);
+}
+function isIdleSessionState(state) {
+  const status = readNonEmptyString(state?.status).toLowerCase();
+  if (isTerminalSessionStatus(status)) return false;
+  return status === "idle" || state?.activeChat?.status === "waiting_input";
+}
+function isDirtyNode(node) {
+  return node?.health === "dirty" || node?.git?.dirty === true;
+}
+function isLaunchableNode(node) {
+  if (!node || node.status === "disabled" || node.status === "removed") return false;
+  const health = readNonEmptyString(node.health).toLowerCase();
+  if (!health) return true;
+  return health === "online" || health === "unknown";
+}
+function localAutoLaunchSkipReason(node) {
+  const daemonId = readNonEmptyString(node?.daemonId);
+  const machineId = readNonEmptyString(node?.machineId);
+  const appConfig = loadConfig();
+  const localMachineId = readNonEmptyString(appConfig.machineId) || readNonEmptyString(appConfig.registeredMachineId);
+  const cloudDaemonId = localMachineId ? `daemon_${localMachineId}` : "";
+  const standaloneDaemonId = localMachineId ? `standalone_${localMachineId}` : "";
+  const daemonMatchesLocal = !daemonId || daemonId === cloudDaemonId || daemonId === standaloneDaemonId;
+  const machineMatchesLocal = !machineId || localMachineId && machineId === localMachineId;
+  if (node?.isLocalWorktree === true) {
+    return daemonMatchesLocal && machineMatchesLocal ? null : "remote_auto_launch_unsupported";
+  }
+  if (daemonId || machineId) {
+    return daemonMatchesLocal && machineMatchesLocal ? null : "remote_auto_launch_unsupported";
+  }
+  return null;
+}
+function activeAssignedCount(meshId) {
+  return getQueue(meshId, { status: ["assigned"] }).length;
+}
+function nodeHasActiveAssignment(meshId, nodeId) {
+  return getQueue(meshId, { status: ["assigned"] }).some((task) => task.assignedNodeId === nodeId);
+}
+function liveSessionCountForNode(components, meshId, nodeId) {
+  return components.instanceManager.getByCategory("cli").filter((inst) => {
+    const state = inst.getState();
+    const settings = state.settings || {};
+    if (readNonEmptyString(settings.meshNodeFor) !== meshId) return false;
+    const instNodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
+    if (instNodeId !== nodeId) return false;
+    const status = readNonEmptyString(state.status).toLowerCase();
+    return !isTerminalSessionStatus(status);
+  }).length;
+}
+function recordAutoLaunchEvent(meshId, args) {
+  try {
+    appendLedgerEntry(meshId, {
+      kind: "session_auto_launch",
+      nodeId: args.nodeId,
+      sessionId: args.sessionId,
+      providerType: args.providerType,
+      payload: {
+        phase: args.phase,
+        taskId: args.taskId,
+        reason: args.reason,
+        error: args.error
+      }
+    });
+  } catch (e) {
+    LOG.warn("MeshQueue", `Failed to record auto-launch ledger event: ${e?.message || e}`);
+  }
+}
+function markAutoLaunch(meshId, taskId, args) {
+  recordTaskAutoLaunch(meshId, taskId, {
+    status: args.status,
+    reason: args.reason || args.error,
+    nodeId: args.nodeId,
+    providerType: args.providerType,
+    sessionId: args.sessionId
+  });
+  recordAutoLaunchEvent(meshId, {
+    phase: args.status,
+    taskId,
+    nodeId: args.nodeId,
+    providerType: args.providerType,
+    sessionId: args.sessionId,
+    reason: args.reason,
+    error: args.error
+  });
+}
+async function resolveUsableProvider(components, nodeId, node) {
+  const providerPriority = normalizeProviderPriority(node?.policy);
+  if (!providerPriority.length) return { reason: "missing_provider_priority" };
+  const providerLoader = components.providerLoader;
+  if (!providerLoader) return { reason: "provider_loader_unavailable" };
+  const failed = [];
+  for (const requestedType of providerPriority) {
+    const normalizedType = typeof providerLoader.resolveAlias === "function" ? providerLoader.resolveAlias(requestedType) : requestedType;
+    if (typeof providerLoader.isMachineProviderEnabled === "function" && !providerLoader.isMachineProviderEnabled(normalizedType)) {
+      failed.push(`${requestedType}: disabled`);
+      continue;
+    }
+    let detected;
+    try {
+      detected = await detectCLI(normalizedType, providerLoader, { includeVersion: false });
+    } catch (e) {
+      failed.push(`${requestedType}: detect failed: ${e?.message || e}`);
+      continue;
+    }
+    if (typeof providerLoader.setCliDetectionResults === "function") {
+      providerLoader.setCliDetectionResults([{
+        id: normalizedType,
+        installed: !!detected,
+        path: detected?.path
+      }], false);
+    }
+    components.onStatusChange?.();
+    if (detected) return { providerType: normalizedType };
+    failed.push(`${requestedType}: not detected`);
+  }
+  return { reason: `provider_priority_unusable: ${failed.join("; ") || nodeId}` };
+}
+async function maybeAutoLaunchOneQueueSession(components, meshId, mesh) {
+  const queue = getQueue(meshId);
+  const pending = queue.filter((task) => task.status === "pending");
+  if (!pending.length) return false;
+  const maxParallelTasks = Math.max(1, Math.floor(Number(mesh?.policy?.maxParallelTasks) || 2));
+  for (const task of pending) {
+    if (activeAssignedCount(meshId) >= maxParallelTasks) {
+      markAutoLaunch(meshId, task.id, { status: "skipped", reason: "max_parallel_tasks_reached" });
+      return false;
+    }
+    if (task.targetSessionId) {
+      markAutoLaunch(meshId, task.id, { status: "skipped", reason: "target_session_constraint" });
+      continue;
+    }
+    const candidateNodes = Array.isArray(mesh?.nodes) ? mesh.nodes.filter((node) => task.targetNodeId ? node?.id === task.targetNodeId : true) : [];
+    if (!candidateNodes.length) {
+      markAutoLaunch(meshId, task.id, { status: "skipped", reason: "no_matching_node", nodeId: task.targetNodeId });
+      continue;
+    }
+    for (const node of candidateNodes) {
+      const nodeId = readNonEmptyString(node?.id);
+      if (!nodeId) continue;
+      const launchKey = `${meshId}:${nodeId}`;
+      const cooldownUntil = autoLaunchCooldownUntil.get(launchKey) || 0;
+      if (autoLaunchInProgress.has(launchKey)) {
+        markAutoLaunch(meshId, task.id, { status: "skipped", reason: "auto_launch_in_progress", nodeId });
+        continue;
+      }
+      if (Date.now() < cooldownUntil) {
+        markAutoLaunch(meshId, task.id, { status: "skipped", reason: "auto_launch_cooldown", nodeId });
+        continue;
+      }
+      if (isDirtyNode(node)) {
+        markAutoLaunch(meshId, task.id, { status: "skipped", reason: "dirty_workspace", nodeId });
+        continue;
+      }
+      if (!isLaunchableNode(node)) {
+        markAutoLaunch(meshId, task.id, { status: "skipped", reason: "node_not_launch_ready", nodeId });
+        continue;
+      }
+      const localSkipReason = localAutoLaunchSkipReason(node);
+      if (localSkipReason) {
+        markAutoLaunch(meshId, task.id, { status: "skipped", reason: localSkipReason, nodeId });
+        continue;
+      }
+      if (nodeHasActiveAssignment(meshId, nodeId)) {
+        markAutoLaunch(meshId, task.id, { status: "skipped", reason: "node_has_active_assignment", nodeId });
+        continue;
+      }
+      const maxConcurrentSessions = Number(node?.policy?.maxConcurrentSessions);
+      if (Number.isFinite(maxConcurrentSessions) && maxConcurrentSessions >= 0 && liveSessionCountForNode(components, meshId, nodeId) >= maxConcurrentSessions) {
+        markAutoLaunch(meshId, task.id, { status: "skipped", reason: "max_concurrent_sessions_reached", nodeId });
+        continue;
+      }
+      autoLaunchInProgress.add(launchKey);
+      try {
+        const resolved = await resolveUsableProvider(components, nodeId, node);
+        if (!resolved.providerType) {
+          markAutoLaunch(meshId, task.id, { status: "skipped", reason: resolved.reason || "provider_unusable", nodeId });
+          continue;
+        }
+        markAutoLaunch(meshId, task.id, { status: "started", nodeId, providerType: resolved.providerType });
+        const launchResult = await components.cliManager.handleCliCommand("launch_cli", {
+          cliType: resolved.providerType,
+          dir: node.workspace,
+          settings: {
+            meshNodeFor: meshId,
+            meshNodeId: nodeId,
+            spawnedSessionVisibility: mesh?.policy?.spawnedSessionVisibility || "hidden",
+            launchedByCoordinator: true,
+            autoLaunchedForQueueTaskId: task.id
+          }
+        });
+        if (!launchResult?.success) {
+          const reason = launchResult?.error || "launch_cli_failed";
+          markAutoLaunch(meshId, task.id, { status: "failed", reason, nodeId, providerType: resolved.providerType });
+          autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+          return false;
+        }
+        const sessionId = readNonEmptyString(launchResult.sessionId) || readNonEmptyString(launchResult.id) || readNonEmptyString(launchResult.runtimeSessionId);
+        if (!sessionId) {
+          markAutoLaunch(meshId, task.id, { status: "failed", reason: "launch_missing_session_id", nodeId, providerType: resolved.providerType });
+          autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+          return false;
+        }
+        markAutoLaunch(meshId, task.id, { status: "completed", nodeId, providerType: resolved.providerType, sessionId });
+        tryAssignQueueTask(components, meshId, nodeId, sessionId, resolved.providerType);
+        return true;
+      } catch (e) {
+        markAutoLaunch(meshId, task.id, { status: "failed", error: e?.message || String(e), nodeId });
+        autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
+        return false;
+      } finally {
+        autoLaunchInProgress.delete(launchKey);
+      }
+    }
+  }
+  return false;
+}
+async function triggerMeshQueue(components, meshId) {
   const mesh = getMeshWithCache(components, meshId);
   if (!mesh) return;
   const cliInstances = components.instanceManager.getByCategory("cli");
@@ -26359,9 +26786,7 @@ function triggerMeshQueue(components, meshId) {
     if (instMeshId !== meshId) continue;
     const nodeId = readNonEmptyString(settings.meshNodeId) || readNonEmptyString(settings.nodeId);
     if (!nodeId) continue;
-    const status = readNonEmptyString(state.status).toLowerCase();
-    if (["stopped", "failed", "terminated", "exited", "closed"].includes(status)) continue;
-    if (status !== "idle" && state.activeChat?.status !== "waiting_input") continue;
+    if (!isIdleSessionState(state)) continue;
     const sessionId = state.instanceId;
     const providerType = state.type || readNonEmptyString(settings.providerType);
     if (providerType) {
@@ -26377,6 +26802,7 @@ function triggerMeshQueue(components, meshId) {
       }
     }
   }
+  await maybeAutoLaunchOneQueueSession(components, meshId, mesh);
 }
 function buildMeshSystemMessage(args) {
   const metadata = formatCompletionMetadata(args.metadataEvent);
@@ -26884,7 +27310,7 @@ function findBinary(name) {
   const isWin = os9.platform() === "win32";
   try {
     const cmd = isWin ? `where ${trimmed}` : `which ${trimmed}`;
-    return (0, import_child_process2.execSync)(cmd, {
+    return (0, import_child_process3.execSync)(cmd, {
       encoding: "utf-8",
       timeout: 5e3,
       stdio: ["pipe", "pipe", "pipe"],
@@ -27259,7 +27685,7 @@ async function validateWorkspace(workspace) {
         cwd: normalizedWorkspace
       });
     }
-    await (0, import_promises5.access)(normalizedWorkspace, import_fs8.constants.R_OK);
+    await (0, import_promises5.access)(normalizedWorkspace, import_fs9.constants.R_OK);
   } catch (error48) {
     if (error48 instanceof GitCommandError) throw error48;
     throw new GitCommandError("invalid_args", "Workspace must be an existing directory", {
@@ -28388,7 +28814,7 @@ function addWorkspaceEntry(config2, rawPath, label, options) {
     }
   }
   const v = validateWorkspacePath(abs);
-  if (!v.ok) return { error: v.error };
+  if (v.ok !== true) return { error: v.error };
   const list = [...config2.workspaces || []];
   if (list.some((w) => path5.resolve(w.path) === abs)) {
     return { error: "Workspace already in list" };
@@ -28752,25 +29178,87 @@ async function syncMeshes(transport) {
       }
     }
   }
-  if (transport.syncMeshLedger) {
-    for (const local of localMeshes) {
-      try {
-        await syncMeshLedger(local.id, transport);
-      } catch (e) {
-        result.errors.push(`Ledger sync failed for "${local.name}": ${e.message}`);
-      }
-    }
-  }
   return result;
 }
-async function syncMeshLedger(meshId, transport) {
-  if (!transport.syncMeshLedger) return;
-  const { readLedgerEntries: readLedgerEntries2, appendRemoteLedgerEntries: appendRemoteLedgerEntries2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
-  const localEntries = readLedgerEntries2(meshId);
-  const res = await transport.syncMeshLedger(meshId, { newEntries: localEntries });
-  if (res.missingEntries && res.missingEntries.length > 0) {
-    appendRemoteLedgerEntries2(meshId, res.missingEntries);
+function messageFromError(error48) {
+  if (error48 instanceof Error) return error48.message;
+  if (typeof error48 === "string") return error48;
+  if (error48 && typeof error48 === "object") {
+    const candidate = error48.error ?? error48.message ?? error48.reason;
+    if (typeof candidate === "string") return candidate;
   }
+  return String(error48 || "mesh relay command failed");
+}
+function classifyP2pRelayFailure(error48, _context = {}) {
+  const message = messageFromError(error48);
+  const lower = message.toLowerCase();
+  const hasP2pSignal = /p2p|datachannel|node-datachannel|webrtc|ice|mesh_relay_command|daemon_mesh_p2p_transport/i.test(message);
+  const hasFailureSignal = /unavailable|missing|failed|failure|timeout|timed out|not connected|closed|disconnected|offline|no route|route unavailable|cannot send|cannot establish/i.test(message);
+  if (/requires targetdaemonid and command|providerpriority|no inference provider|permission denied|read-only|not a member/i.test(message)) {
+    return {
+      code: "mesh_logic_or_provider_failure",
+      reason: "mesh_logic_or_provider_failure",
+      transport: "unknown",
+      recoverable: false,
+      retryRecommended: false,
+      nextAction: NON_P2P_NEXT_ACTION,
+      noFallbackReason: NO_FALLBACK_REASON
+    };
+  }
+  let code = null;
+  let reason = "";
+  if (/timeout|timed out/i.test(message) && (hasP2pSignal || /mesh transport/i.test(message))) {
+    code = "p2p_timeout";
+    reason = "daemon_mesh_p2p_timeout";
+  } else if (/no route|route unavailable/i.test(message)) {
+    code = "p2p_no_route";
+    reason = "daemon_mesh_p2p_no_route";
+  } else if (/offline|not owned|not found|not connected to server/i.test(message) && /daemon|peer|target/i.test(message)) {
+    code = "p2p_daemon_offline";
+    reason = "daemon_mesh_target_offline";
+  } else if (/closed|disconnected/i.test(message) && (hasP2pSignal || /state changed/i.test(message))) {
+    code = "p2p_datachannel_closed";
+    reason = "daemon_mesh_p2p_datachannel_closed";
+  } else if (/not connected|cannot send|cannot establish/i.test(message) && hasP2pSignal) {
+    code = "p2p_not_connected";
+    reason = "daemon_mesh_p2p_not_connected";
+  } else if (hasP2pSignal && hasFailureSignal) {
+    code = "p2p_unavailable";
+    reason = "daemon_mesh_p2p_transport_unavailable";
+  }
+  if (!code) {
+    return {
+      code: "mesh_logic_or_provider_failure",
+      reason: "mesh_logic_or_provider_failure",
+      transport: "unknown",
+      recoverable: false,
+      retryRecommended: false,
+      nextAction: NON_P2P_NEXT_ACTION,
+      noFallbackReason: NO_FALLBACK_REASON
+    };
+  }
+  return {
+    code,
+    reason,
+    transport: "p2p",
+    recoverable: true,
+    retryRecommended: true,
+    nextAction: P2P_NEXT_ACTION,
+    noFallbackReason: NO_FALLBACK_REASON
+  };
+}
+function isP2pRelayTransportFailure(error48) {
+  return classifyP2pRelayFailure(error48).recoverable === true;
+}
+function buildP2pRelayFailurePayload(error48, context = {}) {
+  const classification = classifyP2pRelayFailure(error48, context);
+  return {
+    success: false,
+    ...classification,
+    error: messageFromError(error48),
+    ...context.command ? { command: context.command } : {},
+    ...context.targetDaemonId ? { targetDaemonId: context.targetDaemonId } : {}
+  };
 }
 function isPlainObject22(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -28812,11 +29300,11 @@ function normalizeState(raw) {
 }
 function loadState() {
   const statePath = getStatePath();
-  if (!(0, import_fs9.existsSync)(statePath)) {
+  if (!(0, import_fs10.existsSync)(statePath)) {
     return { ...DEFAULT_STATE };
   }
   try {
-    const raw = (0, import_fs9.readFileSync)(statePath, "utf-8");
+    const raw = (0, import_fs10.readFileSync)(statePath, "utf-8");
     return normalizeState(JSON.parse(raw));
   } catch {
     return { ...DEFAULT_STATE };
@@ -28825,7 +29313,7 @@ function loadState() {
 function saveState(state) {
   const statePath = getStatePath();
   const normalized = normalizeState(state);
-  (0, import_fs9.writeFileSync)(statePath, JSON.stringify(normalized, null, 2), { encoding: "utf-8", mode: 384 });
+  (0, import_fs10.writeFileSync)(statePath, JSON.stringify(normalized, null, 2), { encoding: "utf-8", mode: 384 });
 }
 function resetState() {
   saveState({ ...DEFAULT_STATE });
@@ -28846,13 +29334,13 @@ function getMergedDefinitions() {
 function findCliCommand(command) {
   const trimmed = String(command || "").trim();
   if (!trimmed) return null;
-  if (path9.isAbsolute(trimmed) || trimmed.includes("/") || trimmed.includes("\\") || trimmed.startsWith("~")) {
-    const candidate = trimmed.startsWith("~") ? path9.join((0, import_os3.homedir)(), trimmed.slice(1)) : trimmed;
-    const resolved = path9.isAbsolute(candidate) ? candidate : path9.resolve(candidate);
-    return (0, import_fs10.existsSync)(resolved) ? resolved : null;
+  if (path10.isAbsolute(trimmed) || trimmed.includes("/") || trimmed.includes("\\") || trimmed.startsWith("~")) {
+    const candidate = trimmed.startsWith("~") ? path10.join((0, import_os3.homedir)(), trimmed.slice(1)) : trimmed;
+    const resolved = path10.isAbsolute(candidate) ? candidate : path10.resolve(candidate);
+    return (0, import_fs11.existsSync)(resolved) ? resolved : null;
   }
   try {
-    const result = (0, import_child_process4.execSync)(
+    const result = (0, import_child_process5.execSync)(
       (0, import_os3.platform)() === "win32" ? `where ${trimmed}` : `which ${trimmed}`,
       { encoding: "utf-8", timeout: 5e3, stdio: ["pipe", "pipe", "pipe"] }
     ).trim();
@@ -28863,7 +29351,7 @@ function findCliCommand(command) {
 }
 function getIdeVersion(cliCommand) {
   try {
-    const result = (0, import_child_process4.execSync)(`"${cliCommand}" --version`, {
+    const result = (0, import_child_process5.execSync)(`"${cliCommand}" --version`, {
       encoding: "utf-8",
       timeout: 1e4,
       stdio: ["pipe", "pipe", "pipe"]
@@ -28876,13 +29364,13 @@ function getIdeVersion(cliCommand) {
 function checkPathExists(paths) {
   const home = (0, import_os3.homedir)();
   for (const p of paths) {
-    const normalized = p.startsWith("~") ? path9.join(home, p.slice(1)) : p;
+    const normalized = p.startsWith("~") ? path10.join(home, p.slice(1)) : p;
     if (normalized.includes("*")) {
       const username = home.split(/[\\/]/).pop() || "";
       const resolved = normalized.replace("*", username);
-      if ((0, import_fs10.existsSync)(resolved)) return resolved;
+      if ((0, import_fs11.existsSync)(resolved)) return resolved;
     } else {
-      if ((0, import_fs10.existsSync)(normalized)) return normalized;
+      if ((0, import_fs11.existsSync)(normalized)) return normalized;
     }
   }
   return null;
@@ -28896,7 +29384,7 @@ async function detectIDEs(providerLoader) {
     let resolvedCli = cliPath;
     if (!resolvedCli && appPath && os222 === "darwin") {
       const bundledCli = `${appPath}/Contents/Resources/app/bin/${def.cli}`;
-      if ((0, import_fs10.existsSync)(bundledCli)) resolvedCli = bundledCli;
+      if ((0, import_fs11.existsSync)(bundledCli)) resolvedCli = bundledCli;
     }
     if (!resolvedCli && appPath && os222 === "win32") {
       const { dirname: dirname92 } = await import("path");
@@ -28909,7 +29397,7 @@ async function detectIDEs(providerLoader) {
         `${appDir}\\\\resources\\\\app\\\\bin\\\\${def.cli}.cmd`
       ];
       for (const c of candidates) {
-        if ((0, import_fs10.existsSync)(c)) {
+        if ((0, import_fs11.existsSync)(c)) {
           resolvedCli = c;
           break;
         }
@@ -28929,129 +29417,6 @@ async function detectIDEs(providerLoader) {
     });
   }
   return results;
-}
-function parseVersion(raw) {
-  const match = raw.match(/v?(\d+\.\d+(?:\.\d+)?(?:-[a-zA-Z0-9.]+)?)/);
-  return match ? match[1] : raw.split("\n")[0].slice(0, 100);
-}
-function shellQuote(value) {
-  if (/^[a-zA-Z0-9_./:@%+=,-]+$/.test(value)) return value;
-  return `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
-}
-function expandHome(value) {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("~")) return trimmed;
-  return path10.join(os32.homedir(), trimmed.slice(1));
-}
-function isExplicitCommandPath(command) {
-  const trimmed = command.trim();
-  return path10.isAbsolute(trimmed) || trimmed.includes("/") || trimmed.includes("\\") || trimmed.startsWith("~");
-}
-function resolveCommandPath(command) {
-  const trimmed = command.trim();
-  if (!trimmed) return null;
-  if (isExplicitCommandPath(trimmed)) {
-    const expanded = expandHome(trimmed);
-    const candidate = path10.isAbsolute(expanded) ? expanded : path10.resolve(expanded);
-    return (0, import_fs11.existsSync)(candidate) ? candidate : null;
-  }
-  return null;
-}
-function execAsync(cmd, timeoutMs = 5e3) {
-  return new Promise((resolve162) => {
-    const child = (0, import_child_process5.exec)(cmd, {
-      encoding: "utf-8",
-      timeout: timeoutMs,
-      ...process.platform === "win32" ? { windowsHide: true } : {}
-    }, (err, stdout) => {
-      if (err || !stdout?.trim()) {
-        resolve162(null);
-      } else {
-        resolve162(stdout.trim());
-      }
-    });
-    child.on("error", () => resolve162(null));
-  });
-}
-async function detectCLIs(providerLoader, options) {
-  const platform10 = os32.platform();
-  const whichCmd = platform10 === "win32" ? "where" : "which";
-  const includeVersion = options?.includeVersion !== false;
-  const cliList = providerLoader ? providerLoader.getCliDetectionList() : [];
-  const results = await Promise.all(
-    cliList.map(async (cli) => {
-      try {
-        const explicitPath = resolveCommandPath(cli.command);
-        const pathResult = explicitPath || await execAsync(`${whichCmd} ${shellQuote(cli.command)}`);
-        if (!pathResult) return { ...cli, installed: false };
-        const firstPath = explicitPath || pathResult.split("\n")[0];
-        let version2;
-        if (includeVersion) {
-          const versionCommands = [
-            `"${firstPath}" --version`,
-            `"${firstPath}" -V`,
-            `"${firstPath}" -v`,
-            cli.versionCommand
-          ].filter((v) => !!v);
-          try {
-            for (const versionCommand of versionCommands) {
-              const versionResult = await execAsync(versionCommand, 3e3);
-              if (versionResult) {
-                version2 = parseVersion(versionResult);
-                break;
-              }
-            }
-          } catch {
-          }
-        }
-        return { ...cli, installed: true, version: version2, path: firstPath };
-      } catch {
-        return { ...cli, installed: false };
-      }
-    })
-  );
-  return results;
-}
-async function detectCLI(cliId, providerLoader, options) {
-  const resolvedId = providerLoader ? providerLoader.resolveAlias(cliId) : cliId;
-  if (providerLoader) {
-    const cliList = providerLoader.getCliDetectionList();
-    const target = cliList.find((c) => c.id === resolvedId);
-    if (target) {
-      const platform10 = os32.platform();
-      const whichCmd = platform10 === "win32" ? "where" : "which";
-      try {
-        const explicitPath = resolveCommandPath(target.command);
-        const pathResult = explicitPath || await execAsync(`${whichCmd} ${shellQuote(target.command)}`);
-        if (!pathResult) return null;
-        const firstPath = explicitPath || pathResult.split("\n")[0];
-        let version2;
-        if (options?.includeVersion !== false) {
-          const versionCommands = [
-            `"${firstPath}" --version`,
-            `"${firstPath}" -V`,
-            `"${firstPath}" -v`,
-            target.versionCommand
-          ].filter((v) => !!v);
-          try {
-            for (const versionCommand of versionCommands) {
-              const versionResult = await execAsync(versionCommand, 3e3);
-              if (versionResult) {
-                version2 = parseVersion(versionResult);
-                break;
-              }
-            }
-          } catch {
-          }
-        }
-        return { ...target, installed: true, version: version2, path: firstPath };
-      } catch {
-        return null;
-      }
-    }
-  }
-  const all = await detectCLIs(providerLoader, options);
-  return all.find((c) => c.id === resolvedId && c.installed) || null;
 }
 function parseDarwinAvailableBytes(totalMem) {
   if (os42.platform() !== "darwin") return null;
@@ -34389,6 +34754,13 @@ function cleanupStaleMaterializedImages(dir) {
   } catch {
   }
 }
+function hasNonEmptyCliModalButtons(activeModal) {
+  const buttons = activeModal?.buttons;
+  return Array.isArray(buttons) && buttons.some((button) => String(button || "").trim().length > 0);
+}
+function isCliGeneratingLikeStatus(status) {
+  return status === "generating" || status === "streaming" || status === "long_generating" || status === "starting";
+}
 function buildCliStructuredInputPrompt(input, options = {}) {
   const promptParts = [];
   const imageRefs = [];
@@ -36567,6 +36939,204 @@ async function resolveProviderTypeFromPriority(args) {
   }
   return { error: `No usable provider detected for node '${args.nodeId}' from providerPriority: ${failed.join("; ")}` };
 }
+function truncateValidationOutput(value) {
+  const text = typeof value === "string" ? value : value == null ? "" : String(value);
+  if (text.length <= REFINE_VALIDATION_SUMMARY_CHARS) return text;
+  return `${text.slice(0, REFINE_VALIDATION_SUMMARY_CHARS)}
+[truncated ${text.length - REFINE_VALIDATION_SUMMARY_CHARS} chars]`;
+}
+function readPackageScripts(workspace) {
+  try {
+    const packageJsonPath = (0, import_path7.join)(workspace, "package.json");
+    const parsed = JSON.parse(fs10.readFileSync(packageJsonPath, "utf-8"));
+    return parsed?.scripts && typeof parsed.scripts === "object" && !Array.isArray(parsed.scripts) ? parsed.scripts : {};
+  } catch {
+    return {};
+  }
+}
+function tokenizeValidationCommand(command) {
+  const trimmed = command.trim();
+  if (!trimmed) return null;
+  if (/[;&|<>`$\\\n\r'\"]/.test(trimmed)) return null;
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  if (!tokens.length) return null;
+  if (tokens.some((token) => !/^[A-Za-z0-9_@./:=+-]+$/.test(token))) return null;
+  return tokens;
+}
+function scriptMatchesValidationCategory(scriptName, category) {
+  return scriptName === category || scriptName.startsWith(`${category}:`);
+}
+function parsePackageManagerValidationCommand(rawCommand, category, scripts, source) {
+  const tokens = tokenizeValidationCommand(rawCommand);
+  if (!tokens) {
+    return { rejected: { command: rawCommand, category, source, reason: "unsafe command string is not allowlisted" } };
+  }
+  const [binary2, second, third, ...rest] = tokens;
+  let scriptName = "";
+  let command = binary2;
+  let args = [];
+  if ((binary2 === "npm" || binary2 === "pnpm" || binary2 === "bun") && second === "run" && third) {
+    scriptName = third;
+    args = ["run", scriptName, ...rest];
+  } else if (binary2 === "npm" && second === "test" && !third) {
+    scriptName = "test";
+    args = ["test"];
+  } else if (binary2 === "yarn" && second === "run" && third) {
+    scriptName = third;
+    args = ["run", scriptName, ...rest];
+  } else if (binary2 === "yarn" && second && !third) {
+    scriptName = second;
+    args = [scriptName];
+  } else {
+    return { rejected: { command: rawCommand, category, source, reason: "command is not a supported package-manager script invocation" } };
+  }
+  if (!scriptName || !Object.prototype.hasOwnProperty.call(scripts, scriptName)) {
+    return { rejected: { command: rawCommand, category, source, script: scriptName, reason: "script is not declared in package.json" } };
+  }
+  if (!scriptMatchesValidationCategory(scriptName, category)) {
+    return { rejected: { command: rawCommand, category, source, script: scriptName, reason: "script name is outside the validation category allowlist" } };
+  }
+  return {
+    command: {
+      command,
+      args,
+      displayCommand: [command, ...args].join(" "),
+      category,
+      source
+    }
+  };
+}
+function collectProjectContextValidationCandidates(mesh) {
+  const commands = mesh?.projectContext?.commands;
+  if (!commands || typeof commands !== "object" || Array.isArray(commands)) return [];
+  const candidates = [];
+  for (const category of REFINE_VALIDATION_CATEGORIES) {
+    const entries = Array.isArray(commands[category]) ? commands[category] : [];
+    for (const entry of entries) {
+      if (typeof entry?.command !== "string") continue;
+      candidates.push({
+        command: entry.command,
+        category,
+        source: typeof entry.sourcePath === "string" ? entry.sourcePath : "projectContext.commands",
+        confidence: typeof entry.confidence === "string" ? entry.confidence : void 0
+      });
+    }
+  }
+  return candidates.sort((a, b) => {
+    const rank = (value) => value === "high" ? 0 : value === "medium" ? 1 : 2;
+    return rank(a.confidence) - rank(b.confidence);
+  });
+}
+function collectPolicyValidationCandidates(mesh) {
+  const policy = mesh?.policy && typeof mesh.policy === "object" && !Array.isArray(mesh.policy) ? mesh.policy : {};
+  const configured = Array.isArray(policy.validationCommands) ? policy.validationCommands : Array.isArray(policy.validationGate?.commands) ? policy.validationGate.commands : [];
+  return configured.map((entry) => typeof entry === "string" ? { command: entry, category: "", source: "mesh.policy.validationCommands" } : entry).filter((entry) => entry && typeof entry.command === "string").map((entry) => {
+    const commandText = entry.command.trim();
+    const category = REFINE_VALIDATION_CATEGORIES.find((cat) => commandText.includes(` ${cat}`)) ?? "";
+    return { command: commandText, category, source: "mesh.policy.validationCommands" };
+  }).filter((entry) => !!entry.category);
+}
+function selectMeshRefineValidationCommands(mesh, workspace) {
+  const scripts = readPackageScripts(workspace);
+  const rejectedCommands = [];
+  const selected = [];
+  const seen = /* @__PURE__ */ new Set();
+  const candidates = [
+    ...collectPolicyValidationCandidates(mesh),
+    ...collectProjectContextValidationCandidates(mesh)
+  ];
+  for (const candidate of candidates) {
+    const parsed = parsePackageManagerValidationCommand(candidate.command, candidate.category, scripts, candidate.source);
+    if (parsed.rejected) {
+      rejectedCommands.push(parsed.rejected);
+      continue;
+    }
+    if (!parsed.command || seen.has(parsed.command.displayCommand)) continue;
+    selected.push(parsed.command);
+    seen.add(parsed.command.displayCommand);
+    if (selected.length >= REFINE_VALIDATION_MAX_COMMANDS) break;
+  }
+  if (!selected.length && candidates.length === 0) {
+    for (const category of REFINE_VALIDATION_CATEGORIES) {
+      if (!Object.prototype.hasOwnProperty.call(scripts, category)) continue;
+      const fallback = parsePackageManagerValidationCommand(`npm run ${category}`, category, scripts, "package.json:scripts");
+      if (fallback.command && !seen.has(fallback.command.displayCommand)) {
+        selected.push(fallback.command);
+        seen.add(fallback.command.displayCommand);
+      } else if (fallback.rejected) {
+        rejectedCommands.push(fallback.rejected);
+      }
+      if (selected.length >= 2) break;
+    }
+  }
+  return {
+    commands: selected,
+    rejectedCommands,
+    source: selected.some((command) => command.source === "mesh.policy.validationCommands") ? "mesh_policy" : selected.some((command) => command.source !== "package.json:scripts") ? "project_context" : selected.length ? "package_json_scripts" : "unavailable"
+  };
+}
+async function runMeshRefineValidationGate(mesh, workspace) {
+  const { execFile: execFile3 } = await import("child_process");
+  const { promisify: promisify3 } = await import("util");
+  const execFileAsync3 = promisify3(execFile3);
+  const selection = selectMeshRefineValidationCommands(mesh, workspace);
+  const summary = {
+    status: "skipped",
+    required: true,
+    commandsRun: [],
+    rejectedCommands: selection.rejectedCommands,
+    skippedReason: void 0,
+    timeoutMs: REFINE_VALIDATION_TIMEOUT_MS,
+    outputLimitBytes: REFINE_VALIDATION_OUTPUT_LIMIT_BYTES
+  };
+  if (!selection.commands.length) {
+    summary.skippedReason = "validation_unavailable: no allowlisted projectContext, mesh policy, or package.json build/test/typecheck/lint command was available";
+    return summary;
+  }
+  for (const candidate of selection.commands) {
+    const startedAt = Date.now();
+    try {
+      const result = await execFileAsync3(candidate.command, candidate.args, {
+        cwd: workspace,
+        encoding: "utf8",
+        timeout: REFINE_VALIDATION_TIMEOUT_MS,
+        maxBuffer: REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
+        env: { ...process.env, CI: process.env.CI || "1" }
+      });
+      summary.commandsRun.push({
+        command: candidate.command,
+        args: candidate.args,
+        displayCommand: candidate.displayCommand,
+        category: candidate.category,
+        source: candidate.source,
+        passed: true,
+        exitCode: 0,
+        durationMs: Date.now() - startedAt,
+        stdout: truncateValidationOutput(result.stdout),
+        stderr: truncateValidationOutput(result.stderr)
+      });
+    } catch (error48) {
+      summary.commandsRun.push({
+        command: candidate.command,
+        args: candidate.args,
+        displayCommand: candidate.displayCommand,
+        category: candidate.category,
+        source: candidate.source,
+        passed: false,
+        exitCode: typeof error48?.code === "number" ? error48.code : null,
+        signal: typeof error48?.signal === "string" ? error48.signal : null,
+        timedOut: error48?.killed === true || /timed out/i.test(String(error48?.message || "")),
+        durationMs: Date.now() - startedAt,
+        stdout: truncateValidationOutput(error48?.stdout),
+        stderr: truncateValidationOutput(error48?.stderr || error48?.message)
+      });
+      summary.status = "failed";
+      return summary;
+    }
+  }
+  summary.status = "passed";
+  return summary;
+}
 function loadYamlModule() {
   return js_yaml_exports;
 }
@@ -36595,6 +37165,34 @@ function loadHermesCoordinatorBaseConfig(targetConfigPath) {
   const parsed = parseMeshCoordinatorMcpConfig(fs10.readFileSync(sourceConfigPath, "utf-8"), "hermes_config_yaml");
   const { mcp_servers: _mcpServers, ...baseConfig } = parsed;
   return { config: baseConfig, sourceHome, sourceConfigPath };
+}
+function stripHermesCoordinatorTempModelProviderOverrides(config2) {
+  const {
+    model: _model,
+    provider: _provider,
+    default_model: _defaultModel,
+    defaultProvider: _defaultProvider,
+    default_provider: _defaultProviderSnake,
+    modelProvider: _modelProvider,
+    model_provider: _modelProviderSnake,
+    ...sanitized
+  } = config2;
+  const delegation = sanitized.delegation;
+  if (delegation && typeof delegation === "object" && !Array.isArray(delegation)) {
+    const {
+      model: _delegationModel,
+      provider: _delegationProvider,
+      modelProvider: _delegationModelProvider,
+      model_provider: _delegationModelProviderSnake,
+      ...delegationRest
+    } = delegation;
+    if (Object.keys(delegationRest).length > 0) {
+      sanitized.delegation = delegationRest;
+    } else {
+      delete sanitized.delegation;
+    }
+  }
+  return sanitized;
 }
 function copyHermesCoordinatorCredentialFiles(sourceHome, targetHome) {
   if ((0, import_path7.resolve)(sourceHome) === (0, import_path7.resolve)(targetHome)) return;
@@ -41086,7 +41684,7 @@ async function shutdownDaemonComponents(components) {
   }
   cdpManagers.clear();
 }
-var path4, import_promises4, import_fs3, import_child_process, import_util3, import_os2, import_path, import_fs4, import_crypto2, import_fs5, import_path2, import_crypto3, import_fs6, import_path3, import_crypto4, import_events2, import_fs7, import_path4, import_crypto5, fs2, path8, os22, os8, os9, path14, import_child_process2, os10, path15, os11, import_child_process3, import_fs8, import_promises5, path, import_util4, import_promises6, path22, path32, fs, os4, path5, import_crypto6, path6, path7, import_fs9, import_path5, import_child_process4, import_fs10, import_os3, path9, import_child_process5, os32, path10, import_fs11, os42, import_child_process6, http, crypto2, fs3, path11, os5, fs4, os6, path12, import_crypto7, fs5, path13, os7, os13, path18, crypto4, import_fs12, import_child_process7, os12, path16, crypto3, fs6, import_module, path17, import_stream2, import_child_process8, import_child_process9, net2, os15, path20, fs7, path19, os14, fs8, path21, os16, import_child_process10, import_crypto8, import_fs13, import_module2, os17, import_path6, os18, import_child_process11, import_child_process12, fs9, os19, path222, import_os4, import_path7, fs10, fs11, path23, os20, import_child_process13, import_os5, http2, fs15, path27, fs12, path24, fs13, path25, fs14, path26, os21, import_child_process14, __defProp2, __getOwnPropDesc2, __getOwnPropNames2, __hasOwnProp2, __require2, __esm2, __export2, __copyProps2, __toCommonJS2, DEFAULT_MESH_POLICY, init_repo_mesh_types, git_worktree_exports, execFileAsync2, WORKTREE_DIR_NAME, GIT_TIMEOUT_MS, GIT_MAX_BUFFER, init_git_worktree, config_exports, DEFAULT_CONFIG, MACHINE_ID_PREFIX, init_config, mesh_config_exports, SESSION_CLEANUP_MODES, SPAWNED_SESSION_VISIBILITY_MODES, init_mesh_config, coordinator_prompt_exports, TOOLS_SECTION, TOOL_EXPOSURE_PREFLIGHT_SECTION, WORKFLOW_SECTION, init_coordinator_prompt, mesh_ledger_exports, LEDGER_DIR_NAME, MAX_FILE_SIZE_BYTES, RECENT_FAILURE_WINDOW_MS, meshLedgerEvents, init_mesh_ledger, mesh_work_queue_exports, init_mesh_work_queue, LEVEL_NUM, LEVEL_LABEL, currentLevel, LOG_DIR, MAX_LOG_SIZE, MAX_LOG_DAYS, currentDate, currentLogFile, writeCount, RING_BUFFER_SIZE, ringBuffer, origConsoleLog, origConsoleError, origConsoleWarn, LOG, interceptorInstalled, LOG_PATH, init_logger, mesh_events_exports, remoteIdleSessions, MAX_PENDING_EVENTS, pendingMeshCoordinatorEvents, MESH_COORDINATOR_EVENTS, EVENT_TO_LEDGER_KIND, init_mesh_events, NORMAL_TRACE_BUFFER_SIZE, DEV_TRACE_BUFFER_SIZE, DEFAULT_CONFIG2, currentConfig, init_debug_config, DEFAULT_BINDING_CANDIDATES, cachedBinding, cachedBindingError, GhosttyVtTerminalBackend, init_ghostty_vt_backend, TerminalCtor, XtermTerminalBackend, init_xterm_backend, DEFAULT_SCROLLBACK, loggedTerminalBackends, TerminalScreen, init_terminal_screen, init_spawn_env, cachedPty, NodePtyRuntimeTransport, NodePtyTransportFactory, init_pty_transport, TerminalTranscriptAccumulator, buildCliSpawnEnv, init_provider_cli_shared, init_provider_cli_parse, init_provider_cli_config, init_provider_cli_runtime, provider_cli_adapter_exports, ProviderCliAdapter, init_provider_cli_adapter, execFileAsync, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_BUFFER, GitCommandError, DEFAULT_MAX_FILES, DEFAULT_MAX_BYTES, summarizeGitStatus, InMemoryGitSnapshotStore, DEFAULT_GIT_WORKSPACE_POLL_INTERVAL_MS, MIN_GIT_WORKSPACE_POLL_INTERVAL_MS, GitWorkspaceMonitor, GIT_COMMAND_NAMES, SNAPSHOT_REASONS, FAILURE_REASONS, defaultSnapshotStore, defaultGitCommandServices, BUSY_STATUSES, TERMINAL_STATUSES, TurnSnapshotTracker, MAX_WORKSPACES, MAX_ACTIVITY, MAX_SAVED_SESSIONS, DEFAULT_STATE, BUILTIN_IDE_DEFINITIONS, registeredIDEs, LIVE_LIFECYCLES, DEFAULT_ACTIVE_CHAT_POLL_STATUSES, DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS, LIVE_RUNTIME_LIFECYCLES, DaemonCdpManager, CdpDomHandlers, DEFAULT_MONITOR_CONFIG, StatusMonitor, BUILTIN_CHAT_MESSAGE_KINDS, CHAT_MESSAGE_VISIBILITIES, CHAT_MESSAGE_TRANSCRIPT_VISIBILITIES, CHAT_MESSAGE_AUDIENCES, CHAT_MESSAGE_SOURCES, CHAT_MESSAGE_ACTIVITY_SOURCES, CHAT_MESSAGE_INTERNAL_SOURCES, KNOWN_CHAT_MESSAGE_KINDS, CHAT_MESSAGE_KIND_ALIASES, EXPLICIT_HIDDEN_VISIBILITIES, EXPLICIT_VISIBLE_VISIBILITIES, HIDDEN_AUDIENCES, ACTIVITY_SOURCE_SET, INTERNAL_SOURCE_SET, HISTORY_DIR, RETAIN_DAYS, SAVED_HISTORY_INDEX_VERSION, SAVED_HISTORY_INDEX_FILE, SAVED_HISTORY_INDEX_LOCK_SUFFIX, SAVED_HISTORY_INDEX_LOCK_WAIT_MS, SAVED_HISTORY_INDEX_LOCK_STALE_MS, SAVED_HISTORY_INDEX_LOCK_POLL_MS, SAVED_HISTORY_ROLLUP_THRESHOLD_BYTES, savedHistorySessionCache, savedHistoryFileSummaryCache, savedHistoryBackgroundRefresh, savedHistoryRollupInFlight, ChatHistoryWriter, IDE_PROVIDER_SESSION_CAPABILITIES_BASE, EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE, ExtensionProviderInstance, VALID_STATUSES, VALID_ROLES, VALID_BUBBLE_STATES, VALID_TURN_STATUSES, DEFAULT_APPROVAL_POSITIVE_HINTS, IdeProviderInstance, DEFAULT_CDP_SCAN_INTERVAL_MS, DEFAULT_CDP_DISCOVERY_INTERVAL_MS, DEFAULT_STATUS_INITIAL_REPORT_DELAY_MS, DEFAULT_STATUS_SERVER_REPORT_INTERVAL_MS, DEFAULT_STATUS_P2P_REPORT_INTERVAL_MS, MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS, DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS, MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS, DEFAULT_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS, DEFAULT_SESSION_HOST_READY_TIMEOUT_MS, STANDALONE_CDP_SCAN_INTERVAL_MS, DaemonCdpScanner, DaemonCdpInitializer, WORKING_STATUSES, FULL_STATUS_ACTIVE_CHAT_OPTIONS, LIVE_STATUS_ACTIVE_CHAT_OPTIONS, STATUS_MODAL_MESSAGE_LIMIT, STATUS_MODAL_BUTTON_LIMIT, VALID_INPUT_MEDIA_TYPES, VALID_INPUT_STRATEGIES, TEXT_ONLY_MESSAGE_INPUT_SUPPORT, IDE_SESSION_CAPABILITIES, EXTENSION_SESSION_CAPABILITIES, PTY_SESSION_CAPABILITIES, CLI_CHAT_SESSION_CAPABILITIES, ACP_SESSION_CAPABILITIES, globalStore, RECENT_SEND_WINDOW_MS, READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS, HERMES_CLI_STARTING_SEND_SETTLE_MS, recentSendByTarget, DEFAULT_DEBUG_SANITIZE_OPTIONS, SECRET_KEY_PATTERN, KEY_TO_VK, COMMAND_DEBUG_LEVELS, DaemonCommandHandler, IMAGE_MIME_EXTENSIONS, MATERIALIZED_IMAGE_MAX_AGE_MS, MATERIALIZED_IMAGE_CLEANUP_INTERVAL_MS, lastMaterializedImageCleanupAt, CachedDatabaseSync, CliProviderInstance, AcpProviderInstance, chalkModule, chalkApi, COORDINATOR_DELEGATED_ENV_UNSETS, DaemonCliManager, VALID_CAPABILITY_MEDIA_TYPES, VALID_INPUT_STRATEGIES2, KNOWN_PROVIDER_FIELDS, VALUE_CONTROL_TYPES, ProviderLoader, _providerLoader, LOG_DIR2, MAX_FILE_SIZE, MAX_DAYS, SENSITIVE_KEYS, currentDate2, currentFile, writeCount2, SKIP_COMMANDS, DEFAULT_SERVER_NAME, DEFAULT_ADHDEV_MCP_COMMAND, HERMES_CLI_TYPE, HERMES_MCP_CONFIG_PATH, READ_DEBUG_ENABLED, recentReadDebugSignatureBySession, UPGRADE_HELPER_ENV, CHANNEL_NPM_TAG, CHANNEL_SERVER_URL, CHAT_COMMANDS, READ_DEBUG_ENABLED2, DaemonCommandRouter, DaemonStatusReporter, DEFAULT_DAEMON_PORT, DAEMON_WS_PATH, ProviderStreamAdapter, DaemonAgentStreamManager, AgentStreamPoller, ProviderInstanceManager, ARCHIVE_PATH, MAX_ENTRIES_PER_PROVIDER, VersionArchive, DEV_SERVER_PORT, DevServer, SessionHostRuntimeTransport, SessionHostPtyTransportFactory, DEFAULT_SESSION_HOST_APP_NAME, DEFAULT_STANDALONE_SESSION_HOST_APP_NAME, STARTUP_TIMEOUT_MS, STARTUP_POLL_MS, SessionHostCompatibilityError, EXTENSION_CATALOG, SessionRegistry;
+var path4, import_promises4, import_fs3, import_child_process, import_util3, import_os2, import_path, import_fs4, import_crypto2, import_fs5, import_path2, import_crypto3, import_fs6, import_path3, import_crypto4, import_events2, import_fs7, import_path4, import_crypto5, import_child_process2, os22, path8, import_fs8, fs2, path9, os32, os8, os9, path14, import_child_process3, os10, path15, os11, import_child_process4, import_fs9, import_promises5, path, import_util4, import_promises6, path22, path32, fs, os4, path5, import_crypto6, path6, path7, import_fs10, import_path5, import_child_process5, import_fs11, import_os3, path10, os42, import_child_process6, http, crypto2, fs3, path11, os5, fs4, os6, path12, import_crypto7, fs5, path13, os7, os13, path18, crypto4, import_fs12, import_child_process7, os12, path16, crypto3, fs6, import_module, path17, import_stream2, import_child_process8, import_child_process9, net2, os15, path20, fs7, path19, os14, fs8, path21, os16, import_child_process10, import_crypto8, import_fs13, import_module2, os17, import_path6, os18, import_child_process11, import_child_process12, fs9, os19, path222, import_os4, import_path7, fs10, fs11, path23, os20, import_child_process13, import_os5, http2, fs15, path27, fs12, path24, fs13, path25, fs14, path26, os21, import_child_process14, __defProp2, __getOwnPropDesc2, __getOwnPropNames2, __hasOwnProp2, __require2, __esm2, __export2, __copyProps2, __toCommonJS2, DEFAULT_MESH_POLICY, init_repo_mesh_types, git_worktree_exports, execFileAsync2, WORKTREE_DIR_NAME, GIT_TIMEOUT_MS, GIT_MAX_BUFFER, SUBMODULE_WORKTREE_REMOVE_RE, init_git_worktree, config_exports, DEFAULT_CONFIG, MACHINE_ID_PREFIX, init_config, mesh_config_exports, SESSION_CLEANUP_MODES, SPAWNED_SESSION_VISIBILITY_MODES, init_mesh_config, coordinator_prompt_exports, TOOLS_SECTION, TOOL_EXPOSURE_PREFLIGHT_SECTION, WORKFLOW_SECTION, init_coordinator_prompt, mesh_ledger_exports, LEDGER_DIR_NAME, MAX_FILE_SIZE_BYTES, RECENT_FAILURE_WINDOW_MS, meshLedgerEvents, init_mesh_ledger, mesh_work_queue_exports, ACTIVE_MESH_QUEUE_STATUSES, HISTORICAL_MESH_QUEUE_STATUSES, init_mesh_work_queue, init_cli_detector, LEVEL_NUM, LEVEL_LABEL, currentLevel, LOG_DIR, MAX_LOG_SIZE, MAX_LOG_DAYS, currentDate, currentLogFile, writeCount, RING_BUFFER_SIZE, ringBuffer, origConsoleLog, origConsoleError, origConsoleWarn, LOG, interceptorInstalled, LOG_PATH, init_logger, mesh_events_exports, remoteIdleSessions, MAX_PENDING_EVENTS, pendingMeshCoordinatorEvents, MESH_COORDINATOR_EVENTS, EVENT_TO_LEDGER_KIND, autoLaunchInProgress, autoLaunchCooldownUntil, AUTO_LAUNCH_COOLDOWN_MS, init_mesh_events, NORMAL_TRACE_BUFFER_SIZE, DEV_TRACE_BUFFER_SIZE, DEFAULT_CONFIG2, currentConfig, init_debug_config, DEFAULT_BINDING_CANDIDATES, cachedBinding, cachedBindingError, GhosttyVtTerminalBackend, init_ghostty_vt_backend, TerminalCtor, XtermTerminalBackend, init_xterm_backend, DEFAULT_SCROLLBACK, loggedTerminalBackends, TerminalScreen, init_terminal_screen, init_spawn_env, cachedPty, NodePtyRuntimeTransport, NodePtyTransportFactory, init_pty_transport, TerminalTranscriptAccumulator, buildCliSpawnEnv, init_provider_cli_shared, init_provider_cli_parse, init_provider_cli_config, init_provider_cli_runtime, provider_cli_adapter_exports, ProviderCliAdapter, init_provider_cli_adapter, execFileAsync, DEFAULT_TIMEOUT_MS, DEFAULT_MAX_BUFFER, GitCommandError, DEFAULT_MAX_FILES, DEFAULT_MAX_BYTES, summarizeGitStatus, InMemoryGitSnapshotStore, DEFAULT_GIT_WORKSPACE_POLL_INTERVAL_MS, MIN_GIT_WORKSPACE_POLL_INTERVAL_MS, GitWorkspaceMonitor, GIT_COMMAND_NAMES, SNAPSHOT_REASONS, FAILURE_REASONS, defaultSnapshotStore, defaultGitCommandServices, BUSY_STATUSES, TERMINAL_STATUSES, TurnSnapshotTracker, MAX_WORKSPACES, MAX_ACTIVITY, MAX_SAVED_SESSIONS, NO_FALLBACK_REASON, P2P_NEXT_ACTION, NON_P2P_NEXT_ACTION, P2pRelayFailureError, DEFAULT_STATE, BUILTIN_IDE_DEFINITIONS, registeredIDEs, LIVE_LIFECYCLES, DEFAULT_ACTIVE_CHAT_POLL_STATUSES, DEFAULT_CHAT_TAIL_RECENT_MESSAGE_GRACE_MS, LIVE_RUNTIME_LIFECYCLES, DaemonCdpManager, CdpDomHandlers, DEFAULT_MONITOR_CONFIG, StatusMonitor, BUILTIN_CHAT_MESSAGE_KINDS, CHAT_MESSAGE_VISIBILITIES, CHAT_MESSAGE_TRANSCRIPT_VISIBILITIES, CHAT_MESSAGE_AUDIENCES, CHAT_MESSAGE_SOURCES, CHAT_MESSAGE_ACTIVITY_SOURCES, CHAT_MESSAGE_INTERNAL_SOURCES, KNOWN_CHAT_MESSAGE_KINDS, CHAT_MESSAGE_KIND_ALIASES, EXPLICIT_HIDDEN_VISIBILITIES, EXPLICIT_VISIBLE_VISIBILITIES, HIDDEN_AUDIENCES, ACTIVITY_SOURCE_SET, INTERNAL_SOURCE_SET, HISTORY_DIR, RETAIN_DAYS, SAVED_HISTORY_INDEX_VERSION, SAVED_HISTORY_INDEX_FILE, SAVED_HISTORY_INDEX_LOCK_SUFFIX, SAVED_HISTORY_INDEX_LOCK_WAIT_MS, SAVED_HISTORY_INDEX_LOCK_STALE_MS, SAVED_HISTORY_INDEX_LOCK_POLL_MS, SAVED_HISTORY_ROLLUP_THRESHOLD_BYTES, savedHistorySessionCache, savedHistoryFileSummaryCache, savedHistoryBackgroundRefresh, savedHistoryRollupInFlight, ChatHistoryWriter, IDE_PROVIDER_SESSION_CAPABILITIES_BASE, EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE, ExtensionProviderInstance, VALID_STATUSES, VALID_ROLES, VALID_BUBBLE_STATES, VALID_TURN_STATUSES, DEFAULT_APPROVAL_POSITIVE_HINTS, IdeProviderInstance, DEFAULT_CDP_SCAN_INTERVAL_MS, DEFAULT_CDP_DISCOVERY_INTERVAL_MS, DEFAULT_STATUS_INITIAL_REPORT_DELAY_MS, DEFAULT_STATUS_SERVER_REPORT_INTERVAL_MS, DEFAULT_STATUS_P2P_REPORT_INTERVAL_MS, MIN_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS, DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS, MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS, DEFAULT_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS, DEFAULT_SESSION_HOST_READY_TIMEOUT_MS, STANDALONE_CDP_SCAN_INTERVAL_MS, DaemonCdpScanner, DaemonCdpInitializer, WORKING_STATUSES, FULL_STATUS_ACTIVE_CHAT_OPTIONS, LIVE_STATUS_ACTIVE_CHAT_OPTIONS, STATUS_MODAL_MESSAGE_LIMIT, STATUS_MODAL_BUTTON_LIMIT, VALID_INPUT_MEDIA_TYPES, VALID_INPUT_STRATEGIES, TEXT_ONLY_MESSAGE_INPUT_SUPPORT, IDE_SESSION_CAPABILITIES, EXTENSION_SESSION_CAPABILITIES, PTY_SESSION_CAPABILITIES, CLI_CHAT_SESSION_CAPABILITIES, ACP_SESSION_CAPABILITIES, globalStore, RECENT_SEND_WINDOW_MS, READ_CHAT_PROVIDER_EVAL_TIMEOUT_MS, HERMES_CLI_STARTING_SEND_SETTLE_MS, recentSendByTarget, DEFAULT_DEBUG_SANITIZE_OPTIONS, SECRET_KEY_PATTERN, KEY_TO_VK, COMMAND_DEBUG_LEVELS, DaemonCommandHandler, COMPLETED_FINALIZATION_RETRY_MS, COMPLETED_FINALIZATION_MAX_WAIT_MS, IMAGE_MIME_EXTENSIONS, MATERIALIZED_IMAGE_MAX_AGE_MS, MATERIALIZED_IMAGE_CLEANUP_INTERVAL_MS, lastMaterializedImageCleanupAt, CachedDatabaseSync, CliProviderInstance, AcpProviderInstance, chalkModule, chalkApi, COORDINATOR_DELEGATED_ENV_UNSETS, DaemonCliManager, VALID_CAPABILITY_MEDIA_TYPES, VALID_INPUT_STRATEGIES2, KNOWN_PROVIDER_FIELDS, VALUE_CONTROL_TYPES, ProviderLoader, _providerLoader, LOG_DIR2, MAX_FILE_SIZE, MAX_DAYS, SENSITIVE_KEYS, currentDate2, currentFile, writeCount2, SKIP_COMMANDS, DEFAULT_SERVER_NAME, DEFAULT_ADHDEV_MCP_COMMAND, HERMES_CLI_TYPE, HERMES_MCP_CONFIG_PATH, READ_DEBUG_ENABLED, recentReadDebugSignatureBySession, UPGRADE_HELPER_ENV, CHANNEL_NPM_TAG, CHANNEL_SERVER_URL, REFINE_VALIDATION_CATEGORIES, REFINE_VALIDATION_TIMEOUT_MS, REFINE_VALIDATION_OUTPUT_LIMIT_BYTES, REFINE_VALIDATION_SUMMARY_CHARS, REFINE_VALIDATION_MAX_COMMANDS, CHAT_COMMANDS, READ_DEBUG_ENABLED2, DaemonCommandRouter, DaemonStatusReporter, DEFAULT_DAEMON_PORT, DAEMON_WS_PATH, ProviderStreamAdapter, DaemonAgentStreamManager, AgentStreamPoller, ProviderInstanceManager, ARCHIVE_PATH, MAX_ENTRIES_PER_PROVIDER, VersionArchive, DEV_SERVER_PORT, DevServer, SessionHostRuntimeTransport, SessionHostPtyTransportFactory, DEFAULT_SESSION_HOST_APP_NAME, DEFAULT_STANDALONE_SESSION_HOST_APP_NAME, STARTUP_TIMEOUT_MS, STARTUP_POLL_MS, SessionHostCompatibilityError, EXTENSION_CATALOG, SessionRegistry;
 var init_dist2 = __esm({
   "../daemon-core/dist/index.mjs"() {
     "use strict";
@@ -41109,20 +41707,24 @@ var init_dist2 = __esm({
     import_fs7 = require("fs");
     import_path4 = require("path");
     import_crypto5 = require("crypto");
-    fs2 = __toESM(require("fs"), 1);
-    path8 = __toESM(require("path"), 1);
+    import_child_process2 = require("child_process");
     os22 = __toESM(require("os"), 1);
+    path8 = __toESM(require("path"), 1);
+    import_fs8 = require("fs");
+    fs2 = __toESM(require("fs"), 1);
+    path9 = __toESM(require("path"), 1);
+    os32 = __toESM(require("os"), 1);
     init_dist();
     os8 = __toESM(require("os"), 1);
     os9 = __toESM(require("os"), 1);
     path14 = __toESM(require("path"), 1);
-    import_child_process2 = require("child_process");
+    import_child_process3 = require("child_process");
     os10 = __toESM(require("os"), 1);
     path15 = __toESM(require("path"), 1);
     init_dist();
     os11 = __toESM(require("os"), 1);
-    import_child_process3 = require("child_process");
-    import_fs8 = require("fs");
+    import_child_process4 = require("child_process");
+    import_fs9 = require("fs");
     import_promises5 = require("fs/promises");
     path = __toESM(require("path"), 1);
     import_util4 = require("util");
@@ -41135,16 +41737,12 @@ var init_dist2 = __esm({
     import_crypto6 = require("crypto");
     path6 = __toESM(require("path"), 1);
     path7 = __toESM(require("path"), 1);
-    import_fs9 = require("fs");
-    import_path5 = require("path");
-    import_child_process4 = require("child_process");
     import_fs10 = require("fs");
-    import_os3 = require("os");
-    path9 = __toESM(require("path"), 1);
+    import_path5 = require("path");
     import_child_process5 = require("child_process");
-    os32 = __toESM(require("os"), 1);
-    path10 = __toESM(require("path"), 1);
     import_fs11 = require("fs");
+    import_os3 = require("os");
+    path10 = __toESM(require("path"), 1);
     os42 = __toESM(require("os"), 1);
     import_child_process6 = require("child_process");
     init_wrapper();
@@ -41277,6 +41875,7 @@ var init_dist2 = __esm({
         WORKTREE_DIR_NAME = ".adhdev-worktrees";
         GIT_TIMEOUT_MS = 3e4;
         GIT_MAX_BUFFER = 4 * 1024 * 1024;
+        SUBMODULE_WORKTREE_REMOVE_RE = /working trees containing submodules cannot be moved or removed/i;
       }
     });
     config_exports = {};
@@ -41356,17 +41955,24 @@ var init_dist2 = __esm({
 
 | Tool | Purpose |
 |------|---------|
-| \`mesh_status\` | Check all nodes' health, git state, and active sessions |
+| \`mesh_status\` | Check all nodes' health, git state, active sessions, and branch convergence |
 | \`mesh_list_nodes\` | List nodes with workspace paths |
+| \`mesh_enqueue_task\` | Add a task to the pull-based work queue; idle nodes auto-claim |
+| \`mesh_view_queue\` | View queue status \u2014 pending, assigned, completed, failed, cancelled tasks |
+| \`mesh_queue_cancel\` | Cancel a queue task without deleting audit history |
+| \`mesh_queue_requeue\` | Return a task to pending for retry; clears stale session targets |
+| \`mesh_send_task\` | Legacy push: enqueue a task targeted at a specific node |
 | \`mesh_launch_session\` | Start a new agent session on a node |
-| \`mesh_send_task\` | Send a task (natural language) to a running agent |
-| \`mesh_read_chat\` | Read an agent's recent messages to check progress |
+| \`mesh_read_chat\` | Read recent chat messages from a delegated agent session |
+| \`mesh_read_debug\` | Collect a daemon-side chat/parser debug bundle for a session |
 | \`mesh_task_history\` | Read the task ledger \u2014 dispatches, completions, failures. Use to understand what has been done before deciding next steps |
 | \`mesh_git_status\` | Check git status on a specific node |
 | \`mesh_checkpoint\` | Create a git checkpoint on a node |
 | \`mesh_approve\` | Approve/reject a pending agent action |
 | \`mesh_clone_node\` | Create a worktree node for isolated parallel branch work |
-| \`mesh_remove_node\` | Remove a node (cleans up worktree if applicable) |`;
+| \`mesh_refine_node\` | Validate and merge a completed worktree node back into its base branch |
+| \`mesh_remove_node\` | Remove a node (cleans up worktree if applicable) |
+| \`mesh_cleanup_sessions\` | Manually clean up delegated session records for a node |`;
         TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
 
 Before doing any coordinator work, confirm that the actual callable tool list includes \`mesh_status\` and the other \`mesh_*\` tools from the table above. If this Repo Mesh coordinator prompt is present but the callable \`mesh_*\` tools are missing, the MCP server/tool manifest is stale or not injected yet. Do not substitute terminal/file/git tools, do not inspect or edit the repository directly, and do not continue as a non-mesh local coding agent. Stop immediately and tell the user to run \`/reload-mcp\` or start a fresh coordinator session so ADHDev can reconnect \`adhdev-mesh\`.`;
@@ -41376,14 +41982,16 @@ Before doing any coordinator work, confirm that the actual callable tool list in
 2. **Plan** \u2014 Decompose the user's request into independent tasks for parallel execution, or sequential tasks when dependencies exist. If \`mesh_task_history\` shows a recent failure for a task, decide whether to retry or reassign.
 3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:
    a. **General Tasks**: Enqueue tasks using \`mesh_enqueue_task\`. Idle node agents will automatically pull tasks from the queue and begin working.
-   b. **Node Preparation**: Call \`mesh_launch_session\` to ensure enough agent sessions are active to handle the queue. If you need branch isolation for parallel work, call \`mesh_clone_node\` to create a worktree node first.
+   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session. Call \`mesh_launch_session\` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. If you need branch isolation for parallel work, call \`mesh_clone_node\` to create a worktree node first.
    c. **Targeted Tasks**: Use \`mesh_send_task\` only when you need to bypass the queue and force a specific node to execute a task immediately.
-   d. Always provide a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.
+   d. For the first dispatch of a new task, provide a **complete, self-contained** instruction that includes all context the agent needs (file paths, line numbers, what to change, why). Do not send partial instructions expecting future follow-up.
+   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work; that wastes coordinator and worker context.
 4. **Monitor** \u2014 Prefer event-driven completion/status notifications. Do **not** poll \`mesh_read_chat\` repeatedly. Use \`mesh_view_queue\` to see the status of all pending, assigned, completed, and failed tasks. Do not call \`mesh_read_chat\` again within a few seconds for the same generating session. Use at most one compact \`mesh_read_chat\` check after a completion/approval signal. Handle approvals via \`mesh_approve\`.
 5. **Verify** \u2014 When a task reports completion or git work is visible, call \`mesh_git_status\` to verify changes were made.
 6. **Checkpoint** \u2014 Call \`mesh_checkpoint\` to save the work.
-7. **Clean up** \u2014 Remove worktree nodes via \`mesh_remove_node\` after their work is merged or no longer needed.
-8. **Report** \u2014 Summarize what was done, what changed, and any issues.
+7. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one final state: \`merged_to_main\`, \`pushed_feature_branch_needs_merge\`, \`blocked_review\`, \`cleanup_candidate\`, or \`not_mergeable\`. Use \`mesh_status\` branchConvergenceSummary and \`mesh_refine_node\` for clean worktree branches when safe. A task that remains on a non-main branch is not fully complete unless the final report names the follow-up state and next step.
+8. **Clean up** \u2014 Remove worktree nodes via \`mesh_remove_node\` after their work is merged or no longer needed.
+9. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.
 
 ## Failure Recovery
 
@@ -41393,7 +42001,7 @@ When a node agent stops unexpectedly, the daemon automatically enriches the syst
 - A recommendation: **retry**, **reassign**, or **escalate**
 
 Follow these recovery rules:
-1. **If "Retry recommended"**: Re-launch the session on the same node (\`mesh_launch_session\`), then resend the original task (\`mesh_send_task\`). The system message includes the original task text.
+1. **If "Retry recommended"**: Check \`mesh_view_queue\` first \u2014 the daemon may have auto-requeued. If not, re-launch the session on the same node (\`mesh_launch_session\`), then resend the original task (\`mesh_send_task\`). The system message includes the original task text.
 2. **If "Max retries exceeded"**: Do NOT retry on the same node. Either reassign the task to a different node, or inform the user that the task requires manual intervention.
 3. **If no recovery context**: The stop may be intentional (normal completion). Use \`mesh_read_chat\` once to verify, then move on.
 4. **Always record what happened**: After handling a failure, briefly note the outcome in your report to the user.`;
@@ -41421,11 +42029,14 @@ Follow these recovery rules:
     });
     mesh_work_queue_exports = {};
     __export2(mesh_work_queue_exports, {
+      ACTIVE_MESH_QUEUE_STATUSES: () => ACTIVE_MESH_QUEUE_STATUSES,
+      HISTORICAL_MESH_QUEUE_STATUSES: () => HISTORICAL_MESH_QUEUE_STATUSES,
       cancelTask: () => cancelTask,
       claimNextTask: () => claimNextTask,
       enqueueTask: () => enqueueTask,
       getMeshQueueStats: () => getMeshQueueStats,
       getQueue: () => getQueue,
+      recordTaskAutoLaunch: () => recordTaskAutoLaunch,
       requeueTask: () => requeueTask,
       updateSessionTaskStatus: () => updateSessionTaskStatus,
       updateTaskStatus: () => updateTaskStatus
@@ -41434,6 +42045,13 @@ Follow these recovery rules:
       "src/mesh/mesh-work-queue.ts"() {
         "use strict";
         init_mesh_ledger();
+        ACTIVE_MESH_QUEUE_STATUSES = ["pending", "assigned"];
+        HISTORICAL_MESH_QUEUE_STATUSES = ["completed", "failed", "cancelled"];
+      }
+    });
+    init_cli_detector = __esm2({
+      "src/detection/cli-detector.ts"() {
+        "use strict";
       }
     });
     init_logger = __esm2({
@@ -41442,7 +42060,7 @@ Follow these recovery rules:
         LEVEL_NUM = { debug: 0, info: 1, warn: 2, error: 3 };
         LEVEL_LABEL = { debug: "DBG", info: "INF", warn: "WRN", error: "ERR" };
         currentLevel = "info";
-        LOG_DIR = process.platform === "win32" ? path8.join(process.env.LOCALAPPDATA || process.env.APPDATA || path8.join(os22.homedir(), "AppData", "Local"), "adhdev", "logs") : process.platform === "darwin" ? path8.join(os22.homedir(), "Library", "Logs", "adhdev") : path8.join(os22.homedir(), ".local", "share", "adhdev", "logs");
+        LOG_DIR = process.platform === "win32" ? path9.join(process.env.LOCALAPPDATA || process.env.APPDATA || path9.join(os32.homedir(), "AppData", "Local"), "adhdev", "logs") : process.platform === "darwin" ? path9.join(os32.homedir(), "Library", "Logs", "adhdev") : path9.join(os32.homedir(), ".local", "share", "adhdev", "logs");
         MAX_LOG_SIZE = 5 * 1024 * 1024;
         MAX_LOG_DAYS = 7;
         try {
@@ -41450,16 +42068,16 @@ Follow these recovery rules:
         } catch {
         }
         currentDate = getDateStr();
-        currentLogFile = path8.join(LOG_DIR, `daemon-${currentDate}.log`);
+        currentLogFile = path9.join(LOG_DIR, `daemon-${currentDate}.log`);
         cleanOldLogs();
         try {
-          const oldLog = path8.join(LOG_DIR, "daemon.log");
+          const oldLog = path9.join(LOG_DIR, "daemon.log");
           if (fs2.existsSync(oldLog)) {
             const stat22 = fs2.statSync(oldLog);
             const oldDate = stat22.mtime.toISOString().slice(0, 10);
-            fs2.renameSync(oldLog, path8.join(LOG_DIR, `daemon-${oldDate}.log`));
+            fs2.renameSync(oldLog, path9.join(LOG_DIR, `daemon-${oldDate}.log`));
           }
-          const oldLogBackup = path8.join(LOG_DIR, "daemon.log.old");
+          const oldLogBackup = path9.join(LOG_DIR, "daemon.log.old");
           if (fs2.existsSync(oldLogBackup)) {
             fs2.unlinkSync(oldLogBackup);
           }
@@ -41491,7 +42109,7 @@ Follow these recovery rules:
           }
         };
         interceptorInstalled = false;
-        LOG_PATH = path8.join(LOG_DIR, `daemon-${getDateStr()}.log`);
+        LOG_PATH = path9.join(LOG_DIR, `daemon-${getDateStr()}.log`);
       }
     });
     mesh_events_exports = {};
@@ -41505,7 +42123,9 @@ Follow these recovery rules:
     init_mesh_events = __esm2({
       "src/mesh/mesh-events.ts"() {
         "use strict";
+        init_config();
         init_mesh_config();
+        init_cli_detector();
         init_logger();
         init_mesh_ledger();
         init_mesh_work_queue();
@@ -41526,6 +42146,9 @@ Follow these recovery rules:
           "agent:stopped": "task_failed",
           "monitor:long_generating": "task_stalled"
         };
+        autoLaunchInProgress = /* @__PURE__ */ new Set();
+        autoLaunchCooldownUntil = /* @__PURE__ */ new Map();
+        AUTO_LAUNCH_COOLDOWN_MS = 5e3;
       }
     });
     init_debug_config = __esm2({
@@ -41970,6 +42593,7 @@ Follow these recovery rules:
             this.requirePromptEchoBeforeSubmit = resolvedConfig.requirePromptEchoBeforeSubmit;
             this.providerResolutionMeta = resolvedConfig.providerResolutionMeta;
             this.cliScripts = provider.scripts || {};
+            this.scriptState = typeof this.cliScripts.createState === "function" ? this.cliScripts.createState() ?? null : null;
             const scriptNames = listCliScriptNames(this.cliScripts);
             if (scriptNames.length > 0) {
               LOG.info("CLI", `[${this.cliType}] CLI scripts: [${scriptNames.join(", ")}]`);
@@ -42130,9 +42754,13 @@ ${lastSnapshot}`;
             this.lastScreenChangeAt = 0;
             this.lastScreenSnapshotReadAt = Number.NEGATIVE_INFINITY;
           }
+          getAccumulatedRawBufferCacheKey() {
+            return this.accumulatedRawBuffer.replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, "").replace(/\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g, "").replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+          }
           getFreshParsedStatusCache() {
             const cached2 = this.parsedStatusCache;
-            if (cached2 && cached2.responseBuffer === this.responseBuffer && cached2.currentTurnScope === this.currentTurnScope && cached2.recentOutputBuffer === this.recentOutputBuffer && cached2.accumulatedBuffer === this.accumulatedBuffer && cached2.accumulatedRawBuffer === this.accumulatedRawBuffer && cached2.screenText === this.lastScreenText && cached2.currentStatus === this.currentStatus && cached2.activeModal === this.activeModal && cached2.cliName === this.cliName) {
+            const accumulatedRawBufferKey = this.getAccumulatedRawBufferCacheKey();
+            if (cached2 && cached2.responseBuffer === this.responseBuffer && cached2.currentTurnScope === this.currentTurnScope && cached2.recentOutputBuffer === this.recentOutputBuffer && cached2.accumulatedBuffer === this.accumulatedBuffer && cached2.accumulatedRawBufferKey === accumulatedRawBufferKey && cached2.screenText === this.lastScreenText && cached2.currentStatus === this.currentStatus && cached2.activeModal === this.activeModal && cached2.cliName === this.cliName) {
               return cached2.result;
             }
             return null;
@@ -42235,7 +42863,7 @@ ${lastSnapshot}`;
             this.cliScripts = scripts;
             this.parsedStatusCache = null;
             this.parseErrorMessage = null;
-            this.scriptState = typeof scripts.createState === "function" ? scripts.createState() : null;
+            this.scriptState = typeof scripts.createState === "function" ? scripts.createState() ?? null : null;
             const scriptNames = listCliScriptNames(scripts);
             LOG.info("CLI", `[${this.cliType}] CLI scripts injected: [${scriptNames.join(", ")}]`);
           }
@@ -43224,7 +43852,8 @@ ${lastSnapshot}`;
             const screenText = this.readTerminalScreenText();
             const parseScreenText = this.getParseScreenText(screenText);
             const cached2 = this.parsedStatusCache;
-            if (cached2 && cached2.responseBuffer === this.responseBuffer && cached2.currentTurnScope === this.currentTurnScope && cached2.recentOutputBuffer === this.recentOutputBuffer && cached2.accumulatedBuffer === this.accumulatedBuffer && cached2.accumulatedRawBuffer === this.accumulatedRawBuffer && cached2.screenText === parseScreenText && cached2.currentStatus === this.currentStatus && cached2.activeModal === this.activeModal && cached2.cliName === this.cliName) {
+            const accumulatedRawBufferKey = this.getAccumulatedRawBufferCacheKey();
+            if (cached2 && cached2.responseBuffer === this.responseBuffer && cached2.currentTurnScope === this.currentTurnScope && cached2.recentOutputBuffer === this.recentOutputBuffer && cached2.accumulatedBuffer === this.accumulatedBuffer && cached2.accumulatedRawBufferKey === accumulatedRawBufferKey && cached2.screenText === parseScreenText && cached2.currentStatus === this.currentStatus && cached2.activeModal === this.activeModal && cached2.cliName === this.cliName) {
               return cached2.result;
             }
             const parsed = this.runParseSession();
@@ -43252,7 +43881,7 @@ ${lastSnapshot}`;
               currentTurnScope: this.currentTurnScope,
               recentOutputBuffer: this.recentOutputBuffer,
               accumulatedBuffer: this.accumulatedBuffer,
-              accumulatedRawBuffer: this.accumulatedRawBuffer,
+              accumulatedRawBufferKey,
               screenText: parseScreenText,
               currentStatus: this.currentStatus,
               activeModal: this.activeModal,
@@ -43277,7 +43906,7 @@ ${lastSnapshot}`;
               scope: this.currentTurnScope,
               runtimeSettings: this.runtimeSettings
             });
-            return await Promise.resolve(fn(this.scriptState, {
+            return await Promise.resolve(this.invokeCliScript(fn, {
               ...input,
               args: args && typeof args === "object" ? { ...args } : {}
             }));
@@ -44013,7 +44642,7 @@ ${lastSnapshot}`;
       }
     });
     init_repo_mesh_types();
-    execFileAsync = (0, import_util4.promisify)(import_child_process3.execFile);
+    execFileAsync = (0, import_util4.promisify)(import_child_process4.execFile);
     DEFAULT_TIMEOUT_MS = 5e3;
     DEFAULT_MAX_BUFFER = 1024 * 1024;
     GitCommandError = class extends Error {
@@ -44272,6 +44901,34 @@ ${lastSnapshot}`;
     init_mesh_ledger();
     init_mesh_work_queue();
     init_mesh_events();
+    NO_FALLBACK_REASON = "Repo Mesh command/data-plane is P2P-only; WS/REST command fallback is intentionally disabled to preserve the transport boundary.";
+    P2P_NEXT_ACTION = "Check daemon/P2P health, wait briefly for connection establishment, then do one bounded retry or requeue the mesh task after clearing stale target session metadata.";
+    NON_P2P_NEXT_ACTION = "Inspect the provider/command error and fix the underlying logic or configuration before retrying.";
+    P2pRelayFailureError = class extends Error {
+      code;
+      reason;
+      transport;
+      recoverable;
+      retryRecommended;
+      nextAction;
+      noFallbackReason;
+      command;
+      targetDaemonId;
+      constructor(message, context = {}) {
+        super(message);
+        this.name = "P2pRelayFailureError";
+        const payload = buildP2pRelayFailurePayload(message, context);
+        this.code = payload.code;
+        this.reason = payload.reason;
+        this.transport = payload.transport;
+        this.recoverable = payload.recoverable;
+        this.retryRecommended = payload.retryRecommended;
+        this.nextAction = payload.nextAction;
+        this.noFallbackReason = payload.noFallbackReason;
+        this.command = context.command;
+        this.targetDaemonId = context.targetDaemonId;
+      }
+    };
     init_config();
     DEFAULT_STATE = {
       recentActivity: [],
@@ -44283,6 +44940,7 @@ ${lastSnapshot}`;
     };
     BUILTIN_IDE_DEFINITIONS = [];
     registeredIDEs = /* @__PURE__ */ new Map();
+    init_cli_detector();
     LIVE_LIFECYCLES = /* @__PURE__ */ new Set(["starting", "running", "stopping", "interrupted"]);
     DEFAULT_ACTIVE_CHAT_POLL_STATUSES = /* @__PURE__ */ new Set([
       "generating",
@@ -48014,9 +48672,12 @@ ${effect.notification.body || ""}`.trim();
       }
     };
     init_provider_cli_adapter();
+    init_cli_detector();
     init_config();
     init_provider_cli_adapter();
     init_logger();
+    COMPLETED_FINALIZATION_RETRY_MS = 1e3;
+    COMPLETED_FINALIZATION_MAX_WAIT_MS = 3e4;
     IMAGE_MIME_EXTENSIONS = {
       "image/png": ".png",
       "image/jpeg": ".jpg",
@@ -48202,10 +48863,12 @@ ${effect.notification.body || ""}`.trim();
         const mergedMessages = this.mergeConversationMessages(parsedMessages);
         const canonicalBackedHistory = this.syncCanonicalSavedHistoryIfNeeded();
         const dirName = this.workingDir.split("/").filter(Boolean).pop() || "session";
+        const parsedChatStatus = typeof parsedStatus?.status === "string" && parsedStatus.status.trim() ? parsedStatus.status.trim() : void 0;
+        const suppressStaleParsedBusyStatus = this.shouldSuppressStaleParsedBusyStatus(parsedStatus, adapterStatus);
         if (parsedMessages.length > 0) {
           const shouldSkipReplayPersist = this.suppressIdleHistoryReplay && adapterStatus.status === "idle" && parsedStatus?.status === "idle";
           let messagesToSave = parsedMessages;
-          if (parsedStatus?.status === "generating" || parsedStatus?.status === "long_generating") {
+          if (!suppressStaleParsedBusyStatus && (parsedChatStatus === "generating" || parsedChatStatus === "long_generating")) {
             const lastIdx = messagesToSave.length - 1;
             if (lastIdx >= 0 && messagesToSave[lastIdx]?.role === "assistant") {
               messagesToSave = messagesToSave.slice(0, lastIdx);
@@ -48239,6 +48902,7 @@ ${effect.notification.body || ""}`.trim();
           summaryMetadata: this.summaryMetadata,
           controlValues: this.controlValues
         });
+        const activeChatStatus = parseErrorMessage ? "error" : autoApproveActive && parsedStatus?.status === "waiting_approval" ? "generating" : adapterStatus.status !== "idle" ? visibleStatus : suppressStaleParsedBusyStatus ? visibleStatus : parsedChatStatus || visibleStatus;
         return {
           type: this.type,
           name: this.provider.name,
@@ -48248,7 +48912,7 @@ ${effect.notification.body || ""}`.trim();
           activeChat: {
             id: `${this.type}_${this.workingDir}`,
             title: parsedStatus?.title || dirName,
-            status: parseErrorMessage ? "error" : autoApproveActive && parsedStatus?.status === "waiting_approval" ? "generating" : adapterStatus.status !== "idle" ? visibleStatus : parsedStatus?.status || visibleStatus,
+            status: activeChatStatus,
             messages: mergedMessages,
             activeModal: autoApproveActive ? null : parsedStatus?.activeModal ?? adapterStatus.activeModal,
             inputContent: ""
@@ -48378,6 +49042,102 @@ ${effect.notification.body || ""}`.trim();
         }
         this.applyProviderResponse(parsed.payload, { phase: "immediate" });
       }
+      completionHasFinalAssistantMessage(messages) {
+        const visibleMessages = (Array.isArray(messages) ? messages : []).filter((message) => isUserFacingChatMessage(message));
+        const lastVisible = visibleMessages[visibleMessages.length - 1];
+        const role = typeof lastVisible?.role === "string" ? lastVisible.role.trim().toLowerCase() : "";
+        const content = lastVisible ? flattenContent(lastVisible.content).trim() : "";
+        return role === "assistant" && !!content;
+      }
+      hasAdapterPendingResponse() {
+        const adapterAny = this.adapter;
+        if (adapterAny?.isWaitingForResponse === true) return true;
+        if (adapterAny?.currentTurnScope) return true;
+        try {
+          if (typeof this.adapter.isProcessing === "function" && this.adapter.isProcessing()) return true;
+        } catch {
+        }
+        try {
+          const partial2 = typeof this.adapter.getPartialResponse === "function" ? this.adapter.getPartialResponse() : "";
+          if (typeof partial2 === "string" && partial2.trim()) return true;
+        } catch {
+        }
+        return false;
+      }
+      shouldSuppressStaleParsedBusyStatus(parsedStatus, adapterStatus) {
+        const parsedRawStatus = typeof parsedStatus?.status === "string" ? parsedStatus.status.trim() : "";
+        const adapterRawStatus = typeof adapterStatus?.status === "string" ? adapterStatus.status.trim() : "";
+        if (!isCliGeneratingLikeStatus(parsedRawStatus)) return false;
+        if (adapterRawStatus !== "idle") return false;
+        if (hasNonEmptyCliModalButtons(parsedStatus?.activeModal ?? parsedStatus?.modal)) return false;
+        return !this.hasAdapterPendingResponse();
+      }
+      getCompletedFinalizationBlockReason(latestVisibleStatus) {
+        if (latestVisibleStatus !== "idle") return `status:${latestVisibleStatus}`;
+        const adapterAny = this.adapter;
+        if (adapterAny?.isWaitingForResponse === true) return "adapter_waiting_for_response";
+        if (adapterAny?.currentTurnScope) return "adapter_turn_scope_active";
+        const partial2 = typeof this.adapter.getPartialResponse === "function" ? this.adapter.getPartialResponse() : "";
+        if (typeof partial2 === "string" && partial2.trim()) return "partial_response_pending";
+        let parsed;
+        try {
+          parsed = this.adapter.getScriptParsedStatus();
+        } catch (error48) {
+          return `parse_error:${error48?.message || String(error48)}`;
+        }
+        const parsedStatus = typeof parsed?.status === "string" ? parsed.status : "unknown";
+        if (parsedStatus !== "idle") return `parsed_status:${parsedStatus}`;
+        if (parsed?.activeModal || parsed?.modal) return "parsed_modal_active";
+        if (!this.completionHasFinalAssistantMessage(parsed?.messages)) return "missing_final_assistant";
+        return null;
+      }
+      scheduleCompletedDebounceFlush(delayMs) {
+        if (this.completedDebounceTimer) clearTimeout(this.completedDebounceTimer);
+        this.completedDebounceTimer = setTimeout(() => this.flushCompletedDebounceIfFinalized(), delayMs);
+      }
+      flushCompletedDebounceIfFinalized() {
+        const pending = this.completedDebouncePending;
+        if (!pending) {
+          this.completedDebounceTimer = null;
+          return;
+        }
+        const latestStatus = this.adapter.getStatus({ allowParse: false });
+        const latestAutoApproveActive = latestStatus.status === "waiting_approval" && this.shouldAutoApprove();
+        const latestVisibleStatus = latestAutoApproveActive ? "generating" : latestStatus.status;
+        if (latestVisibleStatus !== "idle") {
+          LOG.info("CLI", `[${this.type}] cancelled pending completed (resumed ${latestVisibleStatus})`);
+          this.completedDebouncePending = null;
+          this.completedDebounceTimer = null;
+          return;
+        }
+        const blockReason = this.getCompletedFinalizationBlockReason(latestVisibleStatus);
+        if (blockReason) {
+          const waitedMs = Date.now() - pending.firstObservedAt;
+          if (waitedMs < COMPLETED_FINALIZATION_MAX_WAIT_MS) {
+            if (pending.loggedBlockReason !== blockReason) {
+              LOG.info("CLI", `[${this.type}] waiting to emit completed until transcript finalizes (${blockReason})`);
+              pending.loggedBlockReason = blockReason;
+            }
+            this.scheduleCompletedDebounceFlush(COMPLETED_FINALIZATION_RETRY_MS);
+            return;
+          }
+          LOG.warn("CLI", `[${this.type}] suppressed completed event after ${waitedMs}ms without finalized assistant turn (${blockReason})`);
+          this.completedDebouncePending = null;
+          this.completedDebounceTimer = null;
+          this.generatingStartedAt = 0;
+          return;
+        }
+        LOG.info("CLI", `[${this.type}] completed in ${pending.duration}s`);
+        this.pushEvent({
+          event: "agent:generating_completed",
+          chatTitle: pending.chatTitle,
+          duration: pending.duration,
+          timestamp: pending.timestamp
+        });
+        this.completedDebouncePending = null;
+        this.completedDebounceTimer = null;
+        this.generatingStartedAt = 0;
+      }
       maybeAutoApproveStatus(adapterStatus, now = Date.now()) {
         const autoApproveActive = adapterStatus?.status === "waiting_approval" && this.shouldAutoApprove();
         if (autoApproveActive && !this.autoApproveBusy) {
@@ -48475,26 +49235,8 @@ ${effect.notification.body || ""}`.trim();
               this.generatingDebouncePending = null;
               this.generatingStartedAt = 0;
             } else {
-              if (this.completedDebounceTimer) clearTimeout(this.completedDebounceTimer);
-              this.completedDebouncePending = { chatTitle, duration: duration3, timestamp: now };
-              this.completedDebounceTimer = setTimeout(() => {
-                if (this.completedDebouncePending) {
-                  const latestStatus = this.adapter.getStatus({ allowParse: false });
-                  const latestAutoApproveActive = latestStatus.status === "waiting_approval" && this.shouldAutoApprove();
-                  const latestVisibleStatus = latestAutoApproveActive ? "generating" : latestStatus.status;
-                  if (latestVisibleStatus !== "idle") {
-                    LOG.info("CLI", `[${this.type}] cancelled pending completed (resumed ${latestVisibleStatus})`);
-                    this.completedDebouncePending = null;
-                    this.completedDebounceTimer = null;
-                    return;
-                  }
-                  LOG.info("CLI", `[${this.type}] completed in ${this.completedDebouncePending.duration}s`);
-                  this.pushEvent({ event: "agent:generating_completed", ...this.completedDebouncePending });
-                  this.completedDebouncePending = null;
-                  this.generatingStartedAt = 0;
-                }
-                this.completedDebounceTimer = null;
-              }, 3e3);
+              this.completedDebouncePending = { chatTitle, duration: duration3, timestamp: now, firstObservedAt: now };
+              this.scheduleCompletedDebounceFlush(3e3);
             }
           } else if (newStatus === "idle" && this.lastStatus === "starting") {
             this.pushEvent({ event: "agent:ready", chatTitle, timestamp: now });
@@ -52282,6 +53024,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
     };
     _providerLoader = null;
     init_config();
+    init_cli_detector();
     init_logger();
     LOG_DIR2 = process.platform === "win32" ? path21.join(process.env.LOCALAPPDATA || process.env.APPDATA || path21.join(os16.homedir(), "AppData", "Local"), "adhdev", "logs") : process.platform === "darwin" ? path21.join(os16.homedir(), "Library", "Logs", "adhdev") : path21.join(os16.homedir(), ".local", "share", "adhdev", "logs");
     MAX_FILE_SIZE = 5 * 1024 * 1024;
@@ -52330,6 +53073,11 @@ Run 'adhdev doctor' for detailed diagnostics.`
       stable: "https://api.adhf.dev",
       preview: "https://api-preview.adhf.dev"
     };
+    REFINE_VALIDATION_CATEGORIES = ["typecheck", "test", "lint", "build"];
+    REFINE_VALIDATION_TIMEOUT_MS = 12e4;
+    REFINE_VALIDATION_OUTPUT_LIMIT_BYTES = 128 * 1024;
+    REFINE_VALIDATION_SUMMARY_CHARS = 2e3;
+    REFINE_VALIDATION_MAX_COMMANDS = 4;
     CHAT_COMMANDS = [
       "send_chat",
       "new_chat",
@@ -52392,6 +53140,167 @@ Run 'adhdev doctor' for detailed diagnostics.`
         if (workspace && record2?.workspace === workspace) return true;
         if (record2?.meta?.meshNodeId === nodeId) return true;
         return false;
+      }
+      async cleanupLocalWorktreeNode(args) {
+        const workspace = typeof args.node?.workspace === "string" ? args.node.workspace.trim() : "";
+        if (!workspace) {
+          return {
+            success: false,
+            code: "mesh_worktree_cleanup_missing_workspace",
+            error: `Worktree node '${args.nodeId}' is missing workspace metadata`,
+            recoveryHint: "Inspect the mesh node record before removing it, or remove stale metadata manually only after confirming no managed worktree remains."
+          };
+        }
+        const worktreeExists = fs10.existsSync(workspace);
+        const sourceNode = args.node?.clonedFromNodeId ? args.mesh?.nodes?.find((n) => n.id === args.node.clonedFromNodeId || n.nodeId === args.node.clonedFromNodeId) : args.mesh?.nodes?.find((n) => !n.isLocalWorktree);
+        const repoRoot = typeof sourceNode?.repoRoot === "string" && sourceNode.repoRoot.trim() ? sourceNode.repoRoot.trim() : typeof sourceNode?.workspace === "string" && sourceNode.workspace.trim() ? sourceNode.workspace.trim() : "";
+        if (!worktreeExists) {
+          return { success: true, skipped: true, removedPath: workspace, repoRoot: repoRoot || void 0, reason: "worktree_path_missing" };
+        }
+        if (!repoRoot || !fs10.existsSync(repoRoot)) {
+          return {
+            success: false,
+            code: "mesh_worktree_cleanup_missing_source_repo",
+            error: `Refusing to remove worktree '${workspace}' because the source repo root is unavailable`,
+            recoveryHint: "Run mesh_remove_node from the machine that owns the source repo, or verify the source node metadata before retrying."
+          };
+        }
+        if (typeof args.node?.worktreeBranch !== "string" || !args.node.worktreeBranch.trim()) {
+          return {
+            success: false,
+            code: "mesh_worktree_cleanup_missing_branch",
+            error: `Refusing to remove worktree '${workspace}' because worktreeBranch metadata is missing`,
+            recoveryHint: "Confirm this is an ADHDev-managed worktree before removing it manually; managed worktree nodes include worktreeBranch metadata."
+          };
+        }
+        const { resolveWorktreePath: resolveWorktreePath2, listWorktrees: listWorktrees2, removeWorktree: removeWorktree2 } = await Promise.resolve().then(() => (init_git_worktree(), git_worktree_exports));
+        const normalizePath2 = (value) => {
+          const resolved = (0, import_path7.resolve)(value);
+          try {
+            return fs10.realpathSync(resolved);
+          } catch {
+            return resolved;
+          }
+        };
+        const expectedPath = normalizePath2(resolveWorktreePath2(repoRoot, String(args.mesh?.name || args.mesh?.id || "mesh"), args.node.worktreeBranch));
+        const actualPath = normalizePath2(workspace);
+        if (actualPath !== expectedPath) {
+          return {
+            success: false,
+            code: "mesh_worktree_cleanup_unexpected_path",
+            error: `Refusing to remove worktree '${workspace}' because it is not at the expected managed path '${expectedPath}'`,
+            recoveryHint: "Use git worktree list/status to inspect the path. Retry only after confirming the mesh node metadata points to an ADHDev-managed worktree."
+          };
+        }
+        const entries = await listWorktrees2(repoRoot);
+        const managedEntry = entries.find((entry) => normalizePath2(entry.path) === actualPath);
+        if (!managedEntry) {
+          return {
+            success: false,
+            code: "mesh_worktree_cleanup_not_registered",
+            error: `Refusing to remove '${workspace}' because it is not registered in git worktree list for '${repoRoot}'`,
+            recoveryHint: "Inspect git worktree list --porcelain from the source repo. If the path was already removed, prune git worktrees before retrying."
+          };
+        }
+        if (managedEntry.branch && managedEntry.branch !== args.node.worktreeBranch) {
+          return {
+            success: false,
+            code: "mesh_worktree_cleanup_branch_mismatch",
+            error: `Refusing to remove '${workspace}' because git reports branch '${managedEntry.branch}', expected '${args.node.worktreeBranch}'`,
+            recoveryHint: "Inspect the worktree branch and mesh metadata before retrying cleanup."
+          };
+        }
+        const forceFallbackConvergence = await this.getWorktreeForceCleanupConvergence({
+          repoRoot,
+          workspace,
+          node: args.node
+        });
+        try {
+          const result = await removeWorktree2(repoRoot, workspace, {
+            requireClean: true,
+            allowSubmoduleForceFallback: forceFallbackConvergence.allow
+          });
+          return {
+            success: true,
+            removedPath: result.removedPath,
+            repoRoot,
+            ...result.fallback ? {
+              fallback: result.fallback,
+              forced: result.forced,
+              reason: result.reason,
+              convergence: forceFallbackConvergence
+            } : {}
+          };
+        } catch (e) {
+          const message = String(e?.message || e || "worktree cleanup failed");
+          const dirty = message.includes("dirty worktree") || message.includes("local changes");
+          const submoduleForceBlocked = /working trees containing submodules cannot be moved or removed/i.test(message) && !forceFallbackConvergence.allow;
+          return {
+            success: false,
+            code: dirty ? "mesh_worktree_cleanup_dirty" : submoduleForceBlocked ? "mesh_worktree_cleanup_force_fallback_blocked" : "mesh_worktree_cleanup_failed",
+            error: submoduleForceBlocked ? `${message}; refusing --force fallback because convergence could not be verified: ${forceFallbackConvergence.error || "unknown convergence state"}` : message,
+            recoveryHint: dirty ? "Commit, stash, or intentionally discard the worktree changes before retrying mesh_remove_node. The mesh registry entry is preserved until cleanup is safe." : submoduleForceBlocked ? "Verify the worktree branch is merged/contained in the source default branch (for example origin/main) or mark the node with a safe branchConvergence final state before retrying. The mesh registry entry is preserved." : "Inspect git worktree status/list from the source repo and retry after resolving the reported cleanup failure.",
+            ...submoduleForceBlocked ? { convergence: forceFallbackConvergence } : {}
+          };
+        }
+      }
+      async getWorktreeForceCleanupConvergence(args) {
+        const metadataStatus = typeof args.node?.branchConvergence?.status === "string" ? args.node.branchConvergence.status : "";
+        if (metadataStatus === "merged_to_main" || metadataStatus === "cleanup_candidate") {
+          return { allow: true, status: metadataStatus, source: "node_branch_convergence" };
+        }
+        const { execFile: execFile3 } = await import("child_process");
+        const { promisify: promisify3 } = await import("util");
+        const execFileAsync3 = promisify3(execFile3);
+        const runGit2 = async (gitArgs, cwd) => {
+          const { stdout } = await execFileAsync3("git", gitArgs, {
+            cwd,
+            encoding: "utf8",
+            timeout: 3e4,
+            maxBuffer: 4 * 1024 * 1024,
+            windowsHide: true
+          });
+          return String(stdout || "").trim();
+        };
+        let head = "";
+        try {
+          head = await runGit2(["rev-parse", "HEAD"], args.workspace);
+        } catch (e) {
+          return { allow: false, error: `could not resolve worktree HEAD: ${e?.message || e}` };
+        }
+        if (!head) return { allow: false, error: "worktree HEAD is empty" };
+        const candidateRefs = [];
+        try {
+          const defaultBranch = await runGit2(["branch", "--show-current"], args.repoRoot);
+          if (defaultBranch) {
+            candidateRefs.push(defaultBranch, `origin/${defaultBranch}`);
+          }
+        } catch {
+        }
+        candidateRefs.push("origin/main", "origin/master", "main", "master");
+        const seen = /* @__PURE__ */ new Set();
+        const checkedRefs = [];
+        for (const ref of candidateRefs) {
+          if (!ref || seen.has(ref)) continue;
+          seen.add(ref);
+          let commit = "";
+          try {
+            commit = await runGit2(["rev-parse", "--verify", `${ref}^{commit}`], args.repoRoot);
+          } catch {
+            continue;
+          }
+          checkedRefs.push(ref);
+          try {
+            await runGit2(["merge-base", "--is-ancestor", head, commit], args.repoRoot);
+            return { allow: true, status: "merged_to_default_ref", source: "git_merge_base", ref };
+          } catch {
+          }
+        }
+        return {
+          allow: false,
+          status: metadataStatus || void 0,
+          error: checkedRefs.length ? `worktree HEAD is not contained in checked refs: ${checkedRefs.join(", ")}` : "no default/main refs were available for convergence verification"
+        };
       }
       isCompletedHostedSession(record2) {
         return record2?.lifecycle === "stopped" || record2?.lifecycle === "failed" || record2?.lifecycle === "interrupted";
@@ -53220,10 +54129,21 @@ Run 'adhdev doctor' for detailed diagnostics.`
             const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
             if (!meshId) return { success: false, error: "meshId required" };
             try {
-              const { getQueue: getQueue2 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
+              const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue2 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
               const status = Array.isArray(args?.status) ? args.status.map((s) => typeof s === "string" ? s.trim() : "").filter(Boolean) : void 0;
               const queue = getQueue2(meshId, { status });
-              return { success: true, queue };
+              const summary = getMeshQueueStats2(meshId);
+              return {
+                success: true,
+                queue,
+                summary,
+                sourceOfTruth: {
+                  kind: "mesh_work_queue_file",
+                  activeStatuses: ["pending", "assigned"],
+                  historicalStatuses: ["completed", "failed", "cancelled"],
+                  notes: "pending/assigned are active work; completed/failed/cancelled are historical records."
+                }
+              };
             } catch (e) {
               return { success: false, error: e.message };
             }
@@ -53352,10 +54272,61 @@ Run 'adhdev doctor' for detailed diagnostics.`
               if (!branch) return { success: false, error: "Could not determine branch of the worktree node" };
               const { stdout: baseBranchStdout } = await execFileAsync3("git", ["branch", "--show-current"], { cwd: repoRoot, encoding: "utf8" });
               const baseBranch = baseBranchStdout.trim();
+              const validationSummary = await runMeshRefineValidationGate(mesh, node.workspace);
+              if (validationSummary.status === "failed") {
+                return {
+                  success: false,
+                  code: "validation_failed",
+                  convergenceStatus: "blocked_review",
+                  error: "Refinery validation gate failed; merge/refine was not attempted.",
+                  branch,
+                  into: baseBranch,
+                  validationSummary,
+                  finalBranchConvergenceState: {
+                    branch,
+                    baseBranch,
+                    merged: false,
+                    removed: false,
+                    validation: "failed",
+                    status: "blocked_review"
+                  }
+                };
+              }
+              if (validationSummary.status === "skipped") {
+                return {
+                  success: false,
+                  code: "validation_unavailable",
+                  convergenceStatus: "blocked_review",
+                  error: "Refinery validation gate is required but no allowlisted validation command was available; merge/refine was not attempted.",
+                  branch,
+                  into: baseBranch,
+                  validationSummary,
+                  finalBranchConvergenceState: {
+                    branch,
+                    baseBranch,
+                    merged: false,
+                    removed: false,
+                    validation: "unavailable",
+                    status: "blocked_review"
+                  }
+                };
+              }
               try {
                 await execFileAsync3("git", ["merge", "--no-ff", branch, "-m", `Auto-merge branch '${branch}' via Refinery`], { cwd: repoRoot, encoding: "utf8" });
               } catch (e) {
-                return { success: false, error: `Merge failed (conflicts?): ${e.message}` };
+                return {
+                  success: false,
+                  error: `Merge failed (conflicts?): ${e.message}`,
+                  validationSummary,
+                  finalBranchConvergenceState: {
+                    branch,
+                    baseBranch,
+                    merged: false,
+                    removed: false,
+                    validation: "passed",
+                    status: "not_mergeable"
+                  }
+                };
               }
               const removeResult = await this.execute("remove_mesh_node", {
                 meshId,
@@ -53368,11 +54339,27 @@ Run 'adhdev doctor' for detailed diagnostics.`
                 appendLedgerEntry2(meshId, {
                   kind: "node_removed",
                   nodeId,
-                  payload: { refined: true, mergedBranch: branch, into: baseBranch }
+                  payload: { refined: true, mergedBranch: branch, into: baseBranch, validationSummary }
                 });
               } catch {
               }
-              return { success: true, merged: true, branch, into: baseBranch, removeResult };
+              return {
+                success: true,
+                merged: true,
+                branch,
+                into: baseBranch,
+                removeResult,
+                validationSummary,
+                finalBranchConvergenceState: {
+                  branch: baseBranch,
+                  mergedBranch: branch,
+                  baseBranch,
+                  merged: true,
+                  removed: removeResult?.success !== false,
+                  validation: "passed",
+                  status: removeResult?.success === false ? "merged_cleanup_failed" : "merged"
+                }
+              };
             } catch (e) {
               return { success: false, error: e.message };
             }
@@ -53393,17 +54380,21 @@ Run 'adhdev doctor' for detailed diagnostics.`
                 sessionCleanup = await this.cleanupMeshSessions({ meshId, nodeId, node, mode: sessionCleanupMode });
                 if (sessionCleanup.success === false) return { success: false, removed: false, sessionCleanup };
               }
-              if (node?.isLocalWorktree && node.workspace) {
-                try {
-                  const sourceNode = node.clonedFromNodeId ? mesh?.nodes.find((n) => n.id === node.clonedFromNodeId || n.nodeId === node.clonedFromNodeId) : mesh?.nodes.find((n) => !n.isLocalWorktree);
-                  const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
-                  if (repoRoot) {
-                    const { removeWorktree: removeWorktree2 } = await Promise.resolve().then(() => (init_git_worktree(), git_worktree_exports));
-                    await removeWorktree2(repoRoot, node.workspace);
-                  }
-                } catch (e) {
-                  LOG.warn("MeshNode", `Worktree cleanup failed for ${nodeId}: ${e.message}`);
+              let worktreeCleanup;
+              if (node?.isLocalWorktree) {
+                const cleanupResult = await this.cleanupLocalWorktreeNode({ mesh, node, nodeId });
+                if (cleanupResult.success === false) {
+                  return {
+                    success: false,
+                    removed: false,
+                    code: cleanupResult.code,
+                    error: cleanupResult.error,
+                    recoveryHint: cleanupResult.recoveryHint,
+                    ...sessionCleanup ? { sessionCleanup } : {},
+                    worktreeCleanup: cleanupResult
+                  };
                 }
+                worktreeCleanup = cleanupResult;
               }
               let removed = false;
               if (meshRecord?.inline) {
@@ -53423,13 +54414,16 @@ Run 'adhdev doctor' for detailed diagnostics.`
                       sessionCleanupMode,
                       workspace: typeof node?.workspace === "string" ? node.workspace : void 0,
                       daemonId: typeof node?.daemonId === "string" ? node.daemonId : void 0,
-                      worktreeBranch: typeof node?.worktreeBranch === "string" ? node.worktreeBranch : void 0
+                      worktreeBranch: typeof node?.worktreeBranch === "string" ? node.worktreeBranch : void 0,
+                      worktreeCleanupFallback: typeof worktreeCleanup?.fallback === "string" ? worktreeCleanup.fallback : void 0,
+                      forced: worktreeCleanup?.forced === true ? true : void 0,
+                      forceFallbackReason: typeof worktreeCleanup?.reason === "string" ? worktreeCleanup.reason : void 0
                     }
                   });
                 } catch {
                 }
               }
-              return { success: true, removed, ...sessionCleanup ? { sessionCleanup } : {} };
+              return { success: true, removed, ...sessionCleanup ? { sessionCleanup } : {}, ...worktreeCleanup ? { worktreeCleanup } : {} };
             } catch (e) {
               return { success: false, error: e.message };
             }
@@ -53464,6 +54458,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
                   workspace: result.worktreePath,
                   repoRoot: result.worktreePath,
                   daemonId: sourceNode.daemonId,
+                  machineId: sourceNode.machineId ?? sourceNode.machine_id,
                   userOverrides: { ...sourceNode.userOverrides || {} },
                   policy: { ...sourceNode.policy || {} },
                   isLocalWorktree: true,
@@ -53477,6 +54472,7 @@ Run 'adhdev doctor' for detailed diagnostics.`
                   workspace: result.worktreePath,
                   repoRoot: result.worktreePath,
                   daemonId: sourceNode.daemonId,
+                  machineId: sourceNode.machineId ?? sourceNode.machine_id,
                   userOverrides: { ...sourceNode.userOverrides || {} },
                   isLocalWorktree: true,
                   worktreeBranch: result.branch,
@@ -53759,7 +54755,8 @@ ${block}`);
               if (hadExistingMcpConfig) {
                 try {
                   const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(readFileSync17(mcpConfigPath, "utf-8"), configFormat);
-                  existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
+                  const existingCoordinatorConfig = hermesManualFallback ? stripHermesCoordinatorTempModelProviderOverrides(parsedExistingMcpConfig) : parsedExistingMcpConfig;
+                  existingMcpConfig = { ...existingMcpConfig, ...existingCoordinatorConfig };
                   copyFileSync4(mcpConfigPath, mcpConfigPath + ".backup");
                 } catch (error48) {
                   LOG.error("MeshCoordinator", `Failed to parse existing MCP config ${mcpConfigPath}: ${error48?.message || error48}`);
@@ -57317,6 +58314,7 @@ data: ${JSON.stringify(msg.data)}
         apiKeyName: "OpenAI/Anthropic API key"
       }
     ];
+    init_cli_detector();
     SessionRegistry = class {
       bySessionId = /* @__PURE__ */ new Map();
       byManagerKey = /* @__PURE__ */ new Map();
@@ -57587,6 +58585,9 @@ function readString(value) {
 }
 var DUPLICATE_DISPATCH_WINDOW_MS = 6e4;
 var STALE_ASSIGNED_QUEUE_MS = 30 * 6e4;
+var OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 6e4;
+var ACTIVE_QUEUE_STATUSES = /* @__PURE__ */ new Set(["pending", "assigned"]);
+var HISTORICAL_QUEUE_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
 async function refreshMeshFromDaemon(ctx) {
   if (!(ctx.transport instanceof IpcTransport)) return;
   try {
@@ -57712,30 +58713,194 @@ function buildMissingNodeReadChatRecovery(ctx, args) {
     ]
   };
 }
-function annotateQueueStaleness(queue) {
+function readSessionRecordId(session) {
+  return readString(session?.id) || readString(session?.sessionId) || readString(session?.session_id) || readString(session?.runtimeSessionId) || readString(session?.runtime_session_id) || readString(session?.instanceId) || readString(session?.instance_id);
+}
+function addSessionRecord(target, session) {
+  if (!session || typeof session !== "object" || isTerminalSessionRecord(session)) return;
+  const sessionId = readSessionRecordId(session);
+  if (sessionId) target.add(sessionId);
+}
+function collectNodeSessionIds(node) {
+  const sessions = /* @__PURE__ */ new Set();
+  const sessionArrays = [
+    node?.sessions,
+    node?.activeSessions,
+    node?.active_sessions,
+    node?.lastProbe?.sessions,
+    node?.last_probe?.sessions,
+    node?.lastProbe?.status?.sessions,
+    node?.last_probe?.status?.sessions
+  ];
+  for (const value of sessionArrays) {
+    if (Array.isArray(value)) value.forEach((session) => addSessionRecord(sessions, session));
+  }
+  const sessionRecords = [
+    node?.activeSession,
+    node?.active_session,
+    node?.currentSession,
+    node?.current_session,
+    node?.runtimeSession,
+    node?.runtime_session,
+    node?.session,
+    node?.lastProbe?.activeSession,
+    node?.last_probe?.active_session,
+    node?.lastProbe?.currentSession,
+    node?.last_probe?.current_session,
+    node?.lastProbe?.session,
+    node?.last_probe?.session
+  ];
+  sessionRecords.forEach((session) => addSessionRecord(sessions, session));
+  return sessions;
+}
+function buildQueueLivenessIndex(mesh) {
+  const nodeIds = /* @__PURE__ */ new Set();
+  const nodeSessionIds = /* @__PURE__ */ new Map();
+  for (const node of Array.isArray(mesh?.nodes) ? mesh.nodes : []) {
+    const nodeId = readString(node.id) || readString(node.nodeId) || readString(node.node_id);
+    if (!nodeId) continue;
+    nodeIds.add(nodeId);
+    const sessions = collectNodeSessionIds(node);
+    if (sessions.size > 0) nodeSessionIds.set(nodeId, sessions);
+  }
+  return { nodeIds, nodeSessionIds };
+}
+function queueAssignmentStaleReason(task, liveness) {
+  if (task?.status !== "assigned") return void 0;
+  const nodeId = readString(task.assignedNodeId) || readString(task.nodeId) || readString(task.node_id) || readString(task.targetNodeId);
+  const sessionId = readString(task.assignedSessionId) || readString(task.sessionId) || readString(task.session_id) || readString(task.targetSessionId);
+  if (nodeId && liveness.nodeIds.size > 0 && !liveness.nodeIds.has(nodeId)) {
+    return "assigned node is not present in the current mesh snapshot";
+  }
+  if (nodeId && sessionId && liveness.nodeSessionIds.has(nodeId) && !liveness.nodeSessionIds.get(nodeId).has(sessionId)) {
+    return "assigned session is not live on the assigned node";
+  }
+  const updatedAt = new Date(task.updatedAt).getTime();
+  const ageMs = Number.isFinite(updatedAt) ? Date.now() - updatedAt : null;
+  if (!nodeId && ageMs !== null && ageMs >= STALE_ASSIGNED_QUEUE_MS) {
+    return "assigned task has no assigned node metadata";
+  }
+  return void 0;
+}
+function buildQueueStatusSummary(queue) {
+  const counts = { pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0 };
+  for (const task of queue) {
+    const status = typeof task?.status === "string" ? task.status : void 0;
+    if (status && Object.prototype.hasOwnProperty.call(counts, status)) {
+      counts[status] += 1;
+    }
+  }
+  return {
+    totalCount: queue.length,
+    activeCount: counts.pending + counts.assigned,
+    historicalCount: counts.completed + counts.failed + counts.cancelled,
+    counts,
+    activeCounts: {
+      pending: counts.pending,
+      assigned: counts.assigned
+    },
+    historicalCounts: {
+      completed: counts.completed,
+      failed: counts.failed,
+      cancelled: counts.cancelled
+    }
+  };
+}
+function normalizeQueueViewMode(value) {
+  return value === "active" || value === "historical" || value === "all" ? value : "all";
+}
+function sanitizeQueueStatusFilter(value) {
+  if (!Array.isArray(value)) return void 0;
+  const statuses = value.map((item) => typeof item === "string" ? item.trim() : "").filter((status) => ACTIVE_QUEUE_STATUSES.has(status) || HISTORICAL_QUEUE_STATUSES.has(status));
+  return statuses.length ? Array.from(new Set(statuses)) : void 0;
+}
+function filterQueueForView(queue, view, statuses) {
+  if (statuses?.length) {
+    const allowed = new Set(statuses);
+    return queue.filter((task) => allowed.has(String(task?.status || "")));
+  }
+  if (view === "active") return queue.filter((task) => ACTIVE_QUEUE_STATUSES.has(String(task?.status || "")));
+  if (view === "historical") return queue.filter((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
+  return queue;
+}
+function slimQueueTask(task) {
+  return {
+    id: task?.id,
+    status: task?.status,
+    assignedNodeId: task?.assignedNodeId,
+    assignedSessionId: task?.assignedSessionId,
+    targetNodeId: task?.targetNodeId,
+    targetSessionId: task?.targetSessionId,
+    updatedAt: task?.updatedAt,
+    staleAssigned: task?.staleAssigned === true,
+    staleReason: task?.staleReason
+  };
+}
+function buildQueueMaintenanceReport(queue) {
+  const now = Date.now();
+  const staleAssignedTasks = queue.filter((task) => task?.status === "assigned" && task?.staleAssigned === true).map(slimQueueTask);
+  const historicalTasks = queue.filter((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
+  const oldHistoricalTasks = historicalTasks.filter((task) => {
+    const updatedAt = new Date(task?.updatedAt).getTime();
+    return Number.isFinite(updatedAt) && now - updatedAt >= OLD_HISTORICAL_QUEUE_RECORD_MS;
+  }).map((task) => ({
+    ...slimQueueTask(task),
+    cleanupClass: "old_historical_record",
+    reason: "terminal queue record is older than the read-only maintenance threshold"
+  }));
+  const cleanupCandidates = [
+    ...staleAssignedTasks.map((task) => ({
+      ...task,
+      cleanupClass: "stale_assigned",
+      reason: typeof task.staleReason === "string" ? task.staleReason : "active assigned task does not match current live mesh node/session state",
+      suggestedOperation: "operator_review_then_requeue_or_cancel"
+    })),
+    ...oldHistoricalTasks.map((task) => ({
+      ...task,
+      suggestedOperation: "operator_review_then_archive_or_keep"
+    }))
+  ];
+  return {
+    readOnly: true,
+    mutationPerformed: false,
+    sourceOfTruth: "mesh_work_queue_file",
+    staleAssignedDefinition: "Only active assigned queue rows are stale candidates, and only when the assigned node/session is absent from the current live mesh snapshot.",
+    historicalDefinition: "completed/failed/cancelled rows are historical ledger records and never active assignments.",
+    staleAssignedTasks,
+    staleAssignedCount: staleAssignedTasks.length,
+    historicalRecordCount: historicalTasks.length,
+    oldHistoricalRecordCount: oldHistoricalTasks.length,
+    cleanupCandidates,
+    cleanupCandidateCount: cleanupCandidates.length
+  };
+}
+function annotateQueueStaleness(queue, mesh) {
+  const liveness = buildQueueLivenessIndex(mesh);
   const now = Date.now();
   return queue.map((task) => {
     const taskStatus = typeof task?.status === "string" ? task.status : void 0;
     const annotated = {
       ...task,
       taskStatus,
+      isActive: taskStatus ? ACTIVE_QUEUE_STATUSES.has(taskStatus) : false,
+      isHistorical: taskStatus ? HISTORICAL_QUEUE_STATUSES.has(taskStatus) : false,
       dispatchedAt: task?.createdAt,
       ...taskStatus === "assigned" ? { activeTaskId: task.id } : {},
       ...taskStatus === "completed" || taskStatus === "failed" ? {
-        isHistorical: true,
         completedAt: task.updatedAt
       } : {}
     };
     if (taskStatus !== "assigned") return annotated;
     const updatedAt = new Date(task.updatedAt).getTime();
     const ageMs = Number.isFinite(updatedAt) ? now - updatedAt : null;
-    if (ageMs === null || ageMs < STALE_ASSIGNED_QUEUE_MS) return annotated;
+    const staleReason = queueAssignmentStaleReason(task, liveness);
+    if (!staleReason) return annotated;
     return {
       ...annotated,
       stale: true,
       staleAssigned: true,
-      staleReason: "assigned task has not reached a terminal state within 30 minutes",
-      assignedAgeMs: ageMs
+      staleReason,
+      ...ageMs !== null ? { assignedAgeMs: ageMs } : {}
     };
   });
 }
@@ -57802,16 +58967,38 @@ function extractLaunchPayload(value) {
 function classifyMeshLaunchFailure(error48) {
   const message = error48 instanceof Error ? error48.message : String(error48 || "launch failed");
   const lower = message.toLowerCase();
-  if (lower.includes("p2p") || lower.includes("datachannel") || lower.includes("node-datachannel")) {
-    return { code: "p2p_unavailable", reason: "daemon_mesh_p2p_transport_unavailable", transport: "daemon_mesh_p2p" };
+  const p2pClassification = classifyP2pRelayFailure(error48, { command: "launch_cli" });
+  if (p2pClassification.recoverable) {
+    return p2pClassification;
   }
   if (lower.includes("cannot connect to daemon ipc") || lower.includes("daemon ipc command")) {
-    return { code: "local_ipc_unavailable", reason: "local_daemon_ipc_unavailable", transport: "local_ipc" };
+    return {
+      code: "local_ipc_unavailable",
+      reason: "local_daemon_ipc_unavailable",
+      transport: "local_ipc",
+      recoverable: true,
+      retryRecommended: true,
+      nextAction: "Check the local daemon IPC connection, then retry mesh_launch_session once after the daemon is reachable."
+    };
   }
   if (lower.includes("timed out") || lower.includes("timeout")) {
-    return { code: "mesh_transport_timeout", reason: "mesh_transport_timeout", transport: "mesh_transport" };
+    return {
+      code: "mesh_transport_timeout",
+      reason: "mesh_transport_timeout",
+      transport: "mesh_transport",
+      recoverable: true,
+      retryRecommended: true,
+      nextAction: "Check mesh transport health, then do one bounded retry before requeueing or relaunching the task."
+    };
   }
-  return { code: "mesh_launch_failed", reason: "provider_launch_failed", transport: "mesh_transport" };
+  return {
+    code: "mesh_launch_failed",
+    reason: "provider_launch_failed",
+    transport: "mesh_transport",
+    recoverable: false,
+    retryRecommended: false,
+    nextAction: "Inspect the provider launch error and fix the underlying provider/configuration issue before retrying."
+  };
 }
 function buildWorktreeCleanupHint(node) {
   if (!node.isLocalWorktree) return void 0;
@@ -57827,10 +59014,13 @@ function buildRecoverableLaunchFailure(ctx, node, providerType, error48) {
   const cleanup = buildWorktreeCleanupHint(node);
   return {
     success: false,
-    recoverable: true,
+    recoverable: classified.recoverable,
     code: classified.code,
     reason: classified.reason,
     transport: classified.transport,
+    retryRecommended: classified.retryRecommended,
+    nextAction: classified.nextAction,
+    ...classified.noFallbackReason ? { noFallbackReason: classified.noFallbackReason } : {},
     error: message,
     meshId: ctx.mesh.id,
     nodeId: node.id,
@@ -57877,6 +59067,18 @@ function getLatestActiveLaunchFailure(meshId, nodeId) {
   }
   return null;
 }
+function buildCoordinatorP2pRelayFailure(error48, context) {
+  const payload = buildP2pRelayFailurePayload(error48, {
+    command: context.command,
+    targetDaemonId: context.targetDaemonId
+  });
+  return {
+    ...payload,
+    ...context.nodeId ? { nodeId: context.nodeId } : {},
+    ...context.sessionId ? { sessionId: context.sessionId } : {},
+    retryHint: payload.retryRecommended ? payload.nextAction : "Do not retry as a P2P transport recovery; inspect the command/provider error first."
+  };
+}
 async function ipcDispatchToRemoteAgent(ctx, node, args) {
   const transport = ctx.transport;
   const daemonId = node.daemonId;
@@ -57912,11 +59114,32 @@ async function ipcDispatchToRemoteAgent(ctx, node, args) {
     });
     const dispatchPayload = unwrapCommandPayload(dispatchResult);
     if (dispatchPayload?.success === false || dispatchResult?.success === false) {
-      return { success: false, error: `P2P dispatch failed: ${dispatchPayload?.error || dispatchResult?.error || "agent_command rejected the task"}` };
+      const source = dispatchPayload?.success === false ? dispatchPayload : dispatchResult;
+      const errorMessage = dispatchPayload?.error || dispatchResult?.error || "agent_command rejected the task";
+      return {
+        ...buildCoordinatorP2pRelayFailure(source?.error || errorMessage, {
+          command: "agent_command",
+          targetDaemonId: daemonId,
+          nodeId: node.id,
+          sessionId
+        }),
+        ...source && typeof source === "object" ? source : {},
+        success: false,
+        error: `P2P dispatch failed: ${errorMessage}`
+      };
     }
     return { success: true, dispatched: true, sessionId: sessionId || resolvedProviderType };
   } catch (e) {
-    return { success: false, error: `P2P dispatch failed: ${e?.message || String(e)}` };
+    const errorMessage = e?.message || String(e);
+    return {
+      ...buildCoordinatorP2pRelayFailure(e, {
+        command: "agent_command",
+        targetDaemonId: daemonId,
+        nodeId: node.id,
+        sessionId
+      }),
+      error: `P2P dispatch failed: ${errorMessage}`
+    };
   }
 }
 function resolveCoordinatorNode(ctx) {
@@ -57926,13 +59149,39 @@ function resolveCoordinatorNode(ctx) {
     if (preferred) return preferred;
   }
   if (ctx.localMachineId) {
-    const byMachine = ctx.mesh.nodes.find((n) => n.machineId === ctx.localMachineId);
+    const byMachine = ctx.mesh.nodes.find((n) => readNodeMachineId(n) === ctx.localMachineId);
     if (byMachine) return byMachine;
   }
   if (ctx.localDaemonId) {
-    return ctx.mesh.nodes.find((n) => n.daemonId === ctx.localDaemonId);
+    return ctx.mesh.nodes.find((n) => readNodeDaemonId(n) === ctx.localDaemonId);
   }
   return void 0;
+}
+function readNodeMachineId(node) {
+  return readString(node.machineId) || readString(node.machine_id);
+}
+function readNodeDaemonId(node) {
+  return readString(node.daemonId) || readString(node.daemon_id);
+}
+function isDirectLocalNode(ctx, node) {
+  const machineId = readNodeMachineId(node);
+  const daemonId = readNodeDaemonId(node);
+  return Boolean(
+    ctx.localMachineId && machineId === ctx.localMachineId || ctx.localDaemonId && daemonId === ctx.localDaemonId
+  );
+}
+function findClonedFromNode(ctx, node) {
+  const clonedFromNodeId = readString(node.clonedFromNodeId) || readString(node.cloned_from_node_id);
+  if (!clonedFromNodeId) return void 0;
+  return ctx.mesh.nodes.find((n) => n.id === clonedFromNodeId || n.nodeId === clonedFromNodeId || n.node_id === clonedFromNodeId);
+}
+function isLocalControlPlaneNode(ctx, node) {
+  if (isDirectLocalNode(ctx, node)) return true;
+  if (node.isLocalWorktree === true) {
+    const sourceNode = findClonedFromNode(ctx, node);
+    if (sourceNode && isDirectLocalNode(ctx, sourceNode)) return true;
+  }
+  return false;
 }
 function meshSessionCacheKey(nodeId, runtimeSessionId) {
   return `${nodeId}:${runtimeSessionId}`;
@@ -58017,8 +59266,115 @@ function getNodeLaunchReadiness(node) {
     launchBlockedMessage: missingProviderPriorityMessage(node.id)
   };
 }
+function readNumeric(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+function buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges) {
+  const defaultBranch = readString(mesh.defaultBranch) ?? "main";
+  const branch = readString(status?.branch) ?? readString(node.worktreeBranch) ?? null;
+  const ahead = readNumeric(status?.ahead);
+  const behind = readNumeric(status?.behind);
+  const upstream = readString(status?.upstream) ?? null;
+  const hasConflicts = status?.hasConflicts === true || Array.isArray(status?.conflictFiles) && status.conflictFiles.length > 0;
+  const base = {
+    defaultBranch,
+    branch,
+    upstream,
+    ahead,
+    behind,
+    isWorktree: node.isLocalWorktree === true,
+    isDefaultBranch: branch === defaultBranch
+  };
+  if (status?.isGitRepo !== true) {
+    return {
+      ...base,
+      status: "blocked_review",
+      needsConvergence: true,
+      reason: "git_status_unavailable",
+      nextStep: `Resolve git status for node '${node.id}' before marking the task complete.`
+    };
+  }
+  if (!branch) {
+    return {
+      ...base,
+      status: "blocked_review",
+      needsConvergence: true,
+      reason: "branch_unknown",
+      nextStep: `Inspect node '${node.id}' git branch before deciding whether it is merged to ${defaultBranch}.`
+    };
+  }
+  if (hasConflicts || dirty || uncommittedChanges > 0) {
+    return {
+      ...base,
+      status: "not_mergeable",
+      needsConvergence: true,
+      reason: hasConflicts ? "conflicts_present" : "dirty_workspace",
+      nextStep: `Commit, checkpoint, or resolve node '${node.id}' before any main convergence step.`
+    };
+  }
+  if (branch === defaultBranch) {
+    if (ahead > 0 || behind > 0) {
+      return {
+        ...base,
+        status: "blocked_review",
+        needsConvergence: true,
+        reason: "default_branch_not_even_with_upstream",
+        nextStep: `Bring ${defaultBranch} even with its upstream before declaring convergence complete.`
+      };
+    }
+    return {
+      ...base,
+      status: "merged_to_main",
+      needsConvergence: false,
+      reason: "clean_default_branch",
+      nextStep: null
+    };
+  }
+  if (node.isLocalWorktree) {
+    return {
+      ...base,
+      status: "cleanup_candidate",
+      needsConvergence: true,
+      reason: "clean_non_default_worktree_branch",
+      nextStep: `Run mesh_refine_node(node_id: "${node.id}") or explicitly classify this worktree as blocked_review/not_mergeable before ending the task.`
+    };
+  }
+  if (!upstream || ahead > 0 || behind > 0) {
+    return {
+      ...base,
+      status: "blocked_review",
+      needsConvergence: true,
+      reason: !upstream ? "feature_branch_missing_upstream" : "feature_branch_not_even_with_upstream",
+      nextStep: `Push or reconcile branch '${branch}', then merge it into ${defaultBranch} or mark it not_mergeable with a reason.`
+    };
+  }
+  return {
+    ...base,
+    status: "pushed_feature_branch_needs_merge",
+    needsConvergence: true,
+    reason: "clean_non_default_branch",
+    nextStep: `Review and merge branch '${branch}' into ${defaultBranch}; do not report the task as fully complete while it remains off main.`
+  };
+}
+function summarizeBranchConvergence(nodes) {
+  const followUps = nodes.filter((node) => node?.branchConvergence?.needsConvergence === true).map((node) => ({
+    nodeId: node.nodeId,
+    workspace: node.workspace,
+    branch: node.branchConvergence.branch,
+    status: node.branchConvergence.status,
+    reason: node.branchConvergence.reason,
+    nextStep: node.branchConvergence.nextStep
+  }));
+  return {
+    needsFollowUp: followUps.length > 0,
+    unresolvedCount: followUps.length,
+    requiredFinalStates: ["merged_to_main", "pushed_feature_branch_needs_merge", "blocked_review", "cleanup_candidate", "not_mergeable"],
+    followUps
+  };
+}
 async function commandForNode(ctx, node, command, args = {}) {
-  const isLocalNode = ctx.localMachineId && node.machineId === ctx.localMachineId || ctx.localDaemonId && node.daemonId === ctx.localDaemonId;
+  const isLocalNode = isLocalControlPlaneNode(ctx, node);
   if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
     return ctx.transport.meshCommand(node.daemonId, command, args);
   }
@@ -58026,6 +59382,17 @@ async function commandForNode(ctx, node, command, args = {}) {
     return ctx.transport.command(command, args);
   }
   throw new Error(`Command '${command}' requires daemon IPC/local transport for node '${node.id}'`);
+}
+function isP2pTransportUnavailableError(error48) {
+  return isP2pRelayTransportFailure(error48);
+}
+function buildRemoveNodeArgs(ctx, nodeId, sessionCleanupMode) {
+  return {
+    meshId: ctx.mesh.id,
+    nodeId,
+    ...sessionCleanupMode ? { sessionCleanupMode } : {},
+    inlineMesh: ctx.mesh
+  };
 }
 var MESH_STATUS_TOOL = {
   name: "mesh_status",
@@ -58060,14 +59427,19 @@ var MESH_ENQUEUE_TASK_TOOL = {
 };
 var MESH_VIEW_QUEUE_TOOL = {
   name: "mesh_view_queue",
-  description: "View the current status of the mesh work queue (pending, assigned, completed, failed, cancelled tasks).",
+  description: "View the mesh work queue with source-of-truth active counts separated from historical completed/failed/cancelled records.",
   inputSchema: {
     type: "object",
     properties: {
       status: {
         type: "array",
         items: { type: "string" },
-        description: "Filter by task status: pending, assigned, completed, failed, cancelled. Returns all if omitted."
+        description: "Explicit row filter by task status: pending, assigned, completed, failed, cancelled. Source-of-truth counts remain unfiltered; visible* counts describe returned rows."
+      },
+      view: {
+        type: "string",
+        enum: ["all", "active", "historical"],
+        description: "Optional row view. active returns pending/assigned rows, historical returns completed/failed/cancelled rows, all returns every persisted queue row. Defaults to all for compatibility."
       }
     }
   }
@@ -58305,6 +59677,7 @@ async function meshStatus(ctx) {
         entry.branch = status?.branch;
         entry.isDirty = dirty;
         entry.uncommittedChanges = uncommittedChanges;
+        entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
       } else if (isLocalTransport(transport)) {
         const statusResult = await commandForNode(ctx, node, "git_status", { workspace: node.workspace });
         const status = extractGitStatus(statusResult);
@@ -58314,13 +59687,28 @@ async function meshStatus(ctx) {
         entry.branch = status?.branch;
         entry.isDirty = dirty;
         entry.uncommittedChanges = uncommittedChanges;
+        entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
       } else {
         entry.health = "unknown";
         entry.note = "No daemonId available for cloud status probe";
       }
     } catch (e) {
+      const failure2 = buildCoordinatorP2pRelayFailure(e, {
+        command: "git_status",
+        targetDaemonId: node.daemonId,
+        nodeId: node.id
+      });
       entry.health = "degraded";
-      entry.error = e.message;
+      entry.error = failure2.error;
+      entry.degradedReason = failure2.recoverable ? "p2p_relay_failure" : "git_status_unavailable";
+      Object.assign(entry, {
+        code: failure2.code,
+        transport: failure2.transport,
+        recoverable: failure2.recoverable,
+        retryRecommended: failure2.retryRecommended,
+        nextAction: failure2.nextAction,
+        noFallbackReason: failure2.noFallbackReason
+      });
     }
     const recoveryContext = getSessionRecoveryContext(mesh.id, { nodeId: node.id });
     if (recoveryContext.consecutiveNodeFailures > 0) {
@@ -58351,6 +59739,9 @@ async function meshStatus(ctx) {
     } else if (entry.health === "degraded" && entry.error?.includes("git")) {
       nextStepHints.push("Initialize git repository or check workspace path.");
     }
+    if (entry.branchConvergence?.needsConvergence === true && entry.branchConvergence.nextStep) {
+      nextStepHints.push(String(entry.branchConvergence.nextStep));
+    }
     if (recoveryContext.consecutiveNodeFailures > 0) {
       if (recoveryContext.retryRecommended) {
         nextStepHints.push(`Retry task on this node or launch a fresh session.`);
@@ -58371,7 +59762,8 @@ async function meshStatus(ctx) {
     repoIdentity: mesh.repoIdentity,
     policy: mesh.policy,
     refreshedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    nodes: results
+    nodes: results,
+    branchConvergenceSummary: summarizeBranchConvergence(results)
   };
   try {
     response.ledgerSummary = ledgerSummary;
@@ -58428,7 +59820,7 @@ async function meshEnqueueTask(ctx, args) {
       });
       const dispatchPromises = [];
       for (const node of ctx.mesh.nodes) {
-        const isLocalNode = ctx.localMachineId && node.machineId === ctx.localMachineId || ctx.localDaemonId && node.daemonId === ctx.localDaemonId;
+        const isLocalNode = isLocalControlPlaneNode(ctx, node);
         if (isLocalNode || !node.daemonId) continue;
         dispatchPromises.push(
           ipcDispatchToRemoteAgent(ctx, node, { message: args.message }).then((result) => {
@@ -58458,13 +59850,50 @@ async function meshEnqueueTask(ctx, args) {
 }
 async function meshViewQueue(ctx, args) {
   try {
-    const queue = annotateQueueStaleness(getQueue(ctx.mesh.id, { status: args.status }));
-    const staleAssignedTasks = queue.filter((task) => task?.status === "assigned" && task?.staleAssigned);
+    const statusFilter = sanitizeQueueStatusFilter(args.status);
+    const view = normalizeQueueViewMode(args.view);
+    const fullQueue = annotateQueueStaleness(getQueue(ctx.mesh.id), ctx.mesh);
+    const queue = filterQueueForView(fullQueue, view, statusFilter);
+    const summary = buildQueueStatusSummary(fullQueue);
+    const visibleSummary = buildQueueStatusSummary(queue);
+    const maintenance = buildQueueMaintenanceReport(fullQueue);
+    const staleAssignedTasks = maintenance.staleAssignedTasks || [];
+    const requestedHistoricalRows = queue.some((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")));
     return JSON.stringify({
       success: true,
+      sourceOfTruth: {
+        kind: "mesh_work_queue_file",
+        activeStatuses: ["pending", "assigned"],
+        historicalStatuses: ["completed", "failed", "cancelled"],
+        notes: "pending/assigned are active work; completed/failed/cancelled are historical ledger records and never stale assignments."
+      },
+      filter: {
+        view,
+        statuses: statusFilter,
+        filtered: Boolean(statusFilter?.length) || view !== "all"
+      },
       queue,
+      visibleQueue: queue,
+      visibleSummary,
+      summary,
+      activeCounts: summary.activeCounts,
+      historicalCounts: summary.historicalCounts,
+      activeCount: summary.activeCount,
+      historicalCount: summary.historicalCount,
+      visibleActiveCounts: visibleSummary.activeCounts,
+      visibleHistoricalCounts: visibleSummary.historicalCounts,
+      visibleActiveCount: visibleSummary.activeCount,
+      visibleHistoricalCount: visibleSummary.historicalCount,
       staleAssignedTasks,
-      staleAssignedCount: staleAssignedTasks.length,
+      staleAssignedCount: maintenance.staleAssignedCount,
+      queueMaintenance: maintenance,
+      cleanupDryRun: maintenance,
+      ...view === "active" || statusFilter?.some((status) => ACTIVE_QUEUE_STATUSES.has(status)) ? {
+        activeQueue: queue.filter((task) => ACTIVE_QUEUE_STATUSES.has(String(task?.status || "")))
+      } : {},
+      ...view === "historical" || requestedHistoricalRows ? {
+        historicalQueue: queue.filter((task) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || "")))
+      } : {},
       // Back-compat alias for callers already reading the first hardening payload.
       staleAssignments: staleAssignedTasks
     }, null, 2);
@@ -58539,7 +59968,7 @@ async function meshSendTask(ctx, args) {
       });
       return JSON.stringify(res);
     }
-    const isLocalNode = ctx.localMachineId && node.machineId === ctx.localMachineId || ctx.localDaemonId && node.daemonId === ctx.localDaemonId;
+    const isLocalNode = isLocalControlPlaneNode(ctx, node);
     if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
       const cached2 = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id || ""));
       const result = await ipcDispatchToRemoteAgent(ctx, node, {
@@ -58604,7 +60033,13 @@ async function meshSendTask(ctx, args) {
     }
     return JSON.stringify({ success: true, nodeId: args.node_id, taskId: task.id, status: task.status });
   } catch (e) {
-    return JSON.stringify({ success: false, error: e.message });
+    const failure2 = buildCoordinatorP2pRelayFailure(e, {
+      command: "mesh_send_task",
+      targetDaemonId: node.daemonId,
+      nodeId: args.node_id,
+      sessionId: args.session_id
+    });
+    return JSON.stringify(failure2);
   }
 }
 async function meshReadChat(ctx, args) {
@@ -58754,7 +60189,7 @@ async function meshLaunchSession(ctx, args) {
       });
     } catch {
     }
-    const isLocalNode = ctx.localMachineId && node.machineId === ctx.localMachineId || ctx.localDaemonId && node.daemonId === ctx.localDaemonId;
+    const isLocalNode = isLocalControlPlaneNode(ctx, node);
     if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
       ctx.transport.meshCommand(node.daemonId, "trigger_mesh_queue", { meshId: ctx.mesh.id }).catch(() => {
       });
@@ -58813,31 +60248,43 @@ async function meshLaunchSession(ctx, args) {
 }
 async function meshGitStatus(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
-  if (!isLocalTransport(ctx.transport) && node.daemonId) {
-    const result = await ctx.transport.gitStatus(node.daemonId, node.workspace, true);
-    return JSON.stringify({
-      nodeId: args.node_id,
-      workspace: node.workspace,
-      status: extractGitStatus(result),
-      diff: extractGitDiff(result),
-      relatedRepos: await collectRelatedRepoStatuses(ctx, node)
-    }, null, 2);
-  } else if (isLocalTransport(ctx.transport)) {
-    const statusResult = await commandForNode(ctx, node, "git_status", {
-      workspace: node.workspace
+  try {
+    if (!isLocalTransport(ctx.transport) && node.daemonId) {
+      const result = await ctx.transport.gitStatus(node.daemonId, node.workspace, true);
+      return JSON.stringify({
+        nodeId: args.node_id,
+        workspace: node.workspace,
+        status: extractGitStatus(result),
+        diff: extractGitDiff(result),
+        relatedRepos: await collectRelatedRepoStatuses(ctx, node)
+      }, null, 2);
+    } else if (isLocalTransport(ctx.transport)) {
+      const statusResult = await commandForNode(ctx, node, "git_status", {
+        workspace: node.workspace
+      });
+      const diffResult = await commandForNode(ctx, node, "git_diff_summary", {
+        workspace: node.workspace
+      });
+      return JSON.stringify({
+        nodeId: args.node_id,
+        workspace: node.workspace,
+        status: extractGitStatus(statusResult),
+        diff: extractGitDiff(diffResult),
+        relatedRepos: await collectRelatedRepoStatuses(ctx, node)
+      }, null, 2);
+    } else {
+      return JSON.stringify({ error: "No daemonId available for cloud git_status probe" });
+    }
+  } catch (e) {
+    const failure2 = buildCoordinatorP2pRelayFailure(e, {
+      command: "git_status",
+      targetDaemonId: node.daemonId,
+      nodeId: args.node_id
     });
-    const diffResult = await commandForNode(ctx, node, "git_diff_summary", {
-      workspace: node.workspace
-    });
     return JSON.stringify({
-      nodeId: args.node_id,
-      workspace: node.workspace,
-      status: extractGitStatus(statusResult),
-      diff: extractGitDiff(diffResult),
-      relatedRepos: await collectRelatedRepoStatuses(ctx, node)
+      ...failure2,
+      workspace: node.workspace
     }, null, 2);
-  } else {
-    return JSON.stringify({ error: "No daemonId available for cloud git_status probe" });
   }
 }
 async function meshCheckpoint(ctx, args) {
@@ -58984,12 +60431,28 @@ async function meshCleanupSessions(ctx, args) {
 async function meshRemoveNode(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
   if (isLocalTransport(ctx.transport)) {
-    const result = await commandForNode(ctx, node, "remove_mesh_node", {
-      meshId: ctx.mesh.id,
-      nodeId: args.node_id,
-      ...args.session_cleanup_mode ? { sessionCleanupMode: args.session_cleanup_mode } : {},
-      inlineMesh: ctx.mesh
-    });
+    const removeArgs = buildRemoveNodeArgs(ctx, args.node_id, args.session_cleanup_mode);
+    let result;
+    let transportFallback;
+    try {
+      result = await commandForNode(ctx, node, "remove_mesh_node", removeArgs);
+    } catch (e) {
+      if (ctx.transport instanceof IpcTransport && node.isLocalWorktree && isP2pTransportUnavailableError(e)) {
+        result = await ctx.transport.command("remove_mesh_node", removeArgs);
+        transportFallback = {
+          from: "p2p_mesh_relay",
+          to: "local_control_plane",
+          reason: e?.message || String(e)
+        };
+      } else {
+        return JSON.stringify({
+          success: false,
+          code: isP2pTransportUnavailableError(e) ? "p2p_unavailable" : "mesh_remove_node_failed",
+          error: e?.message || String(e),
+          recoveryHint: isP2pTransportUnavailableError(e) ? "If this is an ADHDev-managed local worktree, retry from a coordinator connected to the daemon that owns the worktree; dashboard command/data-plane traffic still requires P2P." : "Inspect mesh_status and retry after resolving the reported failure."
+        }, null, 2);
+      }
+    }
     if (result?.success && result.removed !== false) {
       const idx = ctx.mesh.nodes.findIndex((n) => n.id === args.node_id);
       if (idx >= 0) {
@@ -58997,7 +60460,7 @@ async function meshRemoveNode(ctx, args) {
         ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
       }
     }
-    return JSON.stringify(result, null, 2);
+    return JSON.stringify({ ...result || {}, ...transportFallback ? { transportFallback } : {} }, null, 2);
   } else if (!isLocalTransport(ctx.transport) && node.daemonId) {
     try {
       const res = await ctx.transport.meshRemoveNode(node.daemonId, {
@@ -59190,15 +60653,6 @@ var CloudTransport = class {
       headers: this.headers()
     });
     if (!res.ok) throw new Error(`Delete remote mesh failed: ${res.status}`);
-  }
-  async syncMeshLedger(meshId, data) {
-    const res = await fetch(`${this.baseUrl}/api/v1/repo-meshes/${encodeURIComponent(meshId)}/ledger/sync`, {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(data)
-    });
-    if (!res.ok) throw new Error(`Sync mesh ledger failed: ${res.status}`);
-    return res.json();
   }
   async listDaemons() {
     const res = await fetch(`${this.baseUrl}/api/v1/daemons`, { headers: this.headers() });
