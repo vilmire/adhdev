@@ -219,10 +219,14 @@ export interface BaseDaemonData {
     _sessionListAuthoritative?: boolean;
     settings?: Record<string, any>;
     meshQueueStats?: {
+        total?: number;
+        active?: number;
+        historical?: number;
         pending: number;
         assigned: number;
         completed: number;
         failed: number;
+        cancelled?: number;
     };
     /** Effective message input/media support for this session. Fail-closed to text-only when absent. */
     messageInput?: MessageInputSupport;

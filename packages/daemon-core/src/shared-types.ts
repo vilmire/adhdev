@@ -390,6 +390,9 @@ export interface SessionEntry {
     surfaceHidden?: boolean;
     settings?: Record<string, any>;
     meshQueueStats?: {
+        total?: number;
+        active?: number;
+        historical?: number;
         pending: number;
         assigned: number;
         completed: number;
@@ -442,6 +445,9 @@ export interface CompactSessionEntry {
     summaryMetadata?: ProviderSummaryMetadata;
     settings?: Record<string, any>;
     meshQueueStats?: {
+        total?: number;
+        active?: number;
+        historical?: number;
         pending: number;
         assigned: number;
         completed: number;

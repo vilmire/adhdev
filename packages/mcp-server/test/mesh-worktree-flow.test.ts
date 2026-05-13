@@ -1184,6 +1184,18 @@ test('mesh_view_queue annotates stale assigned tasks and historical task metadat
       updatedAt: staleUpdatedAt,
     },
     {
+      id: 'task-live-assigned',
+      meshId,
+      message: 'live old task still assigned',
+      status: 'assigned',
+      targetNodeId: 'node-live',
+      targetSessionId: 'session-live',
+      assignedNodeId: 'node-live',
+      assignedSessionId: 'session-live',
+      createdAt: staleUpdatedAt,
+      updatedAt: staleUpdatedAt,
+    },
+    {
       id: 'task-completed',
       meshId,
       message: 'done task',
@@ -1203,19 +1215,31 @@ test('mesh_view_queue annotates stale assigned tasks and historical task metadat
       coordinator: {},
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      nodes: [],
+      nodes: [{
+        id: 'node-live',
+        workspace: '/repo',
+        sessions: [{ id: 'session-live', status: 'idle' }],
+        policy: {},
+        userOverrides: {},
+      }],
     },
     transport: {} as any,
   } as any, {}));
 
   assert.equal(payload.success, true);
+  assert.deepEqual(payload.activeCounts, { pending: 0, assigned: 2 });
+  assert.deepEqual(payload.historicalCounts, { completed: 1, failed: 0, cancelled: 0 });
+  assert.equal(payload.activeCount, 2);
+  assert.equal(payload.historicalCount, 1);
   assert.equal(payload.staleAssignedCount, 1);
   assert.equal(payload.staleAssignedTasks[0].id, 'task-stale-assigned');
   assert.equal(payload.queue[0].taskStatus, 'assigned');
   assert.equal(payload.queue[0].activeTaskId, 'task-stale-assigned');
   assert.equal(payload.queue[0].staleAssigned, true);
-  assert.equal(payload.queue[1].isHistorical, true);
-  assert.equal(payload.queue[1].completedAt, completedAt);
+  assert.equal(payload.queue[1].taskStatus, 'assigned');
+  assert.equal(payload.queue[1].staleAssigned, undefined);
+  assert.equal(payload.queue[2].isHistorical, true);
+  assert.equal(payload.queue[2].completedAt, completedAt);
 });
 
 test('mesh_clone_node upserts clone returned through payload-wrapped live relay shape before immediate resolver use', async () => {

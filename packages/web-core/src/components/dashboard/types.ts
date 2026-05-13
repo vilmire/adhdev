@@ -50,10 +50,14 @@ export interface ActiveConversation {
     sessionCapabilities?: string[];
     settings?: Record<string, any>;
     meshQueueStats?: {
+        total?: number;
+        active?: number;
+        historical?: number;
         pending: number;
         assigned: number;
         completed: number;
         failed: number;
+        cancelled?: number;
     };
     /** Effective message input/media support. Absent → text-only. */
     messageInput?: MessageInputSupport;

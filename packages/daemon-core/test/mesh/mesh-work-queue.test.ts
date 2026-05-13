@@ -154,6 +154,9 @@ describe('Mesh Work Queue (GUPP)', () => {
 
         const stats = getMeshQueueStats(meshId);
 
+        expect(stats.total).to.equal(1);
+        expect(stats.active).to.equal(1);
+        expect(stats.historical).to.equal(0);
         expect(stats.pending).to.equal(0);
         expect(stats.assigned).to.equal(1);
         expect(stats.activeAssignments).to.deep.equal([{

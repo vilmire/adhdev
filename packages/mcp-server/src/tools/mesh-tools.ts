@@ -63,6 +63,8 @@ function findNode(mesh: LocalMeshEntry, nodeId: string): LocalMeshNodeEntry {
 
 const DUPLICATE_DISPATCH_WINDOW_MS = 60_000;
 const STALE_ASSIGNED_QUEUE_MS = 30 * 60_000;
+const ACTIVE_QUEUE_STATUSES = new Set(['pending', 'assigned']);
+const HISTORICAL_QUEUE_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
 /**
  * Refresh the MCP process's mesh snapshot from the daemon inline mesh cache.
@@ -215,30 +217,146 @@ function buildMissingNodeReadChatRecovery(ctx: MeshContext, args: { node_id: str
     };
 }
 
-function annotateQueueStaleness(queue: any[]): any[] {
+type QueueLivenessIndex = {
+    nodeIds: Set<string>;
+    nodeSessionIds: Map<string, Set<string>>;
+};
+
+function readSessionRecordId(session: any): string | undefined {
+    return readString(session?.id)
+        || readString(session?.sessionId)
+        || readString(session?.session_id)
+        || readString(session?.runtimeSessionId)
+        || readString(session?.runtime_session_id)
+        || readString(session?.instanceId)
+        || readString(session?.instance_id);
+}
+
+function addSessionRecord(target: Set<string>, session: any): void {
+    if (!session || typeof session !== 'object' || isTerminalSessionRecord(session)) return;
+    const sessionId = readSessionRecordId(session);
+    if (sessionId) target.add(sessionId);
+}
+
+function collectNodeSessionIds(node: any): Set<string> {
+    const sessions = new Set<string>();
+    const sessionArrays = [
+        node?.sessions,
+        node?.activeSessions,
+        node?.active_sessions,
+        node?.lastProbe?.sessions,
+        node?.last_probe?.sessions,
+        node?.lastProbe?.status?.sessions,
+        node?.last_probe?.status?.sessions,
+    ];
+    for (const value of sessionArrays) {
+        if (Array.isArray(value)) value.forEach(session => addSessionRecord(sessions, session));
+    }
+
+    const sessionRecords = [
+        node?.activeSession,
+        node?.active_session,
+        node?.currentSession,
+        node?.current_session,
+        node?.runtimeSession,
+        node?.runtime_session,
+        node?.session,
+        node?.lastProbe?.activeSession,
+        node?.last_probe?.active_session,
+        node?.lastProbe?.currentSession,
+        node?.last_probe?.current_session,
+        node?.lastProbe?.session,
+        node?.last_probe?.session,
+    ];
+    sessionRecords.forEach(session => addSessionRecord(sessions, session));
+    return sessions;
+}
+
+function buildQueueLivenessIndex(mesh?: LocalMeshEntry): QueueLivenessIndex {
+    const nodeIds = new Set<string>();
+    const nodeSessionIds = new Map<string, Set<string>>();
+    for (const node of Array.isArray(mesh?.nodes) ? mesh.nodes : []) {
+        const nodeId = readString((node as any).id) || readString((node as any).nodeId) || readString((node as any).node_id);
+        if (!nodeId) continue;
+        nodeIds.add(nodeId);
+        const sessions = collectNodeSessionIds(node);
+        if (sessions.size > 0) nodeSessionIds.set(nodeId, sessions);
+    }
+    return { nodeIds, nodeSessionIds };
+}
+
+function queueAssignmentStaleReason(task: any, liveness: QueueLivenessIndex): string | undefined {
+    if (task?.status !== 'assigned') return undefined;
+    const nodeId = readString(task.assignedNodeId) || readString(task.nodeId) || readString(task.node_id) || readString(task.targetNodeId);
+    const sessionId = readString(task.assignedSessionId) || readString(task.sessionId) || readString(task.session_id) || readString(task.targetSessionId);
+
+    if (nodeId && liveness.nodeIds.size > 0 && !liveness.nodeIds.has(nodeId)) {
+        return 'assigned node is not present in the current mesh snapshot';
+    }
+    if (nodeId && sessionId && liveness.nodeSessionIds.has(nodeId) && !liveness.nodeSessionIds.get(nodeId)!.has(sessionId)) {
+        return 'assigned session is not live on the assigned node';
+    }
+
+    const updatedAt = new Date(task.updatedAt).getTime();
+    const ageMs = Number.isFinite(updatedAt) ? Date.now() - updatedAt : null;
+    if (!nodeId && ageMs !== null && ageMs >= STALE_ASSIGNED_QUEUE_MS) {
+        return 'assigned task has no assigned node metadata';
+    }
+    return undefined;
+}
+
+function buildQueueStatusSummary(queue: any[]): Record<string, unknown> {
+    const counts = { pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0 };
+    for (const task of queue) {
+        const status = typeof task?.status === 'string' ? task.status : undefined;
+        if (status && Object.prototype.hasOwnProperty.call(counts, status)) {
+            counts[status as keyof typeof counts] += 1;
+        }
+    }
+    return {
+        totalCount: queue.length,
+        activeCount: counts.pending + counts.assigned,
+        historicalCount: counts.completed + counts.failed + counts.cancelled,
+        counts,
+        activeCounts: {
+            pending: counts.pending,
+            assigned: counts.assigned,
+        },
+        historicalCounts: {
+            completed: counts.completed,
+            failed: counts.failed,
+            cancelled: counts.cancelled,
+        },
+    };
+}
+
+function annotateQueueStaleness(queue: any[], mesh?: LocalMeshEntry): any[] {
+    const liveness = buildQueueLivenessIndex(mesh);
     const now = Date.now();
     return queue.map(task => {
         const taskStatus = typeof task?.status === 'string' ? task.status : undefined;
         const annotated = {
             ...task,
             taskStatus,
+            isActive: taskStatus ? ACTIVE_QUEUE_STATUSES.has(taskStatus) : false,
+            isHistorical: taskStatus ? HISTORICAL_QUEUE_STATUSES.has(taskStatus) : false,
             dispatchedAt: task?.createdAt,
             ...(taskStatus === 'assigned' ? { activeTaskId: task.id } : {}),
             ...(taskStatus === 'completed' || taskStatus === 'failed' ? {
-                isHistorical: true,
                 completedAt: task.updatedAt,
             } : {}),
         };
         if (taskStatus !== 'assigned') return annotated;
         const updatedAt = new Date(task.updatedAt).getTime();
         const ageMs = Number.isFinite(updatedAt) ? now - updatedAt : null;
-        if (ageMs === null || ageMs < STALE_ASSIGNED_QUEUE_MS) return annotated;
+        const staleReason = queueAssignmentStaleReason(task, liveness);
+        if (!staleReason) return annotated;
         return {
             ...annotated,
             stale: true,
             staleAssigned: true,
-            staleReason: 'assigned task has not reached a terminal state within 30 minutes',
-            assignedAgeMs: ageMs,
+            staleReason,
+            ...(ageMs !== null ? { assignedAgeMs: ageMs } : {}),
         };
     });
 }
@@ -1393,11 +1511,17 @@ export async function meshViewQueue(
     args: { status?: string[] },
 ): Promise<string> {
     try {
-        const queue = annotateQueueStaleness(getQueue(ctx.mesh.id, { status: args.status as any }));
+        const queue = annotateQueueStaleness(getQueue(ctx.mesh.id, { status: args.status as any }), ctx.mesh);
         const staleAssignedTasks = queue.filter((task: any) => task?.status === 'assigned' && task?.staleAssigned);
+        const summary = buildQueueStatusSummary(queue);
         return JSON.stringify({
             success: true,
             queue,
+            summary,
+            activeCounts: (summary as any).activeCounts,
+            historicalCounts: (summary as any).historicalCounts,
+            activeCount: (summary as any).activeCount,
+            historicalCount: (summary as any).historicalCount,
             staleAssignedTasks,
             staleAssignedCount: staleAssignedTasks.length,
             // Back-compat alias for callers already reading the first hardening payload.

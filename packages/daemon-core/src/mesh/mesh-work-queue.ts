@@ -252,6 +252,9 @@ export function updateSessionTaskStatus(
 }
 
 export interface MeshWorkQueueStats {
+    total: number;
+    active: number;
+    historical: number;
     pending: number;
     assigned: number;
     completed: number;
@@ -270,12 +273,20 @@ export interface MeshWorkQueueStats {
  */
 export function getMeshQueueStats(meshId: string): MeshWorkQueueStats {
     const queue = readQueue(meshId);
+    const pending = queue.filter(q => q.status === 'pending').length;
+    const assigned = queue.filter(q => q.status === 'assigned').length;
+    const completed = queue.filter(q => q.status === 'completed').length;
+    const failed = queue.filter(q => q.status === 'failed').length;
+    const cancelled = queue.filter(q => q.status === 'cancelled').length;
     return {
-        pending: queue.filter(q => q.status === 'pending').length,
-        assigned: queue.filter(q => q.status === 'assigned').length,
-        completed: queue.filter(q => q.status === 'completed').length,
-        failed: queue.filter(q => q.status === 'failed').length,
-        cancelled: queue.filter(q => q.status === 'cancelled').length,
+        total: queue.length,
+        active: pending + assigned,
+        historical: completed + failed + cancelled,
+        pending,
+        assigned,
+        completed,
+        failed,
+        cancelled,
         activeAssignments: queue
             .filter(q => q.status === 'assigned')
             .map(q => ({
