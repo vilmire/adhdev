@@ -493,13 +493,50 @@ function resolveCoordinatorNode(ctx: MeshContext): LocalMeshNodeEntry | undefine
         if (preferred) return preferred;
     }
     if (ctx.localMachineId) {
-        const byMachine = ctx.mesh.nodes.find(n => (n as any).machineId === ctx.localMachineId);
+        const byMachine = ctx.mesh.nodes.find(n => readNodeMachineId(n) === ctx.localMachineId);
         if (byMachine) return byMachine;
     }
     if (ctx.localDaemonId) {
-        return ctx.mesh.nodes.find(n => n.daemonId === ctx.localDaemonId);
+        return ctx.mesh.nodes.find(n => readNodeDaemonId(n) === ctx.localDaemonId);
     }
     return undefined;
+}
+
+function readNodeMachineId(node: LocalMeshNodeEntry): string | undefined {
+    return readString((node as any).machineId) || readString((node as any).machine_id);
+}
+
+function readNodeDaemonId(node: LocalMeshNodeEntry): string | undefined {
+    return readString(node.daemonId) || readString((node as any).daemon_id);
+}
+
+function isDirectLocalNode(ctx: MeshContext, node: LocalMeshNodeEntry): boolean {
+    const machineId = readNodeMachineId(node);
+    const daemonId = readNodeDaemonId(node);
+    return Boolean(
+        (ctx.localMachineId && machineId === ctx.localMachineId)
+        || (ctx.localDaemonId && daemonId === ctx.localDaemonId),
+    );
+}
+
+function findClonedFromNode(ctx: MeshContext, node: LocalMeshNodeEntry): LocalMeshNodeEntry | undefined {
+    const clonedFromNodeId = readString(node.clonedFromNodeId) || readString((node as any).cloned_from_node_id);
+    if (!clonedFromNodeId) return undefined;
+    return ctx.mesh.nodes.find(n => n.id === clonedFromNodeId || (n as any).nodeId === clonedFromNodeId || (n as any).node_id === clonedFromNodeId);
+}
+
+function isLocalControlPlaneNode(ctx: MeshContext, node: LocalMeshNodeEntry): boolean {
+    if (isDirectLocalNode(ctx, node)) return true;
+
+    // Worktree nodes created by the local daemon may be persisted without their
+    // own machineId. In that case, preserve locality from the cloned source node
+    // rather than incorrectly routing local workspace commands through P2P.
+    if (node.isLocalWorktree === true) {
+        const sourceNode = findClonedFromNode(ctx, node);
+        if (sourceNode && isDirectLocalNode(ctx, sourceNode)) return true;
+    }
+
+    return false;
 }
 
 function meshSessionCacheKey(nodeId: string, runtimeSessionId: string): string {
@@ -746,9 +783,7 @@ async function commandForNode(
     command: string,
     args: Record<string, unknown> = {},
 ): Promise<any> {
-    const isLocalNode =
-        (ctx.localMachineId && (node as any).machineId === ctx.localMachineId) ||
-        (ctx.localDaemonId && node.daemonId === ctx.localDaemonId);
+    const isLocalNode = isLocalControlPlaneNode(ctx, node);
 
     if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
         return ctx.transport.meshCommand(node.daemonId, command, args);
@@ -1240,9 +1275,7 @@ export async function meshEnqueueTask(
             // 2. For each remote node, directly dispatch to an idle session via P2P
             const dispatchPromises: Promise<void>[] = [];
             for (const node of ctx.mesh.nodes) {
-                const isLocalNode =
-                    (ctx.localMachineId && (node as any).machineId === ctx.localMachineId) ||
-                    (ctx.localDaemonId && node.daemonId === ctx.localDaemonId);
+                const isLocalNode = isLocalControlPlaneNode(ctx, node);
                 if (isLocalNode || !node.daemonId) continue;
 
                 dispatchPromises.push(
@@ -1400,9 +1433,7 @@ export async function meshSendTask(
         // trigger_mesh_queue to the remote daemon would always be a no-op
         // because it cannot read the queue.  Instead we relay agent_command
         // directly over P2P so the remote daemon forwards it to its agent.
-        const isLocalNode =
-            (ctx.localMachineId && (node as any).machineId === ctx.localMachineId) ||
-            (ctx.localDaemonId && node.daemonId === ctx.localDaemonId);
+        const isLocalNode = isLocalControlPlaneNode(ctx, node);
 
         if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
             const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id || ''));
@@ -1657,9 +1688,7 @@ export async function meshLaunchSession(
         } catch { /* ledger append is best-effort */ }
 
         // Tell daemon to trigger queue processing so the new session immediately picks up pending tasks
-        const isLocalNode =
-            (ctx.localMachineId && (node as any).machineId === ctx.localMachineId) ||
-            (ctx.localDaemonId && node.daemonId === ctx.localDaemonId);
+        const isLocalNode = isLocalControlPlaneNode(ctx, node);
 
         if (ctx.transport instanceof IpcTransport && node.daemonId && !isLocalNode) {
             ctx.transport.meshCommand(node.daemonId, 'trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});

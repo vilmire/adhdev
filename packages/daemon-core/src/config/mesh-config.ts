@@ -180,6 +180,7 @@ export interface AddNodeOptions {
     workspace: string;
     repoRoot?: string;
     daemonId?: string;
+    machineId?: string;
     userOverrides?: Partial<RepoMeshNodeCapabilities>;
     policy?: RepoMeshNodePolicy;
     isLocalWorktree?: boolean;
@@ -206,6 +207,7 @@ export function addNode(meshId: string, opts: AddNodeOptions): LocalMeshNodeEntr
         workspace: opts.workspace.trim(),
         repoRoot: opts.repoRoot,
         daemonId: opts.daemonId,
+        machineId: opts.machineId,
         userOverrides: opts.userOverrides || {},
         policy: opts.policy || {},
         isLocalWorktree: opts.isLocalWorktree,

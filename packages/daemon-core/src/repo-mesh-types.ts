@@ -224,6 +224,8 @@ export interface LocalMeshNodeEntry {
     workspace: string;
     repoRoot?: string;
     daemonId?: string;
+    /** Machine registry ID that owns this workspace, when known. */
+    machineId?: string;
     userOverrides: Partial<RepoMeshNodeCapabilities>;
     policy: RepoMeshNodePolicy;
     /** For single-machine mesh: same daemon, different worktree */

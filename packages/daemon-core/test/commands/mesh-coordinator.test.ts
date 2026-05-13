@@ -310,7 +310,7 @@ describe('resolveMeshCoordinatorSetup', () => {
       id: 'mesh_inline_worktree',
       name: 'Inline Mesh',
       repoIdentity: 'example/repo',
-      nodes: [{ id: 'node-source', workspace: repo, repoRoot: repo, daemonId: 'daemon-source', policy: { canPush: true } }],
+      nodes: [{ id: 'node-source', workspace: repo, repoRoot: repo, daemonId: 'daemon-source', machineId: 'mreg-source', policy: { canPush: true } }],
       policy: {},
       coordinator: {},
       createdAt: new Date().toISOString(),
@@ -336,6 +336,7 @@ describe('resolveMeshCoordinatorSetup', () => {
         worktreeBranch: 'mesh/worktree-smoke',
         clonedFromNodeId: 'node-source',
         daemonId: 'daemon-source',
+        machineId: 'mreg-source',
         policy: { canPush: true },
       })
 

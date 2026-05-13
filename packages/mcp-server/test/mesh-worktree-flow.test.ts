@@ -370,7 +370,93 @@ test('mesh_remove_node does not use local control-plane fallback for non-worktre
   assert.ok(ctx.mesh.nodes.some(node => node.id === 'node-remote-normal'));
 });
 
-test('mesh_launch_session still does not use local fallback when P2P relay is unavailable', async () => {
+test('mesh_launch_session routes local worktree cloned from local source through local control plane without P2P relay', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const directCalls: Array<{ command: string; args: Record<string, unknown> }> = [];
+  const relayCalls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+
+  const ctx = {
+    localDaemonId: 'daemon-local-runtime',
+    localMachineId: 'mreg-local-machine',
+    mesh: {
+      id: 'mesh-local-worktree-launch',
+      name: 'Local Worktree Launch Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [
+        {
+          id: 'node-source-local',
+          workspace: '/repo',
+          repoRoot: '/repo',
+          daemonId: 'daemon-cloud-identity',
+          machineId: 'mreg-local-machine',
+          userOverrides: {},
+          policy: { providerPriority: ['hermes-cli'] },
+        },
+        {
+          id: 'node-worktree-a',
+          workspace: '/repo-parent/.adhdev-worktrees/mesh/feat-a',
+          repoRoot: '/repo-parent/.adhdev-worktrees/mesh/feat-a',
+          daemonId: 'daemon-cloud-identity',
+          userOverrides: {},
+          policy: { providerPriority: ['hermes-cli'] },
+          isLocalWorktree: true,
+          worktreeBranch: 'feat/a',
+          clonedFromNodeId: 'node-source-local',
+        },
+        {
+          id: 'node-worktree-b',
+          workspace: '/repo-parent/.adhdev-worktrees/mesh/feat-b',
+          repoRoot: '/repo-parent/.adhdev-worktrees/mesh/feat-b',
+          daemonId: 'daemon-cloud-identity',
+          userOverrides: {},
+          policy: { providerPriority: ['hermes-cli'] },
+          isLocalWorktree: true,
+          worktreeBranch: 'feat/b',
+          clonedFromNodeId: 'node-source-local',
+        },
+      ],
+    },
+    transport,
+  };
+
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    relayCalls.push({ daemonId, command, args });
+    throw new Error(`unexpected P2P relay for local worktree command: ${command}`);
+  };
+  transport.command = async (command, args = {}) => {
+    directCalls.push({ command, args });
+    if (command === 'launch_cli') {
+      return { success: true, sessionId: (args as any).dir === '/repo-parent/.adhdev-worktrees/mesh/feat-a' ? 'session-a' : 'session-b' };
+    }
+    if (command === 'trigger_mesh_queue') return { success: true };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+
+  const launchAText = await meshLaunchSession(ctx, { node_id: 'node-worktree-a', type: 'hermes-cli' });
+  const launchBText = await meshLaunchSession(ctx, { node_id: 'node-worktree-b', type: 'hermes-cli' });
+  const launchA = JSON.parse(launchAText);
+  const launchB = JSON.parse(launchBText);
+
+  assert.equal(launchA.sessionId, 'session-a');
+  assert.equal(launchB.sessionId, 'session-b');
+  assert.equal(relayCalls.length, 0);
+
+  const launchCalls = directCalls.filter(call => call.command === 'launch_cli');
+  assert.equal(launchCalls.length, 2);
+  assert.equal(launchCalls[0].args.dir, '/repo-parent/.adhdev-worktrees/mesh/feat-a');
+  assert.equal(launchCalls[1].args.dir, '/repo-parent/.adhdev-worktrees/mesh/feat-b');
+  assert.equal((launchCalls[0].args.settings as any).meshNodeId, 'node-worktree-a');
+  assert.equal((launchCalls[1].args.settings as any).meshNodeId, 'node-worktree-b');
+});
+
+test('mesh_launch_session still does not use local fallback when non-local worktree P2P relay is unavailable', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
     meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
