@@ -421,7 +421,7 @@ export class DaemonCommandRouter {
         mesh: any;
         node: any;
         nodeId: string;
-    }): Promise<{ success: true; skipped?: boolean; removedPath?: string; repoRoot?: string; reason?: string } | { success: false; code: string; error: string; recoveryHint: string }> {
+    }): Promise<{ success: true; skipped?: boolean; removedPath?: string; repoRoot?: string; reason?: string; fallback?: string; forced?: boolean; convergence?: Record<string, unknown> } | { success: false; code: string; error: string; recoveryHint: string; convergence?: Record<string, unknown> }> {
         const workspace = typeof args.node?.workspace === 'string' ? args.node.workspace.trim() : '';
         if (!workspace) {
             return {
@@ -497,21 +497,122 @@ export class DaemonCommandRouter {
             };
         }
 
+        const forceFallbackConvergence = await this.getWorktreeForceCleanupConvergence({
+            repoRoot,
+            workspace,
+            node: args.node,
+        });
+
         try {
-            const result = await removeWorktree(repoRoot, workspace, { requireClean: true });
-            return { success: true, removedPath: result.removedPath, repoRoot };
+            const result = await removeWorktree(repoRoot, workspace, {
+                requireClean: true,
+                allowSubmoduleForceFallback: forceFallbackConvergence.allow,
+            });
+            return {
+                success: true,
+                removedPath: result.removedPath,
+                repoRoot,
+                ...(result.fallback ? {
+                    fallback: result.fallback,
+                    forced: result.forced,
+                    reason: result.reason,
+                    convergence: forceFallbackConvergence,
+                } : {}),
+            };
         } catch (e: any) {
             const message = String(e?.message || e || 'worktree cleanup failed');
             const dirty = message.includes('dirty worktree') || message.includes('local changes');
+            const submoduleForceBlocked = /working trees containing submodules cannot be moved or removed/i.test(message) && !forceFallbackConvergence.allow;
             return {
                 success: false,
-                code: dirty ? 'mesh_worktree_cleanup_dirty' : 'mesh_worktree_cleanup_failed',
-                error: message,
+                code: dirty
+                    ? 'mesh_worktree_cleanup_dirty'
+                    : submoduleForceBlocked
+                        ? 'mesh_worktree_cleanup_force_fallback_blocked'
+                        : 'mesh_worktree_cleanup_failed',
+                error: submoduleForceBlocked
+                    ? `${message}; refusing --force fallback because convergence could not be verified: ${forceFallbackConvergence.error || 'unknown convergence state'}`
+                    : message,
                 recoveryHint: dirty
                     ? 'Commit, stash, or intentionally discard the worktree changes before retrying mesh_remove_node. The mesh registry entry is preserved until cleanup is safe.'
-                    : 'Inspect git worktree status/list from the source repo and retry after resolving the reported cleanup failure.',
+                    : submoduleForceBlocked
+                        ? 'Verify the worktree branch is merged/contained in the source default branch (for example origin/main) or mark the node with a safe branchConvergence final state before retrying. The mesh registry entry is preserved.'
+                        : 'Inspect git worktree status/list from the source repo and retry after resolving the reported cleanup failure.',
+                ...(submoduleForceBlocked ? { convergence: forceFallbackConvergence } : {}),
             };
         }
+    }
+
+    private async getWorktreeForceCleanupConvergence(args: {
+        repoRoot: string;
+        workspace: string;
+        node: any;
+    }): Promise<{ allow: boolean; status?: string; source?: string; ref?: string; error?: string }> {
+        const metadataStatus = typeof args.node?.branchConvergence?.status === 'string'
+            ? args.node.branchConvergence.status
+            : '';
+        if (metadataStatus === 'merged_to_main' || metadataStatus === 'cleanup_candidate') {
+            return { allow: true, status: metadataStatus, source: 'node_branch_convergence' };
+        }
+
+        const { execFile } = await import('node:child_process');
+        const { promisify } = await import('node:util');
+        const execFileAsync = promisify(execFile);
+        const runGit = async (gitArgs: string[], cwd: string): Promise<string> => {
+            const { stdout } = await execFileAsync('git', gitArgs, {
+                cwd,
+                encoding: 'utf8',
+                timeout: 30_000,
+                maxBuffer: 4 * 1024 * 1024,
+                windowsHide: true,
+            });
+            return String(stdout || '').trim();
+        };
+
+        let head = '';
+        try {
+            head = await runGit(['rev-parse', 'HEAD'], args.workspace);
+        } catch (e: any) {
+            return { allow: false, error: `could not resolve worktree HEAD: ${e?.message || e}` };
+        }
+        if (!head) return { allow: false, error: 'worktree HEAD is empty' };
+
+        const candidateRefs: string[] = [];
+        try {
+            const defaultBranch = await runGit(['branch', '--show-current'], args.repoRoot);
+            if (defaultBranch) {
+                candidateRefs.push(defaultBranch, `origin/${defaultBranch}`);
+            }
+        } catch { /* fall through to common refs */ }
+        candidateRefs.push('origin/main', 'origin/master', 'main', 'master');
+
+        const seen = new Set<string>();
+        const checkedRefs: string[] = [];
+        for (const ref of candidateRefs) {
+            if (!ref || seen.has(ref)) continue;
+            seen.add(ref);
+            let commit = '';
+            try {
+                commit = await runGit(['rev-parse', '--verify', `${ref}^{commit}`], args.repoRoot);
+            } catch {
+                continue;
+            }
+            checkedRefs.push(ref);
+            try {
+                await runGit(['merge-base', '--is-ancestor', head, commit], args.repoRoot);
+                return { allow: true, status: 'merged_to_default_ref', source: 'git_merge_base', ref };
+            } catch {
+                // Not contained in this candidate ref; keep checking other safe refs.
+            }
+        }
+
+        return {
+            allow: false,
+            status: metadataStatus || undefined,
+            error: checkedRefs.length
+                ? `worktree HEAD is not contained in checked refs: ${checkedRefs.join(', ')}`
+                : 'no default/main refs were available for convergence verification',
+        };
     }
 
     private isCompletedHostedSession(record: any): boolean {
@@ -1701,6 +1802,9 @@ export class DaemonCommandRouter {
                                     workspace: typeof node?.workspace === 'string' ? node.workspace : undefined,
                                     daemonId: typeof node?.daemonId === 'string' ? node.daemonId : undefined,
                                     worktreeBranch: typeof node?.worktreeBranch === 'string' ? node.worktreeBranch : undefined,
+                                    worktreeCleanupFallback: typeof worktreeCleanup?.fallback === 'string' ? worktreeCleanup.fallback : undefined,
+                                    forced: worktreeCleanup?.forced === true ? true : undefined,
+                                    forceFallbackReason: typeof worktreeCleanup?.reason === 'string' ? worktreeCleanup.reason : undefined,
                                 },
                             });
                         } catch { /* ledger append is best-effort */ }

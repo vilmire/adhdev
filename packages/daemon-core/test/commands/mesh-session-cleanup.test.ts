@@ -22,6 +22,30 @@ async function createTempGitRepo(prefix: string) {
   return { dir, repoRoot }
 }
 
+async function createTempGitRepoWithSubmodule(prefix: string) {
+  const dir = await mkdtemp(join(tmpdir(), prefix))
+  const submoduleRoot = join(dir, 'submodule')
+  const repoRoot = join(dir, 'repo')
+
+  await execFileAsync('git', ['init', submoduleRoot])
+  await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: submoduleRoot })
+  await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: submoduleRoot })
+  await writeFile(join(submoduleRoot, 'submodule.txt'), 'submodule\n')
+  await execFileAsync('git', ['add', 'submodule.txt'], { cwd: submoduleRoot })
+  await execFileAsync('git', ['commit', '-m', 'submodule init'], { cwd: submoduleRoot })
+
+  await execFileAsync('git', ['init', repoRoot])
+  await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoRoot })
+  await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: repoRoot })
+  await writeFile(join(repoRoot, 'README.md'), '# test\n')
+  await execFileAsync('git', ['add', 'README.md'], { cwd: repoRoot })
+  await execFileAsync('git', ['commit', '-m', 'init'], { cwd: repoRoot })
+  await execFileAsync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', submoduleRoot, 'vendor/submodule'], { cwd: repoRoot })
+  await execFileAsync('git', ['commit', '-am', 'add submodule'], { cwd: repoRoot })
+
+  return { dir, repoRoot, submoduleRoot }
+}
+
 function createRouter(overrides: Record<string, unknown> = {}) {
   const sessionHostControl = {
     listSessions: vi.fn(async () => []),
@@ -291,6 +315,47 @@ describe('mesh session cleanup', () => {
       })
       expect(existsSync(unsafePath)).toBe(true)
       expect(inlineMesh.nodes.some(node => node.id === 'node-worktree')).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('uses a force fallback for clean managed worktrees that contain checked-out submodules', async () => {
+    const { dir, repoRoot } = await createTempGitRepoWithSubmodule('adhdev-mesh-submodule-worktree-')
+    try {
+      const branch = 'feat/submodule-worktree'
+      const meshName = 'submodule-worktree-mesh'
+      const created = await createWorktree({ repoRoot, branch, meshName })
+      await execFileAsync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'], { cwd: created.worktreePath })
+      const inlineMesh = {
+        id: 'mesh-submodule-worktree',
+        name: meshName,
+        policy: {},
+        nodes: [
+          { id: 'source', workspace: repoRoot, repoRoot },
+          { id: 'node-worktree', workspace: created.worktreePath, repoRoot: created.worktreePath, isLocalWorktree: true, worktreeBranch: branch, clonedFromNodeId: 'source' },
+        ],
+      }
+      const { router } = createRouter()
+
+      const result = await router.execute('remove_mesh_node', {
+        meshId: inlineMesh.id,
+        nodeId: 'node-worktree',
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({
+        success: true,
+        removed: true,
+        worktreeCleanup: {
+          success: true,
+          fallback: 'git_worktree_remove_force_submodule',
+          forced: true,
+          reason: 'working_trees_containing_submodules',
+        },
+      })
+      expect(existsSync(created.worktreePath)).toBe(false)
+      expect(inlineMesh.nodes.some(node => node.id === 'node-worktree')).toBe(false)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

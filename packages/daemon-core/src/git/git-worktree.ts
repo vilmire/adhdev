@@ -20,6 +20,7 @@ const execFileAsync = promisify(execFile);
 const WORKTREE_DIR_NAME = '.adhdev-worktrees';
 const GIT_TIMEOUT_MS = 30_000;
 const GIT_MAX_BUFFER = 4 * 1024 * 1024;
+const SUBMODULE_WORKTREE_REMOVE_RE = /working trees containing submodules cannot be moved or removed/i;
 
 // ─── Types ──────────────────────────────────────
 
@@ -52,11 +53,20 @@ export interface WorktreeEntry {
 export interface WorktreeRemoveOptions {
     /** Refuse to remove a worktree with uncommitted or untracked changes. */
     requireClean?: boolean;
+    /**
+     * If normal removal fails with Git's submodule-worktree guard, retry with
+     * `git worktree remove --force`. Callers must perform their own
+     * higher-level managed-path/convergence checks before enabling this.
+     */
+    allowSubmoduleForceFallback?: boolean;
 }
 
 export interface WorktreeRemoveResult {
     success: true;
     removedPath: string;
+    fallback?: 'git_worktree_remove_force_submodule';
+    forced?: boolean;
+    reason?: 'working_trees_containing_submodules';
 }
 
 // ─── Path Resolution ────────────────────────────
@@ -157,7 +167,31 @@ export async function removeWorktree(repoRoot: string, worktreePath: string, opt
         });
     } catch (error: any) {
         const stderr = typeof error.stderr === 'string' ? error.stderr : '';
-        throw new Error(`git worktree remove failed: ${stderr.trim() || error.message}`);
+        const stdout = typeof error.stdout === 'string' ? error.stdout : '';
+        const detail = `${stderr}\n${stdout}\n${error.message || ''}`;
+        if (opts.allowSubmoduleForceFallback && SUBMODULE_WORKTREE_REMOVE_RE.test(detail)) {
+            try {
+                await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], {
+                    cwd: repoRoot,
+                    encoding: 'utf8',
+                    timeout: GIT_TIMEOUT_MS,
+                    maxBuffer: GIT_MAX_BUFFER,
+                    windowsHide: true,
+                });
+            } catch (forceError: any) {
+                const forceStderr = typeof forceError.stderr === 'string' ? forceError.stderr : '';
+                const forceStdout = typeof forceError.stdout === 'string' ? forceError.stdout : '';
+                throw new Error(`git worktree remove --force fallback failed: ${forceStderr.trim() || forceStdout.trim() || forceError.message}`);
+            }
+            return {
+                success: true,
+                removedPath: worktreePath,
+                fallback: 'git_worktree_remove_force_submodule',
+                forced: true,
+                reason: 'working_trees_containing_submodules',
+            };
+        }
+        throw new Error(`git worktree remove failed: ${stderr.trim() || stdout.trim() || error.message}`);
     }
 
     return { success: true, removedPath: worktreePath };
