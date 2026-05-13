@@ -27,6 +27,7 @@ export type MeshLedgerKind =
     | 'task_stalled'
     | 'task_approval_needed'
     | 'session_launched'
+    | 'session_auto_launch'
     | 'session_stopped'
     | 'checkpoint_created'
     | 'node_cloned'
