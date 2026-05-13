@@ -4,6 +4,11 @@ import { randomUUID } from 'crypto';
 import { getLedgerDir } from './mesh-ledger.js';
 
 export type MeshTaskStatus = 'pending' | 'assigned' | 'completed' | 'failed' | 'cancelled';
+export type MeshActiveTaskStatus = Extract<MeshTaskStatus, 'pending' | 'assigned'>;
+export type MeshHistoricalTaskStatus = Extract<MeshTaskStatus, 'completed' | 'failed' | 'cancelled'>;
+
+export const ACTIVE_MESH_QUEUE_STATUSES: MeshActiveTaskStatus[] = ['pending', 'assigned'];
+export const HISTORICAL_MESH_QUEUE_STATUSES: MeshHistoricalTaskStatus[] = ['completed', 'failed', 'cancelled'];
 
 export interface MeshWorkQueueEntry {
     id: string;
@@ -260,6 +265,10 @@ export interface MeshWorkQueueStats {
     completed: number;
     failed: number;
     cancelled: number;
+    /** Source-of-truth active queue counters; only pending/assigned are live work. */
+    activeCounts: Record<MeshActiveTaskStatus, number>;
+    /** Terminal ledger records kept for audit/history; never count as active work. */
+    historicalCounts: Record<MeshHistoricalTaskStatus, number>;
     activeAssignments: Array<{
         id: string;
         nodeId?: string;
@@ -287,6 +296,15 @@ export function getMeshQueueStats(meshId: string): MeshWorkQueueStats {
         completed,
         failed,
         cancelled,
+        activeCounts: {
+            pending,
+            assigned,
+        },
+        historicalCounts: {
+            completed,
+            failed,
+            cancelled,
+        },
         activeAssignments: queue
             .filter(q => q.status === 'assigned')
             .map(q => ({

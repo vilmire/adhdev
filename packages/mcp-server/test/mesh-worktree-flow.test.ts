@@ -1168,7 +1168,7 @@ test('mesh_send_task dedupes rapid identical node/session/message dispatch retri
 test('mesh_view_queue annotates stale assigned tasks and historical task metadata', async () => {
   const meshId = `mesh-stale-queue-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const staleUpdatedAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
-  const completedAt = new Date(Date.now() - 60_000).toISOString();
+  const completedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
   const queuePath = join(getLedgerDir(), `${meshId}.queue.json`);
   writeFileSync(queuePath, JSON.stringify([
     {
@@ -1227,12 +1227,24 @@ test('mesh_view_queue annotates stale assigned tasks and historical task metadat
   } as any, {}));
 
   assert.equal(payload.success, true);
+  assert.deepEqual(payload.sourceOfTruth.activeStatuses, ['pending', 'assigned']);
+  assert.deepEqual(payload.sourceOfTruth.historicalStatuses, ['completed', 'failed', 'cancelled']);
+  assert.equal(payload.summary.totalCount, 3);
+  assert.equal(payload.visibleSummary.totalCount, 3);
   assert.deepEqual(payload.activeCounts, { pending: 0, assigned: 2 });
   assert.deepEqual(payload.historicalCounts, { completed: 1, failed: 0, cancelled: 0 });
+  assert.deepEqual(payload.visibleActiveCounts, { pending: 0, assigned: 2 });
+  assert.deepEqual(payload.visibleHistoricalCounts, { completed: 1, failed: 0, cancelled: 0 });
   assert.equal(payload.activeCount, 2);
   assert.equal(payload.historicalCount, 1);
   assert.equal(payload.staleAssignedCount, 1);
   assert.equal(payload.staleAssignedTasks[0].id, 'task-stale-assigned');
+  assert.equal(payload.queueMaintenance.readOnly, true);
+  assert.equal(payload.queueMaintenance.mutationPerformed, false);
+  assert.equal(payload.queueMaintenance.staleAssignedCount, 1);
+  assert.equal(payload.queueMaintenance.oldHistoricalRecordCount, 1);
+  assert.equal(payload.queueMaintenance.cleanupCandidateCount, 2);
+  assert.deepEqual(payload.queueMaintenance.cleanupCandidates.map((task: any) => task.cleanupClass).sort(), ['old_historical_record', 'stale_assigned']);
   assert.equal(payload.queue[0].taskStatus, 'assigned');
   assert.equal(payload.queue[0].activeTaskId, 'task-stale-assigned');
   assert.equal(payload.queue[0].staleAssigned, true);
@@ -1240,6 +1252,34 @@ test('mesh_view_queue annotates stale assigned tasks and historical task metadat
   assert.equal(payload.queue[1].staleAssigned, undefined);
   assert.equal(payload.queue[2].isHistorical, true);
   assert.equal(payload.queue[2].completedAt, completedAt);
+
+  const filteredPayload = JSON.parse(await meshViewQueue({
+    mesh: payload.filter ? {
+      id: meshId,
+      name: 'Stale Queue',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-live',
+        workspace: '/repo',
+        sessions: [{ id: 'session-live', status: 'idle' }],
+        policy: {},
+        userOverrides: {},
+      }],
+    } : undefined,
+    transport: {} as any,
+  } as any, { status: ['failed', 'completed'] }));
+  assert.equal(filteredPayload.success, true);
+  assert.deepEqual(filteredPayload.activeCounts, { pending: 0, assigned: 2 });
+  assert.deepEqual(filteredPayload.visibleActiveCounts, { pending: 0, assigned: 0 });
+  assert.deepEqual(filteredPayload.visibleHistoricalCounts, { completed: 1, failed: 0, cancelled: 0 });
+  assert.equal(filteredPayload.staleAssignedCount, 1);
+  assert.equal(filteredPayload.queue.length, 1);
+  assert.equal(filteredPayload.historicalQueue.length, 1);
+  assert.equal(filteredPayload.historicalQueue[0].id, 'task-completed');
 });
 
 test('mesh_clone_node upserts clone returned through payload-wrapped live relay shape before immediate resolver use', async () => {

@@ -159,6 +159,8 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(stats.historical).to.equal(0);
         expect(stats.pending).to.equal(0);
         expect(stats.assigned).to.equal(1);
+        expect(stats.activeCounts).to.deep.equal({ pending: 0, assigned: 1 });
+        expect(stats.historicalCounts).to.deep.equal({ completed: 0, failed: 0, cancelled: 0 });
         expect(stats.activeAssignments).to.deep.equal([{
             id: task.id,
             nodeId: 'node-active',
@@ -214,5 +216,23 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(requeued?.requeueReason).to.equal('retry on another session');
         const next = claimNextTask(meshId, 'node1', 'fresh-session');
         expect(next?.id).to.equal(task.id);
+    });
+
+    it('keeps historical terminal rows out of active assignment counters', () => {
+        const failedTask = enqueueTask(meshId, 'failed historical task');
+        claimNextTask(meshId, 'node-history', 'session-history');
+        updateTaskStatus(meshId, failedTask.id, 'failed');
+        const pendingTask = enqueueTask(meshId, 'pending active task');
+
+        const stats = getMeshQueueStats(meshId);
+
+        expect(stats.total).to.equal(2);
+        expect(stats.active).to.equal(1);
+        expect(stats.historical).to.equal(1);
+        expect(stats.activeCounts).to.deep.equal({ pending: 1, assigned: 0 });
+        expect(stats.historicalCounts).to.deep.equal({ completed: 0, failed: 1, cancelled: 0 });
+        expect(stats.activeAssignments).to.deep.equal([]);
+        expect(getQueue(meshId, { status: ['pending'] })).to.have.length(1);
+        expect(getQueue(meshId, { status: ['pending'] })[0].id).to.equal(pendingTask.id);
     });
 });

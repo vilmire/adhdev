@@ -398,6 +398,15 @@ export interface SessionEntry {
         completed: number;
         failed: number;
         cancelled?: number;
+        activeCounts?: {
+            pending: number;
+            assigned: number;
+        };
+        historicalCounts?: {
+            completed: number;
+            failed: number;
+            cancelled: number;
+        };
         activeAssignments?: Array<{
             id: string;
             nodeId?: string;
@@ -453,6 +462,15 @@ export interface CompactSessionEntry {
         completed: number;
         failed: number;
         cancelled?: number;
+        activeCounts?: {
+            pending: number;
+            assigned: number;
+        };
+        historicalCounts?: {
+            completed: number;
+            failed: number;
+            cancelled: number;
+        };
         activeAssignments?: Array<{
             id: string;
             nodeId?: string;

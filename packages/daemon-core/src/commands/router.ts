@@ -1825,12 +1825,23 @@ export class DaemonCommandRouter {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 if (!meshId) return { success: false, error: 'meshId required' };
                 try {
-                    const { getQueue } = await import('../mesh/mesh-work-queue.js');
+                    const { getMeshQueueStats, getQueue } = await import('../mesh/mesh-work-queue.js');
                     const status = Array.isArray(args?.status)
                         ? args.status.map((s: any) => typeof s === 'string' ? s.trim() : '').filter(Boolean)
                         : undefined;
                     const queue = getQueue(meshId, { status: status as any });
-                    return { success: true, queue };
+                    const summary = getMeshQueueStats(meshId);
+                    return {
+                        success: true,
+                        queue,
+                        summary,
+                        sourceOfTruth: {
+                            kind: 'mesh_work_queue_file',
+                            activeStatuses: ['pending', 'assigned'],
+                            historicalStatuses: ['completed', 'failed', 'cancelled'],
+                            notes: 'pending/assigned are active work; completed/failed/cancelled are historical records.',
+                        },
+                    };
                 } catch (e: any) {
                     return { success: false, error: e.message };
                 }

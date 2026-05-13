@@ -63,8 +63,10 @@ function findNode(mesh: LocalMeshEntry, nodeId: string): LocalMeshNodeEntry {
 
 const DUPLICATE_DISPATCH_WINDOW_MS = 60_000;
 const STALE_ASSIGNED_QUEUE_MS = 30 * 60_000;
+const OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 60_000;
 const ACTIVE_QUEUE_STATUSES = new Set(['pending', 'assigned']);
 const HISTORICAL_QUEUE_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+type QueueViewMode = 'all' | 'active' | 'historical';
 
 /**
  * Refresh the MCP process's mesh snapshot from the daemon inline mesh cache.
@@ -327,6 +329,85 @@ function buildQueueStatusSummary(queue: any[]): Record<string, unknown> {
             failed: counts.failed,
             cancelled: counts.cancelled,
         },
+    };
+}
+
+function normalizeQueueViewMode(value: unknown): QueueViewMode {
+    return value === 'active' || value === 'historical' || value === 'all' ? value : 'all';
+}
+
+function sanitizeQueueStatusFilter(value: unknown): string[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const statuses = value
+        .map(item => typeof item === 'string' ? item.trim() : '')
+        .filter(status => ACTIVE_QUEUE_STATUSES.has(status) || HISTORICAL_QUEUE_STATUSES.has(status));
+    return statuses.length ? Array.from(new Set(statuses)) : undefined;
+}
+
+function filterQueueForView(queue: any[], view: QueueViewMode, statuses?: string[]): any[] {
+    if (statuses?.length) {
+        const allowed = new Set(statuses);
+        return queue.filter(task => allowed.has(String(task?.status || '')));
+    }
+    if (view === 'active') return queue.filter(task => ACTIVE_QUEUE_STATUSES.has(String(task?.status || '')));
+    if (view === 'historical') return queue.filter(task => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')));
+    return queue;
+}
+
+function slimQueueTask(task: any): Record<string, unknown> {
+    return {
+        id: task?.id,
+        status: task?.status,
+        assignedNodeId: task?.assignedNodeId,
+        assignedSessionId: task?.assignedSessionId,
+        targetNodeId: task?.targetNodeId,
+        targetSessionId: task?.targetSessionId,
+        updatedAt: task?.updatedAt,
+        staleAssigned: task?.staleAssigned === true,
+        staleReason: task?.staleReason,
+    };
+}
+
+function buildQueueMaintenanceReport(queue: any[]): Record<string, unknown> {
+    const now = Date.now();
+    const staleAssignedTasks = queue
+        .filter(task => task?.status === 'assigned' && task?.staleAssigned === true)
+        .map(slimQueueTask);
+    const historicalTasks = queue.filter(task => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')));
+    const oldHistoricalTasks = historicalTasks
+        .filter(task => {
+            const updatedAt = new Date(task?.updatedAt).getTime();
+            return Number.isFinite(updatedAt) && now - updatedAt >= OLD_HISTORICAL_QUEUE_RECORD_MS;
+        })
+        .map(task => ({
+            ...slimQueueTask(task),
+            cleanupClass: 'old_historical_record',
+            reason: 'terminal queue record is older than the read-only maintenance threshold',
+        }));
+    const cleanupCandidates = [
+        ...staleAssignedTasks.map(task => ({
+            ...task,
+            cleanupClass: 'stale_assigned',
+            reason: typeof task.staleReason === 'string' ? task.staleReason : 'active assigned task does not match current live mesh node/session state',
+            suggestedOperation: 'operator_review_then_requeue_or_cancel',
+        })),
+        ...oldHistoricalTasks.map(task => ({
+            ...task,
+            suggestedOperation: 'operator_review_then_archive_or_keep',
+        })),
+    ];
+    return {
+        readOnly: true,
+        mutationPerformed: false,
+        sourceOfTruth: 'mesh_work_queue_file',
+        staleAssignedDefinition: 'Only active assigned queue rows are stale candidates, and only when the assigned node/session is absent from the current live mesh snapshot.',
+        historicalDefinition: 'completed/failed/cancelled rows are historical ledger records and never active assignments.',
+        staleAssignedTasks,
+        staleAssignedCount: staleAssignedTasks.length,
+        historicalRecordCount: historicalTasks.length,
+        oldHistoricalRecordCount: oldHistoricalTasks.length,
+        cleanupCandidates,
+        cleanupCandidateCount: cleanupCandidates.length,
     };
 }
 
@@ -1045,14 +1126,19 @@ export const MESH_ENQUEUE_TASK_TOOL = {
 
 export const MESH_VIEW_QUEUE_TOOL = {
     name: 'mesh_view_queue',
-    description: 'View the current status of the mesh work queue (pending, assigned, completed, failed, cancelled tasks).',
+    description: 'View the mesh work queue with source-of-truth active counts separated from historical completed/failed/cancelled records.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             status: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Filter by task status: pending, assigned, completed, failed, cancelled. Returns all if omitted.',
+                description: 'Explicit row filter by task status: pending, assigned, completed, failed, cancelled. Source-of-truth counts remain unfiltered; visible* counts describe returned rows.',
+            },
+            view: {
+                type: 'string',
+                enum: ['all', 'active', 'historical'],
+                description: 'Optional row view. active returns pending/assigned rows, historical returns completed/failed/cancelled rows, all returns every persisted queue row. Defaults to all for compatibility.',
             },
         },
     },
@@ -1508,22 +1594,53 @@ export async function meshEnqueueTask(
 
 export async function meshViewQueue(
     ctx: MeshContext,
-    args: { status?: string[] },
+    args: { status?: string[]; view?: QueueViewMode },
 ): Promise<string> {
     try {
-        const queue = annotateQueueStaleness(getQueue(ctx.mesh.id, { status: args.status as any }), ctx.mesh);
-        const staleAssignedTasks = queue.filter((task: any) => task?.status === 'assigned' && task?.staleAssigned);
-        const summary = buildQueueStatusSummary(queue);
+        const statusFilter = sanitizeQueueStatusFilter(args.status);
+        const view = normalizeQueueViewMode(args.view);
+        const fullQueue = annotateQueueStaleness(getQueue(ctx.mesh.id), ctx.mesh);
+        const queue = filterQueueForView(fullQueue, view, statusFilter);
+        const summary = buildQueueStatusSummary(fullQueue);
+        const visibleSummary = buildQueueStatusSummary(queue);
+        const maintenance = buildQueueMaintenanceReport(fullQueue);
+        const staleAssignedTasks = (maintenance as any).staleAssignedTasks || [];
+        const requestedHistoricalRows = queue.some((task: any) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')));
         return JSON.stringify({
             success: true,
+            sourceOfTruth: {
+                kind: 'mesh_work_queue_file',
+                activeStatuses: ['pending', 'assigned'],
+                historicalStatuses: ['completed', 'failed', 'cancelled'],
+                notes: 'pending/assigned are active work; completed/failed/cancelled are historical ledger records and never stale assignments.',
+            },
+            filter: {
+                view,
+                statuses: statusFilter,
+                filtered: Boolean(statusFilter?.length) || view !== 'all',
+            },
             queue,
+            visibleQueue: queue,
+            visibleSummary,
             summary,
             activeCounts: (summary as any).activeCounts,
             historicalCounts: (summary as any).historicalCounts,
             activeCount: (summary as any).activeCount,
             historicalCount: (summary as any).historicalCount,
+            visibleActiveCounts: (visibleSummary as any).activeCounts,
+            visibleHistoricalCounts: (visibleSummary as any).historicalCounts,
+            visibleActiveCount: (visibleSummary as any).activeCount,
+            visibleHistoricalCount: (visibleSummary as any).historicalCount,
             staleAssignedTasks,
-            staleAssignedCount: staleAssignedTasks.length,
+            staleAssignedCount: (maintenance as any).staleAssignedCount,
+            queueMaintenance: maintenance,
+            cleanupDryRun: maintenance,
+            ...(view === 'active' || statusFilter?.some(status => ACTIVE_QUEUE_STATUSES.has(status)) ? {
+                activeQueue: queue.filter((task: any) => ACTIVE_QUEUE_STATUSES.has(String(task?.status || ''))),
+            } : {}),
+            ...(view === 'historical' || requestedHistoricalRows ? {
+                historicalQueue: queue.filter((task: any) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || ''))),
+            } : {}),
             // Back-compat alias for callers already reading the first hardening payload.
             staleAssignments: staleAssignedTasks,
         }, null, 2);
