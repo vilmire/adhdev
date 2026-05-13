@@ -201,7 +201,7 @@ export function addWorkspaceEntry(
         }
     }
     const v = validateWorkspacePath(abs);
-    if (!v.ok) return { error: v.error };
+    if (v.ok !== true) return { error: v.error };
 
     const list = [...(config.workspaces || [])];
     if (list.some(w => path.resolve(w.path) === abs)) {

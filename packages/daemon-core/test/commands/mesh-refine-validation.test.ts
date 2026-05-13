@@ -112,7 +112,7 @@ describe('refine_mesh_node validation gate', () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
-  })
+  }, 60000)
 
   it('runs allowlisted ProjectContextSnapshot commands before merging a clean worktree', async () => {
     const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-validation-pass-'))

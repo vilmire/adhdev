@@ -264,7 +264,8 @@ function ensureMachineId(config: ADHDevConfig): { config: ADHDevConfig; changed:
  * Get the config directory path
  */
 export function getConfigDir(): string {
-    const dir = join(homedir(), '.adhdev');
+    const override = process.env.ADHDEV_CONFIG_DIR;
+    const dir = override && override.trim() ? override.trim() : join(homedir(), '.adhdev');
     if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
     }

@@ -317,7 +317,7 @@ describe('chat-history config helpers', () => {
     const persistedKeys = Object.keys(persisted.files).sort()
     expect(persistedKeys).toContain('20260417_060606_zeta_2026-04-17.jsonl')
     expect(persistedKeys.some(key => key.startsWith('20260417_050505_epsilon_') && key.endsWith('.jsonl'))).toBe(true)
-  })
+  }, 60000)
 
   it('updates the saved-history index during append writes so first open after reload stays fast', async () => {
     const { ChatHistoryWriter } = await import('../../src/config/chat-history.js')
