@@ -563,7 +563,12 @@ test('mesh_launch_session still does not use local fallback when non-local workt
   const result = JSON.parse(text);
 
   assert.equal(result.success, false);
-  assert.equal(result.code, 'p2p_unavailable');
+  assert.equal(result.recoverable, true);
+  assert.equal(result.code, 'p2p_timeout');
+  assert.equal(result.transport, 'p2p');
+  assert.equal(result.retryRecommended, true);
+  assert.match(result.nextAction, /bounded retry/i);
+  assert.match(result.noFallbackReason, /WS\/REST command fallback/i);
   assert.equal(directLaunchCalls, 0);
 });
 
