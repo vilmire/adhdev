@@ -82,6 +82,34 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(prompt).toContain('Never launch a duplicate session or second worker solely because `mesh_read_chat` has no final assistant message')
   })
 
+  it('prefers reusing idle sessions and concise delta instructions for same-issue continuations', () => {
+    const prompt = buildCoordinatorSystemPrompt({
+      mesh: {
+        id: 'mesh_1',
+        name: 'ADHDev',
+        repoIdentity: 'github.com/acme/adhdev',
+        nodes: [
+          {
+            id: 'node_1',
+            workspace: '/repo',
+            daemonId: 'daemon_1',
+            userOverrides: {},
+            policy: {},
+          },
+        ],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as any,
+    })
+
+    expect(prompt).toContain('Reuse an existing idle session on the correct node/provider before launching a new chat/session')
+    expect(prompt).toContain('Call `mesh_launch_session` only when no suitable session exists')
+    expect(prompt).toContain('send a concise **delta instruction**')
+    expect(prompt).toContain('Do not resend the full original task or open a new chat solely to continue the same work')
+    expect(prompt).toContain('Avoid context-wasting restarts')
+    expect(prompt).toContain('prefer the existing idle session and send only the delta from its last verified state')
+  })
+
   it('requires a branch convergence final state before reporting completion', () => {
     const prompt = buildCoordinatorSystemPrompt({
       mesh: {
