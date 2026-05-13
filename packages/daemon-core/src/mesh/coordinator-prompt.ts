@@ -128,18 +128,24 @@ const TOOLS_SECTION = `## Available Tools
 
 | Tool | Purpose |
 |------|---------|
-| \`mesh_status\` | Check all nodes' health, git state, and active sessions |
+| \`mesh_status\` | Check all nodes' health, git state, active sessions, and branch convergence |
 | \`mesh_list_nodes\` | List nodes with workspace paths |
+| \`mesh_enqueue_task\` | Add a task to the pull-based work queue; idle nodes auto-claim |
+| \`mesh_view_queue\` | View queue status — pending, assigned, completed, failed, cancelled tasks |
+| \`mesh_queue_cancel\` | Cancel a queue task without deleting audit history |
+| \`mesh_queue_requeue\` | Return a task to pending for retry; clears stale session targets |
+| \`mesh_send_task\` | Legacy push: enqueue a task targeted at a specific node |
 | \`mesh_launch_session\` | Start a new agent session on a node |
-| \`mesh_send_task\` | Send a task (natural language) to a running agent |
-| \`mesh_read_chat\` | Read an agent's recent messages to check progress |
+| \`mesh_read_chat\` | Read recent chat messages from a delegated agent session |
+| \`mesh_read_debug\` | Collect a daemon-side chat/parser debug bundle for a session |
 | \`mesh_task_history\` | Read the task ledger — dispatches, completions, failures. Use to understand what has been done before deciding next steps |
 | \`mesh_git_status\` | Check git status on a specific node |
 | \`mesh_checkpoint\` | Create a git checkpoint on a node |
 | \`mesh_approve\` | Approve/reject a pending agent action |
 | \`mesh_clone_node\` | Create a worktree node for isolated parallel branch work |
 | \`mesh_refine_node\` | Validate and merge a completed worktree node back into its base branch |
-| \`mesh_remove_node\` | Remove a node (cleans up worktree if applicable) |`;
+| \`mesh_remove_node\` | Remove a node (cleans up worktree if applicable) |
+| \`mesh_cleanup_sessions\` | Manually clean up delegated session records for a node |`;
 
 const TOOL_EXPOSURE_PREFLIGHT_SECTION = `## Tool Exposure Preflight
 
@@ -169,7 +175,7 @@ When a node agent stops unexpectedly, the daemon automatically enriches the syst
 - A recommendation: **retry**, **reassign**, or **escalate**
 
 Follow these recovery rules:
-1. **If "Retry recommended"**: Re-launch the session on the same node (\`mesh_launch_session\`), then resend the original task (\`mesh_send_task\`). The system message includes the original task text.
+1. **If "Retry recommended"**: Check \`mesh_view_queue\` first — the daemon may have auto-requeued. If not, re-launch the session on the same node (\`mesh_launch_session\`), then resend the original task (\`mesh_send_task\`). The system message includes the original task text.
 2. **If "Max retries exceeded"**: Do NOT retry on the same node. Either reassign the task to a different node, or inform the user that the task requires manual intervention.
 3. **If no recovery context**: The stop may be intentional (normal completion). Use \`mesh_read_chat\` once to verify, then move on.
 4. **Always record what happened**: After handling a failure, briefly note the outcome in your report to the user.`;
