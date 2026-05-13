@@ -3,7 +3,7 @@ import { loadConfig } from '../config/config.js';
 import { getMesh, getMeshByRepo } from '../config/mesh-config.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { LOG } from '../logging/logger.js';
-import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext } from './mesh-ledger.js';
+import { appendLedgerEntry, buildTaskCompletionEvidence, getSessionRecoveryContext, isIntentionalCleanupStopEntry, readLedgerEntries } from './mesh-ledger.js';
 import type { MeshLedgerKind, SessionRecoveryContext } from './mesh-ledger.js';
 import { claimNextTask, updateSessionTaskStatus, enqueueTask, updateTaskStatus, getQueue, recordTaskAutoLaunch } from './mesh-work-queue.js';
 
@@ -88,6 +88,46 @@ function getMeshWithCache(components: DaemonComponents, meshId: string): any | u
     const localMesh = getMesh(meshId);
     if (localMesh) return localMesh;
     return components.router?.getCachedInlineMesh(meshId);
+}
+
+const INTENTIONAL_CLEANUP_STOP_SUPPRESSION_MS = 30 * 60 * 1000;
+
+function isIntentionalCleanupStopMetadata(event: Record<string, unknown>): boolean {
+    return event.intentional === true
+        || event.intentionalStop === true
+        || event.operatorCleanup === true
+        || event.reason === 'operator_cleanup'
+        || event.stopReason === 'operator_cleanup'
+        || event.cleanupReason === 'operator_cleanup'
+        || event.source === 'mesh_cleanup_sessions'
+        || event.source === 'mesh_remove_node';
+}
+
+function hasRecentIntentionalCleanupStop(meshId: string, sessionId?: string, nodeId?: string): boolean {
+    if (!sessionId && !nodeId) return false;
+    const cutoff = Date.now() - INTENTIONAL_CLEANUP_STOP_SUPPRESSION_MS;
+    const entries = readLedgerEntries(meshId);
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        const timestamp = new Date(entry.timestamp).getTime();
+        if (!Number.isNaN(timestamp) && timestamp < cutoff) break;
+        if (!isIntentionalCleanupStopEntry(entry)) continue;
+        if (sessionId && entry.sessionId === sessionId) return true;
+        if (!sessionId && nodeId && entry.nodeId === nodeId) return true;
+    }
+    return false;
+}
+
+function shouldSuppressIntentionalCleanupStop(args: {
+    event: string;
+    meshId: string;
+    metadataEvent: Record<string, unknown>;
+    sessionId?: string;
+    nodeId?: string;
+}): boolean {
+    if (args.event !== 'agent:stopped' && args.event !== 'monitor:long_generating') return false;
+    if (isIntentionalCleanupStopMetadata(args.metadataEvent)) return true;
+    return hasRecentIntentionalCleanupStop(args.meshId, args.sessionId, args.nodeId);
 }
 
 
@@ -526,6 +566,23 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
     event: string;
     metadataEvent: Record<string, unknown>;
 }) {
+    const eventSessionId = resolveEventSessionId(args.metadataEvent, args.sourceInstanceId);
+    const eventNodeId = readNonEmptyString(args.nodeId) || readNonEmptyString(args.metadataEvent.meshNodeId);
+    const intentionalCleanupStop = shouldSuppressIntentionalCleanupStop({
+        event: args.event,
+        meshId: args.meshId,
+        metadataEvent: args.metadataEvent,
+        sessionId: eventSessionId || undefined,
+        nodeId: eventNodeId || undefined,
+    });
+    if (intentionalCleanupStop) {
+        if (eventSessionId && eventNodeId) {
+            remoteIdleSessions.delete(`${eventNodeId}:${eventSessionId}`);
+        }
+        LOG.info('MeshEvents', `Suppressed ${args.event} for intentionally cleanup-stopped session ${eventSessionId || '(unknown session)'}`);
+        return { success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true };
+    }
+
     // ── Task Queue & Ledger ──
     let completedTaskForLedger: { id?: string } | null = null;
     if (args.event === 'agent:generating_completed') {
@@ -767,6 +824,13 @@ export function handleMeshForwardEvent(components: DaemonComponents, payload: Re
             providerType: readNonEmptyString(payload.providerType),
             providerSessionId: readNonEmptyString(payload.providerSessionId),
             finalSummary: readNonEmptyString(payload.finalSummary) || readNonEmptyString(payload.summary),
+            intentional: payload.intentional === true,
+            intentionalStop: payload.intentionalStop === true,
+            operatorCleanup: payload.operatorCleanup === true,
+            reason: readNonEmptyString(payload.reason),
+            stopReason: readNonEmptyString(payload.stopReason),
+            cleanupReason: readNonEmptyString(payload.cleanupReason),
+            source: readNonEmptyString(payload.source),
         },
     });
 }

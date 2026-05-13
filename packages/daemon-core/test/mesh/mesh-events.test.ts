@@ -22,7 +22,7 @@ vi.mock('../../src/detection/cli-detector.js', () => ({
 
 import { handleMeshForwardEvent, setupMeshEventForwarding, triggerMeshQueue } from '../../src/mesh/mesh-events.js'
 import { claimNextTask, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
-import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger.js'
+import { getLedgerDir, readLedgerEntries, appendLedgerEntry, getLedgerSummary } from '../../src/mesh/mesh-ledger.js'
 
 function createComponents(meshId = 'mesh_inline_1') {
   let listener: ((event: any) => void) | undefined
@@ -344,6 +344,60 @@ describe('setupMeshEventForwarding', () => {
     expect(coordinator.onEvent.mock.calls[0][1].input.textFallback).toContain('has stopped')
     expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('has been generating for a long time')
     expect(coordinator.onEvent.mock.calls[1][1].input.textFallback).toContain('mesh_read_chat once')
+  })
+
+  it('suppresses cleanup-requested stop and stale long-generating events from failure/recovery ledgers', () => {
+    const meshId = `mesh_cleanup_stop_${Date.now()}`
+    try {
+      const { components, coordinator } = createComponents(meshId)
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a' }],
+        policy: { maxTaskRetries: 1 },
+      })
+      enqueueTask(meshId, 'duplicate session task')
+      claimNextTask(meshId, 'node_child_1', 'runtime-session-1')
+      appendLedgerEntry(meshId, {
+        kind: 'session_stopped',
+        nodeId: 'node_child_1',
+        sessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+        payload: {
+          intentional: true,
+          reason: 'operator_cleanup',
+          source: 'mesh_cleanup_sessions',
+          cleanupMode: 'stop',
+        },
+      })
+
+      const stopped = handleMeshForwardEvent(components, {
+        event: 'agent:stopped',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+      })
+      const longGenerating = handleMeshForwardEvent(components, {
+        event: 'monitor:long_generating',
+        meshId,
+        nodeId: 'node_child_1',
+        targetSessionId: 'runtime-session-1',
+        providerType: 'hermes-cli',
+      })
+
+      expect(stopped).toMatchObject({ success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true })
+      expect(longGenerating).toMatchObject({ success: true, forwarded: 0, suppressed: true, intentionalCleanupStop: true })
+      expect(coordinator.onEvent).not.toHaveBeenCalled()
+      expect(getQueue(meshId)[0].status).toBe('assigned')
+      const kinds = readLedgerEntries(meshId).map(entry => entry.kind)
+      expect(kinds).toContain('session_stopped')
+      expect(kinds).not.toContain('task_failed')
+      expect(kinds).not.toContain('task_stalled')
+      expect(kinds).not.toContain('recovery_attempted')
+      expect(getLedgerSummary(meshId)).toMatchObject({ taskFailed: 0, taskStalled: 0, recentFailures: 0 })
+    } finally {
+      cleanupMeshFiles(meshId)
+    }
   })
 
   it('does not let stopped delegated session records claim targeted queue tasks', () => {

@@ -882,6 +882,36 @@ export class DaemonCommandRouter {
         return record?.lifecycle === 'stopped' || record?.lifecycle === 'failed' || record?.lifecycle === 'interrupted';
     }
 
+    private async recordIntentionalMeshSessionStop(args: {
+        meshId: string;
+        nodeId: string;
+        node: any;
+        sessionId: string;
+        mode: RepoMeshSessionCleanupMode;
+        source: 'mesh_cleanup_sessions' | 'mesh_remove_node';
+        action: 'stop_session' | 'delete_session_force';
+    }): Promise<void> {
+        try {
+            const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
+            appendLedgerEntry(args.meshId, {
+                kind: 'session_stopped',
+                nodeId: args.nodeId,
+                sessionId: args.sessionId,
+                payload: {
+                    intentional: true,
+                    reason: 'operator_cleanup',
+                    intentionalStopReason: 'operator_cleanup',
+                    source: args.source,
+                    cleanupMode: args.mode,
+                    action: args.action,
+                    workspace: typeof args.node?.workspace === 'string' ? args.node.workspace : undefined,
+                },
+            });
+        } catch (e: any) {
+            LOG.warn('MeshCleanup', `Failed to record intentional cleanup stop for ${args.sessionId}: ${e?.message || e}`);
+        }
+    }
+
     private async cleanupMeshSessions(args: {
         meshId: string;
         nodeId: string;
@@ -889,6 +919,7 @@ export class DaemonCommandRouter {
         mode: RepoMeshSessionCleanupMode;
         sessionIds?: string[];
         dryRun?: boolean;
+        source?: 'mesh_cleanup_sessions' | 'mesh_remove_node';
     }): Promise<{ success: boolean; [key: string]: unknown }> {
         if (args.mode === 'preserve') {
             return { success: true, mode: 'preserve', matchedCount: 0, stoppedSessionIds: [], deletedSessionIds: [], skippedSessionIds: [] };
@@ -908,6 +939,21 @@ export class DaemonCommandRouter {
         const deleteUnsupportedSessionIds: string[] = [];
         const recordsRemainSessionIds: string[] = [];
         const errors: Array<{ sessionId: string; error: string }> = [];
+        const cleanupSource = args.source || 'mesh_cleanup_sessions';
+        const markedIntentionalStopSessionIds = new Set<string>();
+        const markIntentionalStop = async (sessionId: string, action: 'stop_session' | 'delete_session_force') => {
+            if (args.dryRun || markedIntentionalStopSessionIds.has(sessionId)) return;
+            markedIntentionalStopSessionIds.add(sessionId);
+            await this.recordIntentionalMeshSessionStop({
+                meshId: args.meshId,
+                nodeId: args.nodeId,
+                node: args.node,
+                sessionId,
+                mode: args.mode,
+                source: cleanupSource,
+                action,
+            });
+        };
         const matchedBySurfaceKind = {
             live_runtime: 0,
             recovery_snapshot: 0,
@@ -932,7 +978,10 @@ export class DaemonCommandRouter {
             try {
                 if (args.mode === 'stop') {
                     if (!completed) {
-                        if (!args.dryRun) await this.deps.sessionHostControl.stopSession(sessionId);
+                        if (!args.dryRun) {
+                            await markIntentionalStop(sessionId, 'stop_session');
+                            await this.deps.sessionHostControl.stopSession(sessionId);
+                        }
                         stoppedSessionIds.push(sessionId);
                     } else {
                         skippedSessionIds.push(sessionId);
@@ -951,6 +1000,7 @@ export class DaemonCommandRouter {
                 }
 
                 if (args.mode === 'stop_and_delete') {
+                    if (!completed) await markIntentionalStop(sessionId, 'delete_session_force');
                     if (!args.dryRun) await this.deps.sessionHostControl.deleteSession(sessionId, { force: true });
                     deletedSessionIds.push(sessionId);
                     continue;
@@ -963,6 +1013,7 @@ export class DaemonCommandRouter {
                     recordsRemainSessionIds.push(sessionId);
                     if (args.mode === 'stop_and_delete' && !completed) {
                         try {
+                            await markIntentionalStop(sessionId, 'stop_session');
                             await this.deps.sessionHostControl.stopSession(sessionId);
                             stoppedSessionIds.push(sessionId);
                         } catch (stopError: any) {
@@ -1989,6 +2040,7 @@ export class DaemonCommandRouter {
                         mode,
                         sessionIds,
                         dryRun: args?.dryRun === true,
+                        source: 'mesh_cleanup_sessions',
                     });
                     return result;
                 } catch (e: any) {
@@ -2137,7 +2189,7 @@ export class DaemonCommandRouter {
                     );
                     let sessionCleanup: Record<string, unknown> | undefined;
                     if (node && sessionCleanupMode !== 'preserve') {
-                        sessionCleanup = await this.cleanupMeshSessions({ meshId, nodeId, node, mode: sessionCleanupMode });
+                        sessionCleanup = await this.cleanupMeshSessions({ meshId, nodeId, node, mode: sessionCleanupMode, source: 'mesh_remove_node' });
                         if (sessionCleanup.success === false) return { success: false, removed: false, sessionCleanup };
                     }
 

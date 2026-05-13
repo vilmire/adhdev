@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { DaemonCommandRouter } from '../../src/commands/router'
 import { createWorktree, resolveWorktreePath } from '../../src/git/git-worktree'
+import { getLedgerDir, readLedgerEntries } from '../../src/mesh/mesh-ledger'
 
 const execFileAsync = promisify(execFile)
 
@@ -78,6 +79,11 @@ function createRouter(overrides: Record<string, unknown> = {}) {
   })
 
   return { router, sessionHostControl }
+}
+
+function cleanupLedgerFile(meshId: string) {
+  const ledgerPath = join(getLedgerDir(), `${meshId}.jsonl`)
+  if (existsSync(ledgerPath)) unlinkSync(ledgerPath)
 }
 
 describe('mesh session cleanup', () => {
@@ -218,6 +224,96 @@ describe('mesh session cleanup', () => {
       skippedLiveSessionIds: [],
     })
     expect(sessionHostControl.stopSession).toHaveBeenCalledWith('smoke-live')
+    cleanupLedgerFile('mesh-1')
+  })
+
+  it('records operator cleanup stop intent before stopping live sessions', async () => {
+    const meshId = `mesh-cleanup-intent-${Date.now()}`
+    try {
+      const { router, sessionHostControl } = createRouter({
+        listSessions: vi.fn(async () => [
+          { sessionId: 'duplicate-live', workspace: '/repo/worktree-a', lifecycle: 'running' },
+        ]),
+      })
+
+      const result = await router.execute('cleanup_mesh_sessions', {
+        meshId,
+        nodeId: 'node-a',
+        mode: 'stop',
+        sessionIds: ['duplicate-live'],
+        inlineMesh: {
+          id: meshId,
+          name: 'Mesh',
+          policy: {},
+          nodes: [{ id: 'node-a', workspace: '/repo/worktree-a' }],
+        },
+      })
+
+      expect(result).toMatchObject({ success: true, stoppedSessionIds: ['duplicate-live'] })
+      expect(sessionHostControl.stopSession).toHaveBeenCalledWith('duplicate-live')
+      const entries = readLedgerEntries(meshId)
+      expect(entries).toHaveLength(1)
+      expect(entries[0]).toMatchObject({
+        kind: 'session_stopped',
+        nodeId: 'node-a',
+        sessionId: 'duplicate-live',
+        payload: {
+          intentional: true,
+          reason: 'operator_cleanup',
+          source: 'mesh_cleanup_sessions',
+          cleanupMode: 'stop',
+          action: 'stop_session',
+          workspace: '/repo/worktree-a',
+        },
+      })
+    } finally {
+      cleanupLedgerFile(meshId)
+    }
+  })
+
+  it('records remove-node cleanup as intentional stop before force deleting non-completed sessions', async () => {
+    const meshId = `mesh-remove-intent-${Date.now()}`
+    try {
+      const { router, sessionHostControl } = createRouter({
+        listSessions: vi.fn(async () => [
+          { sessionId: 'remove-live', workspace: '/repo/worktree-a', lifecycle: 'created' },
+        ]),
+      })
+      const inlineMesh = {
+        id: meshId,
+        name: 'Mesh',
+        policy: {},
+        nodes: [{ id: 'node-a', workspace: '/repo/worktree-a' }],
+      }
+
+      const result = await router.execute('remove_mesh_node', {
+        meshId,
+        nodeId: 'node-a',
+        sessionCleanupMode: 'stop_and_delete',
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({
+        success: true,
+        removed: true,
+        sessionCleanup: { deletedSessionIds: ['remove-live'] },
+      })
+      expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('remove-live', { force: true })
+      const stopIntent = readLedgerEntries(meshId).find(entry => entry.kind === 'session_stopped')
+      expect(stopIntent).toMatchObject({
+        nodeId: 'node-a',
+        sessionId: 'remove-live',
+        payload: {
+          intentional: true,
+          reason: 'operator_cleanup',
+          source: 'mesh_remove_node',
+          cleanupMode: 'stop_and_delete',
+          action: 'delete_session_force',
+        },
+      })
+    } finally {
+      cleanupLedgerFile(meshId)
+    }
   })
 
   it('reports older hosts with unsupported delete as stopped-only with records remaining', async () => {

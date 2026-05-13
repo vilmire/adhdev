@@ -49,6 +49,18 @@ export interface MeshLedgerEntry {
     payload: Record<string, unknown>;
 }
 
+export function isIntentionalCleanupStopEntry(entry: Pick<MeshLedgerEntry, 'kind' | 'payload'>): boolean {
+    if (entry.kind !== 'session_stopped' && entry.kind !== 'task_failed' && entry.kind !== 'task_stalled') return false;
+    const payload = entry.payload && typeof entry.payload === 'object' && !Array.isArray(entry.payload)
+        ? entry.payload as Record<string, unknown>
+        : {};
+    return payload.intentional === true
+        && (payload.reason === 'operator_cleanup'
+            || payload.intentionalStopReason === 'operator_cleanup'
+            || payload.source === 'mesh_cleanup_sessions'
+            || payload.source === 'mesh_remove_node');
+}
+
 export interface MeshTaskCompletionEvidence {
     source: 'agent_status_event';
     event: 'agent:generating_completed' | 'agent:ready';
@@ -415,13 +427,17 @@ export function getLedgerSummary(meshId: string): MeshLedgerSummary {
             case 'task_dispatched': summary.taskDispatched++; break;
             case 'task_completed': summary.taskCompleted++; break;
             case 'task_failed': {
+                if (isIntentionalCleanupStopEntry(entry)) break;
                 summary.taskFailed++;
                 if (new Date(entry.timestamp).getTime() >= recentFailureCutoff) {
                     summary.recentFailures++;
                 }
                 break;
             }
-            case 'task_stalled': summary.taskStalled++; break;
+            case 'task_stalled': {
+                if (!isIntentionalCleanupStopEntry(entry)) summary.taskStalled++;
+                break;
+            }
             case 'session_launched': summary.sessionLaunched++; break;
             case 'checkpoint_created': summary.checkpointCreated++; break;
         }
@@ -492,6 +508,7 @@ export function getSessionRecoveryContext(
         if (new Date(e.timestamp).getTime() < recentWindow) break;
         if (opts.nodeId && e.nodeId !== opts.nodeId) continue;
         if (e.kind === 'task_failed') {
+            if (isIntentionalCleanupStopEntry(e)) continue;
             consecutiveNodeFailures++;
         } else if (e.kind === 'task_completed' || e.kind === 'task_dispatched') {
             // A completion or new dispatch breaks the consecutive failure chain
