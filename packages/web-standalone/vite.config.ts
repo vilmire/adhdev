@@ -11,6 +11,22 @@ export default defineConfig({
     },
     build: {
         rollupOptions: {
+            external: (id) =>
+                id.startsWith('node:') ||
+                id === 'readdirp' ||
+                id === 'chokidar' ||
+                id === 'path' ||
+                id === 'fs' ||
+                id === 'fs/promises' ||
+                id === 'os' ||
+                id === 'net' ||
+                id === 'stream' ||
+                id === 'crypto' ||
+                id === 'child_process' ||
+                id === 'util' ||
+                id === 'events' ||
+                id === 'http' ||
+                id === 'module',
             output: {
                 manualChunks(id) {
                     if (
