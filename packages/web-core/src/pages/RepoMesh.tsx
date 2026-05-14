@@ -683,7 +683,7 @@ export default function RepoMesh() {
                         <div className="flex-1 rounded-xl border border-border-subtle bg-bg-secondary overflow-hidden" style={{ minHeight: 420 }}>
                             <MeshGraphView
                                 data={meshGraph}
-                                onNodeClick={node => setSelectedGraphNode(current => current?.id === node.id ? null : node)}
+                                onNodeClick={(node: MeshGraphNode) => setSelectedGraphNode((current: MeshGraphNode | null) => current?.id === node.id ? null : node)}
                                 selectedNodeId={selectedGraphNode?.id || null}
                             />
                         </div>
