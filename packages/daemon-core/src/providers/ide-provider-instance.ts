@@ -22,7 +22,7 @@ import { validateReadChatResultPayload } from './read-chat-contract.js';
 import type { ChatMessage } from '../types.js';
 import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
-import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages } from './chat-message-normalization.js';
+import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
 import { getProviderSessionCapabilities, IDE_PROVIDER_SESSION_CAPABILITIES_BASE } from './open-panel-support.js';
 
 type ReadChatModal = {
@@ -470,7 +470,7 @@ export class IdeProviderInstance implements ProviderInstance {
             } else if (agentStatus === 'idle' && (lastStatus === 'generating' || lastStatus === 'waiting_approval')) {
                 const startedAt = this.generatingStartedAt.get(agentKey);
                 const duration = startedAt ? Math.round((now - startedAt) / 1000) : 0;
-                this.pushEvent({ event: 'agent:generating_completed', chatTitle, duration, timestamp: now, ideType: this.type });
+                this.pushEvent({ event: 'agent:generating_completed', chatTitle, duration, timestamp: now, ideType: this.type, finalSummary: extractFinalSummaryFromMessages(chatData?.messages) });
                 this.generatingStartedAt.delete(agentKey);
             }
 

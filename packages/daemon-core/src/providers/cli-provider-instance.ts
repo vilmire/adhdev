@@ -25,7 +25,7 @@ import { formatAutoApprovalMessage, pickApprovalButton } from './approval-utils.
 import { getCliScriptCommand, parseCliScriptResult } from './cli-script-results.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { normalizeProviderSessionId } from './provider-session-id.js';
-import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind } from './chat-message-normalization.js';
+import { buildChatMessage, buildRuntimeSystemChatMessage, isUserFacingChatMessage, normalizeChatMessages, resolveChatMessageKind, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
 
 type PersistableCliHistoryMessage = {
     role: string;
@@ -841,6 +841,7 @@ export class CliProviderInstance implements ProviderInstance {
             chatTitle: pending.chatTitle,
             duration: pending.duration,
             timestamp: pending.timestamp,
+            finalSummary: extractFinalSummaryFromMessages(this.adapter?.getScriptParsedStatus()?.messages),
         });
         this.completedDebouncePending = null;
         this.completedDebounceTimer = null;

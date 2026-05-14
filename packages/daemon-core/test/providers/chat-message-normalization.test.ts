@@ -9,6 +9,7 @@ import {
   buildThoughtChatMessage,
   buildToolChatMessage,
   buildUserChatMessage,
+  extractFinalSummaryFromMessages,
   filterUserFacingChatMessages,
   isBuiltinChatMessageKind,
   isUserFacingChatMessage,
@@ -137,5 +138,44 @@ describe('chat message normalization', () => {
       'answer',
       'intentional tool summary',
     ]);
+  });
+
+  it('extractFinalSummaryFromMessages returns empty string for null/undefined/empty', () => {
+    expect(extractFinalSummaryFromMessages(null)).toBe('');
+    expect(extractFinalSummaryFromMessages(undefined)).toBe('');
+    expect(extractFinalSummaryFromMessages([])).toBe('');
+  });
+
+  it('extractFinalSummaryFromMessages extracts last user-facing assistant message', () => {
+    const messages = [
+      { role: 'user', content: 'prompt' },
+      { role: 'assistant', content: 'first answer' },
+      { role: 'assistant', content: 'final answer', meta: { userFacing: true } },
+    ] as any;
+    expect(extractFinalSummaryFromMessages(messages)).toBe('final answer');
+  });
+
+  it('extractFinalSummaryFromMessages falls back to last user-facing message of any role', () => {
+    const messages = [
+      { role: 'user', content: 'prompt' },
+      { role: 'assistant', content: 'answer', meta: { hidden: true } },
+      { role: 'user', content: 'follow-up', meta: { userFacing: true } },
+    ] as any;
+    expect(extractFinalSummaryFromMessages(messages)).toBe('follow-up');
+  });
+
+  it('extractFinalSummaryFromMessages truncates to maxChars', () => {
+    const messages = [
+      { role: 'assistant', content: 'a'.repeat(1000), meta: { userFacing: true } },
+    ] as any;
+    expect(extractFinalSummaryFromMessages(messages, 100)).toBe('a'.repeat(100));
+  });
+
+  it('extractFinalSummaryFromMessages prefers assistant over user', () => {
+    const messages = [
+      { role: 'user', content: 'user message', meta: { userFacing: true } },
+      { role: 'assistant', content: 'assistant message', meta: { userFacing: true } },
+    ] as any;
+    expect(extractFinalSummaryFromMessages(messages)).toBe('assistant message');
   });
 });

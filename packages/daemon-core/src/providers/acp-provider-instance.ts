@@ -61,6 +61,7 @@ import {
     buildToolChatMessage,
     buildUserChatMessage,
     normalizeChatMessages,
+    extractFinalSummaryFromMessages,
 } from './chat-message-normalization.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
@@ -1507,7 +1508,7 @@ export class AcpProviderInstance implements ProviderInstance {
                 });
             } else if (newStatus === 'idle' && (this.lastStatus === 'generating' || this.lastStatus === 'waiting_approval')) {
                 const duration = this.generatingStartedAt ? Math.round((now - this.generatingStartedAt) / 1000) : 0;
-                this.pushEvent({ event: 'agent:generating_completed', chatTitle, duration, timestamp: now });
+                this.pushEvent({ event: 'agent:generating_completed', chatTitle, duration, timestamp: now, finalSummary: extractFinalSummaryFromMessages(this.messages) });
                 this.generatingStartedAt = 0;
             } else if (newStatus === 'stopped') {
                 this.pushEvent({ event: 'agent:stopped', chatTitle, timestamp: now });

@@ -1,4 +1,36 @@
 import type { ChatMessage } from '../types.js';
+import { flattenContent } from './contracts.js';
+
+export function extractFinalSummaryFromMessages(
+  messages: ChatMessage[] | null | undefined,
+  maxChars: number = 500,
+): string {
+  if (!Array.isArray(messages) || messages.length === 0) return '';
+
+  // Find last user-facing assistant message
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg) continue;
+    const classification = classifyChatMessageVisibility(msg);
+    if (classification.isUserFacing && (msg.role === 'assistant' || msg.role === 'model')) {
+      const text = flattenContent(msg.content).trim();
+      if (text) return text.slice(0, maxChars);
+    }
+  }
+
+  // Fallback: last user-facing message of any role
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg) continue;
+    const classification = classifyChatMessageVisibility(msg);
+    if (classification.isUserFacing) {
+      const text = flattenContent(msg.content).trim();
+      if (text) return text.slice(0, maxChars);
+    }
+  }
+
+  return '';
+}
 
 export const BUILTIN_CHAT_MESSAGE_KINDS = ['standard', 'thought', 'tool', 'terminal', 'system'] as const;
 

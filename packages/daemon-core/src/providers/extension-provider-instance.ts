@@ -12,7 +12,7 @@ import { buildPersistedProviderEffectMessage, normalizeProviderEffects } from '.
 import { ChatHistoryWriter } from '../config/chat-history.js';
 import type { ChatMessage } from '../types.js';
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
-import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages } from './chat-message-normalization.js';
+import { buildChatMessage, buildRuntimeSystemChatMessage, normalizeChatMessages, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
 import { getProviderSessionCapabilities, EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE } from './open-panel-support.js';
 
 export class ExtensionProviderInstance implements ProviderInstance {
@@ -234,6 +234,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
                     agentType: this.type,
                     agentName: this.agentName || this.provider.name,
                     extensionId: this.extensionId || this.type,
+                    finalSummary: extractFinalSummaryFromMessages(data?.messages),
                 });
                 this.generatingStartedAt = 0;
             }
