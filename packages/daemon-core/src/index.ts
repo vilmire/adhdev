@@ -395,7 +395,6 @@ export {
 } from './session-host/runtime-surface.js';
 export type { SessionHostSurfaceKind, SessionHostSurfaceRecordLike } from './session-host/runtime-surface.js';
 export { shouldAutoRestoreHostedSessionsOnStartup } from './session-host/startup-restore-policy.js';
-export type { SessionHostEndpoint } from '@adhdev/session-host-core';
 
 // ── Installer ──
 export { getAIExtensions, installExtensions, launchIDE, isExtensionInstalled } from './installer.js';
