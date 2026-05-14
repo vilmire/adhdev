@@ -29,6 +29,8 @@ import {
     buildManualCoordinatorSetup,
     type MeshCoordinatorMetadata,
 } from '../utils/mesh-coordinator-setup'
+import { MeshGraphView, MeshGraphPanel } from '../components/MeshGraph'
+import { buildMeshGraph, type MeshGraph, type MeshGraphNode } from '@adhdev/daemon-core'
 
 // ─── Types (matches daemon-core LocalMeshEntry shape) ───
 export interface MeshNode {
@@ -223,6 +225,12 @@ export default function RepoMesh() {
     const [meshQueue, setMeshQueue] = useState<MeshQueueEntry[]>([])
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
 
+    // Graph state
+    const [meshGraph, setMeshGraph] = useState<MeshGraph | null>(null)
+    const [graphLoading, setGraphLoading] = useState(false)
+    const [graphError, setGraphError] = useState<string | null>(null)
+    const [selectedGraphNode, setSelectedGraphNode] = useState<MeshGraphNode | null>(null)
+
     // Create form
     const [showCreate, setShowCreate] = useState(false)
     const [createName, setCreateName] = useState('')
@@ -293,6 +301,39 @@ export default function RepoMesh() {
 
     useEffect(() => { void loadMeshes() }, [loadMeshes])
     useEffect(() => { void loadQueue(selectedMeshId) }, [loadQueue, selectedMeshId])
+
+    async function loadMeshGraph() {
+        if (!daemonId || !selectedMeshId) return
+        try {
+            setGraphLoading(true)
+            setGraphError(null)
+            const res: any = await sendCommand(daemonId, 'mesh_status', { meshId: selectedMeshId })
+            if (res?.success) {
+                const status = res.status || res.result || res
+                if (status && typeof status === 'object') {
+                    const graph = buildMeshGraph(status)
+                    setMeshGraph(graph)
+                } else {
+                    setGraphError('Invalid mesh_status response format')
+                }
+            } else {
+                setGraphError(res?.error || 'mesh_status failed')
+            }
+        } catch (e: any) {
+            setGraphError(e?.message || 'Failed to load mesh graph')
+        } finally {
+            setGraphLoading(false)
+        }
+    }
+
+    useEffect(() => {
+        if (selectedMeshId) {
+            setMeshGraph(null)
+            setGraphError(null)
+            setSelectedGraphNode(null)
+            void loadMeshGraph()
+        }
+    }, [selectedMeshId])
 
     // ─── Actions ───
     async function handleCreate() {
@@ -605,6 +646,54 @@ export default function RepoMesh() {
                     </div>
                 </div>
                 {savingPolicy && <div className="mt-3 text-[12px] text-text-muted">Saving policy...</div>}
+            </Section>
+
+            {/* Graph */}
+            <Section
+                title="Visualization"
+                description="Live mesh topology: branches, worktrees, sessions, and orphan detection."
+            >
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                    <div className="flex items-center gap-2 text-[11px] text-text-muted">
+                        <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" />healthy</span>
+                        <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />dirty</span>
+                        <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />error</span>
+                        <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-500" />offline</span>
+                    </div>
+                    <button
+                        type="button"
+                        className="btn btn-secondary btn-sm inline-flex items-center gap-1.5"
+                        onClick={loadMeshGraph}
+                        disabled={graphLoading}
+                    >
+                        {graphLoading ? 'Loading...' : 'Refresh Graph'}
+                    </button>
+                </div>
+                {graphError && (
+                    <div className="mb-3 text-[12px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+                        {graphError}
+                    </div>
+                )}
+                {!meshGraph ? (
+                    <div className="text-[12px] text-text-muted rounded-lg border border-border-subtle bg-bg-secondary px-3 py-3">
+                        {graphLoading ? 'Loading graph...' : 'Refresh the graph to view mesh topology.'}
+                    </div>
+                ) : (
+                    <div className="flex gap-4" style={{ minHeight: 420 }}>
+                        <div className="flex-1 rounded-xl border border-border-subtle bg-bg-secondary overflow-hidden" style={{ minHeight: 420 }}>
+                            <MeshGraphView
+                                data={meshGraph}
+                                onNodeClick={node => setSelectedGraphNode(current => current?.id === node.id ? null : node)}
+                                selectedNodeId={selectedGraphNode?.id || null}
+                            />
+                        </div>
+                        {selectedGraphNode && (
+                            <div className="w-80 shrink-0">
+                                <MeshGraphPanel node={selectedGraphNode} onClose={() => setSelectedGraphNode(null)} />
+                            </div>
+                        )}
+                    </div>
+                )}
             </Section>
 
             {/* Nodes */}

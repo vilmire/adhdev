@@ -159,6 +159,10 @@ export type { MeshLedgerReconciliationEvidence, MeshLedgerReplicaEvidence, MeshL
 export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTaskStatus, cancelTask, requeueTask, getMeshQueueStats } from './mesh/mesh-work-queue.js';
 export type { MeshWorkQueueEntry, MeshTaskStatus, MeshWorkQueueStats } from './mesh/mesh-work-queue.js';
 
+// ── Mesh Visualization ──
+export { buildMeshGraph } from './mesh/mesh-visualization.js';
+export type { MeshGraph, MeshGraphNode, MeshGraphEdge, MeshGraphNodeType, MeshGraphEdgeType } from './mesh/mesh-visualization.js';
+
 // ── Mesh Events ──
 export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, clearPendingMeshCoordinatorEvents } from './mesh/mesh-events.js';
 export type { PendingMeshCoordinatorEvent } from './mesh/mesh-events.js';

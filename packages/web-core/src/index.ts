@@ -197,6 +197,9 @@ export { default as MachineDetail } from './pages/MachineDetail'
 export { default as MachinesPage } from './pages/Machines'
 export { default as NotificationsPage } from './pages/Notifications'
 export { default as RepoMesh } from './pages/RepoMesh'
+export { MeshGraphView, MeshGraphPanel } from './components/MeshGraph'
+export type { MeshGraphData, MeshGraphNode, MeshGraphEdge } from './components/MeshGraph'
+
 export { default as OnboardingModal } from './components/OnboardingModal'
 
 // ── Dashboard Mesh ──
