@@ -148,6 +148,71 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(q[0].status).to.equal('failed');
     });
 
+    it('selects the most recently dispatched task when multiple tasks are assigned to the same session', () => {
+        // Simulate a rare edge case where a session somehow has multiple assigned tasks
+        const t1 = enqueueTask(meshId, 'older task');
+        const t2 = enqueueTask(meshId, 'newer task');
+
+        // Manually assign both tasks to the same session (bypassing claimNextTask guard)
+        // to simulate the edge case where assignment tracking drifts
+        const queue = JSON.parse(fs.readFileSync(queuePath, 'utf-8'));
+        const now = Date.now();
+        queue[0].status = 'assigned';
+        queue[0].assignedNodeId = 'node1';
+        queue[0].assignedSessionId = 'session1';
+        queue[0].dispatchTimestamp = new Date(now - 1000).toISOString();
+        queue[0].updatedAt = new Date(now - 1000).toISOString();
+
+        queue[1].status = 'assigned';
+        queue[1].assignedNodeId = 'node1';
+        queue[1].assignedSessionId = 'session1';
+        queue[1].dispatchTimestamp = new Date(now).toISOString();
+        queue[1].updatedAt = new Date(now).toISOString();
+
+        fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
+
+        // Completion should target the most recently dispatched task (t2)
+        const completed = updateSessionTaskStatus(meshId, 'session1', 'completed');
+        expect(completed).to.not.be.null;
+        expect(completed?.id).to.equal(t2.id);
+        expect(completed?.status).to.equal('completed');
+
+        // The older task should remain assigned
+        const q = getQueue(meshId);
+        const older = q.find((t: any) => t.id === t1.id);
+        const newer = q.find((t: any) => t.id === t2.id);
+        expect(older?.status).to.equal('assigned');
+        expect(newer?.status).to.equal('completed');
+    });
+
+    it('falls back to updatedAt when dispatchTimestamp is missing (legacy entries)', () => {
+        const t1 = enqueueTask(meshId, 'legacy task 1');
+        const t2 = enqueueTask(meshId, 'legacy task 2');
+
+        const queue = JSON.parse(fs.readFileSync(queuePath, 'utf-8'));
+        const now = Date.now();
+        queue[0].status = 'assigned';
+        queue[0].assignedNodeId = 'node1';
+        queue[0].assignedSessionId = 'session1';
+        // No dispatchTimestamp — legacy entry
+        queue[0].updatedAt = new Date(now - 1000).toISOString();
+
+        queue[1].status = 'assigned';
+        queue[1].assignedNodeId = 'node1';
+        queue[1].assignedSessionId = 'session1';
+        // No dispatchTimestamp — legacy entry
+        queue[1].updatedAt = new Date(now).toISOString();
+
+        fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
+
+        const completed = updateSessionTaskStatus(meshId, 'session1', 'completed');
+        expect(completed?.id).to.equal(t2.id);
+
+        const q = getQueue(meshId);
+        expect(q.find((t: any) => t.id === t1.id)?.status).to.equal('assigned');
+        expect(q.find((t: any) => t.id === t2.id)?.status).to.equal('completed');
+    });
+
     it('exposes active assignment details in queue stats for status/UI surfaces', () => {
         const task = enqueueTask(meshId, 'visible active task');
         claimNextTask(meshId, 'node-active', 'session-active');

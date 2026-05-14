@@ -39,6 +39,8 @@ export interface MeshWorkQueueEntry {
         sessionId?: string;
         updatedAt: string;
     };
+    /** ISO timestamp when the task was dispatched (assigned) to a node/session. Used for precise matching on completion. */
+    dispatchTimestamp?: string;
     createdAt: string;
     updatedAt: string;
 }
@@ -132,6 +134,7 @@ export function claimNextTask(meshId: string, nodeId: string, sessionId: string)
     entry.status = 'assigned';
     entry.assignedNodeId = nodeId;
     entry.assignedSessionId = sessionId;
+    entry.dispatchTimestamp = new Date().toISOString();
     entry.updatedAt = new Date().toISOString();
 
     writeQueue(meshId, queue);
@@ -243,17 +246,27 @@ export function updateSessionTaskStatus(
     status: MeshTaskStatus,
 ): MeshWorkQueueEntry | null {
     const queue = readQueue(meshId);
-    // Find the most recently assigned task for this session that isn't already terminal
-    // (In case multiple tasks were assigned to the same session over time, though rare)
+    // Collect all assigned tasks for this session, then pick the one with the
+    // most recent dispatchTimestamp (or updatedAt fallback for legacy entries).
+    // This prevents completing the wrong task when multiple tasks were assigned
+    // to the same session in rapid succession.
+    let bestIdx = -1;
+    let bestTime = 0;
     for (let i = queue.length - 1; i >= 0; i--) {
         if (queue[i].assignedSessionId === sessionId && queue[i].status === 'assigned') {
-            queue[i].status = status;
-            queue[i].updatedAt = new Date().toISOString();
-            writeQueue(meshId, queue);
-            return queue[i];
+            const time = new Date(queue[i].dispatchTimestamp || queue[i].updatedAt).getTime();
+            if (time > bestTime) {
+                bestTime = time;
+                bestIdx = i;
+            }
         }
     }
-    return null;
+    if (bestIdx === -1) return null;
+
+    queue[bestIdx].status = status;
+    queue[bestIdx].updatedAt = new Date().toISOString();
+    writeQueue(meshId, queue);
+    return queue[bestIdx];
 }
 
 export interface MeshWorkQueueStats {
