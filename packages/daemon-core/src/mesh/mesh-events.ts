@@ -44,6 +44,16 @@ export function drainPendingMeshCoordinatorEvents(): PendingMeshCoordinatorEvent
     return pendingMeshCoordinatorEvents.splice(0);
 }
 
+/** Peek at pending coordinator events without draining (non-destructive). */
+export function getPendingMeshCoordinatorEvents(): readonly PendingMeshCoordinatorEvent[] {
+    return pendingMeshCoordinatorEvents.slice();
+}
+
+/** Explicitly clear all pending coordinator events. */
+export function clearPendingMeshCoordinatorEvents(): void {
+    pendingMeshCoordinatorEvents.splice(0);
+}
+
 function readNonEmptyString(value: unknown): string {
     return typeof value === 'string' && value.trim() ? value.trim() : '';
 }

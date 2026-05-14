@@ -27,6 +27,7 @@ import {
     buildP2pRelayFailurePayload,
     cancelTask,
     classifyP2pRelayFailure,
+    drainPendingMeshCoordinatorEvents,
     enqueueTask,
     getQueue,
     getLedgerSummary,
@@ -1522,17 +1523,23 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         response.ledgerSummary = ledgerSummary;
     } catch { /* ledger read is best-effort */ }
 
-    // Drain MCP-coordinator pending events queued by the daemon (same-machine case).
-    if (ctx.transport instanceof IpcTransport) {
-        try {
+    // Drain MCP-coordinator pending events queued by the daemon.
+    // IpcTransport (same-machine daemon IPC): use command round-trip.
+    // LocalTransport (standalone daemon same-process): drain directly from daemon-core.
+    // CloudTransport (cross-machine): cannot access same-process queue; skip.
+    try {
+        let pendingEvents: any[] = [];
+        if (ctx.transport instanceof IpcTransport) {
             const eventsResult = await (ctx.transport as IpcTransport).command('get_pending_mesh_events', {}) as any;
-            const pendingEvents = Array.isArray(eventsResult?.events) ? eventsResult.events : [];
-            if (pendingEvents.length > 0) {
-                response.pendingCoordinatorEvents = pendingEvents;
-            }
-        } catch {
-            // Non-fatal: pending events are best-effort.
+            pendingEvents = Array.isArray(eventsResult?.events) ? eventsResult.events : [];
+        } else if (isLocalTransport(ctx.transport)) {
+            pendingEvents = drainPendingMeshCoordinatorEvents() as any[];
         }
+        if (pendingEvents.length > 0) {
+            response.pendingCoordinatorEvents = pendingEvents;
+        }
+    } catch {
+        // Non-fatal: pending events are best-effort.
     }
 
     return JSON.stringify(response, null, 2);
@@ -1948,7 +1955,16 @@ export async function meshSendTask(
             ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
         }
 
-        return JSON.stringify({ success: true, nodeId: args.node_id, taskId: task.id, status: task.status });
+        // Also drain any pending coordinator events so the caller sees them inline
+        const pendingEvents = isLocalTransport(ctx.transport)
+            ? drainPendingMeshCoordinatorEvents()
+            : [];
+
+        const result: Record<string, unknown> = { success: true, nodeId: args.node_id, taskId: task.id, status: task.status };
+        if (pendingEvents.length > 0) {
+            result.pendingCoordinatorEvents = pendingEvents;
+        }
+        return JSON.stringify(result);
     } catch (e: any) {
         const failure = buildCoordinatorP2pRelayFailure(e, {
             command: 'mesh_send_task',

@@ -160,7 +160,8 @@ export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTa
 export type { MeshWorkQueueEntry, MeshTaskStatus, MeshWorkQueueStats } from './mesh/mesh-work-queue.js';
 
 // ── Mesh Events ──
-export { triggerMeshQueue } from './mesh/mesh-events.js';
+export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, clearPendingMeshCoordinatorEvents } from './mesh/mesh-events.js';
+export type { PendingMeshCoordinatorEvent } from './mesh/mesh-events.js';
 
 // ── Mesh P2P Relay Failure Classification ──
 export {
