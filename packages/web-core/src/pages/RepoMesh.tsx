@@ -30,7 +30,7 @@ import {
     type MeshCoordinatorMetadata,
 } from '../utils/mesh-coordinator-setup'
 import { MeshGraphView, MeshGraphPanel } from '../components/MeshGraph'
-import { buildMeshGraph, type MeshGraph, type MeshGraphNode } from '@adhdev/daemon-core'
+import { buildMeshGraph, type MeshGraph, type MeshGraphNode } from '@adhdev/web-core'
 
 // ─── Types (matches daemon-core LocalMeshEntry shape) ───
 export interface MeshNode {

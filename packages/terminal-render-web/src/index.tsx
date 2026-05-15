@@ -9,9 +9,7 @@ import '@xterm/xterm/css/xterm.css';
 import { Terminal } from '@xterm/xterm';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { FitAddon } from '@xterm/addon-fit';
-
-const DEFAULT_SESSION_HOST_COLS = 80;
-const DEFAULT_SESSION_HOST_ROWS = 32;
+import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core';
 
 export interface TerminalRendererHandle {
   write: (data: string, onProcessed?: () => void) => void;

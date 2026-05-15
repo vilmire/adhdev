@@ -160,8 +160,11 @@ export { enqueueTask, getQueue, claimNextTask, updateTaskStatus, updateSessionTa
 export type { MeshWorkQueueEntry, MeshTaskStatus, MeshWorkQueueStats } from './mesh/mesh-work-queue.js';
 
 // ── Mesh Visualization ──
-export { buildMeshGraph } from './mesh/mesh-visualization.js';
-export type { MeshGraph, MeshGraphNode, MeshGraphEdge, MeshGraphNodeType, MeshGraphEdgeType } from './mesh/mesh-visualization.js';
+// buildMeshGraph and MeshGraph types moved to @adhdev/web-core to avoid
+// bundling Node.js built-ins (fs, path, etc.) into browser builds.
+// Import from '@adhdev/web-core' instead.
+// export { buildMeshGraph } from './mesh/mesh-visualization.js';
+// export type { MeshGraph, MeshGraphNode, MeshGraphEdge, MeshGraphNodeType, MeshGraphEdgeType } from './mesh/mesh-visualization.js';
 
 // ── Mesh Events ──
 export { triggerMeshQueue, drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, clearPendingMeshCoordinatorEvents } from './mesh/mesh-events.js';

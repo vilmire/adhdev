@@ -199,6 +199,8 @@ export { default as NotificationsPage } from './pages/Notifications'
 export { default as RepoMesh } from './pages/RepoMesh'
 export { MeshGraphView, MeshGraphPanel } from './components/MeshGraph'
 export type { MeshGraphData, MeshGraphNode, MeshGraphEdge } from './components/MeshGraph'
+export { buildMeshGraph } from './utils/mesh-visualization'
+export type { MeshGraph, MeshGraphNode as MeshGraphNodeType, MeshGraphEdge as MeshGraphEdgeType } from './utils/mesh-visualization'
 
 export { default as OnboardingModal } from './components/OnboardingModal'
 
