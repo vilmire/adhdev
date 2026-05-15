@@ -2734,6 +2734,7 @@ export class DaemonCommandRouter {
                     for (const node of mesh.nodes || []) {
                         const status: Record<string, unknown> = {
                             nodeId: node.id || node.nodeId,
+                            machineLabel: node.machineLabel || node.id || node.nodeId,
                             workspace: node.workspace,
                             repoRoot: node.repoRoot,
                             isLocalWorktree: node.isLocalWorktree,
@@ -2741,24 +2742,72 @@ export class DaemonCommandRouter {
                             daemonId: node.daemonId,
                             machineId: node.machineId,
                             health: 'unknown',
+                            providers: node.providers || [],
+                            activeSessions: [],
                         };
                         if (node.workspace && typeof node.workspace === 'string') {
                             try {
                                 const { execFile } = await import('node:child_process');
                                 const { promisify } = await import('node:util');
                                 const execFileAsync = promisify(execFile);
-                                const branch = await execFileAsync('git', ['-C', node.workspace, 'branch', '--show-current'], {
-                                    encoding: 'utf8',
-                                    timeout: 10_000,
-                                }).then(r => r.stdout.trim()).catch(() => '');
-                                const porc = await execFileAsync('git', ['-C', node.workspace, 'status', '--porcelain'], {
-                                    encoding: 'utf8',
-                                    timeout: 10_000,
-                                }).then(r => r.stdout.trim()).catch(() => '');
+
+                                const runGit = async (args: string[]): Promise<string> => {
+                                    const result = await execFileAsync('git', ['-C', node.workspace as string, ...args], {
+                                        encoding: 'utf8',
+                                        timeout: 10_000,
+                                    });
+                                    return result.stdout.trim();
+                                };
+
+                                const branch = await runGit(['branch', '--show-current']).catch(() => '');
+                                const porc = await runGit(['status', '--porcelain']).catch(() => '');
+                                const headCommit = await runGit(['rev-parse', '--short', 'HEAD']).catch(() => null);
+                                const headMessage = await runGit(['log', '-1', '--format=%s']).catch(() => null);
+                                const upstream = await runGit(['rev-parse', '--abbrev-ref', '@{upstream}']).catch(() => null);
+                                const aheadBehind = await runGit(['rev-list', '--left-right', '--count', '@{upstream}...HEAD']).catch(() => '');
+                                const stashCount = await runGit(['stash', 'list']).catch(() => '');
+
+                                let ahead = 0, behind = 0;
+                                if (aheadBehind) {
+                                    const parts = aheadBehind.split(/\s+/);
+                                    if (parts.length >= 2) {
+                                        behind = parseInt(parts[0], 10) || 0;
+                                        ahead = parseInt(parts[1], 10) || 0;
+                                    }
+                                }
+
                                 const dirty = porc.length > 0;
-                                status.branch = branch;
-                                status.isDirty = dirty;
-                                status.uncommittedChanges = porc ? porc.split('\n').filter(Boolean).length : 0;
+                                const lines = porc ? porc.split('\n').filter(Boolean) : [];
+                                let staged = 0, modified = 0, untracked = 0, deleted = 0, renamed = 0;
+                                for (const line of lines) {
+                                    const xy = line.slice(0, 2);
+                                    if (xy[0] !== ' ' && xy[0] !== '?') staged++;
+                                    if (xy[1] === 'M') modified++;
+                                    if (xy[1] === 'D') deleted++;
+                                    if (xy[0] === 'R' || xy[1] === 'R') renamed++;
+                                    if (xy === '??') untracked++;
+                                }
+
+                                status.git = {
+                                    workspace: node.workspace,
+                                    repoRoot: node.workspace,
+                                    isGitRepo: true,
+                                    branch: branch || null,
+                                    headCommit,
+                                    headMessage,
+                                    upstream,
+                                    ahead,
+                                    behind,
+                                    staged,
+                                    modified,
+                                    untracked,
+                                    deleted,
+                                    renamed,
+                                    hasConflicts: false,
+                                    conflictFiles: [],
+                                    stashCount: stashCount ? stashCount.split('\n').filter(Boolean).length : 0,
+                                    lastCheckedAt: Date.now(),
+                                };
                                 status.health = branch ? (dirty ? 'dirty' : 'online') : 'degraded';
                             } catch {
                                 status.health = 'degraded';
