@@ -2714,6 +2714,74 @@ export class DaemonCommandRouter {
                 }
             }
 
+            case 'mesh_status': {
+                const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+                if (!meshId) return { success: false, error: 'meshId required' };
+                try {
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                    const mesh = meshRecord?.mesh;
+                    if (!mesh) return { success: false, error: 'Mesh not found' };
+
+                    const { getMeshQueueStats, getQueue } = await import('../mesh/mesh-work-queue.js');
+                    const queue = getQueue(meshId);
+                    const queueSummary = getMeshQueueStats(meshId);
+
+                    const { readLedgerEntries, getLedgerSummary } = await import('../mesh/mesh-ledger.js');
+                    const ledgerEntries = readLedgerEntries(meshId, { tail: 20 });
+                    const ledgerSummary = getLedgerSummary(meshId);
+
+                    const nodeStatuses = [];
+                    for (const node of mesh.nodes || []) {
+                        const status: Record<string, unknown> = {
+                            nodeId: node.id || node.nodeId,
+                            workspace: node.workspace,
+                            repoRoot: node.repoRoot,
+                            isLocalWorktree: node.isLocalWorktree,
+                            worktreeBranch: node.worktreeBranch,
+                            daemonId: node.daemonId,
+                            machineId: node.machineId,
+                            health: 'unknown',
+                        };
+                        if (node.workspace && typeof node.workspace === 'string') {
+                            try {
+                                const { execFile } = await import('node:child_process');
+                                const { promisify } = await import('node:util');
+                                const execFileAsync = promisify(execFile);
+                                const branch = await execFileAsync('git', ['-C', node.workspace, 'branch', '--show-current'], {
+                                    encoding: 'utf8',
+                                    timeout: 10_000,
+                                }).then(r => r.stdout.trim()).catch(() => '');
+                                const porc = await execFileAsync('git', ['-C', node.workspace, 'status', '--porcelain'], {
+                                    encoding: 'utf8',
+                                    timeout: 10_000,
+                                }).then(r => r.stdout.trim()).catch(() => '');
+                                const dirty = porc.length > 0;
+                                status.branch = branch;
+                                status.isDirty = dirty;
+                                status.uncommittedChanges = porc ? porc.split('\n').filter(Boolean).length : 0;
+                                status.health = branch ? (dirty ? 'dirty' : 'online') : 'degraded';
+                            } catch {
+                                status.health = 'degraded';
+                            }
+                        }
+                        nodeStatuses.push(status);
+                    }
+
+                    return {
+                        success: true,
+                        meshId: mesh.id,
+                        meshName: mesh.name,
+                        repoIdentity: mesh.repoIdentity,
+                        defaultBranch: mesh.defaultBranch,
+                        nodes: nodeStatuses,
+                        queue: { tasks: queue, summary: queueSummary },
+                        ledger: { entries: ledgerEntries, summary: ledgerSummary },
+                    };
+                } catch (e: any) {
+                    return { success: false, error: e.message };
+                }
+            }
+
             default:
                 break;
         }
