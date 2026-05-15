@@ -119,6 +119,7 @@ export type RuntimeWriteOwner = _RuntimeWriteOwner;
 export type RuntimeAttachedClient = _RuntimeAttachedClient;
 export type RecentLaunchEntry = _RecentLaunchEntry;
 export type TerminalBackendStatus = _TerminalBackendStatus;
+export type { SessionHostEndpoint } from '@adhdev/session-host-core';
 
 // Type aliases — rollup-dts cannot bundle re-exported type aliases at all.
 // Canonical definition lives in shared-types-extra.ts — keep these in sync.

@@ -322,7 +322,7 @@ export function classifyChatMessageVisibility(message: ChatMessage | null | unde
   const explicitHidden = EXPLICIT_HIDDEN_VISIBILITIES.has(visibility)
     || EXPLICIT_HIDDEN_VISIBILITIES.has(transcriptVisibility)
     || HIDDEN_AUDIENCES.has(audience)
-    || hasBooleanMarker(message, meta, ['internal', 'isInternal', 'debug', 'statusOnly', 'controlOnly']);
+    || hasBooleanMarker(message, meta, ['hidden', 'internal', 'isInternal', 'debug', 'statusOnly', 'controlOnly']);
   const explicitUserFacing = EXPLICIT_VISIBLE_VISIBILITIES.has(visibility)
     || EXPLICIT_VISIBLE_VISIBILITIES.has(transcriptVisibility)
     || audience === 'chat'
