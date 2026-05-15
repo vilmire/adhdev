@@ -1,8 +1,12 @@
-import type { GitRepoStatus } from './git-types.js';
+import type { GitRepoStatus, GitSubmoduleStatus } from './git-types.js';
 import { GitCommandError, resolveGitRepository, runGit } from './git-executor.js';
 
 export interface GitStatusOptions {
   timeoutMs?: number;
+  /** When true, include submodule status in the result. Defaults to true. */
+  includeSubmodules?: boolean;
+  /** Optional filter to exclude specific submodule paths from status */
+  submoduleIgnorePaths?: string[];
 }
 
 export async function getGitRepoStatus(
@@ -10,6 +14,7 @@ export async function getGitRepoStatus(
   options: GitStatusOptions = {},
 ): Promise<GitRepoStatus> {
   const lastCheckedAt = Date.now();
+  const includeSubmodules = options.includeSubmodules !== false;
 
   try {
     const repo = await resolveGitRepository(workspace, options);
@@ -17,6 +22,11 @@ export async function getGitRepoStatus(
     const parsed = parsePorcelainV2Status(statusOutput.stdout);
     const head = await readHead(repo, options);
     const stashCount = await readStashCount(repo, options);
+
+    let submodules: GitSubmoduleStatus[] | undefined;
+    if (includeSubmodules) {
+      submodules = await getSubmoduleStatuses(repo, options);
+    }
 
     return {
       workspace: repo.workspace,
@@ -37,6 +47,7 @@ export async function getGitRepoStatus(
       conflictFiles: parsed.conflictFiles,
       stashCount,
       lastCheckedAt,
+      submodules,
     };
   } catch (error) {
     if (error instanceof GitCommandError) {
@@ -190,4 +201,55 @@ function emptyStatus(workspace: string, lastCheckedAt: number, error: GitCommand
     error: error.stderr || error.message,
     reason: error.reason,
   };
+}
+
+// ─── Submodule Status ───────────────────────────
+
+async function getSubmoduleStatuses(
+  repo: { workspace: string; repoRoot: string | null; isGitRepo: boolean },
+  options: GitStatusOptions,
+): Promise<GitSubmoduleStatus[]> {
+  if (!repo.repoRoot) return [];
+
+  try {
+    const result = await runGit(repo, ['submodule', 'status', '--recursive'], options);
+    return parseSubmoduleStatusOutput(result.stdout, repo.repoRoot, options.submoduleIgnorePaths);
+  } catch {
+    return [];
+  }
+}
+
+function parseSubmoduleStatusOutput(
+  output: string,
+  repoRoot: string,
+  ignorePaths?: string[],
+): GitSubmoduleStatus[] {
+  const submodules: GitSubmoduleStatus[] = [];
+  const ignoreSet = new Set(ignorePaths || []);
+
+  for (const line of output.split('\n')) {
+    if (!line.trim()) continue;
+
+    // Format: [+- ]<commit> <path> (<branch>)
+    // - = out of sync, + = dirty, ' ' = clean
+    const match = line.match(/^([\-+\s])([0-9a-f]{40})\s+(\S+)(?:\s+\(([^)]+)\))?/);
+    if (!match) continue;
+
+    const prefix = match[1];
+    const commit = match[2];
+    const path = match[3];
+
+    if (ignoreSet.has(path)) continue;
+
+    submodules.push({
+      path,
+      commit,
+      repoPath: repoRoot + '/' + path,
+      dirty: prefix === '+',
+      outOfSync: prefix === '-',
+      lastCheckedAt: Date.now(),
+    });
+  }
+
+  return submodules;
 }

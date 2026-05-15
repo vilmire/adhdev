@@ -105,6 +105,21 @@ export interface RepoMeshNodePolicy {
      * sibling paths so freshness checks stay fail-closed and non-surprising.
      */
     relatedRepos?: RepoMeshRelatedRepo[];
+    /**
+     * When true (default), mesh_git_status automatically discovers git submodules
+     * and includes their status. Set to false to disable auto-discovery.
+     */
+    autoDiscoverSubmodules?: boolean;
+    /**
+     * Submodule paths to ignore when autoDiscoverSubmodules is true.
+     * Useful for vendored dependencies that change frequently but are not deploy-critical.
+     */
+    submoduleIgnorePaths?: string[];
+    /**
+     * When true (default), mesh_clone_node runs `git submodule update --init --recursive`
+     * after creating a worktree. Set to false to skip submodule initialization.
+     */
+    initSubmodulesOnClone?: boolean;
 }
 
 export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {

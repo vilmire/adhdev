@@ -525,6 +525,15 @@ function extractGitDiff(value: any): any {
     return payload?.diffSummary ?? payload?.diff ?? value?.diffSummary ?? value?.diff ?? payload;
 }
 
+function extractSubmodules(value: any, ignorePaths: string[]): any[] | undefined {
+    const payload = unwrapCommandPayload(value);
+    const subs = payload?.submodules ?? value?.submodules;
+    if (!Array.isArray(subs)) return undefined;
+    if (ignorePaths.length === 0) return subs;
+    const ignoreSet = new Set(ignorePaths);
+    return subs.filter((s: any) => s?.path && !ignoreSet.has(s.path));
+}
+
 function extractLaunchPayload(value: any): any {
     return findNestedPayload(value, payload => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
 }
@@ -1420,8 +1429,19 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
                 entry.isDirty = dirty;
                 entry.uncommittedChanges = uncommittedChanges;
                 entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
+                // Submodule out-of-sync warning
+                const submodules = extractSubmodules(result, (node.policy as any)?.submoduleIgnorePaths || []);
+                if (submodules && submodules.some((s: any) => s?.outOfSync)) {
+                    entry.submoduleWarning = 'One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.';
+                    entry.outOfSyncSubmodules = submodules.filter((s: any) => s?.outOfSync).map((s: any) => s.path);
+                }
             } else if (isLocalTransport(transport)) {
-                const statusResult = await commandForNode(ctx, node, 'git_status', { workspace: node.workspace });
+                const autoDiscover = (node.policy as any)?.autoDiscoverSubmodules !== false;
+                const statusResult = await commandForNode(ctx, node, 'git_status', {
+                    workspace: node.workspace,
+                    includeSubmodules: autoDiscover,
+                    submoduleIgnorePaths: (node.policy as any)?.submoduleIgnorePaths || undefined,
+                });
                 const status = extractGitStatus(statusResult);
                 const uncommittedChanges = countUncommittedChanges(status);
                 const dirty = isGitStatusDirty(status);
@@ -1430,6 +1450,12 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
                 entry.isDirty = dirty;
                 entry.uncommittedChanges = uncommittedChanges;
                 entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
+                // Submodule out-of-sync warning
+                const submodules = extractSubmodules(statusResult, (node.policy as any)?.submoduleIgnorePaths || []);
+                if (submodules && submodules.some((s: any) => s?.outOfSync)) {
+                    entry.submoduleWarning = 'One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.';
+                    entry.outOfSyncSubmodules = submodules.filter((s: any) => s?.outOfSync).map((s: any) => s.path);
+                }
             } else {
                 entry.health = 'unknown';
                 entry.note = 'No daemonId available for cloud status probe';
@@ -2221,6 +2247,10 @@ export async function meshGitStatus(
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
+    // Determine submodule options from node policy
+    const autoDiscoverSubmodules = (node.policy as any)?.autoDiscoverSubmodules !== false;
+    const submoduleIgnorePaths = (node.policy as any)?.submoduleIgnorePaths || [];
+
     try {
         if (!isLocalTransport(ctx.transport) && node.daemonId) {
             const result = await (ctx.transport as CloudTransport).gitStatus(node.daemonId, node.workspace, true);
@@ -2229,11 +2259,14 @@ export async function meshGitStatus(
                 workspace: node.workspace,
                 status: extractGitStatus(result),
                 diff: extractGitDiff(result),
+                submodules: autoDiscoverSubmodules ? extractSubmodules(result, submoduleIgnorePaths) : undefined,
                 relatedRepos: await collectRelatedRepoStatuses(ctx, node),
             }, null, 2);
         } else if (isLocalTransport(ctx.transport)) {
             const statusResult = await commandForNode(ctx, node, 'git_status', {
                 workspace: node.workspace,
+                includeSubmodules: autoDiscoverSubmodules,
+                submoduleIgnorePaths: submoduleIgnorePaths.length > 0 ? submoduleIgnorePaths : undefined,
             });
             const diffResult = await commandForNode(ctx, node, 'git_diff_summary', {
                 workspace: node.workspace,
@@ -2243,6 +2276,7 @@ export async function meshGitStatus(
                 workspace: node.workspace,
                 status: extractGitStatus(statusResult),
                 diff: extractGitDiff(diffResult),
+                submodules: autoDiscoverSubmodules ? extractSubmodules(statusResult, submoduleIgnorePaths) : undefined,
                 relatedRepos: await collectRelatedRepoStatuses(ctx, node),
             }, null, 2);
         } else {

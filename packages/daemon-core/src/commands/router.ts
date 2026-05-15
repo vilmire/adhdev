@@ -2303,13 +2303,29 @@ export class DaemonCommandRouter {
                         if (!node) return { success: false, error: 'Failed to register worktree node' };
                     }
 
+                    // Initialize submodules if policy allows (default: true)
+                    const initSubmodules = (sourceNode.policy as any)?.initSubmodulesOnClone !== false;
+                    if (initSubmodules) {
+                        try {
+                            const { runGit } = await import('../git/git-executor.js');
+                            await runGit(
+                                { workspace: result.worktreePath, repoRoot: result.worktreePath, isGitRepo: true },
+                                ['submodule', 'update', '--init', '--recursive'],
+                                { timeoutMs: 120000 },
+                            );
+                        } catch (subErr: any) {
+                            // Submodule init is best-effort; don't fail the clone
+                            console.warn('[mesh] Submodule init failed for worktree:', subErr.message);
+                        }
+                    }
+
                     // Record in task ledger
                     try {
                         const { appendLedgerEntry } = await import('../mesh/mesh-ledger.js');
                         appendLedgerEntry(meshId, {
                             kind: 'node_cloned',
                             nodeId: node.id,
-                            payload: { sourceNodeId, branch: result.branch, worktreePath: result.worktreePath },
+                            payload: { sourceNodeId, branch: result.branch, worktreePath: result.worktreePath, submodulesInitialized: initSubmodules },
                         });
                     } catch { /* ledger append is best-effort */ }
 

@@ -23,6 +23,23 @@ export interface GitRepoIdentity {
   isGitRepo: boolean;
 }
 
+export interface GitSubmoduleStatus {
+  /** Submodule path relative to repo root */
+  path: string;
+  /** Current commit SHA the submodule is at */
+  commit: string;
+  /** Path to the submodule repo (absolute) */
+  repoPath: string;
+  /** Whether the submodule has uncommitted changes */
+  dirty: boolean;
+  /** Whether the submodule commit differs from what the parent repo expects */
+  outOfSync: boolean;
+  /** Last checked timestamp */
+  lastCheckedAt: number;
+  /** Error message if submodule status could not be read */
+  error?: string;
+}
+
 export interface GitRepoStatus extends GitRepoIdentity {
   branch: string | null;
   headCommit: string | null;
@@ -39,6 +56,8 @@ export interface GitRepoStatus extends GitRepoIdentity {
   conflictFiles: string[];
   stashCount: number;
   lastCheckedAt: number;
+  /** Submodule statuses when auto-discover is enabled */
+  submodules?: GitSubmoduleStatus[];
   error?: string;
   reason?: GitFailureReason;
 }
