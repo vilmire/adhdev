@@ -173,10 +173,31 @@ git commit -m "chore: bump version to v$NEW_VERSION"
 git tag "v$NEW_VERSION"
 git push origin main --tags
 
+# ── Tag push verification ──
+
+echo ""
+echo "🔎 Verifying tag was pushed..."
+REMOTE_TAG=$(git ls-remote --tags origin "refs/tags/v$NEW_VERSION" 2>/dev/null | awk '{print $1}')
+if [ -z "$REMOTE_TAG" ]; then
+    echo "❌ Tag v$NEW_VERSION was NOT found on remote!"
+    echo "   Manual fix: git push origin v$NEW_VERSION"
+    exit 1
+fi
+echo "✅ Tag v$NEW_VERSION confirmed on remote"
+
 echo ""
 echo "✅ OSS v$NEW_VERSION released!"
 echo "   → CI will publish session-host-core, mcp-server, daemon-core, and daemon-standalone to npm"
 echo "   → ghostty-vt-node is published too when its release paths changed"
 echo ""
-echo "Next: update cloud repo"
-echo "  cd .. && ./scripts/version-bump.sh $NEW_VERSION"
+echo "⚠️  IMPORTANT: Wait for OSS CI to complete before deploying Cloud!"
+echo ""
+echo "   Check CI status:"
+echo "     gh run list --repo vilmire/adhdev -L 1"
+echo ""
+echo "   Verify npm publish:"
+echo "     npm view @adhdev/daemon-core version"
+echo "     npm view @adhdev/daemon-standalone version"
+echo ""
+echo "   Then deploy Cloud:"
+echo "     cd .. && ./scripts/version-bump.sh $NEW_VERSION"
