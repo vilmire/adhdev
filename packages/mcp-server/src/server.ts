@@ -207,7 +207,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
 
     const server = new Server(
-      { name: 'adhdev-mcp-server', version: '0.9.80' },
+      { name: 'adhdev-mcp-server', version: '0.9.81' },
       { capabilities: { tools: {}, resources: {} } },
     );
 
