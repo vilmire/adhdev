@@ -71,4 +71,40 @@ describe('DashboardMobileChatInbox render behavior', () => {
     expect(titleIndex).toBeGreaterThan(hideIndex)
     expect(html).not.toContain('Hide this chat from the inbox?')
   })
+
+  it('renders a dedicated mesh graph affordance in mobile inbox rows for coordinator conversations', () => {
+    const conversation = makeConversation({
+      settings: { meshCoordinatorFor: 'mesh-123' } as ActiveConversation['settings'],
+    })
+    const html = renderToStaticMarkup(
+      React.createElement(DashboardMobileChatInbox, {
+        section: 'chats',
+        attentionItems: [],
+        unreadItems: [],
+        workingItems: [makeItem(conversation)],
+        completedItems: [],
+        hiddenConversations: [],
+        machineCards: [],
+        getAvatarText: () => 'C',
+        actionLogs: [],
+        sendDaemonCommand: vi.fn(),
+        onOpenConversation: vi.fn(),
+        onShowAllHidden: vi.fn(),
+        onHideConversation: vi.fn(),
+        onOpenMeshGraph: vi.fn(),
+        onOpenMachine: vi.fn(),
+        onOpenSettings: vi.fn(),
+        onSectionChange: vi.fn(),
+        wsStatus: 'connected',
+      }),
+    )
+
+    const railIndex = html.indexOf('mobile-inbox-leading-rail')
+    const hideIndex = html.indexOf('mobile-inbox-hide-button')
+    const meshIndex = html.indexOf('mobile-inbox-mesh-button')
+
+    expect(meshIndex).toBeGreaterThan(hideIndex)
+    expect(hideIndex).toBeGreaterThan(railIndex)
+    expect(html).toContain('Open mesh graph for Refactor mobile inbox')
+  })
 })

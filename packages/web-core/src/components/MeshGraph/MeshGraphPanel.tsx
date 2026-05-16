@@ -38,7 +38,7 @@ function HealthBadge({ health }: { health: string }) {
 export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
     if (!node) {
         return (
-            <div className="w-64 rounded-xl border border-border-subtle bg-bg-panel p-4 text-text-muted text-xs">
+            <div className="w-full max-w-full rounded-xl border border-border-subtle bg-bg-panel p-4 text-text-muted text-xs md:w-64">
                 Select a node to view details.
             </div>
         )
@@ -47,7 +47,7 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
     const isSubmoduleNode = node.type === 'submoduleNode'
 
     return (
-        <div className="w-64 rounded-xl border border-border-subtle bg-bg-panel p-4 flex flex-col gap-2 shadow-lg">
+        <div className="w-full max-w-full rounded-xl border border-border-subtle bg-bg-panel p-4 flex flex-col gap-2 shadow-lg md:w-64">
             <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold text-text-primary truncate">{node.label}</span>
                 {onClose && (

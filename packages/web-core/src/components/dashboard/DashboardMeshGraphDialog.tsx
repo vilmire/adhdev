@@ -150,7 +150,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                 )}
 
                 <div className="flex min-h-0 flex-1 flex-col bg-[linear-gradient(180deg,rgba(2,6,23,0.95),rgba(15,23,42,0.98))] md:flex-row">
-                    <div className="flex min-h-[360px] min-w-0 flex-1 flex-col gap-3 overflow-hidden px-4 py-4 md:px-5 md:py-5">
+                    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden px-4 py-4 md:px-5 md:py-5">
                         {graph?.warnings && graph.warnings.length > 0 && (
                             <div className="flex flex-wrap gap-2">
                                 {graph.warnings.map(warning => (
@@ -173,9 +173,22 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                                 </div>
                             )}
                         </div>
+                        {!selectedNode && (
+                            <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-300 md:hidden">
+                                Tap a node to inspect workspace, session, and git details.
+                            </div>
+                        )}
                     </div>
 
-                    <div className="w-full shrink-0 border-t border-white/10 px-4 py-4 md:w-[320px] md:border-l md:border-t-0 md:px-5 md:py-5">
+                    {selectedNode && (
+                        <div className="border-t border-white/10 px-4 py-4 md:hidden">
+                            <div className="max-h-[38vh] overflow-y-auto">
+                                <MeshGraphPanel node={selectedNode} onClose={() => setSelectedNodeId(null)} />
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="hidden w-full shrink-0 border-t border-white/10 px-4 py-4 md:block md:w-[320px] md:border-l md:border-t-0 md:px-5 md:py-5">
                         <MeshGraphPanel node={selectedNode} onClose={selectedNode ? () => setSelectedNodeId(null) : undefined} />
                     </div>
                 </div>

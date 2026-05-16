@@ -67,6 +67,21 @@ describe('dashboard mobile/touch regressions', () => {
     expect(roomSource).not.toContain('title="Close chat"')
   })
 
+  it('keeps mesh graph access available from both the mobile chat header and inbox rows', () => {
+    const inboxSource = readSource('components/dashboard/DashboardMobileChatInbox.tsx')
+    const roomSource = readSource('components/dashboard/DashboardMobileChatRoom.tsx')
+    const modeSource = readSource('components/dashboard/DashboardMobileChatMode.tsx')
+    const mainViewSource = readSource('components/dashboard/DashboardMainView.tsx')
+
+    expect(inboxSource).toContain('mobile-inbox-mesh-button')
+    expect(inboxSource).toContain('title="Open live repo mesh graph"')
+    expect(inboxSource).toContain('onOpenMeshGraph?: (conversation: ActiveConversation) => void')
+    expect(roomSource).toContain('const meshGraphAvailable = !!selectedConversation.daemonId')
+    expect(roomSource).toContain('title="Open live repo mesh graph"')
+    expect(modeSource).toContain('onOpenMeshGraph={onOpenMeshGraph}')
+    expect(mainViewSource).toContain('onOpenMeshGraph={handleOpenMeshGraph}')
+  })
+
   it('keeps mobile hidden chats collapsed and makes row hide an explicit confirmed action under the left chat icon', () => {
     const inboxSource = readSource('components/dashboard/DashboardMobileChatInbox.tsx')
     const modeSource = readSource('components/dashboard/DashboardMobileChatMode.tsx')

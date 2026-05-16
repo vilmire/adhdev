@@ -25,4 +25,14 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(dialogSource).not.toContain('mockMeshGraph')
     expect(dialogSource).not.toContain('mockNodes')
   })
+
+  it('keeps the dialog responsive on mobile by collapsing the detail pane into a bounded sheet', () => {
+    const dialogSource = readSource('components/dashboard/DashboardMeshGraphDialog.tsx')
+    const panelSource = readSource('components/MeshGraph/MeshGraphPanel.tsx')
+
+    expect(dialogSource).toContain('Tap a node to inspect workspace, session, and git details.')
+    expect(dialogSource).toContain('max-h-[38vh] overflow-y-auto')
+    expect(dialogSource).toContain('className="hidden w-full shrink-0 border-t border-white/10 px-4 py-4 md:block')
+    expect(panelSource).toContain('w-full max-w-full rounded-xl border border-border-subtle bg-bg-panel p-4 flex flex-col gap-2 shadow-lg md:w-64')
+  })
 })

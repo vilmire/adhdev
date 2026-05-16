@@ -1,5 +1,5 @@
 import type { DaemonData } from '../../types'
-import { IconChevronLeft, IconMonitor, IconScroll, IconX } from '../Icons'
+import { IconChevronLeft, IconMesh, IconMonitor, IconScroll, IconX } from '../Icons'
 import PaneGroupContent from './PaneGroupContent'
 import ConversationMetaChips from './ConversationMetaChips'
 import type { ActiveConversation, CliConversationViewMode } from './types'
@@ -25,6 +25,7 @@ interface DashboardMobileChatRoomProps {
     onOpenMachine: (conversation: ActiveConversation) => void
     onOpenHistory: (conversation: ActiveConversation) => void
     onOpenRemote: (conversation: ActiveConversation) => void
+    onOpenMeshGraph?: (conversation: ActiveConversation) => void
     onStopCli?: (conversation?: ActiveConversation) => void | Promise<void>
     cliViewMode: CliConversationViewMode | null
     onSetCliViewMode: (mode: CliConversationViewMode) => void
@@ -49,6 +50,7 @@ export default function DashboardMobileChatRoom({
     onOpenMachine,
     onOpenHistory,
     onOpenRemote,
+    onOpenMeshGraph,
     onStopCli,
     cliViewMode,
     onSetCliViewMode,
@@ -60,6 +62,9 @@ export default function DashboardMobileChatRoom({
     const terminalRef = useRef<CliTerminalHandle | null>(null)
     const isCli = isCliConv(selectedConversation) && !isAcp
     const isCliTerminal = isCli && cliViewMode === 'terminal'
+    const meshGraphAvailable = !!selectedConversation.daemonId
+        && typeof selectedConversation.settings?.meshCoordinatorFor === 'string'
+        && selectedConversation.settings.meshCoordinatorFor.length > 0
     const headerPaddingClass = isStandalone
         ? 'px-4 pt-3.5 pb-2.5'
         : 'px-4 pt-[calc(14px+env(safe-area-inset-top,0px))] pb-2.5'
@@ -106,6 +111,17 @@ export default function DashboardMobileChatRoom({
                             }}
                         >
                             <IconX size={14} />
+                        </button>
+                    )}
+                    {meshGraphAvailable && onOpenMeshGraph && (
+                        <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => onOpenMeshGraph(selectedConversation)}
+                            type="button"
+                            title="Open live repo mesh graph"
+                            aria-label="Open live repo mesh graph"
+                        >
+                            <IconMesh size={14} />
                         </button>
                     )}
                     <button className="btn btn-secondary btn-sm" onClick={() => onOpenHistory(selectedConversation)} type="button">

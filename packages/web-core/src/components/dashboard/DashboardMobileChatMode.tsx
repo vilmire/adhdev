@@ -52,6 +52,7 @@ interface DashboardMobileChatModeProps {
     isConnected?: boolean
     onShowAllHiddenConversations: () => void
     onHideConversation?: (conversation: ActiveConversation) => void
+    onOpenMeshGraph?: (conversation: ActiveConversation) => void
     onOpenNewSession?: () => void
     liveSessionInboxState: Map<string, LiveSessionInboxState>
     setCliViewModeOverrides: Dispatch<SetStateAction<Record<string, 'chat' | 'terminal'>>>
@@ -85,6 +86,7 @@ export default function DashboardMobileChatMode({
     isConnected,
     onShowAllHiddenConversations,
     onHideConversation,
+    onOpenMeshGraph,
     onOpenNewSession,
     liveSessionInboxState,
     setCliViewModeOverrides,
@@ -277,6 +279,7 @@ export default function DashboardMobileChatMode({
                     onOpenMachine={navigation.openConversationMachine}
                     onOpenHistory={onOpenHistory}
                     onOpenRemote={onOpenRemote}
+                    onOpenMeshGraph={onOpenMeshGraph}
                     onStopCli={onStopCli}
                     cliViewMode={selectedCliViewMode}
                     onSetCliViewMode={async mode => {
@@ -331,6 +334,7 @@ export default function DashboardMobileChatMode({
                     onOpenConversation={navigation.openConversation}
                     onShowAllHidden={onShowAllHiddenConversations}
                     onHideConversation={onHideConversation}
+                    onOpenMeshGraph={onOpenMeshGraph}
                     onOpenNewSession={onOpenNewSession}
                     onOpenMachine={navigation.openMachine}
                     onOpenSettings={() => navigate('/settings')}

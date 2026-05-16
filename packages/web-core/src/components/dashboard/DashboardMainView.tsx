@@ -577,6 +577,7 @@ export default function DashboardMainView({
                     isConnected={isConnected}
                     onShowAllHiddenConversations={onShowAllHiddenConversations}
                     onHideConversation={onHideConversation}
+                    onOpenMeshGraph={handleOpenMeshGraph}
                     onOpenNewSession={openNewSession}
                     liveSessionInboxState={liveSessionInboxState}
                 />

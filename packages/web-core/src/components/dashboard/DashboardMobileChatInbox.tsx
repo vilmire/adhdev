@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import type { MouseEvent } from 'react'
-import { IconBell, IconSettings, IconChat, IconEyeOff, IconX } from '../Icons'
+import { IconBell, IconSettings, IconChat, IconEyeOff, IconMesh, IconX } from '../Icons'
 import InstallCommand from '../InstallCommand'
 import { formatRelativeTime, getConversationViewStates, type MobileConversationListItem, type MobileMachineCard } from './DashboardMobileChatShared'
 import type { ActiveConversation } from './types'
@@ -32,6 +32,7 @@ interface DashboardMobileChatInboxProps {
     onOpenConversation: (conversation: ActiveConversation) => void
     onShowAllHidden: () => void
     onHideConversation?: (conversation: ActiveConversation) => void
+    onOpenMeshGraph?: (conversation: ActiveConversation) => void
     onOpenNewSession?: () => void
     onOpenMachine: (machineId: string) => void
     onOpenSettings: () => void
@@ -154,6 +155,7 @@ function DashboardMobileChatItem({
     getAvatarText,
     onOpenConversation,
     onRequestHideConversation,
+    onOpenMeshGraph,
     onCollectChatDebugBundle,
 }: {
     item: MobileConversationListItem
@@ -161,6 +163,7 @@ function DashboardMobileChatItem({
     getAvatarText: (primary: string) => string
     onOpenConversation: (c: ActiveConversation) => void
     onRequestHideConversation?: () => void
+    onOpenMeshGraph?: (conversation: ActiveConversation) => void
     onCollectChatDebugBundle?: MobileInboxDebugBundleCollector
 }) {
     const isUnread = type === 'needs_attention' || type === 'task_complete'
@@ -190,6 +193,9 @@ function DashboardMobileChatItem({
     const previewClassName = isEarlier ? 'text-text-secondary opacity-80' : 'text-text-muted'
     const timestampClassName = isEarlier ? 'text-text-muted opacity-80' : 'text-text-muted'
     const shouldShowTimestamp = !isWorking && !isTaskComplete
+    const meshGraphAvailable = !!item.conversation.daemonId
+        && typeof item.conversation.settings?.meshCoordinatorFor === 'string'
+        && item.conversation.settings.meshCoordinatorFor.length > 0
     const warningTextClassName = 'text-[color:var(--status-warning)]'
     const handleConversationContextMenu = (event: MouseEvent<HTMLButtonElement>) => {
         if (!onCollectChatDebugBundle) return
@@ -231,6 +237,22 @@ function DashboardMobileChatItem({
                         >
                             <IconEyeOff size={11} />
                             <span>Hide</span>
+                        </button>
+                    )}
+                    {meshGraphAvailable && onOpenMeshGraph && (
+                        <button
+                            type="button"
+                            className="mobile-inbox-mesh-button inline-flex min-h-7 items-center justify-center gap-1 rounded-full border border-border-subtle bg-bg-primary/70 px-2 text-[10px] font-semibold text-text-muted transition-colors hover:border-border-default hover:text-text-primary"
+                            onClick={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                onOpenMeshGraph(item.conversation)
+                            }}
+                            aria-label={`Open mesh graph for ${title}`}
+                            title="Open live repo mesh graph"
+                        >
+                            <IconMesh size={11} />
+                            <span>Graph</span>
                         </button>
                     )}
                 </div>
@@ -305,6 +327,7 @@ export default function DashboardMobileChatInbox({
     onOpenConversation,
     onShowAllHidden,
     onHideConversation,
+    onOpenMeshGraph,
     onOpenNewSession,
     onOpenMachine,
     onOpenSettings,
@@ -485,6 +508,7 @@ export default function DashboardMobileChatInbox({
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
                                         onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
+                                        onOpenMeshGraph={onOpenMeshGraph}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                     />
                                 </div>
@@ -505,6 +529,7 @@ export default function DashboardMobileChatInbox({
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
                                         onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
+                                        onOpenMeshGraph={onOpenMeshGraph}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                     />
                                 </div>
@@ -525,6 +550,7 @@ export default function DashboardMobileChatInbox({
                                         getAvatarText={getAvatarText}
                                         onOpenConversation={onOpenConversation}
                                         onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
+                                        onOpenMeshGraph={onOpenMeshGraph}
                                         onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                     />
                                 </div>
@@ -548,6 +574,7 @@ export default function DashboardMobileChatInbox({
                                             getAvatarText={getAvatarText}
                                             onOpenConversation={onOpenConversation}
                                             onRequestHideConversation={onHideConversation ? () => setHideConfirmConversation(item.conversation) : undefined}
+                                            onOpenMeshGraph={onOpenMeshGraph}
                                             onCollectChatDebugBundle={effectiveCollectChatDebugBundle}
                                         />
                                     </div>
