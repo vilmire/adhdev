@@ -762,7 +762,16 @@ export class DaemonCommandRouter {
         return this.inlineMeshCache.get(meshId);
     }
 
-    private async getMeshForCommand(meshId: string, inlineMesh?: unknown): Promise<{ mesh: any; inline: boolean } | null> {
+    private async getMeshForCommand(
+        meshId: string,
+        inlineMesh?: unknown,
+        options?: { preferInline?: boolean },
+    ): Promise<{ mesh: any; inline: boolean } | null> {
+        const preferInline = options?.preferInline === true;
+        if (preferInline) {
+            const cached = this.getCachedInlineMesh(meshId, inlineMesh);
+            if (cached) return { mesh: cached, inline: true };
+        }
         try {
             const { getMesh } = await import('../config/mesh-config.js');
             const mesh = getMesh(meshId);
@@ -2864,7 +2873,7 @@ export class DaemonCommandRouter {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 if (!meshId) return { success: false, error: 'meshId required' };
                 try {
-                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh);
+                    const meshRecord = await this.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
                     const mesh = meshRecord?.mesh;
                     if (!mesh) return { success: false, error: 'Mesh not found' };
 

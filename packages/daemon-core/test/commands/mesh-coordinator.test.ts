@@ -782,4 +782,153 @@ describe('resolveMeshCoordinatorSetup', () => {
       rmSync(workspace, { recursive: true, force: true })
     }
   })
+
+  it('prefers inline mesh snapshots over a same-id local meshes.json entry when computing mesh status', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-inline-preferred-'))
+    const configDir = mkdtempSync(join(tmpdir(), 'adhdev-mesh-config-'))
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    process.env.ADHDEV_CONFIG_DIR = configDir
+    writeFileSync(join(configDir, 'meshes.json'), JSON.stringify({
+      meshes: [{
+        id: 'mesh_status_inline_preferred',
+        name: 'Local Stale Mesh',
+        repoIdentity: 'example/repo',
+        nodes: [{ id: 'node-local-stale', workspace: '/Users/local/stale', policy: {} }],
+        policy: {},
+        coordinator: {},
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }],
+    }, null, 2), 'utf-8')
+
+    const router = createAutoImportRouter(baseProvider, {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+    })
+    const inlineMesh: any = {
+      id: 'mesh_status_inline_preferred',
+      name: 'Inline Preferred Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [
+        { id: 'node-local', workspace, policy: {} },
+        {
+          id: 'node-remote',
+          workspace: '/Users/remote/.worktrees/adhdev',
+          daemonId: 'daemon_remote',
+          machineId: 'machine_remote',
+          cachedStatus: {
+            machineStatus: 'online',
+            health: 'online',
+            git: {
+              workspace: '/Users/remote/.worktrees/adhdev',
+              repoRoot: '/Users/remote/.worktrees/adhdev',
+              isGitRepo: true,
+              branch: 'main',
+              headCommit: 'abc1234',
+              headMessage: 'inline preferred',
+              upstream: 'origin/main',
+              ahead: 0,
+              behind: 0,
+              staged: 0,
+              modified: 0,
+              untracked: 0,
+              deleted: 0,
+              renamed: 0,
+              hasConflicts: false,
+              conflictFiles: [],
+              stashCount: 0,
+            },
+          },
+          policy: {},
+        },
+      ],
+      policy: {},
+      coordinator: {},
+    }
+
+    try {
+      const result = await router.execute('mesh_status', {
+        meshId: inlineMesh.id,
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({ success: true, meshId: inlineMesh.id, meshName: 'Inline Preferred Mesh' })
+      expect(((result as any).nodes as any[]).map(node => node.nodeId)).toContain('node-remote')
+      expect(((result as any).nodes as any[]).map(node => node.nodeId)).not.toContain('node-local-stale')
+      const remote = ((result as any).nodes as any[]).find(node => node.nodeId === 'node-remote')
+      expect(remote).toMatchObject({ health: 'online', daemonId: 'daemon_remote', machineId: 'machine_remote' })
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(configDir, { recursive: true, force: true })
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('does not let a warmed inline mesh cache shadow same-id local mesh commands without inlineMesh', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-inline-shadow-'))
+    const configDir = mkdtempSync(join(tmpdir(), 'adhdev-mesh-config-shadow-'))
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    process.env.ADHDEV_CONFIG_DIR = configDir
+    writeFileSync(join(configDir, 'meshes.json'), JSON.stringify({
+      meshes: [{
+        id: 'mesh_status_inline_preferred',
+        name: 'Local Mesh',
+        repoIdentity: 'example/repo',
+        nodes: [{ id: 'node-local-stale', workspace: '/Users/local/stale', policy: {} }],
+        policy: {},
+        coordinator: {},
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }],
+    }, null, 2), 'utf-8')
+
+    const router = createAutoImportRouter(baseProvider, {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+    })
+    const inlineMesh: any = {
+      id: 'mesh_status_inline_preferred',
+      name: 'Inline Preferred Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [
+        { id: 'node-local', workspace, policy: {} },
+        {
+          id: 'node-remote',
+          workspace: '/Users/remote/.worktrees/adhdev',
+          daemonId: 'daemon_remote',
+          machineId: 'machine_remote',
+          cachedStatus: {
+            machineStatus: 'online',
+            health: 'online',
+            git: {
+              workspace: '/Users/remote/.worktrees/adhdev',
+              repoRoot: '/Users/remote/.worktrees/adhdev',
+              isGitRepo: true,
+              branch: 'main',
+              headCommit: 'abc1234',
+            },
+          },
+          policy: {},
+        },
+      ],
+      policy: {},
+      coordinator: {},
+    }
+
+    try {
+      await expect(router.execute('mesh_status', {
+        meshId: inlineMesh.id,
+        inlineMesh,
+      })).resolves.toMatchObject({ success: true })
+
+      await expect(router.execute('remove_mesh_node', {
+        meshId: inlineMesh.id,
+        nodeId: 'node-local-stale',
+      })).resolves.toMatchObject({ success: true, removed: true })
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmSync(configDir, { recursive: true, force: true })
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
 })
