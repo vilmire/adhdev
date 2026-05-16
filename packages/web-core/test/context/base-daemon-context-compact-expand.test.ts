@@ -39,6 +39,56 @@ describe('expandCompactDaemons', () => {
     ])
   })
 
+  it('clones active chat message arrays from compact payloads so appended transcript tails force a reconcile', () => {
+    const sharedMessages = [
+      { role: 'assistant' as const, content: 'older reply', id: 'msg-1', receivedAt: 1 },
+    ]
+    const buildPayload = (timestamp: number) => ([
+      {
+        id: 'machine-chat',
+        type: 'adhdev-daemon',
+        timestamp,
+        sessions: [
+          {
+            id: 'cli-1',
+            parentId: null,
+            providerType: 'hermes-cli',
+            providerName: 'Hermes Agent',
+            kind: 'agent',
+            transport: 'pty',
+            status: 'idle',
+            title: 'Hermes Agent',
+            workspace: '/repo',
+            activeChat: {
+              id: 'chat-1',
+              title: 'Hermes Agent',
+              status: 'idle',
+              messages: sharedMessages,
+              activeModal: null,
+            },
+          },
+        ],
+      },
+    ] as CompactDaemonCompat[])
+
+    const previous = expandCompactDaemons(buildPayload(100)).entries
+    const previousEntry = previous.find(entry => entry.id === 'machine-chat:cli:cli-1')
+    expect(previousEntry?.activeChat?.messages).toHaveLength(1)
+    expect(previousEntry?.activeChat?.messages).not.toBe(sharedMessages)
+
+    sharedMessages.push({ role: 'assistant', content: 'latest reply', id: 'msg-2', receivedAt: 2 })
+
+    expect(previousEntry?.activeChat?.messages).toHaveLength(1)
+
+    const incoming = expandCompactDaemons(buildPayload(101)).entries
+    const reconciled = reconcileIdes(incoming, previous)
+    const nextEntry = reconciled.find(entry => entry.id === 'machine-chat:cli:cli-1')
+
+    expect(nextEntry).toBeTruthy()
+    expect(nextEntry).not.toBe(previousEntry)
+    expect(nextEntry?.activeChat?.messages.map(message => message.id)).toEqual(['msg-1', 'msg-2'])
+  })
+
   it('preserves preview update policy fields from cloud compact daemon payloads', () => {
     const result = expandCompactDaemons([
       {
