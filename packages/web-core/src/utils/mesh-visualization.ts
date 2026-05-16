@@ -81,6 +81,20 @@ function isDirty(git?: GitRepoStatus): boolean {
     return (git.staged + git.modified + git.untracked + git.deleted + git.renamed) > 0
 }
 
+function hasDirtySubmodules(git?: GitRepoStatus): boolean {
+    return (git?.submodules ?? []).some(submodule => submodule.dirty)
+}
+
+function hasOutOfSyncSubmodules(git?: GitRepoStatus): boolean {
+    return (git?.submodules ?? []).some(submodule => submodule.outOfSync || Boolean(submodule.error))
+}
+
+function getParentSubmoduleHealth(git?: GitRepoStatus): RepoMeshNodeHealth {
+    if (hasOutOfSyncSubmodules(git)) return 'degraded'
+    if (hasDirtySubmodules(git)) return 'dirty'
+    return 'online'
+}
+
 function dirtyFileCount(git?: GitRepoStatus): number {
     if (!git) return 0
     return git.staged + git.modified + git.untracked + git.deleted + git.renamed
@@ -191,7 +205,8 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     for (const nodeStatus of status.nodes) {
         const git = nodeStatus.git
         const branch = git?.branch ?? null
-        const dirty = isDirty(git)
+        const submoduleHealth = getParentSubmoduleHealth(git)
+        const dirty = isDirty(git) || submoduleHealth === 'dirty'
         const orphanReasons = detectOrphanReasons(nodeStatus, inferredDefaultBranch)
         const graphNode: MeshGraphNode = {
             id: nodeStatus.nodeId,
@@ -200,7 +215,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             workspace: nodeStatus.workspace,
             branch,
             machineLabel: nodeStatus.machineLabel || null,
-            health: nodeStatus.health,
+            health: pickDominantHealth([nodeStatus.health, submoduleHealth]),
             ahead: git?.ahead ?? 0,
             behind: git?.behind ?? 0,
             dirty,
@@ -216,7 +231,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             parentNodeId: null,
             submodulePath: null,
             submoduleCommit: git?.headCommit ?? null,
-            outOfSync: false,
+            outOfSync: hasOutOfSyncSubmodules(git),
             source: nodeStatus,
         }
         nodes.push(graphNode)

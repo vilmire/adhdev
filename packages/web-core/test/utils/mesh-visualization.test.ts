@@ -226,6 +226,13 @@ describe('buildMeshGraph', () => {
             ],
         } as any)
 
+        const parentNode = graph.nodes.find(node => node.id === 'node_main')
+
+        expect(parentNode).toEqual(expect.objectContaining({
+            health: 'degraded',
+            dirty: false,
+            outOfSync: true,
+        }))
         expect(graph.nodes).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 id: 'node_main::submodule::oss',
@@ -247,7 +254,7 @@ describe('buildMeshGraph', () => {
         ]))
         expect(graph.stats).toEqual(expect.objectContaining({
             totalNodes: 2,
-            errorNodes: 1,
+            errorNodes: 2,
             totalActiveSessions: 1,
         }))
         expect(graph.warnings).toContain('1 submodule(s) are out of sync with their parent checkout')

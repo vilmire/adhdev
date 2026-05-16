@@ -222,26 +222,63 @@ function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | un
     };
 }
 
+function hasGitWorktreeChanges(git: Record<string, unknown> | null | undefined): boolean {
+    if (!git) return false;
+    return Number(git.staged || 0) + Number(git.modified || 0) + Number(git.untracked || 0) + Number(git.deleted || 0) + Number(git.renamed || 0) > 0;
+}
+
+function getGitSubmoduleDriftState(git: Record<string, unknown> | null | undefined): { dirty: boolean; outOfSync: boolean } {
+    const submodules = Array.isArray(git?.submodules) ? git.submodules : [];
+    let dirty = false;
+    let outOfSync = false;
+    for (const entry of submodules) {
+        const submodule = readObjectRecord(entry);
+        if (readBooleanValue(submodule.dirty) === true) dirty = true;
+        if (readBooleanValue(submodule.outOfSync) === true || !!readStringValue(submodule.error)) outOfSync = true;
+    }
+    return { dirty, outOfSync };
+}
+
+function deriveMeshNodeHealthFromGit(git: Record<string, unknown> | null | undefined): 'online' | 'dirty' | 'degraded' {
+    if (!git || readBooleanValue(git.isGitRepo) === false) return 'degraded';
+    const branch = readStringValue(git.branch);
+    if (!branch) return 'degraded';
+    const submoduleDrift = getGitSubmoduleDriftState(git);
+    if (submoduleDrift.outOfSync) return 'degraded';
+    if (submoduleDrift.dirty || hasGitWorktreeChanges(git)) return 'dirty';
+    return 'online';
+}
+
+function readCachedInlineMeshActiveSessions(node: any): string[] {
+    const cachedStatus = readObjectRecord(node?.cachedStatus);
+    const activeSession = readObjectRecord(cachedStatus.activeSession);
+    const fallbackSession = Object.keys(activeSession).length
+        ? activeSession
+        : readObjectRecord(node?.activeSession ?? node?.active_session);
+    const sessionId = readStringValue(fallbackSession.id, fallbackSession.sessionId, fallbackSession.session_id, node?.activeSessionId, node?.active_session_id, node?.sessionId, node?.session_id);
+    return sessionId ? [sessionId] : [];
+}
+
 function applyCachedInlineMeshNodeStatus(status: Record<string, unknown>, node: any): boolean {
     const cachedStatus = readObjectRecord(node?.cachedStatus);
     const git = buildCachedInlineMeshGitStatus(node);
     const error = readStringValue(cachedStatus.error, node?.error);
     const health = readStringValue(cachedStatus.health, node?.health);
     const machineStatus = readStringValue(cachedStatus.machineStatus, node?.machineStatus);
-    if (!git && !error && !health) return false;
-    if (!machineStatus && !git && !error) return false;
+    const activeSessions = readCachedInlineMeshActiveSessions(node);
+    if (!git && !error && !health && !machineStatus && activeSessions.length === 0) return false;
     if (git) status.git = git;
     if (error) status.error = error;
+    if (activeSessions.length > 0) status.activeSessions = activeSessions;
     if (health) {
         status.health = health;
         return true;
     }
     if (git) {
-        const dirty = Number(git.staged || 0) + Number(git.modified || 0) + Number(git.untracked || 0) + Number(git.deleted || 0) + Number(git.renamed || 0) > 0;
-        status.health = git.isGitRepo === false ? 'degraded' : dirty ? 'dirty' : 'online';
+        status.health = deriveMeshNodeHealthFromGit(git);
         return true;
     }
-    return false;
+    return activeSessions.length > 0 || !!machineStatus;
 }
 
 async function resolveProviderTypeFromPriority(args: {
@@ -2913,6 +2950,10 @@ export class DaemonCommandRouter {
                     const { readLedgerEntries, getLedgerSummary } = await import('../mesh/mesh-ledger.js');
                     const ledgerEntries = readLedgerEntries(meshId, { tail: 20 });
                     const ledgerSummary = getLedgerSummary(meshId);
+                    const sessionHostRecords = this.deps.sessionHostControl?.listSessions
+                        ? await this.deps.sessionHostControl.listSessions().catch(() => [])
+                        : [];
+                    const liveMeshSessions = partitionSessionHostRecords(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
 
                     const nodeStatuses = [];
                     for (const node of mesh.nodes || []) {
@@ -2929,6 +2970,14 @@ export class DaemonCommandRouter {
                             providers: node.providers || [],
                             activeSessions: [],
                         };
+                        const nodeId = String(node.id || node.nodeId || '');
+                        const matchedLiveSessions = liveMeshSessions
+                            .filter((record) => this.sessionMatchesMeshNode(record, node, nodeId))
+                            .map((record: any) => typeof record?.sessionId === 'string' ? record.sessionId : '')
+                            .filter(Boolean);
+                        if (matchedLiveSessions.length > 0) {
+                            status.activeSessions = matchedLiveSessions;
+                        }
                         if (node.workspace && typeof node.workspace === 'string') {
                             if (!fs.existsSync(node.workspace as string) && applyCachedInlineMeshNodeStatus(status, node)) {
                                 nodeStatuses.push(status);
@@ -2938,8 +2987,7 @@ export class DaemonCommandRouter {
                                 const gitStatus = await getGitRepoStatus(node.workspace as string, { timeoutMs: 10_000 });
                                 status.git = gitStatus;
                                 if (gitStatus.isGitRepo) {
-                                    const dirty = (gitStatus.staged + gitStatus.modified + gitStatus.untracked + gitStatus.deleted + gitStatus.renamed) > 0;
-                                    status.health = gitStatus.branch ? (dirty ? 'dirty' : 'online') : 'degraded';
+                                    status.health = deriveMeshNodeHealthFromGit(gitStatus as unknown as Record<string, unknown>);
                                 } else {
                                     status.health = 'degraded';
                                     if (gitStatus.error && !status.error) status.error = gitStatus.error;
