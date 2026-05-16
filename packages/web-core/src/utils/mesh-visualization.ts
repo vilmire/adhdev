@@ -3,10 +3,24 @@
  * rendered by richer graph surfaces (React Flow, SVG, etc.).
  */
 
-import type { GitRepoStatus, RepoMeshNodeHealth, RepoMeshNodeStatus, RepoMeshStatus } from '@adhdev/daemon-core'
+import type {
+    GitRepoStatus,
+    RepoMeshNodeHealth,
+    RepoMeshNodeStatus,
+    RepoMeshStatus,
+} from '@adhdev/daemon-core'
 
-export type MeshGraphNodeType = 'defaultBranchNode' | 'worktreeNode' | 'orphanNode'
-export type MeshGraphEdgeType = 'parentBranch' | 'worktreeLink' | 'sessionLink' | 'orphanLink'
+export type MeshGraphNodeType = 'defaultBranchNode' | 'worktreeNode' | 'orphanNode' | 'submoduleNode'
+export type MeshGraphEdgeType = 'parentBranch' | 'worktreeLink' | 'sessionLink' | 'orphanLink' | 'submoduleLink'
+
+type MeshGraphSubmoduleStatus = NonNullable<GitRepoStatus['submodules']>[number]
+
+type MeshGraphNodeSource = RepoMeshNodeStatus | {
+    kind: 'synthetic-submodule'
+    parentNodeId: string
+    parentWorkspace: string
+    submodule: MeshGraphSubmoduleStatus
+}
 
 export interface MeshGraphNode {
     id: string
@@ -28,7 +42,11 @@ export interface MeshGraphNode {
     orphanReasons: string[]
     nextStepHint?: string
     error?: string
-    source: RepoMeshNodeStatus
+    parentNodeId?: string | null
+    submodulePath?: string | null
+    submoduleCommit?: string | null
+    outOfSync?: boolean
+    source: MeshGraphNodeSource
 }
 
 export interface MeshGraphEdge {
@@ -157,6 +175,12 @@ function detectOrphanReasons(node: RepoMeshNodeStatus, defaultBranch: string | n
     return reasons
 }
 
+function getSubmoduleHealth(submodule: MeshGraphSubmoduleStatus): RepoMeshNodeHealth {
+    if (submodule.error || submodule.outOfSync) return 'degraded'
+    if (submodule.dirty) return 'dirty'
+    return 'online'
+}
+
 export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
     const inferredDefaultBranch = inferDefaultBranch(status.nodes)
     const nodes: MeshGraphNode[] = []
@@ -189,6 +213,10 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             orphanReasons,
             error: nodeStatus.error,
             nextStepHint: orphanReasons[0],
+            parentNodeId: null,
+            submodulePath: null,
+            submoduleCommit: git?.headCommit ?? null,
+            outOfSync: false,
             source: nodeStatus,
         }
         nodes.push(graphNode)
@@ -196,6 +224,54 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             const ids = branchToNodeIds.get(branch) ?? []
             ids.push(graphNode.id)
             branchToNodeIds.set(branch, ids)
+        }
+
+        for (const submodule of git?.submodules ?? []) {
+            const submoduleNodeId = `${graphNode.id}::submodule::${submodule.path}`
+            const submoduleLabel = submodule.path.split('/').filter(Boolean).pop() || submodule.path
+            nodes.push({
+                id: submoduleNodeId,
+                type: 'submoduleNode',
+                label: submoduleLabel,
+                workspace: submodule.repoPath,
+                branch: null,
+                machineLabel: graphNode.machineLabel,
+                health: getSubmoduleHealth(submodule),
+                ahead: 0,
+                behind: 0,
+                dirty: submodule.dirty,
+                dirtyFiles: submodule.dirty ? 1 : 0,
+                hasConflicts: false,
+                activeSessionCount: 0,
+                activeSessions: [],
+                providers: [],
+                isOrphan: false,
+                orphanReasons: [],
+                error: submodule.error,
+                nextStepHint: submodule.error
+                    || (submodule.outOfSync
+                        ? `${submodule.path} is out of sync with the parent checkout`
+                        : submodule.dirty
+                            ? `${submodule.path} has local changes`
+                            : `${submodule.path} is in sync with the parent checkout`),
+                parentNodeId: graphNode.id,
+                submodulePath: submodule.path,
+                submoduleCommit: submodule.commit,
+                outOfSync: submodule.outOfSync,
+                source: {
+                    kind: 'synthetic-submodule',
+                    parentNodeId: graphNode.id,
+                    parentWorkspace: nodeStatus.workspace,
+                    submodule,
+                },
+            })
+            edges.push({
+                id: `${graphNode.id}--${submoduleNodeId}`,
+                source: graphNode.id,
+                target: submoduleNodeId,
+                type: 'submoduleLink',
+                label: submodule.outOfSync ? 'submodule out of sync' : 'submodule',
+            })
         }
     }
 
@@ -226,6 +302,11 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
             isOrphan: false,
             orphanReasons: [],
             nextStepHint: branchNodes.length > 0 ? `${branchNodes.length} workspace(s) currently on ${inferredDefaultBranch}` : 'No workspaces currently checked out to the default branch',
+            error: undefined,
+            parentNodeId: null,
+            submodulePath: null,
+            submoduleCommit: null,
+            outOfSync: false,
             source: {
                 nodeId: defaultBranchNodeId,
                 machineLabel: inferredDefaultBranch,
@@ -238,7 +319,7 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         nodes.push(syntheticDefaultNode)
 
         for (const node of nodes) {
-            if (node.id === defaultBranchNodeId) continue
+            if (node.id === defaultBranchNodeId || node.type === 'submoduleNode') continue
             if (node.branch === inferredDefaultBranch) {
                 edges.push({
                     id: `${defaultBranchNodeId}--${node.id}`,
@@ -288,13 +369,16 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         }
     }
 
-    const orphanCount = nodes.filter(node => node.isOrphan).length
-    const conflictCount = nodes.filter(node => node.hasConflicts).length
-    const offlineCount = nodes.filter(node => node.health === 'offline').length
+    const visibleGraphNodes = nodes.filter(node => node.type !== 'defaultBranchNode')
+    const orphanCount = visibleGraphNodes.filter(node => node.isOrphan).length
+    const conflictCount = visibleGraphNodes.filter(node => node.hasConflicts).length
+    const offlineCount = visibleGraphNodes.filter(node => node.health === 'offline').length
+    const outOfSyncSubmoduleCount = visibleGraphNodes.filter(node => node.type === 'submoduleNode' && node.outOfSync).length
 
     if (orphanCount > 0) warnings.push(`${orphanCount} workspace(s) need attention before safe coordination`)
     if (conflictCount > 0) warnings.push(`${conflictCount} workspace(s) report merge conflicts`)
     if (offlineCount > 0) warnings.push(`${offlineCount} node(s) are currently offline`)
+    if (outOfSyncSubmoduleCount > 0) warnings.push(`${outOfSyncSubmoduleCount} submodule(s) are out of sync with their parent checkout`)
     if (!inferredDefaultBranch) warnings.push('Could not infer a default branch from live mesh status')
 
     return {
@@ -305,13 +389,13 @@ export function buildMeshGraph(status: RepoMeshStatus): MeshGraph {
         nodes,
         edges,
         stats: {
-            totalNodes: status.nodes.length,
-            onlineNodes: status.nodes.filter(node => node.health === 'online').length,
-            dirtyNodes: nodes.filter(node => node.dirty).length,
+            totalNodes: visibleGraphNodes.length,
+            onlineNodes: visibleGraphNodes.filter(node => node.health === 'online').length,
+            dirtyNodes: visibleGraphNodes.filter(node => node.dirty).length,
             orphanNodes: orphanCount,
-            errorNodes: status.nodes.filter(node => Boolean(node.error)).length,
+            errorNodes: visibleGraphNodes.filter(node => Boolean(node.error) || node.outOfSync).length,
             offlineNodes: offlineCount,
-            totalActiveSessions: status.nodes.reduce((total, node) => total + (node.activeSessions?.length ?? 0), 0),
+            totalActiveSessions: visibleGraphNodes.reduce((total, node) => total + node.activeSessionCount, 0),
         },
         warnings,
     }
