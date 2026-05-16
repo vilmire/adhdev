@@ -23,20 +23,31 @@ function hasExplicitProviderName(value: string | null | undefined, providerType:
 }
 
 
+function cloneActiveChatMessages(messages: SessionEntry['activeChat'] extends { messages?: infer T } ? T : never) {
+  return Array.isArray(messages) ? [...messages] : []
+}
+
 export function mergeActiveChatData(
   incoming: SessionEntry['activeChat'] | null | undefined,
   existing: SessionEntry['activeChat'] | null | undefined,
 ): SessionEntry['activeChat'] | null {
   if (!incoming) return existing ?? null
-  if (!existing) return incoming ?? null
 
   const incomingHasMessages = Object.prototype.hasOwnProperty.call(incoming, 'messages')
   const incomingHasActiveModal = Object.prototype.hasOwnProperty.call(incoming, 'activeModal')
 
+  if (!existing) {
+    return {
+      ...incoming,
+      ...(incomingHasMessages ? { messages: cloneActiveChatMessages(incoming.messages) } : {}),
+      ...(incomingHasActiveModal ? { activeModal: incoming.activeModal ?? null } : {}),
+    }
+  }
+
   return {
     ...existing,
     ...incoming,
-    messages: incomingHasMessages ? (incoming.messages ?? []) : existing.messages,
+    messages: incomingHasMessages ? cloneActiveChatMessages(incoming.messages) : existing.messages,
     activeModal: incomingHasActiveModal ? (incoming.activeModal ?? null) : existing.activeModal,
     inputContent: incoming.inputContent ?? existing.inputContent,
   }
