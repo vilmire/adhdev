@@ -478,16 +478,20 @@ function isIdleSessionRecord(session: any): boolean {
 function chooseDispatchableSession(sessions: any[], providerType: string, meshId: string, nodeId: string): any | undefined {
     const live = sessions.filter(session => !isTerminalSessionRecord(session));
     const matchingProvider = (session: any) => !providerType || session?.providerType === providerType || session?.cliType === providerType;
+    const isMeshOwnedDelegateSession = (session: any) => {
+        const settings = session?.settings;
+        const sessionMeshId = typeof settings?.meshNodeFor === 'string' ? settings.meshNodeFor.trim() : '';
+        const coordinatorDaemonId = typeof settings?.meshCoordinatorDaemonId === 'string' ? settings.meshCoordinatorDaemonId.trim() : '';
+        const sessionNodeId = typeof settings?.meshNodeId === 'string' ? settings.meshNodeId.trim() : '';
+        if (sessionMeshId !== meshId || !coordinatorDaemonId) return false;
+        return !sessionNodeId || sessionNodeId === nodeId;
+    };
     const meshSessions = live.filter((session: any) =>
-        session?.settings?.meshNodeFor === meshId ||
-        session?.settings?.meshNodeId === nodeId
+        isMeshOwnedDelegateSession(session)
     );
     return meshSessions.find(session => isIdleSessionRecord(session) && matchingProvider(session))
         || meshSessions.find(matchingProvider)
-        || live.find(session => isIdleSessionRecord(session) && matchingProvider(session))
-        || live.find(matchingProvider)
-        || live.find(isIdleSessionRecord)
-        || live[0];
+        || undefined;
 }
 
 function findNestedPayload(value: any, predicate: (payload: any) => boolean): any {

@@ -430,6 +430,74 @@ test('mesh_send_task preserves P2P relay recovery payload for coordinator feedba
   assert.equal(send.sessionId, 'session-remote');
 });
 
+test('mesh_send_task does not reuse a remote live session that lacks mesh delegate metadata', async () => {
+  const meshId = `mesh-remote-fresh-only-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const relayCalls: Array<{ daemonId: string; command: string; args: Record<string, unknown> }> = [];
+  const ctx = {
+    mesh: {
+      id: meshId,
+      name: 'Remote Fresh Only',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-remote-worker',
+        workspace: '/repo-remote',
+        repoRoot: '/repo-remote',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+      }],
+    },
+    transport,
+  };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (daemonId, command, args = {}) => {
+    relayCalls.push({ daemonId, command, args });
+    if (command === 'get_status_metadata') {
+      return {
+        success: true,
+        result: {
+          success: true,
+          status: {
+            sessions: [{
+              id: 'session-legacy-live',
+              providerType: 'hermes-cli',
+              status: 'idle',
+              settings: {},
+            }],
+          },
+        },
+      };
+    }
+    if (command === 'agent_command') {
+      return { success: true };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const send = JSON.parse(await meshSendTask(ctx as any, { node_id: 'node-remote-worker', message: 'do work' }));
+
+  assert.equal(send.success, true);
+  assert.equal(send.dispatched, true);
+  assert.equal(relayCalls[0].command, 'get_status_metadata');
+  assert.equal(relayCalls[1].command, 'agent_command');
+  assert.equal(relayCalls[1].args.targetSessionId, undefined);
+  assert.equal(relayCalls[1].args.agentType, 'hermes-cli');
+  assert.equal(relayCalls[1].args.cliType, 'hermes-cli');
+  assert.equal(relayCalls[1].args.message, 'do work');
+});
+
 test('mesh_remove_node falls back to local control-plane cleanup for degraded local worktree nodes when P2P relay is unavailable', async () => {
   const transport = new IpcTransport() as IpcTransport & {
     command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
