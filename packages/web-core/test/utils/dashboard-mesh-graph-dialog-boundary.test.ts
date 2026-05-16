@@ -35,4 +35,19 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(dialogSource).toContain('className="hidden w-full shrink-0 border-t border-white/10 px-4 py-4 md:block')
     expect(panelSource).toContain('w-full max-w-full rounded-xl border border-border-subtle bg-bg-panel p-4 flex flex-col gap-2 shadow-lg md:w-64')
   })
+
+  it('keeps submodule details on the shared mobile/desktop dialog path instead of forking a separate mobile graph payload', () => {
+    const modeSource = readSource('components/dashboard/DashboardMobileChatMode.tsx')
+    const mainViewSource = readSource('components/dashboard/DashboardMainView.tsx')
+    const dialogSource = readSource('components/dashboard/DashboardMeshGraphDialog.tsx')
+    const panelSource = readSource('components/MeshGraph/MeshGraphPanel.tsx')
+
+    expect(modeSource).toContain('onOpenMeshGraph={onOpenMeshGraph}')
+    expect(mainViewSource).toContain('setMeshGraphConversation(conversation)')
+    expect(mainViewSource).toContain('activeConv={meshGraphConversation}')
+    expect(dialogSource).toContain("sendDaemonCommand(daemonId, 'mesh_status', { meshId })")
+    expect(dialogSource).toContain('const nextGraph = buildMeshGraph(status)')
+    expect(panelSource).toContain('Field label="Submodule path" value={node.submodulePath ?? null}')
+    expect(panelSource).toContain('Field label="Submodule commit" value={node.submoduleCommit ?? null}')
+  })
 })

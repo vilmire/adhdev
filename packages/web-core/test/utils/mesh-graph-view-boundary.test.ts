@@ -7,11 +7,11 @@ function readSource(relativePath: string): string {
 }
 
 describe('mesh graph view interaction boundaries', () => {
-    it('keeps viewport drag and zoom interactions disabled so the graph stays fixed while nodes remain clickable', () => {
+    it('keeps node dragging disabled while allowing viewport drag panning and preserving click-to-inspect behavior', () => {
         const source = readSource('components/MeshGraph/MeshGraphView.tsx')
 
         expect(source).toContain('nodesDraggable={false}')
-        expect(source).toContain('panOnDrag={false}')
+        expect(source).toContain('panOnDrag')
         expect(source).toContain('panOnScroll={false}')
         expect(source).toContain('zoomOnScroll={false}')
         expect(source).toContain('zoomOnPinch={false}')

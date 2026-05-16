@@ -118,4 +118,27 @@ describe('git repo status parser', () => {
     expect(status.hasConflicts).toBe(true);
     expect(status.conflictFiles).toEqual(['conflict.txt']);
   });
+
+  it('discovers git submodules so mesh_status callers can surface subrepo nodes like oss', async () => {
+    const submoduleRepo = tempRepo('status-submodule-child');
+    writeFileSync(join(submoduleRepo, 'child.txt'), 'child\n');
+    commit(submoduleRepo, 'child init');
+
+    const repo = tempRepo('status-submodule-parent');
+    writeFileSync(join(repo, 'README.md'), 'parent\n');
+    commit(repo, 'parent init');
+    git(repo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', submoduleRepo, 'oss']);
+    commit(repo, 'add oss submodule');
+
+    const status = await getGitRepoStatus(repo);
+
+    expect(status.submodules).toBeDefined();
+    expect(status.submodules).toHaveLength(1);
+    expect(status.submodules?.[0]).toMatchObject({
+      path: 'oss',
+      repoPath: join(repo, 'oss'),
+      dirty: false,
+      outOfSync: false,
+    });
+  });
 });

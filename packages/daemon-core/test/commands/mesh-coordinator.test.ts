@@ -749,6 +749,16 @@ describe('resolveMeshCoordinatorSetup', () => {
               hasConflicts: false,
               conflictFiles: [],
               stashCount: 0,
+              submodules: [
+                {
+                  path: 'oss',
+                  commit: 'def5678',
+                  repoPath: '/Users/remote/.worktrees/adhdev/oss',
+                  dirty: false,
+                  outOfSync: true,
+                  lastCheckedAt: 123,
+                },
+              ],
             },
           },
           policy: {},
@@ -778,8 +788,67 @@ describe('resolveMeshCoordinatorSetup', () => {
         headCommit: 'abc1234',
         isGitRepo: true,
       })
+      expect(remote.git.submodules).toMatchObject([
+        {
+          path: 'oss',
+          commit: 'def5678',
+          repoPath: '/Users/remote/.worktrees/adhdev/oss',
+          outOfSync: true,
+        },
+      ])
     } finally {
       rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves live local submodule status in mesh_status so dialog graph normalization can emit subrepo nodes', async () => {
+    const submoduleRepo = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-submodule-child-'))
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-submodule-parent-'))
+    const router = createAutoImportRouter(baseProvider, {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+    })
+
+    try {
+      execFileSync('git', ['init'], { cwd: submoduleRepo, stdio: 'ignore' })
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: submoduleRepo, stdio: 'ignore' })
+      execFileSync('git', ['config', 'user.name', 'ADHDev Test'], { cwd: submoduleRepo, stdio: 'ignore' })
+      writeFileSync(join(submoduleRepo, 'child.txt'), 'child\n')
+      execFileSync('git', ['add', 'child.txt'], { cwd: submoduleRepo, stdio: 'ignore' })
+      execFileSync('git', ['commit', '-m', 'child init'], { cwd: submoduleRepo, stdio: 'ignore' })
+
+      execFileSync('git', ['init'], { cwd: workspace, stdio: 'ignore' })
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: workspace, stdio: 'ignore' })
+      execFileSync('git', ['config', 'user.name', 'ADHDev Test'], { cwd: workspace, stdio: 'ignore' })
+      writeFileSync(join(workspace, 'README.md'), 'parent\n')
+      execFileSync('git', ['add', 'README.md'], { cwd: workspace, stdio: 'ignore' })
+      execFileSync('git', ['commit', '-m', 'parent init'], { cwd: workspace, stdio: 'ignore' })
+      execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', submoduleRepo, 'oss'], { cwd: workspace, stdio: 'ignore' })
+      execFileSync('git', ['commit', '-m', 'add oss submodule'], { cwd: workspace, stdio: 'ignore' })
+
+      const result = await router.execute('mesh_status', {
+        meshId: 'mesh_status_live_submodules',
+        inlineMesh: {
+          id: 'mesh_status_live_submodules',
+          name: 'Live Submodule Mesh',
+          repoIdentity: 'example/repo',
+          nodes: [{ id: 'node-local', workspace, policy: {} }],
+          policy: {},
+          coordinator: {},
+        },
+      })
+
+      expect(result).toMatchObject({ success: true, meshId: 'mesh_status_live_submodules' })
+      const local = ((result as any).nodes as any[]).find(node => node.nodeId === 'node-local')
+      expect(local.git.submodules).toMatchObject([
+        {
+          path: 'oss',
+          repoPath: realpathSync(join(workspace, 'oss')),
+          outOfSync: false,
+        },
+      ])
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+      rmSync(submoduleRepo, { recursive: true, force: true })
     }
   })
 

@@ -460,7 +460,7 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
                 nodesDraggable={false}
                 nodesConnectable={false}
                 elementsSelectable
-                panOnDrag={false}
+                panOnDrag
                 panOnScroll={false}
                 zoomOnScroll={false}
                 zoomOnPinch={false}

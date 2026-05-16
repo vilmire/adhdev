@@ -26,6 +26,8 @@ import { getSavedProviderSessions } from '../config/saved-sessions.js';
 import { listProviderHistorySessions } from '../config/chat-history.js';
 import { detectIDEs } from '../detection/ide-detector.js';
 import { detectCLI } from '../detection/cli-detector.js';
+import { getGitRepoStatus } from '../git/git-status.js';
+import type { GitSubmoduleStatus } from '../git/git-types.js';
 import { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 import { logCommand } from '../logging/command-log.js';
@@ -112,6 +114,29 @@ function readBooleanValue(...values: unknown[]): boolean | undefined {
     return undefined;
 }
 
+function readGitSubmodules(value: unknown): GitSubmoduleStatus[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const submodules = value
+        .map(entry => {
+            const submodule = readObjectRecord(entry);
+            const path = readStringValue(submodule.path);
+            const commit = readStringValue(submodule.commit);
+            const repoPath = readStringValue(submodule.repoPath, submodule.repo_root);
+            if (!path || !commit || !repoPath) return null;
+            return {
+                path,
+                commit,
+                repoPath,
+                dirty: readBooleanValue(submodule.dirty) ?? false,
+                outOfSync: readBooleanValue(submodule.outOfSync, submodule.out_of_sync) ?? false,
+                lastCheckedAt: readNumberValue(submodule.lastCheckedAt, submodule.last_checked_at) ?? Date.now(),
+                ...(readStringValue(submodule.error) ? { error: readStringValue(submodule.error) } : {}),
+            };
+        })
+        .filter((entry): entry is GitSubmoduleStatus => entry !== null);
+    return submodules.length > 0 ? submodules : undefined;
+}
+
 function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | undefined {
     const cachedStatus = readObjectRecord(node?.cachedStatus);
     const cachedGit = readObjectRecord(cachedStatus.git);
@@ -123,6 +148,7 @@ function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | un
         const hasConflicts = readBooleanValue(cachedGit.hasConflicts) ?? conflictCount > 0;
         const isGitRepo = readBooleanValue(cachedGit.isGitRepo);
         if (isGitRepo !== undefined) {
+            const submodules = readGitSubmodules(cachedGit.submodules);
             return {
                 workspace: readStringValue(cachedGit.workspace, node?.workspace) || '',
                 repoRoot: readStringValue(cachedGit.repoRoot, node?.repoRoot, node?.workspace) || null,
@@ -142,6 +168,7 @@ function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | un
                 conflictFiles,
                 stashCount: readNumberValue(cachedGit.stashCount) ?? 0,
                 lastCheckedAt: readNumberValue(cachedGit.lastCheckedAt) ?? Date.now(),
+                ...(submodules ? { submodules } : {}),
             };
         }
     }
@@ -171,6 +198,7 @@ function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | un
         : [];
     const conflictCount = readNumberValue(status.conflicts) ?? conflictFiles.length;
     const hasConflicts = readBooleanValue(status.hasConflicts) ?? conflictCount > 0;
+    const submodules = readGitSubmodules(status.submodules);
     return {
         workspace: readStringValue(status.workspace, node?.workspace) || '',
         repoRoot: readStringValue(status.repoRoot, node?.repoRoot, node?.workspace) || null,
@@ -190,6 +218,7 @@ function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | un
         conflictFiles,
         stashCount: readNumberValue(status.stashCount) ?? 0,
         lastCheckedAt: Date.now(),
+        ...(submodules ? { submodules } : {}),
     };
 }
 
@@ -2906,68 +2935,15 @@ export class DaemonCommandRouter {
                                 continue;
                             }
                             try {
-                                const { execFile } = await import('node:child_process');
-                                const { promisify } = await import('node:util');
-                                const execFileAsync = promisify(execFile);
-
-                                const runGit = async (args: string[]): Promise<string> => {
-                                    const result = await execFileAsync('git', ['-C', node.workspace as string, ...args], {
-                                        encoding: 'utf8',
-                                        timeout: 10_000,
-                                    });
-                                    return result.stdout.trim();
-                                };
-
-                                const branch = await runGit(['branch', '--show-current']).catch(() => '');
-                                const porc = await runGit(['status', '--porcelain']).catch(() => '');
-                                const headCommit = await runGit(['rev-parse', '--short', 'HEAD']).catch(() => null);
-                                const headMessage = await runGit(['log', '-1', '--format=%s']).catch(() => null);
-                                const upstream = await runGit(['rev-parse', '--abbrev-ref', '@{upstream}']).catch(() => null);
-                                const aheadBehind = await runGit(['rev-list', '--left-right', '--count', '@{upstream}...HEAD']).catch(() => '');
-                                const stashCount = await runGit(['stash', 'list']).catch(() => '');
-
-                                let ahead = 0, behind = 0;
-                                if (aheadBehind) {
-                                    const parts = aheadBehind.split(/\s+/);
-                                    if (parts.length >= 2) {
-                                        behind = parseInt(parts[0], 10) || 0;
-                                        ahead = parseInt(parts[1], 10) || 0;
-                                    }
+                                const gitStatus = await getGitRepoStatus(node.workspace as string, { timeoutMs: 10_000 });
+                                status.git = gitStatus;
+                                if (gitStatus.isGitRepo) {
+                                    const dirty = (gitStatus.staged + gitStatus.modified + gitStatus.untracked + gitStatus.deleted + gitStatus.renamed) > 0;
+                                    status.health = gitStatus.branch ? (dirty ? 'dirty' : 'online') : 'degraded';
+                                } else {
+                                    status.health = 'degraded';
+                                    if (gitStatus.error && !status.error) status.error = gitStatus.error;
                                 }
-
-                                const dirty = porc.length > 0;
-                                const lines = porc ? porc.split('\n').filter(Boolean) : [];
-                                let staged = 0, modified = 0, untracked = 0, deleted = 0, renamed = 0;
-                                for (const line of lines) {
-                                    const xy = line.slice(0, 2);
-                                    if (xy[0] !== ' ' && xy[0] !== '?') staged++;
-                                    if (xy[1] === 'M') modified++;
-                                    if (xy[1] === 'D') deleted++;
-                                    if (xy[0] === 'R' || xy[1] === 'R') renamed++;
-                                    if (xy === '??') untracked++;
-                                }
-
-                                status.git = {
-                                    workspace: node.workspace,
-                                    repoRoot: node.workspace,
-                                    isGitRepo: true,
-                                    branch: branch || null,
-                                    headCommit,
-                                    headMessage,
-                                    upstream,
-                                    ahead,
-                                    behind,
-                                    staged,
-                                    modified,
-                                    untracked,
-                                    deleted,
-                                    renamed,
-                                    hasConflicts: false,
-                                    conflictFiles: [],
-                                    stashCount: stashCount ? stashCount.split('\n').filter(Boolean).length : 0,
-                                    lastCheckedAt: Date.now(),
-                                };
-                                status.health = branch ? (dirty ? 'dirty' : 'online') : 'degraded';
                             } catch {
                                 if (!applyCachedInlineMeshNodeStatus(status, node)) {
                                     status.health = 'degraded';
