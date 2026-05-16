@@ -8,6 +8,7 @@ import DashboardMobileChatMode from './DashboardMobileChatMode'
 import DashboardPaneWorkspace from './DashboardPaneWorkspace'
 import DashboardDockviewWorkspace from './DashboardDockviewWorkspace'
 import DashboardNewSessionDialog from './DashboardNewSessionDialog'
+import DashboardMeshGraphDialog from './DashboardMeshGraphDialog'
 import GitStatusDialog from '../git/GitStatusDialog'
 import type { DashboardMobileSection } from './DashboardMobileBottomNav'
 import { useActionShortcuts, type DashboardActionShortcutDefinition } from '../../hooks/useActionShortcuts'
@@ -267,8 +268,12 @@ export default function DashboardMainView({
     })
 
     const [gitDialogTarget, setGitDialogTarget] = React.useState<{ daemonId: string; workspace: string } | null>(null)
+    const [meshGraphConversation, setMeshGraphConversation] = React.useState<ActiveConversation | null>(null)
     const handleOpenGitDialog = React.useCallback((daemonId: string, workspace: string) => {
         setGitDialogTarget({ daemonId, workspace })
+    }, [])
+    const handleOpenMeshGraph = React.useCallback((conversation: ActiveConversation) => {
+        setMeshGraphConversation(conversation)
     }, [])
 
     const handleShowHiddenConversationWithRestore = React.useCallback((conversation: ActiveConversation) => {
@@ -544,6 +549,7 @@ export default function DashboardMainView({
                     activeCliViewMode={activeCliViewMode}
                     onSetCliViewMode={onSetActiveCliViewMode}
                     onOpenGitDialog={handleOpenGitDialog}
+                    onOpenMeshGraph={handleOpenMeshGraph}
                 />
             )}
 
@@ -643,6 +649,13 @@ export default function DashboardMainView({
                     onListMeshes={onListMachineMeshes}
                     onLaunchMeshCoordinator={onLaunchMeshCoordinator}
                     onListSavedSessions={onListMachineSavedSessions}
+                />
+            )}
+            {meshGraphConversation && (
+                <DashboardMeshGraphDialog
+                    activeConv={meshGraphConversation}
+                    sendDaemonCommand={sendDaemonCommand}
+                    onClose={() => setMeshGraphConversation(null)}
                 />
             )}
             {gitDialogTarget && (

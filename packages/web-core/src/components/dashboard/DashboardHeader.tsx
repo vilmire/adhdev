@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActiveConversation, CliConversationViewMode } from './types';
 import { isCliConv, isCliTerminalConv, isAcpConv } from './types';
-import { IconBell, IconChat, IconScroll, IconMonitor, IconEyeOff, IconX, IconPlus } from '../Icons';
+import { IconBell, IconChat, IconScroll, IconMonitor, IconEyeOff, IconX, IconPlus, IconMesh } from '../Icons';
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import CliViewModeToggle from './CliViewModeToggle';
 import { getConversationMetaText, getConversationTitle } from './conversation-presenters';
@@ -50,6 +50,7 @@ export interface DashboardHeaderProps {
     guideNudgeVisible?: boolean;
     actionShortcuts?: Partial<Record<DashboardActionShortcutId, string>>;
     onOpenGitDialog?: (daemonId: string, workspace: string) => void;
+    onOpenMeshGraph?: (conversation: ActiveConversation) => void;
 }
 
 type DashboardHeaderConnectionState = {
@@ -191,10 +192,12 @@ export default function DashboardHeader({
     onMarkNotificationUnread,
     onDeleteNotification,
     onOpenGitDialog,
+    onOpenMeshGraph,
 }: DashboardHeaderProps) {
     const { ides, p2pStates = {} } = useBaseDaemons();
     const isCliActive = !!activeConv && isCliConv(activeConv) && !isAcpConv(activeConv);
     const isAcpActive = !!activeConv && isAcpConv(activeConv);
+    const meshGraphAvailable = !!activeConv?.daemonId && typeof activeConv?.settings?.meshCoordinatorFor === 'string' && activeConv.settings.meshCoordinatorFor.length > 0
     const effectiveCliViewMode = activeCliViewMode || (activeConv ? (isCliTerminalConv(activeConv) ? 'terminal' : 'chat') : null);
     const [isHiddenDropTarget, setIsHiddenDropTarget] = useState(false);
     const inboxRef = useRef<HTMLDivElement | null>(null);
@@ -375,6 +378,17 @@ export default function DashboardHeader({
                             </button>
                         ) : (
                             <GitStatusPill git={activeConv.git} compact className="max-w-[8rem] shrink-0" />
+                        )}
+                        {meshGraphAvailable && onOpenMeshGraph && (
+                            <button
+                                type="button"
+                                onClick={() => onOpenMeshGraph(activeConv)}
+                                className="btn btn-secondary btn-sm inline-flex items-center gap-1.5"
+                                title="Open live repo mesh graph"
+                            >
+                                <IconMesh size={14} />
+                                <span className="hidden lg:inline">Mesh graph</span>
+                            </button>
                         )}
 
                         {(isCliActive || isAcpActive) && onStopCli && (

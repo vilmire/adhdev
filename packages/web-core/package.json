@@ -17,6 +17,7 @@
   "dependencies": {
     "@adhdev/daemon-core": "*",
     "@adhdev/terminal-render-web": "*",
+    "@xyflow/react": "^12.10.2",
     "clsx": "^2.1.1",
     "dockview": "^5.2.0",
     "react": "^18.3.0",
