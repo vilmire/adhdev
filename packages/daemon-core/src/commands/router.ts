@@ -85,6 +85,136 @@ function readProviderPriorityFromPolicy(policy: unknown): string[] {
         });
 }
 
+function readObjectRecord(value: unknown): Record<string, any> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, any>
+        : {};
+}
+
+function readStringValue(...values: unknown[]): string | undefined {
+    for (const value of values) {
+        if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return undefined;
+}
+
+function readNumberValue(...values: unknown[]): number | undefined {
+    for (const value of values) {
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+    }
+    return undefined;
+}
+
+function readBooleanValue(...values: unknown[]): boolean | undefined {
+    for (const value of values) {
+        if (typeof value === 'boolean') return value;
+    }
+    return undefined;
+}
+
+function buildCachedInlineMeshGitStatus(node: any): Record<string, unknown> | undefined {
+    const cachedStatus = readObjectRecord(node?.cachedStatus);
+    const cachedGit = readObjectRecord(cachedStatus.git);
+    if (Object.keys(cachedGit).length) {
+        const conflictFiles = Array.isArray(cachedGit.conflictFiles)
+            ? cachedGit.conflictFiles.filter((value: unknown): value is string => typeof value === 'string')
+            : [];
+        const conflictCount = readNumberValue(cachedGit.conflicts) ?? conflictFiles.length;
+        const hasConflicts = readBooleanValue(cachedGit.hasConflicts) ?? conflictCount > 0;
+        const isGitRepo = readBooleanValue(cachedGit.isGitRepo);
+        if (isGitRepo !== undefined) {
+            return {
+                workspace: readStringValue(cachedGit.workspace, node?.workspace) || '',
+                repoRoot: readStringValue(cachedGit.repoRoot, node?.repoRoot, node?.workspace) || null,
+                isGitRepo,
+                branch: readStringValue(cachedGit.branch) ?? null,
+                headCommit: readStringValue(cachedGit.headCommit) ?? null,
+                headMessage: readStringValue(cachedGit.headMessage) ?? null,
+                upstream: readStringValue(cachedGit.upstream) ?? null,
+                ahead: readNumberValue(cachedGit.ahead) ?? 0,
+                behind: readNumberValue(cachedGit.behind) ?? 0,
+                staged: readNumberValue(cachedGit.staged) ?? 0,
+                modified: readNumberValue(cachedGit.modified) ?? 0,
+                untracked: readNumberValue(cachedGit.untracked) ?? 0,
+                deleted: readNumberValue(cachedGit.deleted) ?? 0,
+                renamed: readNumberValue(cachedGit.renamed) ?? 0,
+                hasConflicts,
+                conflictFiles,
+                stashCount: readNumberValue(cachedGit.stashCount) ?? 0,
+                lastCheckedAt: readNumberValue(cachedGit.lastCheckedAt) ?? Date.now(),
+            };
+        }
+    }
+
+    const rawGit = readObjectRecord(node?.lastGit ?? node?.last_git);
+    const gitResult = readObjectRecord(rawGit.result);
+    const directStatus = readObjectRecord(rawGit.status);
+    const nestedStatus = readObjectRecord(gitResult.status);
+    const rawProbe = readObjectRecord(node?.lastProbe ?? node?.last_probe);
+    const probeGit = readObjectRecord(rawProbe.git);
+    const probeGitResult = readObjectRecord(probeGit.result);
+    const probeDirectStatus = readObjectRecord(probeGit.status);
+    const probeNestedStatus = readObjectRecord(probeGitResult.status);
+    const status = Object.keys(directStatus).length
+        ? directStatus
+        : Object.keys(nestedStatus).length
+            ? nestedStatus
+            : Object.keys(probeDirectStatus).length
+                ? probeDirectStatus
+                : Object.keys(probeNestedStatus).length
+                    ? probeNestedStatus
+                    : {};
+    const isGitRepo = readBooleanValue(status.isGitRepo);
+    if (!Object.keys(status).length || isGitRepo === undefined) return undefined;
+    const conflictFiles = Array.isArray(status.conflictFiles)
+        ? status.conflictFiles.filter((value: unknown): value is string => typeof value === 'string')
+        : [];
+    const conflictCount = readNumberValue(status.conflicts) ?? conflictFiles.length;
+    const hasConflicts = readBooleanValue(status.hasConflicts) ?? conflictCount > 0;
+    return {
+        workspace: readStringValue(status.workspace, node?.workspace) || '',
+        repoRoot: readStringValue(status.repoRoot, node?.repoRoot, node?.workspace) || null,
+        isGitRepo,
+        branch: readStringValue(status.branch) ?? null,
+        headCommit: readStringValue(status.headCommit) ?? null,
+        headMessage: readStringValue(status.headMessage) ?? null,
+        upstream: readStringValue(status.upstream) ?? null,
+        ahead: readNumberValue(status.ahead) ?? 0,
+        behind: readNumberValue(status.behind) ?? 0,
+        staged: readNumberValue(status.staged) ?? 0,
+        modified: readNumberValue(status.modified) ?? 0,
+        untracked: readNumberValue(status.untracked) ?? 0,
+        deleted: readNumberValue(status.deleted) ?? 0,
+        renamed: readNumberValue(status.renamed) ?? 0,
+        hasConflicts,
+        conflictFiles,
+        stashCount: readNumberValue(status.stashCount) ?? 0,
+        lastCheckedAt: Date.now(),
+    };
+}
+
+function applyCachedInlineMeshNodeStatus(status: Record<string, unknown>, node: any): boolean {
+    const cachedStatus = readObjectRecord(node?.cachedStatus);
+    const git = buildCachedInlineMeshGitStatus(node);
+    const error = readStringValue(cachedStatus.error, node?.error);
+    const health = readStringValue(cachedStatus.health, node?.health);
+    const machineStatus = readStringValue(cachedStatus.machineStatus, node?.machineStatus);
+    if (!git && !error && !health) return false;
+    if (!machineStatus && !git && !error) return false;
+    if (git) status.git = git;
+    if (error) status.error = error;
+    if (health) {
+        status.health = health;
+        return true;
+    }
+    if (git) {
+        const dirty = Number(git.staged || 0) + Number(git.modified || 0) + Number(git.untracked || 0) + Number(git.deleted || 0) + Number(git.renamed || 0) > 0;
+        status.health = git.isGitRepo === false ? 'degraded' : dirty ? 'dirty' : 'online';
+        return true;
+    }
+    return false;
+}
+
 async function resolveProviderTypeFromPriority(args: {
     nodeId: string;
     providerPriority: string[];
@@ -2762,6 +2892,10 @@ export class DaemonCommandRouter {
                             activeSessions: [],
                         };
                         if (node.workspace && typeof node.workspace === 'string') {
+                            if (!fs.existsSync(node.workspace as string) && applyCachedInlineMeshNodeStatus(status, node)) {
+                                nodeStatuses.push(status);
+                                continue;
+                            }
                             try {
                                 const { execFile } = await import('node:child_process');
                                 const { promisify } = await import('node:util');
@@ -2826,8 +2960,12 @@ export class DaemonCommandRouter {
                                 };
                                 status.health = branch ? (dirty ? 'dirty' : 'online') : 'degraded';
                             } catch {
-                                status.health = 'degraded';
+                                if (!applyCachedInlineMeshNodeStatus(status, node)) {
+                                    status.health = 'degraded';
+                                }
                             }
+                        } else {
+                            applyCachedInlineMeshNodeStatus(status, node);
                         }
                         nodeStatuses.push(status);
                     }

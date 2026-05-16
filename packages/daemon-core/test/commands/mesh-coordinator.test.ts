@@ -711,4 +711,75 @@ describe('resolveMeshCoordinatorSetup', () => {
       rmSync(workspace, { recursive: true, force: true })
     }
   })
+
+  it('reuses cached cloud node status when an inline mesh workspace is not local to the selected coordinator', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'adhdev-mesh-status-inline-'))
+    const router = createAutoImportRouter(baseProvider, {
+      handleCliCommand: vi.fn(async () => ({ success: true, sessionId: 'unused-session' })),
+    })
+    const inlineMesh: any = {
+      id: 'mesh_status_cached_remote',
+      name: 'Cached Remote Status Mesh',
+      repoIdentity: 'example/repo',
+      nodes: [
+        { id: 'node-local', workspace, policy: {} },
+        {
+          id: 'node-remote',
+          workspace: '/Users/remote/.worktrees/adhdev',
+          daemonId: 'daemon_remote',
+          machineId: 'machine_remote',
+          cachedStatus: {
+            machineStatus: 'online',
+            health: 'online',
+            git: {
+              workspace: '/Users/remote/.worktrees/adhdev',
+              repoRoot: '/Users/remote/.worktrees/adhdev',
+              isGitRepo: true,
+              branch: 'main',
+              headCommit: 'abc1234',
+              headMessage: 'remote ok',
+              upstream: 'origin/main',
+              ahead: 0,
+              behind: 0,
+              staged: 0,
+              modified: 0,
+              untracked: 0,
+              deleted: 0,
+              renamed: 0,
+              hasConflicts: false,
+              conflictFiles: [],
+              stashCount: 0,
+            },
+          },
+          policy: {},
+        },
+      ],
+      policy: {},
+      coordinator: {},
+    }
+
+    try {
+      const result = await router.execute('mesh_status', {
+        meshId: inlineMesh.id,
+        inlineMesh,
+      })
+
+      expect(result).toMatchObject({ success: true, meshId: inlineMesh.id })
+      const remote = ((result as any).nodes as any[]).find(node => node.nodeId === 'node-remote')
+      expect(remote).toMatchObject({
+        health: 'online',
+        workspace: '/Users/remote/.worktrees/adhdev',
+        daemonId: 'daemon_remote',
+        machineId: 'machine_remote',
+      })
+      expect(remote.git).toMatchObject({
+        repoRoot: '/Users/remote/.worktrees/adhdev',
+        branch: 'main',
+        headCommit: 'abc1234',
+        isGitRepo: true,
+      })
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
 })
