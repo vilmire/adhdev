@@ -1118,6 +1118,97 @@ async function commandForNode(
     throw new Error(`Command '${command}' requires daemon IPC/local transport for node '${node.id}'`);
 }
 
+function normalizePendingMeshCoordinatorEvents(value: any): any[] {
+    const payload = unwrapCommandPayload(value);
+    const events = Array.isArray(payload?.events)
+        ? payload.events
+        : Array.isArray(value?.events)
+            ? value.events
+            : [];
+    return events.filter((event: unknown) => event && typeof event === 'object');
+}
+
+function buildMeshForwardPayloadFromPendingEvent(event: any): Record<string, unknown> {
+    const metadataEvent = event?.metadataEvent && typeof event.metadataEvent === 'object'
+        ? event.metadataEvent as Record<string, unknown>
+        : {};
+    return {
+        event: readString(event?.event),
+        meshId: readString(event?.meshId),
+        nodeId: readString(event?.nodeId) || readString(metadataEvent.meshNodeId),
+        workspace: readString(event?.workspace) || readString(metadataEvent.workspace),
+        targetSessionId: readString(metadataEvent.targetSessionId) || readString(metadataEvent.sessionId) || readString(metadataEvent.instanceId),
+        providerType: readString(metadataEvent.providerType),
+        providerSessionId: readString(metadataEvent.providerSessionId),
+        finalSummary: readString(metadataEvent.finalSummary) || readString(metadataEvent.summary),
+        ...(metadataEvent.intentional === true ? { intentional: true } : {}),
+        ...(metadataEvent.intentionalStop === true ? { intentionalStop: true } : {}),
+        ...(metadataEvent.operatorCleanup === true ? { operatorCleanup: true } : {}),
+        ...(readString(metadataEvent.reason) ? { reason: readString(metadataEvent.reason) } : {}),
+        ...(readString(metadataEvent.stopReason) ? { stopReason: readString(metadataEvent.stopReason) } : {}),
+        ...(readString(metadataEvent.cleanupReason) ? { cleanupReason: readString(metadataEvent.cleanupReason) } : {}),
+        ...(readString(metadataEvent.source) ? { source: readString(metadataEvent.source) } : {}),
+    };
+}
+
+async function drainCoordinatorPendingEvents(
+    ctx: MeshContext,
+    opts?: { nodeIds?: string[] },
+): Promise<any[]> {
+    const requestedNodeIds = opts?.nodeIds?.length ? new Set(opts.nodeIds) : null;
+    const matchesCurrentMesh = (event: any) => readString(event?.meshId) === ctx.mesh.id;
+
+    if (ctx.transport instanceof IpcTransport) {
+        const surfacedEvents: any[] = [];
+
+        try {
+            surfacedEvents.push(
+                ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', {}) as any)
+                    .filter(matchesCurrentMesh),
+            );
+        } catch {
+            // Non-fatal: pending events are best-effort.
+        }
+
+        for (const node of ctx.mesh.nodes) {
+            if (!node.daemonId || isLocalControlPlaneNode(ctx, node)) continue;
+            if (requestedNodeIds && !requestedNodeIds.has(node.id)) continue;
+
+            try {
+                const remoteEvents = normalizePendingMeshCoordinatorEvents(
+                    await ctx.transport.meshCommand(node.daemonId, 'get_pending_mesh_events', {}),
+                ).filter(matchesCurrentMesh);
+                if (remoteEvents.length === 0) continue;
+
+                for (const event of remoteEvents) {
+                    const payload = buildMeshForwardPayloadFromPendingEvent(event);
+                    if (!payload.event || !payload.meshId) continue;
+                    await ctx.transport.command('mesh_forward_event', payload);
+                }
+            } catch {
+                // Non-fatal: remote pending-event recovery is best-effort.
+            }
+        }
+
+        try {
+            surfacedEvents.push(
+                ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command('get_pending_mesh_events', {}) as any)
+                    .filter(matchesCurrentMesh),
+            );
+        } catch {
+            // Non-fatal: pending events are best-effort.
+        }
+
+        return surfacedEvents;
+    }
+
+    if (isLocalTransport(ctx.transport)) {
+        return (drainPendingMeshCoordinatorEvents() as any[]).filter(matchesCurrentMesh);
+    }
+
+    return [];
+}
+
 function isP2pTransportUnavailableError(error: unknown): boolean {
     return isP2pRelayTransportFailure(error);
 }
@@ -1579,18 +1670,8 @@ export async function meshStatus(ctx: MeshContext): Promise<string> {
         response.ledgerSummary = ledgerSummary;
     } catch { /* ledger read is best-effort */ }
 
-    // Drain MCP-coordinator pending events queued by the daemon.
-    // IpcTransport (same-machine daemon IPC): use command round-trip.
-    // LocalTransport (standalone daemon same-process): drain directly from daemon-core.
-    // CloudTransport (cross-machine): cannot access same-process queue; skip.
     try {
-        let pendingEvents: any[] = [];
-        if (ctx.transport instanceof IpcTransport) {
-            const eventsResult = await (ctx.transport as IpcTransport).command('get_pending_mesh_events', {}) as any;
-            pendingEvents = Array.isArray(eventsResult?.events) ? eventsResult.events : [];
-        } else if (isLocalTransport(ctx.transport)) {
-            pendingEvents = drainPendingMeshCoordinatorEvents() as any[];
-        }
+        const pendingEvents = await drainCoordinatorPendingEvents(ctx);
         if (pendingEvents.length > 0) {
             response.pendingCoordinatorEvents = pendingEvents;
         }
@@ -1606,6 +1687,7 @@ export async function meshTaskHistory(
     args: { tail?: number; kind?: string },
 ): Promise<string> {
     const { mesh } = ctx;
+    await drainCoordinatorPendingEvents(ctx);
     const tail = typeof args.tail === 'number' && args.tail > 0 ? args.tail : 20;
     const kind = typeof args.kind === 'string' && args.kind.trim() ? [args.kind.trim() as any] : undefined;
     const entries = readLedgerEntries(mesh.id, { tail, kind });
@@ -2039,6 +2121,10 @@ export async function meshReadChat(
     const node = await findOptionalNodeWithRefresh(ctx, args.node_id);
     if (!node) {
         return JSON.stringify(buildMissingNodeReadChatRecovery(ctx, args), null, 2);
+    }
+
+    if (ctx.transport instanceof IpcTransport || isLocalTransport(ctx.transport)) {
+        await drainCoordinatorPendingEvents(ctx, { nodeIds: [args.node_id] });
     }
 
     if (isLocalTransport(ctx.transport)) {

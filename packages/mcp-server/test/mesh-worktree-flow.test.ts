@@ -4,8 +4,9 @@ import { join } from 'node:path';
 import { writeFileSync, readFileSync } from 'node:fs';
 
 import { IpcTransport } from '../src/transports/ipc.js';
-import { meshApprove, meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
+import { meshApprove, meshCheckpoint, meshCloneNode, meshLaunchSession, meshReadChat, meshReadDebug, meshRemoveNode, meshSendTask, meshStatus, meshListNodes, meshGitStatus, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshTaskHistory, ALL_MESH_TOOLS } from '../src/tools/mesh-tools.js';
 import { appendLedgerEntry, claimNextTask, enqueueTask, getLedgerDir, getQueue } from '@adhdev/daemon-core';
+import { clearPendingMeshCoordinatorEvents, drainPendingMeshCoordinatorEvents, handleMeshForwardEvent } from '../../daemon-core/src/mesh/mesh-events.js';
 
 test('mesh worktree tools route clone/remove to the source node daemon and refresh MCP mesh context', async () => {
   const transport = new IpcTransport() as IpcTransport & {
@@ -372,6 +373,88 @@ test('mesh_status marks git_status P2P timeout as recoverable degraded node meta
   assert.equal(nodeStatus.transport, 'p2p');
   assert.equal(nodeStatus.retryRecommended, true);
   assert.match(nodeStatus.noFallbackReason, /WS\/REST command fallback/i);
+});
+
+test('mesh_task_history backfills remote pending completion events into the coordinator ledger', async () => {
+  clearPendingMeshCoordinatorEvents();
+  const meshId = `mesh-task-history-backfill-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  let remoteDrained = false;
+  const localComponents = {
+    instanceManager: {
+      getByCategory: () => [],
+    },
+  } as any;
+  const ctx = {
+    localDaemonId: 'daemon-coordinator',
+    mesh: {
+      id: meshId,
+      name: 'Task History Backfill Mesh',
+      repoIdentity: 'example/repo',
+      policy: {},
+      coordinator: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: [{
+        id: 'node-remote-worker',
+        workspace: '/repo-remote',
+        repoRoot: '/repo-remote',
+        daemonId: 'daemon-remote',
+        userOverrides: {},
+        policy: { providerPriority: ['hermes-cli'] },
+      }],
+    },
+    transport,
+  };
+
+  transport.command = async (command, args = {}) => {
+    if (command === 'get_mesh') return { success: true, mesh: ctx.mesh };
+    if (command === 'get_pending_mesh_events') {
+      return { events: drainPendingMeshCoordinatorEvents() };
+    }
+    if (command === 'mesh_forward_event') {
+      return handleMeshForwardEvent(localComponents, args as Record<string, unknown>);
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (_daemonId, command) => {
+    if (command === 'get_pending_mesh_events') {
+      if (remoteDrained) return { events: [] };
+      remoteDrained = true;
+      return {
+        events: [{
+          event: 'agent:generating_completed',
+          meshId,
+          nodeId: 'node-remote-worker',
+          workspace: '/repo-remote',
+          metadataEvent: {
+            targetSessionId: 'session-remote',
+            providerType: 'hermes-cli',
+            providerSessionId: 'provider-remote',
+            finalSummary: 'done',
+          },
+        }],
+      };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  try {
+    const history = JSON.parse(await meshTaskHistory(ctx as any, { tail: 10 }));
+    const completion = history.entries.find((entry: any) => entry.kind === 'task_completed' && entry.sessionId === 'session-remote');
+    assert.ok(completion, 'expected task_completed entry after remote pending-event drain');
+    assert.equal(completion.nodeId, 'node-remote-worker');
+    assert.equal(completion.providerType, 'hermes-cli');
+    assert.equal(completion.payload.event, 'agent:generating_completed');
+    assert.equal(completion.payload.providerSessionId, 'provider-remote');
+    assert.equal(completion.payload.finalSummary, 'done');
+    assert.equal(history.summary.taskCompleted >= 1, true);
+  } finally {
+    clearPendingMeshCoordinatorEvents();
+  }
 });
 
 test('mesh_send_task preserves P2P relay recovery payload for coordinator feedback', async () => {
@@ -1209,19 +1292,21 @@ test('mesh_read_chat forwards cached provider metadata after launch', async () =
   await meshLaunchSession(ctx as any, { node_id: 'node-provider', type: 'hermes-cli' });
   const readText = await meshReadChat(ctx as any, { node_id: 'node-provider', session_id: 'runtime-cached', tail: 5 });
   const readPayload = JSON.parse(readText);
-  assert.equal(calls[2].command, 'read_chat');
-  assert.equal(calls[2].args.agentType, 'hermes-cli');
-  assert.equal(calls[2].args.providerType, 'hermes-cli');
-  assert.equal(calls[2].args.providerSessionId, 'provider-cached');
-  assert.equal(calls[2].args.workspace, '/repo');
-  assert.equal(calls[2].args.tailLimit, 5);
+  const firstReadCall = calls.find((call) => call.command === 'read_chat');
+  assert.ok(firstReadCall);
+  assert.equal(firstReadCall.args.agentType, 'hermes-cli');
+  assert.equal(firstReadCall.args.providerType, 'hermes-cli');
+  assert.equal(firstReadCall.args.providerSessionId, 'provider-cached');
+  assert.equal(firstReadCall.args.workspace, '/repo');
+  assert.equal(firstReadCall.args.tailLimit, 5);
   assert.equal(readPayload.success, true);
   assert.equal(readPayload.status, 'idle');
   assert.deepEqual(readPayload.messages, [{ role: 'assistant', content: 'delegated result' }]);
   assert.equal(readPayload.providerSessionId, 'provider-cached');
 
   await meshReadChat(ctx as any, { node_id: 'node-provider', session_id: 'runtime-cached', provider_session_id: 'provider-explicit-read' });
-  assert.equal(calls[3].args.providerSessionId, 'provider-explicit-read');
+  const readCalls = calls.filter((call) => call.command === 'read_chat');
+  assert.equal(readCalls[1].args.providerSessionId, 'provider-explicit-read');
 });
 
 test('mesh_read_chat compact mode filters tool/internal chatter and returns the final assistant summary', async () => {

@@ -32,12 +32,22 @@ export interface PendingMeshCoordinatorEvent {
     event: string;
     meshId: string;
     nodeLabel: string;
+    nodeId?: string;
+    workspace?: string;
     metadataEvent: Record<string, unknown>;
     queuedAt: number;
 }
 
 const MAX_PENDING_EVENTS = 50;
 const pendingMeshCoordinatorEvents: PendingMeshCoordinatorEvent[] = [];
+
+export function queuePendingMeshCoordinatorEvent(event: PendingMeshCoordinatorEvent): boolean {
+    if (pendingMeshCoordinatorEvents.length >= MAX_PENDING_EVENTS) {
+        return false;
+    }
+    pendingMeshCoordinatorEvents.push(event);
+    return true;
+}
 
 /** Drain and return all pending coordinator events, clearing the queue. */
 export function drainPendingMeshCoordinatorEvents(): PendingMeshCoordinatorEvent[] {
@@ -781,17 +791,18 @@ function injectMeshSystemMessage(components: DaemonComponents, args: {
 
     if (coordinatorInstances.length === 0) {
         // No CLI coordinator session found — buffer for MCP-based coordinators.
-        if (pendingMeshCoordinatorEvents.length < MAX_PENDING_EVENTS) {
-            pendingMeshCoordinatorEvents.push({
+        if (queuePendingMeshCoordinatorEvent({
                 event: args.event,
                 meshId: args.meshId,
                 nodeLabel: args.nodeLabel,
+                nodeId: args.nodeId || undefined,
+                workspace: readNonEmptyString(args.metadataEvent.workspace),
                 metadataEvent: {
                     ...args.metadataEvent,
                     ...(recoveryContext ? { recoveryContext } : {}),
                 },
                 queuedAt: Date.now(),
-            });
+            })) {
             LOG.info('MeshEvents', `Queued ${args.event} for MCP coordinator (mesh ${args.meshId})`);
         }
         return { success: true, forwarded: 0 };
