@@ -27,4 +27,17 @@ describe('mesh graph view interaction boundaries', () => {
         expect(source).toContain("case 'submoduleLink':")
         expect(source).toContain("return '#c084fc'")
     })
+
+    it('keeps graph node cards on the observability dark surface instead of mixing in page-theme text/background tokens', () => {
+        const source = readSource('components/MeshGraph/MeshGraphView.tsx')
+
+        expect(source).toContain('bg-slate-950/78')
+        expect(source).toContain('text-slate-100')
+        expect(source).toContain('text-slate-200')
+        expect(source).toContain('bg-slate-950/60')
+        expect(source).not.toContain('bg-bg-panel')
+        expect(source).not.toContain('text-text-primary')
+        expect(source).not.toContain('text-text-secondary')
+        expect(source).not.toContain('text-text-muted')
+    })
 })

@@ -41,7 +41,7 @@ const STACK_SECTION_GAP = 44
 function getHealthClasses(health: MeshGraphNode['health'], selected: boolean): string {
     const base = selected
         ? 'border-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_24px_60px_rgba(8,145,178,0.18)]'
-        : 'border-border-subtle shadow-[0_18px_48px_rgba(3,7,18,0.22)]'
+        : 'border-white/10 shadow-[0_18px_48px_rgba(3,7,18,0.22)]'
 
     switch (health) {
         case 'online':
@@ -55,14 +55,14 @@ function getHealthClasses(health: MeshGraphNode['health'], selected: boolean): s
         case 'offline':
             return `${base} bg-slate-500/12`
         default:
-            return `${base} bg-bg-panel`
+            return `${base} bg-slate-950/78`
     }
 }
 
 function getBadgeClasses(kind: 'health' | 'dirty' | 'conflict' | 'orphan' | 'meta' | 'submodule'): string {
     switch (kind) {
         case 'health':
-            return 'border-white/10 bg-white/6 text-text-secondary'
+            return 'border-white/10 bg-slate-950/60 text-slate-200'
         case 'dirty':
             return 'border-amber-400/25 bg-amber-500/10 text-amber-200'
         case 'conflict':
@@ -70,7 +70,7 @@ function getBadgeClasses(kind: 'health' | 'dirty' | 'conflict' | 'orphan' | 'met
         case 'orphan':
             return 'border-fuchsia-400/25 bg-fuchsia-500/10 text-fuchsia-200'
         case 'submodule':
-            return 'border-violet-400/25 bg-violet-500/10 text-violet-100'
+            return 'border-violet-400/25 bg-violet-500/10 text-violet-200'
         case 'meta':
         default:
             return 'border-cyan-400/20 bg-cyan-500/8 text-cyan-100'
@@ -121,8 +121,8 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             />
             <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold text-text-primary">{node.label}</div>
-                    <div className="truncate text-[11px] text-text-muted">{subtitle}</div>
+                    <div className="truncate text-sm font-semibold text-slate-100">{node.label}</div>
+                    <div className="truncate text-[11px] text-slate-400">{subtitle}</div>
                 </div>
                 <span
                     className="mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full"
@@ -173,25 +173,25 @@ function MeshNodeCard({ data, selected }: NodeProps<FlowNode>) {
             </div>
 
             {isSubmoduleNode ? (
-                <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-text-secondary">
-                    <div className="rounded-xl border border-white/6 bg-black/10 px-2.5 py-2">
-                        <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted">Parent node</div>
-                        <div className="mt-1 truncate font-medium text-text-primary">{node.machineLabel || 'mesh node'}</div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-slate-300">
+                    <div className="rounded-xl border border-white/8 bg-slate-950/58 px-2.5 py-2">
+                        <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Parent node</div>
+                        <div className="mt-1 truncate font-medium text-slate-100">{node.machineLabel || 'mesh node'}</div>
                     </div>
-                    <div className="rounded-xl border border-white/6 bg-black/10 px-2.5 py-2">
-                        <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted">State</div>
-                        <div className="mt-1 font-medium text-text-primary">{node.outOfSync ? 'Out of sync' : node.dirty ? 'Dirty' : 'Synced'}</div>
+                    <div className="rounded-xl border border-white/8 bg-slate-950/58 px-2.5 py-2">
+                        <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">State</div>
+                        <div className="mt-1 font-medium text-slate-100">{node.outOfSync ? 'Out of sync' : node.dirty ? 'Dirty' : 'Synced'}</div>
                     </div>
                 </div>
             ) : (
-                <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-text-secondary">
-                    <div className="rounded-xl border border-white/6 bg-black/10 px-2.5 py-2">
-                        <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted">Sessions</div>
-                        <div className="mt-1 font-medium text-text-primary">{node.activeSessionCount}</div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-slate-300">
+                    <div className="rounded-xl border border-white/8 bg-slate-950/58 px-2.5 py-2">
+                        <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Sessions</div>
+                        <div className="mt-1 font-medium text-slate-100">{node.activeSessionCount}</div>
                     </div>
-                    <div className="rounded-xl border border-white/6 bg-black/10 px-2.5 py-2">
-                        <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted">Git drift</div>
-                        <div className="mt-1 font-medium text-text-primary">
+                    <div className="rounded-xl border border-white/8 bg-slate-950/58 px-2.5 py-2">
+                        <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Git drift</div>
+                        <div className="mt-1 font-medium text-slate-100">
                             +{node.ahead} / -{node.behind}
                         </div>
                     </div>
@@ -435,12 +435,12 @@ export default function MeshGraphView({ data, selectedNodeId = null, onNodeClick
     )
 
     return (
-        <div className="relative h-full min-h-[560px] overflow-hidden rounded-2xl border border-border-subtle bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_rgba(15,23,42,0.98)_42%,_rgba(2,6,23,1))]">
-            <div className="absolute left-4 top-4 z-10 flex flex-wrap gap-2 text-[11px] text-text-secondary">
-                <span className="rounded-full border border-white/10 bg-black/25 px-3 py-1">
+        <div className="relative h-full min-h-[560px] overflow-hidden rounded-2xl border border-white/10 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.12),_rgba(15,23,42,0.98)_42%,_rgba(2,6,23,1))]">
+            <div className="absolute left-4 top-4 z-10 flex flex-wrap gap-2 text-[11px] text-slate-200">
+                <span className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1">
                     {data.stats.totalNodes} node{data.stats.totalNodes === 1 ? '' : 's'}
                 </span>
-                <span className="rounded-full border border-white/10 bg-black/25 px-3 py-1">
+                <span className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1">
                     {data.stats.totalActiveSessions} active session{data.stats.totalActiveSessions === 1 ? '' : 's'}
                 </span>
                 {data.stats.orphanNodes > 0 && (

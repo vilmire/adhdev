@@ -39,6 +39,18 @@ describe('dashboard mesh graph dialog wiring', () => {
     expect(surfaceSource).toContain('max-h-[22vh] overflow-y-auto')
   })
 
+  it('keeps node drill-down panels on the same dark contrast system as the observability shell', () => {
+    const panelSource = readSource('components/MeshGraph/MeshGraphPanel.tsx')
+
+    expect(panelSource).toContain('bg-white/[0.04]')
+    expect(panelSource).toContain('text-slate-100')
+    expect(panelSource).toContain('text-slate-200')
+    expect(panelSource).not.toContain('bg-bg-panel')
+    expect(panelSource).not.toContain('text-text-primary')
+    expect(panelSource).not.toContain('text-text-secondary')
+    expect(panelSource).not.toContain('text-text-muted')
+  })
+
   it('keeps submodule details and queue/session drill-down on the shared graph surface', () => {
     const modeSource = readSource('components/dashboard/DashboardMobileChatMode.tsx')
     const mainViewSource = readSource('components/dashboard/DashboardMainView.tsx')

@@ -12,9 +12,9 @@ interface MeshGraphPanelProps {
 function Field({ label, value }: { label: string; value: string | number | null }) {
     if (value === null || value === undefined || value === '') return null
     return (
-        <div className="flex justify-between gap-3 text-[11px] py-0.5 border-b border-border-subtle/50">
-            <span className="text-text-muted">{label}</span>
-            <span className="text-right break-all text-text-secondary font-medium">{String(value)}</span>
+        <div className="flex justify-between gap-3 border-b border-white/6 py-0.5 text-[11px]">
+            <span className="text-slate-400">{label}</span>
+            <span className="break-all text-right font-medium text-slate-200">{String(value)}</span>
         </div>
     )
 }
@@ -38,7 +38,7 @@ function HealthBadge({ health }: { health: string }) {
 export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
     if (!node) {
         return (
-            <div className="w-full max-w-full rounded-xl border border-border-subtle bg-bg-panel p-4 text-text-muted text-xs md:w-64">
+            <div className="w-full max-w-full rounded-xl border border-white/10 bg-white/[0.04] p-4 text-xs text-slate-400 md:w-64">
                 Select a node to view details.
             </div>
         )
@@ -47,17 +47,17 @@ export default function MeshGraphPanel({ node, onClose }: MeshGraphPanelProps) {
     const isSubmoduleNode = node.type === 'submoduleNode'
 
     return (
-        <div className="w-full max-w-full rounded-xl border border-border-subtle bg-bg-panel p-4 flex flex-col gap-2 shadow-lg md:w-64">
+        <div className="flex w-full max-w-full flex-col gap-2 rounded-xl border border-white/10 bg-white/[0.04] p-4 shadow-lg md:w-64">
             <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-text-primary truncate">{node.label}</span>
+                <span className="truncate text-xs font-semibold text-slate-100">{node.label}</span>
                 {onClose && (
-                    <button onClick={onClose} className="text-text-muted hover:text-text-primary text-xs">✕</button>
+                    <button onClick={onClose} className="text-xs text-slate-400 hover:text-slate-100">✕</button>
                 )}
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
                 <HealthBadge health={node.health} />
-                {isSubmoduleNode && <span className="px-1.5 py-0.5 rounded text-[10px] bg-violet-500/10 text-violet-300 border border-violet-500/20">Submodule</span>}
+                {isSubmoduleNode && <span className="rounded border border-violet-500/20 bg-violet-500/10 px-1.5 py-0.5 text-[10px] text-violet-200">Submodule</span>}
                 {node.dirty && <span className="px-1.5 py-0.5 rounded text-[10px] bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">Dirty</span>}
                 {node.outOfSync && <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20">Out of sync</span>}
                 {node.hasConflicts && <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20">Conflict</span>}
