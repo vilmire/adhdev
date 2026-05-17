@@ -86,6 +86,8 @@ export interface DaemonInitConfig {
 
     /** Relays a command to a remote mesh node daemon */
     dispatchMeshCommand?: (daemonId: string, command: string, args: Record<string, unknown>) => Promise<any>;
+    /** Returns selected-coordinator mesh peer telemetry for a target daemon when available. */
+    getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null;
 }
 
 // ─── Result ───
@@ -306,6 +308,7 @@ export async function initDaemonComponents(config: DaemonInitConfig): Promise<Da
         sessionHostControl: config.sessionHostControl,
         statusInstanceId: config.statusInstanceId,
         statusVersion: config.statusVersion,
+        getMeshPeerConnectionStatus: config.getMeshPeerConnectionStatus,
         getCdpLogFn: config.getCdpLogFn || ((ideType: string) => LOG.forComponent(`CDP:${ideType}`).asLogFn()),
     });
 

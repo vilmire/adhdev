@@ -334,12 +334,16 @@ function applyCachedInlineMeshNodeStatus(status: Record<string, unknown>, node: 
     const error = readStringValue(cachedStatus.error, node?.error);
     const health = readStringValue(cachedStatus.health, node?.health);
     const machineStatus = readStringValue(cachedStatus.machineStatus, node?.machineStatus);
+    const lastSeenAt = toIsoTimestamp(cachedStatus.lastSeenAt ?? cachedStatus.last_seen_at ?? node?.lastSeenAt ?? node?.last_seen_at);
+    const updatedAt = toIsoTimestamp(cachedStatus.updatedAt ?? cachedStatus.updated_at ?? node?.updatedAt ?? node?.updated_at);
     const activeSessions = readCachedInlineMeshActiveSessions(node);
     const activeSessionDetails = readCachedInlineMeshActiveSessionDetails(node);
-    if (!git && !error && !health && !machineStatus && activeSessions.length === 0) return false;
+    if (!git && !error && !health && !machineStatus && !lastSeenAt && !updatedAt && activeSessions.length === 0) return false;
     if (git) status.git = git;
     if (error) status.error = error;
     if (machineStatus) status.machineStatus = machineStatus;
+    if (lastSeenAt) status.lastSeenAt = lastSeenAt;
+    if (updatedAt) status.updatedAt = updatedAt;
     if (activeSessions.length > 0) status.activeSessions = activeSessions;
     if (activeSessionDetails.length > 0) status.activeSessionDetails = activeSessionDetails;
     if (health) {
@@ -350,7 +354,7 @@ function applyCachedInlineMeshNodeStatus(status: Record<string, unknown>, node: 
         status.health = deriveMeshNodeHealthFromGit(git);
         return true;
     }
-    return activeSessions.length > 0 || !!machineStatus;
+    return activeSessions.length > 0 || !!machineStatus || !!lastSeenAt || !!updatedAt;
 }
 
 async function resolveProviderTypeFromPriority(args: {
@@ -770,6 +774,8 @@ export interface CommandRouterDeps {
     statusVersion?: string;
     /** Session host control plane */
     sessionHostControl?: SessionHostControlPlane | null;
+    /** Selected-coordinator mesh peer telemetry surface for target daemons, when supported by the runtime. */
+    getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null;
 }
 
 export interface CommandRouterResult {
@@ -3027,24 +3033,68 @@ export class DaemonCommandRouter {
                         : [];
                     const liveMeshSessions = partitionSessionHostRecords(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
 
+                    const localMachineId = loadConfig().machineId || '';
+                    const inlineCoordinatorNodeId = meshRecord?.inline && Array.isArray(mesh.nodes)
+                        ? readStringValue((mesh.nodes[0] as any)?.id, (mesh.nodes[0] as any)?.nodeId)
+                        : undefined;
+                    const refreshedAt = new Date().toISOString();
                     const nodeStatuses = [];
-                    for (const node of mesh.nodes || []) {
+                    for (const [nodeIndex, node] of (mesh.nodes || []).entries()) {
+                        const nodeId = String(node.id || node.nodeId || '');
+                        const daemonId = readStringValue(node.daemonId);
+                        const providerPriority = readProviderPriorityFromPolicy(node.policy);
+                        const isSelfNode = Boolean(
+                            nodeId && inlineCoordinatorNodeId && nodeId === inlineCoordinatorNodeId,
+                        ) || Boolean(
+                            daemonId && (daemonId === localMachineId || daemonId === this.deps.statusInstanceId),
+                        ) || Boolean(meshRecord?.inline && nodeIndex === 0);
                         const status: Record<string, unknown> = {
-                            nodeId: node.id || node.nodeId,
+                            nodeId,
                             machineLabel: node.machineLabel || node.id || node.nodeId,
                             workspace: node.workspace,
                             repoRoot: node.repoRoot,
                             isLocalWorktree: node.isLocalWorktree,
                             worktreeBranch: node.worktreeBranch,
-                            daemonId: node.daemonId,
+                            daemonId,
                             machineId: node.machineId,
                             machineStatus: node.machineStatus,
                             health: 'unknown',
                             providers: node.providers || [],
+                            providerPriority,
                             activeSessions: [],
                             activeSessionDetails: [],
+                            launchReady: false,
                         };
-                        const nodeId = String(node.id || node.nodeId || '');
+                        if (isSelfNode) {
+                            status.connection = {
+                                perspective: 'selected_coordinator',
+                                source: 'mesh_peer_status',
+                                state: 'self',
+                                transport: 'local',
+                                reported: true,
+                                reason: 'Selected coordinator daemon',
+                                lastStateChangeAt: refreshedAt,
+                            };
+                        } else if (daemonId) {
+                            const connection = this.deps.getMeshPeerConnectionStatus?.(daemonId);
+                            status.connection = connection ?? {
+                                perspective: 'selected_coordinator',
+                                source: 'not_reported',
+                                state: 'unknown',
+                                transport: 'unknown',
+                                reported: false,
+                                reason: 'No live mesh peer telemetry reported by the selected coordinator yet.',
+                            };
+                        } else {
+                            status.connection = {
+                                perspective: 'selected_coordinator',
+                                source: 'not_reported',
+                                state: 'unknown',
+                                transport: 'unknown',
+                                reported: false,
+                                reason: 'Node has no daemon id, so mesh transport cannot be reported from the selected coordinator.',
+                            };
+                        }
                         const matchedLiveSessionRecords = liveMeshSessions
                             .filter((record) => this.sessionMatchesMeshNode(record, node, nodeId));
                         if (matchedLiveSessionRecords.length > 0) {
@@ -3062,6 +3112,7 @@ export class DaemonCommandRouter {
                         }
                         if (node.workspace && typeof node.workspace === 'string') {
                             if (!fs.existsSync(node.workspace as string) && applyCachedInlineMeshNodeStatus(status, node)) {
+                                status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
                                 nodeStatuses.push(status);
                                 continue;
                             }
@@ -3082,6 +3133,7 @@ export class DaemonCommandRouter {
                         } else {
                             applyCachedInlineMeshNodeStatus(status, node);
                         }
+                        status.launchReady = !!daemonId && (readStringValue(status.machineStatus) === 'online' || isSelfNode);
                         nodeStatuses.push(status);
                     }
 

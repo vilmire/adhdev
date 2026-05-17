@@ -123,6 +123,48 @@ function sessionTone(state: string | null | undefined): 'default' | 'good' | 'wa
     }
 }
 
+function connectionTone(connection: RepoMeshNodeStatus['connection'] | null | undefined): 'default' | 'good' | 'warn' | 'danger' | 'info' {
+    if (!connection) return 'default'
+    if (connection.state === 'self') return 'info'
+    if (connection.transport === 'direct' && connection.state === 'connected') return 'good'
+    if (connection.transport === 'relay' && connection.state === 'connected') return 'info'
+    switch (connection.state) {
+        case 'connected':
+            return 'good'
+        case 'connecting':
+            return 'warn'
+        case 'disconnected':
+        case 'failed':
+        case 'closed':
+            return 'danger'
+        default:
+            return 'default'
+    }
+}
+
+function connectionLabel(connection: RepoMeshNodeStatus['connection'] | null | undefined): string {
+    if (!connection) return 'mesh unknown'
+    if (connection.state === 'self') return 'mesh self'
+    if (connection.transport === 'direct' && connection.state === 'connected') return 'mesh direct'
+    if (connection.transport === 'relay' && connection.state === 'connected') return 'mesh relay'
+    if (!connection.reported && connection.source === 'not_reported') return 'mesh unknown / not reported'
+    return `mesh ${connection.state}`
+}
+
+function formatYesNo(value: boolean | null | undefined): string {
+    if (value === true) return 'yes'
+    if (value === false) return 'no'
+    return 'unknown'
+}
+
+function buildDashboardSessionHref(daemonId: string | null | undefined, sessionId: string | null | undefined): string | null {
+    if (!sessionId) return null
+    const params = new URLSearchParams()
+    if (daemonId) params.set('daemonId', daemonId)
+    params.set('targetSessionId', sessionId)
+    return `/dashboard?${params.toString()}`
+}
+
 function summarizeNodeDrift(node: RepoMeshNodeStatus): string {
     const git = node.git
     if (!git) return 'No git probe'
@@ -260,9 +302,11 @@ export default function MeshObservabilitySurface({ graph, status, emptyMessage =
                         <Badge label="Peer link = same-branch worktree" tone="default" />
                         <Badge label="Submodule link = child checkout under a parent node" tone="warn" />
                         <Badge label="Node badges = health + drift + session activity" tone="default" />
+                        <Badge label="Mesh transport = selected-coordinator view only" tone="info" />
+                        <Badge label="Unknown / not reported = no live daemon↔daemon telemetry yet" tone="warn" />
                     </div>
                     <div className="mt-3 text-xs text-slate-400">
-                        Tap a node to inspect workspace, session, and git details. Queue rows and session rows are also selectable for drill-down.
+                        Tap a node to inspect workspace, launch readiness, mesh transport, session, and git details. Queue rows and session rows are also selectable for drill-down.
                     </div>
                 </Card>
 
@@ -305,6 +349,19 @@ export default function MeshObservabilitySurface({ graph, status, emptyMessage =
                                 <Row label="Updated" value={formatTimestamp(selectedQueueTask.updatedAt) ?? 'unknown'} />
                                 <Row label="Requeues" value={selectedQueueTask.requeueCount ?? 0} />
                                 <Row label="Auto-launch" value={selectedQueueTask.autoLaunch ? `${selectedQueueTask.autoLaunch.status}${selectedQueueTask.autoLaunch.providerType ? ` · ${selectedQueueTask.autoLaunch.providerType}` : ''}` : 'none'} />
+                                {(() => {
+                                    const sessionId = selectedQueueTask.assignedSessionId || selectedQueueTask.targetSessionId || selectedQueueTask.autoLaunch?.sessionId || null
+                                    const nodeId = selectedQueueTask.assignedNodeId || selectedQueueTask.targetNodeId || selectedQueueTask.autoLaunch?.nodeId || null
+                                    const dashboardHref = buildDashboardSessionHref(nodeId ? nodeStatusById.get(nodeId)?.daemonId : null, sessionId)
+                                    return dashboardHref ? (
+                                        <a
+                                            href={dashboardHref}
+                                            className="inline-flex w-fit items-center rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-xs font-medium text-sky-100 transition hover:bg-sky-500/20"
+                                        >
+                                            Open linked dashboard chat
+                                        </a>
+                                    ) : null
+                                })()}
                                 {selectedQueueTask.cancelReason && <Row label="Cancel reason" value={selectedQueueTask.cancelReason} />}
                                 {selectedQueueTask.requeueReason && <Row label="Requeue reason" value={selectedQueueTask.requeueReason} />}
                             </>
@@ -324,6 +381,20 @@ export default function MeshObservabilitySurface({ graph, status, emptyMessage =
                                 {selectedSessionEntry.session.surfaceKind && <Row label="Surface" value={selectedSessionEntry.session.surfaceKind} />}
                                 {selectedSessionEntry.session.recoveryState && <Row label="Recovery" value={selectedSessionEntry.session.recoveryState} />}
                                 {selectedSessionEntry.session.lastActivityAt && <Row label="Last activity" value={formatTimestamp(selectedSessionEntry.session.lastActivityAt) ?? selectedSessionEntry.session.lastActivityAt} />}
+                                {(() => {
+                                    const dashboardHref = buildDashboardSessionHref(
+                                        nodeStatusById.get(selectedSessionEntry.nodeId)?.daemonId,
+                                        selectedSessionEntry.session.sessionId,
+                                    )
+                                    return dashboardHref ? (
+                                        <a
+                                            href={dashboardHref}
+                                            className="inline-flex w-fit items-center rounded-full border border-sky-400/30 bg-sky-500/10 px-3 py-1 text-xs font-medium text-sky-100 transition hover:bg-sky-500/20"
+                                        >
+                                            Open dashboard chat
+                                        </a>
+                                    ) : null
+                                })()}
                             </>
                         ) : selectedGraphNode ? (
                             <>
@@ -333,14 +404,26 @@ export default function MeshObservabilitySurface({ graph, status, emptyMessage =
                                         <div className="mb-2 flex flex-wrap items-center gap-2">
                                             <Badge label={selectedNodeStatus.health} tone={healthTone(selectedNodeStatus.health)} />
                                             {selectedNodeStatus.machineStatus && <Badge label={selectedNodeStatus.machineStatus} tone={selectedNodeStatus.machineStatus === 'online' ? 'good' : 'warn'} />}
+                                            <Badge label={`launchReady ${formatYesNo(selectedNodeStatus.launchReady)}`} tone={selectedNodeStatus.launchReady ? 'good' : 'warn'} />
+                                            <Badge label={connectionLabel(selectedNodeStatus.connection)} tone={connectionTone(selectedNodeStatus.connection)} />
                                             {selectedNodeStatus.worktreeBranch && <Badge label={selectedNodeStatus.worktreeBranch} tone="info" />}
                                         </div>
                                         <div className="flex flex-col gap-0.5">
                                             <Row label="Repo root" value={selectedNodeStatus.repoRoot ?? selectedNodeStatus.workspace} />
                                             <Row label="Provider(s)" value={(selectedNodeStatus.providers ?? []).join(', ') || 'none'} />
+                                            <Row label="Provider priority" value={(selectedNodeStatus.providerPriority ?? []).join(', ') || 'not configured'} />
                                             <Row label="Drift" value={summarizeNodeDrift(selectedNodeStatus)} />
                                             <Row label="Daemon" value={selectedNodeStatus.daemonId ?? 'unknown'} />
                                             <Row label="Machine" value={selectedNodeStatus.machineId ?? selectedNodeStatus.machineLabel} />
+                                            <Row label="Launch ready" value={formatYesNo(selectedNodeStatus.launchReady)} />
+                                            <Row label="Mesh connection" value={connectionLabel(selectedNodeStatus.connection)} />
+                                            <Row label="Transport" value={selectedNodeStatus.connection?.transport ?? 'unknown'} />
+                                            <Row label="Connection source" value={selectedNodeStatus.connection?.source ?? 'unknown'} />
+                                            <Row label="Last seen" value={formatTimestamp(selectedNodeStatus.lastSeenAt) ?? selectedNodeStatus.lastSeenAt ?? 'not reported'} />
+                                            <Row label="Updated" value={formatTimestamp(selectedNodeStatus.updatedAt) ?? selectedNodeStatus.updatedAt ?? 'not reported'} />
+                                            {selectedNodeStatus.connection?.lastConnectedAt && <Row label="Last connected" value={formatTimestamp(selectedNodeStatus.connection.lastConnectedAt) ?? selectedNodeStatus.connection.lastConnectedAt} />}
+                                            {selectedNodeStatus.connection?.lastCommandAt && <Row label="Last mesh command" value={formatTimestamp(selectedNodeStatus.connection.lastCommandAt) ?? selectedNodeStatus.connection.lastCommandAt} />}
+                                            {selectedNodeStatus.connection?.reason && <Row label="Connection reason" value={selectedNodeStatus.connection.reason} />}
                                             <Row label="Sessions" value={selectedNodeStatus.activeSessions.length} />
                                             {selectedNodeStatus.error && <Row label="Error" value={selectedNodeStatus.error} />}
                                         </div>
@@ -467,9 +550,14 @@ export default function MeshObservabilitySurface({ graph, status, emptyMessage =
                                             <div className="truncate text-xs font-medium text-white">{node.machineLabel}</div>
                                             <div className="mt-1 truncate text-[11px] text-slate-400">{summarizeNodeDrift(node)}</div>
                                             <div className="mt-1 truncate text-[11px] text-slate-500">{(node.providers ?? []).join(', ') || 'no provider metadata'}</div>
+                                            <div className="mt-1 flex flex-wrap gap-1">
+                                                <Badge label={`launchReady ${formatYesNo(node.launchReady)}`} tone={node.launchReady ? 'good' : 'warn'} />
+                                                <Badge label={connectionLabel(node.connection)} tone={connectionTone(node.connection)} />
+                                            </div>
                                         </div>
                                         <div className="flex flex-col items-end gap-1">
                                             <Badge label={node.health} tone={healthTone(node.health)} />
+                                            {node.machineStatus && <Badge label={node.machineStatus} tone={node.machineStatus === 'online' ? 'good' : 'warn'} />}
                                             {node.activeSessions.length > 0 && <Badge label={`${node.activeSessions.length} sessions`} tone="info" />}
                                         </div>
                                     </div>
