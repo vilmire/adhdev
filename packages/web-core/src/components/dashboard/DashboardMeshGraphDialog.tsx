@@ -153,7 +153,13 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
 
                 <div className="min-h-0 flex-1 overflow-y-auto bg-[linear-gradient(180deg,rgba(2,6,23,0.95),rgba(15,23,42,0.98))] px-4 py-4 md:px-5 md:py-5">
                     {graph && meshStatus ? (
-                        <MeshObservabilitySurface graph={graph} status={meshStatus} emptyMessage={emptyMessage} />
+                        <MeshObservabilitySurface
+                            graph={graph}
+                            status={meshStatus}
+                            emptyMessage={emptyMessage}
+                            daemonId={daemonId}
+                            sendDaemonCommand={sendDaemonCommand}
+                        />
                     ) : (
                         <div className="flex h-full min-h-[320px] items-center justify-center rounded-[28px] border border-dashed border-white/10 bg-white/[0.03] px-6 text-center text-sm text-slate-400">
                             {emptyMessage}
