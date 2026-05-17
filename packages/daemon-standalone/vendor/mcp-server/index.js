@@ -583,10 +583,18 @@ function isIdleSessionRecord(session) {
 function chooseDispatchableSession(sessions, providerType, meshId, nodeId) {
   const live = sessions.filter((session) => !isTerminalSessionRecord(session));
   const matchingProvider = (session) => !providerType || session?.providerType === providerType || session?.cliType === providerType;
+  const isMeshOwnedDelegateSession = (session) => {
+    const settings = session?.settings;
+    const sessionMeshId = typeof settings?.meshNodeFor === "string" ? settings.meshNodeFor.trim() : "";
+    const coordinatorDaemonId = typeof settings?.meshCoordinatorDaemonId === "string" ? settings.meshCoordinatorDaemonId.trim() : "";
+    const sessionNodeId = typeof settings?.meshNodeId === "string" ? settings.meshNodeId.trim() : "";
+    if (sessionMeshId !== meshId || !coordinatorDaemonId) return false;
+    return !sessionNodeId || sessionNodeId === nodeId;
+  };
   const meshSessions = live.filter(
-    (session) => session?.settings?.meshNodeFor === meshId || session?.settings?.meshNodeId === nodeId
+    (session) => isMeshOwnedDelegateSession(session)
   );
-  return meshSessions.find((session) => isIdleSessionRecord(session) && matchingProvider(session)) || meshSessions.find(matchingProvider) || live.find((session) => isIdleSessionRecord(session) && matchingProvider(session)) || live.find(matchingProvider) || live.find(isIdleSessionRecord) || live[0];
+  return meshSessions.find((session) => isIdleSessionRecord(session) && matchingProvider(session)) || meshSessions.find(matchingProvider) || void 0;
 }
 function findNestedPayload(value, predicate) {
   const seen = /* @__PURE__ */ new Set();
@@ -612,6 +620,14 @@ function extractGitStatus(value) {
 function extractGitDiff(value) {
   const payload = unwrapCommandPayload(value);
   return payload?.diffSummary ?? payload?.diff ?? value?.diffSummary ?? value?.diff ?? payload;
+}
+function extractSubmodules(value, ignorePaths) {
+  const payload = unwrapCommandPayload(value);
+  const subs = payload?.submodules ?? value?.submodules;
+  if (!Array.isArray(subs)) return void 0;
+  if (ignorePaths.length === 0) return subs;
+  const ignoreSet = new Set(ignorePaths);
+  return subs.filter((s) => s?.path && !ignoreSet.has(s.path));
 }
 function extractLaunchPayload(value) {
   return findNestedPayload(value, (payload) => Boolean(payload?.sessionId || payload?.id || payload?.runtimeSessionId));
@@ -864,6 +880,10 @@ function summarizeRelatedRepoStatus(repo, status) {
     workspace: repo.workspace,
     isGitRepo: status?.isGitRepo === true,
     branch: status?.branch ?? null,
+    upstream: status?.upstream ?? null,
+    upstreamStatus: typeof status?.upstreamStatus === "string" ? status.upstreamStatus : status?.upstream ? "unchecked" : "no_upstream",
+    upstreamFetchedAt: Number.isFinite(Number(status?.upstreamFetchedAt)) ? Number(status.upstreamFetchedAt) : null,
+    upstreamFetchError: typeof status?.upstreamFetchError === "string" ? status.upstreamFetchError : null,
     ahead: Number.isFinite(Number(status?.ahead)) ? Number(status.ahead) : 0,
     behind: Number.isFinite(Number(status?.behind)) ? Number(status.behind) : 0,
     dirty,
@@ -880,7 +900,7 @@ async function collectRelatedRepoStatuses(ctx, node) {
   const results = [];
   for (const repo of relatedRepos) {
     try {
-      const statusResult = !isLocalTransport(ctx.transport) && node.daemonId ? await ctx.transport.gitStatus(node.daemonId, repo.workspace, false) : await commandForNode(ctx, node, "git_status", { workspace: repo.workspace });
+      const statusResult = !isLocalTransport(ctx.transport) && node.daemonId ? await ctx.transport.gitStatus(node.daemonId, repo.workspace, false, true) : await commandForNode(ctx, node, "git_status", { workspace: repo.workspace, refreshUpstream: true });
       const status = extractGitStatus(statusResult);
       results.push(summarizeRelatedRepoStatus(repo, status));
     } catch (e) {
@@ -928,11 +948,13 @@ function buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges) {
   const ahead = readNumeric(status?.ahead);
   const behind = readNumeric(status?.behind);
   const upstream = readString(status?.upstream) ?? null;
+  const upstreamStatus = readString(status?.upstreamStatus) ?? (upstream ? "unchecked" : "no_upstream");
   const hasConflicts = status?.hasConflicts === true || Array.isArray(status?.conflictFiles) && status.conflictFiles.length > 0;
   const base = {
     defaultBranch,
     branch,
     upstream,
+    upstreamStatus,
     ahead,
     behind,
     isWorktree: node.isLocalWorktree === true,
@@ -966,6 +988,15 @@ function buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges) {
     };
   }
   if (branch === defaultBranch) {
+    if (upstream && upstreamStatus !== "fresh") {
+      return {
+        ...base,
+        status: "blocked_review",
+        needsConvergence: true,
+        reason: "default_branch_upstream_unverified",
+        nextStep: `Refresh ${defaultBranch}'s upstream refs or resolve the fetch failure before declaring convergence complete for node '${node.id}'.`
+      };
+    }
     if (ahead > 0 || behind > 0) {
       return {
         ...base,
@@ -990,6 +1021,15 @@ function buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges) {
       needsConvergence: true,
       reason: "clean_non_default_worktree_branch",
       nextStep: `Run mesh_refine_node(node_id: "${node.id}") or explicitly classify this worktree as blocked_review/not_mergeable before ending the task.`
+    };
+  }
+  if (upstream && upstreamStatus !== "fresh") {
+    return {
+      ...base,
+      status: "blocked_review",
+      needsConvergence: true,
+      reason: "feature_branch_upstream_unverified",
+      nextStep: `Refresh branch '${branch}' upstream refs or resolve the fetch failure before deciding whether it is ready to merge into ${defaultBranch}.`
     };
   }
   if (!upstream || ahead > 0 || behind > 0) {
@@ -1034,6 +1074,71 @@ async function commandForNode(ctx, node, command, args = {}) {
     return ctx.transport.command(command, args);
   }
   throw new Error(`Command '${command}' requires daemon IPC/local transport for node '${node.id}'`);
+}
+function normalizePendingMeshCoordinatorEvents(value) {
+  const payload = unwrapCommandPayload(value);
+  const events = Array.isArray(payload?.events) ? payload.events : Array.isArray(value?.events) ? value.events : [];
+  return events.filter((event) => event && typeof event === "object");
+}
+function buildMeshForwardPayloadFromPendingEvent(event) {
+  const metadataEvent = event?.metadataEvent && typeof event.metadataEvent === "object" ? event.metadataEvent : {};
+  return {
+    event: readString(event?.event),
+    meshId: readString(event?.meshId),
+    nodeId: readString(event?.nodeId) || readString(metadataEvent.meshNodeId),
+    workspace: readString(event?.workspace) || readString(metadataEvent.workspace),
+    targetSessionId: readString(metadataEvent.targetSessionId) || readString(metadataEvent.sessionId) || readString(metadataEvent.instanceId),
+    providerType: readString(metadataEvent.providerType),
+    providerSessionId: readString(metadataEvent.providerSessionId),
+    finalSummary: readString(metadataEvent.finalSummary) || readString(metadataEvent.summary),
+    ...metadataEvent.intentional === true ? { intentional: true } : {},
+    ...metadataEvent.intentionalStop === true ? { intentionalStop: true } : {},
+    ...metadataEvent.operatorCleanup === true ? { operatorCleanup: true } : {},
+    ...readString(metadataEvent.reason) ? { reason: readString(metadataEvent.reason) } : {},
+    ...readString(metadataEvent.stopReason) ? { stopReason: readString(metadataEvent.stopReason) } : {},
+    ...readString(metadataEvent.cleanupReason) ? { cleanupReason: readString(metadataEvent.cleanupReason) } : {},
+    ...readString(metadataEvent.source) ? { source: readString(metadataEvent.source) } : {}
+  };
+}
+async function drainCoordinatorPendingEvents(ctx, opts) {
+  const requestedNodeIds = opts?.nodeIds?.length ? new Set(opts.nodeIds) : null;
+  const matchesCurrentMesh = (event) => readString(event?.meshId) === ctx.mesh.id;
+  if (ctx.transport instanceof IpcTransport) {
+    const surfacedEvents = [];
+    try {
+      surfacedEvents.push(
+        ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", {})).filter(matchesCurrentMesh)
+      );
+    } catch {
+    }
+    for (const node of ctx.mesh.nodes) {
+      if (!node.daemonId || isLocalControlPlaneNode(ctx, node)) continue;
+      if (requestedNodeIds && !requestedNodeIds.has(node.id)) continue;
+      try {
+        const remoteEvents = normalizePendingMeshCoordinatorEvents(
+          await ctx.transport.meshCommand(node.daemonId, "get_pending_mesh_events", {})
+        ).filter(matchesCurrentMesh);
+        if (remoteEvents.length === 0) continue;
+        for (const event of remoteEvents) {
+          const payload = buildMeshForwardPayloadFromPendingEvent(event);
+          if (!payload.event || !payload.meshId) continue;
+          await ctx.transport.command("mesh_forward_event", payload);
+        }
+      } catch {
+      }
+    }
+    try {
+      surfacedEvents.push(
+        ...normalizePendingMeshCoordinatorEvents(await ctx.transport.command("get_pending_mesh_events", {})).filter(matchesCurrentMesh)
+      );
+    } catch {
+    }
+    return surfacedEvents;
+  }
+  if (isLocalTransport(ctx.transport)) {
+    return (0, import_daemon_core.drainPendingMeshCoordinatorEvents)().filter(matchesCurrentMesh);
+  }
+  return [];
 }
 function isP2pTransportUnavailableError(error) {
   return (0, import_daemon_core.isP2pRelayTransportFailure)(error);
@@ -1336,7 +1441,7 @@ async function meshStatus(ctx) {
     };
     try {
       if (!isLocalTransport(transport) && node.daemonId) {
-        const result = await transport.gitStatus(node.daemonId, node.workspace, false);
+        const result = await transport.gitStatus(node.daemonId, node.workspace, false, true);
         const status = extractGitStatus(result);
         const uncommittedChanges = countUncommittedChanges(status);
         const dirty = isGitStatusDirty(status);
@@ -1345,8 +1450,19 @@ async function meshStatus(ctx) {
         entry.isDirty = dirty;
         entry.uncommittedChanges = uncommittedChanges;
         entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
+        const submodules = extractSubmodules(result, node.policy?.submoduleIgnorePaths || []);
+        if (submodules && submodules.some((s) => s?.outOfSync)) {
+          entry.submoduleWarning = "One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.";
+          entry.outOfSyncSubmodules = submodules.filter((s) => s?.outOfSync).map((s) => s.path);
+        }
       } else if (isLocalTransport(transport)) {
-        const statusResult = await commandForNode(ctx, node, "git_status", { workspace: node.workspace });
+        const autoDiscover = node.policy?.autoDiscoverSubmodules !== false;
+        const statusResult = await commandForNode(ctx, node, "git_status", {
+          workspace: node.workspace,
+          refreshUpstream: true,
+          includeSubmodules: autoDiscover,
+          submoduleIgnorePaths: node.policy?.submoduleIgnorePaths || void 0
+        });
         const status = extractGitStatus(statusResult);
         const uncommittedChanges = countUncommittedChanges(status);
         const dirty = isGitStatusDirty(status);
@@ -1355,6 +1471,11 @@ async function meshStatus(ctx) {
         entry.isDirty = dirty;
         entry.uncommittedChanges = uncommittedChanges;
         entry.branchConvergence = buildBranchConvergence(mesh, node, status, dirty, uncommittedChanges);
+        const submodules = extractSubmodules(statusResult, node.policy?.submoduleIgnorePaths || []);
+        if (submodules && submodules.some((s) => s?.outOfSync)) {
+          entry.submoduleWarning = "One or more submodules are out of sync with the parent repo. Run `git submodule update` or check deployment readiness.";
+          entry.outOfSyncSubmodules = submodules.filter((s) => s?.outOfSync).map((s) => s.path);
+        }
       } else {
         entry.health = "unknown";
         entry.note = "No daemonId available for cloud status probe";
@@ -1437,13 +1558,7 @@ async function meshStatus(ctx) {
   } catch {
   }
   try {
-    let pendingEvents = [];
-    if (ctx.transport instanceof IpcTransport) {
-      const eventsResult = await ctx.transport.command("get_pending_mesh_events", {});
-      pendingEvents = Array.isArray(eventsResult?.events) ? eventsResult.events : [];
-    } else if (isLocalTransport(ctx.transport)) {
-      pendingEvents = (0, import_daemon_core.drainPendingMeshCoordinatorEvents)();
-    }
+    const pendingEvents = await drainCoordinatorPendingEvents(ctx);
     if (pendingEvents.length > 0) {
       response.pendingCoordinatorEvents = pendingEvents;
     }
@@ -1453,6 +1568,7 @@ async function meshStatus(ctx) {
 }
 async function meshTaskHistory(ctx, args) {
   const { mesh } = ctx;
+  await drainCoordinatorPendingEvents(ctx);
   const tail = typeof args.tail === "number" && args.tail > 0 ? args.tail : 20;
   const kind = typeof args.kind === "string" && args.kind.trim() ? [args.kind.trim()] : void 0;
   const entries = (0, import_daemon_core.readLedgerEntries)(mesh.id, { tail, kind });
@@ -1800,6 +1916,9 @@ async function meshReadChat(ctx, args) {
   if (!node) {
     return JSON.stringify(buildMissingNodeReadChatRecovery(ctx, args), null, 2);
   }
+  if (ctx.transport instanceof IpcTransport || isLocalTransport(ctx.transport)) {
+    await drainCoordinatorPendingEvents(ctx, { nodeIds: [args.node_id] });
+  }
   if (isLocalTransport(ctx.transport)) {
     const cached = meshSessionProviderMetadata.get(meshSessionCacheKey(args.node_id, args.session_id));
     const providerSessionId = typeof args.provider_session_id === "string" && args.provider_session_id.trim() ? args.provider_session_id.trim() : cached?.providerSessionId;
@@ -2001,19 +2120,25 @@ async function meshLaunchSession(ctx, args) {
 }
 async function meshGitStatus(ctx, args) {
   const node = await findNodeWithRefresh(ctx, args.node_id);
+  const autoDiscoverSubmodules = node.policy?.autoDiscoverSubmodules !== false;
+  const submoduleIgnorePaths = node.policy?.submoduleIgnorePaths || [];
   try {
     if (!isLocalTransport(ctx.transport) && node.daemonId) {
-      const result = await ctx.transport.gitStatus(node.daemonId, node.workspace, true);
+      const result = await ctx.transport.gitStatus(node.daemonId, node.workspace, true, true);
       return JSON.stringify({
         nodeId: args.node_id,
         workspace: node.workspace,
         status: extractGitStatus(result),
         diff: extractGitDiff(result),
+        submodules: autoDiscoverSubmodules ? extractSubmodules(result, submoduleIgnorePaths) : void 0,
         relatedRepos: await collectRelatedRepoStatuses(ctx, node)
       }, null, 2);
     } else if (isLocalTransport(ctx.transport)) {
       const statusResult = await commandForNode(ctx, node, "git_status", {
-        workspace: node.workspace
+        workspace: node.workspace,
+        refreshUpstream: true,
+        includeSubmodules: autoDiscoverSubmodules,
+        submoduleIgnorePaths: submoduleIgnorePaths.length > 0 ? submoduleIgnorePaths : void 0
       });
       const diffResult = await commandForNode(ctx, node, "git_diff_summary", {
         workspace: node.workspace
@@ -2023,6 +2148,7 @@ async function meshGitStatus(ctx, args) {
         workspace: node.workspace,
         status: extractGitStatus(statusResult),
         diff: extractGitDiff(diffResult),
+        submodules: autoDiscoverSubmodules ? extractSubmodules(statusResult, submoduleIgnorePaths) : void 0,
         relatedRepos: await collectRelatedRepoStatuses(ctx, node)
       }, null, 2);
     } else {
@@ -2482,8 +2608,8 @@ var CloudTransport = class {
     if (!res.ok) throw new Error(`Approve failed: ${res.status}`);
     return res.json();
   }
-  async gitStatus(daemonId, workspace, includeDiff = true) {
-    const params = new URLSearchParams({ workspace, includeDiff: String(includeDiff) });
+  async gitStatus(daemonId, workspace, includeDiff = true, refreshUpstream = false) {
+    const params = new URLSearchParams({ workspace, includeDiff: String(includeDiff), refreshUpstream: String(refreshUpstream) });
     const res = await fetch(
       `${this.baseUrl}/api/v1/shortcuts/${encodeURIComponent(daemonId)}/git-status?${params}`,
       { headers: this.headers() }
@@ -3920,7 +4046,7 @@ async function startMcpServer(opts) {
     const meshCtx = { mesh, transport, ...localDaemonId ? { localDaemonId } : {}, ...localMachineId ? { localMachineId } : {} };
     const coordinatorPrompt = await buildMeshModeCoordinatorPrompt(mesh);
     const server2 = new import_server.Server(
-      { name: "adhdev-mcp-server", version: "0.9.78" },
+      { name: "adhdev-mcp-server", version: "0.9.81" },
       { capabilities: { tools: {}, resources: {} } }
     );
     const { ListResourcesRequestSchema, ReadResourceRequestSchema } = await import("@modelcontextprotocol/sdk/types.js");

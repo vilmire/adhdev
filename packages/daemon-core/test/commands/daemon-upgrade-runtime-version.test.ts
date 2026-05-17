@@ -10,9 +10,13 @@ const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
 }))
 
-vi.mock('child_process', () => ({
-  execSync: mocks.execSync,
-}))
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>()
+  return {
+    ...actual,
+    execSync: mocks.execSync,
+  }
+})
 
 vi.mock('../../src/commands/upgrade-helper.js', () => ({
   execNpmCommandSync: mocks.execNpmCommandSync,
